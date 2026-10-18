@@ -669,7 +669,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
 | waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **The owner's tick** (`park-text.ts` `ticksOf`). On the label route of an unpark, the loop reads
@@ -1399,7 +1399,12 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
   links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
-  (`agents/designer.md:71-77`). A split child is a whole issue: its `## Rollout` defaults to
+  (`agents/designer.md:71-77`) until every sub-issue is closed, whatever its close reason: then the loop closes it
+  (action `close-tracker`, planned by the closed row when a split child's merge is done; the child is
+  found by its hidden key, so a merged issue without one, such as a child the owner made under an epic by hand,
+  closes nothing). The parent is read live: any sub-issue still open leaves it open until the next sibling's merge checks again.
+  A child whose rollout is `run-it` or `keep-open` stays open at its merge, so it plans no check, and its
+  tracker is closed by the owner or by a later sibling's check. A split child is a whole issue: its `## Rollout` defaults to
   `merge`, and the contract refuses a child body without one, or a `keep-open` whose reason says
   the child is part of an epic or a split. The plan comment on the parent shows the four reasons
   under "Why this split", and each child line its `why`. `release-parent` carries `reasons` and
@@ -1800,8 +1805,7 @@ safeguards remain:
   read makes the result unknown, never not-ok (`totality/T-20`).
 - **Stopping.** At the next seq the entry actions stop the old step: TaskStop for its agent when
   it is still listed at work (13.6.1, `stop-agent`), then `factory-slot kill <path>`, both best
-  effort (4.5). There is no grace period and no inference from a listed status (D-71 and D-75
-  are retired).
+  effort (4.5). There is no grace period and no inference from a listed status.
 - **`factory-slot kill`** sends SIGTERM to every process whose working directory is the slot or
   inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`, as `prepare` and
   `free` do when they end a slot's processes; the slot action's outcome keeps n and its summary
@@ -1960,7 +1964,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 ## 11. Releases and parking
 
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
-  Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold (D-52) are
+  Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold are
   gone (14.1).
 - **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
@@ -2287,7 +2291,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (13.11.2) |
 | `trace` | `false` | trace mode (13.12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (13.12.1) |
-| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-73, D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
+| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
 | `minimumReleaseCadenceMs` | `6h` | the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake carries it as `cadence` |
 | `titleEveryMs` | `5m` | the session title is renamed at most this often (13.9.1) |
@@ -3215,8 +3219,7 @@ later child of #684.
 - **The mod API is early access**: the plugin pins Claude Code 2.1.296 in its README, and the
   spike's checks are re-run before each upgrade.
 - **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
-  shadow reads labels, blockers and sub-issues live, so it can judge claims (DECISIONS D-32 is
-  superseded).
+  shadow reads labels, blockers and sub-issues live, so it can judge claims.
 - **Agents' tools**: the loop spawns its own agent types (13.6.1), which list their answer tool
   and ToolSearch. Only the testbed can prove three things: that a mod-registered tool
   named in a plugin agent's `tools:` line is reachable through ToolSearch; that the call carries
@@ -3308,7 +3311,7 @@ revision.
 |---|---|---|---|---|---|
 | Rule ids | 46 | about 21 | 21 | 21 | none |
 | Table rows | inside rule code | the table as one mechanism | 47, plus 3 side events | 33, plus 2 side checks (re-claim, push intervention) | rows are where conditions live; counted from here on |
-| Action kinds | 29 | about 15 | 24 | 24: 12 new, 12 reused (appendix B) | C3's list has no events, no CI re-run and no split. v2 logs its own state events (OB decision 3), re-runs flaky checks, and owns briefs and sub-issues so retries cannot repeat them |
+| Action kinds | 29 | about 15 | 24 | 25: 13 new, 12 reused (appendix B) | C3's list has no events, no CI re-run and no split. v2 logs its own state events (OB decision 3), re-runs flaky checks, and owns briefs and sub-issues so retries cannot repeat them |
 | Key families | about 62 | about 12 | 17 | 13 new, plus the foundation's 5 (appendix C) | the extra families are the CI re-run, the split children and the intervention key |
 | Guard checks | 10 failure classes | 6 | 7 with `--patch` | 7 with `--patch` (9.4) | rollout and linkage check the loop's own Closes or Refs line, which the owner's rule needs (OB:71) |
 | Notice kinds of the new layer | about 24 in all | about 5: parked, breaker, blind, untrusted PR, main red | 9 | 7: parked, breaker, stalled, waiting, checkout, workspace, rejected | main red and untrusted PR are gone (no hold; a policy park asks the question). stalled makes an exhausted effect visible; waiting gives waiting states their timeout (OB:44); checkout and workspace are the owner's backstop and the companion's rail; rejected tells the owner the lives cap was reached (6.4) |
@@ -3338,6 +3341,15 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** a drop closes the record and removes the labels; the issue stays open, and
   re-adding `ready` brings it back (4.1, 11).
 - **Why:** the issue is the owner's; a drop is the factory stepping away.
+
+### The loop closes a split's tracker once every sub-issue is closed (owner, 2026-10-18, #946)
+
+- **Decision:** a split parent stays open as the tracker, and the loop closes it as completed when
+  its last sub-issue is closed (8.7). A parent that blocked another issue stops blocking it then.
+- **Why:** the tracker kept blocking its dependents after all its children had merged (the plant
+  console case), until the owner closed it by hand.
+- **Limit:** the check runs at a child's merge, so a child whose rollout is `run-it` or `keep-open`
+  (its issue stays open) plans none; its tracker closes with a later sibling's check or by the owner.
 
 ### The reconcile migration runs now (owner)
 
@@ -3730,7 +3742,7 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** R2 restarts at once except during a queue action or the release task, on a pass
   that admits nothing else (what it would start would only be cut); a running step it cuts
   re-runs free (U1).
-- **Alternatives:** v1's drain (D-15, D-53); waiting for agent steps.
+- **Alternatives:** v1's drain (D-15); waiting for agent steps.
 - **Why:** steps are re-runnable and pushed work survives; the drain held the factory for hours.
 
 ### Foundation helpers are copied, not moved, until the delete wave
@@ -3883,8 +3895,8 @@ limbo map as G1 records them. Checks:
 - #467's and #571's merge holds do not happen;
 - triage calls and parks are counted against v1's 13 judge wakes and its escalations.
 
-The existing replay harness also runs with `--planner v2` on the recorded windows in
-`docs/factory-loop/replay/`, for claims and titles.
+The existing replay harness also runs with `--planner v2` on a recorded window, for claims and titles.
+Its results are not kept in the repo: the harness writes only to the `--out` folder it is given.
 
 ### 17.3 Fault drills on cbundy/dev-system-scratch
 
@@ -3999,6 +4011,7 @@ delete wave.
 | `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
+| `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
@@ -4007,7 +4020,7 @@ delete wave.
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | as v1 | as v1 (13.6.1); `claim` also lists open PRs for adoption (3.5) | as v1 |
 
-12 new kinds, 12 reused. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
+13 new kinds, 12 reused. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
 command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other v1
 ban (FM coupling C10). `rerun` is banned there today, so `gh run rerun` is allowed deliberately,
 as one argv.
@@ -4026,7 +4039,7 @@ as one argv.
 | CI re-run | `i571/lss1x2k/rerun/r2/18342299123` |
 | queue | `i571/lss1x2k/queue/update/9e01b77`, `.../queue/merge/4c2d8aa` |
 | slot | `i571/lss1x2k/lease/1`, `slot/<lease id>/free` |
-| follow-up | `i571/lss1x2k/follow/rollout` |
+| follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
 | heartbeat, sweep, tell, restart, release task | as v1 (the release task: hourly review, 11) |

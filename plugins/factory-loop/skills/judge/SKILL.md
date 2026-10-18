@@ -60,10 +60,10 @@ reason: releasing at the next minor: a fix for a parked issue merged
   explain at length.
 
 ## TASK
-The work stays yours (D-13, D-37): do it in this turn, then answer `done` (finished, or nothing
+The work stays yours: do it in this turn, then answer `done` (finished, or nothing
 left for you), `hold` (the rest waits on the owner: say who and what) or `failed` (it cannot be
 done: say why). Every reason says what you found and what you did: it is the trail of when and why
-the model was involved (D-13).
+the model was involved.
 
 - **`release`** (`closed expected tag oldest cadence`, and `waiting` when some): an hourly review while the Next milestone
   has no open item and at least one closed, or while an issue waits on a release (`tag` is the last release, `oldest` the oldest merge

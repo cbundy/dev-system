@@ -64,7 +64,7 @@ dev-query -At -c \
 ```
 
 The new event store has its own export, whole rows of the `factory.event_log` view (no column list, so it
-keeps working when the view grows), which feeds `--new-events` (with `--source new`; the default `shadow`
+keeps working when the view grows), which feeds `--new-events` (with `--source new`, the default; `--source shadow`
 also compares it with the old report when both are given):
 
 ```

@@ -8,11 +8,11 @@
   "additionalProperties": false,
   "required": ["available", "five_hour_pct", "five_hour_resets_at", "seven_day_pct", "seven_day_resets_at", "source", "reasons"],
   "properties": {
-    "available": { "type": "boolean", "description": "true when a reading was had; false when no source gave one (then every reading field is null)." },
-    "five_hour_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the five-hour window used, rounded up." },
-    "five_hour_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the five-hour window resets." },
-    "seven_day_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the most used seven-day window, rounded up." },
-    "seven_day_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When that seven-day window resets." },
+    "available": { "type": "boolean", "description": "true when a reading was had; false when no source gave one (then every reading field is null).", "x-column": true },
+    "five_hour_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the five-hour window used, rounded up.", "x-column": true },
+    "five_hour_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the five-hour window resets.", "x-column": true },
+    "seven_day_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the most used seven-day window, rounded up.", "x-column": true },
+    "seven_day_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When that seven-day window resets.", "x-column": true },
     "source": { "enum": ["oauth", "statusline", null], "description": "Where the reading came from; null when unavailable." },
     "reasons": { "type": "array", "items": { "type": "string" }, "description": "When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise." }
   },

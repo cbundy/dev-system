@@ -135,6 +135,16 @@ export function subIssuesReadArgv(repo: string, parent: number): string[] {
   return ['gh', 'api', `repos/${repo}/issues/${parent}/sub_issues`, '--paginate', '--jq', '.[].id']
 }
 
+// The number and state of each of the parent's sub-issues, one `<number> <state>` a line.
+export function subIssueStatesArgv(repo: string, parent: number): string[] {
+  return ['gh', 'api', `repos/${repo}/issues/${parent}/sub_issues`, '--paginate', '--jq', '.[] | "\\(.number) \\(.state)"']
+}
+
+// A split's tracker closed as completed once every sub-issue is closed (the comment names them).
+export function trackerCloseArgv(repo: string, parent: number, comment: string): string[] {
+  return ['gh', 'issue', 'close', String(parent), '--repo', repo, '--reason', 'completed', '--comment', comment]
+}
+
 // The ids of the issues a child is blocked by, likewise.
 export function blockersReadArgv(repo: string, issue: number): string[] {
   return ['gh', 'api', `repos/${repo}/issues/${issue}/dependencies/blocked_by`, '--paginate', '--jq', '.[].id']

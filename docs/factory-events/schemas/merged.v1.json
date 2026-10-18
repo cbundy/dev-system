@@ -11,11 +11,11 @@
     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The merged pull request; null when the loop found a merge it cannot name.", "x-column": true },
     "branch": { "type": ["string", "null"], "description": "The merged branch, when known.", "x-column": true },
     "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "The commit that was merged, when known.", "x-column": true },
-    "by": { "enum": ["factory", "hand"], "description": "factory: the factory merged it; hand: a person merged it outside the factory." },
+    "by": { "enum": ["factory", "hand"], "description": "factory: the factory merged it; hand: a person merged it outside the factory.", "x-column": true },
     "recovered": { "type": "boolean", "description": "true when the loop logged it afterwards because no merged event was recorded at the merge." },
-    "files": { "type": ["array", "null"], "items": { "type": "string", "minLength": 1 }, "description": "The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null." },
-    "additions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines added, as GitHub reports them at merge time. null when unknown." },
-    "deletions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown." }
+    "files": { "type": ["array", "null"], "items": { "type": "string", "minLength": 1 }, "description": "The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null.", "x-column": true },
+    "additions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines added, as GitHub reports them at merge time. null when unknown.", "x-column": true },
+    "deletions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown.", "x-column": true }
   },
   "examples": [
     { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false },
