@@ -52,6 +52,8 @@ export type SourceCtx = {
   limited: () => boolean
   unread: readonly PrUnread[]
   kept: readonly PrView[]
+  // the newest read of each issue, which the queue's hold on a label reads; absent: none known
+  reads?: Record<number, IssueRead>
   // the newest release tag observe read (observe-milestone.ts); null when none is known
   tag: string | null
 }
@@ -353,6 +355,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     limited: input.limited,
     unread: cache.prs.unread ?? [],
     kept,
+    reads,
     tag: input.tag ?? null,
   }
   const prs = await readers.prs(ctx)

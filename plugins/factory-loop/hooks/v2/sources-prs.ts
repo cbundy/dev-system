@@ -22,7 +22,7 @@ import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
 import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv, prRunsArgv } from './argv'
 import type { SourceCtx } from './observe'
-import { queueOf } from './rules-queue'
+import { excludedOf, queueOf } from './rules-queue'
 import { lifePr } from './rules-review'
 import type { HeadSeen, IssueRecord } from './types'
 
@@ -49,6 +49,8 @@ export type PrView = {
   base: string | null
   // the branch the PR targets (the REST pull's base.ref)
   baseRef: string | null
+  // the PR's label names; null when the read did not show them
+  labels: string[] | null
   checks: CheckRun[]
   patch: string | null
   readAt: number
@@ -77,7 +79,20 @@ const PATCH_MS = 120_000
 
 // The REST pull object as callum-flow-issue-read --json --pr prints it ({ pr, stripped }), read
 // for what the loop needs; null when it does not read.
-export type Pull = { state: PrView['state']; head: string | null; mergedHead: string | null; closedAt: string | null; mergeable: string | null; author: string | null; base: string | null; baseSha: string | null }
+export type Pull = { state: PrView['state']; head: string | null; mergedHead: string | null; closedAt: string | null; mergeable: string | null; author: string | null; base: string | null; baseSha: string | null; labels: string[] | null }
+
+// labelsOf: the names of a REST pull's labels; null when the field is missing or is not a list of
+// named objects (the hold then fails closed).
+function labelsOf(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null
+  const names: string[] = []
+  for (const l of v) {
+    const n = l !== null && typeof l === 'object' ? (l as Record<string, unknown>).name : undefined
+    if (typeof n !== 'string' || n === '') return null
+    names.push(n)
+  }
+  return names
+}
 
 export function pullOf(json: string): Pull | null {
   let o: Record<string, unknown>
@@ -103,6 +118,7 @@ export function pullOf(json: string): Pull | null {
     author: str(sub(o.user, 'login')),
     base: str(sub(o.base, 'ref')),
     baseSha: str(sub(o.base, 'sha')),
+    labels: labelsOf(o.labels),
   }
 }
 
@@ -238,8 +254,8 @@ const PATCHES = new Map<string, string>()
 // prRecords: the records whose PR the source reads, each with its life's PR (lifePr), in 2.4's
 // order: the queue's head, then the other records in reviewing and the merge queue, oldest seq
 // first.
-export function prRecords(records: readonly IssueRecord[], paused: readonly number[], ledger: readonly LedgerEntry[]): (IssueRecord & { pr: number })[] {
-  const head = queueOf(records, paused)[0]
+export function prRecords(records: readonly IssueRecord[], excluded: readonly number[], ledger: readonly LedgerEntry[]): (IssueRecord & { pr: number })[] {
+  const head = queueOf(records, excluded)[0]
   const rank = (r: IssueRecord) => (r === head ? 0 : 1)
   return records
     .filter(r => r.state === 'reviewing' || r.state === 'merge-queue')
@@ -254,7 +270,7 @@ export function prRecords(records: readonly IssueRecord[], paused: readonly numb
 // the heads first seen, updated.
 export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: Source; heads: Record<string, HeadSeen> }> {
   const now = ctx.now
-  const want = prRecords(ctx.records, ctx.state.control.paused, ctx.state.ledger)
+  const want = prRecords(ctx.records, (ctx.reads === undefined ? ctx.state.control.paused : excludedOf(ctx.records, ctx.state.control.paused, ctx.reads, ctx.kept)), ctx.state.ledger)
   const kept = ctx.kept.filter(v => want.some(r => r.pr === v.pr && r.issue === v.issue))
   const due = want.filter(r => !kept.some(v => v.pr === r.pr && v.issue === r.issue))
   const checkout = ctx.state.checkout
@@ -326,7 +342,7 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
       patch = p
     }
   }
-  return { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, base: pull.baseSha, baseRef: pull.base, checks, patch, readAt: ctx.now }
+  return { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, base: pull.baseSha, baseRef: pull.base, labels: pull.labels, checks, patch, readAt: ctx.now }
 }
 
 async function patchOf(ctx: SourceCtx, head: string, base: string): Promise<string | { why: string }> {

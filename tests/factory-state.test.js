@@ -136,6 +136,19 @@ test("S2, S4 and S5 trip, and --rule thresholds move them", () => {
   assert.equal(loose.rules.S2, 500);
 });
 
+test("don't-merge: a ready-to-merge issue the owner holds shows the held flag and is not stuck (S4)", () => {
+  const gh = (labels) => ({ [A]: { ok: true, stripped: 0, open: { 71: { labels } }, states: {}, claims: {} } });
+  const base = input("stuck-rules");
+  const plain = derive(base, { github: gh(["factory:merge-queue"]) });
+  assert.ok(plain.stuck.some((s) => s.issue === 71 && s.rule === "S4"), "without the label #71 is stuck");
+  assert.deepEqual(issue(plain, A, 71).flags.filter((f) => f.startsWith("held")), []);
+  const held = derive(base, { github: gh(["factory:merge-queue", "Don't-Merge"]) });
+  assert.equal(issue(held, A, 71).stage, "ready to merge");
+  assert.ok(issue(held, A, 71).flags.includes("held: don't-merge (waits on the owner)"));
+  assert.equal(held.stuck.some((s) => s.issue === 71), false, "a held issue is not stuck");
+  assert.ok(held.stuck.some((s) => s.issue === 70), "other issues keep their rules");
+});
+
 test("point in time: before the run finished it is in pipeline and approximate", () => {
   const early = derive(input("point-in-time-early"));
   assert.equal(issue(early, A, 60).stage, "in pipeline");

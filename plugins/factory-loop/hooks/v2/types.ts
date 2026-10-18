@@ -368,6 +368,13 @@ export const REJECTED_LABEL: { name: 'factory:rejected'; color: string; descript
   description: 'Factory loop: its last life ended without a merge; remove this label and add ready to try again',
 }
 
+// The owner's hold on a merge (9.1): set on the issue or its PR, the loop reads it and never makes,
+// adds or removes it, so it is not in ALL_FACTORY_LABELS. It is a hold, not a state.
+export const DONT_MERGE_LABEL = "don't-merge"
+
+// sameLabel: label names are equal ignoring case.
+export const sameLabel = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
 // Every label the loop makes (op ensure): the seven state labels, then factory:rejected.
 export const ALL_FACTORY_LABELS: readonly { name: string; color: string; description: string }[] = [...Object.values(FACTORY_LABELS), REJECTED_LABEL]
 
@@ -395,7 +402,7 @@ export type InterventionWho = 'person' | 'loop'
 
 // The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
 // and `guard:<what>` take their suffix from the lists above or the op's name.
-export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'unreject', 'rescue'] as const
+export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'unreject', 'rescue', 'hold'] as const
 export const LOOP_CAUSES = [
   'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'prompt-denied', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
 ] as const

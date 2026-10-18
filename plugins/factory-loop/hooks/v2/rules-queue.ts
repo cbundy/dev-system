@@ -5,7 +5,10 @@
 // rebased or closed by any rule.
 //
 // - Order (9.1): the records in merge-queue whose step is `queue`, oldest seqAt first, ties by
-//   issue; paused issues are not in it, and a record on triage is not either. Every transition
+//   issue; paused issues and records held by the owner's `don't-merge` label (on the issue or the PR;
+//   labels that cannot be read hold too) are not in it, and keep their seqAt, so the next record is the
+//   head and a released one is back at its place; a held step is `held`, never `waiting`; a record on
+//   triage is not in it either. Every transition
 //   sets seqAt, so a head whose step ends other than ok goes to the back and the next PR becomes
 //   the head (property 14).
 // - The head's step (4.2): its result from the tries of its seq (steps-queue.ts), then the PR as
@@ -33,7 +36,8 @@ import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import type { PrView } from './sources-prs'
 import { ciOf, conflictNote, headFacts, mayHaveMerged, mergeKey, mergeResult, mergesAt, pastWait, redNotes, updateKey, updateResult } from './steps-queue'
 import type { HeadFacts } from './steps-queue'
-import type { IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
+import { DONT_MERGE_LABEL, sameLabel } from './types'
+import type { IssueRead, IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
 
 // The merge tries Q2 makes of one head in one seq: a FAIL of class behind, checks or linkage (after
 // the body is written again) earns another, and the guard refusing a head this often while the
@@ -47,9 +51,40 @@ export const MERGE_TRIES = 3
 // The mergeable states GitHub merges from (the guard's CLEAN, UNSTABLE and HAS_HOOKS).
 const MERGEABLE: readonly string[] = ['clean', 'unstable', 'has_hooks']
 
-// queueOf: the merge queue, head first (9.1).
-export function queueOf(records: readonly IssueRecord[], paused: readonly number[]): IssueRecord[] {
-  return records.filter(r => r.state === 'merge-queue' && r.step === 'queue' && !paused.includes(r.issue)).sort((a, b) => a.seqAt - b.seqAt || a.issue - b.issue)
+// queueOf: the merge queue, head first (9.1). `excluded`: the issues left out of it, the paused and
+// the held (excludedOf).
+export function queueOf(records: readonly IssueRecord[], excluded: readonly number[]): IssueRecord[] {
+  return records.filter(r => r.state === 'merge-queue' && r.step === 'queue' && !excluded.includes(r.issue)).sort((a, b) => a.seqAt - b.seqAt || a.issue - b.issue)
+}
+
+// The owner's hold on a record (9.1): the label `don't-merge` on its issue or its PR, or, failing
+// closed, labels that could not be read. where: which carries the label.
+export type DontMerge = { kind: 'label'; where: 'issue' | 'pr'; pr: number | null } | { kind: 'unread' }
+
+// holdOf: the hold on a record from the issue reads and the PR views, or null. The label matches
+// by its exact name, ignoring case. A positive hold wins over an unread one. Unread: the issue read
+// is missing or its labels null, or a PR view exists whose labels are null; a record with no view
+// yet is held by the issue alone, since Q1 and Q2 need a view anyway.
+export function holdOf(reads: Readonly<Record<number, IssueRead | undefined>>, views: readonly PrView[], r: IssueRecord): DontMerge | null {
+  const labels = reads[r.issue]?.labels ?? null
+  const view = r.pr === null ? undefined : views.find(p => p.pr === r.pr && p.issue === r.issue)
+  if (labels?.some(l => sameLabel(l, DONT_MERGE_LABEL)) === true) return { kind: 'label', where: 'issue', pr: null }
+  if (view?.labels?.some(l => sameLabel(l, DONT_MERGE_LABEL)) === true) return { kind: 'label', where: 'pr', pr: view.pr }
+  if (labels === null || (view !== undefined && view.labels === null)) return { kind: 'unread' }
+  return null
+}
+
+// excludedOf: the issues the queue leaves out: the paused and the records holdOf holds.
+export function excludedOf(records: readonly IssueRecord[], paused: readonly number[], reads: Readonly<Record<number, IssueRead | undefined>>, views: readonly PrView[]): number[] {
+  return [...paused, ...records.filter(r => holdOf(reads, views, r) !== null).map(r => r.issue)]
+}
+
+// dontMergeOf: the held step's reason, or null when the record is not held.
+export function dontMergeOf(ctx: V2Ctx, r: IssueRecord): string | null {
+  const h = holdOf(ctx.v2.reads, ctx.v2.prs.prs, r)
+  if (h === null) return null
+  if (h.kind === 'unread') return 'merge queue: labels not read, held until they are'
+  return `merge queue: held by the ${DONT_MERGE_LABEL} label on ${h.where === 'issue' ? 'the issue' : `PR #${h.pr}`}`
 }
 
 // queueRules: the composer's hook (plan.ts) for rules over the whole queue. It plans nothing: the
@@ -74,7 +109,9 @@ function defaultBranch(ctx: V2Ctx): string | null {
 const queuePlan: StepPlan = env => {
   const { ctx, r } = env
   if (ctx.state.control.paused.includes(r.issue)) return held('merge queue: paused by the owner, so the queue moves past it')
-  const queue = queueOf(ctx.v2.records, ctx.state.control.paused)
+  const why = dontMergeOf(ctx, r)
+  if (why !== null) return held(why)
+  const queue = queueOf(ctx.v2.records, excludedOf(ctx.v2.records, ctx.state.control.paused, ctx.v2.reads, ctx.v2.prs.prs))
   const at = queue.findIndex(x => x.issue === r.issue && x.life === r.life)
   const head = queue[0]
   if (at > 0 && head !== undefined) return { kind: 'waiting', why: `merge queue: waits behind #${head.issue} (${at + 1} of ${queue.length})` }
