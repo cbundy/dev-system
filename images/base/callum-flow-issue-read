@@ -11,6 +11,7 @@
 #   callum-flow-issue-read [--json] --list [--label L] [--state open|closed|all]
 #   callum-flow-issue-read [--json] --pr <pr> [--comments]
 #   callum-flow-issue-read [--json] --timeline <issue>
+#   callum-flow-issue-read [--json] --issues <N>[,<N>...]
 #
 # <issue>: number, state, labels, author, title and body - only if the issue
 #   author is trusted. --comments adds the trusted comments (id, login,
@@ -28,9 +29,16 @@
 #   the conversation comments, review comments and reviews, all filtered.
 # --timeline: only events whose actor is trusted. A cross-referenced event also
 #   needs a trusted author on the source issue or PR.
+# --issues: the facts of several issues in ONE GraphQL request (chunks of at most 50):
+#   number, title, state, labels, author, dependency and sub-issue counts, no body,
+#   no comments, no dependency lists. An issue by an untrusted author is listed in
+#   `refused` and nothing else about it is printed; a number GitHub does not know
+#   (deleted, transferred, a PR) is listed in `missing`. Exit 0 either way; any
+#   other GraphQL error, a transport failure or a malformed response exits 1.
 # --json: stable machine shape, always one object with a top-level `stripped`
 #   count: {issue, blocked_by, blocking, comments?, stripped}, {comment, stripped}, {issues, stripped},
-#   {pr, comments?, review_comments?, reviews?, stripped}, {events, stripped}.
+#   {pr, comments?, review_comments?, reviews?, stripped}, {events, stripped}, and for
+#   --issues {issues, refused, missing, stripped} (issues items in the REST field names).
 #   Items are as GitHub returns them. Text output (the default) is for agents.
 #
 # Trust: an author is trusted only when its user.login (case-insensitive) AND
@@ -59,14 +67,14 @@ ME=callum-flow-issue-read
 
 usage() {
   [ -z "${1-}" ] || echo "$ME: $1" >&2
-  echo "usage: $ME [--json] <issue> [--comments] | --comment <id|url> | --list [--label L] [--state S] | --pr <pr> [--comments] | --timeline <issue>" >&2
+  echo "usage: $ME [--json] <issue> [--comments] | --comment <id|url> | --list [--label L] [--state S] | --pr <pr> [--comments] | --timeline <issue> | --issues <N>[,<N>...]" >&2
   exit 2
 }
 err() { echo "$ME: $*" >&2; }
 die() { err "$*"; exit 1; }
 isnum() { case "$1" in '' | *[!0-9]*) return 1 ;; esac; }
 
-json=false mode=issue n='' comments=false label='' state=open cid=''
+json=false mode=issue n='' comments=false label='' state=open cid='' nums=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --json) json=true ;;
@@ -79,6 +87,12 @@ while [ $# -gt 0 ]; do
         if [ "$mode" = comment ]; then cid=$2; else n=$2; fi
         shift
       fi
+      ;;
+    --issues)
+      if [ "$mode" != issue ] || [ -n "$n" ]; then usage "only one mode at a time"; fi
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      mode=issues nums=$2
+      shift
       ;;
     --label | --state)
       [ $# -ge 2 ] || usage "$1 needs a value"
@@ -103,9 +117,21 @@ case "$mode" in
     isnum "$cid" || usage "--comment needs a comment id or URL"
     ;;
   list) ;;
+  issues)
+    # canonical decimal numbers, comma separated, no empty item, no duplicate
+    case "$nums" in '' | *[!0-9,]* | ,* | *, | *,,*) usage "--issues needs a comma-separated list of issue numbers" ;; esac
+    seen=','
+    for _i in $(printf '%s' "$nums" | tr ',' ' '); do
+      isnum "$_i" || usage "--issues needs issue numbers, got '$_i'"
+      case "$_i" in 0*) usage "--issues needs issue numbers, got '$_i'" ;; esac
+      case "$seen" in *",$_i,"*) usage "--issues lists #$_i twice" ;; esac
+      seen="$seen$_i,"
+    done
+    ;;
 esac
 [ "$comments" = false ] || case "$mode" in issue | pr) ;; *) usage "--comments only goes with an issue number or --pr" ;; esac
 if [ "$mode" != list ] && { [ -n "$label" ] || [ "$state" != open ]; }; then usage "--label and --state only go with --list"; fi
+if [ "$mode" = issues ] && { [ -n "$label" ] || [ "$state" != open ]; }; then usage "--label and --state do not go with --issues"; fi
 case "$state" in open | closed | all) ;; *) usage "--state must be open, closed or all" ;; esac
 
 command -v jq >/dev/null 2>&1 || die "jq not found"
@@ -235,6 +261,78 @@ case "$mode" in
     logn=$(printf '%s' "$all" | jq -r --argjson T "$trusted" "$PRELUDE"'
       [.[] | select((has("pull_request") | not) and (trusted | not)) | .number] | min // empty') || die "unexpected response listing issues"
     ;;
+  issues)
+    case "$repo" in */*) ;; *) die "cannot determine the repo owner and name" ;; esac
+    owner=${repo%%/*} rname=${repo#*/}
+    case "$owner$rname" in *[!A-Za-z0-9._/-]*) die "unexpected repo name '$repo'" ;; esac
+    FRAG='fragment F on Issue { number title state author { __typename login ... on User { databaseId } ... on Bot { databaseId } } labels(first: 100) { totalCount nodes { name } } issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking } subIssuesSummary { total completed } }'
+    parts=''
+    rest=$(printf '%s' "$nums" | tr ',' ' ')
+    while [ -n "$rest" ]; do
+      # shellcheck disable=SC2086
+      set -- $rest
+      al=''
+      k=0
+      while [ $# -gt 0 ] && [ "$k" -lt 50 ]; do
+        al="$al i$1: issue(number: $1) { ...F }"
+        k=$((k + 1))
+        shift
+      done
+      rest=$*
+      q="query { repository(owner: \"$owner\", name: \"$rname\") {$al } } $FRAG"
+      # gh exits non-zero when the answer carries errors but still prints it: judge the body
+      # gh's stderr is kept and passed on when the answer is unusable, as single mode does,
+      # so a rate limit reaches the caller's detection
+      _e="${TMPDIR:-/tmp}/$ME.$$.err"
+      _o=$("$GH" api graphql -f query="$q" 2>"$_e") && grc=0 || grc=$?
+      part=$(printf '%s' "$_o" | jq -c --argjson T "$trusted" --argjson grc "$grc" '
+        def bad: error("unexpected response");
+        if type != "object" or (.data | type) != "object" or (.data.repository | type) != "object" then bad else . end
+        | (.errors // []) as $e
+        | (if ($e | type) != "array" then bad else . end) as $x
+        | .data.repository as $r
+        | ($e | map(if (.type == "NOT_FOUND") and ((.path | type) == "array") and (.path | length) == 2 and .path[0] == "repository" then .path[1] else bad end)) as $nf
+        | if $grc != 0 and ($e | length) == 0 then bad else . end
+        | [$r | to_entries[] | select(.key | test("^i[0-9]+$"))] as $ents
+        | if ($ents | length) == 0 then bad else . end
+        | if any($nf[]; . as $a | ($r | has($a) | not) or ($r[$a] != null)) then bad else . end
+        | reduce ($ents[]) as $en ({issues: [], refused: [], missing: []};
+            ($en.key[1:] | tonumber) as $num
+            | $en.value as $v
+            | if $v == null then (if ($nf | index($en.key)) != null then .missing += [$num] else bad end)
+              else
+                (if ($v | type) == "object" and $v.number == $num and ($v.title | type) == "string" and ($v.state | type) == "string"
+                    and ($v.labels | type) == "object" and ($v.labels.nodes | type) == "array"
+                    and ($v.labels.totalCount | type) == "number" and $v.labels.totalCount <= ($v.labels.nodes | length)
+                    and ($v.issueDependenciesSummary | type) == "object" and ($v.subIssuesSummary | type) == "object"
+                  then . else bad end)
+                | ($v.author) as $a
+                | (if ($a | type) == "object" and ($a.login | type) == "string" and ($a.databaseId | type) == "number"
+                    then {login: (if $a.__typename == "Bot" then $a.login + "[bot]" else $a.login end), id: $a.databaseId}
+                    else null end) as $u
+                | if $u != null and any($T[]; .login == ($u.login | ascii_downcase) and .id == $u.id)
+                  then .issues += [{number: $num, title: $v.title, state: ($v.state | ascii_downcase), labels: ($v.labels.nodes | map({name})),
+                      user: $u,
+                      issue_dependencies_summary: {blocked_by: $v.issueDependenciesSummary.blockedBy, blocking: $v.issueDependenciesSummary.blocking,
+                        total_blocked_by: $v.issueDependenciesSummary.totalBlockedBy, total_blocking: $v.issueDependenciesSummary.totalBlocking},
+                      sub_issues_summary: {total: $v.subIssuesSummary.total, completed: $v.subIssuesSummary.completed}}]
+                  else .refused += [$num] end
+              end)') || { cat "$_e" >&2; rm -f "$_e"; die "cannot read the issues (unexpected GraphQL response)"; }
+      rm -f "$_e"
+      parts="$parts$part
+"
+    done
+    # one object, in the order asked; the count of numbers asked is checked
+    res=$(printf '%s' "$parts" | jq -s -c --arg nums "$nums" '
+      ($nums | split(",") | map(tonumber)) as $order
+      | {issues: (map(.issues) | add), refused: (map(.refused) | add), missing: (map(.missing) | add)}
+      | if ((.issues | map(.number)) + .refused + .missing | sort) != ($order | sort) then error("count") else . end
+      | .issues |= sort_by(.number as $x | $order | index($x))
+      | .refused |= sort_by(. as $x | $order | index($x))
+      | .missing |= sort_by(. as $x | $order | index($x))
+      | . + {stripped: (.refused | length)}') || die "unexpected response for the issues"
+    for _r in $(printf '%s' "$res" | jq -r '.refused[]'); do log_stripped "$_r" issue; done
+    ;;
   timeline)
     all=$(fetch_all "repos/$repo/issues/$n/timeline") || die "cannot read the timeline of #$n"
     # An event is trusted by its actor (user for commented events). A cross-
@@ -269,7 +367,7 @@ if [ "$json" = true ]; then
 fi
 
 # Text output for agents.
-out=$(printf '%s' "$res" | jq -r --arg repo "$repo" '
+out=$(printf '%s' "$res" | jq -r --arg repo "$repo" --arg mode "$mode" '
   def labels: [.labels[]? | .name] | join(", ");
   def ref: if .repo == $repo then "#\(.number)" else "\(.repo)#\(.number)" end;
   def dline($p): "\($p) \(ref) \(.state) [\(labels)]" + (if has("title") then " \(.title // "")" else "" end) + "\n";
@@ -279,7 +377,8 @@ out=$(printf '%s' "$res" | jq -r --arg repo "$repo" '
   (if .issue then (. as $r | .issue | item("issue"; ($r | deplines))) else empty end),
   (if .pr then (.pr | item("pr"; "")) else empty end),
   (if .comment then (.comment | cm) else empty end),
-  (if .issues then (.issues[] | "#\(.number) \(.title)") else empty end),
+  (if .issues then (.issues[] | if $mode == "issues" then "#\(.number) \(.state) [\(labels)] \(.title)" else "#\(.number) \(.title)" end) else empty end),
+  (if (.missing // []) | length > 0 then "missing: \(.missing | map("#\(.)") | join(", "))" else empty end),
   (if .events then (.events[] | "\(.created_at // "") \(.event) \((.actor // .user).login)"
     + (if .label then " \(.label.name)" else "" end)
     + (if .event == "cross-referenced" then " #\(.source.issue.number) \(.source.issue.title)" else "" end)

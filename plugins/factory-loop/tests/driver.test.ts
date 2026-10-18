@@ -126,11 +126,10 @@ describe('observe mode (SPEC 11.1)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     const read = () => h.seen.filter(s => s.argv[0] === 'callum-flow-issue-read').map(s => s.argv.slice(1).join(' '))
-    expect(read()).toContain('--json 40')
+    expect(read().some(r => /^--json --issues .*\b40\b/.test(r))).toBe(true)
     expect(read()).toContain('--json --timeline 40')
     await clock.advance(60_000)
-    expect(read()).toContain('--json 41')
-    expect(read()).toContain('--json 42')
+    expect(read().some(r => /^--json --issues .*\b41\b.*\b42\b/.test(r))).toBe(true)
   })
 
   test('binDir goes ahead of PATH and toolsDir places the watchers (a testbed)', ENGINE_TEST, async ($, on) => {
