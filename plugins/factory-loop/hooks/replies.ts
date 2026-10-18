@@ -1,5 +1,5 @@
-// The agents' replies, parsed: the designer's RESULT line (SPEC 7.2), the adjudicator's verdict
-// and ACTION lines with the merge review's report (SPEC 7.3, plugins/callum-flow/agents/
+// The agents' replies, parsed: the designer's RESULT line (the retired v1 designer reply), the adjudicator's verdict
+// and ACTION lines with the merge review's report (the retired v1 adjudicator reply, plugins/callum-flow/agents/
 // adjudicator.md), and the implementer's and fixer's handoff (the RESULT line prompts.ts asks
 // for after the implement-issue handoff). Pure: text in, an Outcome or null out; each read*
 // says instead what kept a reply from parsing, for the one repair message (#548). A reply that
@@ -44,7 +44,7 @@ function quote(line: string): string {
 
 const parsed = <T>(r: T | string): T | null => (typeof r === 'string' ? null : r)
 
-// --- the designer (SPEC 7.2) -----------------------------------------------------------------
+// --- the designer (the retired v1 designer reply) -----------------------------------------------------------------
 
 const DESIGNER_LINE = /^RESULT\s+brief=(\S+)\s+created=(\S+)\s+pending_decision=(yes|no)$/
 
@@ -71,7 +71,7 @@ export function readDesigner(answer: string, repo: string, issue: number | null)
   return { kind: 'designer', brief: briefRaw === 'none' ? null : briefRaw, created, pendingDecision: pending === 'yes' }
 }
 
-// --- the adjudicator (SPEC 7.3) ----------------------------------------------------------------
+// --- the adjudicator (the retired v1 adjudicator reply) ----------------------------------------------------------------
 
 // parseAdjudicator: verdict lines `<VERDICT>: <reason>`, exactly one `ACTION:` line, and for
 // purpose merge exactly one each of SUMMARY, BUMP and FLAGS. Any other line inside the contract,

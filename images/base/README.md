@@ -520,8 +520,12 @@ parameter on an existing workspace" in
 `CODER_VERSION` and both `CODER_SHA256_*` ARGs in the Dockerfile (checksums are in the
 release's `coder_<version>_checksums.txt`) in the same release.
 
-Authentication is not baked in and `dev-init` does not set it up, so a workspace never
-holds a login by default. Recommended, per shell or script:
+Authentication is not baked in, so a workspace holds no login by default. A Coder
+workspace can opt in (template parameter `coder_login`): the template mounts a token file
+and sets `DEV_CODER_TOKEN_FILE`, and `dev-init` rebuilds the CLI's login from it on every
+start (see "Coder CLI login (opt-in)" in
+[coder/dev-system/README.md](../../coder/dev-system/README.md#coder-cli-login-opt-in)).
+For a workspace without it, the recommended way is, per shell or script:
 
 ```sh
 export CODER_URL="${CODER_URL:-$CODER_AGENT_URL}"   # the deployment this workspace runs on
@@ -538,7 +542,8 @@ coder whoami
   mode-0600 file on a `/persist` volume so it survives a restart. Create it with
   `coder tokens create`, scoped and expiring as short as the work allows.
 - `coder login` also works but stores the token in `~/.config/coderv2`, which is not on a
-  volume, so it is lost when the workspace restarts.
+  volume, so it is lost when the workspace restarts. The opt-in `dev-init` login is written
+  there too, and rebuilt on each start.
 - The agent's own `CODER_AGENT_TOKEN` is not a user session and cannot run `coder`
   commands as you.
 - Never run `coder restart`, `coder stop` or `coder update` on the workspace your session
@@ -561,10 +566,15 @@ container never fails to start because of it.
    printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones. One
    `WARNING` names every directory with no volume behind it, whose state is lost on the
    next rebuild, with the fix for a devcontainer, `docker run` and Kubernetes. It shows in
-   the post-start output and the container log. Right after, it runs
-   `dev-restart-self --resume` (see [`dev-restart-self`](#dev-restart-self)): it restores
-   what a scheduled restart saved and logs the last request; with nothing saved it does
-   nothing.
+   the post-start output and the container log.
+   Then, with `DEV_CODER_TOKEN_FILE` set (the opt-in Coder CLI login), it writes the file's
+   first line to the CLI's `session` file and the URL (`CODER_URL`, else `CODER_AGENT_URL`)
+   to `url` in `${CODER_CONFIG_DIR:-~/.config/coderv2}` (directory 0700, files 0600), then
+   logs the user `coder whoami` reports. A missing or empty file, no URL or no `coder`
+   gives one `WARNING` and no login. Unset, it does nothing.
+   Last, it runs `dev-restart-self --resume` (see [`dev-restart-self`](#dev-restart-self)),
+   which can use the login: it restores what a scheduled restart saved and logs the last
+   request; with nothing saved it does nothing.
 2. Records Claude's `installMethod: native` in `.claude.json` if missing (`claude doctor`
    warns without it, because the config directory starts empty).
 3. Seeds `$CODEX_HOME/config.toml` with a top-level `sandbox_mode = "danger-full-access"`
@@ -1812,7 +1822,7 @@ and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assi
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in `factory.events`. An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `old` (as above), `new` (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`) or `shadow`, the default. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)

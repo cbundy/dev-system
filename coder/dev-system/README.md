@@ -70,6 +70,7 @@ privacy defaults are in
 | `workspace_secrets_dir` | empty (off) | Directory on the Docker host with one folder per workspace, `<dir>/<lower(owner)>/<lower(workspace name)>/gh-token` (owner and workspace name lower-cased, as in the container name; the file owned 1000:1000, mode 0600). When set, every workspace mounts only its own folder, read-only, at `/run/secrets/dev-system-workspace`, whatever its GitHub login; the folder can also carry `factory-db-writer-url` and `factory-db-reader-url` to put that workspace on another factory database (see [docs/factory-db.md](../../docs/factory-db.md)). A workspace that picks **GitHub login** *This workspace's own token* also gets `DEV_GH_TOKEN_FILE`. Must not be `secrets_dir` or under it, since that one is mounted into every workspace (a validation rejects it). Docker creates a missing folder as an empty root-owned one, and `dev-init` then warns that the token is missing. Empty turns the choice off. Only the path passes through Terraform, never a token. See [Sharing one gh login](#sharing-one-gh-login). |
 | `claude_auth_volume_name` | empty (off) | Named Docker volume behind the per-workspace **Claude login** choice: workspaces that pick *shared* mount it at `/persist/claude-auth` and share one Claude login, keeping their own history and settings. Empty hides the choice, and every workspace keeps its own login. See [Sharing one Claude login](#sharing-one-claude-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
+| `coder_login_secrets_dir` | empty (off) | Directory on the Docker host holding `coder-session-token` for the opt-in Coder CLI login, mounted read-only at `/run/secrets/dev-system-coder-login` only into workspaces with `coder_login` on. Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `push-next.sh` always pushes it empty. See [Coder CLI login (opt-in)](#coder-cli-login-opt-in). |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
 | `registry_auth_address` | `ghcr.io` | Registry the credentials are for. Only used with `registry_auth_config`. |
 
@@ -130,6 +131,7 @@ for repo plugins, opt-outs and recovery when an install fails.
 | `cpus` | 2 | yes | CPU limit (1-16). |
 | `memory_gb` | 8 | yes | Memory limit in GB (1-16). 8 leaves room for an agent, a no-mistakes pipeline and a Playwright e2e run at once; 4 got the browser and test runners OOM-killed (cbundy/job-search#222). |
 | `template_testing` | `false` | yes | Mounts the Template Admin token from `template_tester_secrets_dir`, so agents here can push `dev-system-next`. That token can change any template: only for a workspace developing dev-system. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
+| `coder_login` | `false` | yes | Logs the `coder` CLI in inside this workspace from the token in `coder_login_secrets_dir`, so agents here can drive other workspaces (e.g. the factory loop's shadow and testbed runs). That token can reach every workspace its user can reach: only for a workspace that drives others. Takes effect on the next start. See [Coder CLI login (opt-in)](#coder-cli-login-opt-in). |
 
 `remote_control_skip_permissions` sets `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` to `1` (else
 `0`), documented in the [image README](../../images/base/README.md). In `session` mode the
@@ -264,7 +266,7 @@ coder create <repo>-loop --template orchestrator-loop \
 ```
 
 The loop's agents run unattended, so a tool call that would ask for approval is refused instead
-(SPEC 10.10); every loop workspace in use runs with `remote_control_skip_permissions` on. The
+(v2 SPEC 10.10); every loop workspace in use runs with `remote_control_skip_permissions` on. The
 stop gate runs one full gate per 8 CPUs at once, beside the agents. Logins are as for any
 workspace ([First-run logins](#first-run-logins)).
 
@@ -300,7 +302,7 @@ workspace ([First-run logins](#first-run-logins)).
   within a minute, whatever its mode, until the file is deleted.
 - **Stopping the workspace** (`wind_down_minutes`, 10 here): the stop path is Coder stop, then the
   `Wind down` stop script (`wind-down.sh`), then the loop's wind-down mode
-  ([SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace
+  ([v2 SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace
   (`/persist/claude/factory-loop/<owner>__<repo>`) the script writes `wind-down.request`, so the
   loop starts nothing new, and waits until no step runs, `/factory stop-now` is used, or the cap
   passes (the smaller of the loop's own cap and the template's, counted from the request). It
@@ -364,6 +366,11 @@ workspace ([First-run logins](#first-run-logins)).
   workspace's `template_testing` parameter on, that directory is bind-mounted read-only at
   `/run/secrets/dev-system-template-tester` for `push-next.sh`. Every other workspace
   never sees it.
+- **Coder CLI login token, opt-in.** Only with `coder_login_secrets_dir` set and the
+  workspace's `coder_login` parameter on, that directory is bind-mounted read-only at
+  `/run/secrets/dev-system-coder-login` and `DEV_CODER_TOKEN_FILE` points at its
+  `coder-session-token`, which `dev-init` turns into the CLI's login on every start. Every
+  other workspace never sees it.
 - **Logins metadata.** A row on the workspace page, e.g.
   `claude: in, codex: out (optional), gh: out`, refreshed every 300 seconds using
   `dev-login status --json --cached`. Older images that reject `--cached` fall back to
@@ -693,3 +700,49 @@ coder tokens remove <id>                # expire it
 To revoke access entirely, delete the token file from `/etc/dev-system/template-tester`
 and run
 `coder users suspend template-tester`.
+
+## Coder CLI login (opt-in)
+
+A workspace that drives other workspaces (the factory loop's shadow and testbed runs use
+`coder ssh`) needs a logged-in `coder` CLI. By default no workspace has one. With the
+`coder_login` parameter on, and `coder_login_secrets_dir` set, the template mounts a host
+directory read-only at `/run/secrets/dev-system-coder-login` and sets `DEV_CODER_TOKEN_FILE`
+to its `coder-session-token`. On every start `dev-init` writes that token to the CLI's
+`session` file (`~/.config/coderv2`, directory 0700, file 0600) and the server URL
+(`CODER_URL`, else `CODER_AGENT_URL`) to `url`, then logs the user `coder whoami` returns,
+or one `WARNING` naming the cause. This runs before `dev-restart-self --resume`, so a
+resumed restart can use the login. The CLI's config is not on a volume, so a workspace
+that stops opting in has no login after its next start. Only the path passes through
+Terraform, never the token. `push-next.sh` always pushes `coder_login_secrets_dir` empty, so
+no `dev-system-next` workspace gets it.
+
+### What the token can do
+
+The token is a session for one Coder user and **reaches every workspace that user can
+reach**, with that user's rights. Any agent or shell in an opted-in workspace can use it, as
+can root on the Docker host. Use a dedicated user, keep its lifetime short, and turn
+`coder_login` on only for workspaces that need it.
+
+### One-time setup
+
+1. As a Coder Owner, mint a token for the user (`coder tokens create --user <user> --name
+   dev-system-coder-login --lifetime 2160h`); it is printed once.
+2. As root on the workspace Docker host, write it into a directory of its own, not
+   `secrets_dir` or `workspace_secrets_dir`:
+
+   ```bash
+   install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/coder-login
+   (umask 077 && read -rsp 'Coder token: ' t && printf '%s\n' "$t" > /etc/dev-system/coder-login/coder-session-token)
+   chown 1000:1000 /etc/dev-system/coder-login/coder-session-token
+   ```
+
+3. `terraform.tfvars` already sets `coder_login_secrets_dir` to that directory, so the next
+   `coder/push.sh dev-system` turns the feature on (inert until the directory exists).
+4. Turn on `coder_login` (Settings, Parameters) on each workspace that needs it, and restart
+   it. Check with `coder whoami`.
+
+### Rotation and revocation
+
+Mint a new token, replace the file, then restart each opted-in workspace (the login is
+rebuilt at start). Expire the old one with `coder tokens list --all` and
+`coder tokens remove <id>`. To revoke entirely, delete the token file and expire the token.

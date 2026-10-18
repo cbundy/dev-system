@@ -26,7 +26,7 @@ export function hook(work: () => Promise<void>): Promise<void> {
 }
 
 // ledgerFor: the runtime a hook works with, while the loop is in act mode with no kill switch
-// (SPEC 11.1, 11.3: observe and off log no real event and keep no ledger), once the ledger is
+// (v2 SPEC 13.11.1, 13.11.3: observe and off log no real event and keep no ledger), once the ledger is
 // loaded: by this module already, or now (an answer that comes before the first pass after a
 // reload).
 export async function ledgerFor($: EngineInterface): Promise<Runtime | null> {

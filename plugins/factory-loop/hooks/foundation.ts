@@ -14,7 +14,7 @@ import { AGENT_STEPS } from './v2/types'
 const MIN = 60_000
 export const HOUR = 60 * MIN
 
-// The classes each tier allows (v1 SPEC 5.2; rails.ts TIER_CLASSES is the act step's copy).
+// The classes each tier allows (v2 SPEC 13.5.2; rails.ts TIER_CLASSES is the act step's copy).
 export const ALLOWED: Readonly<Record<Tier, readonly ActionClass[]>> = {
   normal: ['free', 'owner', 'drive', 'develop', 'start'],
   slow: ['free', 'owner', 'drive', 'develop', 'start'],
@@ -24,8 +24,8 @@ export const ALLOWED: Readonly<Record<Tier, readonly ActionClass[]>> = {
 
 export const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 
-// The kinds that write to GitHub (or read it heavily): held while GitHub rate-limits us (v1 SPEC
-// 10.2), by plan and, for the rest of a pass that met a limit, by the act step (act.ts runActions).
+// The kinds that write to GitHub (or read it heavily): held while GitHub rate-limits us (v2 SPEC
+// 13.10 item 2), by plan and, for the rest of a pass that met a limit, by the act step (act.ts runActions).
 export const GITHUB_V2: readonly ActionKind[] = [
   'claim',
   'heartbeat',
@@ -45,7 +45,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'queue-merge',
 ]
 
-// The executor breaker (v1 SPEC 11.4): three failures in a row of one kind hold that kind this long.
+// The executor breaker (v2 SPEC 13.11.4): three failures in a row of one kind hold that kind this long.
 export const BREAKER_MS = 30 * MIN
 
 // The step-unknown breaker (v2 SPEC 5.3): `trips` unexplained unknowns of agent steps, on at least
@@ -115,14 +115,14 @@ export function maxAttemptsOf(config: Config, kind: ActionKind | AgentType, cap?
 }
 
 // cadenceOf: the interval of a kind that runs on a cadence. Heartbeat and sweep retry at their
-// next due time, so they are never used up (v1 SPEC 6.1). null: any other kind.
+// next due time, so they are never used up (v2 SPEC 13.6.1). null: any other kind.
 export function cadenceOf(config: Config, kind: ActionKind | AgentType): Ms | null {
   if (kind === 'heartbeat') return config.heartbeatEveryMs
   if (kind === 'sweep') return config.sweepEveryMs
   return null
 }
 
-// gate: whether the action under this key may run now (v1 SPEC 5.1 "blocked"): new keys go; a
+// gate: whether the action under this key may run now (v2 SPEC 13.5.1 "blocked"): new keys go; a
 // running or done key is not planned again; a failed, timed-out or lost one runs again after its
 // backoff until its attempts are used up, and an agent's only once the agent list shows it ended.
 export function gate(ctx: PlanCtx, key: string, kind: ActionKind | AgentType, cap?: number): Gate {
@@ -192,7 +192,7 @@ export function blindPass(ctx: PlanCtx): void {
   }
 }
 
-// --- the breakers (v1 SPEC 11.4; v2 SPEC 5.3) -------------------------------------------------------
+// --- the breakers (v2 SPEC 13.11.4, 5.3) -------------------------------------------------------
 
 // executorBreaker: the time the newest of this kind's last three ended entries ended, when all
 // three failed within BREAKER_MS of now; else null.
@@ -419,7 +419,7 @@ export function titleOf(f: TitleFrame): string {
 // the live stages; observe reads the GitHub state of every issue in one (#556)
 export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
-// tierOf: the usage tier (SPEC rule G3). The higher of the two windows decides; a missing
+// tierOf: the usage tier (rule G3, v2 SPEC 13.5.2). The higher of the two windows decides; a missing
 // reading is Normal (the skill fails open); an owner override keeps Normal below its pct.
 export function tierOf(
   usage: Usage,

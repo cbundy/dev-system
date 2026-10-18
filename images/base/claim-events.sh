@@ -14,10 +14,11 @@
 # Source switch (cbundy/dev-system#905, docs/factory-events/replay.md "Source switch"):
 # CALLUM_FLOW_CLAIM_EVENTS_SOURCE picks the store the rule reads.
 #   old     factory.events through dev-query, and this device's old log (callum-flow-event --path).
-#   new     factory.event_log through dev-query --factory, and this device's new log
+#           The way back: CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old.
+#   new     (the default, also when unset or empty) factory.event_log through dev-query --factory, and this device's new log
 #           (callum-flow-event --new-path). The new type names are read by name; requeued is
 #           mapped back to reclaimed in DIR/latest, so ce_held and the sweep see one vocabulary.
-#   shadow  (the default, also when unset) decide on old exactly as `old` does, then read both
+#   shadow  opt-in, to re-measure: decide on old exactly as `old` does, then read both
 #           sides over a window and write one shadow_read event (reader claim-events, tool
 #           CE_TOOL) with how many issues the two sides decide differently. The decision never
 #           depends on the new side, and a failed write only warns.
@@ -54,9 +55,9 @@ ce_device() {
 # ce_source: sets CE_SRC to old, new or shadow from CALLUM_FLOW_CLAIM_EVENTS_SOURCE.
 ce_source() {
   case "${CALLUM_FLOW_CLAIM_EVENTS_SOURCE:-}" in
-    '' | shadow) CE_SRC=shadow ;;
+    '' | new) CE_SRC=new ;;
+    shadow) CE_SRC=shadow ;;
     old) CE_SRC=old ;;
-    new) CE_SRC=new ;;
     *)
       if [ "${CE_WARNED_SRC:-}" != "${CALLUM_FLOW_CLAIM_EVENTS_SOURCE}" ]; then
         echo "${CE_TOOL:-claim-events}: warning: CALLUM_FLOW_CLAIM_EVENTS_SOURCE='${CALLUM_FLOW_CLAIM_EVENTS_SOURCE}' is not old, new or shadow, reading the old log" >&2

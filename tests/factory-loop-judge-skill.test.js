@@ -2,7 +2,7 @@
 
 // The factory loop's judge skill (plugins/factory-loop/skills/judge/SKILL.md) is what the model
 // answers wakes by, so it must cover every wake the loop sends and every answer the loop
-// accepts (docs/factory-loop/v2/SPEC.md 5.4, 11, appendix E; docs/factory-loop/SPEC.md 4.3). This
+// accepts (docs/factory-loop/v2/SPEC.md 11, 13.4.3, appendices D and E). This
 // reads the skill, the SPEC and the hooks as text, since plugin tests cannot read files; wake.ts's
 // own tests (plugins/factory-loop/tests/wake.test.ts) check the code.
 const { test } = require("node:test");
@@ -13,7 +13,7 @@ const path = require("node:path");
 const ROOT = path.join(__dirname, "..");
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
 const SKILL = read("plugins/factory-loop/skills/judge/SKILL.md");
-const SPEC = read("docs/factory-loop/SPEC.md");
+const SPEC = read("docs/factory-loop/v2/SPEC.md");
 const HOOKS = path.join(ROOT, "plugins/factory-loop/hooks");
 const SOURCES = Object.fromEntries(
   fs
@@ -97,12 +97,12 @@ test("every wake the hooks emit is in the skill under its kind", () => {
   }
 });
 
-test("every control op of SPEC 4.3 is in the skill's owner chat", () => {
-  const text = section(SPEC, "### 4.3 Control state (owner directives)");
+test("every control op of v2 SPEC 13.4.3 is in the skill's owner chat", () => {
+  const text = section(SPEC, "#### 13.4.3 Control state (owner directives)");
   const list = text.match(/from any client[^:]*:([\s\S]*?)\.\s+Each change/);
-  assert.ok(list !== null, "SPEC 4.3: the list of ops was not found");
+  assert.ok(list !== null, "v2 SPEC 13.4.3: the list of ops was not found");
   const ops = [...new Set(ticked(list[1]).map((t) => t.split(/\s+/)[0]))];
-  assert.ok(ops.length >= 16, `read only ${ops.length} ops from SPEC 4.3`);
+  assert.ok(ops.length >= 16, `read only ${ops.length} ops from v2 SPEC 13.4.3`);
   for (const op of ops) {
     assert.match(OWNER, new RegExp(`\`${escape(op)}[ \`]`), `SKILL.md Owner chat does not name the op ${op}`);
   }

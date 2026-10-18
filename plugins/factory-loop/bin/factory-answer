@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // factory-answer: an agent of the factory loop records its answer with this checked script
-// (SPEC 7.3a, #561).
+// (v2 SPEC 13.7.3a, #561).
 //
 // A TEMPORARY WORKAROUND. The loop's registered answer tools (hooks/agent-tools.ts, #548) are the
 // intended answer channel, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from
-// its timer never reaches the loop's own tool.call hook (#560; SPEC 13 has the probe), while its
+// its timer never reaches the loop's own tool.call hook (#560; v2 SPEC 13.13 has the probe), while its
 // Bash works. So this script gives back what the tool was for: it checks the answer against the
 // same contract (hooks/contract.mjs, which the loop and the tools share), names every problem so
 // the agent corrects it in the same turn, and on success writes the answer file the loop reads,

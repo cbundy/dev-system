@@ -1,4 +1,4 @@
-// Default settings (SPEC 4.2), and the pure loaders for the settings files and the control
+// Default settings (v2 SPEC 13.4.2), and the pure loaders for the settings files and the control
 // state. The repo-local .claude/factory-loop.json overrides any setting; the plugin ships no
 // repo-specific values. Types only are imported, so the pure planner and the replay can use this
 // too, and v2's vocabulary (v2/types.ts), which holds constants alone.
@@ -52,13 +52,13 @@ export const DEFAULT_CONFIG: Config = {
     implementer: 2,
     adjudicator: 2,
     fixer: 2,
-    // heartbeat and sweep are never used up (they retry at their cadence, SPEC 6.1): this many
+    // heartbeat and sweep are never used up (they retry at their cadence, v2 SPEC 13.6.1): this many
     // failures in a row tells the owner once
     heartbeat: 3,
     sweep: 3,
-    // a restart is tried once; the owner hears if it fails (SPEC 6.1)
+    // a restart is tried once; the owner hears if it fails (v2 SPEC 13.6.1)
     'restart-self': 1,
-    // SPEC 6.1: a stop once
+    // v2 SPEC 13.6.1: a stop once
     'stop-agent': 1,
     // a wake is asked once (with one reminder inside the attempt); then its fallback holds
     judge: 1,
@@ -82,7 +82,7 @@ export const DEFAULT_CONFIG: Config = {
   traceMaxBytes: 100 * 1024 * 1024,
   // script: a TEMPORARY WORKAROUND (#561, D-74). The registered answer tools (`tool`, #548) are
   // the intended channel, but on Claude Code 2.1.296 and 2.1.299 an agent spawned from the loop's
-  // timer never reaches the loop's tool hook (#560, SPEC 13), while Bash works: agents record
+  // timer never reaches the loop's tool hook (#560, v2 SPEC 13.13), while Bash works: agents record
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
@@ -160,7 +160,7 @@ export const EMPTY_CONTROL: Control = {
   notes: [],
 }
 
-// --- the settings files (SPEC 4.2) -------------------------------------------------------
+// --- the settings files (v2 SPEC 13.4.2) -------------------------------------------------------
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: MIN, h: 60 * MIN, d: 24 * 60 * MIN }
 
@@ -178,7 +178,7 @@ export function shortDuration(ms: Ms): string {
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
 }
 
-// Every action kind, for the loaders that read one from text (SPEC 6.1).
+// Every action kind, for the loaders that read one from text (v2 SPEC 13.6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
   'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
   'judge', 'task', 'tell', 'title',
@@ -339,7 +339,7 @@ function compiles(pattern: string) {
   }
 }
 
-// --- the control state (SPEC 4.3) ----------------------------------------------------------
+// --- the control state (v2 SPEC 13.4.3) ----------------------------------------------------------
 
 // controlFrom: control.json's parsed contents as Control, field by field: a missing or
 // malformed field takes its empty value, and a malformed list item is dropped, so one bad

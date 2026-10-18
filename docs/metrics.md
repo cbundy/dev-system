@@ -153,7 +153,7 @@ GROUP BY repo;
 
 How long the stop gate waited for a turn, and how long it ran, per gate run. The loop writes one
 `gate_run` event for each `gate-pass`, `gate-fail` and `gate-unknown` line of the workspace
-companion (`rules-gates.ts`, SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
+companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
 took one at once or there is no limit), `run_ms` the time the commands ran (0 when they never
 did), `queued_behind` how many gates held a turn or waited ahead when it asked, `concurrency` the
 limit it ran under (null: none), and `started_at` when it asked for its turn. A retried write can
@@ -178,7 +178,7 @@ ORDER BY started_at DESC;
 ```
 
 How often the stop gate hook itself failed or was cut off (the engine gives a hook 10 s of budget
-that host calls pause, SPEC 10.6). Every `gate-unknown` line is an `intervention` with cause
+that host calls pause, v2 SPEC 10.6). Every `gate-unknown` line is an `intervention` with cause
 `gate-unknown`; a cap wait or a gate that could not run also gives a `gate_run` with result
 `unknown`, but the hook's own `.catch` line has no `waitMs` and gives none. So per day, the excess
 of the first count over the second is the hook failures and cut-offs; its reason (the
@@ -248,7 +248,7 @@ GROUP BY repo;
 ```
 
 (c) Each cut step and its re-run: the first `transition` after `stopped_at` with the same repo,
-issue, life and step. `rerun_via` `free:load` with table row `U1` is the free re-run (SPEC 5.1,
+issue, life and step. `rerun_via` `free:load` with table row `U1` is the free re-run (v2 SPEC 5.1,
 docs/factory-loop/v2/SPEC.md:528, 731-733). Any other via is the cost of the cap: the attempt's
 free re-run was already spent. Null means no re-run yet. A seq key
 (`i<N>/l<life>/s<seq>/<step>/a<n>`) and a review key (`i<N>/l<life>/review/<patch7>/r<round>/a<n>`)
@@ -439,7 +439,7 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producer is the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
-event per run in their default `shadow` source (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`), with
+event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
 (lifecycle class, latest claim type, claim device) differs, over the last 7 days cut 10 minutes
 before now; the query groups by reader and tool.

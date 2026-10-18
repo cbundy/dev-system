@@ -4,7 +4,7 @@
 // (record.ts) and the migration tool build and read their events here alone, so a later format
 // change touches this module only.
 //
-// The format is today's (owner, 2026-10-15; SPEC 15 "v2's events use today's format"): existing
+// The format is today's (owner, 2026-10-15; v2 SPEC 15 "v2's events use today's format"): existing
 // `callum-flow-event` states and columns (issue, branch, pr, head; actor for a fixer's verdict),
 // and v2's extra fields as `key=value` tokens in the note, encoded as the `loop` notes are
 // (derive.ts loopNote, enc):

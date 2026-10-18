@@ -1,8 +1,8 @@
 #!/bin/sh
 #
 # Tests for the claim tools' event source switch (cbundy/dev-system#905): claim-events.sh reads
-# the old store (factory.events), the new one (factory.event_log) or both (shadow, the default,
-# which decides on old and records a shadow_read event). A stub dev-query stands in for both
+# the old store (factory.events), the new one (factory.event_log) or both (shadow, opt-in, which
+# decides on old and records a shadow_read event). The default is new. A stub dev-query stands in for both
 # databases and honours the window the rule asks for; the events are written by the real
 # callum-flow-event, so the local logs are the real old and new ones.
 set -eu
@@ -175,14 +175,30 @@ final "$tmpdir/out/latest" 8 || fail "#8 is final"
 released "$tmpdir/out/latest" 11 || fail "#11 is released (requeued)"
 ! released "$tmpdir/out/latest" 9 || fail "#9 is not released"
 
-# the default is shadow: the decision is old's, on the same history
-drive
-rc_is 0 "default"
+# the default is new: unset and empty decide like the `new` run, read factory.event_log and not
+# the old store, and write no shadow_read event
+for setting in unset empty; do
+  if [ "$setting" = unset ]; then drive; else drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=; fi
+  rc_is 0 "default ($setting)"
+  expect_stderr_empty "default ($setting)"
+  tuples > "$tmpdir/tuples-default"
+  held > "$tmpdir/held-default"
+  cmp -s "$tmpdir/tuples-new" "$tmpdir/tuples-default" || fail "default ($setting) decides differently from new: $(diff "$tmpdir/tuples-new" "$tmpdir/tuples-default")"
+  cmp -s "$tmpdir/tuples-old" "$tmpdir/tuples-default" || fail "default ($setting) decides differently from old"
+  cmp -s "$tmpdir/held-new" "$tmpdir/held-default" || fail "default ($setting): held"
+  grep -q 'factory.event_log' "$S/calls-new" || fail "default ($setting) reads factory.event_log: $(cat "$S/calls-new" 2> /dev/null)"
+  [ ! -e "$S/calls-old" ] || fail "default ($setting) does not read the old store: $(cat "$S/calls-old")"
+  [ -z "$(shadow_events)" ] || fail "default ($setting) writes no shadow_read event"
+done
+
+# shadow, when asked for: the decision is old's, on the same history, and a shadow_read is written
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+rc_is 0 "shadow"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow decides on old: $(diff "$tmpdir/latest-old" "$tmpdir/out/latest")"
 [ "$(held)" = "$(cat "$tmpdir/held-old")" ] || fail "shadow: held"
-[ -n "$(shadow_events)" ] || fail "default is shadow: no shadow_read event"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=
-[ "$(shadow_events | wc -l)" = 2 ] || fail "an empty value is the default too"
+[ -n "$(shadow_events)" ] || fail "shadow: no shadow_read event"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+[ "$(shadow_events | wc -l)" = 2 ] || fail "shadow writes one event per run"
 
 # an invalid value warns once, names the variable and the value, and reads old
 drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=bogus
@@ -207,13 +223,13 @@ grep -q "warning: cannot read the central event log (new source, dev-query --fac
 ! grep -q '^9 ' "$tmpdir/out/latest" || fail "new, exit 1: local log only"
 # shadow: the decision stays old's; exit 78 records nothing, exit 1 records new_ok=false
 echo 78 > "$S/new-rc"
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "shadow, new exit 78"
 expect_stderr_empty "shadow, new exit 78"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow, new exit 78: decision"
 [ -z "$(shadow_events)" ] || fail "shadow, new exit 78 writes no event: $(shadow_events)"
 echo 1 > "$S/new-rc"
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "shadow, new exit 1"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow, new exit 1: decision"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "shadow, new exit 1: one warning: $(cat "$tmpdir/stderr")"
@@ -255,7 +271,7 @@ reset
 for n in 20 21 22; do both -4000 "$n" claimed claimed devB; done
 both -3000 21 reclaimed requeued devB
 local_event claimed --issue 23
-drive DRV_TOOL=callum-flow-claim
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow DRV_TOOL=callum-flow-claim
 rc_is 0 "equal"
 expect_stderr_empty "equal"
 ev=$(shadow_events)
@@ -271,7 +287,7 @@ both -4000 30 claimed claimed devB
 row old -3000 31 claimed devB
 row old -5 32 claimed devB
 row old -700000 33 claimed devB
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "differences"
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "differences: the event breaks shadow_read.v1: $ev"
@@ -283,10 +299,10 @@ grep -q '^33 claimed claimed devB$' "$tmpdir/out/latest" || fail "differences: t
 reset
 both -4000 30 claimed claimed devB
 row old -3000 31 claimed devB
-drive CALLUM_FLOW_SHADOW_WINDOW_SECONDS=2000
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow CALLUM_FLOW_SHADOW_WINDOW_SECONDS=2000
 shadow_events | jq -e '.data | .compared == 0 and .differences == 0' > /dev/null || fail "window: $(shadow_events)"
 # a longer settle time moves the older difference into live only
-drive CALLUM_FLOW_SHADOW_SETTLE_SECONDS=4000
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow CALLUM_FLOW_SHADOW_SETTLE_SECONDS=4000
 shadow_events | tail -1 | jq -e '.data | .differences == 0 and .live_differences == 1 and .settle_seconds == 4000 and .diff_keys == ["o/r#31"]' > /dev/null || fail "settle: $(shadow_events | tail -1)"
 # a difference on a deciding value only: the claim device, the lifecycle class
 reset
@@ -296,21 +312,21 @@ both -3900 42 claimed claimed devB
 row old -3000 40 claimed devC
 row new -3000 41 claimed devB
 row new -3000 42 transition devB
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 3 and .differences == 2 and .diff_keys == ["o/r#40", "o/r#41"]' > /dev/null || fail "deciding values: $(shadow_events)"
 # a non-deciding lifecycle type on one side only is no difference
 reset
 both -4000 43 claimed claimed devB
 row new -3000 43 transition devB
 row new -2900 43 finding_handled devB
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 1 and .differences == 0' > /dev/null || fail "non-deciding types: $(shadow_events)"
 
 # more than 50 differing keys: the list is clipped, the count is not
 reset
 i=100
 while [ "$i" -lt 160 ]; do row old -3000 "$i" claimed devB; i=$((i + 1)); done
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "clip: the event breaks shadow_read.v1"
 printf '%s\n' "$ev" | jq -e '.data | .differences == 60 and .live_differences == 60 and (.diff_keys | length) == 50 and .diff_keys[0] == "o/r#100" and .diff_keys[49] == "o/r#149"' > /dev/null || fail "clip: $ev"
@@ -319,7 +335,7 @@ printf '%s\n' "$ev" | jq -e '.data | .differences == 60 and .live_differences ==
 reset
 long=$(awk 'BEGIN { for (i = 0; i < 700; i++) printf "x" }')
 row old -3000 50 claimed "$long"
-drive
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "detail: the event breaks shadow_read.v1"
 printf '%s\n' "$ev" | jq -e '.data.detail | length == 500 and startswith("o/r#50 old: other claimed xxx")' > /dev/null || fail "detail clip: $ev"
@@ -327,7 +343,7 @@ printf '%s\n' "$ev" | jq -e '.data.detail | length == 500 and startswith("o/r#50
 # a failing write warns once, leaves the status and the decision alone
 reset
 row old -3000 60 claimed devB
-drive EVENT_BIN="$tmpdir/event-nowrite"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow EVENT_BIN="$tmpdir/event-nowrite"
 rc_is 0 "write fails"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "write fails: one warning: $(cat "$tmpdir/stderr")"
 grep -q 'warning: cannot record the shadow_read event' "$tmpdir/stderr" || fail "write fails: $(cat "$tmpdir/stderr")"
@@ -337,7 +353,7 @@ grep -q '^60 claimed claimed devB$' "$tmpdir/out/latest" || fail "write fails: t
 # without dev-query nothing is compared and nothing is recorded
 reset
 local_event claimed --issue 70
-drive DEVQ_BIN="$tmpdir/no-such-dev-query"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow DEVQ_BIN="$tmpdir/no-such-dev-query"
 rc_is 0 "no dev-query"
 expect_stderr_empty "no dev-query"
 grep -q '^70 claimed claimed devA$' "$tmpdir/out/latest" || fail "no dev-query: the local log decides: $(latest)"

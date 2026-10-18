@@ -1,7 +1,7 @@
 # Factory loop: decisions made without the owner
 
 The brief says: do not stop to ask; take the conservative option, record it here with the
-alternatives and why, and carry on. Each decision below is in force in [SPEC.md](SPEC.md) and the
+alternatives and why, and carry on. Each decision below is in force in [the v2 spec](v2/SPEC.md) and the
 code. The ones marked **owner call** are the ones most worth a look in the morning: the rest
 follow directly from the skill or the brief.
 
@@ -13,7 +13,7 @@ short summary of each under "Build decisions".
 
 ### D-05 The adjudicator reviews each merge; the model only sequences releases (owner call)
 
-- **Decision**: before each merge the loop spawns the adjudicator with purpose `merge` (SPEC M4).
+- **Decision**: before each merge the loop spawns the adjudicator with purpose `merge` (the retired v1 merge rule M4).
   It is seeded with ids and pointers only: the issue and brief URL, the PR, run and head, the
   implementer's handoff head, the guard output for that head and the run's verdict lines. It
   checks that the pipeline's fix commits after the handoff head keep every acceptance criterion
@@ -21,7 +21,7 @@ short summary of each under "Build decisions".
   links the issue the right way, and that a visual change has UI evidence. It returns
   `ACTION merge`, `hold` or `fixer`, one line on what changes for users, the bump with a reason,
   and sequencing flags (base image or template touched, a restart needed, a `run-it` rollout).
-  The loop merges on `merge` unless a sequencing rule holds it (SPEC M5); the model is woken only
+  The loop merges on `merge` unless a sequencing rule holds it (the retired v1 merge rule M5); the model is woken only
   when a flag needs a release-sequencing call, with the report's lines, never the diff.
 - **Alternatives**: (a) the first decision: the main model reads the fix commits
   (`JUDGE merge-review`); (b) skip the review when the pipeline added no fix commits.
@@ -38,7 +38,7 @@ short summary of each under "Build decisions".
   in its note. The loop logs it for agent starts and ends, wakes and their answers (with the
   wake's cause), owner notices and rate-cap holds. CLI work already logs its own events and gets
   no `loop` event. The ledger still lives in `$.store`, and a lost store is rebuilt exactly from
-  these events (SPEC 7.4, 7.5).
+  these events (v2 SPEC 13.7.4, 13.7.5).
 - **Alternatives**: no new state; the loop logs only what the model logs by hand today (the
   first decision). A lost store then costs harmless repeats.
 - **Why**: owner, 2026-10-13. Someone watching or debugging the factory must see when an
@@ -52,14 +52,14 @@ short summary of each under "Build decisions".
 
 - **Decision**: a `failed` run with id `unknown` (infrastructure) and a re-driven `cancelled` run
   become `TASK redrive` for the main model, which checks `daemon.log`, rebases, runs
-  `callum-flow-regate` and starts a fresh `axi run`, as it does today (SPEC P4, P5).
+  `callum-flow-regate` and starts a fresh `axi run`, as it does today (the retired v1 pipeline rules P4 and P5).
 - **Alternatives**: (a) a fixer agent with fixed re-drive instructions; (b) a new
   `callum-flow-redrive` CLI.
 - **Why**: the skill says "no fixer" for the infrastructure case, and both cases need reading
   `daemon.log` and composing the run's `--intent`, which is judgment. They are not rare: in the
   week to 2026-10-12 dev-system had 21 distinct cancelled runs and one run with id `unknown`. But
   18 of those 21 were history (their issue was superseded, merged or abandoned afterwards), and
-  the loop acts only on an issue's current run (SPEC 5.4), so about one wake every two days
+  the loop acted only on an issue's current run (the retired v1 pipeline section), so about one wake every two days
   remains. A CLI is the better long-term home once the steps are stable.
 - **Owner (2026-10-13)**: accepted for now, likely to be revisited. Every re-drive must leave a
   clear trail of when and why the model was involved, so that frequency and causes can justify
@@ -70,7 +70,7 @@ short summary of each under "Build decisions".
 
 - **Decision**: an owner action or decision is a `TELL` wake: the model writes one line in the
   conversation, which the phone shows, in the tick report's format. The title also counts open
-  owner items (SPEC 9).
+  owner items (v2 SPEC 13.9).
 - **Alternatives**: (a) the title only, which costs nothing but carries no detail (no links, no
   brief URL, no verdict lines); (b) push notifications from the mod.
 - **Why**: the skill's tick report adds a line exactly for these cases (SKILL:173-174), and the
@@ -86,7 +86,7 @@ short summary of each under "Build decisions".
   `--plugin-dir`.
 - **Alternatives**: list it now as opt-in, like factory-hud.
 - **Why**: the brief says do not ship. A listed plugin would reach every workspace with the next
-  release. Listing it is cutover step 2 (SPEC 14).
+  release. Listing it is cutover step 2 (v2 SPEC 17.5).
 - **Owner (2026-10-13)**: keep it out of the marketplace until the build is further along. When it
   goes to other containers for testing, it ships as a replacement for the released orchestrator,
   never alongside it.
@@ -94,7 +94,7 @@ short summary of each under "Build decisions".
 ### D-28 Act mode needs the orchestrator role and no old watcher (owner call)
 
 - **Decision**: act mode also needs `DEV_ROLE=orchestrator` and refuses while an
-  `orchestrator-watch.sh` lock for the repo is live (SPEC 11.2).
+  `orchestrator-watch.sh` lock for the repo is live (v2 SPEC 13.11.2).
 - **Heartbeat guard** (owner, 2026-10-13): act mode also waits while another device with role
   `orchestrator` and the same repo has a heartbeat in `factory.workers` from the last 120
   seconds. The check runs at the start of every pass, before any action, tells the owner once,
@@ -111,8 +111,8 @@ short summary of each under "Build decisions".
 
 - **Decision**: owner, 2026-10-13, #537 option B: a narrow `env-retry` executor reruns an
   environment escalation on the same head once per resume. Amended by [D-76](#d-76-a-resumed-escalation-sends-a-fixer-unless-it-is-all-env-with-no-note)
-  for owner notes and other verdicts. Current routing lives in [SPEC 5.4](SPEC.md#54-pipeline-gates-p),
-  and the executor's launch restrictions and retry limits in [SPEC 6.1](SPEC.md#61-catalogue).
+  for owner notes and other verdicts. The pipeline routing it belonged to is retired; v2's [transition table](v2/SPEC.md#43-the-table)
+  replaces it, and the executor catalogue is [v2 SPEC 13.6.1](v2/SPEC.md#1361-catalogue).
   The agent's safety choices were approved by the owner on 2026-10-14.
 - **Alternatives**: option A, the resume becomes a `task(redrive)` for the model.
 - **Why**: on the testbed codex was logged out, so six runs failed at the test step. Every
@@ -123,7 +123,7 @@ short summary of each under "Build decisions".
 ### D-07 What "at most one new dispatch per tick" means in Slow (owner call)
 
 - **Decision**: in Slow, at most one claim per pass, none within `slowGapMs` (10 minutes) of the
-  last claim, and none in a pass that plans merge work (SPEC 5.2).
+  last claim, and none in a pass that plans merge work (v2 SPEC 13.5.2).
 - **Alternatives**: one per pass with no gap; one in flight at a time; a shorter gap.
 - **Why**: today a tick is a watcher event or an agent's end, every few minutes when busy. The
   loop passes every 60 seconds, so "one per pass" alone would dispatch up to 60 an hour and defeat
@@ -138,14 +138,14 @@ short summary of each under "Build decisions".
 
 ### D-08 Stop new also holds the designer and implementer of an already-claimed issue
 
-- **Decision**: they are the `develop` class, blocked in Stop new and Stop all (SPEC 5.2).
+- **Decision**: they are the `develop` class, blocked in Stop new and Stop all (v2 SPEC 13.5.2).
 - **Alternatives**: treat them as in-flight work, which Stop new lets continue.
 - **Why**: the conservative reading of "start no sub-agent for new work", and it matches what the
   live orchestrator did at 94% on 2026-10-12 ("#489 implementer held", MEM 18:55).
 
 ### D-12 Every conflict gets a fixer
 
-- **Decision**: a guard `mergeable` conflict or a `conflict` run state spawns a fixer (SPEC M2).
+- **Decision**: a guard `mergeable` conflict or a `conflict` run state spawns a fixer (the retired v1 merge rule M2).
 - **Alternatives**: tell trivial from non-trivial conflicts and rebase trivial ones in code.
 - **Why**: the skill says "spawn a fixer for a non-trivial conflict", but telling the two apart
   is judgment, and a wrong "trivial" rebase can drop one side of colliding additions. A fixer
@@ -156,7 +156,7 @@ short summary of each under "Build decisions".
 - **Decision**: an issue with sub-issues (`sub_issues_summary.total > 0`), or whose title matches
   `trackerTitle` (default `Epic` or `Tracker` first, as in #340 "Epic: deterministic current
   state of the factory", which has no linked sub-issues), is never a candidate. Labels in the repo-local `skipLabels` (for example `parked`) also exclude an issue
-  (SPEC D1).
+  (the retired v1 claim rule D1).
 - **Alternatives**: leave both to owner `skip` directives.
 - **Why**: "trackers are never claimed" is a standing owner rule (MEM 2026-10-12, follow-up #471)
   that holds in every repo. The `parked` label is this owner's convention, so it is repo
@@ -166,7 +166,7 @@ short summary of each under "Build decisions".
 
 - **Decision**: a hold (a pending decision, an escalation, the review cap, a merge `hold`)
   is not a stored record. It is the plan finding that the fact still stands and the owner has not
-  resumed that subject since. A new head, a closed issue or an owner `resume` ends it (SPEC 5).
+  resumed that subject since. A new head, a closed issue or an owner `resume` ends it (v2 SPEC 13.5).
 - **Alternatives**: a stored hold list.
 - **Why**: one less piece of state to keep in step. A hold ends by itself when its subject moves
   on, which is the behaviour the skill describes ("wait").
@@ -191,10 +191,10 @@ short summary of each under "Build decisions".
   failures in a row tell the owner once. `pr-reopen`, `stop-agent` and `restart-self` get one
   attempt, `release-worktree` two, `guard` three, and each wake one (with its one reminder). A
   `lost` entry is retried at once. Exit 2 is a never-retried usage error only for the image's
-  own CLIs (SPEC 4.2, 6.1, 10.1).
+  own CLIs (v2 SPEC 13.4.2, 13.6.1, 13.10 item 1).
 - **Alternatives**: one count for every CLI write; every exit 2 a usage error.
 - **Why**: a heartbeat that ran out of attempts would stop renewing claims for a week, and
-  another device would reclaim the work. The smaller counts are SPEC 6.1's. A lost entry did not
+  another device would reclaim the work. The smaller counts are v2 SPEC 13.6.1's. A lost entry did not
   fail: its process died with the session. `gh` exits 2 when a command is cancelled and 1 on bad
   usage, so its exit 2 is worth another try.
 
@@ -204,7 +204,7 @@ short summary of each under "Build decisions".
   one leased for it, with `--step` so it answers only the gate plan judged (left out when the
   step is not known), and its log is read back after 5 seconds. A clean launch is `done`; rule
   `P3a` judges `respondSettleMs` later whether the gate moved. Each attempt has its own log
-  (SPEC 6.1, P3a).
+  (v2 SPEC 13.6.1; the retired v1 pipeline rule P3a).
 - **Alternatives**: keep the entry `running` until the run moves; no `--step`; one log per run.
 - **Why**: `P3a` reads a done respond's launch time, and the `H4` drain waits on running
   entries, so a respond left running would never be retried and would hold an update forever.
@@ -218,7 +218,7 @@ short summary of each under "Build decisions".
   next update is keyed by the head it pushed. A merge its own guard refused is a failed attempt,
   retried once rule `M2` clears the FAIL; only a refusal by GitHub or the harness tells the
   owner. A merge whose rollout read failed has it read again. A hand-merged closing PR on an
-  epic base closes its issue (SPEC M1, M2b, M6, M7).
+  epic base closes its issue (the retired v1 merge rules M1, M2b, M6 and M7).
 - **Alternatives**: guards fresh until their TTL, one update key per run head, every refused
   merge to the owner, and follow-ups only from a merge's own rollout read.
 - **Why**: each was a way a PR stalled or lost its follow-ups. The watcher keeps printing the
@@ -243,7 +243,7 @@ short summary of each under "Build decisions".
 - **Decision**: the judge skill answers `task(run-it)` and `task(release)` with `hold` while the
   release waits on the owner, then finishes in chat. A `run-it` PR waits while another merged
   `run-it` issue's Run it is unfinished: its task not answered `done`, the issue open, and the
-  owner has not resumed that issue since (SPEC M5).
+  owner has not resumed that issue since (the retired v1 merge rule M5).
 - **Alternatives**: keep the task open until the release is out; count any answered task as a
   finished Run it.
 - **Why**: one wake is open at a time (D-26), so a task held open for hours would block every
@@ -256,7 +256,7 @@ short summary of each under "Build decisions".
   device, and for the runs source to read; the restart goes only in a pass with nothing else
   planned, after the title. Once `dev-restart-self` returns, the module acts no more, and the
   drain ends only when the next load finds the restart lost, or done before it loaded. A failed
-  restart is not retried: the owner is told and the drain holds (SPEC H4).
+  restart is not retried: the owner is told and the drain holds (the retired v1 housekeeping rule H4).
 - **Alternatives**: end the drain when the restart reports done; retry a failed restart.
 - **Why**: `dev-restart-self` returns once Coder accepts the build, minutes before the
   container is replaced, so ending there starts new work in a container about to go. A
@@ -271,7 +271,7 @@ short summary of each under "Build decisions".
   rule's retry, and a failed `A1` stop tells the owner. `A2` stops tell the owner why. A turn
   that ends in `refusal` is a failed attempt, a spawn that does not start within 60 seconds
   fails, and a designer that posted its brief before it failed is not spawned again: the brief
-  goes to `judge(report)` (SPEC 5.1, A1, A2, D2, 7.5, 10.4).
+  goes to `judge(report)` (v2 SPEC 13.5.1, 13.7.5, 13.10 item 4; the retired v1 rules A1, A2 and D2).
 - **Alternatives**: trust any list read; retry by attempts alone; spawn a new designer whenever
   the last one did not answer.
 - **Why**: a failed read that returned nothing would mark every agent lost and spawn them all
@@ -286,7 +286,7 @@ short summary of each under "Build decisions".
   Every first line carries `repo=`. The one reminder repeats why an answer was refused, and an
   aborted or refused turn gets it too. A wake from an earlier session (another session id, or
   none recorded and started before this load) is lost at once with its attempt given back, so
-  its rule decides again (SPEC 7.5, 8.1, 8.2; #549).
+  its rule decides again (v2 SPEC 13.7.5, 13.8.1, 13.8.2; #549).
 - **Alternatives**: wait for the submit to resolve; count a dropped prompt as the wake's attempt.
 - **Why**: a wake gets one attempt, so a prompt the model never saw must not use it up. Waiting
   on a busy session would stall every other action for as long as its turn runs. `repo=` saves a
@@ -301,7 +301,7 @@ short summary of each under "Build decisions".
   its shape. The designer's prompt lists in-flight branch names only. Spawns are named with
   their purpose and, from the second attempt, the attempt. Implementers and fixers end their
   handoff with `RESULT run= head= commit= gated= branch= pr=`, and a head that is not the commit
-  is not gated. Each spawn's prompt and each answer are kept in the loop dir (SPEC 6.1, 6.3).
+  is not gated. Each spawn's prompt and each answer are kept in the loop dir (v2 SPEC 13.6.1, 13.6.3).
 - **Alternatives**: refuse any text with the bare words; list the in-flight branches' files;
   read the handoff's prose.
 - **Why**: a ban on the words would garble adjudicator instructions ("Fix the timeout") and
@@ -318,13 +318,13 @@ short summary of each under "Build decisions".
   carries over a rebase-only update only on a head's first round; a `restart` flag alone needs no
   sequencing call; an ACTION a rule does not expect plans nothing and is logged; an issue `only`
   names that is not in the queue is named in the skip reasons; trackers are followed three
-  levels deep (SPEC 5).
+  levels deep (v2 SPEC 13.5).
 - **Alternatives**: `at cap` whenever live issues equal the cap; a claim counted only once done;
   no bound on hand-merge follow-ups.
 - **Why**: a cap reached with an empty queue is no news. Checking the plan properties on every
-  plan call showed that planning again while a claim ran claimed again (SPEC 5.9, property 2).
+  plan call showed that planning again while a claim ran claimed again (v2 SPEC 13.5.9, property 2).
   `callum-flow-factory-state` lists a merged issue for 24 hours, well inside the ledger's
-  seven-day prune, so a follow-up can never fire twice. SPEC M5 names a major bump, a run-it
+  seven-day prune, so a follow-up can never fire twice. The retired v1 merge rule M5 named a major bump, a run-it
   rollout and a base image or template change as the calls; a restart is rule `H4`'s.
 
 ## Architecture
@@ -332,7 +332,7 @@ short summary of each under "Build decisions".
 ### D-03 Plan does not know the mode
 
 - **Decision**: `plan` computes the same actions in observe and act mode; only the driver decides
-  whether to execute them (SPEC 2).
+  whether to execute them (v2 SPEC 13.2).
 - **Alternatives**: plan only what the mode allows.
 - **Why**: observe mode then shows exactly what act mode would do, which is the point of the
   shadow run.
@@ -342,7 +342,7 @@ short summary of each under "Build decisions".
 - **Decision**: when the loop wakes the model with a `JUDGE` or `TASK` line, the model answers by
   ending its reply with a short block the loop reads: `ANSWER <id> <decision>`, then optional
   `key: value` lines such as `reason:`. Calling the `mcp__factory-loop__answer` tool works too,
-  but nothing depends on it (SPEC 8.2).
+  but nothing depends on it (v2 SPEC 13.8.2).
 - **What it means for you**: every answer the model gives the loop is plain text in the
   conversation, so you see it in the transcript and on your phone, and nothing is hidden. A
   missing or malformed answer gets one reminder, then the wake's safe fallback, which is always a
@@ -357,7 +357,7 @@ short summary of each under "Build decisions".
 
 ### D-06 Usage comes from `usage-check.sh` every 5 minutes plus the session's own figures
 
-- **Decision**: SPEC 3.3, `usage` source.
+- **Decision**: v2 SPEC 13.3.3, `usage` source.
 - **Alternatives**: `$.session.usage()` only, which is free.
 - **Why**: the session's figures come from its own last API response. An idle loop makes no API
   calls, while the other orchestrators keep spending the same plan, so those figures go stale and
@@ -367,7 +367,7 @@ short summary of each under "Build decisions".
 ### D-10 Observe mode sends side-effect events to a sink
 
 - **Decision**: every command run in observe mode gets `CALLUM_EVENTS_DIR=<loop dir>/sink-events`
-  (SPEC 11.1).
+  (v2 SPEC 13.11.1).
 - **Alternatives**: skip the CLIs that log, or add a no-log flag to each.
 - **Why**: `usage-check.sh`, the `--once` modes and `callum-flow-issue-read` all log as a side
   effect. One environment variable keeps all of them out of the live event log without touching
@@ -376,7 +376,7 @@ short summary of each under "Build decisions".
 ### D-14 The designer's definition owns its `RESULT` line
 
 - **Decision**: the designer's agent definition (`designer.md`) ends every return with one
-  `RESULT brief=... created=... pending_decision=...` line (SPEC 7.2), as the adjudicator's
+  `RESULT brief=... created=... pending_decision=...` line (retired with v1's designer; v2's designer answers through the script, v2 SPEC 8.7), as the adjudicator's
   definition already owns its verdict lines and `ACTION`. It ships with cutover step 1; until
   then the loop's prompt asks for the line as a fallback.
 - **Alternatives**: the first decision, where only the loop's prompt asks for it; parsing the
@@ -389,7 +389,7 @@ short summary of each under "Build decisions".
 ### D-19 `blocked_by` comes from the issue's dependency summary
 
 - **Decision**: `issue_dependencies_summary.blocked_by` (open blockers) from
-  `callum-flow-issue-read --json <N>` (SPEC 3.1).
+  `callum-flow-issue-read --json <N>` (v2 SPEC 13.3.1).
 - **Alternatives**: a new `--blocked-by` mode on the reader, or a field in
   `callum-flow-factory-state`.
 - **Why**: GitHub already returns the count on the issue object through the sanctioned reader
@@ -397,7 +397,7 @@ short summary of each under "Build decisions".
 
 ### D-20 Pipeline classification stays in `pipeline-watch.sh`, through a new `--once` mode
 
-- **Decision**: SPEC 3.4. The queue gets the same treatment (`queue-watch.sh --once`).
+- **Decision**: v2 SPEC 13.3.4. The queue gets the same treatment (`queue-watch.sh --once`).
 - **Alternatives**: re-implement the classification in TypeScript.
 - **Why**: the brief asks for it, and the classification (head checks, CI markers, mergeability,
   stalls, run id resolution) is subtle and tested. A one-shot mode reuses it and keeps the
@@ -406,7 +406,7 @@ short summary of each under "Build decisions".
 ### D-21 Shadow and replay read pipeline states from the event log
 
 - **Decision**: `runSource: events` builds runs from the live orchestrator's watcher events and the
-  mirror (SPEC 3.3).
+  mirror (v2 SPEC 13.3.3).
 - **Alternatives**: run the shadow loop on the orchestrator's own workspace.
 - **Why**: pipeline runs are local to the workspace that started them, so the spike workspace has
   none for dev-system. The brief forbids touching the live orchestrator's workspace. The watcher
@@ -417,7 +417,7 @@ short summary of each under "Build decisions".
 
 ### D-26 One wake at a time
 
-- **Decision**: at most one `JUDGE`, `TASK` or `TELL` open at once (SPEC O2).
+- **Decision**: at most one `JUDGE`, `TASK` or `TELL` open at once (v2 SPEC 13.5.8, rule O2).
 - **Alternatives**: several queued prompts.
 - **Why**: the model answers one prompt per turn, and queued prompts would arrive while it is
   still answering the first. One at a time keeps each answer tied to its line.
@@ -437,7 +437,7 @@ short summary of each under "Build decisions".
   transition before its `loop` event. It writes back only while the act lock names this session
   or still stands as it did at the load. The lease lasts at least 15 minutes, is renewed before
   every action and on a timer during a pass, and each write of it is a compare-and-set under
-  `flock`. A store that cannot be read, or that refuses a save, starts nothing (SPEC 7.1, 10.10,
+  `flock`. A store that cannot be read, or that refuses a save, starts nothing (v2 SPEC 13.7.1, 13.10 item 10,
   11.2).
 - **Alternatives**: re-read the ledger from the store every pass; a lease renewed once a pass and
   written plainly; fall back to the event log when the store cannot be read.
@@ -456,7 +456,7 @@ short summary of each under "Build decisions".
   and the rebuilt ledger is kept and saved; a merge rebuilt from the log counts as having had its
   rollout read, since the merging device ran the follow-ups then. A GitHub rate limit is remembered in the store for
   15 minutes, and once an executor meets one, the rest of the pass's GitHub writes are skipped
-  with no attempt counted (SPEC 3.3, 7.5, 10.2).
+  with no attempt counted (v2 SPEC 13.3.3, 13.7.5, 13.10 item 2).
 - **Alternatives**: one reader in both modes; rebuild from the facts window; let each later
   write in the pass meet the limit itself.
 - **Why**: a shadow must not log the events the live orchestrator also logs. A hold such as a
@@ -470,7 +470,7 @@ short summary of each under "Build decisions".
 - **Decision**: the workspace file takes `toolsDir` (where the watchers and `usage-check.sh`
   live; default the base image's `/usr/local/share/callum-tools`) and `binDir` (put ahead of
   `PATH`). Every command also gets the configured labels as `CALLUM_FLOW_READY_LABEL` and
-  `CALLUM_FLOW_IN_DEV_LABEL` (SPEC 4.1).
+  `CALLUM_FLOW_IN_DEV_LABEL` (v2 SPEC 13.4.1).
 - **Alternatives**: wait for a base image release before any act-mode test; fixed image paths.
 - **Why**: the `--once` modes and the `loop` state ship in the image, and no release carries
   them yet; pointing at a checkout's `features/src/callum-tools` and `images/base` lets the
@@ -485,7 +485,7 @@ short summary of each under "Build decisions".
   `old-watcher` notice). The heartbeat guard blocks on a failed query and on a device with no
   name, and counts a stopping device's heartbeat. A session the role check refuses tells
   nothing. The usage pre-check, by contrast, fails open. A pass a rail refuses plans exactly as
-  observe mode does (SPEC 10.7, 11.2).
+  observe mode does (v2 SPEC 13.10 item 7, 13.11.2).
 - **Alternatives**: read a check that cannot run as "nothing there"; act as soon as the
   watcher's lock is gone; tell the owner from every session.
 - **Why**: each rail guards against two drivers on one repo, where doubt should keep the loop in
@@ -501,7 +501,7 @@ short summary of each under "Build decisions".
   (`breaker kind=ping`) and three throwing passes (`pass-error`, new) go out through the wake
   executor, keyed by when their spell began, and only while no wake is open, outside plan's
   one-wake choice. Rail and breaker notices wait in the store, are dropped when their spell ends
-  first, and go again if the engine dropped the prompt. `stopped` now says why (SPEC 9.2).
+  first, and go again if the engine dropped the prompt. `stopped` now says why (v2 SPEC 13.9.2).
 - **Alternatives**: hand these notices to plan as state; send them whatever wake is open.
 - **Why**: they come from the driver, not the factory's state, so plan never sees them, and one
   wake at a time (D-26) still holds. The owner needs to hear once why act mode is held back or
@@ -515,7 +515,7 @@ short summary of each under "Build decisions".
   `callum-flow-event loop` refuses a note without `kind=`, `key=` and `status=`, `--if-changed`
   skips `loop` lines, and every event-log reader (factory-state, evaluate, heartbeat-state, the
   sweep) treats `loop` as bookkeeping. Loop notes leave out free text and guard outcomes
-  (SPEC 3.4, 7.4).
+  (v2 SPEC 13.3.4, 13.7.4).
 - **Alternatives**: accept and ignore other options; log a `watcher_error` for each failure;
   let `loop` events count as activity.
 - **Why**: a failed listing must never read as "no runs". The loop polls every minute and
@@ -529,7 +529,7 @@ short summary of each under "Build decisions".
 - **Decision**: once a day the loop deletes the spawn records, saved answers, respond logs,
   recorded states and decision logs older than 7 days. Recorded states are written in observe
   mode only, at most 288 a day. The stored ledger keeps within 3 MiB by dropping the entries
-  that ended longest ago, never a running one (SPEC 7.1, 11.6).
+  that ended longest ago, never a running one (v2 SPEC 13.7.1, 13.11.6).
 - **Alternatives**: keep everything; a size limit on each file.
 - **Why**: nothing reads past the ledger's own week, and the store refuses a whole save over its
   4 MiB limit, which would lose every change since the last one. A busy synthetic week stays
@@ -542,7 +542,7 @@ short summary of each under "Build decisions".
   label before they log `abandoned`. `release-worktree` gives `treehouse return` empty stdin,
   never `--force`, and is done only when the slot reads `available`. `milestone-expect` puts its
   reason on one line. `stop-agent` refuses any agent the ledger does not hold running
-  (SPEC 6.1).
+  (v2 SPEC 13.6.1).
 - **Alternatives**: rely on `CALLUM_FLOW_REPO`, which `gh` does not read; log the event first;
   force the return.
 - **Why**: a write can then reach only the configured repo. With the label off first, the event
@@ -569,7 +569,7 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
 - **Decision**: when an update is due, the loop drains: it starts no new claims, agents or
   wakes. Once the safe state holds (no loop agent running, no wake open, no command in flight,
   every current pipeline run parked, merge-ready or done) it runs `dev-restart-self` and resumes
-  by itself after the restart (SPEC H4). The reconciler says an update is due through control
+  by itself after the restart (the retired v1 housekeeping rule H4, now R2, v2 SPEC 14.1). The reconciler says an update is due through control
   state (`updateDue`): it owns which versions are wanted, and the loop owns when it is safe to
   switch. Until the reconciler exists, and whenever the owner wants one, `/factory update` sets
   it by hand (owner, 2026-10-13). A drain longer than an hour tells the owner.
@@ -582,7 +582,7 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
 ### D-16 Owner directives become control state
 
 The pause, drain, wind-down, priority, "only these" and skip instructions the memory file holds as free text
-(I-90) become typed control state, set through the control tool or `/factory` (SPEC 4.3). The model
+(I-90) become typed control state, set through the control tool or `/factory` (v2 SPEC 13.4.3). The model
 still keeps the memory file for lessons and context.
 
 ### D-22 Agent prompts point at their own type's memory file
@@ -649,7 +649,7 @@ events to compare claims.
 ### D-33 Runtime settings and owner directives are plain JSON files
 
 `${CLAUDE_CONFIG_DIR}/factory-loop/config.json` holds the workspace's mode, repo, shadow device
-and run source, and `<loop dir>/control.json` holds the owner directives (SPEC 4.1, 4.3). The
+and run source, and `<loop dir>/control.json` holds the owner directives (v2 SPEC 13.4.1, 13.4.3). The
 plugin options stay as defaults. The first plan put control state in `$.store`; files are easier
 to inspect and set from a shell (the shadow run is configured that way), they survive restarts on
 `/persist` just as well, and the `/factory` command and the control tool write the same file.
@@ -662,7 +662,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-35 "Only these issues" is its own directive
 
-- **Decision**: control state gains `only` (SPEC 4.3): when it is non-empty, rule `D1` claims
+- **Decision**: control state gains `only` (v2 SPEC 13.4.3): when it is non-empty, rule `D1` claims
   only those issues, in that order, and leaves work in flight alone. A tracker or epic in the
   list stands for its open sub-issues, nested ones included, in ascending order; they come from
   the tracker's timeline (`sub_issue_added` and `sub_issue_removed`), which
@@ -690,7 +690,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision**: when a respond leaves its gate unmoved, is retried once and still has not moved,
   rule `P3a` gives `task(respond-stuck)`: the model reads the run's log and `daemon.log`, then
-  re-drives the run or reports what it found (SPEC P3a).
+  re-drives the run or reports what it found (the retired v1 pipeline rule P3a).
 - **Alternatives**: tell the owner (the first rule).
 - **Why**: owner, 2026-10-13: a notice at 3 a.m. leaves the factory stuck until morning. The
   likely causes, a hung run or a crashed daemon, are what the re-drive task already handles.
@@ -698,7 +698,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 ### D-38 The owner can clear an issue's exhausted actions
 
 - **Decision**: `/factory retry <N>` (and the control tool) clears the issue's ledger entries
-  whose attempts ran out, so its rules can try again (SPEC 4.3, 7.1).
+  whose attempts ran out, so its rules can try again (v2 SPEC 13.4.3, 13.7.1).
 - **Alternatives**: wait for the seven-day prune, or for the subject's key to change.
 - **Why**: owner, 2026-10-13. An entry blocks only its own key, but a key that never changes
   (an issue's claim within one life, for example) would otherwise stay held for a week.
@@ -707,7 +707,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision**: passes start at least 5 seconds apart, and if pings drive more than 30 passes in
   10 minutes the loop ignores pings for 10 minutes, runs on its 60-second timer alone, logs a
-  `loop` event and tells the owner once (SPEC 2, 11.4).
+  `loop` event and tells the owner once (v2 SPEC 13.2, 13.11.4).
 - **Alternatives**: no limit beyond passes never overlapping.
 - **Why**: owner, 2026-10-13: something that keeps waking the loop without being handled (a
   hook firing in a loop, an answer the parser rejects) would otherwise spin it. The timer keeps
@@ -721,7 +721,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   needs `run:`), refused rather than cut. A control.json that does not parse is never
   overwritten. The control tool refuses every op but `status` from inside an agent. `retry`
   sets the exhausted entries' attempts to 0 rather than removing them, and clears the notices
-  they raised (SPEC 4.3, 7.1).
+  they raised (v2 SPEC 13.4.3, 13.7.1).
 - **Alternatives**: SPEC's first op list alone; cut long input; remove retried entries.
 - **Why**: nothing else could lift a priority or cancel an override. A second drop would plan a
   second abandon. A cut directive is a different directive. Directives the owner could still
@@ -748,12 +748,12 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   seeded in the store.
 - **Alternatives**: one end-to-end test inside the host.
 - **Why**: the host never returns an agent id from `$.agent.spawn` (probed: the subagent type
-  arrives empty too), so a spawn there always fails. Only the testbed closes that gap (SPEC 13).
+  arrives empty too), so a spawn there always fails. Only the testbed closes that gap (v2 SPEC 13.13).
 
 ### D-61 Only an interactive session runs the loop
 
 - **Decision**: a session whose `session.start` says it is not interactive (a `-p` run, the
-  SDK) never runs a pass or handles a hook (SPEC 2).
+  SDK) never runs a pass or handles a hook (v2 SPEC 13.2).
 - **Alternatives**: rely on the act lock alone, so extra copies only observe.
 - **Why**: found on the testbed on 2026-10-13. The plugin loads in every Claude process that sees
   the workspace's plugin folders, so each review step the pipeline ran started its own loop.
@@ -764,8 +764,8 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 ### D-62 Prose before an adjudicator's contract is skipped
 
 - **Decision**: the adjudicator parser skips lines before the first contract line, unless one
-  looks like a misshapen contract line; after it, the contract stays strict (SPEC 7.3).
-- **Alternatives**: the strict parse of SPEC 7.3 as first written, where any other line fails.
+  looks like a misshapen contract line; after it, the contract stays strict (the retired v1 adjudicator reply contract).
+- **Alternatives**: the strict parse of that contract as first written, where any other line fails.
 - **Why**: on the testbed on 2026-10-13, adjudicators twice opened with a sentence of context
   before correct verdict and ACTION lines. The strict parse failed both attempts, so a correct
   escalation became an agent-failed notice and cost a second adjudicator run.
@@ -792,7 +792,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   asked for ended) while the same failure stands; the 30 minutes are a constant in plan.ts
   (`JUDGE_REMIND_MS`), not a setting. The guard fixer's key follows the judge's round. Every
   merge-ready PR that no rule acts on in a pass leaves a skip line saying what it waits for
-  (SPEC 4.2, 5.5).
+  (v2 SPEC 13.4.2; the retired v1 merge section).
 - **Alternatives**: keep the 30 minute expiry and re-guard only after a commit; key the judge by
   the guard's number; no reminder after `wait`.
 - **Why**: stage D run 2, PRs 44 to 46 sat about 20 minutes after no-commit fixers, and setting
@@ -806,8 +806,8 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #551): a free `fast-forward`
   action repairs worktree lag before waking the judge. The current eligibility, recovery and
-  safety requirements live in [SPEC rule M2](SPEC.md#55-merge-m) and the
-  [executor catalogue](SPEC.md#61-catalogue).
+  safety requirements were the retired v1 merge rule M2's; the
+  [executor catalogue](v2/SPEC.md#1361-catalogue) holds what remains.
 - **Alternatives**: keep judging every `head` FAIL; fast-forward before every first guard,
   whatever the pool shows; move a lagging worktree by any means but `--ff-only`.
 - **Why**: run 2 had six `FAIL head` results, every PR the pipeline committed to, each costing a
@@ -823,7 +823,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #545): an answer with no
   machine line is interim only when a fresh agent list shows the agent `waiting`, or a sub-agent
   of its own pending, running or waiting; then the loop waits for its next answer, up to its
-  timeout. The agent's own `running` does not count (SPEC 7.3).
+  timeout. The agent's own `running` does not count (the retired v1 adjudicator reply section).
 - **Alternatives**: hold whenever the list shows the agent at work, `running` included.
 - **Why**: the test host lists an agent as `running` at its own `turn.complete`, and the real
   engine may too before it marks the agent completed. Counting `running` would hold every
@@ -839,7 +839,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   in the same call. An accepted call ends the entry at once. Text stays the fallback. One repair
   message per attempt via `$.session.send`, marked on the entry (`reminded`) before it goes out,
   before a failed attempt or `judge(report)`. The decision log records each answer's path
-  (SPEC 7.3a, 12).
+  (v2 SPEC 13.7.3a, 13.12).
 - **Alternatives**: one tool with a union schema; holding a tool answer until `turn.complete`;
   retrying with a fresh agent (the old way); several repairs.
 - **Why**: run 2 refused four sound approvals of one gate over a line of prose, and each refusal
@@ -850,7 +850,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Note** (2026-10-14): three changes after review. A handoff that says gated with no run is
   refused in both channels, the tool and the `RESULT` line. A repair reply is appended to the
   saved answer, under a separator, never written over it. A fix refuses `missed-` ids in its
-  findings: a gap the reviewer missed goes in `addFinding` (SPEC 6.3, 7.3a).
+  findings: a gap the reviewer missed goes in `addFinding` (v2 SPEC 13.6.3, 13.7.3a).
 
 ### D-69 Trace mode: one switch in two files, a size cap, and skip ages kept in memory
 
@@ -861,12 +861,12 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   `traceMaxBytes` (100 MiB): the oldest files go first, and today's is cut short with a closing
   line. Times inside a pass come from `performance.now()`. The decision log's `trigger` and `ms`
   are always written. A skip's age is kept in the module's memory from pass to pass, by issue and
-  rule (SPEC 12, 12.1).
+  rule (v2 SPEC 13.12, 13.12.1).
 - **Alternatives**: `/factory trace` writes the repo's file; `control.json`; `$.clock.now()` for
   every timing; a skip's age keyed by its exact words; per-file caps, or deleting by age alone.
 - **Why**: the owner asked for it per repo in the config, and switchable mid-run. The repo's file
   is checked in, so writing it would dirty the consumer's checkout, which nothing may do
-  (SPEC 11.6). `control.json` holds owner directives that plan obeys, and trace is not one. The
+  (v2 SPEC 13.11.6). `control.json` holds owner directives that plan obeys, and trace is not one. The
   workspace file is read every pass, so a write applies at the next one without a reload, and a
   repo can still turn it on. Each `$.clock.now()` reading is an engine call, and plan's few
   milliseconds would read as 0 or 1. A countdown in a skip's words changes every pass, so an age
@@ -879,7 +879,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   `plugins/factory-loop/agents/{adjudicator,designer}.md` are the callum-flow definitions word
   for word, plus ToolSearch and the answer tool on `tools:`. A root test
   (`tests/factory-loop-agents.test.js`) keeps them in step, and `agent.offer` hides them from the
-  model (SPEC 6.1).
+  model (v2 SPEC 13.6.1).
 - **Alternatives**: (a) edit the callum-flow `tools:` lines, which changes the released
   orchestrator's agents, and #548 keeps the instruction out of the shared definitions; (b)
   `$.agent.register` at load from the released plugin's agent file, but no engine API finds
@@ -896,7 +896,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   `stop-agent` accepts that agent as the loop's own. The 60 s grace leaves alone an agent the list
   has not yet marked completed. A repaired agent counts as at work for 5 minutes while still
   listed completed, or until its next `turn.complete`, instead of the full A1 timeout, so an agent
-  that never resumes is lost quietly within minutes (SPEC 5.7, 7.3a).
+  that never resumes is lost quietly within minutes (the retired v1 agent rules A1 and A2; v2 SPEC 13.7.3a).
 - **Alternatives**: keep a repaired agent at work for the full A1 timeout.
 - **Why**: an answer through the tool ends the entry before the agent's turn ends, and an agent
   that works on still holds its branch, so it must stay supervised. The alternative would hold
@@ -923,7 +923,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   the title's `D` or `stuck`, not under the in-flight cap, no heartbeat for it. No rule drives its
   runs, designs or delegates it, or judges its handoffs. A2 stops its agents, naming the final
   stage when the factory shows one, else `closed`. H3 returns its clean slots once no agent of the
-  loop works there. `M7`'s follow-ups and `M8`'s close still run (SPEC 3.3, 5.1, 13).
+  loop works there. `M7`'s follow-ups and `M8`'s close still run (v2 SPEC 13.3.3, 13.5.1, 13.13).
 - **Alternatives**: (a) hold every action on an issue whose state is not known, which would hold
   a new device's whole first pass, and a run whenever one read fails; (b) add the issues the
   watcher lists a run for: `no-mistakes` lists the newest unfinished run of every branch it ever
@@ -951,7 +951,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   file, which wins. Off, the spawn prompts and the repair message ask for the text contract alone
   and name no tool. On, they ask for the tool first, with the text as the fallback, as #548 built
   them. The three answer tools stay registered and served either way, and a call is answered as
-  before. A bad value in either file is left out and named in the decision log (SPEC 4.1, 4.2,
+  before. A bad value in either file is left out and named in the decision log (v2 SPEC 13.4.1, 13.4.2,
   6.3, 7.3a, 13).
 - **Alternatives**: (a) keep asking for the tool, as now; (b) unregister the tools while off; (c)
   spawn agents from a hook the engine serves, not the timer; (d) a `/factory` op to switch it.
@@ -991,7 +991,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   shared table of cases holds the loop and the script, run for real, to the same problems. The
   setting `answerChannel` (`script`, the default; `tool`; `text`) replaces #560's `answerTools`,
   which is named as replaced and not read. Prompts never say why the script stands in. It goes
-  back to `tool` once the timer-spawn probe (SPEC 13) passes (SPEC 4.2, 6.3, 7.3a, 11.6, 12, 13).
+  back to `tool` once the timer-spawn probe (v2 SPEC 13.13) passes (v2 SPEC 13.4.2, 13.6.3, 13.7.3a, 13.11.6, 13.12, 13.13).
 - **Alternatives**: (a) stay on text with the repair message, as #560 left it; (b) write the
   contract in TypeScript and run the script with node's type stripping; (c) a JSON schema plus a
   small validator; (d) pass the purpose, repo and issue as flags on the script's command line;
@@ -1050,8 +1050,8 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   sends a fixer for an owner instruction or recorded verdicts that are not all `ENV`, including
   an empty verdict list. Environment retry remains available without an owner instruction;
   missing adjudication details require a fresh adjudicator unless an owner instruction exists.
-  [SPEC rules P2, P2a and P2b](SPEC.md#54-pipeline-gates-p) own the eligibility, instruction
-  ordering and once-per-resume contract; P3 owns the notice context. The
+  The retired v1 pipeline rules P2, P2a and P2b owned the eligibility, instruction
+  ordering and once-per-resume contract, and P3 the notice context. The
   [judge skill](../../plugins/factory-loop/skills/judge/SKILL.md#owner-chat)
   owns how to record the owner's instruction before resuming.
 - **Why**: on #533 every verdict was `ENV` (the PR body was over the provider budget), the owner
