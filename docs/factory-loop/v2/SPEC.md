@@ -128,7 +128,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | kept (G2): claims, their holders and lapses. `nomistakes.runs` becomes optional in that tool (U4), so no-mistakes data can never blind v2 (`simplicity/F3`) |
 | `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1), and says which facts are logged (7.2) |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | kept |
-| `github` | `callum-flow-issue-read --json N` | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
+| `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | v1's `pool` without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
@@ -1741,7 +1741,16 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   full gate is assumed to use; `cpus` is `os.availableParallelism()` (cgroup-aware), read once
   per loop process through `node -e`. The slot executor writes the resolved number into the step
   marker as `gateConcurrency` (with `gateWaitTimeoutMs`); a marker without it takes no turn.
-  A writer that finishes while every turn is taken waits in FIFO order. The `gateTimeoutMs`
+  A writer that finishes while every turn is taken waits in FIFO order. The engine gives every
+  hook handler a budget of 10 000 ms that host calls pause and clock operations do not, so a
+  bare wait for a turn would be cut off at 10 s (`exceeded 10000ms budget`), and the handler,
+  which the engine does not cancel, would run its gate later in a slot the loop has left. A queued
+  waiter therefore always has a host call in flight: a `sleep` of a few seconds through
+  `$.process.run`, started again as each ends and raced against the grant, so a granted turn starts
+  its gate at once; a slice that fails ends the slices and the wait goes on with the grant alone.
+  The wait stays bounded by `gateWaitTimeoutMs`. A handler the engine has cut off runs no gate when
+  its turn comes: it gives the turn back and writes nothing. The `.catch`'s `gate-unknown` reason
+  names the error: `the stop gate hook failed (<error>)`. The `gateTimeoutMs`
   budget starts when the gate holds its turn. The turn is given back in a `finally`, whether the
   gate passes, fails, is unknown or the hook throws. A wait past `gateWaitTimeoutMs` (30 minutes)
   leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;

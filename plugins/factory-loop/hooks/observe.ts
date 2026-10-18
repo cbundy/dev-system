@@ -11,6 +11,7 @@ import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
+import { readIssues } from './observe-github'
 import { newestTag, readMilestone, waitsOnTag } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
@@ -18,7 +19,6 @@ import {
   parseCheckout,
   parseCsv,
   parseFactoryState,
-  parseIssueRead,
   parsePool,
   parseQueue,
   parseQueueOnce,
@@ -346,34 +346,8 @@ export async function observe(
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
-    let githubOk = true
-    // a rate limit seen this pass ends the pass's GitHub reads: each would only hit it again
-    for (const n of due) {
-      if (limited) {
-        githubOk = false
-        break
-      }
-      try {
-        const r = await run(['callum-flow-issue-read', '--json', String(n)])
-        if (r.exitCode === 3) {
-          cache.github.set(n, { at: now, value: { facts: null, trusted: false, brief: null } })
-          continue
-        }
-        const facts = r.exitCode === 0 ? parseIssueRead(r.stdout) : null
-        if (facts === null) {
-          githubOk = false
-          continue
-        }
-        let brief = cache.github.get(n)?.value.brief ?? null
-        if (mine.some(i => i.number === n && i.stage === 'designing')) {
-          const c = await run(['callum-flow-issue-read', '--json', String(n), '--comments'])
-          if (c.exitCode === 0) brief = parseBrief(c.stdout)
-        }
-        cache.github.set(n, { at: now, value: { facts, trusted: true, brief } })
-      } catch {
-        githubOk = false
-      }
-    }
+    const designing = new Set(mine.filter(i => i.stage === 'designing').map(i => i.number))
+    let githubOk = await readIssues(run, due, { cache: cache.github, now, designing, limited: () => limited })
     // tracker timelines, in the reads left this pass, walked again so a tracker read just now counts
     const timelinesDue = walkTrackers()
       .trackers.filter(n => {

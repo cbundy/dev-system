@@ -17,6 +17,7 @@ import {
   parseCsv,
   parseFactoryState,
   parseIssueRead,
+  parseIssuesRead,
   parseCommitDate,
   parseMilestone,
   parseOldestMerge,
@@ -33,6 +34,7 @@ import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
 import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
+import { issuesRead } from './host'
 
 const REPO = 'cbundy/dev-system'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -125,6 +127,26 @@ describe('parse', () => {
     expect(parseIssueRead(two)?.blocking).toBe(2)
     expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
     expect(parseIssueRead('{}')).toBeNull()
+  })
+
+  test('parseIssuesRead maps each batched item as parseIssueRead maps the single read, and rejects a malformed shape (#922)', () => {
+    const item = (n: number, state: string) => ({
+      number: n,
+      title: `T${n}`,
+      state,
+      labels: [{ name: 'ready' }],
+      issue_dependencies_summary: { blocked_by: 1, blocking: 2, total_blocked_by: 1, total_blocking: 2 },
+      sub_issues_summary: { total: 3, completed: 1 },
+    })
+    const read = parseIssuesRead(JSON.stringify({ issues: [item(45, 'open'), item(114, 'closed')], refused: [7], missing: [8], stripped: 1 }))
+    expect(read?.refused).toEqual([7])
+    expect(read?.missing).toEqual([8])
+    for (const [n, state] of [[45, 'open'], [114, 'closed']] as const) {
+      expect(read?.facts.get(n)).toEqual(parseIssueRead(JSON.stringify({ issue: item(n, state) })))
+    }
+    for (const bad of ['', '{}', '{"issues":[],"refused":"x","missing":[]}', '{"issues":[{"state":"open"}],"refused":[],"missing":[]}', '{"issues":[],"refused":[1.5],"missing":[]}']) {
+      expect(parseIssuesRead(bad)).toBeNull()
+    }
   })
 
   test('the newest design brief comment, by its heading', () => {
@@ -836,6 +858,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     // the pool, and what git answers in a slot, by `<path> <reflog|status>` (#563)
     pool: Reply
     slots: Record<string, Reply>
+    // a fixed answer to the batched `--issues` call (#922); undefined composes it from the single-read replies
+    batch?: Reply
   }
 
   function host(over: Partial<World> = {}) {
@@ -889,7 +913,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       now: async () => now,
       run: async (argv, init) => {
         calls.push({ argv: [...argv], cwd: init.cwd, env: init.env, stdin: init.stdin })
-        const r = answer(argv)
+        const r = argv.includes('--issues') && world.batch !== undefined ? world.batch : ((await issuesRead(argv, answer)) ?? answer(argv))
         return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
       },
       readFile: async path => world.files[path] ?? null,
@@ -1108,8 +1132,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const h = host({ issues: { '--json 114': limit } })
     const obs = await h.pass(runtime(), stored())
     expect(obs.rateLimited).toBe(true)
-    // 45, this device's, is read first (#556); 114 hits the limit; 470 is not tried
-    expect(h.commands().filter(c => c.startsWith('callum-flow-issue-read'))).toEqual(['callum-flow-issue-read --json 45', 'callum-flow-issue-read --json 114'])
+    // 45, this device's, is read first (#556); the one batched call hits the limit; no single read follows
+    expect(h.commands().filter(c => c.startsWith('callum-flow-issue-read'))).toEqual(['callum-flow-issue-read --json --issues 45,114,470'])
     expect(obs.state.sources.github).toEqual({ ok: false, at: NOW, error: 'GitHub rate limit' })
     expect(obs.state.githubBackoffUntil).toBe(NOW + GITHUB_BACKOFF_MS)
 
@@ -1150,8 +1174,12 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       stripped: 0,
     }),
   })
+  // the issues one pass read, in order: the numbers of its batched call (#922), or the single reads
   const issueReads = (h: ReturnType<typeof host>) =>
-    h.commands().flatMap(c => (c.startsWith('callum-flow-issue-read --json ') && !c.includes('--list') ? [c.slice('callum-flow-issue-read --json '.length)] : []))
+    h.commands().flatMap(c => {
+      if (c.startsWith('callum-flow-issue-read --json --issues ')) return c.slice('callum-flow-issue-read --json --issues '.length).split(',')
+      return c.startsWith('callum-flow-issue-read --json ') && !c.includes('--list') ? [c.slice('callum-flow-issue-read --json '.length)] : []
+    })
 
   test('the first pass reads the issues the loop would act on before the queue, so a closed one is never driven (testbed run 3, #556)', async () => {
     // twelve ready issues, and run 2's issues 40 and 41, closed at the reset, still live in the
@@ -1206,6 +1234,54 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const back = await h.pass(runtime(), kept, NOW + 12 * MIN)
     expect(issueReads(h)).toContain('77')
     expect(back.state.issues.find(i => i.number === 77)?.open).toBe(true)
+  })
+
+  test('forty queued issues are read with one batched call of at most twelve numbers, never by single reads (#922)', async () => {
+    const queue = Array.from({ length: 40 }, (_, i) => 200 + i)
+    const issues = Object.fromEntries(queue.map(n => [`--json ${n}`, { stdout: ISSUE(n) }]))
+    const h = host({ queue: { stdout: `queue known=none now=${queue.join(',')}\n` }, issues })
+    const obs = await h.pass(runtime(), stored({ queueKnown: null }))
+    const calls = h.commands().filter(c => c.startsWith('callum-flow-issue-read') && !c.includes('--list'))
+    expect(calls.filter(c => c.includes('--issues'))).toHaveLength(1)
+    expect(calls.filter(c => !c.includes('--issues') && !c.includes('--timeline') && !c.includes('--comments'))).toEqual([])
+    expect(issueReads(h).length).toBeLessThanOrEqual(12)
+    expect(obs.state.sources.github.ok).toBe(true)
+    // the cached facts are those the single read gives: compare with a pass of single reads
+    const read = issueReads(h).map(Number)
+    const batched = obs.state.issues.filter(i => read.includes(i.number))
+    expect(batched).toHaveLength(read.length)
+    const single = host({ queue: { stdout: `queue known=none now=${queue.join(',')}\n` }, issues })
+    single.world.batch = { exitCode: 2, stderr: 'usage' }
+    const ref = await single.pass(runtime(), stored({ queueKnown: null }))
+    for (const i of batched) {
+      expect(i.open).toBe(true)
+      expect(i).toEqual(ref.state.issues.find(j => j.number === i.number))
+    }
+  })
+
+  test('a failed batched call keeps every last value and marks github not ok; an exit-2 reader falls back to single reads; a refused number is untrusted (#922)', async () => {
+    const h = host()
+    const good = await h.pass(runtime(), stored())
+    expect(good.state.issues.find(i => i.number === 114)?.open).toBe(true)
+
+    // the whole call fails: the values stay, github is not ok
+    h.world.batch = { exitCode: 1, stderr: 'callum-flow-issue-read: boom' }
+    const failed = await h.pass(runtime(), stored(), NOW + 6 * MIN)
+    expect(failed.state.sources.github.ok).toBe(false)
+    expect(failed.state.issues.find(i => i.number === 114)?.open).toBe(true)
+
+    // an older reader exits 2 on --issues: single reads in the same pass
+    h.world.batch = { exitCode: 2, stderr: 'usage' }
+    const old = await h.pass(runtime(), stored(), NOW + 12 * MIN)
+    const after = h.commands().filter(c => c.startsWith('callum-flow-issue-read --json '))
+    expect(after).toContain('callum-flow-issue-read --json 114')
+    expect(old.state.sources.github.ok).toBe(true)
+
+    // a refused number is cached as untrusted
+    h.world.batch = undefined
+    h.world.issues['--json 114'] = { exitCode: 3, stderr: 'refused' }
+    const refused = await h.pass(runtime(), stored(), NOW + 18 * MIN)
+    expect(refused.state.issues.find(i => i.number === 114)?.trusted ?? false).toBe(false)
   })
 
   test("an issue whose labels the loop changed is read again on the next pass, not a read period later (drill run 2, R2-O2)", async () => {

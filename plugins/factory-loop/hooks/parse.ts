@@ -141,20 +141,47 @@ export type IssueFacts = {
   title: string
 }
 
+function factsOf(issue: unknown): IssueFacts | null {
+  if (issue === null || typeof issue !== 'object') return null
+  const i = issue as { state?: unknown; labels?: unknown; title?: unknown; issue_dependencies_summary?: { blocked_by?: unknown; blocking?: unknown }; sub_issues_summary?: { total?: unknown } }
+  const deps = i.issue_dependencies_summary
+  const subs = i.sub_issues_summary
+  return {
+    open: i.state === 'open',
+    labels: Array.isArray(i.labels) ? i.labels.map((l: { name?: unknown }) => String(l?.name ?? '')).filter(Boolean) : [],
+    blockedBy: typeof deps?.blocked_by === 'number' ? deps.blocked_by : null,
+    blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
+    subIssues: typeof subs?.total === 'number' ? subs.total : null,
+    title: typeof i.title === 'string' ? i.title : '',
+  }
+}
+
 export function parseIssueRead(json: string): IssueFacts | null {
   try {
-    const issue = JSON.parse(json)?.issue
-    if (issue === null || typeof issue !== 'object') return null
-    const deps = issue.issue_dependencies_summary
-    const subs = issue.sub_issues_summary
-    return {
-      open: issue.state === 'open',
-      labels: Array.isArray(issue.labels) ? issue.labels.map((l: { name?: unknown }) => String(l?.name ?? '')).filter(Boolean) : [],
-      blockedBy: typeof deps?.blocked_by === 'number' ? deps.blocked_by : null,
-      blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
-      subIssues: typeof subs?.total === 'number' ? subs.total : null,
-      title: typeof issue.title === 'string' ? issue.title : '',
+    return factsOf(JSON.parse(json)?.issue)
+  } catch {
+    return null
+  }
+}
+
+// parseIssuesRead: callum-flow-issue-read --json --issues <N,...>: each trusted issue's facts (the
+// same mapping as parseIssueRead), the numbers refused as untrusted, the numbers GitHub does not know.
+export type IssuesRead = { facts: Map<number, IssueFacts>; refused: number[]; missing: number[] }
+
+export function parseIssuesRead(json: string): IssuesRead | null {
+  try {
+    const o = JSON.parse(json)
+    const nums = (v: unknown): number[] | null => (Array.isArray(v) && v.every(n => Number.isInteger(n)) ? (v as number[]) : null)
+    const refused = nums(o?.refused)
+    const missing = nums(o?.missing)
+    if (!Array.isArray(o?.issues) || refused === null || missing === null) return null
+    const facts = new Map<number, IssueFacts>()
+    for (const item of o.issues) {
+      const f = factsOf(item)
+      if (f === null || !Number.isInteger(item.number)) return null
+      facts.set(item.number, f)
     }
+    return { facts, refused, missing }
   } catch {
     return null
   }

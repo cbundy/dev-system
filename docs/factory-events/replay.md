@@ -110,13 +110,17 @@ counts the whole window.
 
 Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
 default `shadow`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
-shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)).
+shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)) and
+`heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `shadow`; its replay reader is
+`scripts/factory-events-replay/readers/heartbeat-state.js`; `new` reads this device's local new log under a 500 ms
+deadline, and a shadow record is kept for every difference or error but an agreeing run only once per quiet period).
 
 Switched readers and their known differences from `old` (dropped before comparing, in `normalize`):
 
 | Tool | Reader | Known differences |
 |---|---|---|
 | `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
+| `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900)) | [`readers/heartbeat-state.js`](../../scripts/factory-events-replay/readers/heartbeat-state.js) | the per-entry `state` (old state names against new types); the v1-only events the new log lacks (`run_started`, `superseded`, `owner_wait`, `briefed`, `design_routed`, `delegated` and the replayed run facts `failed`, `head_mismatch`, `conflict`, `ci_stalled`); history from before the device's dual write |
 
 To move a tool's default to `new`: its shadow runs must be clean, judged with the query in
 [docs/metrics.md](../metrics.md#shadow-runs-source-switch). The threshold is set in

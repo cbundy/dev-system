@@ -28,6 +28,9 @@ check "callum-flow-event --type writes a checked new-format event only to the ne
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ]'
 check "factory-source.js loads and exports resolveSource, runShadow and diff" in_image '
   node -e "const m=require(\"/usr/local/share/dev-system/factory-source.js\");for(const k of [\"resolveSource\",\"runShadow\",\"diff\"])if(typeof m[k]!==\"function\")process.exit(1)"'
+check "heartbeat-state finds factory-source.js beside itself and prints a state under --source new" in_image '
+  d=$(mktemp -d) && CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=new CALLUM_EVENTS_DIR=$d NO_MISTAKES_HOME=$d CLAUDE_CONFIG_DIR=$d \
+    /usr/local/share/dev-system/heartbeat-state | node -e "const o=JSON.parse(require(\"fs\").readFileSync(0,\"utf8\"));if(!o||typeof o!==\"object\"||!o.state)process.exit(1)"'
 check "evaluate-new-events.js loads, and callum-flow-evaluate finds the shared helpers and rejects a bad --source" in_image '
   node -e "const m=require(\"/usr/local/share/dev-system/evaluate-new-events.js\");for(const k of [\"mapEvent\",\"loadNewEvents\",\"normalize\"])if(typeof m[k]!==\"function\")process.exit(1)" &&
   callum-flow-evaluate --repo o/r --since 2026-10-01T00:00:00Z --source bogus 2>&1 | grep -q "invalid source"'

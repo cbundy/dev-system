@@ -159,7 +159,7 @@ describe('trace on', () => {
     expect(factory?.t).toBeGreaterThanOrEqual(0)
     const sourceOf = (r: Rec, start: string) => commandsOf(r).find(c => c.cmd.startsWith(start))?.source
     expect(sourceOf(t1, 'callum-flow-issue-read --json --list')).toBe('queue')
-    expect(sourceOf(t1, 'callum-flow-issue-read --json 470')).toBe('github')
+    expect(sourceOf(t1, 'callum-flow-issue-read --json --issues 470')).toBe('github')
     expect(sourceOf(t1, `${TOOLS}/usage-check.sh`)).toBe('usage')
     expect(sourceOf(t1, 'git ')).toBe('checkout')
     // what came from the observe cache: the queue, GitHub and usage are read on their cadences
@@ -538,6 +538,7 @@ describe('the tracer', () => {
       [['/tools/queue-watch.sh', '--once'], 'queue'],
       [['callum-flow-issue-read', '--json', '--list', '--label', 'ready'], 'queue'],
       [['callum-flow-issue-read', '--json', '470', '--comments'], 'github'],
+      [['callum-flow-issue-read', '--json', '--issues', '470,471'], 'github'],
       [['/tools/usage-check.sh'], 'usage'],
       [['treehouse', 'status', '--json'], 'pool'],
       [['git', 'symbolic-ref'], 'checkout'],
