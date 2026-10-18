@@ -480,6 +480,9 @@ Each merged issue's wall-clock time from `ready` to `merged`, cut into two parts
   next transition; each `transition` to merge-queue until the next `merged` or transition.
 - **Agent work**: the rest (`total` minus `dispatcher_bound`).
 
+Time a merge-queue record is held by the owner's `don't-merge` label counts as owner-bound, not
+dispatcher-bound; this split does not carve it out, and section 9 has its own query ("Held time").
+
 A dispatcher-bound second is flagged "another device idle" when, at that moment, some device other
 than the issue's owner (the device of its first `claimed`) was alive and held no in-flight issue.
 A device is alive for 30 minutes after any `event_log` row it logged (`usage`, `loop_entry` and
@@ -925,6 +928,50 @@ SELECT s.repo, s.issue, s.to_ts AS merged_at,
       AND t.seq_at < s.to_ts AND coalesce(t.next_at, s.to_ts) > s.from_ts), 0)) AS in_flight_s
 FROM spans s
 ORDER BY s.to_ts DESC;
+```
+
+**Held time** (the owner's `don't-merge` hold, v2 SPEC 9.1): one `hold:dont-merge` person intervention
+starts a hold and the next `hold:released` ends it; a hold the owner never released ends at the PR's
+`merged` or at the next `transition` out of merge-queue, whichever comes first. A merge-queue record
+the label holds waits on the owner, not on the loop, and a label that could not be read writes no
+event, so this counts the owner's choices only.
+
+```sql
+-- per hold: how long the owner held a PR out of the queue, from each hold:dont-merge to the next
+-- hold:released, merged, or transition out of merge-queue (held_s is null while the hold is open)
+WITH ev AS (
+  SELECT repo, issue, life, ts, cause
+  FROM (
+    SELECT repo, issue, life, ts, cause,
+           row_number() OVER (PARTITION BY repo, issue, who, cause, coalesce(fact, event_id::text, ts::text)
+                              ORDER BY ts, device, device_seq) AS n
+    FROM factory.event_log
+    WHERE type = 'intervention' AND who = 'person' AND cause IN ('hold:dont-merge', 'hold:released')
+      AND issue IS NOT NULL
+  ) x
+  WHERE n = 1
+), holds AS (
+  SELECT repo, issue, life, ts AS held_at FROM ev WHERE cause = 'hold:dont-merge'
+)
+SELECT h.repo, h.issue, h.life, h.held_at,
+  e.ended_at,
+  round(extract(epoch FROM e.ended_at - h.held_at))::bigint AS held_s
+FROM holds h
+LEFT JOIN LATERAL (
+  SELECT min(t) AS ended_at FROM (
+    SELECT r.ts AS t FROM ev r
+      WHERE r.repo = h.repo AND r.issue = h.issue AND r.life IS NOT DISTINCT FROM h.life
+        AND r.cause = 'hold:released' AND r.ts > h.held_at
+    UNION ALL
+    SELECT m.ts FROM factory.event_log m
+      WHERE m.repo = h.repo AND m.issue = h.issue AND m.type = 'merged' AND m.ts > h.held_at
+    UNION ALL
+    SELECT x.seq_at FROM factory.event_log x
+      WHERE x.repo = h.repo AND x.issue = h.issue AND x.type = 'transition'
+        AND x.life IS NOT DISTINCT FROM h.life AND x.seq_at > h.held_at AND x.to_state <> 'merge-queue'
+  ) u
+) e ON true
+ORDER BY h.held_at DESC;
 ```
 
 ## Workers

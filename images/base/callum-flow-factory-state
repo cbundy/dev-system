@@ -614,6 +614,11 @@ function deriveState(input) {
           const p = expectedLabelProblem(d, d.github.labels);
           if (p) d.flags.push(`label: ${p}`);
         }
+        // the owner's hold on a merge: a PR waiting on a person is not stuck (PR labels are not visible here)
+        if (d.github.state === 'open' && d.github.labels && d.stage === 'ready to merge' && d.github.labels.some((l) => l.toLowerCase() === "don't-merge")) {
+          d.flags.push("held: don't-merge (waits on the owner)");
+          if (d.stuck === 'S4') d.stuck = null;
+        }
         if (d.github.state === 'unknown') d.flags.push('github: state could not be read');
         if (d.github.claim && d.holder && d.github.claim.device !== d.holder && ACTIVE_STAGES.has(d.stage)) {
           d.flags.push(`claim: GitHub comment says ${d.github.claim.device}, events say ${d.holder}`);

@@ -8,7 +8,8 @@
 //   owner lifted factory:rejected), a CI re-run, a PR body re-rendered for its linkage, R1's
 //   release of a ghost (a rejection among them), H1's re-claim of a lapsed claim, an owner item
 //   told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
-// - the records and the PRs: a head on a record's branch that no loop step produced (4.1);
+// - the records and the PRs: the owner's `don't-merge` hold on a merge-queue record and its release;
+//   a head on a record's branch that no loop step produced (4.1);
 // - the State: a module load, after an earlier run of the loop, with no restart of the loop's own
 //   in flight; the companion's refusals and the stop gates that could not run
 //   (sources-interventions.ts); and the hand edits of control.json, the OFF file and the settings,
@@ -26,10 +27,11 @@ import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
+import { holdOf } from './rules-queue'
 import { lifePr } from './rules-review'
 import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
 import type { IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
-import { UNKNOWN_WHYS } from './types'
+import { DONT_MERGE_LABEL, UNKNOWN_WHYS } from './types'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -287,6 +289,35 @@ function fromPushes(ctx: V2Ctx): Planned[] {
   return out
 }
 
+// fromHolds: the owner's `don't-merge` hold on a merge-queue record (9.1). A hold is `hold:dont-merge`
+// and its release `hold:released`, each logged once per toggle: the fact key holds the issue, the
+// life and the count of the life's earlier hold events (k0 a hold, k1 its release, k2 the next hold).
+// The count is of those logged, so one that failed is planned again. A read that failed (labels not
+// read) is no person's choice: it writes nothing and leaves the hold as it was.
+function fromHolds(ctx: V2Ctx): Planned[] {
+  const out: Planned[] = []
+  for (const r of ctx.v2.records) {
+    if (r.state !== 'merge-queue') continue
+    const h = holdOf(ctx.v2.reads, ctx.v2.prs.prs, r)
+    if (h?.kind === 'unread') continue
+    const base = `i${r.issue}/l${r.life}`
+    const done = (n: number) => {
+      const fact = factKey('hold', base, `k${n}`)
+      return ctx.byKey.get(interventionKey(fact))?.status === 'done' || ctx.v2.logged.some(k => k.endsWith(` ${fact}`))
+    }
+    let n = 0
+    while (done(n)) n += 1
+    const open = n % 2 === 1
+    if ((h !== null) === open) continue
+    const fact = factKey('hold', base, `k${n}`)
+    const where = h === null ? '' : h.where === 'issue' ? 'the issue' : `PR #${h.pr}`
+    const cause = h === null ? 'hold:released' : 'hold:dont-merge'
+    const reason = h === null ? `the ${DONT_MERGE_LABEL} label is gone from the issue and the PR` : `the ${DONT_MERGE_LABEL} label is on ${where}`
+    out.push({ key: interventionKey(fact), rule: 'S6', event: intervention('person', cause, fact, reason, { issue: r.issue, life: r.life, pr: r.pr }) })
+  }
+  return out
+}
+
 // fromRestart: a module load that restarted the loop, with no restart-self of the loop's own around
 // it (R2's, or v1's H4). A load is a restart only when the loop ran before it: the ledger it loaded
 // holds an entry from before the load. The first start of a loop with no ledger restarts nothing
@@ -430,7 +461,7 @@ export function fileFacts(facts: InterventionFacts): FileFact[] {
 
 // interventionsOf: every intervention the facts hold, done or not; the gate leaves out the done.
 export function interventionsOf(ctx: V2Ctx): Planned[] {
-  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
+  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromHolds(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
 }
 
 // interventionRules: one `event` action per intervention the ledger has not logged, marked logged

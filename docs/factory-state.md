@@ -196,7 +196,7 @@ between sources and never change the stage: for a v2 issue, a missing `factory:<
 other `factory:*` label (but `factory:rejected` on a closed one: the loop rejected the issue at its
 last life, v2 SPEC 6.4, and that label is not a state); for any other issue, a `queued` one without `ready`; a GitHub claim comment
 held by another device than the events say; a GitHub state that could not be read. No label marks a
-claim: `In development` is gone (v2 SPEC 3.6). Also per repo: recently ended issues, `other_runs` (running runs on a branch
+claim: `In development` is gone (v2 SPEC 3.6). An open issue at `ready to merge` that carries the issue label `don't-merge` (any case) shows the flag `held: don't-merge (waits on the owner)`, and S4 does not trip for it: the owner holds it, not the factory. The tool reads issue labels only, so a `don't-merge` label on the PR alone is not seen here (the loop's own merge queue reads both). Also per repo: recently ended issues, `other_runs` (running runs on a branch
 with no issue number), and coverage. Across repos: the stuck list, and the workers section.
 
 An open issue labelled `factory:<state>` or `ready` that the database has never seen is listed with
