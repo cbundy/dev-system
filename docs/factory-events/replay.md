@@ -108,6 +108,12 @@ lifecycle class, the latest claim type and its device); `CALLUM_FLOW_SHADOW_WIND
 both reads and `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) cuts `differences`, while `live_differences`
 counts the whole window.
 
+Switched readers and their known differences from `old` (dropped before comparing, in `normalize`):
+
+| Tool | Reader | Known differences |
+|---|---|---|
+| `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
+
 To move a tool's default to `new`: its shadow runs must be clean, judged with the query in
 [docs/metrics.md](../metrics.md#shadow-runs-source-switch). The threshold is set in
 [#902](https://github.com/cbundy/dev-system/issues/902).
