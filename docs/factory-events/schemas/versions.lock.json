@@ -442,6 +442,7 @@
       },
       "who": {
         "enum": [
+          "judge",
           "loop",
           "person"
         ]

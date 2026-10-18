@@ -1030,7 +1030,7 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
 |---|---|---|---|
 | `transition` | every record change (4.6), again after a re-claim (4.1), and once more for a record the new log lacks when dual write starts (4.1, via=dual-write) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
 | `reviewed` | each review result (8.3) | issue, branch, pr, head | `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`, the counts of error, warning and info findings, the reviewer's id, the answer's path |
-| `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person` or `loop`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
+| `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person`, `loop` or `judge`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
@@ -1070,7 +1070,8 @@ The loop no longer logs `superseded`, `rebased_behind` or `run_started`, and no 
 ### 7.2 Interventions
 
 An intervention is any point where someone had to step in that the plan did not foresee: a person
-(`who=person`), or the loop with unplanned judgement or recovery (`who=loop`). The owner chose
+(`who=person`), the loop's judge (`who=judge`), or the loop with unplanned judgement or recovery
+(`who=loop`). The owner chose
 this broad meaning so that these signals are never lost (section 15; issue #632, metrics 1 and 2).
 Each gets one `intervention` event, keyed by the fact it records, so it is logged once.
 
@@ -1078,7 +1079,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
+| `op:<name>` | (`/factory` ops only) every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
@@ -1093,6 +1094,12 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `hold:release-merged`, `hold:release-closed`, `hold:release-timeout` | the end of that hold: the bump PR left the list and was merged or closed (its state read once), or its window ran out while it was still open. `who=loop`; the detail names the heads whose merge it held. Fact `hold/release/pr<p>/end`. Both are logged once per device, derived from the ledger's start key and GitHub, so a restart between them still logs the end | none |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
 | `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --note 'who=person cause=rescue reason=<what, spaces as %20>'` (the encoding of 7.1), which the operator playbook adds to each rescue recipe | the issue, when given |
+
+**By the judge** (`who=judge`). A control op the loop's judge (the main conversation) runs:
+
+| Cause | When | Issue |
+|---|---|---|
+| `op:<name>` | the main conversation runs a control op through `mcp__factory-loop__control`, owner-chat ops included (the tool cannot tell whether the owner asked) | the issues the op names, else none |
 
 **By the loop** (`who=loop`). Each comes from a fact the loop already holds:
 
