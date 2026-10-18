@@ -15,7 +15,7 @@
     "repo": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "The repository whose factory wrote it, as owner/name." },
     "device": { "type": "string", "minLength": 1, "description": "The machine that wrote it: DEV_MACHINE_NAME, else the hostname." },
     "actor": { "type": "string", "minLength": 1, "description": "The tool or role that wrote it, for example sweep, watcher, fixer or factory-reconcile; agent when the caller named none. For provenance only: what a reader needs to know is in the type and the payload." },
-    "session_id": { "type": ["string", "null"], "description": "The Claude session that wrote it, from CLAUDE_SESSION_ID; null when that is unset. Never guessed." },
+    "session_id": { "type": ["string", "null"], "description": "The Claude session that wrote it, from CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (Claude Code sets it); null when both are unset. Never guessed." },
     "issue": { "type": ["integer", "null"], "minimum": 1, "description": "The GitHub issue the event is about; null for a fleet-level event. Each type's schema says whether it is required (x-issue)." },
     "base_image": { "type": ["string", "null"], "description": "The base image version running when it was written; null when unknown." },
     "dev_image": { "type": ["string", "null"], "description": "The repo's dev image version running when it was written; null when unknown or none." },

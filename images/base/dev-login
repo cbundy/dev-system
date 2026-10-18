@@ -59,6 +59,9 @@
 #                        that takes a POST body) when logins are needed
 set -u
 
+# DL_* are internal hand-offs between our own functions; never inherit them (#607).
+unset DL_WATCH DL_STATES DL_CACHED
+
 RUN_DIR=${DEV_LOGIN_RUN_DIR:-/tmp/dev-login}
 LOCK="$RUN_DIR/lock"
 ALL_TOOLS="claude codex gh"
@@ -515,7 +518,9 @@ cmd_watch() {
       [ "$tool" = gh ] && [ "$state" = scope ] && continue
       sig="$sig $tool=$state"
     done
-    lines=$(DL_WATCH=1 DL_STATES="$states" cmd_start)
+    # Plain assignments in the subshell, not a `VAR=x cmd` prefix: a prefix exports them
+    # into the environment of the tmux servers a login starts.
+    lines=$(DL_WATCH=1; DL_STATES="$states"; cmd_start)
     if [ -z "$sig" ]; then
       [ -z "$last" ] || log "all logins are done"
       return 0

@@ -43,7 +43,7 @@ Rules:
 | `event_id` | `event_id`. The replay covers lines from 2026-10-16 02:00Z, which all have one; a line without one is a miss. |
 | `ts` | `ts`. In dual write, the writer's own time with milliseconds; in the replay, the stored second with `.000Z`. |
 | `state` | `type`, by the tables below; `type_version` is 1 |
-| `session_id` | In dual write, `CLAUDE_SESSION_ID` or null, never today's guess from the newest transcript. The replay copies the stored value. |
+| `session_id` | In dual write, `CLAUDE_SESSION_ID`, else `CLAUDE_CODE_SESSION_ID`, or null, never today's guess from the newest transcript. The replay copies the stored value. |
 | `repo`, `device`, `actor`, `issue`, `base_image`, `dev_image`, `template_version`, `plugin_version` | the same |
 | `run_id` | dropped: v1 runs. No v2 event has one. |
 | `branch`, `pr`, `head` | payload fields where the type has them, else dropped |

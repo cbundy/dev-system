@@ -6,6 +6,9 @@
 # no Docker, so `npm test` runs it anywhere.
 set -eu
 
+# Hermetic: a Claude session sets these, and the cases below set them per call.
+unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
 EVENT="$ROOT/images/base/callum-flow-event"
@@ -209,6 +212,18 @@ DW_CLAUDE="$guess" dw "$d2" claimed --issue 7
 d3="$tmpdir/dw3"
 CLAUDE_SESSION_ID=sess-9 dw "$d3" claimed --issue 7
 [ "$(jq -r .session_id "$d3/factory/cbundy__dev-system.jsonl")" = sess-9 ] || fail "new event should take CLAUDE_SESSION_ID"
+d3c="$tmpdir/dw3c"
+CLAUDE_CODE_SESSION_ID=sess-c dw "$d3c" claimed --issue 7
+[ "$(jq -r .session_id "$d3c/factory/cbundy__dev-system.jsonl")" = sess-c ] || fail "new event should take CLAUDE_CODE_SESSION_ID"
+[ "$(jq -r .session_id "$d3c/cbundy__dev-system.jsonl")" = sess-c ] || fail "old line should take CLAUDE_CODE_SESSION_ID"
+d3b="$tmpdir/dw3b"
+CLAUDE_SESSION_ID=sess-9 CLAUDE_CODE_SESSION_ID=sess-c dw "$d3b" claimed --issue 7
+[ "$(jq -r .session_id "$d3b/factory/cbundy__dev-system.jsonl")" = sess-9 ] || fail "CLAUDE_SESSION_ID must win in the new event"
+[ "$(jq -r .session_id "$d3b/cbundy__dev-system.jsonl")" = sess-9 ] || fail "CLAUDE_SESSION_ID must win in the old line"
+d3e="$tmpdir/dw3e"
+CLAUDE_SESSION_ID='' CLAUDE_CODE_SESSION_ID='' DW_CLAUDE="$guess" dw "$d3e" claimed --issue 7
+[ "$(jq -r .session_id "$d3e/factory/cbundy__dev-system.jsonl")" = null ] || fail "empty variables must leave the new event null"
+[ "$(jq -r .session_id "$d3e/cbundy__dev-system.jsonl")" = guessed ] || fail "empty variables must keep the old line guess"
 
 # a skipped state writes no new event and says nothing
 d4="$tmpdir/dw4"
@@ -316,6 +331,10 @@ cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/copy/" 2> /dev/null |
 # session id: CLAUDE_SESSION_ID, else the newest transcript of the working directory
 CLAUDE_SESSION_ID=sess-1 ev ready --issue 3
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-1 ] || fail "CLAUDE_SESSION_ID not used"
+CLAUDE_CODE_SESSION_ID=sess-c ev ready --issue 3
+[ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-c ] || fail "CLAUDE_CODE_SESSION_ID not used"
+CLAUDE_SESSION_ID=sess-1 CLAUDE_CODE_SESSION_ID=sess-c ev ready --issue 3
+[ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-1 ] || fail "CLAUDE_SESSION_ID must win"
 work="$tmpdir/work dir"
 mkdir -p "$work"
 proj="$tmpdir/claude/projects/$(cd "$work" && pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"

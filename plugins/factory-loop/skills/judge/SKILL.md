@@ -8,7 +8,7 @@ description: >-
   Use whenever a prompt's first line starts with TASK or TELL, when the owner
   gives the factory an instruction, and at the start of an orchestrator
   session the factory loop drives.
-version: 0.54.0
+version: 0.55.0
 ---
 
 # Judge
@@ -207,7 +207,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
   config file, checked as the loader reads it. Only when the owner asks for that change.
 - `pause <N>` / `unpause <N>`: no action at all on N; its claim still renews.
 - `skip <N>` / `noskip <N>`: never claim N.
-- `priority <N...>`: claim these first, in this order.
+- `priority <N...>`: claim these first, in this order; then issues labelled `priority`, then the rest.
 - `only <N...>` / `only off`: claim only these ("522 only"); a tracker stands for its open
   sub-issues, and work in flight goes on.
 - `serial on|off`: one issue in flight at a time (a drain in order, with `priority`).
