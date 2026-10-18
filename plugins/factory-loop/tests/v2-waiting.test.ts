@@ -87,7 +87,7 @@ function world(github: Github, extra: (argv: string[], s: Seen) => { exitCode?: 
   }
 }
 
-// each drives about twenty passes through the driver: room past the default 5 s on a busy machine
+// each drives about twenty passes through the driver: more than ENGINE_TEST (host.ts) gives
 const SLOW = { timeoutMs: 60_000 }
 
 describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {

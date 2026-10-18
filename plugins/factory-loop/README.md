@@ -164,6 +164,8 @@ between releases. Before running the loop on a newer Claude Code:
 
 ## Develop it
 
+A test that drives the engine (`async ($, on) =>`) passes `ENGINE_TEST` from `tests/host.ts` as its second argument: the plugin loads afresh per test and the passes are CPU, so the kit's 5 s wall-clock default fails on a loaded machine. It is a budget, not a retry, and `tests/factory-loop-test-timeouts.test.js` fails `npm test` without it.
+
 `npm test` runs the plugin's tests through `claude plugin test`, and ten node tests at the repo
 root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
 `factory-loop-agents.test.js` checks that every agent the loop spawns lists its answer tool, and

@@ -14,7 +14,7 @@ import { COMPANION_WINDOW_MS, companionLines, gateLines } from '../hooks/v2/sour
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { V2Ctx, V2State } from '../hooks/v2/types'
 import { MIN, NOW, config, control, entry, state } from './fixtures'
-import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host } from './host'
+import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, ENGINE_TEST } from './host'
 
 const N = 571
 const LIFE = 'ss1x2k'
@@ -229,7 +229,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     return undefined
   }
 
-  test('the argv the pass ran is callum-flow-event --type gate_run --data .. --issue N, and a second pass runs none', async ($, on) => {
+  test('the argv the pass ran is callum-flow-event --type gate_run --data .. --issue N, and a second pass runs none', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },

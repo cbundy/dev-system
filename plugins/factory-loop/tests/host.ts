@@ -22,6 +22,12 @@ export const PROCESS = '4242:342070008'
 export const LOCK = `${LOOP_DIR}/act.lock`
 export const iso = (ms: number) => new Date(ms).toISOString()
 
+// The time budget for a test that takes the engine (`async ($, on) =>` or `async ($) =>`). The engine
+// loads the plugin afresh on a test's first event (0.4 to 1.6 s of CPU) and the test then drives
+// whole passes, all in memory: no real waits or subprocesses. The kit's default is 5 s of wall-clock
+// time, which a loaded machine passes. This is a budget, not a retry: a test that fails still fails.
+export const ENGINE_TEST = { timeoutMs: 30_000 }
+
 export type Seen = { argv: string[]; env: Record<string, string>; stdin?: string; cwd?: string }
 export type Reply = { exitCode?: number; stdout?: string; stderr?: string }
 

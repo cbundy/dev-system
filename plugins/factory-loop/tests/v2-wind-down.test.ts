@@ -17,7 +17,7 @@ import { windDownGuard, windDownOf, windDownPaths } from '../hooks/v2/wind-down'
 import { WIND_DOWN_WRITE_SCRIPT, previousOf, requestOf, windDownStatus } from '../hooks/v2/wind-down-files'
 import type { WindDownRead } from '../hooks/v2/wind-down'
 import { MIN, NOW, config, control, entry, issue, state as baseState } from './fixtures'
-import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host } from './host'
+import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, ENGINE_TEST } from './host'
 
 const HOUR = 60 * MIN
 const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
@@ -300,7 +300,7 @@ describe('a pass in the test host', () => {
   const request = (ago: number) => JSON.stringify({ requested_at: new Date(NOW - ago).toISOString(), trigger: 'restart-self' })
   const status = (h: { files: Map<string, string> }) => JSON.parse(h.files.get(FILES.status) ?? 'null') as Record<string, unknown> | null
 
-  test('with a request: the status file lands by temp and rename, started_at stays across passes, stop_now follows the file, and the request is kept', async ($, on) => {
+  test('with a request: the status file lands by temp and rename, started_at stays across passes, stop_now follows the file, and the request is kept', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: settings({ windDownMinutes: 3 }), run: quiet, files: { [FILES.request]: request(MIN) } })
     await $.session.start(START)
@@ -323,7 +323,7 @@ describe('a pass in the test host', () => {
     expect(h.titles.at(-1)).toMatch(/winding down \dm · 0 running/)
   })
 
-  test('windDownMinutes 0: the request is ignored, no status file, work is not held', async ($, on) => {
+  test('windDownMinutes 0: the request is ignored, no status file, work is not held', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: settings({ windDownMinutes: 0 }), run: quiet, files: { [FILES.request]: request(MIN) } })
     await $.session.start(START)
@@ -333,7 +333,7 @@ describe('a pass in the test host', () => {
     expect(h.titles.at(-1) ?? '').not.toContain('winding down')
   })
 
-  test('no request: no status file and nothing removed', async ($, on) => {
+  test('no request: no status file and nothing removed', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: settings(), run: quiet })
     await $.session.start(START)
@@ -342,7 +342,7 @@ describe('a pass in the test host', () => {
     expect(h.seen.filter(s => s.argv[0] === 'rm' && s.argv.includes(FILES.request))).toEqual([])
   })
 
-  test('a stale request is removed by the loop, once told, and the next pass writes no status', async ($, on) => {
+  test('a stale request is removed by the loop, once told, and the next pass writes no status', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: settings({ windDownMinutes: 3 }), run: quiet, files: { [FILES.request]: request(HOUR), [FILES.status]: '{}' } })
     await $.session.start(START)
@@ -353,7 +353,7 @@ describe('a pass in the test host', () => {
     expect(h.titles.at(-1) ?? '').not.toContain('winding down')
   })
 
-  test('a request that does not parse is a request at the file\'s mtime, with a problem in the decision log', async ($, on) => {
+  test('a request that does not parse is a request at the file\'s mtime, with a problem in the decision log', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
       config: settings({ windDownMinutes: 3 }),
@@ -366,7 +366,7 @@ describe('a pass in the test host', () => {
     expect(JSON.stringify(h.passes().at(-1))).toContain('treated as a request at its modification time')
   })
 
-  test('a request that is there but does not read is a request at the file\'s mtime, so work stays held', async ($, on) => {
+  test('a request that is there but does not read is a request at the file\'s mtime, so work stays held', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
       config: settings({ windDownMinutes: 3 }),

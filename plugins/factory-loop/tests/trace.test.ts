@@ -32,7 +32,7 @@ import {
 } from '../hooks/trace'
 import type { LedgerEntry, PlanResult } from '../hooks/types'
 import { DEVICE, MIN, NOW, entry, issue, mine, state } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso, ENGINE_TEST } from './host'
 import type { Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
@@ -86,7 +86,7 @@ async function factoryOp($: Engine, args: string) {
 const commandsOf = (r: Rec) => r.commands as Command[]
 
 describe('trace off (the default)', () => {
-  test('the decision log gains the pass total and its trigger; nothing else is written or read', async ($, on) => {
+  test('the decision log gains the pass total and its trigger; nothing else is written or read', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: OBSERVE, run: world() })
     await $.session.start(START)
@@ -104,7 +104,7 @@ describe('trace off (the default)', () => {
     expect(h.seen.some(s => s.argv[0] === 'rm')).toBe(false)
   })
 
-  test('a pass that throws logs its total and trigger on its error line', async ($, on) => {
+  test('a pass that throws logs its total and trigger on its error line', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: ACT, run: world(), store: ledgerOf([SWEPT]) })
     h.failSet = key => key === `ledger:${REPO}`
@@ -117,7 +117,7 @@ describe('trace off (the default)', () => {
 })
 
 describe('trace on', () => {
-  test('one record per pass beside the decision log: trigger, phases, commands, sources and waits', async ($, on) => {
+  test('one record per pass beside the decision log: trigger, phases, commands, sources and waits', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { ...OBSERVE, trace: true }, run: world(), files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ noNewWork: true }) } })
     await $.session.start(START)
@@ -171,7 +171,7 @@ describe('trace on', () => {
     expect(t1.actions).toEqual([])
   })
 
-  test('the repo-local settings switch it on for the repo; the workspace file overrides them', async ($, on) => {
+  test('the repo-local settings switch it on for the repo; the workspace file overrides them', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: OBSERVE, run: world(), files: { [REPO_FILE]: JSON.stringify({ trace: true }) } })
     await $.session.start(START)
@@ -184,7 +184,7 @@ describe('trace on', () => {
     expect(h.traces()).toHaveLength(1)
   })
 
-  test('/factory trace on and off work mid-run, through the workspace file, and /factory help lists it', async ($, on) => {
+  test('/factory trace on and off work mid-run, through the workspace file, and /factory help lists it', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { ...OBSERVE, poolSize: 8 }, run: world() })
     await $.session.start(START)
@@ -213,7 +213,7 @@ describe('trace on', () => {
     expect((await factoryOp($, 'trace')).text).toBe('Usage: trace on|off')
   })
 
-  test('each pass names what asked for it: the timer, an agent, a wake, an owner op', async ($, on) => {
+  test('each pass names what asked for it: the timer, an agent, a wake, an owner op', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const issues = [{ issue: 470, stage: 'designing', entered_at: iso(since), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]
@@ -242,7 +242,7 @@ describe('trace on', () => {
 })
 
 describe('act mode, traced', () => {
-  test("each action's queue, start and end, the act lock, and the store and event writes are timed", async ($, on) => {
+  test("each action's queue, start and end, the act lock, and the store and event writes are timed", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { ...ACT, trace: true }, run: world() })
     await $.session.start(START)
@@ -270,7 +270,7 @@ describe('act mode, traced', () => {
     expect(t.persistMs as number).toBeGreaterThanOrEqual(0)
   })
 
-  test("a wake's row: queued by its action, delivered when its turn starts, answered when its turn ends", async ($, on) => {
+  test("a wake's row: queued by its action, delivered when its turn starts, answered when its turn ends", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
@@ -315,7 +315,7 @@ describe('act mode, traced', () => {
 })
 
 describe('the cap (default 100 MiB, traceMaxBytes)', () => {
-  test('the oldest trace files go first; today\'s is cut short, never past the cap', async ($, on) => {
+  test('the oldest trace files go first; today\'s is cut short, never past the cap', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const old = (day: string, bytes: number) => [`${LOOP_DIR}/trace-${day}.jsonl`, `${'x'.repeat(bytes - 1)}\n`] as const
     const todays = () => (h.files.get(TRACE) ?? '').split('\n').filter(l => l !== '')
@@ -355,7 +355,7 @@ describe('the cap (default 100 MiB, traceMaxBytes)', () => {
     expect(h.passes()).toHaveLength(3)
   })
 
-  test("a reload finds today's file cut and keeps it closed, reading its tail once; a new cap opens it again (SPEC 12.1)", async ($, on) => {
+  test("a reload finds today's file cut and keeps it closed, reading its tail once; a new cap opens it again (SPEC 12.1)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // an earlier load wrote a big record, then cut the file under this cap
     const cap = 20_000
