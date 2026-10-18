@@ -833,6 +833,69 @@
     "type": "object",
     "x-issue": "required"
   },
+  "shadow_read.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "compared": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "detail": {
+        "maxLength": 500,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "diff_keys": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "differences": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "live_differences": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "new_ok": {
+        "type": "boolean"
+      },
+      "old_ok": {
+        "type": "boolean"
+      },
+      "reader": {
+        "pattern": "^[a-z][a-z0-9-]*$",
+        "type": "string"
+      },
+      "settle_seconds": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "tool": {
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "compared",
+      "detail",
+      "diff_keys",
+      "differences",
+      "live_differences",
+      "new_ok",
+      "old_ok",
+      "reader",
+      "settle_seconds",
+      "tool"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "test_weakened.v1": {
     "additionalProperties": false,
     "properties": {

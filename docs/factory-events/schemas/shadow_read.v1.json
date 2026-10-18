@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "shadow_read.v1.json",
+  "title": "shadow_read",
+  "description": "One shadow compare made by a reader that has an old/new source switch: the command read the same keys from the old source and the new central one and counted where the answers differ. Written once per compare, not for an issue. A retried write can repeat it: count one per (repo, device, ts).",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reader", "tool", "compared", "differences", "live_differences", "diff_keys", "old_ok", "new_ok", "settle_seconds", "detail"],
+  "properties": {
+    "reader": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Which reader was compared, an open family such as claim-events.", "x-column": true },
+    "tool": { "type": "string", "minLength": 1, "description": "The command that made the compare, such as callum-flow-sweep.", "x-column": true },
+    "compared": { "type": "integer", "minimum": 0, "description": "How many keys were compared.", "x-column": true },
+    "differences": { "type": "integer", "minimum": 0, "description": "How many keys whose answers differ, with both sides cut at the settle time.", "x-column": true },
+    "live_differences": { "type": "integer", "minimum": 0, "description": "How many keys whose answers differ on everything read, push lag included.", "x-column": true },
+    "diff_keys": { "type": "array", "maxItems": 50, "items": { "type": "string" }, "description": "The keys that differ, at most 50." },
+    "old_ok": { "type": "boolean", "description": "Whether the central read of the old side succeeded.", "x-column": true },
+    "new_ok": { "type": "boolean", "description": "Whether the central read of the new side succeeded.", "x-column": true },
+    "settle_seconds": { "type": "integer", "minimum": 0, "description": "The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference.", "x-column": true },
+    "detail": { "type": ["string", "null"], "maxLength": 500, "description": "The first difference as old against new, or null when there is none." }
+  },
+  "examples": [
+    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null },
+    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 2, "live_differences": 3, "diff_keys": ["o/r#12", "o/r#15"], "old_ok": true, "new_ok": false, "settle_seconds": 120, "detail": "o/r#12 old: claimed by dev-a, new: ready" }
+  ]
+}

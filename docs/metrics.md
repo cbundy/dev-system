@@ -416,6 +416,46 @@ FROM factory.events
 GROUP BY device;
 ```
 
+## 6b. Reader shadow compares
+
+How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two
+sources disagreeing. The command that compares (`tool`) writes one `shadow_read` event per compare,
+not per issue (`shadow_read.v1.json`). `differences` counts keys whose answers differ with both
+sides cut at the settle time, `live_differences` the same on everything read (push lag included),
+and `old_ok` / `new_ok` say whether that side's central read succeeded. A retried write can repeat
+an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
+0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
+`factory.event_store`. It takes `-v repo=... -v since=...`. There are no rows until the producer
+(#905) ships.
+
+```sql
+-- per reader, tool, device and day: compares, differences, failed reads, newest difference detail
+WITH compares AS (
+  SELECT e.reader, e.tool, e.device, e.ts, e.differences, e.live_differences, e.old_ok, e.new_ok,
+         s.data ->> 'detail' AS detail,
+         row_number() OVER (PARTITION BY e.repo, e.device, e.ts ORDER BY e.event_id) AS dup
+  FROM factory.event_log e
+  JOIN factory.event_store s ON s.event_id = e.event_id
+  WHERE e.type = 'shadow_read' AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+),
+once AS (
+  SELECT *,
+         row_number() OVER (PARTITION BY reader, tool, device, date_trunc('day', ts)
+                            ORDER BY (differences > 0) DESC, ts DESC) AS newest
+  FROM compares
+  WHERE dup = 1
+)
+SELECT reader, tool, device, date_trunc('day', ts) AS day,
+  count(*)                                         AS compares,
+  sum(differences)                                 AS differences,
+  sum(live_differences)                            AS live_differences,
+  count(*) FILTER (WHERE NOT old_ok OR NOT new_ok) AS failed_reads,
+  max(detail) FILTER (WHERE newest = 1 AND differences > 0) AS newest_detail
+FROM once
+GROUP BY reader, tool, device, date_trunc('day', ts)
+ORDER BY day DESC, reader, tool, device;
+```
+
 ## 7. The waiting split
 
 Each merged issue's wall-clock time from `ready` to `merged`, cut into three parts:
