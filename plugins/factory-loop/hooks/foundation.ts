@@ -39,6 +39,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'pr',
   'split',
   'link',
+  'close-tracker',
   'ci-rerun',
   'queue-update',
   'queue-merge',

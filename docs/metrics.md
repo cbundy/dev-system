@@ -383,6 +383,27 @@ jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "S1" and (.reaso
   /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+### Split trackers closed by the loop
+
+When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and
+logs `closed` with reason `completed` for it. Each check, closed or not, is a `close-tracker` entry in the
+loop's ledger with its outcome `{parent, closed, open}` and summary (`closing #139: ...` or `kept #139 open: #190 open`).
+The split itself is an `abandoned` event with reason `split` (its `split_into` field lists the children, in the local
+event log). Per split parent, how long after the split its tracker was closed, and which split parents are still not
+closed (open trackers, including the residual case where the last child's rollout was `run-it` or `keep-open`, whose
+issue stays open at its merge so no check ran):
+
+```sql
+SELECT s.repo, s.issue AS parent, s.ts AS split_at, c.ts AS closed_at, c.ts - s.ts AS open_for
+FROM factory.event_log s
+LEFT JOIN factory.event_log c
+  ON c.repo = s.repo AND c.issue = s.issue AND c.type = 'closed' AND c.reason = 'completed' AND c.ts > s.ts
+WHERE s.type = 'abandoned' AND s.reason = 'split' AND s.repo = :'repo' AND s.ts >= :'since'
+ORDER BY s.ts DESC;
+```
+
+A row with a null `closed_at` is a tracker still open (children unfinished, or closed by the owner as another reason).
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two

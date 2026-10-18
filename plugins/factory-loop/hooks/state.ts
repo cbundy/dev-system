@@ -1,6 +1,7 @@
 // buildState: what observe read, assembled into the State plan takes (SPEC 3.1, 3.2). Pure,
 // so the pass driver and the replay harness build state the same way.
 import type { Facts } from './derive'
+import { TRACKER_DEPTH } from './v2/types'
 import { runsFromEvents } from './derive'
 import type { Factory, IssueFacts } from './parse'
 import type {
@@ -55,8 +56,8 @@ export type Observed = {
 
 const UNAVAILABLE: Usage = { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true }
 
-// How deep trackers nest under a tracker named in `only` before observe stops reading them.
-export const TRACKER_DEPTH = 3
+// How deep trackers nest under a tracker named in `only` before observe stops reading them (v2/types.ts).
+export { TRACKER_DEPTH }
 
 // subIssuesOf: a tracker's open sub-issues, those of nested trackers included, ascending; null
 // when its timeline was not read. Nesting is followed TRACKER_DEPTH levels deep, and a loop in

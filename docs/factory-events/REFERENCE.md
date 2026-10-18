@@ -262,7 +262,7 @@ Example:
 
 ## closed
 
-GitHub shows the issue closed, outside the factory's own merge. Written by callum-flow-sweep (actor sweep). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.
+GitHub shows the issue closed, outside the factory's own merge. Written by callum-flow-sweep (actor sweep), and by the factory loop when it closes a split's tracker once every sub-issue is closed (reason completed). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
