@@ -10,7 +10,7 @@
 // (reminded), and its first line (summary), which the reminder repeats.
 import type { ToolSpec } from 'claude-code'
 
-import { WAKE_POINTER, answerPath } from './exec'
+import { WAKE_POINTER } from './exec'
 import type { Executor } from './exec'
 import type { Action, ActionKind, Config, LedgerEntry, LedgerStatus, Ms, Outcome, WakeKind } from './types'
 
@@ -69,26 +69,6 @@ export function wakeLine(action: WakeAction, id: string, repo: string): string {
   return parts.join(' ')
 }
 
-// wakeDetails: the detail lines the executor adds after plan's context, so the model reads files
-// rather than pasted reports: the agent's saved answer for judge(report) and judge(handoff)
-// (SPEC 7.2, act-agents.ts writes it), and every respond log of the run for task(respond-stuck)
-// (D-37), from its respond entries in the ledger.
-export function wakeDetails(action: WakeAction, loopDir: string, ledger: readonly LedgerEntry[]): string[] {
-  const entry = action.fields.entry
-  if (action.kind === 'judge' && (action.wake === 'report' || action.wake === 'handoff') && entry !== undefined) {
-    return [`saved answer: ${answerPath(loopDir, entry)}`]
-  }
-  if (action.kind === 'task' && action.wake === 'respond-stuck') {
-    const run = action.fields.run
-    const logs = ledger
-      .filter(e => e.kind === 'respond' && run !== undefined && e.run === run)
-      .sort((a, b) => a.startedAt - b.startedAt)
-      .flatMap(e => (e.outcome?.kind === 'respond' ? [e.outcome.log] : []))
-    return [...new Set(logs)].map(log => `respond log: ${log}`)
-  }
-  return []
-}
-
 // wakePrompt: the first line, each detail as its own plain-text line (a value with line breaks
 // becomes several), then the skill pointer as the last line (SPEC 8.1).
 export function wakePrompt(first: string, details: readonly string[]): string {
@@ -112,7 +92,7 @@ const wake: Executor = async (ctx, action) => {
   if (!isWakeAction(action)) return { status: 'failed', summary: `not a wake: ${action.kind}`, noRetry: true }
   const id = ctx.wakeId()
   const first = wakeLine(action, id, ctx.rt.repo)
-  const details = [...action.context, ...wakeDetails(action, ctx.rt.loopDir, ctx.state.ledger)]
+  const details = [...action.context]
   try {
     await ctx.io.submit(wakePrompt(first, details))
   } catch (err) {

@@ -41,7 +41,7 @@ import { CFG_DIR, LOOP_DIR, NO_EVENTS, PROCESS, QUIET_BEATS, REPO, SESSION, TOOL
 import type { Seen } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 2 * HOUR)
 const HEAD = '9e01b77c0ffee000000000000000000000000001'
 const HEAD2 = '7a3c0de1d00d0000000000000000000000000002'
@@ -1054,7 +1054,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       return undefined
     }
     const h = host(on, {
-      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      config: { repo: REPO, mode: 'act', checkout: '/work' },
       store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [t5] } },
       run,
     })
@@ -1129,7 +1129,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       return undefined
     }
     const h = host(on, {
-      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      config: { repo: REPO, mode: 'act', checkout: '/work' },
       store: { [`records:${REPO}`]: recordsToStore(recs, NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: recs.map(t5) } },
       run,
     })
@@ -1193,7 +1193,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       return undefined
     }
     const h = host(on, {
-      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      config: { repo: REPO, mode: 'act', checkout: '/work' },
       store: { [`records:${REPO}`]: recordsToStore([r], NOW - HOUR), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - HOUR, entries: [t5, ens] } },
       run,
     })

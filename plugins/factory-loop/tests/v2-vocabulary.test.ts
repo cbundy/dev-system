@@ -55,7 +55,7 @@ function runtimeOf(): Runtime {
     env: {},
     toolsDir: TOOLS,
     pluginRoot: PLUGIN_ROOT,
-    config: config({ planner: 'v2' }),
+    config: config(),
     configProblems: [],
   }
 }
@@ -287,7 +287,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
       env: {},
       toolsDir: TOOLS,
       pluginRoot: PLUGIN_ROOT,
-      config: config({ planner: 'v2' }),
+      config: config(),
       configProblems: [],
     }
     const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
@@ -331,7 +331,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
       },
       interventions: async () => ({ read: { companion: [], controlDigest: null, configDigest: null }, source: { ok: true, at: NOW } }),
     }
-    const rt = (k: number | null): Runtime => ({ ...runtimeOf(), config: config({ planner: 'v2', maxInFlightIssues: k }) })
+    const rt = (k: number | null): Runtime => ({ ...runtimeOf(), config: config({ maxInFlightIssues: k }) })
     const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
     const cacheOf = () => {
       const c = emptyCache()
@@ -362,7 +362,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
   test('observeV2 keeps the store\'s three cases apart: not read (no records, the store source failed, no rebuild), absent (a rebuild reads the event log) and an empty list (no records)', async () => {
     const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
     const runs: string[][] = []
-    const base = { io, rt: { ...runtimeOf(), config: config({ planner: 'v2' }) }, run: async (argv: string[]) => (runs.push(argv), { exitCode: 0, stdout: '', stderr: '' }), state: state(), poolJson: null, backoff: false, limited: () => false }
+    const base = { io, rt: { ...runtimeOf(), config: config() }, run: async (argv: string[]) => (runs.push(argv), { exitCode: 0, stdout: '', stderr: '' }), state: state(), poolJson: null, backoff: false, limited: () => false }
     const of = async (stored: V2Stored) => {
       const c = emptyCache()
       return (await observeV2({ ...base, cache: c.v2, github: c.github, stored })).v2

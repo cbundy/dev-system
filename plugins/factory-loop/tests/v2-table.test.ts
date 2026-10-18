@@ -13,7 +13,7 @@ import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP, TRIAGE_CHOICES, 
 import type { EventKind, IssueRecord, IssueState, StepKind, TableEvent } from '../hooks/v2/types'
 import { NOW, config } from './fixtures'
 
-const CFG = config({ planner: 'v2' })
+const CFG = config()
 const FIX_CAP = CFG.reviewFixCap
 const MAX_TRIAGES = CFG.maxTriages
 const HEAD = '9e01b77c0ffee0000000000000000000000000aa'

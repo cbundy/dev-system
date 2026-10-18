@@ -1,4 +1,4 @@
-// The repo-local settings under planner v2 (docs/factory-loop/v2/SPEC.md section 15, "Both settings
+// The repo-local settings (docs/factory-loop/v2/SPEC.md section 15, "Both settings
 // files are read every pass; the workspace file may set any key"): nothing in v2 keeps the main
 // checkout current, so the repo's .claude/factory-loop.json is read from origin's default branch
 // with `git show`, again every githubEveryMs. When that branch cannot be read, the main checkout's
@@ -62,11 +62,10 @@ export async function originSettings(io: SettingsIo, cache: SettingsCache, check
 }
 
 // repoLoaded: the repo-local file (the checkout's, tree) under the workspace file's keys (over),
-// with what that file says (raw). Under planner v2 the file is origin's, or, when origin's branch
-// cannot be read, the main checkout's stands, with a problem that names it and no raw.
+// with what that file says (raw). The file is origin's, or, when origin's branch cannot be read,
+// the main checkout's stands, with a problem that names it and no raw.
 export async function repoLoaded(io: SettingsIo, cache: SettingsCache, checkout: string, tree: Record<string, unknown>, over: Record<string, unknown>): Promise<LoadedConfig & { raw: Record<string, unknown> | null }> {
   const fromTree = loadConfig(tree, over)
-  if (fromTree.config.planner !== 'v2') return { ...fromTree, raw: tree }
   const read = await originSettings(io, cache, checkout, fromTree.config.githubEveryMs)
   if (read.ok) return { ...loadConfig(read.raw, over), raw: read.raw }
   return { ...fromTree, problems: [...fromTree.problems, `settings: origin's default branch not read (${read.error}); the main checkout's file is used`], raw: null }

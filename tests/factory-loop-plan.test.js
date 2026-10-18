@@ -1,15 +1,14 @@
 "use strict";
 
-// The factory loop's plan must stay pure (docs/factory-loop/SPEC.md 5.9): plan.ts and the
-// modules it relies on import types only, and reach for no clock, randomness, timer,
-// network, process or engine call. The behaviour itself is tested by
-// plugins/factory-loop/tests/plan.test.ts under `claude plugin test`, whose environment
-// cannot read source files, so this check lives here.
+// The factory loop's plan must stay pure (docs/factory-loop/v2/SPEC.md 2.2): foundation.ts, which
+// holds the helpers the rule layers share, and the modules it relies on import types only, and
+// reach for no clock, randomness, timer, network, process or engine call. The behaviour itself is
+// tested by plugins/factory-loop/tests/foundation.test.ts under `claude plugin test`, whose
+// environment cannot read source files, so this check lives here.
 //
-// The v2 planner (docs/factory-loop/v2/SPEC.md 2.2) is held to the same: v2/plan.ts's imports,
-// followed to the end, reach hooks/v2/ and hooks/foundation.ts alone (foundation.ts re-exports
-// plan.ts's tierOf until the delete wave), every module they reach reads no clock and calls
-// nothing outside itself, and no v2 module at all holds the engine (register.ts alone does).
+// The v2 planner is held to the same: v2/plan.ts's imports, followed to the end, reach hooks/v2/
+// and hooks/foundation.ts alone, every module they reach reads no clock and calls nothing outside
+// itself, and no v2 module at all holds the engine (register.ts alone does).
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -17,7 +16,7 @@ const { register } = require("node:module");
 const path = require("node:path");
 
 const HOOKS = path.join(__dirname, "..", "plugins", "factory-loop", "hooks");
-const PURE = ["plan.ts", "config.ts", "types.ts"];
+const PURE = ["foundation.ts", "config.ts", "types.ts"];
 
 // The plugin's modules import each other without a file extension, as the engine resolves them;
 // plain Node needs the ".ts", so relative imports that fail are retried with it (as
@@ -81,13 +80,14 @@ function code(file) {
     .replace(/'(?:\\.|[^'\\])*'/g, "''");
 }
 
-test("plan.ts, config.ts and types.ts import types only, and v2's vocabulary, which is constants alone", () => {
+test("foundation.ts, config.ts and types.ts import types only, and v2's vocabulary, which is constants alone", () => {
   for (const file of [...PURE, "v2/types.ts"]) {
     const src = fs.readFileSync(path.join(HOOKS, file), "utf8");
     const imports = src.match(/^import\b[\s\S]*?from\s+['"][^'"]+['"]/gm) ?? [];
     for (const statement of imports) {
-      // the closed lists of v2/types.ts are the one value config.ts takes (its kinds, its settings)
-      if (file === "config.ts" && /from\s+'\.\/v2\/types'$/.test(statement)) continue;
+      // the closed lists of v2/types.ts are the one value config.ts and foundation.ts take (kinds,
+      // settings, the agent steps)
+      if ((file === "config.ts" || file === "foundation.ts") && /from\s+'\.\/v2\/types'$/.test(statement)) continue;
       assert.match(statement, /^import type\b/, `${file}: a value import breaks purity: ${statement.split("\n")[0]}`);
     }
     assert.doesNotMatch(src, /\brequire\(|\bimport\(/, `${file}: no dynamic or CommonJS imports`);
@@ -96,8 +96,8 @@ test("plan.ts, config.ts and types.ts import types only, and v2's vocabulary, wh
   for (const [what, pattern] of Object.entries(BANNED_PLAN)) assert.doesNotMatch(vocabulary, pattern, `v2/types.ts must not use ${what}`);
 });
 
-test("plan.ts reads no clock and calls nothing outside itself", () => {
-  const src = code("plan.ts");
+test("foundation.ts reads no clock and calls nothing outside itself", () => {
+  const src = code("foundation.ts");
   const banned = {
     "a clock (the time is state.now)": /\bDate\b|\bperformance\b/,
     randomness: /Math\.random|crypto\./,
@@ -107,7 +107,7 @@ test("plan.ts reads no clock and calls nothing outside itself", () => {
     "the process": /\bprocess\.|\bglobalThis\b/,
   };
   for (const [what, pattern] of Object.entries(banned)) {
-    assert.doesNotMatch(src, pattern, `plan.ts must not use ${what}`);
+    assert.doesNotMatch(src, pattern, `foundation.ts must not use ${what}`);
   }
 });
 
@@ -124,19 +124,17 @@ test("the observe half's pure modules and the config loader read no clock and ca
   }
 });
 
-test("plan.ts imports and runs under Node, for the replay harness", async () => {
-  const mod = await import(path.join(HOOKS, "plan.ts"));
-  assert.equal(typeof mod.plan, "function");
-  assert.equal(typeof mod.tierOf, "function");
+test("foundation.ts imports and runs under Node, for the replay harness", async () => {
+  const mod = await import(path.join(HOOKS, "foundation.ts"));
+  for (const name of ["tierOf", "listedLive", "releaseDue", "turnEnded", "issueFromBranch"]) assert.equal(typeof mod[name], "function", name);
+  assert.ok(Array.isArray(mod.LIVE));
 });
 
 test("the v2 planner imports hooks/v2/ and foundation.ts alone, and every module it reaches reads no clock and calls nothing outside itself", () => {
   const reached = closure("v2/plan.ts");
   assert.ok(reached.includes("foundation.ts") && reached.includes("v2/rules-state.ts") && reached.includes("v2/reconcile.ts"), reached.join(", "));
   for (const f of reached) {
-    // foundation.ts re-exports plan.ts's tierOf until the delete wave (v2 SPEC 2.2); nothing else
-    // of v1's rule layer is reached
-    const allowed = f.startsWith("v2/") || f === "foundation.ts" || (f === "plan.ts" && valueImports("foundation.ts").includes("plan.ts"));
+    const allowed = f.startsWith("v2/") || f === "foundation.ts";
     assert.ok(allowed, `v2/plan.ts reaches ${f}`);
     assert.ok(!f.endsWith(".mjs"), `v2/plan.ts reaches ${f}, an answer contract`);
     const src = code(f);

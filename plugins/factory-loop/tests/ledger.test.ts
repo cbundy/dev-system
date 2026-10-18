@@ -8,10 +8,10 @@ import { describe, expect, test } from 'claude-code/testing'
 import { entryFromLoop } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
 import type { Exec } from '../hooks/exec'
+import { maxAttemptsOf } from '../hooks/foundation'
 import {
   KEEP_MS,
   LEDGER_MAX_BYTES,
-  attemptsKindOf,
   changedEntries,
   choose,
   exhausted,
@@ -20,7 +20,6 @@ import {
   fromStored,
   load,
   loopEvent,
-  maxAttemptsOf,
   onLoad,
   prune,
   reconcileAgents,
@@ -31,9 +30,8 @@ import {
   toStored,
 } from '../hooks/ledger'
 import type { StoreIo } from '../hooks/ledger'
-import { plan } from '../hooks/plan'
-import type { Action, LedgerEntry, Outcome, State } from '../hooks/types'
-import { MIN, NOW, brief, config, entry, issue, keys, mine, run, state, withLedger } from './fixtures'
+import type { Action, LedgerEntry, Outcome } from '../hooks/types'
+import { MIN, NOW, brief, config, entry } from './fixtures'
 
 const CFG = config()
 const REPO = 'cbundy/dev-system'
@@ -43,53 +41,10 @@ const LIFE = NOW - 20 * MIN
 // --- actions as plan emits them ---------------------------------------------------------------
 
 const claim = (n: number, key = `claim:${n}:new`): Action => ({ kind: 'claim', key, class: 'start', rule: 'D1', reason: 'ready', issue: n })
-const designer = (n: number, key = `design:${n}:${LIFE}`): Action => ({
-  kind: 'spawn',
-  agent: 'designer',
-  model: null,
-  notes: [],
-  key,
-  class: 'develop',
-  rule: 'D2',
-  reason: 'designing, no brief',
-  issue: n,
-})
-const adjudicator: Action = {
-  kind: 'spawn',
-  agent: 'adjudicator',
-  purpose: 'gate',
-  run: 'R45',
-  branch: 'feat/issue-45-x',
-  step: 'review',
-  head: 'h45',
-  pr: 545,
-  brief: brief(45),
-  model: null,
-  warns: [],
-  handoffHead: null,
-  verdicts: [],
-  guard: [],
-  key: 'adjudicate:R45:review:h45',
-  class: 'drive',
-  rule: 'P2',
-  reason: 'parked',
-  issue: 45,
-}
-const delegate: Action = { kind: 'delegate', brief: brief(63), key: `delegate:63:${brief(63)}`, class: 'develop', rule: 'D4', reason: 'brief posted', issue: 63 }
-const guard: Action = { kind: 'guard', pr: 550, run: 'R50', head: 'head50', key: 'guard:550:head50:1', class: 'free', rule: 'M1', reason: 'no guard yet', issue: 50 }
-const merge: Action = {
-  kind: 'merge',
-  pr: 550,
-  run: 'R50',
-  head: 'head50',
-  bump: null,
-  bumpReason: null,
-  key: 'merge:550:head50',
-  class: 'free',
-  rule: 'M5',
-  reason: 'reviewed: merge',
-  issue: 50,
-}
+const step = { step: 'review' as const, life: 'l1', seq: 1, attempt: 1, branch: 'feat/issue-45-x', slot: null, notes: [] }
+const designer = (n: number, key = `design:${n}:${LIFE}`): Action => ({ ...step, kind: 'agent-step', key, class: 'develop', rule: 'T1', reason: 'designing, no brief', issue: n })
+const adjudicator: Action = { ...step, kind: 'agent-step', run: 'R45', head: 'h45', pr: 545, key: 'step:review:R45:h45', class: 'drive', rule: 'T1', reason: 'parked', issue: 45 }
+const rollout: Action = { kind: 'rollout', pr: 550, key: 'rollout:50', class: 'free', rule: 'M7', reason: 'merged by hand', issue: 50 }
 const judge: Action = {
   kind: 'judge',
   wake: 'sequence',
@@ -150,14 +105,11 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(before).toEqual([])
   })
 
-  test('run, PR, head, agent and wake come from the actions that carry them', () => {
-    expect(start([], adjudicator, NOW).entry).toMatchObject({ run: 'R45', pr: 545, head: 'h45', agent: 'adjudicator', class: 'drive', issue: 45 })
-    // a delegate spawns the implementer: its entry is that agent's, as plan reads it
-    expect(start([], delegate, NOW).entry).toMatchObject({ agent: 'implementer', class: 'develop', run: null, pr: null })
-    expect(start([], guard, NOW).entry).toMatchObject({ run: 'R50', pr: 550, head: 'head50', class: 'free' })
+  test('run, PR, head and wake come from the actions that carry them', () => {
+    expect(start([], adjudicator, NOW).entry).toMatchObject({ run: 'R45', pr: 545, head: 'h45', class: 'drive', issue: 45 })
+    expect(start([], rollout, NOW).entry).toMatchObject({ run: null, pr: 550, head: null, class: 'free' })
     const wake = start([], judge, NOW).entry
     expect(wake).toMatchObject({ wake: 'sequence', pr: null, head: null, class: 'drive' })
-    expect(wake.agent).toBeUndefined()
     // a wake records the session submitting it, and the store keeps it (SPEC 7.5); nothing else does
     const sessioned = start([], judge, NOW, 'session-1').entry
     expect(sessioned.session).toBe('session-1')
@@ -223,27 +175,9 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(only(ledger, judge.key)).toMatchObject({ status: 'done', wakeId: 'w41', endedAt: NOW, outcome: answer })
   })
 
-  test('a detached respond keeps its launch record when it settles', () => {
-    const respond: Action = {
-      kind: 'respond',
-      run: 'R45',
-      branch: 'feat/issue-45-x',
-      step: 'review',
-      head: 'h45',
-      action: 'approve',
-      findings: null,
-      instructions: null,
-      addFinding: null,
-      ignore: null,
-      approveReason: null,
-      logReview: false,
-      key: 'respond:R45:review:h45:approve',
-      class: 'drive',
-      rule: 'P3',
-      reason: 'adjudicator: approve',
-      issue: 45,
-    }
-    const launched: Outcome = { kind: 'respond', slot: '/w/3', log: '/loop/respond/R45-1.log' }
+  test('a running entry keeps its launch record when it settles', () => {
+    const respond: Action = { ...adjudicator, key: 'step:review:R45:h45:2' }
+    const launched: Outcome = { kind: 'cli', exit: 0, detail: 'launched in /w/3' }
     let ledger = started([respond], NOW - 5 * MIN)
     ledger = finish(ledger, respond.key, { status: 'running', outcome: launched, summary: 'launched' }, NOW - 5 * MIN)
     expect(only(ledger, respond.key)).toMatchObject({ status: 'running', endedAt: null, outcome: launched, run: 'R45', head: 'h45' })
@@ -251,17 +185,16 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(only(ledger, respond.key)).toMatchObject({ status: 'done', endedAt: NOW, outcome: launched })
   })
 
-  test('a usage error uses up the attempts, so plan tells the owner instead of retrying (SPEC 10.1)', () => {
+  test('a usage error uses up the attempts, so the rules tell the owner instead of retrying (SPEC 10.1)', () => {
     const key = `claim:1:${NOW - 30 * MIN}`
-    const s = state({ queue: [1], issues: [issue(1)] })
     const base = started([claim(1, key)], NOW - 10 * MIN)
     const usage: Exec = { status: 'failed', outcome: cliFail(2), summary: 'usage error', noRetry: true }
     const once = finish(base, key, failed(1), NOW - 10 * MIN, { config: CFG })
     expect(only(once, key).attempts).toBe(1)
-    expect(keys(plan(withLedger(s, once), CFG))).toEqual([key])
     const bug = finish(base, key, usage, NOW - 10 * MIN, { config: CFG })
     expect(only(bug, key).attempts).toBe(3)
-    expect(keys(plan(withLedger(s, bug), CFG))).toEqual([`tell:agent-failed:${key}`])
+    expect(exhausted(only(bug, key), CFG)).toBe(true)
+    expect(exhausted(only(once, key), CFG)).toBe(false)
     // the repo's own maximum, when it raised one
     const raised = config({ maxAttempts: { ...CFG.maxAttempts, claim: 5 } })
     expect(only(finish(base, key, usage, NOW, { config: raised }), key).attempts).toBe(5)
@@ -289,92 +222,8 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     })
   })
 
-  test('an extra entry is recorded done beside its action: a guard FAIL that merge printed (SPEC 5.5)', () => {
-    const fails = { kind: 'guard' as const, fails: [{ name: 'mergeable', reason: 'behind main, run update-behind first' }], warns: [] }
-    const result: Exec = {
-      status: 'done',
-      outcome: { kind: 'merge', result: 'refused', rollout: null, closeIssue: null, line: 'GUARD mergeable FAIL behind main' },
-      summary: 'guard FAIL',
-      extra: [{ key: 'guard:550:head50:2', kind: 'guard', issue: 50, run: 'R50', pr: 550, head: 'head50', outcome: fails }],
-    }
-    const ledger = finish(started([merge], NOW - 3 * MIN), merge.key, result, NOW)
-    expect(only(ledger, merge.key)).toMatchObject({ status: 'done', outcome: { kind: 'merge', result: 'refused' } })
-    expect(only(ledger, 'guard:550:head50:2')).toEqual({
-      key: 'guard:550:head50:2',
-      kind: 'guard',
-      class: 'free',
-      rule: 'M5',
-      issue: 50,
-      run: 'R50',
-      pr: 550,
-      head: 'head50',
-      status: 'done',
-      attempts: 1,
-      startedAt: NOW - 3 * MIN,
-      endedAt: NOW,
-      outcome: fails,
-    })
-    // plan reads it as this head's latest guard: behind, so update-behind next (rule M2)
-    const s = state({ issues: [mine(50, 'ready to merge', { delegatedBrief: brief(50), pr: 550 })], runs: [run(50, 'merge-ready', { run: 'R50' })] })
-    const first = entry('guard:550:head50:1', 'guard', { issue: 50, pr: 550, head: 'head50', outcome: { kind: 'guard', fails: [], warns: [] } })
-    expect(keys(plan(withLedger(s, [first, ...ledger]), CFG))).toEqual(['update-behind:550:head50'])
-  })
-
-  test('a re-check that finds what the one before it found replaces it: a held PR keeps one guard, not one per re-check (#550, #551)', () => {
-    // the guard's head FAIL carries its ~700-character fix; re-checked every 5 minutes for a week
-    const HEAD = { name: 'head', reason: `run=head50 origin=head50 pr=head50 worktree=wt50 (run R50); fix: ${'x'.repeat(700)}` }
-    const CI = { name: 'checks', reason: 'ci=fail' }
-    const g = (n: number): Action => ({ ...guard, key: `guard:550:head50:${n}` })
-    const found = (...fails: { name: string; reason: string }[]): Exec => ({ status: 'done', outcome: { kind: 'guard', fails, warns: [] }, summary: 'FAIL' })
-    const check = (ledger: LedgerEntry[], n: number, result: Exec, at: number) => finish(start(ledger, g(n), at).ledger, g(n).key, result, at + 1000)
-    let week: LedgerEntry[] = []
-    for (let n = 1; n <= 7 * 288; n++) week = check(week, n, found(HEAD), NOW - 7 * DAY + n * 5 * MIN)
-    expect(week.map(e => e.key)).toEqual([`guard:550:head50:${7 * 288}`])
-    expect(only(week, `guard:550:head50:${7 * 288}`)).toMatchObject({ status: 'done', startedAt: NOW, endedAt: NOW + 1000 })
-    // a changed failure is kept beside the one before it, and so is a return to an older one
-    let changes = check([], 1, found(HEAD), NOW - 30 * MIN)
-    changes = check(changes, 2, found(HEAD, CI), NOW - 20 * MIN)
-    changes = check(changes, 3, found(HEAD), NOW - 10 * MIN)
-    expect(changes.map(e => e.key)).toEqual(['guard:550:head50:1', 'guard:550:head50:2', 'guard:550:head50:3'])
-    // never across PRs or heads, nor over a guard that did not end done
-    const other = [entry('guard:551:head50:1', 'guard', { pr: 551, head: 'head50', startedAt: NOW - 20 * MIN, outcome: { kind: 'guard', fails: [HEAD], warns: [] } })]
-    expect(check(other, 1, found(HEAD), NOW - 10 * MIN).map(e => e.key)).toEqual(['guard:551:head50:1', 'guard:550:head50:1'])
-    const lost = check([], 1, found(HEAD), NOW - 20 * MIN).map(e => ({ ...e, status: 'lost' as const }))
-    expect(check(lost, 2, found(HEAD), NOW - 10 * MIN).map(e => e.key)).toEqual(['guard:550:head50:1', 'guard:550:head50:2'])
-    // a guard FAIL that merge printed folds the same way
-    const extra: Exec = {
-      status: 'done',
-      outcome: { kind: 'merge', result: 'refused', rollout: null, closeIssue: null, line: 'GUARD checks FAIL ci=fail' },
-      summary: 'guard FAIL',
-      extra: [{ key: 'guard:550:head50:2', kind: 'guard', issue: 50, run: 'R50', pr: 550, head: 'head50', outcome: { kind: 'guard', fails: [CI], warns: [] } }],
-    }
-    const merged = finish(started([merge], NOW - 3 * MIN, check([], 1, found(CI), NOW - 10 * MIN)), merge.key, extra, NOW)
-    expect(merged.filter(e => e.kind === 'guard').map(e => e.key)).toEqual(['guard:550:head50:2'])
-    // a fast-forward refused the same way again replaces the one before; one that moved stays
-    const ff = (n: number): Action => ({ kind: 'fast-forward', key: `fast-forward:550:head50:${n}`, class: 'free', rule: 'M2', reason: 'lag', issue: 50, pr: 550, run: 'R50', head: 'head50', origin: 'head50', branch: 'b' })
-    const forward = (ledger: LedgerEntry[], n: number, result: 'refused' | 'forwarded', at: number) =>
-      finish(start(ledger, ff(n), at).ledger, ff(n).key, { status: 'done', outcome: { kind: 'fast-forward', result, line: `${result.toUpperCase()} wt50 is dirty` }, summary: result }, at + 1000)
-    let tries: LedgerEntry[] = []
-    for (let n = 1; n <= 3; n++) tries = forward(tries, n, 'refused', NOW - (10 - n) * MIN)
-    expect(tries.map(e => e.key)).toEqual(['fast-forward:550:head50:3'])
-    const moved = forward(forward([], 1, 'forwarded', NOW - 20 * MIN), 2, 'forwarded', NOW - 10 * MIN)
-    expect(moved.map(e => e.key)).toEqual(['fast-forward:550:head50:1', 'fast-forward:550:head50:2'])
-    // the main checkout's update every 5 minutes (#555): a week of CURRENT at one commit keeps one
-    // entry; an update that moved it stays beside the ones before and after
-    const up = (n: number): Action => ({ kind: 'update-checkout', key: `update-checkout:${n}`, class: 'free', rule: 'H5', reason: 'due', issue: null, branch: 'main', head: null })
-    const said = (ledger: LedgerEntry[], n: number, line: string, at: number) =>
-      finish(start(ledger, up(n), at).ledger, up(n).key, { status: 'done', outcome: { kind: 'update-checkout', result: line.startsWith('UPDATED') ? 'updated' : 'current', line }, summary: line }, at + 1000)
-    let updates: LedgerEntry[] = []
-    for (let n = 1; n <= 7 * 288; n++) updates = said(updates, n, 'CURRENT c1', NOW - 7 * DAY + n * 5 * MIN)
-    expect(updates.map(e => e.key)).toEqual([`update-checkout:${7 * 288}`])
-    updates = said(updates, 9000, 'UPDATED c1 c2', NOW + MIN)
-    updates = said(updates, 9001, 'CURRENT c2', NOW + 6 * MIN)
-    updates = said(updates, 9002, 'CURRENT c2', NOW + 11 * MIN)
-    expect(updates.map(e => e.key)).toEqual([`update-checkout:${7 * 288}`, 'update-checkout:9000', 'update-checkout:9002'])
-  })
-
   test('a stop of rule A1 marks the agent timed-out, even when TaskStop failed (SPEC A1, 13)', () => {
-    const agent = (id: string) => entry(`design:70:${id}`, 'spawn', { agent: 'designer', class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: id })
+    const agent = (id: string) => entry(`design:70:${id}`, 'agent-step', { class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: id })
     const base = [agent('a70'), agent('a71')]
     const stopped = finish(started([stop('a70', 'A1')], NOW, base), 'stop:a70', { status: 'done', summary: 'stopped' }, NOW)
     expect(only(stopped, 'design:70:a70')).toMatchObject({ status: 'timed-out', endedAt: NOW, summary: 'timed out: stopped' })
@@ -388,7 +237,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
 
   test('a stop of an agent that worked on past its answer, done or failed, keeps its answer; so does the list showing it killed after (#587)', () => {
     const outcome: Outcome = { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/70#issuecomment-1', created: [], pendingDecision: false }
-    const answered = entry('design:70:x', 'spawn', { agent: 'designer', class: 'develop', issue: 70, status: 'done', endedAt: NOW - 20 * MIN, agentId: 'a70', outcome, summary: 'brief posted' })
+    const answered = entry('design:70:x', 'agent-step', { class: 'develop', issue: 70, status: 'done', endedAt: NOW - 20 * MIN, agentId: 'a70', outcome, summary: 'brief posted' })
     const past: Action = { ...stop('a70', 'A2'), reason: 'worked on past its answer' }
     for (const result of [{ status: 'done' as const, summary: 'stopped a70' }, { status: 'failed' as const, summary: 'not stopped a70: TaskStop failed' }]) {
       const after = finish(started([past], NOW, [answered]), 'stop:a70', result, NOW)
@@ -405,9 +254,9 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
 })
 
 describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
-  const cli = entry('guard:550:head50:1', 'guard', { status: 'running', endedAt: null })
-  const spawning = entry(`design:60:${LIFE}`, 'spawn', { agent: 'designer', status: 'running', endedAt: null })
-  const agentEntry = (id: string) => entry(`agent:${id}`, 'spawn', { agent: 'fixer', class: 'drive', status: 'running', endedAt: null, agentId: id })
+  const cli = entry('guard:550:head50:1', 'rollout', { status: 'running', endedAt: null })
+  const spawning = entry(`design:60:${LIFE}`, 'agent-step', { status: 'running', endedAt: null })
+  const agentEntry = (id: string) => entry(`agent:${id}`, 'agent-step', { class: 'drive', status: 'running', endedAt: null, agentId: id })
   const wake = entry('judge:sequence:550:head50', 'judge', { wake: 'sequence', status: 'running', endedAt: null, wakeId: 'w1' })
   const done = entry('heartbeat:0', 'heartbeat')
 
@@ -451,26 +300,16 @@ describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
     expect(only(after, done.key)).toBe(done)
   })
 
-  test('an implementer lost across a restart is delegated again by its rule (SPEC 7.5, D4b)', () => {
-    const s = state({ issues: [mine(63, 'implementing')] })
-    let ledger = started([delegate], NOW - 30 * MIN)
-    ledger = finish(ledger, delegate.key, { status: 'running', agentId: 'a63', summary: 'spawned' }, NOW - 30 * MIN)
-    expect(keys(plan(withLedger(s, ledger), CFG))).toEqual([])
-    ledger = reconcileAgents(onLoad(ledger, NOW - MIN), [], NOW - MIN)
-    expect(only(ledger, delegate.key).status).toBe('lost')
-    expect(keys(plan(withLedger(s, ledger), CFG))).toEqual([delegate.key])
-    expect(start(ledger, delegate, NOW).entry.attempts).toBe(2)
-  })
 })
 
 describe('the prune and the size budget (SPEC 7.1)', () => {
   test('an entry is kept 7 days after it ends, a running one forever', () => {
-    const ended = (key: string, endedAt: number) => entry(key, 'guard', { startedAt: endedAt - MIN, endedAt })
+    const ended = (key: string, endedAt: number) => entry(key, 'rollout', { startedAt: endedAt - MIN, endedAt })
     const ledger = [
       ended('edge', NOW - KEEP_MS),
       ended('past', NOW - KEEP_MS - 1),
       ended('fresh', NOW - DAY),
-      entry('running', 'spawn', { agent: 'fixer', status: 'running', startedAt: NOW - 30 * DAY, endedAt: null }),
+      entry('running', 'agent-step', { status: 'running', startedAt: NOW - 30 * DAY, endedAt: null }),
       // no end time: it ages from its start
       entry('unended', 'claim', { status: 'failed', startedAt: NOW - 8 * DAY, endedAt: null }),
     ]
@@ -479,7 +318,7 @@ describe('the prune and the size budget (SPEC 7.1)', () => {
 
   test('over budget, the entries that ended first go first, and a running one never', () => {
     const ledger = Array.from({ length: 10 }, (_, i) =>
-      entry(`e${i}`, 'guard', { status: i === 0 ? 'running' : 'done', startedAt: NOW - (20 - i) * MIN, endedAt: i === 0 ? null : NOW - (10 - i) * MIN }),
+      entry(`e${i}`, 'rollout', { status: i === 0 ? 'running' : 'done', startedAt: NOW - (20 - i) * MIN, endedAt: i === 0 ? null : NOW - (10 - i) * MIN }),
     )
     expect(fit(ledger)).toEqual(ledger)
     const one = JSON.stringify(ledger[5]).length + 1
@@ -502,7 +341,7 @@ describe('the prune and the size budget (SPEC 7.1)', () => {
 
   test('a runaway ledger is kept within its budget: the oldest ended entries go, running ones stay', () => {
     const running = Array.from({ length: 20 }, (_, i) =>
-      entry(`agent:${i}`, 'spawn', { agent: 'fixer', class: 'drive', status: 'running', startedAt: NOW - 6 * DAY, endedAt: null, agentId: `a${i}` }),
+      entry(`agent:${i}`, 'agent-step', { class: 'drive', status: 'running', startedAt: NOW - 6 * DAY, endedAt: null, agentId: `a${i}` }),
     )
     const huge = [...running, ...busyWeek(48)]
     expect(JSON.stringify(huge).length).toBeGreaterThan(LEDGER_MAX_BYTES)
@@ -543,16 +382,14 @@ describe('/factory retry (D-38)', () => {
   const ended = (key: string, kind: LedgerEntry['kind'], status: LedgerEntry['status'], attempts: number, over: Partial<LedgerEntry> = {}) =>
     entry(key, kind, { status, attempts, ...over })
 
-  test("exhausted is plan's rule: failed, timed-out or lost at the kind's or agent's maximum", () => {
+  test("exhausted is the planner's rule: failed, timed-out or lost at the kind's maximum", () => {
     const cases: [LedgerEntry, boolean][] = [
-      [ended('d', 'spawn', 'failed', 2, { agent: 'designer' }), true],
-      [ended('d', 'spawn', 'failed', 1, { agent: 'designer' }), false],
-      [ended('d', 'spawn', 'lost', 2, { agent: 'adjudicator' }), true],
-      [ended('i', 'delegate', 'timed-out', 2), true],
+      [ended('a', 'agent-step', 'failed', 1), true],
+      [ended('a', 'agent-step', 'lost', 1), true],
+      [ended('a', 'agent-step', 'failed', 0), false],
+      [ended('q', 'stop-agent', 'timed-out', 1), true],
       [ended('c', 'claim', 'failed', 3), true],
       [ended('c', 'claim', 'failed', 2), false],
-      [ended('u', 'update-behind', 'failed', 4), true],
-      [ended('u', 'update-behind', 'failed', 3), false],
       [ended('j', 'judge', 'timed-out', 1), true],
       [ended('r', 'rollout', 'failed', 3), true],
       [ended('r', 'rollout', 'failed', 2), false],
@@ -563,17 +400,17 @@ describe('/factory retry (D-38)', () => {
       [ended('x', 'claim', 'done', 9), false],
     ]
     for (const [e, want] of cases) expect(exhausted(e, CFG), `${e.kind} ${e.status} ${e.attempts}`).toBe(want)
-    expect(attemptsKindOf(ended('i', 'delegate', 'failed', 1))).toBe('implementer')
-    expect(maxAttemptsOf(config({ updateBehindRetries: 5 }), 'update-behind')).toBe(6)
-    expect(exhausted(cases[0]?.[0] as LedgerEntry, config({ maxAttempts: { ...CFG.maxAttempts, designer: 3 } }))).toBe(false)
+    expect(maxAttemptsOf(CFG, 'claim')).toBe(3)
+    expect(maxAttemptsOf(CFG, 'claim', 5)).toBe(5)
+    expect(exhausted(ended('c', 'claim', 'failed', 3), config({ maxAttempts: { ...CFG.maxAttempts, claim: 4 } }))).toBe(false)
   })
 
   test("retry clears the attempts of the issue's exhausted entries and the notices they raised, nothing else", () => {
-    const failedTwice = ended(`design:60:${LIFE}`, 'spawn', 'failed', 2, { agent: 'designer', issue: 60 })
-    const told = ended(`tell:agent-failed:design:60:${LIFE}`, 'tell', 'done', 1, { wake: 'agent-failed', issue: 60 })
+    const failedTwice = ended(`claim:60:${LIFE}`, 'claim', 'failed', 3, { issue: 60 })
+    const told = ended(`tell:agent-failed:claim:60:${LIFE}`, 'tell', 'done', 1, { wake: 'agent-failed', issue: 60 })
     const keep = [
       ended('claim:60:new', 'claim', 'done', 1, { issue: 60 }),
-      ended('guard:560:h:1', 'guard', 'failed', 1, { issue: 60 }),
+      ended('guard:560:h:1', 'rollout', 'failed', 1, { issue: 60 }),
       ended('stop:a60', 'stop-agent', 'running', 5, { issue: 60 }),
       ended('claim:61:new', 'claim', 'failed', 3, { issue: 61 }),
       ended('tell:agent-failed:claim:61:new', 'tell', 'done', 1, { issue: 61 }),
@@ -584,130 +421,40 @@ describe('/factory retry (D-38)', () => {
     // the entry stays, its count cleared: the next attempt is the first
     const reset = { ...failedTwice, attempts: 0, summary: 'attempts cleared by the owner (/factory retry)' }
     expect(r.ledger).toEqual([reset, ...keep])
-    expect(start(r.ledger, designer(60), NOW).entry.attempts).toBe(1)
+    expect(start(r.ledger, claim(60, failedTwice.key), NOW).entry.attempts).toBe(1)
     // a notice still open is left to its wake
     const open = { ...told, status: 'running' as const, endedAt: null }
     expect(retryIssue([failedTwice, open], 60, CFG)).toEqual({ ledger: [reset, open], cleared: [failedTwice.key], notices: [] })
     expect(retryIssue(keep, 60, CFG).cleared).toEqual([])
   })
 
-  test('an env-retry runs once per resume, whatever the config, and a retry never clears it (#537)', () => {
-    const spent = ended('env-retry:r:test:h:r1', 'env-retry', 'failed', 1, { issue: 60 })
-    expect(exhausted(spent, config({ maxAttempts: { ...CFG.maxAttempts, 'env-retry': 5 } }))).toBe(true)
-    expect(maxAttemptsOf(config({ maxAttempts: { 'env-retry': 5 } }), 'env-retry')).toBe(1)
-    const told = ended('tell:agent-failed:env-retry:r:test:h:r1', 'tell', 'done', 1, { wake: 'agent-failed', issue: 60 })
-    expect(retryIssue([spent, told], 60, CFG)).toEqual({ ledger: [spent, told], cleared: [], notices: [] })
-  })
-
-  // Each case: plan holds the key as exhausted (and has told the owner), retry clears it, and
-  // plan emits the action again.
-  function crossCheck(s: State, held: LedgerEntry[], n: number, notice: string, again: string) {
-    expect(keys(plan(withLedger(s, held), CFG))).toEqual([notice])
-    const told = [...held, entry(notice, 'tell', { wake: notice.split(':')[1], class: 'owner', issue: n })]
-    expect(keys(plan(withLedger(s, told), CFG))).toEqual([])
-    const r = retryIssue(withLedger(s, told).ledger, n, CFG)
-    const after = plan({ ...s, ledger: r.ledger }, CFG)
-    expect(keys(after)).toEqual([again])
-    expect(after.skipped.some(k => k.why.startsWith('exhausted: '))).toBe(false)
-    return r
-  }
-
-  test('after retry a designer is spawned again (rule D2)', () => {
-    const s = state({ issues: [mine(60, 'designing', { stageSince: LIFE })] })
-    const key = `design:60:${LIFE}`
-    const r = crossCheck(s, [ended(key, 'spawn', 'failed', 2, { agent: 'designer', class: 'develop', issue: 60 })], 60, `tell:agent-failed:${key}`, key)
-    // and a retry that runs out again is told again
-    let ledger = r.ledger
-    for (const at of [NOW, NOW + 5 * MIN]) {
-      ledger = start(ledger, designer(60), at).ledger
-      ledger = finish(ledger, key, { status: 'failed', summary: 'aborted' }, at + MIN)
-    }
-    expect(only(ledger, key).attempts).toBe(2)
-    // the main checkout was brought up to date a minute before (rule H5)
-    ledger = [...ledger, entry('update-checkout:1', 'update-checkout', { startedAt: NOW + 11 * MIN, endedAt: NOW + 11 * MIN })]
-    expect(keys(plan({ ...s, now: NOW + 12 * MIN, ledger }, CFG))).toEqual([`tell:agent-failed:${key}`])
-  })
-
-  test('after retry a claim is tried again (rule D1)', () => {
-    const s = state({ queue: [1], issues: [issue(1)] })
-    const key = `claim:1:${NOW - 30 * MIN}`
-    crossCheck(s, [ended(key, 'claim', 'failed', 3, { class: 'start', issue: 1 })], 1, `tell:agent-failed:${key}`, key)
-  })
-
-  test('after retry a lost implementer is delegated again (rule D4b)', () => {
-    const s = state({ issues: [mine(63, 'implementing')] })
-    const lostTwice = ended(delegate.key, 'delegate', 'lost', 2, { class: 'develop', issue: 63, agentId: 'a63', agent: 'implementer' })
-    crossCheck(s, [lostTwice], 63, `tell:agent-failed:${delegate.key}`, delegate.key)
-  })
-
-  test('after retry a skipped update-behind runs again (rule M2b)', () => {
-    const s = state({ issues: [mine(50, 'ready to merge', { delegatedBrief: brief(50), pr: 550 })], runs: [run(50, 'merge-ready')] })
-    const behind = entry('guard:550:head50:1', 'guard', {
-      issue: 50,
-      pr: 550,
-      head: 'head50',
-      startedAt: NOW - 2 * MIN,
-      endedAt: NOW - MIN,
-      outcome: { kind: 'guard', fails: [{ name: 'mergeable', reason: 'behind main, run update-behind first' }], warns: [] },
-    })
-    const skipped = ended('update-behind:550:head50', 'update-behind', 'failed', 4, {
-      issue: 50,
-      pr: 550,
-      head: 'head50',
-      endedAt: NOW - 6 * MIN,
-      outcome: { kind: 'update-behind', result: 'skip', from: 'head50', to: null, line: 'UPDATE-BEHIND SKIP' },
-    })
-    const r = crossCheck(s, [behind, skipped], 50, 'tell:update-behind:550:head50', 'update-behind:550:head50')
-    expect(r.cleared).toEqual(['update-behind:550:head50'])
-    expect(r.notices).toEqual(['tell:update-behind:550:head50'])
-  })
-
-  test('after retry a timed-out model task is woken again (rule M7)', () => {
-    const merged = entry('merge:550:head50', 'merge', {
-      issue: 50,
-      pr: 550,
-      head: 'head50',
-      outcome: { kind: 'merge', result: 'merged', rollout: 'run-it', closeIssue: null, line: 'merged' },
-    })
-    const timedOut = ended('task:run-it:50', 'task', 'timed-out', 1, { wake: 'run-it', class: 'drive', issue: 50 })
-    crossCheck(state(), [merged, timedOut], 50, 'tell:task-timeout:task:run-it:50', 'task:run-it:50')
-  })
-
-  test('an entry with attempts left is not cleared, and plan retries it by itself', () => {
-    const s = state({ issues: [mine(60, 'designing', { stageSince: LIFE })] })
-    const key = `design:60:${LIFE}`
-    const roomy = config({ maxAttempts: { ...CFG.maxAttempts, designer: 3 } })
-    const once = ended(key, 'spawn', 'failed', 2, { agent: 'designer', class: 'develop', issue: 60 })
-    expect(retryIssue(withLedger(s, [once]).ledger, 60, roomy).cleared).toEqual([])
-    expect(keys(plan(withLedger(s, [once]), roomy))).toEqual([key])
-  })
 })
 
 describe("the loop's own events (D-09, SPEC 7.4)", () => {
-  test('agent and wake entries log a loop event at their start and end, which rebuilds them', () => {
-    let ledger = started([adjudicator], NOW - 5 * MIN)
-    const startEvent = loopEvent(only(ledger, adjudicator.key))
-    expect(startEvent?.slice(0, 10)).toEqual(['callum-flow-event', 'loop', '--issue', '45', '--run', 'R45', '--pr', '545', '--head', 'h45'])
-    expect(startEvent?.[10]).toBe('--note')
-    expect(startEvent?.[11]).toMatch(/^kind=spawn key=adjudicate:R45:review:h45 status=running attempts=1 /)
-    ledger = finish(ledger, adjudicator.key, { status: 'running', agentId: 'a45', summary: 'spawned' }, NOW - 5 * MIN)
-    ledger = finish(ledger, adjudicator.key, { status: 'failed', summary: 'unparseable reply' }, NOW)
-    const ended = only(ledger, adjudicator.key)
+  test('wake entries log a loop event at their start and end, which rebuilds them', () => {
+    let ledger = started([judge], NOW - 5 * MIN)
+    const startEvent = loopEvent(only(ledger, judge.key))
+    expect(startEvent?.slice(0, 4)).toEqual(['callum-flow-event', 'loop', '--issue', '50'])
+    expect(startEvent?.[startEvent.length - 2]).toBe('--note')
+    expect(startEvent?.[startEvent.length - 1]).toMatch(/^kind=judge key=judge:sequence:550:head50 status=running attempts=1 /)
+    ledger = finish(ledger, judge.key, { status: 'running', summary: 'submitted' }, NOW - 5 * MIN)
+    ledger = finish(ledger, judge.key, { status: 'failed', summary: 'no reply' }, NOW)
+    const ended = only(ledger, judge.key)
     const argv = loopEvent(ended) as string[]
     // what a lost store is rebuilt from (SPEC 7.5): the event gives the entry back
-    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 45, run: 'R45', branch: null, pr: 545, head: 'h45', note: argv[11] ?? null, actor: null, device: null }
+    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 50, run: null, branch: null, pr: null, head: null, note: argv[argv.length - 1] ?? null, actor: null, device: null }
     expect(entryFromLoop(event)).toEqual({ ...ended, summary: undefined })
   })
 
   test('wakes and owner notices log one; CLI work logs its own events and gets none', () => {
     const tell: Action = { kind: 'tell', wake: 'runaway', fields: {}, context: [], key: 'tell:runaway:start:1', class: 'owner', rule: 'O2', reason: 'tell runaway', issue: null }
-    for (const a of [judge, tell, delegate, designer(60)]) expect(loopEvent(start([], a, NOW).entry)?.[1]).toBe('loop')
-    for (const a of [claim(7), guard, merge, stop('a1', 'A1')]) expect(loopEvent(start([], a, NOW).entry)).toBeNull()
+    for (const a of [judge, tell]) expect(loopEvent(start([], a, NOW).entry)?.[1]).toBe('loop')
+    for (const a of [claim(7), stop('a1', 'A1')]) expect(loopEvent(start([], a, NOW).entry)).toBeNull()
     expect(loopEvent(entry('heartbeat:0', 'heartbeat'))).toBeNull()
   })
 
   test("a stop's side effect shows among the changed entries, so the agent's end is logged", () => {
-    const agent = entry('design:70:x', 'spawn', { agent: 'designer', class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: 'a70' })
+    const agent = entry('design:70:x', 'agent-step', { class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: 'a70' })
     const before = started([stop('a70', 'A1')], NOW, [agent])
     const after = finish(before, 'stop:a70', { status: 'done', summary: 'stopped' }, NOW)
     const changed = changedEntries(before, after)
@@ -737,8 +484,8 @@ describe('the store (SPEC 7.1)', () => {
 
   test('save and load round trip under ledger:<repo>, pruned first', async () => {
     const store = fakeStore({ 'queue-known:cbundy/dev-system': [7, 9] })
-    let ledger = started([adjudicator, claim(7)], NOW - 5 * MIN)
-    ledger = finish(ledger, adjudicator.key, { status: 'running', agentId: 'a45', summary: 'spawned' }, NOW - 5 * MIN)
+    let ledger = started([judge, claim(7)], NOW - 5 * MIN)
+    ledger = finish(ledger, judge.key, { status: 'running', wakeId: 'w50', summary: 'submitted' }, NOW - 5 * MIN)
     ledger = finish(ledger, 'claim:7:new', { status: 'done', outcome: { kind: 'claim', result: 'claimed' }, summary: 'claimed' }, NOW - 4 * MIN)
     const old = entry('sweep:1', 'sweep', { startedAt: NOW - 9 * DAY, endedAt: NOW - 8 * DAY })
     const written = await save(store, REPO, [old, ...ledger], NOW)
@@ -757,10 +504,10 @@ describe('the store (SPEC 7.1)', () => {
     expect(await load(store, REPO)).toEqual(week)
   })
 
-  test('the stored value keeps the fields plan reads, and drops what JSON cannot hold', async () => {
+  test('the stored value keeps the fields the rules read, and drops what JSON cannot hold', async () => {
     const store = fakeStore()
     const verdict: Outcome = { kind: 'adjudicator', verdicts: ['WRONG: no'], action: { type: 'escalate', why: 'unclear' }, report: null }
-    const e = { ...entry('adjudicate:R1:review:h1', 'spawn', { agent: 'adjudicator', class: 'drive', issue: 1, run: 'R1', head: 'h1', outcome: verdict }), summary: undefined }
+    const e = { ...entry('adjudicate:R1:review:h1', 'agent-step', { class: 'drive', issue: 1, run: 'R1', head: 'h1', outcome: verdict }), summary: undefined }
     await save(store, REPO, [e], NOW)
     const back = await load(store, REPO)
     expect(back).toEqual([{ ...e }])
@@ -818,8 +565,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
     const t = (k: number) => at(t0 + k * 2 * MIN)
     out.push(entry(`claim:${n}:new`, 'claim', { class: 'start', issue: n, ...t(0), outcome: { kind: 'claim', result: 'claimed' } }))
     out.push(
-      entry(`design:${n}:${t0}`, 'spawn', {
-        agent: 'designer',
+      entry(`design:${n}:${t0}`, 'agent-step', {
         class: 'develop',
         issue: n,
         agentId: `a${n}d`,
@@ -828,8 +574,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
       }),
     )
     out.push(
-      entry(`delegate:${n}:https://github.com/cbundy/dev-system/issues/${n}#issuecomment-${3_000_000_000 + n}`, 'delegate', {
-        agent: 'implementer',
+      entry(`delegate:${n}:https://github.com/cbundy/dev-system/issues/${n}#issuecomment-${3_000_000_000 + n}`, 'agent-step', {
         class: 'develop',
         ...subject,
         agentId: `a${n}i`,
@@ -839,8 +584,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
     )
     for (const [k, step] of ['review', 'test', 'lint'].entries()) {
       out.push(
-        entry(`adjudicate:${runId}:${step}:${head(k)}`, 'spawn', {
-          agent: 'adjudicator',
+        entry(`adjudicate:${runId}:${step}:${head(k)}`, 'agent-step', {
           class: 'drive',
           ...subject,
           head: head(k),
@@ -859,7 +603,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
         }),
       )
       out.push(
-        entry(`respond:${runId}:${step}:${head(k)}:fix`, 'respond', {
+        entry(`respond:${runId}:${step}:${head(k)}:fix`, 'agent-step', {
           class: 'drive',
           ...subject,
           head: head(k),
@@ -870,12 +614,12 @@ function busyWeek(perDay: number): LedgerEntry[] {
     }
     for (let g = 1; g <= 5; g++) {
       out.push(
-        entry(`guard:${500 + n}:${head(3)}:${g}`, 'guard', {
+        entry(`guard:${500 + n}:${head(3)}:${g}`, 'agent-step', {
           ...subject,
           head: head(3),
           ...t(6 + g),
           outcome: {
-            kind: 'guard',
+            kind: 'rollout',
             fails: g < 5 ? [{ name: 'checks', reason: 'ci=pending, e2e=pending, lint=pending' }] : [],
             warns: ['GUARD test-weakening WARN tests/foo.test.ts: an assertion was removed from the retry test'],
           },
@@ -883,8 +627,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
       )
     }
     out.push(
-      entry(`adjudicate-merge:${500 + n}:${head(3)}`, 'spawn', {
-        agent: 'adjudicator',
+      entry(`adjudicate-merge:${500 + n}:${head(3)}`, 'agent-step', {
         class: 'drive',
         ...subject,
         head: head(3),
@@ -911,7 +654,7 @@ function busyWeek(perDay: number): LedgerEntry[] {
       }),
     )
     out.push(
-      entry(`merge:${500 + n}:${head(3)}`, 'merge', {
+      entry(`merge:${500 + n}:${head(3)}`, 'agent-step', {
         ...subject,
         head: head(3),
         ...t(14),

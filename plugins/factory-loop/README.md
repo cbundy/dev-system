@@ -3,8 +3,8 @@
 The issue orchestrator as one deterministic code loop inside its Claude Code session. Every
 minute it reads the factory's whole state, computes what to do with a pure `plan()` function,
 and does it: claims, heartbeats, sweeps, agents, gate responses, guards, merges and the status
-title. The model is woken only for judgment (sequencing a flagged merge into a release, a
-re-drive, a release) and to talk to the owner; agents read the code.
+title. The model is woken only for judgment (the hourly release review) and to talk to the owner;
+agents read the code.
 
 - Design: [docs/factory-loop/SPEC.md](../../docs/factory-loop/SPEC.md), with the inventory of
   what it replaces ([INVENTORY.md](../../docs/factory-loop/INVENTORY.md)), the choices made
@@ -18,21 +18,20 @@ Both halves are built. In **observe mode** (the default) every pass reads the fa
 logs its decisions and shows its status in the session title, and executes nothing: every event
 its commands cause goes to a local sink. In **act mode**, once every safety rail passes (SPEC
 11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
-through its executor, spawns its agents (its own copies of the callum-flow adjudicator and
-designer, and callum-flow's implementer and fixer), and wakes the model for judgment. Act
+through its executor, starts its agents (its own, `agents/`), and wakes the model for judgment. Act
 mode has run only in tests so far; its first real run is on `dev-system-testbed` (PLAN stage
 D). The plugin is not listed in the marketplace (DECISIONS D-02).
 
 | Piece | File | State |
 |---|---|---|
-| The decision table | `hooks/plan.ts` | done, pure |
+| The decision table | `hooks/v2/` (the rules) and `hooks/foundation.ts` (what they share), pure | done |
 | Parsers, event derivation, state assembly | `hooks/parse.ts`, `hooks/derive.ts`, `hooks/state.ts` | done, pure |
 | Observe adapters | `hooks/observe.ts` | done; running as a shadow in `spike-reconcile-mod` |
 | The pass driver: the store, the scheduler, the decision log, the hooks | `hooks/register.ts` | done |
 | The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
-| Executors: commands, guard and merge, respond, agent spawns, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/act-agents.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done; not yet run against real agents |
+| Executors: commands, the rollout read, v2's effects and agent steps, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/v2/act-*.ts`, `hooks/v2/steps*.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done |
 | Wakes and the answer tool | `hooks/wake.ts` | done |
-| The agents' answer tools and the repair message | `hooks/agent-tools.ts`, `agents/` (the loop's adjudicator and designer, D-70) | done; no agent can reach the tools yet (SPEC 13) |
+| The agents' answer tool definitions and the loop's agent definitions | `hooks/agent-tools.ts`, `agents/` | done; unused by the loop, which answers by script |
 | The answer script and the contract it shares with the loop (a temporary workaround, D-74) | `bin/factory-answer`, `hooks/contract.mjs` | done; not yet run by real agents |
 | Safety rails | `hooks/rails.ts` | done |
 | `/factory` and the control tool | `hooks/control.ts` | done |
@@ -167,7 +166,7 @@ between releases. Before running the loop on a newer Claude Code:
 A test that drives the engine (`async ($, on) =>`) passes `ENGINE_TEST` from `tests/host.ts` as its second argument: the plugin loads afresh per test and the passes are CPU, so the kit's 5 s wall-clock default fails on a loaded machine. It is a budget, not a retry, and `tests/factory-loop-test-timeouts.test.js` fails `npm test` without it.
 
 `npm test` runs the plugin's tests through `claude plugin test`, and ten node tests at the repo
-root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
+root: `tests/factory-loop-plan.test.js` checks that `foundation.ts` and v2's planner stay pure;
 `factory-loop-agents.test.js` checks that every agent the loop spawns lists its answer tool, and
 that the loop's adjudicator and designer stay the callum-flow definitions but for `tools:` and
 the one sentence that lets the adjudicator run the answer script;
@@ -178,7 +177,6 @@ names (held to the same table of cases as the loop's own reading, `tests/answer-
 atomic write and every path it must refuse, and runs the answer block of a rendered prompt
 through bash as an agent copies it;
 `factory-loop-judge-skill.test.js` checks the judge skill covers every wake, TELL kind and op;
-and `factory-loop-respond-launch.test.js`, `factory-loop-fast-forward.test.js`,
-`factory-loop-update-checkout.test.js`, `factory-loop-prune.test.js` and
-`factory-loop-loop-events.test.js` run the respond launch, the fast-forward, the main checkout's
-update, the daily prune and every `loop` note for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.
+and `factory-loop-prune.test.js` and `factory-loop-loop-events.test.js` run the daily prune and
+every `loop` note for real, against scratch directories. `foundation.ts` also imports under plain
+Node, which the replay harness uses.

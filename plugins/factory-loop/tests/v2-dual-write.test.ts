@@ -1,5 +1,5 @@
 // Dual write (docs/factory-loop/v2/SPEC.md 4.1, 2.4): observe's once-per-load probe and read of the new
-// event log (act mode, planner v2), and H1's dualWriteRules, which logs each record's stage the new
+// event log (act mode), and H1's dualWriteRules, which logs each record's stage the new
 // log lacks once.
 import { describe, expect, test } from 'claude-code/testing'
 
@@ -18,7 +18,7 @@ import { LOOP_DIR, REPO, TOOLS } from './host'
 
 const LIFE = lifeOf(NOW - 2 * 60 * MIN)
 const OK = { ok: true, at: NOW }
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 
 function rec(n: number, over: Partial<IssueRecord> = {}): IssueRecord {
   return { ...madeRecord({ issue: n, life: LIFE, branch: `issue-${n}`, pr: null, others: [] }, NOW - 30 * MIN), seq: 3, seqAt: NOW - 20 * MIN, state: 'building', step: 'build', since: NOW - 20 * MIN, ...over }
@@ -102,8 +102,8 @@ describe('seenIn', () => {
 })
 
 describe('observeV2 dual write (2.4)', () => {
-  const runtime = (mode: Runtime['mode'], planner: 'v2' | 'v1' = 'v2'): Runtime => ({
-    mode, repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: {}, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: config({ planner }), configProblems: [],
+  const runtime = (mode: Runtime['mode']): Runtime => ({
+    mode, repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: {}, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: config(), configProblems: [],
   })
   const readers: V2Readers = {
     prs: async ctx => ({ read: { prs: [] }, source: OK, heads: ctx.heads }),
@@ -134,7 +134,7 @@ describe('observeV2 dual write (2.4)', () => {
   }
   const probes = (runs: string[][]) => runs.filter(a => a[0] === 'callum-flow-event')
 
-  test('act mode, planner v2: the probe runs once, the log is read once, and seen holds only the matching transition', async () => {
+  test('act mode: the probe runs once, the log is read once, and seen holds only the matching transition', async () => {
     const h = harness({ exitCode: 0, stdout: `${NEW_LOG}\n` })
     const r = await h.pass(runtime('act'))
     expect(probes(h.runs)).toEqual([['callum-flow-event', '--new-only', '--new-path', '--repo', REPO]])
@@ -186,8 +186,8 @@ describe('observeV2 dual write (2.4)', () => {
     expect(r.v2.dualWrite).toEqual({ readAt: NOW, seen: new Set() })
   })
 
-  test('observe mode and the shadow (planner v1): no probe, dualWrite null', async () => {
-    for (const rt of [runtime('observe', 'v2'), runtime('act', 'v1'), runtime('observe', 'v1')]) {
+  test('observe mode: no probe, dualWrite null', async () => {
+    for (const rt of [runtime('observe')]) {
       const h = harness({ exitCode: 0, stdout: NEW_LOG })
       const r = await h.pass(rt)
       expect(probes(h.runs)).toEqual([])

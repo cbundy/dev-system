@@ -169,10 +169,8 @@ rm "$fakebin/nm-status-fail-RUNR"
 [ "$res" = "pending feat/r unknown head=unknown" ] || fail "failing probe: $res"
 ok # head=unknown, and pending when a probe fails
 
-# 2b. The plugin reads every line --once prints (plugins/factory-loop/hooks/parse.ts
-# parsePipelineOnce; SPEC 3.3: a line it cannot read fails the runs source): ULID run ids and full
-# SHAs, as the real watcher prints them, one run in each state.
-command -v node > /dev/null || fail "node not found"
+# 2b. --once prints one line for each run state, with ULID run ids and full SHAs, as the real
+# watcher prints them.
 u() { printf '01K7S1%019d%s' 0 "$1"; }
 for k in 1 2 3 4 5 6 7 8; do mkdir -p "$nm_home/logs/$(u "$k")"; done
 h1=1111111111111111111111111111111111111111
@@ -200,16 +198,8 @@ runs_order RUNF2 "$(u 8)" "$(u 7)" "$(u 6)" "$(u 5)" "$(u 4)" "$(u 3)" "$(u 2)" 
 rm "$fakebin/nm-status-fail-$(u 8)"
 [ "$(cut -d' ' -f1 "$tmpdir/once.txt" | tr '\n' ' ')" = "failed pending head-mismatch ci-stalled merge-ready running cancelled failed parked " ] ||
   fail "parse: not one line per state: $(cat "$tmpdir/once.txt")"
-PARSE="$SCRIPT_DIR/../../../plugins/factory-loop/hooks/parse.ts"
-read=$(node --no-warnings --input-type=module -e "
-  import { readFileSync } from 'node:fs'
-  const { parsePipelineOnce } = await import(process.argv[1])
-  const r = parsePipelineOnce(readFileSync(process.argv[2], 'utf8'))
-  console.log(r.runs.length + ' ' + JSON.stringify(r.bad))
-" "$PARSE" "$tmpdir/once.txt") || fail "parse: node failed: $read"
-[ "$read" = "9 []" ] || fail "parse: parse.ts read $read of: $(cat "$tmpdir/once.txt")"
 runs_order RUNN RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
-ok # parse.ts reads every --once line
+ok # one line for each run state
 
 # 3. The real event log: a repeated --once adds nothing, a new head is logged again.
 real_event_log

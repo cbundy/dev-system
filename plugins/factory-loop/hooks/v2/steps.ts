@@ -16,7 +16,7 @@
 //   ones included, so plan reads why; a turn that ended in error, aborted or refused is unknown
 //   (rate-limited for a 429, api for another API error, else agent-dead), unless a valid answer
 //   was recorded before it, which is the result (a writer's ok excepted: the stop gate never ran).
-// act.ts applies what these give to the live ledger, as it does for v1's agents.
+// act.ts applies what these give to the live ledger.
 import { V2_CONTRACTS, jobPathOf, jobText, parseAnswer } from '../contract.mjs'
 import type { Job, V2Contract, V2ContractName } from '../contract.mjs'
 import { ANSWER_SCRIPT, answerPath } from '../exec'

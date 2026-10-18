@@ -124,14 +124,13 @@ if ! node scripts/build-event-docs.js --check > /dev/null; then
 fi
 
 # The factory loop's size guard (docs/factory-loop/v2/SPEC.md 2.5): no file under its hooks over
-# 600 lines, but the six v1 files listed here, which are over it today, each capped at its size
-# when listed. Both only shrink: a listed file over its cap fails (v2 adds a call into a v2
-# module, not logic), a listed file at or under the limit fails too, so its entry goes, and none is
-# ever added. A cap may be lowered as its file shrinks, never raised. The delete wave (build unit
-# U10) splits what is left, and empties the list.
+# 600 lines, but the files listed here, which are over it today, each capped at its size when
+# listed. Both only shrink: a listed file over its cap fails, a listed file at or under the limit
+# fails too, so its entry goes, and none is ever added. A cap may be lowered as its file shrinks,
+# never raised. Splitting what is left empties the list.
 HOOKS_DIR=plugins/factory-loop/hooks
 HOOKS_MAX_LINES=600
-HOOKS_OVERSIZED="plan.ts:2541 register.ts:1688 act-merge.ts:722 act.ts:745 act-agents.ts:646 control.ts:660"
+HOOKS_OVERSIZED="register.ts:1593 act.ts:632 control.ts:618"
 checked=$((checked + 1))
 # shellcheck disable=SC2086 # word-splitting the allowlist is intended
 if ! sh scripts/size-guard.sh "$HOOKS_DIR" "$HOOKS_MAX_LINES" $HOOKS_OVERSIZED; then

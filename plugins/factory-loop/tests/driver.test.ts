@@ -9,19 +9,32 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { SCRIPT_RECORD, spawnRecordPath } from '../hooks/act-agents'
-import { answerText, jobPathOf, jobText } from '../hooks/contract.mjs'
 import { loopEventArgs } from '../hooks/derive'
-import { answerPath, pruneArgvs, scriptAnswerPath } from '../hooks/exec'
+import { pruneArgvs } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
+import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
+import { handshakePath } from '../hooks/v2/workspace'
+import { STEP_AGENT } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, OTHER, entry } from './fixtures'
-import { CFG_DIR, CHECKOUT_HEAD, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso, ENGINE_TEST } from './host'
+import { CFG_DIR, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, PROCESS, agentDone, factoryDoc, host as engineHost, iso, ENGINE_TEST } from './host'
 import type { Host, HostOptions, Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 // the first pass of a life brings the main checkout up to date (rule H5), already current here
-const UPDATED = { key: 'update-checkout:0', status: 'done', ms: 0, summary: `main checkout: CURRENT ${CHECKOUT_HEAD}` }
-const ACT = { planner: 'v1', repo: REPO, mode: 'act', checkout: '/work' }
+// The companion plugin's handshake for this session, written far ahead so it never goes stale: the
+// workspace rail passes and no owner notice about the companion takes the wake slot (v2 SPEC 10.9).
+// tests/v2-workspace.test.ts covers the rail itself.
+const HANDSHAKE = { [handshakePath(`${CFG_DIR}/factory-loop`, SESSION)]: JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: iso(NOW + 400 * 24 * 60 * MIN) }) }
+const host: typeof engineHost = (on, opts = {}) => engineHost(on, { ...opts, files: { ...HANDSHAKE, ...opts.files } })
+
+const settingsRead = (s: Seen) => s.argv[0] === 'git' && (s.argv[1] === 'show' || s.argv[1] === 'symbolic-ref')
+
+// the claim of 470 at this clock, under v2's key (v2/keys.ts)
+const CLAIM_KEY = 'i470/claim/tmtsc5'
+const CLAIMED = 'claimed #470 on issue-470'
+// the hourly release review of this clock, a task wake the model answers (v2 O3)
+const RELEASE_KEY = 'task:release:unknown:2026-10-13T03'
+const ACT = { repo: REPO, mode: 'act', checkout: '/work' }
 const SINK = `${LOOP_DIR}/sink-events`
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-9001'
 const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
@@ -39,13 +52,18 @@ const EVENTS = [
   `${iso(NOW - 300_000)},closed,3,,,,,completed,sweep,${DEVICE}`,
 ].join('\n')
 // The commands an observe pass may run: reads only.
-const READS = ['callum-flow-factory-state', 'dev-query', 'callum-flow-issue-read', `${TOOLS}/usage-check.sh`, 'callum-flow-milestone', 'git']
+const READS = ['callum-flow-factory-state', 'dev-query', 'callum-flow-issue-read', `${TOOLS}/usage-check.sh`, 'callum-flow-milestone', 'git', 'stat']
 
-function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = {}, config: Record<string, unknown> = {}) {
+function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = {}, config: Record<string, unknown> = {}, originFile?: () => string | undefined) {
   return host(on, {
     config: { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work', ...config },
     env: { DEV_MACHINE_NAME: 'coder-spike' },
     run: argv => {
+      // the repo's settings are origin's default branch's (v2 SPEC section 15)
+      if (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json') {
+        const body = originFile?.()
+        return body === undefined ? { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/main'" } : { stdout: body }
+      }
       switch (argv[0]) {
         case 'callum-flow-factory-state':
           return { stdout: FACTORY }
@@ -70,16 +88,17 @@ describe('observe mode (SPEC 11.1)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
 
-    expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:1 - M:0) · observe'])
+    // v2 counts its own records, which none of this world's runs make
+    expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0) · observe'])
     expect(h.passes()).toHaveLength(1)
     expect(h.last()).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
-    // no main checkout update: the ledger an observe pass derives from the event log cannot show one
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`adjudicate:R45:park@${NOW - 600_000}:h1`])
+    // parked #45 holds a live claim of this device with no record: the ghost is planned for release (R1), and not run
+    expect(h.last().actions).toEqual([expect.objectContaining({ kind: 'label', rule: 'R1', issue: 45 })])
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink
     expect(h.commands().filter(s => !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
-    expect(h.commands().every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // the state was recorded for the replay tools
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
   })
@@ -100,14 +119,14 @@ describe('observe mode (SPEC 11.1)', () => {
 
   test('the repo-local settings are loaded through the config loader (SPEC 4.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const h = shadow(on)
+    const h = shadow(on, {}, {}, () => h.files.get('/work/.claude/factory-loop.json'))
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ readyLabel: 'go', queueEvery: '10m', colour: 'blue' }))
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label go')).toBe(true)
     expect(h.last().config).toEqual(['colour: unknown setting'])
     // the configured labels reach the CLIs through the environment
-    expect(h.commands()[0]?.env).toMatchObject({ CALLUM_FLOW_READY_LABEL: 'go', CALLUM_FLOW_IN_DEV_LABEL: 'in development' })
+    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env).toMatchObject({ CALLUM_FLOW_READY_LABEL: 'go', CALLUM_FLOW_IN_DEV_LABEL: 'in development' })
     // the queue is read every 10 minutes now, so the next pass does not read it again
     const before = h.seen.filter(s => s.argv.includes('--list')).length
     await clock.advance(60_000)
@@ -137,7 +156,7 @@ describe('observe mode (SPEC 11.1)', () => {
     const h = shadow(on, {}, { binDir: '/work/images/base', toolsDir: '/work/features/src/callum-tools' })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.commands()[0]?.env.PATH).toStartWith('/work/images/base:')
+    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env.PATH).toStartWith('/work/images/base:')
     expect(h.seen.some(s => s.argv[0] === '/work/features/src/callum-tools/usage-check.sh')).toBe(true)
   })
 
@@ -205,7 +224,8 @@ describe('observe mode (SPEC 11.1)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.titles).toEqual(['🔄 dev-system · off'])
-    expect(h.seen).toEqual([])
+    // the repo's settings are read from origin first (v2 SPEC section 15); nothing else
+    expect(h.seen.map(s => s.argv.slice(0, 2).join(' '))).toEqual(['git symbolic-ref', 'git show'])
   })
 })
 
@@ -215,8 +235,8 @@ type Issue = { stage: string; since: number; run?: string | null; pr?: number | 
 
 // factory: a small world of canned CLIs: issue 470 in the queue or at a stage, the rest quiet.
 type Answer = { exitCode?: number; stdout?: string; stderr?: string }
-function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string; run?: (argv: string[], s: Seen) => Answer | Promise<Answer> | undefined } = {}) {
-  const w = { queue: over.queue ?? [], issue: over.issue ?? null, beats: over.beats ?? QUIET_BEATS }
+function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string; release?: boolean; run?: (argv: string[], s: Seen) => Answer | Promise<Answer> | undefined } = {}) {
+  const w = { queue: over.queue ?? [], issue: over.issue ?? null, beats: over.beats ?? QUIET_BEATS, release: over.release ?? false }
   const run = (argv: string[], s: Seen) => {
     const own = over.run?.(argv, s)
     if (own !== undefined) return own
@@ -246,6 +266,12 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
         return { stdout: '[]' }
       case 'callum-flow-implementer-route':
         return { stdout: 'sonnet\n' }
+      case 'callum-flow-milestone':
+        // a closed item in the Next release milestone: the hourly release review is due (rule O3)
+        return w.release ? { stdout: 'Next release (v1.0.0)\nExpected: patch\n#469 closed  Done\n' } : undefined
+      case 'gh':
+        // the open PRs a claim adopts: none
+        return args[0] === 'pr' && args[1] === 'list' ? { stdout: '[]' } : undefined
     }
     return undefined
   }
@@ -266,23 +292,23 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
-    expect([...h.registered].sort()).toEqual(['/factory', 'mcp__factory-loop__answer', 'mcp__factory-loop__control', 'mcp__factory-loop__design', 'mcp__factory-loop__handoff', 'mcp__factory-loop__verdict'])
+    expect([...h.registered].sort()).toEqual(['/factory', 'mcp__factory-loop__answer', 'mcp__factory-loop__control'])
     await clock.advance(6_000)
 
     const line = h.last()
     expect(line).toMatchObject({ mode: 'act', executed: true, ledgerSource: 'none', device: DEVICE })
     expect(line.rails).toBeUndefined()
     expect(line.outcomes).toEqual([
-      UPDATED,
+      { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
       { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
-      { key: 'claim:470:new', status: 'done', ms: 0, summary: 'claimed #470' },
     ])
     expect(line.commands).toContain('callum-flow-claim 470')
-    expect(h.entry('claim:470:new')).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'claim', result: 'claimed' } })
+    expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adopt', branch: 'issue-470' } })
     expect(JSON.parse(h.files.get(LOCK) ?? '{}')).toMatchObject({ session: SESSION, expiresAt: NOW + 5_000 + 15 * MIN })
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
     // act mode's commands write real events: no sink
-    expect(h.commands().every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    // (the reads of the repo's settings from origin run before the environment is built, and carry none)
+    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     expect(h.titles).toEqual(['🔄 dev-system (Q:1 - D:0 - M:0)'])
     // no full states in act mode
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(false)
@@ -318,7 +344,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
       expect(line).toMatchObject({ mode: 'act', executed: false })
       expect((line.rails as string[]).join(' | ')).toContain(r.reason)
       // it planned the claim and ran nothing but reads, their events to the sink
-      expect((line.actions as { key: string }[]).map(a => a.key)).toContain('claim:470:new')
+      expect((line.actions as { key: string }[]).map(a => a.key)).toContain(CLAIM_KEY)
       expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim' || s.argv[0] === 'callum-flow-sweep')).toBe(false)
       expect(h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state').every(s => s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
       expect(h.titles.at(-1)).toContain('· observe')
@@ -354,8 +380,10 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.titles).toEqual(['🔄 dev-system · off'])
-    expect(h.seen).toEqual([])
-    expect([...h.store.keys()]).toEqual([])
+    // the repo's settings are read from origin first (v2 SPEC section 15); nothing else is
+    expect(h.seen.map(s => s.argv.slice(0, 2).join(' '))).toEqual(['git symbolic-ref', 'git show'])
+    // and it notes the kill switch as a person's edit, in the one store key the loop keeps for that
+    expect([...h.store.keys()]).toEqual([`files:${REPO}`])
     // removing it resumes the configured mode at the next pass
     h.files.delete(`${CFG_DIR}/factory-loop/OFF`)
     await clock.advance(60_000)
@@ -365,11 +393,11 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
   test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (SPEC 11.3, #557)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let h: Host | undefined
-    // the owner creates the switch while the sweep runs, before the pass's claim
+    // the owner creates the switch while the claim runs, before the pass's sweep
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv[0] === 'callum-flow-sweep') h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+        if (argv[0] === 'callum-flow-claim') h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
         return undefined
       },
     })
@@ -378,13 +406,12 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     await clock.advance(6_000)
     const outcomes = (h.last().outcomes ?? []) as { key: string; status: string; summary: string }[]
     expect(outcomes.map(o => [o.key, o.status, o.summary])).toEqual([
-      ['update-checkout:0', 'done', `main checkout: CURRENT ${CHECKOUT_HEAD}`],
-      ['sweep:0', 'done', 'swept'],
-      ['claim:470:new', 'skipped', 'kill switch'],
+      [CLAIM_KEY, 'done', CLAIMED],
+      ['sweep:0', 'skipped', 'kill switch'],
     ])
-    // the claim never ran nor entered the ledger, and the title says off at once
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
-    expect(h.ledger().map(e => e.key)).toEqual(['update-checkout:0', 'sweep:0'])
+    // the sweep never ran nor entered the ledger, and the title says off at once
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep')).toBe(false)
+    expect(h.ledger().map(e => e.key)).toEqual([CLAIM_KEY])
     expect(h.titles.at(-1)).toBe('🔄 dev-system · off')
   })
 
@@ -395,8 +422,8 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('heartbeat:0', 'heartbeat', { status: 'running', startedAt: started, endedAt: null }),
-      entry('design:470:1', 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: started, endedAt: null, agentId: 'agent-alive' }),
-      entry('fixer:gate:R:review:h', 'spawn', { agent: 'fixer', class: 'drive', issue: 471, status: 'running', startedAt: started, endedAt: null, agentId: 'agent-gone' }),
+      entry('design:470:1', 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: started, endedAt: null, agentId: 'agent-alive' }),
+      entry('fixer:gate:R:review:h', 'agent-step', { step: 'fix', class: 'drive', issue: 471, status: 'running', startedAt: started, endedAt: null, agentId: 'agent-gone' }),
     ])
     const h = host(on, { config: ACT, run, store })
     h.agents.push({ id: 'agent-alive', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
@@ -408,7 +435,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
     // the lost agent's loop event; command entries log their own events, never a loop event
     const loops = h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith('kind='))
-    expect(loops.some(n => n.startsWith('kind=spawn key=fixer:gate:R:review:h status=lost'))).toBe(true)
+    expect(loops.some(n => n.startsWith('kind=agent-step key=fixer:gate:R:review:h status=lost'))).toBe(true)
     expect(loops.some(n => n.includes('key=heartbeat:0'))).toBe(false)
   })
 
@@ -428,17 +455,10 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
   test('a restart that returned keeps the drain and stops acting until the workspace is replaced (rule H4, D-15)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('update-checkout:0', 'update-checkout', { status: 'done', startedAt: NOW - MIN, endedAt: NOW - MIN }),
-    ])
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
     const h = host(on, { config: ACT, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
     await $.session.start(START)
     await clock.advance(6_000)
-    // the first pass after the load brings the main checkout up to date (rule H5), so the restart,
-    // which waits for a pass that plans nothing else, comes on the next
-    expect(h.entry(`update-checkout:${NOW - MIN}`)).toMatchObject({ status: 'done' })
-    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(0)
     await clock.advance(60_000)
     // the drain is complete: dev-restart-self asks Coder for the new workspace and returns
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
@@ -545,7 +565,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
   const ledgerKey = `ledger:${REPO}`
   const otherLease = (expiresAt: number) => JSON.stringify({ session: 'session-other', renewedAt: NOW - MIN, expiresAt })
 
-  // another session takes the lock while the sweep runs (this one's lease ran out under it); its
+  // another session takes the lock while the claim runs (this one's lease ran out under it); its
   // own lease may still be live, or have run out in turn
   for (const [name, expiresAt] of [['live', NOW + 30 * MIN], ['expired since', NOW + 1_000]] as const) {
     test(`a session that loses the act lock mid-pass (the other lease ${name}) runs nothing more and never writes the ledger again`, ENGINE_TEST, async ($, on) => {
@@ -555,7 +575,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
       const { run } = factory({
         queue: [470],
         run: argv => {
-          if (argv[0] === 'callum-flow-sweep' && h !== undefined) {
+          if (argv[0] === 'callum-flow-claim' && h !== undefined) {
             h.files.set(LOCK, otherLease(expiresAt))
             atLoss = JSON.stringify(h.store.get(ledgerKey))
           }
@@ -567,14 +587,13 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
       await clock.advance(6_000)
       const line = h.last()
       expect(line.outcomes).toEqual([
-        UPDATED,
-        { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
-        { key: 'claim:470:new', status: 'skipped', ms: 0, summary: "held: the act lock is no longer this session's" },
+        { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
+        { key: 'sweep:0', status: 'skipped', ms: 0, summary: "held: the act lock is no longer this session's" },
       ])
-      expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
-      // the store keeps what it held when the lock was lost: the sweep running, as the next holder will find it
+      expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep')).toBe(false)
+      // the store keeps what it held when the lock was lost: the claim running, as the next holder will find it
       expect(JSON.stringify(h.store.get(ledgerKey))).toBe(atLoss)
-      expect(h.entry('sweep:0')).toMatchObject({ status: 'running' })
+      expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'running' })
       expect((line.problems as string[]).join(' ')).toContain('session session-other')
       if (name === 'live') {
         // the next pass stays in observe
@@ -591,15 +610,16 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
     const store = ledgerOf([
-      entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+      entry(`design:470:${since}`, 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
     const h = host(on, { config: ACT, run, store, files: { [LOCK]: otherLease(NOW + 30 * MIN) } })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ executed: false })
     const before = JSON.stringify(h.store.get(ledgerKey))
-    await agentDone($, h, 'agent-1', `RESULT brief=${BRIEF} created=none pending_decision=no`)
-    expect(h.events()).toEqual([])
+    await agentDone($, h, 'agent-1', 'Brief posted.')
+    // the observe pass's own probe of the new event log is no event of this answer
+    expect(h.events().filter(e => e[1] !== '--new-only')).toEqual([])
     expect(JSON.stringify(h.store.get(ledgerKey))).toBe(before)
   })
 
@@ -618,14 +638,14 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
       savedAt: NOW + 20_000,
       entries: [
         entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW + 5_000, endedAt: NOW + 5_000 }),
-        entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW + 10_000, endedAt: NOW + 20_000 }),
+        entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW + 10_000, endedAt: NOW + 20_000 }),
       ],
     })
     // the queue is read again two minutes after its last read
     await clock.advance(3 * MIN)
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
-    expect(h.last().skipped).toContainEqual({ rule: 'D1', issue: 470, why: 'exhausted: claim:470:new' })
+    expect(h.last().skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
   test('an agent list that cannot be read marks no agent lost and spawns nothing (SPEC 3.3, 10.4)', ENGINE_TEST, async ($, on) => {
@@ -635,7 +655,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     const { run } = factory({ issue: { stage: 'designing', since } })
     const store = ledgerOf([
       entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+      entry(key, 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
     const h = host(on, { config: ACT, run, store })
     h.failList = true
@@ -674,7 +694,6 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect((line.outcomes as { status: string; summary: string }[]).map(o => [o.status, o.summary])).toEqual([
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
-      ['skipped', 'held: the ledger was not saved, so nothing starts'],
     ])
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv[0] === 'callum-flow-claim')).toBe(false)
     expect((line.problems as string[]).join(' ')).toContain('ledger: not saved, so nothing starts until a save succeeds')
@@ -689,40 +708,24 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.titles.at(-1)).not.toContain('error')
   })
 
-  test('every attempt is in the store, running, before its command or spawn runs, and its end before its loop event (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
+  test('every attempt is in the store, running, before its command runs (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const key = `design:470:${since}`
     const seen: Record<string, string | undefined> = {}
     let h: Host | undefined
     const { run } = factory({
-      issue: { stage: 'designing', since },
+      queue: [470],
       run: argv => {
         if (argv[0] === 'callum-flow-sweep') seen.sweep = h?.entry('sweep:0')?.status
-        const note = argv[0] === 'callum-flow-event' && argv[1] === 'loop' ? (argv.at(-1) ?? '') : ''
-        if (note.startsWith(`kind=spawn key=${key} `)) seen.loop = h?.entry(key)?.status
+        if (argv[0] === 'callum-flow-claim') seen.claim = h?.entry(CLAIM_KEY)?.status
         return undefined
       },
     })
-    const store = ledgerOf([
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-    ])
-    h = host(on, {
-      config: ACT,
-      run,
-      store,
-      spawn: () => {
-        seen.spawn = h?.entry(key)?.status
-        return { agentId: 'agent-1' }
-      },
-    })
+    h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(seen.sweep).toBe('running')
-    expect(seen.spawn).toBe('running')
-    // the loop event of the attempt's end goes out once the store has that end
-    expect(seen.loop).toBe(h.entry(key)?.status)
-    expect(seen.loop).not.toBe('running')
+    expect(seen).toEqual({ claim: 'running', sweep: 'running' })
+    expect(h.entry(CLAIM_KEY)?.status).toBe('done')
+    expect(h.entry('sweep:0')?.status).toBe('done')
   })
 
   test('a long step never outlives the lease: a pass renews it on a timer while it runs (SPEC 11.2)', ENGINE_TEST, async ($, on) => {
@@ -739,7 +742,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(JSON.parse(h.files.get(LOCK) ?? '{}').expiresAt).toBeGreaterThan(clock.now() + 10 * MIN)
     release()
     await clock.settle()
-    expect(h.entry('claim:470:new')).toMatchObject({ status: 'done' })
+    expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done' })
   })
 })
 
@@ -768,301 +771,113 @@ describe('act mode: a lease taken over during a long step', () => {
 })
 
 describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
-  test("an agent's turn.complete records its answer and pings a pass", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
+  // a triage step at work on 470 (v2 SPEC 10.8): its entry, and the record its spawn wrote, naming
+  // the file it answers in with the answer script. With the test's engine, a repair message resumes
+  // the agent as the engine does.
+  const KEY = 'i470/ltbq3k0/s5/triage/a1'
+  const stepRecord = JSON.stringify({
+    v: 2,
+    key: KEY,
+    issue: 470,
+    step: 'triage',
+    life: 'tbq3k0',
+    seq: 5,
+    attempt: 1,
+    branch: 'issue-470',
+    slot: '/slots/1',
+    role: 'reader',
+    subagentType: STEP_AGENT.triage,
+    model: 'opus',
+    contract: 'triage',
+    data: null,
+    answerFile: stepAnswerPath(LOOP_DIR, KEY),
+    prompt: 'triage',
+  })
+  const triageAt = (on: Parameters<typeof host>[0], send: HostOptions['send'], engine?: HostOptions['engine']) => {
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+      entry(KEY, 'agent-step', { step: 'triage', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
-    const h = host(on, { config: ACT, run, store })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
+    const h = host(on, { config: ACT, run: factory().run, store, send, engine, files: { [stepRecordPath(LOOP_DIR, KEY)]: stepRecord } })
+    h.agents.push({ id: 'agent-1', type: STEP_AGENT.triage, status: 'running', description: 'Triage #470' })
+    return { h, key: KEY }
+  }
+  const NO_ANSWER = 'no answer was recorded with the answer script'
+
+  test("an agent of the loop whose turn ends with no recorded answer gets one repair message, then its attempt ends unknown; the decision log says which path each took, and a pass follows (v2 SPEC 10.8)", ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = triageAt(on, undefined, undefined)
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.passes()).toHaveLength(1)
-    // the first pass after a load renews the claim (rule H1); the designer runs on
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['heartbeat:0'])
-
+    const passes = h.passes().length
     // an agent the loop never spawned changes nothing and pings nothing
     await agentDone($, h, 'agent-someone-else', 'all done')
     await clock.advance(5_000)
-    expect(h.passes()).toHaveLength(1)
+    expect(h.passes()).toHaveLength(passes)
 
-    const before = h.seen.length
-    await agentDone($, h, 'agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)
-    expect(h.entry(`design:470:${since}`)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
-    expect(h.files.get(answerPath(LOOP_DIR, `design:470:${since}`))).toContain('RESULT brief=')
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=design:470:${since} status=done`))).toBe(true)
-    // the answer's events are real ones in act mode: none goes to the sink (SPEC 7.4, D-09)
-    const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
-    expect(hooked.length).toBeGreaterThan(0)
-    expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
-    // the ping: a pass 5 s after the last one, which delegates
-    await clock.advance(5_000)
-    expect(h.passes()).toHaveLength(2)
-    // the designer ended, so the main checkout is brought up to date before the implementer starts
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
-    expect(h.commands().some(s => s.argv.join(' ') === 'callum-flow-implementer-route 470')).toBe(true)
-    expect(h.events()).toContainEqual(['callum-flow-event', 'delegated', '--issue', '470', '--note', `brief ${BRIEF}`])
-    expect(h.spawns.map(s => s.description)).toEqual(['Implement #470'])
-    // the implementer goes out on the routed model, with its name (the engine's test kit resolves
-    // no plugin agent type, so the hook sees none; act.test.ts checks the type through ActIo)
-    expect(h.spawns[0]).toMatchObject({ model: 'sonnet', name: 'implementer-470', description: 'Implement #470' })
-    // the kit also hands a plugin's $.agent.spawn no agent id (only core sets one), so the delegate
-    // is recorded as a start with no agent id; act.test.ts runs a whole spawn
-    expect(h.entry(`delegate:470:${BRIEF}`)).toMatchObject({ status: 'failed', summary: 'callum-flow:implementer: started with no agent id' })
-  })
-
-  test("an agent's interim message while its own sub-agent runs leaves its entry running; its final answer is the one recorded (#545)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config: ACT, run, store })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
-    // the designer started an explorer in the background, which still runs
-    h.agents.push({ id: 'agent-x', type: 'Explore', status: 'running', description: 'Explore the code', parentId: 'agent-1' })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.passes()).toHaveLength(1)
-
-    // its turn ends on an interim message with no RESULT line: the entry runs on and no wake goes out
-    const interim = "The explorer is still running. I'll wait for its notification before posting."
-    await $.turn.complete({ agentId: 'agent-1', answer: interim, reason: 'answer', turnId: 'turn-a1', durationMs: 1000, isAborted: false })
-    expect(h.entry(key)).toMatchObject({ status: 'running', agentId: 'agent-1' })
-    expect(h.lines().some(l => JSON.stringify(l).includes('interim answer'))).toBe(true)
-    await clock.advance(60_000)
-    expect(h.prompts).toEqual([])
-    expect(h.entry(key)).toMatchObject({ status: 'running' })
-
-    // the explorer ends, and the designer's next turn posts the brief: that answer is recorded
-    const x = h.agents.find(a => a.id === 'agent-x')
-    if (x !== undefined) x.status = 'completed'
-    await agentDone($, h, 'agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
-    expect(h.files.get(answerPath(LOOP_DIR, key))).toContain('RESULT brief=')
-    await clock.advance(5_000)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
-  })
-
-  test("a stopped agent's answer with no machine line still goes to the model (#545)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config: ACT, run, store })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
-    // a sub-agent it ran in the foreground has ended
-    h.agents.push({ id: 'agent-x', type: 'Explore', status: 'completed', description: 'Explore the code', parentId: 'agent-1' })
-    await $.session.start(START)
-    await clock.advance(6_000)
-
-    // listed running at its own turn.complete, as every agent is as it ends: no proof it works on.
-    // Its missing line first gets the one repair message (#548), so the entry runs on
-    await agentDone($, h, 'agent-1', 'I looked into it but could not settle the design.')
+    await agentDone($, h, 'agent-1', 'I think we should retry')
     expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
-    expect(h.sends[0]?.text).toContain('The factory loop could not read your answer: no RESULT line.')
+    const text = h.sends[0]?.text ?? ''
+    expect(text).toContain(`Your answer was not recorded: ${NO_ANSWER}.`)
+    expect(text).toMatch(new RegExp(`\\S+/bin/factory-answer --to ${stepAnswerPath(LOOP_DIR, key).replace(/[.]/g, '\\.')}`))
     expect(h.entry(key)).toMatchObject({ status: 'running', attempts: 1, reminded: true })
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'repair', why: 'no RESULT line' }))
-    // still no line after it: the report goes to the model, as before
-    await agentDone($, h, 'agent-1', 'I still could not settle it.')
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'repair', why: NO_ANSWER }))
+    // its words are saved for the owner and the triage
+    expect(h.files.get(`${LOOP_DIR}/answers/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`)).toBe('I think we should retry')
+
+    // the resumed agent ends its turn again with nothing recorded: the attempt ends, with no second message
+    const a = h.agents.find(x => x.id === 'agent-1')
+    if (a !== undefined) a.status = 'running'
+    await agentDone($, h, 'agent-1', 'still nothing')
     expect(h.sends).toHaveLength(1)
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', unparsed: true } })
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'step', step: 'triage', result: { event: 'unknown', why: 'bad-answer' } } })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'script', status: 'done', afterRepair: true }))
+    // the ping: the next pass is asked for by the agent (#552)
     await clock.advance(5_000)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `judge:report:${key}`])
+    expect(h.last()).toMatchObject({ trigger: 'agent agent-1' })
   })
 
-  // an adjudicator at work on a gate, whose reply will not parse; with the test's engine, a repair
-  // message resumes it as the engine does
-  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send'], engine?: HostOptions['engine'], config: Record<string, unknown> = ACT) => {
-    const key = 'adjudicate:R470:review:abc1234'
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config, run: factory().run, store, send, engine })
-    h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
-    return { h, key }
-  }
-
-  test('a repair message the engine does not deliver fails the attempt at once, and the decision log says the answer was read as text (#548)', ENGINE_TEST, async ($, on) => {
+  test('a repair message the engine does not deliver ends the attempt at once, and the decision log says so (#548)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, () => 'no such agent')
+    const { h, key } = triageAt(on, () => 'no such agent')
     await $.session.start(START)
     await clock.advance(6_000)
     await agentDone($, h, 'agent-1', 'All good.')
     expect(h.sends).toEqual([])
-    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1, reminded: true })
+    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, reminded: true, outcome: { kind: 'step', result: { event: 'unknown', why: 'bad-answer' } } })
     expect(h.entry(key)?.summary).toContain('the repair message was not delivered: no such agent')
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed' }))
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'script', status: 'done', repairRefused: 'no such agent' }))
   })
 
   test("the repair message reaches an agent of the loop's own type, which the model is never offered: the engine resumes only a type it offers, so the loop offers it while its message is on its way (#559)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, undefined, $)
-    const offer = () => $.agent.offer({ agent: 'factory-loop:adjudicator', description: 'an agent', source: 'plugin', provider: { plugin: 'factory-loop', tier: 'user' } })
+    const { h, key } = triageAt(on, undefined, $)
+    const offer = () => $.agent.offer({ agent: STEP_AGENT.triage, description: 'an agent', source: 'plugin', provider: { plugin: 'factory-loop', tier: 'user' } })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(await offer()).toEqual({ isOffered: false })
-
-    // its reply does not parse: the repair message goes to it, and the engine resumes it
     await agentDone($, h, 'agent-1', 'All good.')
     expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
-    expect(h.sends[0]?.text).toContain('The factory loop could not read your answer: no ACTION line.')
     expect(h.entry(key)).toMatchObject({ status: 'running', attempts: 1, reminded: true })
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'repair', why: 'no ACTION line' }))
     // the type is hidden from the model again once the message is delivered
     expect(await offer()).toEqual({ isOffered: false })
-
-    // the resumed agent answers in the contract: recorded, after the repair, its attempt unspent
-    const a = h.agents.find(x => x.id === 'agent-1')
-    if (a !== undefined) a.status = 'running'
-    await agentDone($, h, 'agent-1', 'WRONG: review-1 is out of scope.\nACTION: approve')
-    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adjudicator', action: { type: 'approve' } } })
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
-    expect(h.sends).toHaveLength(1)
-  })
-
-  // config answerChannel (#561): the answer script by default, a workaround for the registered
-  // tools, which a spawn from the loop's timer cannot reach on Claude Code 2.1.296 and 2.1.299
-  // (#560); the tools, or text alone, when the setting says so
-  const CONTRACT_LINE = 'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
-  const lower = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`
-  const GATE_FILE = scriptAnswerPath(LOOP_DIR, { key: 'adjudicate:R470:review:abc1234', attempts: 1, startedAt: NOW - 10 * MIN })
-  const GATE_JOB = { contract: 'verdict' as const, purpose: 'gate' as const, repo: REPO, issue: 470, branch: null }
-  // what the spawn wrote: its record, naming the channel its prompt asked on, and on the script
-  // channel the job file beside its answer file
-  const spawned = (h: Host, key: string, channel: 'script' | 'tool') => {
-    h.files.set(spawnRecordPath(LOOP_DIR, key), JSON.stringify({ key, channel, answerFile: channel === 'script' ? GATE_FILE : null }))
-    if (channel === 'script') h.files.set(jobPathOf(GATE_FILE) ?? '', jobText(GATE_JOB))
-  }
-
-  test("the script channel by default: the repair message asks again for the answer script, this attempt's answer file named, text as the fallback (#561)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, undefined, undefined)
-    spawned(h, key, 'script')
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.last().config).toBeUndefined()
-    await agentDone($, h, 'agent-1', 'All good.')
-    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
-    const text = h.sends[0]?.text ?? ''
-    expect(text).toContain('The factory loop could not read your answer: no ACTION line.')
-    expect(text).toMatch(new RegExp(`Record the answer you reached now with the answer script, its JSON on standard input as your prompt showed: \`/\\S+/bin/factory-answer --to ${GATE_FILE.replace(/[.]/g, '\\.')}\``))
-    expect(text).not.toContain('mcp__factory-loop__verdict')
-    expect(text.split('\n').pop()).toBe(`If the script cannot record your answer, ${lower(CONTRACT_LINE)}`)
-  })
-
-  test('a config dir with a doubled or trailing / gives plain paths: the loop dir is the one under the plain config dir, and the repair names its answer file (#561)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const key = 'adjudicate:R470:review:abc1234'
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config: ACT, run: factory().run, store, env: { CLAUDE_CONFIG_DIR: `/${CFG_DIR}//` } })
-    h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
-    spawned(h, key, 'script')
-    await $.session.start(START)
-    await clock.advance(6_000)
-    await agentDone($, h, 'agent-1', 'All good.')
-    expect(h.sends[0]?.text).toContain(` --to ${GATE_FILE}\``)
-    expect(h.lines().length).toBeGreaterThan(0)
-    expect([...h.files.keys()].filter(p => p.includes('//'))).toEqual([])
-  })
-
-  test("answerChannel text in the workspace file, over the repo's tool: the repair message asks for the text contract alone; a bad value and the old answerTools are named (#560, #561)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'text', answerTools: true })
-    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'tool' }))
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.last().config).toEqual(['answerTools: replaced by answerChannel (script, tool or text), and ignored'])
-    await agentDone($, h, 'agent-1', 'All good.')
-    const text = h.sends[0]?.text ?? ''
-    expect(text).not.toMatch(/mcp__factory-loop__verdict|answer script/)
-    expect(text.split('\n').pop()).toBe(CONTRACT_LINE)
-  })
-
-  test("answerChannel tool in the workspace file: the repair message asks for the tool again, text as the fallback; a bad value in the repo's file is named (#548)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'tool' })
-    spawned(h, key, 'tool')
-    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'yes' }))
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.last().config).toEqual(['answerChannel: "yes" is not script, tool or text'])
-    await agentDone($, h, 'agent-1', 'All good.')
-    const text = h.sends[0]?.text ?? ''
-    expect(text).toContain('Call mcp__factory-loop__verdict now with the answer you reached')
-    expect(text.split('\n').pop()).toBe(`If you cannot call it, ${lower(CONTRACT_LINE)}`)
-  })
-
-  test('an answer recorded with the answer script is read at the agent\'s turn.complete, from the file issued for its attempt alone: recorded, its verdict logged, the decision log says script, a pass follows (#561)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, undefined, undefined)
-    await $.session.start(START)
-    await clock.advance(6_000)
-    const passes = h.passes().length
-    // the file the script writes (contract.mjs answerText, the function it calls), beside a file
-    // at another attempt's path that must never be read
-    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
-    const written = answerText(GATE_JOB, input)
-    if (!written.ok) throw new Error(written.problems.join('; '))
-    h.files.set(scriptAnswerPath(LOOP_DIR, { key, attempts: 2, startedAt: NOW - 10 * MIN }), JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'escalate', why: 'stale' } } }))
-    h.files.set(GATE_FILE, written.outcome)
-    await agentDone($, h, 'agent-1', 'Recorded my verdict with the script.')
-    expect(h.sends).toEqual([])
-    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adjudicator', action: { type: 'approve', reason: 'a false positive' } }, summary: 'adjudicator #470 (gate, script): ACTION approve, 1 verdict line' })
-    expect(h.events()).toContainEqual(['callum-flow-event', 'verdict', '--issue', '470', '--run', 'R470', '--note', 'WRONG: review-1: the timeout is handled in parse.ts'])
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'script', status: 'done', summary: 'adjudicator #470 (gate, script): ACTION approve, 1 verdict line' }))
-    expect(h.files.get(answerPath(LOOP_DIR, key))).toContain(`Recorded my verdict with the script.\n\n${SCRIPT_RECORD}\n\n`)
-    await clock.advance(5_000)
-    expect(h.passes().length).toBe(passes + 1)
-    expect(h.last().trigger).toBe('agent agent-1')
-  })
-
-  test('a recorded answer that fails its checks is refused: the text is read, and the decision log names what kept the file out (#561)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, undefined, undefined)
-    await $.session.start(START)
-    await clock.advance(6_000)
-    h.files.set(GATE_FILE, JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'merge' } } }))
-    await agentDone($, h, 'agent-1', 'WRONG: review-1 is out of scope.\nACTION: approve')
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'adjudicator', action: { type: 'approve' } } })
-    expect(h.lines()).toContainEqual(
-      expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', scriptRefused: expect.stringContaining('a gate review takes no other') }),
-    )
   })
 
   test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const refusal = `Agent "agent-1" is stopped (completed) and could not be resumed: ${'the transcript could not be read; '.repeat(6)}start a new agent if the work is still needed.`
-    const { h, key } = gateAt(on, () => refusal)
+    const { h, key } = triageAt(on, () => refusal)
     await $.session.start(START)
     await clock.advance(6_000)
     await agentDone($, h, 'agent-1', 'All good.')
-    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1 })
     expect(h.entry(key)?.summary).toEndWith('...')
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed', repairRefused: refusal }))
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'script', status: 'done', repairRefused: refusal }))
   })
 
-  test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt fails (#548)', ENGINE_TEST, async ($, on) => {
+  test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt ends (#548)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h, key } = gateAt(on, () => new Promise<string | undefined>(() => undefined))
+    const { h, key } = triageAt(on, () => new Promise<string | undefined>(() => undefined))
     await $.session.start(START)
     await clock.advance(6_000)
     let settled = false
@@ -1075,51 +890,45 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'running', reminded: true })
     await clock.advance(1_000)
     await ended
-    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1 })
     expect(h.entry(key)?.summary).toContain('the repair message was not delivered: repair message: no answer within 10 s')
   })
 
   test('a wake answered through the main loop: turn.start takes the turn, an ANSWER closes it, a silent turn gets one reminder', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
-    ])
+    const { run } = factory({ release: true })
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
     const h = host(on, { config: ACT, run, store })
     await $.session.start(START)
     await clock.advance(6_000)
 
-    // the designer's report did not parse: judge(report) wakes the model with the saved answer
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', 'heartbeat:0', `judge:report:${key}`])
+    // a closed item in the milestone: the release review wakes the model
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toContain(RELEASE_KEY)
     const wake = h.prompts[0] ?? ''
-    expect(wake).toStartWith('JUDGE report id=w')
-    expect(wake).toContain(`saved answer: ${answerPath(LOOP_DIR, key)}`)
+    expect(wake).toStartWith('TASK release id=w')
     const id = /id=(\S+)/.exec(wake)?.[1] ?? ''
 
     // its turn ends without an answer: one reminder
     const before = h.seen.length
     await $.turn.start({ text: `The factory-loop plugin sent a message:\n${wake}`, turnId: 'turn-1' })
-    await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the report.', reason: 'answer', durationMs: 900, isAborted: false })
+    await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the milestone.', reason: 'answer', durationMs: 900, isAborted: false })
     await clock.settle()
-    expect(h.prompts[1]).toStartWith(`JUDGE report id=${id}`)
+    expect(h.prompts[1]).toStartWith(`TASK release id=${id}`)
     expect(h.prompts[1]?.split('\n')[0]).toEndWith('reminder=1')
-    expect(h.entry(`judge:report:${key}`)).toMatchObject({ status: 'running', turnId: 'turn-1', reminded: true })
+    expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'running', turnId: 'turn-1', reminded: true })
 
     // the reminder's turn answers: the wake is done and the loop is pinged
+    const passes = h.passes().length
     await $.turn.start({ text: h.prompts[1] ?? '', turnId: 'turn-2' })
-    const fields = JSON.stringify({ brief: BRIEF, created: [], pendingDecision: false })
-    await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} parsed\nfields: ${fields}`, reason: 'answer', durationMs: 900, isAborted: false })
-    expect(h.entry(`judge:report:${key}`)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'parsed' } })
+    await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} done`, reason: 'answer', durationMs: 900, isAborted: false })
+    expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
     // the turns' loop event (the wake's end; its turn taking its id and its reminder change nothing
     // an event says) is a real one in act mode: none goes to the sink (SPEC 7.4, D-09)
     const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
     expect(hooked.length).toBeGreaterThan(0)
     expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
     await clock.advance(5_000)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+    expect(h.passes().length).toBeGreaterThan(passes)
   })
 
   // run 2 (#536): a wake's turn starts inside its submit, as the engine starts it, and its one
@@ -1127,33 +936,26 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
   const loopStatuses = (h: Host, kind: string) =>
     h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith(`kind=${kind} `)).map(n => /status=(\S+)/.exec(n)?.[1])
 
-  test('each ledger transition logs one loop event: a judge whose turns start inside their submits, its reminder included', ENGINE_TEST, async ($, on) => {
+  test('each ledger transition logs one loop event: a task whose turns start inside their submits, its reminder included', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
-    ])
+    const { run } = factory({ release: true })
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
     let turns = 0
     const h = host(on, { config: ACT, run, store, submit: text => void $.turn.start({ text, turnId: `turn-${++turns}` }) })
     await $.session.start(START)
     await clock.advance(6_000)
 
-    // the pass wakes the model for the report; its turn says nothing, so it is reminded
-    const judgeKey = `judge:report:${key}`
-    expect(h.entry(judgeKey)).toMatchObject({ status: 'running', turnId: 'turn-1' })
-    expect(loopStatuses(h, 'judge')).toEqual(['running'])
-    await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the report.', reason: 'answer', durationMs: 900, isAborted: false })
+    // the pass wakes the model for the review; its turn says nothing, so it is reminded
+    expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'running', turnId: 'turn-1' })
+    expect(loopStatuses(h, 'task')).toEqual(['running'])
+    await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the milestone.', reason: 'answer', durationMs: 900, isAborted: false })
     await clock.settle()
-    expect(h.entry(judgeKey)).toMatchObject({ status: 'running', reminded: true, turnId: 'turn-2' })
+    expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'running', reminded: true, turnId: 'turn-2' })
     // the reminder's turn answers
     const id = /id=(\S+)/.exec(h.prompts[0] ?? '')?.[1] ?? ''
-    const fields = JSON.stringify({ brief: BRIEF, created: [], pendingDecision: false })
-    await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} parsed\nfields: ${fields}`, reason: 'answer', durationMs: 900, isAborted: false })
-    expect(h.entry(judgeKey)).toMatchObject({ status: 'done' })
-    expect(loopStatuses(h, 'judge')).toEqual(['running', 'done'])
+    await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} done`, reason: 'answer', durationMs: 900, isAborted: false })
+    expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'done' })
+    expect(loopStatuses(h, 'task')).toEqual(['running', 'done'])
   })
 
   test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", ENGINE_TEST, async ($, on) => {
@@ -1191,18 +993,13 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
 
   test('each wake gets its own id, pass after pass (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const f = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
-    ])
+    const f = factory({ release: true })
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
     const h = host(on, { config: ACT, run: f.run, store })
     await $.session.start(START)
     await clock.advance(6_000)
     const first = /id=(\S+)/.exec(h.prompts[0] ?? '')?.[1] ?? ''
-    expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: first, decision: 'hold' })).toMatchObject({ result: expect.stringContaining('Recorded') })
+    expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: first, decision: 'done' })).toMatchObject({ result: expect.stringContaining('Recorded') })
     // another orchestrator comes up: its notice is the next wake
     f.w.beats = `device,age_s\n${OTHER},30\n`
     await clock.advance(60_000)
@@ -1245,7 +1042,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
       config: ACT,
       run: f.run,
       store: {
-        [`ledger:${other}`]: { v: 1, savedAt: NOW - MIN, entries: [entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - MIN, endedAt: NOW - MIN }), entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 10 * MIN, endedAt: NOW - 9 * MIN })] },
+        [`ledger:${other}`]: { v: 1, savedAt: NOW - MIN, entries: [entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - MIN, endedAt: NOW - MIN }), entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 10 * MIN, endedAt: NOW - 9 * MIN })] },
       },
     })
     await $.session.start(START)
@@ -1258,7 +1055,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.files.has(`${CFG_DIR}/factory-loop/cbundy__other/act.lock`)).toBe(true)
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
     const lines = (h.files.get(`${CFG_DIR}/factory-loop/cbundy__other/decisions-${iso(NOW).slice(0, 10)}.jsonl`) ?? '').split('\n').filter(l => l !== '')
-    expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'D1', issue: 470, why: 'exhausted: claim:470:new' })
+    expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
   test('the answer tool closes an open wake; from inside an agent it is refused', ENGINE_TEST, async ($, on) => {
@@ -1279,252 +1076,61 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'merge' } })
   })
 
-  test("an agent's answer tool: refused for a caller the loop does not wait on, denied with what to correct, then recorded with a pass after it (#548)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config: ACT, run, store })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.passes()).toHaveLength(1)
-    const answer = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false } as const
-
-    // the main conversation, and an agent the loop did not start (the designer's explorer)
-    expect(await $.tool.call(answer)).toMatchObject({ deny: expect.stringContaining('the main conversation is none') })
-    expect(await $.tool.call({ ...answer, agentId: 'agent-x' })).toMatchObject({ deny: expect.stringContaining('waiting on no answer from this agent') })
-    // a broken call: denied with what to correct, the entry untouched
-    expect(await $.tool.call({ tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], agentId: 'agent-1' })).toMatchObject({
-      deny: expect.stringContaining('pendingDecision must be true or false. Correct the call and call mcp__factory-loop__design again.'),
-    })
-    expect(h.entry(key)).toMatchObject({ status: 'running' })
-    // corrected in the same turn: recorded at once, and the decision log says which path each call took
-    expect(await $.tool.call({ ...answer, agentId: 'agent-1' })).toMatchObject({ result: expect.stringContaining('Recorded: designer #470 (tool): brief') })
-    await clock.settle()
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool refused' }))
-    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool' }))
-    // the turn's closing words change nothing and log nothing
-    const logged = h.lines().length
-    await agentDone($, h, 'agent-1', 'Recorded through the tool; done.')
-    expect(h.lines()).toHaveLength(logged)
-    expect(h.sends).toEqual([])
-    // the ping: the next pass delegates, its trigger the agent as for a text answer (#552)
-    await clock.advance(5_000)
-    expect(h.passes()).toHaveLength(2)
-    expect(h.last()).toMatchObject({ trigger: 'agent agent-1' })
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
-  })
-
-  // a designer at work on 470 beside an open wake, where the loop event of the wake's end (or, with
-  // `designer`, of the designer's) hangs until the test lets it go: the hook work that logs it
-  // holds the hook queue meanwhile, as a busy session does (#558)
-  const heldQueue = (on: Parameters<typeof host>[0], opts: { holding?: 'wake' | 'designer'; hold?: HostOptions['hold'] } = {}) => {
-    const since = NOW - 20 * MIN
-    const key = `design:470:${since}`
-    const task = 'task:redrive:issue-470-x:abc'
-    const held = `kind=${opts.holding === 'designer' ? `spawn key=${key}` : `task key=${task}`} status=done`
+  // two open wakes, where the loop event of the first one's end hangs until the test lets it go:
+  // the hook work that logs it holds the hook queue meanwhile, as a busy session does (#558)
+  const heldQueue = (on: Parameters<typeof host>[0]) => {
+    const first = 'task:redrive:issue-470-x:abc'
+    const second = 'judge:sequence:512:abc1234'
+    const held = `kind=task key=${first} status=done`
     let release: () => void = () => undefined
     const holding = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({
-      issue: { stage: 'designing', since },
-      run: argv => (argv[0] === 'callum-flow-event' && (argv.at(-1) ?? '').startsWith(held) ? holding : undefined),
-    })
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && (argv.at(-1) ?? '').startsWith(held) ? holding : undefined) })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
-      entry(task, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
+      entry(first, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
+      entry(second, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 9 * MIN, endedAt: null, wakeId: 'w2', session: SESSION }),
     ])
-    const h = host(on, { config: ACT, run, store, hold: opts.hold })
-    h.agents.push({ id: 'agent-1', type: 'factory-loop:designer', status: 'running', description: 'Design #470' })
-    return { h, key, task, release: () => release() }
+    const h = host(on, { config: ACT, run, store })
+    return { h, first, second, release: () => release() }
   }
-  const DESIGN_CALL = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false, agentId: 'agent-1' } as const
-
-  test('an answer tool call is answered at once while other hook work holds the queue; its input and the ledger are saved at once, its events and decision-log line follow, in hook order (#558)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key, task, release } = heldQueue(on)
-    await $.session.start(START)
-    await clock.advance(6_000)
-    const passes = h.passes().length
-    // the main loop answers the wake: its loop event hangs, and the hook queue with it
-    const turn = $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
-    await clock.settle()
-    expect(h.entry(task)).toMatchObject({ status: 'done' })
-    // the designer's call is decided against the ledger in memory and answered, the queue still held
-    const answers: unknown[] = []
-    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
-    await clock.settle()
-    expect(answers).toEqual([{ result: expect.stringContaining('Recorded: designer #470 (tool): brief') }])
-    // recorded in memory at once: a second call is told so, still without the queue
-    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
-    await clock.settle()
-    expect(answers[1]).toEqual({ deny: 'Not recorded: your answer is already recorded; end your turn.' })
-    // saved at once, outside the queue: its input, which a pass that acts on it points the model
-    // at, and the ledger, so a reload or a crash before the queue frees keeps the answer
-    expect(JSON.parse(h.files.get(answerPath(LOOP_DIR, key)) ?? '{}')).toMatchObject({ tool: 'mcp__factory-loop__design' })
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
-    // what follows waits its turn behind the wake: nothing logged or pinged yet
-    expect(h.lines().some(l => l.tool === 'mcp__factory-loop__design')).toBe(false)
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toBe(false)
-
-    // the queue frees: the store takes the answer, its loop event goes out after the wake's, and the
-    // decision log has a line for each call, in order
-    release()
-    await turn
-    await clock.settle()
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
-    expect(JSON.parse(h.files.get(answerPath(LOOP_DIR, key)) ?? '{}')).toMatchObject({ tool: 'mcp__factory-loop__design' })
-    const loops = h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith('kind='))
-    expect(loops.findIndex(n => n.startsWith(`kind=task key=${task} status=done`))).toBeLessThan(loops.findIndex(n => n.startsWith(`kind=spawn key=${key} status=done`)))
-    const tools = h.lines().filter(l => l.tool === 'mcp__factory-loop__design')
-    expect(tools.map(l => l.answer)).toEqual(['tool', 'tool refused'])
-    // the ping: the next pass delegates, its trigger the agent
-    await clock.advance(5_000)
-    expect(h.passes()).toHaveLength(passes + 1)
-    expect(String(h.last().trigger)).toContain('agent agent-1')
-  })
-
-  test('an agent whose tool answered ends its turn while the follow-up still waits, with words that say otherwise: they are never read (#558)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key, release } = heldQueue(on)
-    await $.session.start(START)
-    await clock.advance(6_000)
-    const turn = $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
-    await clock.settle()
-    expect(await $.tool.call(DESIGN_CALL)).toMatchObject({ result: expect.stringContaining('Recorded') })
-    // its turn ends while the follow-up is still queued, with a RESULT line that says otherwise
-    const ended = agentDone($, h, 'agent-1', 'Done.\nRESULT brief=none created=471 pending_decision=no')
-    await clock.settle()
-    release()
-    await Promise.all([turn, ended])
-    await clock.settle()
-    // the tool's answer stands: no text read, no repair, no second line
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [] } })
-    expect(h.sends).toEqual([])
-    expect(h.lines().filter(l => l.agent === 'agent-1').map(l => l.answer)).toEqual(['tool'])
-    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toHaveLength(1)
-  })
 
   test("the owner's answer and control tools are answered while other hook work holds the queue; a wake's answer is saved at once, the events, lines and pings follow (#558)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h, key, task, release } = heldQueue(on, { holding: 'designer' })
+    const { h, first, second, release } = heldQueue(on)
     await $.session.start(START)
     await clock.advance(6_000)
-    // the designer's text answer: its loop event hangs, and the hook queue with it
-    const ended = agentDone($, h, 'agent-1', `RESULT brief=${BRIEF} created=none pending_decision=no`)
+    // the main loop answers the first wake: its loop event hangs, and the hook queue with it
+    const turn = $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
     await clock.settle()
-    expect(h.entry(key)).toMatchObject({ status: 'done' })
+    expect(h.entry(first)).toMatchObject({ status: 'done' })
     const answers: unknown[] = []
-    void $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w1', decision: 'done' }).then(r => answers.push(r))
+    void $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w2', decision: 'hold', reason: 'held' }).then(r => answers.push(r))
     await clock.settle()
     void $.tool.call({ tool: 'mcp__factory-loop__control', op: 'pause 470' }).then(r => answers.push(r))
     await clock.settle()
-    expect(answers).toEqual([{ result: expect.stringContaining('Recorded: w1 done') }, { result: expect.stringContaining('Paused #470') }])
+    expect(answers).toEqual([{ result: expect.stringContaining('Recorded: w2 hold') }, { result: expect.stringContaining('Paused #470') }])
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
-    // the wake's answer is in the store at once; its loop event and the op's line wait their turn
-    expect(h.entry(task)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=task key=${task} status=done`))).toBe(false)
+    // the second wake's answer is in the store at once; its loop event and the op's line wait their turn
+    expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(false)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
 
     release()
-    await ended
+    await turn
     await clock.settle()
-    expect(h.entry(task)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=task key=${task} status=done`))).toBe(true)
+    expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(true)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
   })
 
-  test('a tool call right after a load, before the first pass, is refused at once asking for text, and nothing is loaded for it; the text answer is read as before (#558)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h, key } = heldQueue(on)
-    await $.session.start(START)
-    await clock.settle()
-    expect(h.passes()).toEqual([])
-    expect(await $.tool.call(DESIGN_CALL)).toEqual({ deny: 'Not recorded: the factory loop has not loaded its ledger yet; reply with your text lines instead.' })
-    expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w1', decision: 'done' })).toEqual({
-      deny: 'Not recorded: the factory loop has not loaded its ledger yet; give the ANSWER block in your reply instead.',
-    })
-    expect(h.files.has(LOCK)).toBe(false)
-    expect(h.entry(key)).toMatchObject({ status: 'running' })
-    // the agent's text: its turn.complete loads the ledger, as it did
-    await agentDone($, h, 'agent-1', `RESULT brief=${BRIEF} created=none pending_decision=no`)
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF } })
-  })
-
-  test("a tool call whose own work outruns 2 s is refused asking for text, and changes nothing when that work ends; the agent's next call is recorded (#558)", ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    // the spawn record's read hangs while the test holds it, as a stalled disk would
-    let slow: Promise<void> | null = null
-    let release: () => void = () => undefined
-    const { h, key } = heldQueue(on, { hold: (path, op) => (op === 'read' && path.startsWith(`${LOOP_DIR}/spawns/`) ? (slow ?? undefined) : undefined) })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    slow = new Promise<void>(resolve => (release = resolve))
-    const answers: unknown[] = []
-    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
-    await clock.advance(1_900)
-    expect(answers).toEqual([])
-    await clock.advance(100)
-    expect(answers).toEqual([{ deny: 'Not recorded: the factory loop could not check this answer in time; reply with your text lines instead.' }])
-    // the read comes back: the late work finds its answer given and changes nothing
-    slow = null
-    release()
-    await clock.settle()
-    expect(h.entry(key)).toMatchObject({ status: 'running' })
-    expect(h.lines().filter(l => l.agent === 'agent-1')).toEqual([
-      expect.objectContaining({ tool: 'mcp__factory-loop__design', key, answer: 'tool refused', why: 'Not recorded: the factory loop could not check this answer in time; reply with your text lines instead.' }),
-    ])
-    expect(await $.tool.call(DESIGN_CALL)).toMatchObject({ result: expect.stringContaining('Recorded') })
-    await clock.settle()
-    expect(h.entry(key)).toMatchObject({ status: 'done' })
-  })
-
-  test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 3 * 60 * MIN
-    const { run } = factory({ issue: { stage: 'implementing', since } })
-    const key = `delegate:470:${BRIEF}`
-    const handoff = { kind: 'handoff', notGated: false, run: 'R470', head: 'abc1234', newBranch: 'feat/issue-470-x' } as const
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      // answered through its tool an hour in, and still waiting on a job of its own
-      entry(key, 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'done', startedAt: since, endedAt: since + 60 * MIN, agentId: 'agent-1', outcome: handoff }),
-    ])
-    const h = host(on, { config: ACT, run, store })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'waiting', description: 'Implement #470' })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.stops).toEqual(['agent-1'])
-    expect(h.entry('stop:agent-1')).toMatchObject({ status: 'done', rule: 'A1' })
-    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: handoff })
-  })
-
-  test("the loop's own adjudicator and designer types are never offered to the model; the callum-flow ones are (#548)", ENGINE_TEST, async ($, on) => {
+  test("the loop's own agent types are never offered to the model, v2's steps included; the callum-flow ones are (#548)", ENGINE_TEST, async ($, on) => {
     host(on, { config: ACT })
     const offer = (agent: string) => $.agent.offer({ agent, description: 'an agent', source: 'plugin', provider: { plugin: agent.split(':')[0] ?? '', tier: 'user' } })
-    expect(await offer('factory-loop:adjudicator')).toEqual({ isOffered: false })
-    expect(await offer('factory-loop:designer')).toEqual({ isOffered: false })
+    for (const agent of ['factory-loop:adjudicator', 'factory-loop:designer', ...new Set(Object.values(STEP_AGENT))]) expect(await offer(agent)).toEqual({ isOffered: false })
     expect(await offer('callum-flow:adjudicator')).toEqual({ isOffered: true })
     expect(await offer('callum-flow:designer')).toEqual({ isOffered: true })
   })
 
-  test('outside act mode the agent tools record nothing', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const h = shadow(on)
-    await $.session.start(START)
-    await clock.advance(6_000)
-    const r = await $.tool.call({ tool: 'mcp__factory-loop__verdict', findings: [], action: { type: 'approve' }, agentId: 'agent-1' })
-    expect(r).toMatchObject({ deny: 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.' })
-    expect(h.store.size).toBe(0)
-  })
 })
 
 describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2, 10.7, 11.3, 13)', () => {
@@ -1552,7 +1158,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     const line = h.last()
     expect(line).toMatchObject({ executed: true, device: DEVICE })
     // the other device's parked run is not this loop's to drive; the claim is this device's own
-    expect((line.actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', 'sweep:0', 'claim:470:new'])
+    expect((line.actions as { key: string }[]).map(a => a.key)).toEqual([CLAIM_KEY, 'sweep:0'])
     expect(h.spawns).toEqual([])
     expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
   })
@@ -1560,12 +1166,13 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
   test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (SPEC 8.2, 10.8)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
+    const { run } = factory({ queue: [470] })
     const judge = 'judge:sequence:512:abc1234'
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'failed', attempts: 2, startedAt: since, endedAt: NOW - 10 * MIN }),
+      // a claim that used up its attempts: the owner is told (rule S1), once the judge no longer holds the wake
+      entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: since, endedAt: NOW - 10 * MIN }),
       entry(judge, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 31 * MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run, store })
@@ -1573,45 +1180,32 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     await clock.advance(6_000)
     expect(h.entry(judge)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=done`))).toBe(true)
-    expect(h.prompts.filter(p => p.startsWith('TELL agent-failed id=w'))).toHaveLength(1)
+    expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(1)
   })
 
   test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (SPEC 7.5, D-18)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 60 * MIN
-    const designer = entry(`design:470:${since}`, 'spawn', {
-      agent: 'designer', class: 'develop', rule: 'D2', issue: 470, status: 'done', startedAt: since, endedAt: NOW - 30 * MIN, agentId: 'agent-1',
-      outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: true },
-    })
-    const told = entry(`tell:decision:470:${BRIEF}`, 'tell', { wake: 'decision', class: 'owner', rule: 'D3', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
+    const told = entry('tell:stalled:i470/claim/old:1', 'tell', { wake: 'stalled', class: 'owner', rule: 'S1', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
     const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
-    const events = [NO_EVENTS.trim(), row(designer), row(told)].join('\n') + '\n'
-    const { run } = factory({ issue: { stage: 'designing', since }, run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
+    const events = [NO_EVENTS.trim(), row(told)].join('\n') + '\n'
+    const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'events' })
-    expect(h.entry(designer.key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', pendingDecision: true } })
-    expect(h.entry(told.key)).toMatchObject({ status: 'done' })
-    // the design waits on the owner: no designer again, and the decision is not told twice
-    const keys = (h.last().actions as { key: string }[]).map(a => a.key)
-    expect(keys.filter(k => k.startsWith('design:') || k.startsWith('tell:decision:'))).toEqual([])
-    expect(h.spawns).toEqual([])
+    expect(h.entry(told.key)).toMatchObject({ status: 'done', wake: 'stalled' })
+    // the notice was told before the store was lost: it is not told twice
     expect(h.prompts).toEqual([])
   })
 
   test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (SPEC 7.5, O2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 60 * MIN
-    // run 1 left a guard-fail judge open and a designer out of attempts; run 2 starts with the store cleared
-    const designer = entry(`design:470:${since}`, 'spawn', {
-      agent: 'designer', class: 'develop', rule: 'D2', issue: 470, status: 'failed', attempts: 2, startedAt: since, endedAt: NOW - 20 * MIN, agentId: 'agent-1',
-    })
-    const judge = 'judge:guard-fail:512:abc1234'
-    const open = entry(judge, 'judge', { wake: 'guard-fail', class: 'drive', rule: 'M2', issue: 470, pr: 512, status: 'running', startedAt: NOW - 13 * MIN, endedAt: null })
+    // run 1 left a judge open; run 2 starts with the store cleared
+    const judge = 'judge:sequence:512:abc1234'
+    const open = entry(judge, 'judge', { wake: 'sequence', class: 'drive', rule: 'M5', issue: 470, pr: 512, status: 'running', startedAt: NOW - 13 * MIN, endedAt: null })
     const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
-    const events = [NO_EVENTS.trim(), row(designer), row(open)].join('\n') + '\n'
-    const { run } = factory({ issue: { stage: 'designing', since }, run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
+    const events = [NO_EVENTS.trim(), row(open)].join('\n') + '\n'
+    const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1619,125 +1213,53 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     // nobody can answer it: lost with its attempt given back, so its rule decides again
     expect(h.entry(judge)).toMatchObject({ status: 'lost', attempts: 0, summary: 'lost: it was open before this load' })
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=lost`))).toBe(true)
-    // and it holds no other wake: the owner hears about the designer in the same pass
-    expect(h.prompts.filter(p => p.startsWith('TELL agent-failed id=w'))).toHaveLength(1)
     expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
-  test('usage that crosses Stop all mid-pass skips the next token-spending action, with no attempt counted (SPEC 10.7)', ENGINE_TEST, async ($, on) => {
+  test('usage past Stop all skips the token-spending action, with no attempt counted (SPEC 10.7)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    let h: Host | undefined
-    const { run } = factory({
-      queue: [470],
-      run: argv => {
-        // the session's own reading climbs while the sweep runs
-        if (argv[0] === 'callum-flow-sweep' && h !== undefined) h.usage = [{ kind: 'five_hour', percentUsed: 96 }]
-        return undefined
-      },
-    })
-    h = host(on, { config: ACT, run })
+    const { run } = factory({ queue: [470] })
+    const h = host(on, { config: ACT, run })
+    h.usage = [{ kind: 'five_hour', percentUsed: 96 }]
     await $.session.start(START)
     await clock.advance(6_000)
-    const claim = (h.last().outcomes as { key: string; status: string; summary: string }[]).find(o => o.key === 'claim:470:new')
-    expect(claim).toMatchObject({ status: 'skipped' })
-    expect(claim?.summary).toContain('usage: tier stop-all forbids start (5h 96%')
+    expect(h.last()).toMatchObject({ tier: 'stop-all' })
+    expect(h.last().skipped).toContainEqual(expect.objectContaining({ issue: 470, why: expect.stringContaining('tier stop-all') }))
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
-    expect(h.entry('claim:470:new')).toBeUndefined()
+    expect(h.entry(CLAIM_KEY)).toBeUndefined()
   })
 
-  const stale = (stop?: HostOptions['stop']) => async ($: Engine, on: Parameters<typeof host>[0]) => {
+  // a claim that used up its attempts: the loop tells the owner (rule S1), a tell wake
+  const stalled = (submit: HostOptions['submit']) => async ($: Engine, on: Parameters<typeof host>[0]) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 90 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
+    const { run } = factory({ queue: [470] })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 61 * MIN, endedAt: null, agentId: 'agent-1' }),
-    ])
-    const h = host(on, { config: ACT, run, store, stop })
-    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    return { clock, h, key: `design:470:${since}` }
-  }
-
-  test('a spawn that never starts fails after a minute, and the loop runs on (SPEC 6.1)', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const key = `design:470:${since}`
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-    ])
-    const h = host(on, { config: ACT, run, store, spawn: () => new Promise(() => undefined) })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.passes()).toHaveLength(0)
-    await clock.advance(60_000)
-    expect(h.passes().length).toBeGreaterThan(0)
-    expect((h.passes()[0]?.outcomes as { key: string; status: string }[]).find(o => o.key === key)).toMatchObject({ status: 'failed' })
-    expect(h.entry(key)).toMatchObject({ status: 'failed' })
-    expect(h.entry(key)?.summary).toContain('no answer within 60 s')
-  })
-
-  test('a timed-out agent is stopped with TaskStop on its own id (SPEC A1, 13)', ENGINE_TEST, async ($, on) => {
-    const { h, key } = await stale()($, on)
-    expect(h.stops).toEqual(['agent-1'])
-    expect(h.entry('stop:agent-1')).toMatchObject({ status: 'done' })
-    expect(h.entry(key)).toMatchObject({ status: 'timed-out', summary: 'timed out: stopped' })
-  })
-
-  test('a TaskStop that never answers fails after 30 s, and the loop runs on; a refused one fails (SPEC 6.1, 13)', ENGINE_TEST, async ($, on) => {
-    const { clock, h, key } = await stale(() => new Promise(() => undefined))($, on)
-    expect(h.passes()).toHaveLength(0)
-    await clock.advance(30_000)
-    expect(h.passes()).toHaveLength(1)
-    expect(h.entry('stop:agent-1')).toMatchObject({ status: 'failed' })
-    expect(h.entry('stop:agent-1')?.summary).toContain('no answer within 30 s')
-    expect(h.entry(key)).toMatchObject({ status: 'timed-out', summary: 'timed out: the stop failed, the agent may still run' })
-    await clock.advance(60_000)
-    expect(h.passes()).toHaveLength(2)
-  })
-
-  test('a TaskStop the engine refuses is a failed stop with its reason', ENGINE_TEST, async ($, on) => {
-    const { h } = await stale(() => ({ deny: 'TaskStop: no such tool' }))($, on)
-    expect(h.entry('stop:agent-1')).toMatchObject({ status: 'failed' })
-    expect(h.entry('stop:agent-1')?.summary).toContain('TaskStop: no such tool')
-  })
-
-  const unparsed = (submit: HostOptions['submit']) => async ($: Engine, on: Parameters<typeof host>[0]) => {
-    const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
-    const key = `design:470:${since}`
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
+      entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
     ])
     const h = host(on, { config: ACT, run, store, submit })
     await $.session.start(START)
     await clock.advance(6_000)
-    return { clock, h, wake: `judge:report:${key}` }
+    return { clock, h, wake: `tell:stalled:${CLAIM_KEY}:${NOW - 2 * MIN}` }
   }
 
   test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
     let drops = 1
-    const { clock, h, wake } = await unparsed(() => (drops-- > 0 ? { drop: 'the session is shutting down' } : undefined))($, on)
+    const { clock, h, wake } = await stalled(() => (drops-- > 0 ? { drop: 'the session is shutting down' } : undefined))($, on)
     expect(h.entry(wake)).toBeUndefined()
     const out = (h.last().outcomes as { key: string; status: string; summary: string }[]).find(o => o.key === wake)
     expect(out).toMatchObject({ status: 'skipped' })
     expect(out?.summary).toContain('dropped: the session is shutting down')
     await clock.advance(60_000)
-    expect(h.prompts.filter(p => p.startsWith('JUDGE report id=w'))).toHaveLength(2)
+    expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(2)
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
   test('a busy session never holds a pass: the wake is taken as queued after 5 s, and a later drop asks again', ENGINE_TEST, async ($, on) => {
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
-    const { clock, h, wake } = await unparsed(() => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : undefined))($, on)
+    const { clock, h, wake } = await stalled(() => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : undefined))($, on)
     await clock.advance(5_000)
     expect(h.passes()).toHaveLength(1)
     expect(h.entry(wake)).toMatchObject({ status: 'running' })
@@ -1745,9 +1267,9 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     await clock.settle()
     // lost with its attempt given back, and its end logged, since its start was
     expect(h.entry(wake)).toMatchObject({ status: 'lost', attempts: 0, summary: 'submit dropped: the queue was cleared' })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${wake} status=lost`))).toBe(true)
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=tell key=${wake} status=lost`))).toBe(true)
     await clock.advance(60_000)
-    expect(h.prompts.filter(p => p.startsWith('JUDGE report id=w'))).toHaveLength(2)
+    expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(2)
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
@@ -1851,7 +1373,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(h.passes()).toHaveLength(2)
 
     const status = await factoryOp($, 'status')
-    expect(status.text).toStartWith('Pass 2, 1s ago: act, planner v1, tier normal, 0 actions, 0 for the owner.')
+    expect(status.text).toStartWith('Pass 2, 1s ago: act, tier normal, 0 actions, 0 for the owner.')
     expect(status.text).toContain('Directives: paused #470.')
 
     const tool = await $.tool.call({ tool: 'mcp__factory-loop__control', op: 'new off' })
@@ -2006,7 +1528,7 @@ describe('the pass summary event (#680)', () => {
       const inMinute = lines.filter(l => Date.parse(String(l.at)) >= from && Date.parse(String(l.at)) < from + 60_000)
       expect(Number(field(e, 'passes'))).toBe(inMinute.length)
       expect(field(e, 'mode')).toBe('act')
-      expect(field(e, 'planner')).toBe('v1')
+      expect(field(e, 'planner')).toBe('v2')
       expect(field(e, 'pass_every_ms')).toBe('20000')
     })
     // no per-pass event: only the minutes' summaries

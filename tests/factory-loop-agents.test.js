@@ -7,7 +7,7 @@
 // and the loop's never drift apart. The v2 rule layer's agents (docs/factory-loop/v2/SPEC.md 5.2,
 // 8.3, 8.7; v2/types.ts STEP_AGENT) are the loop's own definitions: each answers with the answer
 // script and carries v2's command rule. This reads the hooks and the definitions as text, since
-// plugin tests cannot read files; act-agents.test.ts checks the same mapping in the code.
+// plugin tests cannot read files.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -24,8 +24,15 @@ function block(file, name) {
   return m[1];
 }
 
-// SUBAGENT_OF (act-agents.ts): agent -> `<plugin>:<name>`
-const SUBAGENT_OF = Object.fromEntries([...block("act-agents.ts", "SUBAGENT_OF").matchAll(/(\w+):\s*'([\w-]+:[\w-]+)'/g)].map((m) => [m[1], m[2]]));
+// The v1 agent definitions still in the tree: agent -> `<plugin>:<name>`. The loop no longer spawns
+// them (v2 starts the STEP_AGENT types below), but the loop's two copies stay word for word the
+// callum-flow definitions until they go with the answer tools (agent-tools.ts).
+const SUBAGENT_OF = {
+  adjudicator: "factory-loop:adjudicator",
+  designer: "factory-loop:designer",
+  implementer: "callum-flow:implementer",
+  fixer: "callum-flow:fixer",
+};
 // TOOL_OF (agent-tools.ts): agent -> the answer tool's full name, through its constant
 const TOOLS = read(`${HOOKS}/agent-tools.ts`);
 const constant = (name) => {
@@ -56,12 +63,12 @@ function toolsOf(text) {
   return line === undefined ? null : line.slice("tools:".length).split(",").map((t) => t.trim()).filter((t) => t !== "");
 }
 
-test("the loop spawns all four agents, and knows each one's answer tool", () => {
+test("the four v1 agents are all there, and each one has its answer tool", () => {
   assert.deepEqual(Object.keys(SUBAGENT_OF).sort(), ["adjudicator", "designer", "fixer", "implementer"]);
   assert.deepEqual(Object.keys(TOOL_OF).sort(), Object.keys(SUBAGENT_OF).sort());
 });
 
-test("every agent type the loop spawns reaches its answer tool, through ToolSearch, or lists no tools", () => {
+test("every v1 agent type reaches its answer tool, through ToolSearch, or lists no tools", () => {
   for (const [agent, type] of Object.entries(SUBAGENT_OF)) {
     const file = definition(type);
     assert.ok(fs.existsSync(path.join(ROOT, file)), `${agent}: ${type} has no definition at ${file}`);

@@ -4,8 +4,8 @@
 // reads well under the rate limit; a failed source keeps its last value with its old time, so
 // plan can see how stale it is. Every command runs from the main checkout with the runtime's
 // environment (rt.env), which in observe mode sends its event writes to the sink (SPEC 11.1).
-// With planner v2 or the v2 shadow, v2/observe.ts reads what v2 adds (v2 SPEC 2.4), and planner
-// v2 reads no runs and infers no slot's issue from its reflog.
+// v2/observe.ts reads what v2 adds (v2 SPEC 2.4); the loop reads no pipeline runs and infers no
+// slot's issue from its reflog.
 import { EMPTY_CONTROL, controlFrom } from './config'
 import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
@@ -18,20 +18,17 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
-  parseDirty,
   parseFactoryState,
-  parsePipelineOnce,
   parsePool,
   parseQueue,
   parseQueueOnce,
-  parseReflog,
   parseSubIssues,
   parseUsage,
 } from './parse'
 import type { Factory } from './parse'
-import { ENDED, LIVE, issueFromBranch, listedLive } from './plan'
-import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
-import type { GithubIssue, SeenRun } from './state'
+import { LIVE, listedLive } from './foundation'
+import { TRACKER_DEPTH, buildState } from './state'
+import type { GithubIssue } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, ReleaseInfo, Source, SourceName, State, Usage } from './types'
 import { emptyV2Cache, lastEnded, observeV2, readDue, readOrder } from './v2/observe'
 import type { V2Cache, V2Stored } from './v2/observe'
@@ -42,8 +39,6 @@ const EVENT_DAYS = 3
 // a ledger rebuilt after a lost store reads a week of events: holds older than the facts
 // window (a pending decision, an escalation) must survive it, and entries are kept 7 days
 export const REBUILD_DAYS = 7
-// one poll probes every watched branch's newest run, GitHub included
-const PIPELINE_TIMEOUT_MS = 120_000
 // how long GitHub reads wait after a rate limit (SPEC 10.2)
 export const GITHUB_BACKOFF_MS = 15 * 60_000
 
@@ -73,8 +68,6 @@ export type Runtime = {
   // resolved from config.gateConcurrency; absent in a test's Runtime: no limit
   cpus?: number
   gateConcurrency?: number
-  // the settings v2 runs with (config.ts LoadedConfig.v2), the v2 shadow's; absent: config's
-  v2Config?: Config
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
   // what the repo-local settings file says, no defaults (settings.ts repoLoaded); null: not read
@@ -109,18 +102,13 @@ export type Cache = {
   factory?: Timed<Factory>
   events?: Timed<FactoryEvent[]>
   pool?: Timed<Pool>
-  // the issue branch each lease of a detached slot was found on (#563), by `<path> <lease id>`:
-  // a lease works one issue, so its reflog is read once it names one
-  leaseBranches: Map<string, string>
-  // runSource local: the last poll's runs, each with when it was first seen as it is
-  runs?: Timed<SeenRun[]>
   // act mode: the last ledger rebuilt from the event log, and how many entries it found
   rebuilt?: Timed<number>
   v2: V2Cache
 }
 
 export function emptyCache(): Cache {
-  return { github: new Map(), timelines: new Map(), leaseBranches: new Map(), v2: emptyV2Cache() }
+  return { github: new Map(), timelines: new Map(), v2: emptyV2Cache() }
 }
 
 // resetFor: nothing read for one repo may stand in for another's (a queue, a milestone, issue
@@ -135,11 +123,9 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.factory
   delete cache.events
   delete cache.pool
-  delete cache.runs
   delete cache.rebuilt
   cache.github.clear()
   cache.timelines.clear()
-  cache.leaseBranches.clear()
   cache.v2 = emptyV2Cache()
   cache.repo = repo
 }
@@ -170,7 +156,7 @@ export type Io = {
 
 // observe: one pass's reads. `stored` is act mode's store (undefined in observe mode): it adds
 // the ledger, the GitHub backoff and the queue's known list. `v2Stored` is what the store holds
-// for v2, read when v2 plans or shadows.
+// for v2.
 export async function observe(
   io: Io,
   rt: Runtime,
@@ -183,8 +169,6 @@ export async function observe(
   resetFor(cache, rt.repo)
   const now = await io.now()
   const cfg = rt.config
-  const v2Only = cfg.planner === 'v2'
-  const v2On = v2Only || cfg.shadow === 'v2'
   const commands: string[] = []
   const sources = {} as Record<SourceName, Source>
   let limited = false
@@ -227,28 +211,10 @@ export async function observe(
   const events = cache.events?.value ?? []
   const facts = cache.events !== undefined ? factsOf(events) : null
 
-  // runs: the pipeline watcher's one-shot poll (runSource local), or the event log's view of
-  // them (runSource events: the shadow and the replay). A failed poll is a failed source,
-  // never "no runs", and so is a line the parser cannot read.
-  if (rt.runSource === 'events') {
-    mark('runs', sources.facts.ok, sources.facts.at)
-  } else if (v2Only) {
-    mark('runs', false, null, 'not read: planner v2 has no pipeline runs')
-  } else {
-    try {
-      const r = await run([tool('pipeline-watch.sh'), '--once'], undefined, PIPELINE_TIMEOUT_MS)
-      const read = r.exitCode === 0 ? parsePipelineOnce(r.stdout) : null
-      if (read !== null && read.bad.length === 0) {
-        cache.runs = { at: now, value: seenRuns(cache.runs?.value ?? [], read.runs, now) }
-        mark('runs', true, now)
-      } else {
-        const why = read === null ? fail(r) : `unreadable line: ${read.bad[0]?.slice(0, 200)}`
-        mark('runs', false, cache.runs?.at ?? null, why)
-      }
-    } catch (err) {
-      mark('runs', false, cache.runs?.at ?? null, String(err))
-    }
-  }
+  // runs: the loop reads no pipeline runs. With runSource events (the shadow and the replay) the
+  // event log's view of them stands, so the source is as good as the facts.
+  if (rt.runSource === 'events') mark('runs', sources.facts.ok, sources.facts.at)
+  else mark('runs', false, null, 'not read: the loop has no pipeline runs')
 
   // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
   // store's whenever it holds one; else it is rebuilt from a `week` of events (the facts window
@@ -257,7 +223,7 @@ export async function observe(
   // older than a label write of the loop's own is due, so it sees what GitHub took.
   let chosen: { ledger: LedgerEntry[]; source: LedgerSource }, week: FactoryEvent[] | null = null
   if (stored === undefined) {
-    chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, factory, facts, rt.device) : null)
+    chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, rt.device) : null)
   } else if (stored.ledger !== null && stored.ledger.length > 0) {
     // the store holds it, so a later loss is rebuilt again
     cache.rebuilt = undefined
@@ -272,7 +238,7 @@ export async function observe(
         const r = await run(eventsSince(REBUILD_DAYS), EVENTS_SQL)
         if (r.exitCode === 0) {
           week = eventsFromRows(parseCsv(r.stdout))
-          derived = deriveLedger(week, factory, factsOf(week), rt.device)
+          derived = deriveLedger(week, rt.device)
           cache.rebuilt = { at: now, value: derived.length }
         } else {
           problem = fail(r)
@@ -369,7 +335,7 @@ export async function observe(
       .flatMap(e => (e.issue === null ? [] : [e.issue]))
     const held = mine.map(i => i.number)
     // v2's records go first, in v2's read order (v2 SPEC 2.4); then the oldest reads
-    const first = v2On ? readOrder(v2Stored?.records ?? []) : []
+    const first = readOrder(v2Stored?.records ?? [])
     const wanted = [...new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
     const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : 0)
     const due = wanted
@@ -420,57 +386,6 @@ export async function observe(
   const usage = withSession(reading, await io.sessionLimits())
   mark('usage', usage !== null && !usage.unavailable, cache.usage?.at ?? null)
 
-  // the pool slots rule H3 might return (#563). An implementer detaches its slot once the
-  // pipeline holds the branch, so a leased slot on no branch is matched to its issue by the newest
-  // issue branch its HEAD reflog shows checked out since the lease began (git's own record, per
-  // worktree, whoever leased it and whenever the loop loaded); a slot of a finished issue then has
-  // its tree read for changes, untracked files too, as `treehouse return` counts them. A failed
-  // read leaves the slot unknown, which H3 keeps. Available and busy slots are not read.
-  const finishedIssue = (n: number) => {
-    const f = factory?.issues.find(i => i.number === n)
-    const open = cache.github.get(n)?.value.facts?.open ?? f?.github?.open ?? null
-    return open === false || (f !== undefined && ENDED.includes(f.stage))
-  }
-  const readSlots = async (read: Pool): Promise<Pool> => {
-    const found = new Map<string, string>()
-    const slots: Pool['slots'] = []
-    for (const slot of read.slots) {
-      if (slot.state === 'available' || slot.busy) {
-        slots.push(slot)
-        continue
-      }
-      let leaseBranch = slot.leaseBranch
-      if (leaseBranch === null && slot.lease !== null && slot.leasedAt !== null) {
-        const id = `${slot.path} ${slot.lease}`
-        leaseBranch = cache.leaseBranches.get(id) ?? null
-        if (leaseBranch === null) {
-          try {
-            const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'reflog', 'show', '--date=unix', '--format=%gd%x09%gs', '-n', '500', 'HEAD'], undefined, 10_000)
-            const branches = r.exitCode === 0 ? parseReflog(r.stdout, slot.leasedAt) : null
-            leaseBranch = branches?.find(b => issueFromBranch(b) !== null) ?? null
-          } catch {
-            // unknown: H3 keeps the slot and says so
-          }
-        }
-        if (leaseBranch !== null) found.set(id, leaseBranch)
-      }
-      const n = leaseBranch === null ? null : issueFromBranch(leaseBranch)
-      let dirty: boolean | null = null
-      if (n !== null && finishedIssue(n)) {
-        try {
-          const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'status', '--porcelain=v2', '--untracked-files=normal'], undefined, 30_000)
-          dirty = r.exitCode === 0 ? parseDirty(r.stdout) : null
-        } catch {
-          // not read: H3 keeps the slot and says so
-        }
-      }
-      slots.push({ ...slot, leaseBranch, dirty })
-    }
-    // only the leases still out are remembered
-    cache.leaseBranches = found
-    return { ...read, slots }
-  }
-
   // pool: the shadow cannot see the shadowed device's pool, so it is assumed from its load
   let pool: Pool | null = null
   let poolJson: string | null = null
@@ -483,7 +398,6 @@ export async function observe(
       const r = await run(['treehouse', 'status', '--json'])
       pool = r.exitCode === 0 ? parsePool(r.stdout, rt.poolSize) : null
       if (pool !== null) poolJson = r.stdout
-      if (pool !== null && !v2Only) pool = await readSlots(pool)
       if (pool !== null) cache.pool = { at: now, value: pool }
       mark('pool', pool !== null, cache.pool?.at ?? null, pool === null ? fail(r) : undefined)
     } catch (err) {
@@ -526,7 +440,7 @@ export async function observe(
     sources,
     factory,
     facts,
-    runs: rt.runSource === 'local' ? runsFromWatch(cache.runs?.value ?? [], facts) : null,
+    runs: null,
     queue: cache.queue?.value ?? null,
     github: new Map([...cache.github].map(([n, c]) => [n, c.value])),
     timelines: new Map([...cache.timelines].map(([n, c]) => [n, c.value])),
@@ -542,7 +456,6 @@ export async function observe(
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
-  if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
   const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, backoff: backoffUntil !== null, limited: () => limited })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }

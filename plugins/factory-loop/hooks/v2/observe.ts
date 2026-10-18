@@ -4,7 +4,7 @@
 // a parked record whose label a person removed (11), the facts the event log holds as logged (from
 // observe.ts's read of the log, 7.2), and the source modules: the PRs
 // (sources-prs.ts) and the interventions' facts (sources-interventions.ts). observe.ts calls
-// observeV2 when the planner is v2 or the v2 shadow is on; register.ts keeps the store keys
+// observeV2 every pass; register.ts keeps the store keys
 // records:<repo> and heads:<repo> with the codecs here. Commands run through observe's own `run`,
 // so they join the pass's command list and, outside act mode, send their events to the sink.
 import type { FactoryEvent } from '../derive'
@@ -296,9 +296,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const now = state.now
   const sources = {} as Record<V2SourceName, Source>
   const blocked = () => input.backoff || input.limited()
-  // a shadow's own reads send their events to the sink, as observe mode's do (2.3)
-  const run: SourceCtx['run'] =
-    rt.config.planner === 'v2' ? (argv, stdin, t) => input.run(argv, stdin, t) : (argv, stdin, t) => input.run(argv, stdin, t, { ...rt.env, CALLUM_EVENTS_DIR: `${rt.loopDir}/sink-events` })
+  const run: SourceCtx['run'] = (argv, stdin, t) => input.run(argv, stdin, t)
 
   // the records: the store's, else a rebuild from this device's transition events (3.3); none
   // when the store could not be read, which the planner reads as blind for them
@@ -402,10 +400,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const facts = await readers.interventions({ ...ctx, heads: prs.heads })
   sources.interventions = facts.source
 
-  // dual write (4.1): act mode with the v2 planner only, once per load; a failed read retries when due
+  // dual write (4.1): act mode only, once per load; a failed read retries when due
   let dualWrite: V2State['dualWrite'] = null
   sources.dualWrite = { ok: true, at: now }
-  if (rt.mode === 'act' && rt.config.planner === 'v2') {
+  if (rt.mode === 'act') {
     if (cache.dualWrite === null || (cache.dualWrite.read.error !== null && now - cache.dualWrite.at >= rt.config.githubEveryMs)) {
       cache.dualWrite = { at: now, read: await readDualWrite(ctx) }
     }

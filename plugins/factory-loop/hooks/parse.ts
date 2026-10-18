@@ -1,7 +1,7 @@
 // Pure parsers for what observe reads: each turns one command's output into typed values,
 // or reports that it could not. No I/O here, so the tests and the replay harness (plain
 // Node) drive them directly. Types only are imported.
-import type { Bump, Checkout, Milestone, Pool, RunState, Stage, Usage } from './types'
+import type { Bump, Checkout, Milestone, Pool, Stage, Usage } from './types'
 
 const STAGES: readonly Stage[] = [
   'queued',
@@ -263,103 +263,6 @@ export function parseQueueOnce(text: string): { known: number[]; now: number[] }
   return { known: list(m[1]), now: list(m[2]) }
 }
 
-// --- pipeline-watch.sh --once ---------------------------------------------------------------
-
-// One branch's newest run that is not completed, as `pipeline-watch.sh --once` reports it.
-export type PipelineRun = {
-  state: RunState
-  branch: string
-  // a ULID, or 'unknown' for a run no source knows the id of
-  run: string
-  head: string | null
-  // the gate a parked run waits at, or the step a failed run failed (null: not known)
-  step: string | null
-  // the state's own detail, as the watcher logs it in its event's note: head-mismatch's
-  // 'run=<sha> branch=<sha>[ worktree=<sha>]', ci-stalled's 'reason=<r>'
-  detail: string | null
-  pr: number | null
-}
-
-const RUN_STATES: readonly RunState[] = [
-  'merge-ready',
-  'head-mismatch',
-  'conflict',
-  'ci-stalled',
-  'parked',
-  'failed',
-  'cancelled',
-  'running',
-  'pending',
-]
-const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/i
-const SHA = /^[0-9a-f]{4,64}$/i
-
-// parsePipelineLine: one line, `<state> <branch> <run-id>[ key=value...] head=<sha>`, split on
-// single spaces. The pairs come in a fixed order: the state's own detail (head-mismatch:
-// run=, branch= and an optional worktree=; ci-stalled: reason=no-workflow|no-checks), then
-// step= (parked and failed only), then an optional pr=. A SHA or step of 'unknown' reads as
-// null. Null for a line that breaks any of it: a watcher the loop does not understand must not
-// be read as some other state.
-export function parsePipelineLine(line: string): PipelineRun | null {
-  const tokens = line.split(' ')
-  if (tokens.length < 4 || tokens.includes('')) return null
-  const [state, branch, run] = tokens as [string, string, string]
-  const last = tokens[tokens.length - 1] as string
-  const kind = RUN_STATES.find(s => s === state)
-  if (kind === undefined || (run !== 'unknown' && !ULID.test(run)) || !last.startsWith('head=')) return null
-  const sha = (v: string | undefined) => (v === undefined ? undefined : v === 'unknown' ? null : SHA.test(v) ? v : undefined)
-  const head = sha(last.slice('head='.length))
-  if (head === undefined) return null
-
-  const pairs = tokens.slice(3, -1)
-  let at = 0
-  // take: the next pair's value when its key is `key`, else undefined (the pair stays)
-  const take = (key: string) => {
-    const pair = pairs[at]
-    if (pair === undefined || !pair.startsWith(`${key}=`) || pair.length === key.length + 1) return undefined
-    at++
-    return pair.slice(key.length + 1)
-  }
-  let detail: string | null = null
-  if (kind === 'head-mismatch') {
-    const own = [take('run'), take('branch')]
-    const worktree = take('worktree')
-    if (worktree !== undefined) own.push(worktree)
-    if (own.some(v => sha(v) === undefined)) return null
-    detail = pairs.slice(0, at).join(' ')
-  } else if (kind === 'ci-stalled') {
-    const reason = take('reason')
-    if (reason !== 'no-workflow' && reason !== 'no-checks') return null
-    detail = `reason=${reason}`
-  }
-  let step: string | null = null
-  if (kind === 'parked' || kind === 'failed') {
-    const value = take('step')
-    if (value === undefined) return null
-    step = value === 'unknown' ? null : value
-  }
-  const pr = take('pr')
-  if (pr !== undefined && !/^[1-9]\d*$/.test(pr)) return null
-  // anything left over is a pair this grammar does not have
-  if (at !== pairs.length) return null
-  return { state: kind, branch, run, head, step, detail, pr: pr === undefined ? null : Number(pr) }
-}
-
-// parsePipelineOnce: every line of one `pipeline-watch.sh --once` poll, and the lines that
-// broke the grammar (observe fails the source on any: SPEC 3.3). A branch it does not print
-// has no run in flight.
-export function parsePipelineOnce(text: string): { runs: PipelineRun[]; bad: string[] } {
-  const runs: PipelineRun[] = []
-  const bad: string[] = []
-  for (const line of text.split('\n')) {
-    if (line.trim() === '') continue
-    const parsed = parsePipelineLine(line)
-    if (parsed === null) bad.push(line)
-    else runs.push(parsed)
-  }
-  return { runs, bad }
-}
-
 // --- usage-check.sh -------------------------------------------------------------------------
 
 export function parseUsage(line: string): Usage {
@@ -385,7 +288,7 @@ export function parseUsage(line: string): Usage {
 // parsePool: the worktree pool. `treehouse status --json` lists the slots that exist; the
 // pool grows up to maxTrees (treehouse.toml), so a slot not yet made counts as free. Whether a
 // slot's tree is dirty is not in the listing, nor the branch of a lease whose slot was detached
-// (`branch: ""`): observe asks git for the slots it might release (#563).
+// (`branch: ""`).
 export function parsePool(json: string, maxTrees: number): Pool | null {
   try {
     const list = JSON.parse(json)
@@ -411,29 +314,6 @@ export function parsePool(json: string, maxTrees: number): Pool | null {
   }
 }
 
-// parseReflog: the branches a slot's checkouts moved to since its lease began (ms), newest first,
-// from `git reflog show --date=unix --format=%gd%x09%gs HEAD`: `HEAD@{<unix seconds>}<tab>checkout:
-// moving from <a> to <b>`, or a rebase's `... returning to refs/heads/<b>`. Only destinations
-// count: the lease's agent moved there itself (its `checkout -b` or `switch`, which its later
-// detach leaves behind), while a branch the slot only moved from may be an earlier lease's, left
-// checked out when this one began. A detached HEAD and a commit id are no branch, and entries
-// before the lease are an earlier lease's (#563), allowing REFLOG_SLACK_S: `treehouse get --lease
-// -b` checks the branch out before it records `leased_at`. null when a line does not read.
-const REFLOG_SLACK_S = 2
-export function parseReflog(text: string, since: number): string[] | null {
-  const branches: string[] = []
-  for (const line of text.split('\n')) {
-    if (line.trim() === '') continue
-    const m = line.match(/^HEAD@\{(\d+)\}\t(.*)$/)
-    if (m === null) return null
-    if (Number(m[1]) < Math.floor(since / 1000) - REFLOG_SLACK_S) continue
-    const subject = m[2] ?? ''
-    const to = subject.match(/^checkout: moving from \S+ to (\S+)$/)?.[1] ?? subject.match(/ returning to refs\/heads\/(\S+)$/)?.[1]
-    if (to !== undefined && to !== 'HEAD' && !/^[0-9a-f]{7,64}$/.test(to)) branches.push(to)
-  }
-  return branches
-}
-
 // changedPath: the path of one `git status --porcelain=v2` line that is a tracked change; null for
 // a header, an untracked or ignored file or a blank line; undefined for a line that does not read.
 // Ordinary (1), renamed (2, then a score and `<path>\t<orig>`) and unmerged (u) entries carry 8,
@@ -443,24 +323,6 @@ function changedPath(line: string): string | null | undefined {
   const fields = line.startsWith('1 ') ? 8 : line.startsWith('2 ') ? 9 : line.startsWith('u ') ? 10 : null
   if (fields === null) return undefined
   return line.split(' ').slice(fields).join(' ').split('\t')[0] ?? ''
-}
-
-// parseDirty: whether `git status --porcelain=v2 --untracked-files=normal` lists a tracked change
-// or an untracked file (a pool slot's tree, rule H3): `treehouse return` counts both as uncommitted
-// changes and keeps the slot, but not an ignored one (`!`, listed only with --ignored). null when
-// a line does not read.
-export function parseDirty(status: string): boolean | null {
-  let dirty = false
-  for (const line of status.split('\n')) {
-    if (line.startsWith('? ')) {
-      dirty = true
-      continue
-    }
-    const path = changedPath(line)
-    if (path === undefined) return null
-    if (path !== null) dirty = true
-  }
-  return dirty
 }
 
 // --- the main checkout (#544) -------------------------------------------------------------------

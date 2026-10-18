@@ -42,7 +42,7 @@ export type V2Live = {
   heads: Record<string, HeadSeen> | null
   // files:<repo>, kept whether or not the records are loaded
   files: FilesSeen | null
-  // the workspace config.json as the newest tick that did not act under planner v2 read it, in
+  // the workspace config.json as the newest tick that did not act read it, in
   // memory only (noteIdle); null once an acting tick has kept it
   idle: { repo: string; seen: FileSeen } | null
   loaded: boolean
@@ -124,9 +124,9 @@ export async function readStoredV2(io: V2StoreIo, repo: string): Promise<V2Store
   return read.ok ? { records: read.records, heads, files, error: null } : { records: null, heads, files, error: read.error }
 }
 
-// keepV2: what a pass acting under planner v2 keeps of v2's reads: the records a lost store was
-// rebuilt into, as the ledger's are (3.3), the PR heads first seen (2.4), and the owner's files
-// with the edits they show, to log (7.2, keepFiles). A shadow keeps nothing.
+// keepV2: what an acting pass keeps of v2's reads: the records a lost store was rebuilt into, as
+// the ledger's are (3.3), the PR heads first seen (2.4), and the owner's files with the edits they
+// show, to log (7.2, keepFiles).
 export async function keepV2(live: V2Live, heads: Record<string, HeadSeen> | null, state: State, keep: (key: string, value: unknown) => Promise<void>): Promise<void> {
   if (!live.loaded) return
   if (state.v2 !== undefined && state.v2.recordsFrom === 'events' && live.absent) {
@@ -208,11 +208,11 @@ export function noteWritten(live: V2Live, io: V2StoreIo, rt: Pick<Runtime, 'repo
   }
 }
 
-// noteKillSwitch: a pass found the OFF file. The loop never writes it, so under planner v2 in act
-// mode its use is a person's edit, kept once to log until a pass acts again (keepFiles clears the
+// noteKillSwitch: a pass found the OFF file. The loop never writes it, so in act mode its use is
+// a person's edit, kept once to log until a pass acts again (keepFiles clears the
 // flag). Returns whether the kill switch is on.
 export async function noteKillSwitch(live: V2Live, io: V2StoreIo, rt: Pick<Runtime, 'repo' | 'mode' | 'config'>, killed: boolean): Promise<boolean> {
-  if (!killed || rt.mode !== 'act' || rt.config.planner !== 'v2' || rt.repo === '') return killed
+  if (!killed || rt.mode !== 'act' || rt.repo === '') return killed
   if (live.loaded && live.repo === rt.repo && live.files?.off === true) return killed
   const at = await io.now().catch(() => null)
   if (at === null) return killed
@@ -224,15 +224,15 @@ export async function noteKillSwitch(live: V2Live, io: V2StoreIo, rt: Pick<Runti
   return killed
 }
 
-// noteIdle: each tick, before its pass (7.2). While the loop does not act under planner v2 (mode off
-// or observe, or planner v1), the workspace config.json it reads is kept in memory, never in the
-// store, which only an acting pass writes. The first tick that acts under v2 again makes that the
-// version files:<repo> holds for the workspace file, so the edit that turned the loop on (`mode`,
-// `planner`) is compared like any other and logged once as config-file; an op's write is the
+// noteIdle: each tick, before its pass (7.2). While the loop does not act (mode off or observe),
+// the workspace config.json it reads is kept in memory, never in the store, which only an acting
+// pass writes. The first tick that acts again makes that the version files:<repo> holds for the
+// workspace file, so the edit that turned the loop on (`mode`) is compared like any other and
+// logged once as config-file; an op's write is the
 // loop's own version (noteWritten). A read that fails changes nothing. Never throws.
 export async function noteIdle(live: V2Live, io: V2StoreIo, files: Pick<FileIo, 'readFile'>, rt: Pick<Runtime, 'repo' | 'mode' | 'config' | 'loopDir'>): Promise<void> {
   if (rt.repo === '') return
-  if (rt.mode !== 'act' || rt.config.planner !== 'v2') {
+  if (rt.mode !== 'act') {
     const text = await files.readFile(`${baseOf(rt.loopDir)}/config.json`).catch(() => null)
     if (text !== null) live.idle = { repo: rt.repo, seen: seenOf(text) }
     return

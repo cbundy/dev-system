@@ -60,8 +60,6 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   trace: 'next-pass',
   traceMaxBytes: 'next-pass',
   answerChannel: 'next-pass',
-  planner: 'next-pass',
-  shadow: 'next-pass',
   stateTimeoutMs: 'next-pass',
   ciStartMs: 'next-pass',
   ciRunMs: 'next-pass',
@@ -82,13 +80,12 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
 }
 
 // The keys that have an op of their own, and which op. `set` refuses them, so the plugin option,
-// the runtime key and the v2 switch keep one path.
+// and the runtime key keep one path.
 // the pool size runtime() uses when the workspace file sets none
 export const DEFAULT_POOL_SIZE = 16
 
 const OWN_OP: Record<string, string> = {
   mode: 'mode off|observe|act',
-  planner: 'planner v1|v2',
   trace: 'trace on|off',
 }
 
@@ -229,7 +226,7 @@ export function editSetting(text: string | null, k: { key: string; fileKey: stri
 }
 
 // withoutSetting: the workspace file's settings with the key (both spellings) or entry removed, as an
-// unset leaves them: what the loader then reads, planner included.
+// unset leaves them: what the loader then reads.
 export function withoutSetting(workspaceRaw: Record<string, unknown>, k: { key: string; fileKey: string; sub: string | null }): Record<string, unknown> {
   const edited = editSetting(JSON.stringify(workspaceRaw), k, undefined)
   return edited.ok ? (JSON.parse(edited.text) as Record<string, unknown>) : workspaceRaw

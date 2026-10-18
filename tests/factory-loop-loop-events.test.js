@@ -60,10 +60,8 @@ function log(argv) {
 
 const base = { class: "free", rule: "test", issue: 470, run: null, pr: null, head: null, attempts: 1, startedAt: NOW - 600_000, endedAt: NOW };
 const entries = [
-  { ...base, key: "design:470:1791860400000", kind: "spawn", class: "develop", rule: "D2", agent: "designer", status: "done", agentId: "agent-1", outcome: { kind: "designer", brief: BRIEF, created: [471, 472], pendingDecision: true } },
-  { ...base, key: `adjudicate:${RUN}:review:abc1234:r1`, kind: "spawn", class: "drive", rule: "P2", agent: "adjudicator", run: RUN, head: "abc1234", status: "running", endedAt: null, agentId: "agent-2" },
-  { ...base, key: `fixer:review:512:abc1234`, kind: "spawn", class: "drive", rule: "M5b", agent: "fixer", pr: 512, head: "abc1234", status: "failed", summary: "agent failed: it said\nno", outcome: { kind: "handoff", notGated: true, run: RUN, head: "abc1234", newBranch: "issue-470-fix" } },
-  { ...base, key: `delegate:470:${BRIEF}`, kind: "delegate", class: "develop", rule: "D4", agent: "implementer", status: "lost", agentId: "agent-3" },
+  { ...base, key: `i470/l1/s3/review/a1`, kind: "agent-step", class: "drive", rule: "S2", step: "review", run: RUN, head: "abc1234", status: "running", endedAt: null, agentId: "agent-2" },
+  { ...base, key: `i470/l1/s4/fix/a1`, kind: "agent-step", class: "drive", rule: "S2", step: "fix", pr: 512, head: "abc1234", status: "failed", summary: "agent failed: it said\nno" },
   { ...base, key: "judge:sequence:512:abc1234", kind: "judge", class: "drive", rule: "M5", pr: 512, head: "abc1234", wake: "sequence", status: "done", wakeId: "w9", outcome: { kind: "wake", decision: "merge", reason: "nothing waits", instructions: null, bump: "minor", bumpReason: null, fields: {} } },
   { ...base, key: `judge:report:brief:470:${BRIEF}`, kind: "judge", class: "drive", rule: "D3", wake: "report", status: "done", outcome: { kind: "wake", decision: "parsed", reason: null, instructions: null, bump: null, bumpReason: null, fields: { brief: BRIEF, created: [], pendingDecision: false } } },
   { ...base, key: "task:respond-stuck:01K7S1AAAAAAAAAAAAAAAAAAAA:park@1791860000000:abc1234", kind: "task", class: "drive", rule: "P3a", wake: "respond-stuck", status: "timed-out" },
@@ -78,7 +76,7 @@ test("every loop note the plugin builds is one callum-flow-event takes", () => {
     act.breakerEventArgv({ kind: "breaker", since: NOW, until: NOW + 600_000, passes: 31 }),
     // the minute's pass summary (passes.ts), one with passes and one with none
     ...(() => {
-      const settings = { mode: "act", planner: "v2", passEveryMs: 60_000 };
+      const settings = { mode: "act", passEveryMs: 60_000 };
       const book = new Map();
       passes.notePass(book, NOW + 1_000, 120, true, false);
       passes.notePass(book, NOW + 2_000, 80, false, true);

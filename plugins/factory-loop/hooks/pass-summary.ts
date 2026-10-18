@@ -37,7 +37,7 @@ export async function flushMinute($: EngineInterface, host: SummaryHost): Promis
   const minute = minuteOf(await $.clock.now()) - MINUTE_MS
   const rt = host.rt()
   if (rt === null) return
-  const summary = closeMinute(book, minute, { mode: rt.mode, planner: rt.config.planner, passEveryMs: rt.config.passEveryMs })
+  const summary = closeMinute(book, minute, { mode: rt.mode, passEveryMs: rt.config.passEveryMs })
   if (rt.mode !== 'act' || rt.repo === '' || !lockHeld || (await host.killed())) return
   await host.send(rt, passesEventArgv(summary)).catch(() => undefined)
 }

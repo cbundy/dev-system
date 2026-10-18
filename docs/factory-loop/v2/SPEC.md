@@ -87,13 +87,10 @@ The foundation stays (OB:22-23; V:13). v2 uses it through the interfaces FM sect
 - **Foundation helpers.** `hooks/foundation.ts` holds the generic plan code v2 needs: the tier
   (re-exporting `tierOf`), the class matrix, `gate` and `want`, the generic admission filters
   (control, tier, GitHub backoff, breakers, rate caps), `oneWake` and the title frame. These are
-  copies of private code in `plan.ts:98`, `:288-332` and `:2378-2541` (FM coupling C1), because
-  `plan.ts` stays untouched until the delete wave (OB:107-109). A parity test runs both copies
-  on v1's property fixtures. At the delete wave `foundation.ts` becomes the only copy.
-- **Observe.** `observe()` (`observe.ts:153`) calls `observeV2()` (`hooks/v2/observe.ts`) when
-  the planner is v2 or the v2 shadow is on. It adds the State fields in 2.4. With `planner: v2`
-  it skips the `runs` source (`pipeline-watch.sh`) and the slot reflog inference
-  (`observe.ts:208-224`, `:418-472`).
+  the code v1's `plan.ts` held (FM coupling C1). v1 and `plan.ts` are deleted (#926):
+  `foundation.ts` is the only copy.
+- **Observe.** `observe()` calls `observeV2()` (`hooks/v2/observe.ts`). It adds the State fields
+  in 2.4. It reads no `runs` source (`pipeline-watch.sh`) and does no slot reflog inference.
 - **Act.** v2 executors live in `hooks/v2/act-*.ts` and join `EXECUTORS` (`act.ts:31`) through
   `hooks/v2/registry.ts`.
 - **Events.** Every v2 event is built by one module, `hooks/v2/events.ts`, and written through
@@ -103,34 +100,24 @@ The foundation stays (OB:22-23; V:13). v2 uses it through the interfaces FM sect
 - **Store.** `records:<repo>` (3.3) and `heads:<repo>` (2.4).
 - **Controls.** `control.json` keeps its shape; the ops are in appendix E.
 
-### 2.3 v1 and v2 side by side
+### 2.3 The loop always plans with v2
 
-Two settings, in the repo-local `.claude/factory-loop.json` or the workspace `config.json`, which
-wins:
+v1 is gone (#926). The loop plans with v2 alone, and there is no switch.
 
-| Key | Values | Default | Meaning |
-|---|---|---|---|
-| `planner` | `v1`, `v2` | `v2` (`v1` is an opt-in until the U10 delete wave) | the layer whose plan the act step executes |
-| `shadow` | `off`, `v2` | `off` | with `planner: v1`, v2 also plans each pass on the same State; its result is logged, never executed |
-
-- Only the planner acts. The shadow never executes, never writes the store and never writes an
-  event; its commands get the observe sink (v1 SPEC 11.1, D-10). There is no v1 shadow of v2
-  (`simplicity/F13`).
-- `mode` (`off`, `observe`, `act`) keeps its meaning (D-03). Observe mode with `planner: v2` runs
-  v2's plan and logs it.
-- The two plan call sites, `act.ts:456` (an acting pass) and `register.ts:921` (a pass that does
-  not act), call the planner's function, then the v2 shadow when it is on.
-- The decision log line gains `planner` and, with the shadow, `shadow: { actions, skipped,
-  transitions }`. `/factory status` names both.
-- v2's records are read, never written, in an observe or shadow pass: the stored records when act
-  mode wrote them, else a rebuild from events (3.3). While v1 acts there are no v2 records, so the
-  shadow shows R1's release proposals for v1's issues (6.2) and the claims v2 would make.
-- A change of `planner` applies from the next pass. The cutover runbook (17.5) runs the one-shot
-  migration (6.3) first.
-- v2's ledger keys never collide with v1's: v2 keys are slash-separated and scoped to an issue's
-  life (appendix C); v1 keys are colon-separated (v1 SPEC 5).
-- `scripts/factory-loop-replay.js` gains `--planner v1|v2`.
-- `plan.ts`, v1's rules and their tests stay untouched until the delete wave (OB:107-109).
+- The settings `planner` and `shadow` of earlier releases are retired. A settings file, repo-local
+  or workspace, that still sets either one (any value, `v1` included) loads: the key is ignored,
+  and `problems` reports each as retired (`planner: retired, the loop always plans with v2, and
+  ignored`), which `/factory config` shows.
+- `mode` (`off`, `observe`, `act`) keeps its meaning (D-03). Observe mode runs v2's plan and logs
+  it; it never executes, never writes the store and never writes an event (its commands get the
+  observe sink, v1 SPEC 11.1, D-10).
+- The two plan call sites, `act.ts` (an acting pass) and `register.ts` (a pass that does not act),
+  call `planV2`.
+- The decision log line and the `loop_passes` event keep their `planner` field, always `v2`.
+  `/factory status` no longer names a planner, and the `planner` op is gone.
+- v2's records are read, never written, in an observe pass: the stored records when act mode wrote
+  them, else a rebuild from events (3.3).
+- `scripts/factory-loop-replay.js` plans with v2 and takes no `--planner`.
 
 ### 2.4 What v2 reads
 
@@ -346,7 +333,7 @@ type IssueRecord = {
   because the winner owns the labels (`callum-flow-claim:18-21`; `totality/T-02`).
 - **Migration.** No issue has a `factory:*` label before cutover. The owner's own `parked` label
   convention (`skipLabels`, D-17) is unrelated and unchanged.
-- **Rollback.** Before the delete wave, `planner: v1`; after it, the previous release (OB:117). The
+- **Rollback.** The `planner` and `shadow` keys are retired and ignored, so rollback means the previous release (OB:117). The
   runbook (17.5) first stops new work and lets v2's records reach parked or closed, because v1
   ignores v2's records, slot holders and labels (`totality/T-27`). It then deletes the nine
   labels with `gh label delete <name> --repo R --yes`, after re-adding `ready` to any rejected

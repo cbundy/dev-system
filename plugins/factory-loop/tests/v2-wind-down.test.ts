@@ -20,7 +20,7 @@ import { MIN, NOW, config, control, entry, issue, state as baseState } from './f
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, ENGINE_TEST } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 2 * HOUR)
 const OK = { ok: true, at: NOW }
 const sha = (c: string) => c.repeat(40)
@@ -296,7 +296,7 @@ describe('a pass in the test host', () => {
     }
     return undefined
   }
-  const settings = (extra: Record<string, unknown> = {}) => ({ repo: REPO, mode: 'act', checkout: '/work', planner: 'v2', ...extra })
+  const settings = (extra: Record<string, unknown> = {}) => ({ repo: REPO, mode: 'act', checkout: '/work', ...extra })
   const request = (ago: number) => JSON.stringify({ requested_at: new Date(NOW - ago).toISOString(), trigger: 'restart-self' })
   const status = (h: { files: Map<string, string> }) => JSON.parse(h.files.get(FILES.status) ?? 'null') as Record<string, unknown> | null
 

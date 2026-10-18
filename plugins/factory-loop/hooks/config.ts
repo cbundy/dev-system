@@ -1,9 +1,9 @@
 // Default settings (SPEC 4.2), and the pure loaders for the settings files and the control
 // state. The repo-local .claude/factory-loop.json overrides any setting; the plugin ships no
-// repo-specific values. Types only are imported, so plan.ts and the replay can use this too, and
-// v2's vocabulary (v2/types.ts), which holds constants alone.
+// repo-specific values. Types only are imported, so the pure planner and the replay can use this
+// too, and v2's vocabulary (v2/types.ts), which holds constants alone.
 import type { ActionKind, AgentType, AnswerChannel, Config, Control, Ms } from './types'
-import { MODELS, PLANNERS, SHADOWS, V2_ACTION_KINDS } from './v2/types'
+import { MODELS, V2_ACTION_KINDS } from './v2/types'
 
 const MIN = 60_000
 
@@ -31,7 +31,8 @@ export const DEFAULT_CONFIG: Config = {
   checkoutEveryMs: 5 * MIN,
   slowGapMs: 10 * MIN,
   maxStartsPerPass: 4,
-  maxInFlightIssues: 5,
+  // K is 3 (v2 SPEC section 15)
+  maxInFlightIssues: 3,
   worktreeReserve: 2,
   reviewFixCap: 3,
   guardRecheckMs: 3 * MIN,
@@ -50,22 +51,14 @@ export const DEFAULT_CONFIG: Config = {
     implementer: 2,
     adjudicator: 2,
     fixer: 2,
-    respond: 2,
-    merge: 2,
-    'fix-linkage': 2,
-    guard: 3,
-    'fast-forward': 2,
-    // heartbeat, sweep and update-checkout are never used up (they retry at their cadence, SPEC
-    // 6.1): this many failures in a row tells the owner once
+    // heartbeat and sweep are never used up (they retry at their cadence, SPEC 6.1): this many
+    // failures in a row tells the owner once
     heartbeat: 3,
     sweep: 3,
-    'update-checkout': 3,
     // a restart is tried once; the owner hears if it fails (SPEC 6.1)
     'restart-self': 1,
-    // SPEC 6.1: a close and reopen once, a stop once, a slot's return twice
-    'pr-reopen': 1,
+    // SPEC 6.1: a stop once
     'stop-agent': 1,
-    'release-worktree': 2,
     // a wake is asked once (with one reminder inside the attempt); then its fallback holds
     judge: 1,
     task: 1,
@@ -92,10 +85,7 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
-  // v2 (v2 SPEC appendix A): v2 plans by default; v1 is an explicit opt-in (`planner: "v1"`) until
-  // the U10 delete wave; the shadow is off
-  planner: 'v2',
-  shadow: 'off',
+  // v2 (v2 SPEC appendix A)
   stateTimeoutMs: {
     design: 45 * MIN,
     build: 90 * MIN,
@@ -153,10 +143,6 @@ export function resolveGateConcurrency(value: 'auto' | number, cpus: number): nu
   return Math.max(1, Math.floor(n / GATE_CPUS))
 }
 
-// The defaults that differ under planner v2, for a key no settings file sets: K is 3 (v2 SPEC
-// section 15; v1's stays 5).
-export const V2_DEFAULTS: Readonly<Pick<Config, 'maxInFlightIssues'>> = { maxInFlightIssues: 3 }
-
 export const ANSWER_CHANNELS: readonly AnswerChannel[] = ['script', 'tool', 'text']
 
 export const EMPTY_CONTROL: Control = {
@@ -193,9 +179,8 @@ export function shortDuration(ms: Ms): string {
 
 // Every action kind, for the loaders that read one from text (SPEC 6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
-  'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fast-forward',
-  'update-checkout', 'fix-linkage', 'merge', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect',
-  'pr-reopen', 'pr-comment', 'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+  'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
+  'judge', 'task', 'tell', 'title',
   ...V2_ACTION_KINDS,
 ]
 // maxAttempts may name any action kind or agent type.
@@ -203,9 +188,16 @@ export const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KIND
 export const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
 export const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 
-// v2: the settings v2 runs with, from the same layers: config itself under planner v2; under v1,
-// V2_DEFAULTS on every key no layer set, which the v2 shadow plans with (v2 SPEC 2.3).
-export type LoadedConfig = { config: Config; problems: string[]; v2: Config }
+// The settings the layers give, and what was wrong with them.
+export type LoadedConfig = { config: Config; problems: string[] }
+
+// Settings the loop no longer reads, which a settings file may still carry: each loads, is ignored
+// and is reported in `problems`. planner and shadow chose between v1 and v2 (v2 SPEC 2.3); the loop
+// always plans with v2 now, and the way back is the previous release.
+export const RETIRED_KEYS: Readonly<Record<string, string>> = {
+  planner: 'planner: retired, the loop always plans with v2, and ignored',
+  shadow: 'shadow: retired, the loop always plans with v2, and ignored',
+}
 
 // jsonObject: a settings file's text as an object; {} for no file, or one that does not read.
 export function jsonObject(raw: string | null): Record<string, unknown> {
@@ -221,7 +213,7 @@ export function jsonObject(raw: string | null): Record<string, unknown> {
 // setting takes a duration string under its key with "Ms" dropped (`passEvery: "60s"`), or a
 // number of milliseconds under either spelling; the agentTimeout and wakeTimeout maps likewise,
 // per entry. An unknown key or a bad value is left out and named in `problems`, for the
-// decision log (owner, 2026-10-13). Under planner v2 a key no layer sets takes V2_DEFAULTS'.
+// decision log (owner, 2026-10-13). A retired key (RETIRED_KEYS) is ignored and reported the same way.
 export function loadConfig(...layers: unknown[]): LoadedConfig {
   const d = DEFAULT_CONFIG
   const out: Record<string, unknown> = {
@@ -234,8 +226,6 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
     rateCaps: { ...d.rateCaps },
     gateCommands: [...d.gateCommands],
   }
-  // the V2_DEFAULTS keys a layer set to a value it takes
-  const set = new Set<string>()
   const defaults = d as unknown as Record<string, unknown>
   const problems: string[] = []
   const bad = (key: string, value: unknown, want: string) => problems.push(`${key}: ${JSON.stringify(value) ?? String(value)} is not ${want}`)
@@ -256,7 +246,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       const short = !(raw in defaults) && `${raw}Ms` in defaults
       const key = short ? `${raw}Ms` : raw
       const base = defaults[key]
-      if (raw === 'answerTools') {
+      if (raw in RETIRED_KEYS) {
+        problems.push(RETIRED_KEYS[raw] as string)
+      } else if (raw === 'answerTools') {
         // #560's switch, replaced by answerChannel (#561) and not read
         problems.push('answerTools: replaced by answerChannel (script, tool or text), and ignored')
       } else if (!(key in defaults)) {
@@ -295,10 +287,8 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
         if (value === null || typeof value === 'string') out[key] = value
         else bad(raw, value, 'a device name or null')
       } else if (key === 'maxInFlightIssues') {
-        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)) {
-          out[key] = value
-          set.add(key)
-        } else bad(raw, value, 'a whole number or null')
+        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)) out[key] = value
+        else bad(raw, value, 'a whole number or null')
       } else if (key === 'skipLabels') {
         if (Array.isArray(value) && value.every(v => typeof v === 'string')) out[key] = [...value]
         else bad(raw, value, 'a list of labels')
@@ -308,12 +298,6 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'gateConcurrency') {
         if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
         else bad(raw, value, 'auto or a whole number of at least 1')
-      } else if (key === 'planner') {
-        if (PLANNERS.some(p => p === value)) out[key] = value
-        else bad(raw, value, PLANNERS.join(' or '))
-      } else if (key === 'shadow') {
-        if (SHADOWS.some(p => p === value)) out[key] = value
-        else bad(raw, value, SHADOWS.join(' or '))
       } else if (key.endsWith('Model')) {
         if (MODELS.some(m => m === value)) out[key] = value
         else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
@@ -342,10 +326,7 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       }
     }
   }
-  const v2: Record<string, unknown> = { ...out }
-  for (const [key, value] of Object.entries(V2_DEFAULTS)) if (!set.has(key)) v2[key] = value
-  const config = (out.planner === 'v2' ? v2 : out) as unknown as Config
-  return { config, problems, v2: v2 as unknown as Config }
+  return { config: out as unknown as Config, problems }
 }
 
 function compiles(pattern: string) {

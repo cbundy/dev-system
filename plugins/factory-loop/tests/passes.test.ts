@@ -6,7 +6,7 @@ import { MINUTE_MS, closeMinute, notePass, passesEventArgv, passesNote } from '.
 import type { PassBook } from '../hooks/passes'
 import { NOW } from './fixtures'
 
-const SET = { mode: 'act', planner: 'v2', passEveryMs: 60_000 }
+const SET = { mode: 'act', passEveryMs: 60_000 }
 const M = Math.floor(NOW / MINUTE_MS) * MINUTE_MS
 const tokens = (note: string) => Object.fromEntries(note.split(' ').map(t => [t.slice(0, t.indexOf('=')), t.slice(t.indexOf('=') + 1)]))
 

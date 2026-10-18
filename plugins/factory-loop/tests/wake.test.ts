@@ -1,13 +1,12 @@
 // Waking the model and reading its answers (wake.ts; SPEC 8, 9.2, 10.8; D-04, D-25, D-26): the
-// prompt of every wake plan emits, the ANSWER blocks and the answer tool, turn tracking with its
-// one reminder, the timeouts' fallbacks, and plan reading what they leave in the ledger.
+// prompt of every wake the planner emits, the ANSWER blocks and the answer tool, turn tracking with its
+// one reminder and the timeouts' fallbacks.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { WAKE_POINTER, answerPath } from '../hooks/exec'
+import { WAKE_POINTER } from '../hooks/exec'
 import type { ActIo, Exec, ExecCtx } from '../hooks/exec'
 import { exhausted, finish } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
-import { plan } from '../hooks/plan'
 import type { Action, LedgerEntry, State, WakeKind } from '../hooks/types'
 import {
   ANSWER_TOOL,
@@ -198,39 +197,6 @@ describe('the prompt (SPEC 8.1)', () => {
     ])
   })
 
-  test('judge(report) and judge(handoff) point at the agent\'s saved answer; a report of a posted brief has none (SPEC 7.2)', async () => {
-    const h = harness()
-    await h.exec(w('judge', 'report', { issue: 47, agent: 'designer', entry: 'design:47:1000' }))
-    await h.exec(w('judge', 'handoff', { issue: 47, entry: `delegate:47:${brief(47)}`, run: RUN47, head: 'head47' }, ['NOT GATED: commit 03a35cd']))
-    await h.exec(w('judge', 'report', { issue: 47, agent: 'designer', brief: brief(47) }))
-    expect(lines(h.prompts[0] ?? '').slice(1)).toEqual([`saved answer: ${answerPath(LOOP_DIR, 'design:47:1000')}`, WAKE_POINTER])
-    expect(lines(h.prompts[1] ?? '').slice(1)).toEqual([
-      'NOT GATED: commit 03a35cd',
-      `saved answer: ${LOOP_DIR}/answers/delegate_47_https_github.com_cbundy_dev-system_issues_47_issuecomment-1047.txt`,
-      WAKE_POINTER,
-    ])
-    expect(lines(h.prompts[2] ?? '').slice(1)).toEqual([WAKE_POINTER])
-  })
-
-  test('task(respond-stuck) names every respond log of its run, oldest first (D-37)', async () => {
-    const respondLog = (k: string, r: string, log: string, startedAt: number) =>
-      entry(k, 'respond', { run: r, startedAt, outcome: { kind: 'respond', slot: '/slots/2', log } })
-    const ledger = [
-      respondLog('respond:R45:review:h1:approve:retry', 'R45', `${LOOP_DIR}/respond/R45-2.log`, NOW - 20 * MIN),
-      respondLog('respond:R45:review:h1:approve', 'R45', `${LOOP_DIR}/respond/R45-1.log`, NOW - 40 * MIN),
-      respondLog('respond:R99:review:h9:approve', 'R99', `${LOOP_DIR}/respond/R99-1.log`, NOW - 30 * MIN),
-      // a launch that failed before any log was read back
-      entry('respond:R45:test:h0:fix', 'respond', { run: 'R45', status: 'failed', outcome: { kind: 'cli', exit: 3 } }),
-    ]
-    const h = harness(ledger)
-    await h.exec(w('task', 'respond-stuck', { issue: 45, run: 'R45', branch: 'feat/issue-45-x', step: 'review', head: 'h1' }))
-    expect(lines(h.prompts[0] ?? '').slice(1)).toEqual([
-      `respond log: ${LOOP_DIR}/respond/R45-1.log`,
-      `respond log: ${LOOP_DIR}/respond/R45-2.log`,
-      WAKE_POINTER,
-    ])
-  })
-
   test('a submit that fails started no turn: skipped, so it uses no attempt; a non-wake action is a loop bug', async () => {
     const h = harness([], new Error('session closed'))
     expect(await h.exec(w('tell', 'blind', { since: 'never' }))).toEqual({ status: 'skipped', summary: 'submit failed: Error: session closed' })
@@ -240,6 +206,14 @@ describe('the prompt (SPEC 8.1)', () => {
     const heartbeat: Action = { kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', reason: 'lease', issue: null }
     const ctx = { wakeId: () => 'w1' } as unknown as ExecCtx
     expect(await executor(ctx, heartbeat)).toEqual({ status: 'failed', summary: 'not a wake: heartbeat', noRetry: true })
+  })
+
+  test('the detail lines are the action\'s context alone: no file of an agent\'s is named, then the skill pointer', async () => {
+    const h = harness()
+    await h.exec(w('judge', 'report', { issue: 47, agent: 'designer', entry: 'design:47:1000' }))
+    await h.exec(w('judge', 'handoff', { issue: 47, entry: `delegate:47:${brief(47)}`, run: RUN47, head: 'head47' }, ['NOT GATED: commit 03a35cd']))
+    expect(lines(h.prompts[0] ?? '').slice(1)).toEqual([WAKE_POINTER])
+    expect(lines(h.prompts[1] ?? '').slice(1)).toEqual(['NOT GATED: commit 03a35cd', WAKE_POINTER])
   })
 
   test('the summary keeps the first line for the reminder, cut after a whole field when too long', () => {
@@ -591,82 +565,6 @@ describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
       'timed out: no answer within 90m',
       'dropped: not delivered within 45s',
     ])
-  })
-})
-
-describe('plan reads what wakes leave behind', () => {
-  // the merge-ready PR 550 of issue 50, guarded, its merge review flagging a base image change
-  function flagged(extra: LedgerEntry[] = []): State {
-    const s = state({ issues: [mine(50, 'ready to merge', { delegatedBrief: brief(50), pr: 550 })], runs: [run(50, 'merge-ready')] })
-    const guard = entry('guard:550:head50:1', 'guard', { issue: 50, pr: 550, head: 'head50', startedAt: NOW - 2 * MIN, endedAt: NOW - MIN, outcome: { kind: 'guard', fails: [], warns: [] } })
-    const reviewed = entry('adjudicate-merge:550:head50', 'spawn', { agent: 'adjudicator', class: 'drive', issue: 50, pr: 550, head: 'head50', outcome: review({ type: 'merge' }, { flags: ['image'], bump: 'minor' }) })
-    return withLedger(s, [guard, reviewed, ...extra])
-  }
-
-  // started: the ledger after the executor ran the planned wake and the driver recorded it
-  async function started(s: State, key: string) {
-    const action = find(plan(s, CFG), key)
-    if (action === undefined || !isWake(action)) throw new Error(`plan did not emit ${key}`)
-    const h = harness(s.ledger)
-    const exec = await h.exec(action)
-    if (exec.status !== 'running') throw new Error(exec.summary)
-    const e = open(action.key, action.kind, action.wake, exec.wakeId ?? '', { issue: action.issue, startedAt: NOW, summary: exec.summary })
-    return { prompt: h.prompts[0] ?? '', ledger: [...s.ledger, e] }
-  }
-  const isWake = (a: Action): a is WakeAction => a.kind === 'judge' || a.kind === 'task' || a.kind === 'tell'
-
-  test('judge(cancelled): the answer redrive gives the re-drive task; a timeout holds and does nothing', async () => {
-    const s = state({ issues: [mine(47, 'implementing')], runs: [run(47, 'cancelled', { step: null })] })
-    const key = `judge:cancelled:${RUN47}:head47`
-    const { prompt, ledger } = await started(s, key)
-    expect(lines(prompt)[0]).toBe(`JUDGE cancelled id=w1 repo=${REPO} issue=47 run=${RUN47} branch=feat/issue-47-work head=head47`)
-    const turn = onTurnComplete(ledger, { turnId: 't1', reason: 'answer', answer: 'ANSWER w1 redrive' }, REPO)
-    expect(keys(plan({ ...s, ledger: apply(ledger, turn.updates) }, CFG))).toEqual(['task:redrive:feat/issue-47-work:head47'])
-    // the clock that expires it moves on; the factory plan reads is the same
-    const expired = apply(ledger, expireWakes(ledger, NOW + 31 * MIN, CFG))
-    expect(keys(plan({ ...s, ledger: expired }, CFG))).toEqual([])
-  })
-
-  test('judge(sequence) timed out holds the merge and tells the owner why', async () => {
-    const s = flagged()
-    const { prompt, ledger } = await started(s, 'judge:sequence:550:head50')
-    expect(lines(prompt)).toEqual([
-      `JUDGE sequence id=w1 repo=${REPO} pr=550 issue=50 head=head50 flags=image bump=minor`,
-      'SUMMARY: a change for users',
-      'BUMP: minor a fix',
-      'FLAGS: image',
-      WAKE_POINTER,
-    ])
-    const after = plan({ ...s, ledger: apply(ledger, expireWakes(ledger, NOW + 30 * MIN, CFG)) }, CFG)
-    expect(keys(after)).toEqual(['tell:merge-hold:550:head50'])
-    expect(find(after, 'tell:merge-hold:550:head50')).toMatchObject({ context: ['no answer within 30m, so the loop holds'] })
-    // answered merge instead, the loop merges
-    const turn = onTurnComplete(ledger, { turnId: 't1', reason: 'answer', answer: 'ANSWER w1 merge' }, REPO)
-    expect(keys(plan({ ...s, ledger: apply(ledger, turn.updates) }, CFG))).toEqual(['merge:550:head50'])
-  })
-
-  test('a judge an earlier session left open is asked again once it is lost; held open, it blocks every wake (SPEC 7.5, O2)', async () => {
-    const s = flagged()
-    const { ledger } = await started(s, 'judge:sequence:550:head50')
-    const old = ledger.map(e => (e.key === 'judge:sequence:550:head50' ? { ...e, session: 'session-before' } : e))
-    expect(keys(plan({ ...s, ledger: old }, CFG))).toEqual([])
-    let lost = old
-    for (const u of orphanedWakes(old, 'session-now', NOW + MIN)) lost = finish(lost, u.key, u, NOW + MIN)
-    expect(keys(plan({ ...s, ledger: lost }, CFG))).toEqual(['judge:sequence:550:head50'])
-  })
-
-  test('a task that timed out is told to the owner; a tell that timed out is dropped, not sent again', () => {
-    const merged = entry('merge:550:head50', 'merge', { issue: 50, pr: 550, head: 'head50', outcome: { kind: 'merge', result: 'merged', rollout: 'run-it', closeIssue: null, line: 'merged' } })
-    const task = open('task:run-it:50', 'task', 'run-it', 'w1', { issue: 50, startedAt: NOW - 6 * 60 * MIN })
-    const s = withLedger(state(), [merged, task])
-    expect(keys(plan({ ...s, ledger: apply(s.ledger, expireWakes(s.ledger, NOW, CFG)) }, CFG))).toEqual(['tell:task-timeout:task:run-it:50'])
-    const stalled = withLedger(state({ issues: [mine(48, 'in pipeline')], runs: [run(48, 'ci-stalled', { detail: 'reason=no-workflow' })] }), [
-      open('tell:no-ci:01M4RQ0048AAAA', 'tell', 'no-ci', 'w2', { issue: 48, startedAt: NOW - 30 * MIN }),
-    ])
-    const after = plan({ ...stalled, ledger: apply(stalled.ledger, expireWakes(stalled.ledger, NOW, CFG)) }, CFG)
-    expect(keys(after)).toEqual([])
-    // still an open owner item in the title
-    expect(after.owner).toBe(1)
   })
 })
 

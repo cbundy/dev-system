@@ -10,11 +10,11 @@
 //   PR's trusted comments before it posts, so a retry never posts twice; the comment's URL is the
 //   outcome's detail.
 // - `event` writes what events.ts builds (7.1), the one seam for v2's events.
-// - Under planner v2 the reused `claim` also lists the open PRs and adopts the newest one by a
+// - The reused `claim` also lists the open PRs and adopts the newest one by a
 //   trusted author on a branch of the issue (3.5), and `heartbeat` renews the records' claims by
 //   number (H1).
 // The follow-ups of a closed record (rollout, close-issue, release-parent, milestone-later) and
-// stop-agent keep v1's executors (act-cli.ts, act-merge.ts). Executors decide nothing: plan did.
+// stop-agent keep the shared executors (act-cli.ts, act-merge.ts). Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
 import type { Exec, ExecCtx, Executor, RunResult } from '../exec'
 import type { ActionKind, Action, LedgerEntry } from '../types'

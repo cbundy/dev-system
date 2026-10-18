@@ -70,13 +70,12 @@ export function issuesRead(argv: readonly string[], single: SingleRun): Promise<
 
 export const CHECKOUT_HEAD = '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff'
 
-// checkout: the main checkout on its default branch with nothing changed (#544), and as current
-// as origin when the loop updates it (#555), unless a test answers git itself.
+// checkout: the main checkout on its default branch with nothing changed (#544), unless a test
+// answers git itself.
 export function checkout(argv: readonly string[]): Reply | undefined {
   const line = argv.join(' ')
   if (line === 'git symbolic-ref --quiet --short refs/remotes/origin/HEAD') return { stdout: 'origin/main\n' }
   if (line.startsWith('git --no-optional-locks status ')) return { stdout: `# branch.oid ${CHECKOUT_HEAD}\n# branch.head main\n` }
-  if (argv[0] === 'sh' && argv[3] === 'factory-loop-update-checkout') return { stdout: `CURRENT ${CHECKOUT_HEAD}\n` }
   return undefined
 }
 
@@ -92,7 +91,7 @@ export function lockCas(files: { get: (p: string) => string | undefined; set: (p
 }
 
 export type HostOptions = {
-  // the workspace config file (config.json); planner v1 unless it says otherwise, as the non-v2 suites test v1 (until the U10 delete wave)
+  // the workspace config file (config.json)
   config?: Record<string, unknown>
   env?: Record<string, string>
   files?: Record<string, string>
@@ -124,7 +123,7 @@ export function host(on: On, opts: HostOptions = {}) {
   // an empty value leaves the variable unset
   const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', ...opts.env }).filter(([, v]) => v !== '')
   mock.env(on, Object.fromEntries(env))
-  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify({ planner: 'v1', ...opts.config })], ['/proc/self/stat', PROC_STAT]])
+  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify({ ...opts.config })], ['/proc/self/stat', PROC_STAT]])
   for (const [path, body] of Object.entries(opts.files ?? {})) files.set(path, body)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   const seen: Seen[] = []

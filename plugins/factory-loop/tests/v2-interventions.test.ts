@@ -111,14 +111,14 @@ function stateOf(w: World): State {
 
 function ctxOf(w: World): V2Ctx {
   const s = stateOf(w)
-  const base = newCtx(s, config({ planner: 'v2', mode: 'act' }), { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2)
+  const base = newCtx(s, config({ mode: 'act' }), { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2)
   base.out.push(...(w.out ?? []))
   return Object.assign(base, { v2: s.v2 as V2State })
 }
 
 const ivs = (w: World) => interventionsOf(ctxOf(w))
 const causes = (w: World) => ivs(w).map(p => `${p.event.who} ${p.event.cause}`)
-const ivActions = (s: State) => planV2(s, config({ planner: 'v2', mode: 'act' })).actions.filter((a): a is Extract<Action, { kind: 'event' }> => a.kind === 'event' && a.key.startsWith('iv/'))
+const ivActions = (s: State) => planV2(s, config({ mode: 'act' })).actions.filter((a): a is Extract<Action, { kind: 'event' }> => a.kind === 'event' && a.key.startsWith('iv/'))
 
 // done: the ledger entry an intervention leaves once logged.
 const done = (p: Planned): LedgerEntry => entry(p.key, 'event', { issue: p.event.issue, startedAt: NOW - MIN, endedAt: NOW - MIN + 100 })
@@ -284,7 +284,7 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
     expect(ctx.out.some(a => a.key === restart.key)).toBe(false)
     expect(ctx.skipped).toContainEqual({ rule: 'R2', issue: null, why: `exhausted: ${restart.key}: the intervention person restart is not logged` })
     expect(ctx.exhausted).toEqual([])
-    expect(planV2(stateOf(failed), config({ planner: 'v2', mode: 'act' })).actions.some(a => a.kind === 'tell')).toBe(false)
+    expect(planV2(stateOf(failed), config({ mode: 'act' })).actions.some(a => a.kind === 'tell')).toBe(false)
   })
 
   test('a free re-run is logged as unknown only once its attempt\'s free re-run is spent (rate-limited)', () => {
@@ -406,7 +406,7 @@ describe('person interventions', () => {
   test('an intervention is no work a restart would cut: it is written first, and R2 restarts in the same pass', () => {
     const earlier = entry('sweep:before', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })
     const s = stateOf({ loadedAt: NOW - 5 * MIN, ledger: [earlier], control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) })
-    const kinds = planV2(s, config({ planner: 'v2', mode: 'act' })).actions.map(a => `${a.kind} ${a.key}`)
+    const kinds = planV2(s, config({ mode: 'act' })).actions.map(a => `${a.kind} ${a.key}`)
     expect(kinds.at(-1)).toBe(`restart-self restart:${NOW - MIN}`)
     expect(kinds.some(k => k.startsWith('event iv/restart/fleet/'))).toBe(true)
   })
@@ -451,20 +451,17 @@ describe('person interventions', () => {
   })
 
   test('an op is an intervention when v2 acts before it or after it: the ops that turn the loop on and off are logged, those far from it are not', () => {
-    const landed = (planner: 'v1' | 'v2', mode: 'off' | 'observe' | 'act', text: string) => {
+    const landed = (mode: 'off' | 'observe' | 'act', text: string) => {
       const [name, word] = text.split(' ')
-      const op = (name === 'mode' ? { op: 'mode', mode: word } : name === 'planner' ? { op: 'planner', planner: word } : { op: 'pause', issues: [] }) as never
-      return opLanded({ planner, mode }, op, text, [], NOW)?.name ?? null
+      const op = (name === 'mode' ? { op: 'mode', mode: word } : { op: 'pause', issues: [] }) as never
+      return opLanded({ mode }, op, text, [], NOW)?.name ?? null
     }
-    expect(landed('v2', 'observe', 'mode act')).toBe('mode')
-    expect(landed('v1', 'act', 'planner v2')).toBe('planner')
-    expect(landed('v2', 'act', 'mode observe')).toBe('mode')
-    expect(landed('v2', 'act', 'planner v1')).toBe('planner')
-    expect(landed('v2', 'act', 'pause')).toBe('pause')
-    expect(landed('v1', 'observe', 'mode act')).toBeNull()
-    expect(landed('v1', 'act', 'pause')).toBeNull()
-    expect(landed('v2', 'observe', 'planner v1')).toBeNull()
-    expect(opLanded({ planner: 'v2', mode: 'act' }, { op: 'status' } as never, null, [], NOW)).toBeNull()
+    expect(landed('observe', 'mode act')).toBe('mode')
+    expect(landed('act', 'mode observe')).toBe('mode')
+    expect(landed('act', 'pause')).toBe('pause')
+    expect(landed('observe', 'pause')).toBeNull()
+    expect(landed('off', 'mode observe')).toBeNull()
+    expect(opLanded({ mode: 'act' }, { op: 'status' } as never, null, [], NOW)).toBeNull()
   })
 })
 
@@ -635,7 +632,7 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
   const BASE = LOOP_DIR.replace(/\/[^/]+$/, '')
   const CONTROL = `${LOOP_DIR}/control.json`
   const WORKSPACE = `${BASE}/config.json`
-  function rtOf(over: Partial<Runtime> = {}, cfg = config({ planner: 'v2' })): Runtime {
+  function rtOf(over: Partial<Runtime> = {}, cfg = config()): Runtime {
     return { mode: 'act', repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: {}, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: cfg, configProblems: [], ...over }
   }
   // one pass's read over these files
@@ -674,7 +671,7 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
   }
 
   test('the read: control.json, the workspace file and the repo-local settings file as they are', async () => {
-    const r = await read({ [CONTROL]: ctl({}), [WORKSPACE]: '{"mode":"act","passEvery":"2m"}' }, rtOf({ repoSettings: { maxInFlightIssues: 2 } }, config({ planner: 'v2', maxInFlightIssues: 2, passEveryMs: 120_000 })))
+    const r = await read({ [CONTROL]: ctl({}), [WORKSPACE]: '{"mode":"act","passEvery":"2m"}' }, rtOf({ repoSettings: { maxInFlightIssues: 2 } }, config({ maxInFlightIssues: 2, passEveryMs: 120_000 })))
     expect(r.source).toEqual({ ok: true, at: NOW })
     expect(r.read.control).toEqual(seenOf(ctl({})))
     expect(r.read.workspace?.text).toBe('{"mode":"act","passEvery":"2m"}')
@@ -789,8 +786,8 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     const facts = await factsOf({ [CONTROL]: ctl({}) }, f)
     expect(kept(facts, false)).toMatchObject({ off: false, edits: f.edits })
     expect(kept(facts, true)).toMatchObject({ off: false, edits: [] })
-    // off, observe or planner v1: not kept
-    for (const rt of [rtOf({ mode: 'observe' }), rtOf({}, config({ planner: 'v1' }))]) {
+    // off or observe: not kept
+    for (const rt of [rtOf({ mode: 'observe' }), rtOf({ mode: 'off' })]) {
       const other = memStore()
       expect(await noteKillSwitch(newV2Live(), other.io, rt, true)).toBe(true)
       expect(other.m.size).toBe(0)
@@ -831,7 +828,7 @@ describe('the owner\'s files in the pass driver', () => {
     }
     return undefined
   }
-  const ACT_V2 = { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }
+  const ACT_V2 = { repo: REPO, mode: 'act', checkout: '/work' }
   const fileIvs = (line: Record<string, unknown>) => (line.actions as { key: string }[]).map(a => a.key).filter(k => /^iv\/(control|config)-file\//.test(k))
 
   test('the kill switch on for a pass, then off: exactly one control-file intervention, the next acting pass\'s', ENGINE_TEST, async ($, on) => {
@@ -843,7 +840,7 @@ describe('the owner\'s files in the pass driver', () => {
     await clock.advance(60_000)
     h.files.delete(OFF)
     await clock.advance(60_000)
-    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.last()).toMatchObject({ executed: true })
     expect(fileIvs(h.last())).toEqual([`iv/control-file/fleet/${(NOW + 5_000).toString(36)}`])
     expect((h.store.get(filesKey(REPO)) as FilesSeen).off).toBe(false)
   })
@@ -881,7 +878,7 @@ describe('the owner\'s files in the pass driver', () => {
     // by hand: mode off -> act
     h.files.set(path, JSON.stringify(ACT_V2))
     await clock.advance(60_000)
-    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.last()).toMatchObject({ executed: true })
     expect(fileIvs(h.last())).toEqual([])
     await clock.advance(60_000)
     expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
@@ -909,12 +906,12 @@ describe('the owner\'s files in the pass driver', () => {
   // from it; a pass that cannot read origin's file compares none.
   test('the settings compared are origin\'s file as written: a kept version without the defaults is no edit, one key changed is one', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const written = JSON.stringify({ planner: 'v2', readyLabel: 'from-origin' })
+    const written = JSON.stringify({ readyLabel: 'from-origin' })
     let origin: { exitCode?: number; stdout?: string; stderr?: string } = { stdout: written }
     const h = host(on, {
       config: ACT_V2,
       run: (argv, s) => (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json' ? origin : quiet(argv, s)),
-      files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) },
+      files: { '/work/.claude/factory-loop.json': JSON.stringify({ readyLabel: 'from-tree' }) },
       store: { [filesKey(REPO)]: { ...EMPTY_FILES, settings: seenOf(written) } },
     })
     const logged = () => h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))
@@ -924,7 +921,7 @@ describe('the owner\'s files in the pass driver', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     await passes(2)
-    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.last()).toMatchObject({ executed: true })
     expect(logged()).toEqual([])
     // origin's branch not read (past githubEveryMs): the checkout's file stands, and is not compared
     origin = { exitCode: 128, stderr: "fatal: invalid object name 'origin/main'." }
@@ -932,7 +929,7 @@ describe('the owner\'s files in the pass driver', () => {
     expect(h.last().config).toEqual([expect.stringContaining("settings: origin's default branch not read")])
     expect(logged()).toEqual([])
     // read again, one key changed: one config-file, naming that key alone
-    origin = { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'go' }) }
+    origin = { stdout: JSON.stringify({ readyLabel: 'go' }) }
     await passes(6)
     expect(logged()).toHaveLength(1)
     expect(logged()[0]?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20readyLabel')
@@ -983,7 +980,7 @@ describe('the owner\'s files in the pass driver', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(60_000)
-    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.last()).toMatchObject({ executed: true })
     expect(h.events().filter(e => e[1] === 'intervention').map(e => noteToken(e.at(-1) ?? '', 'fact'))).toEqual([factOf(fresh)])
     // the ledger holds the logged one again, settled with no write
     expect(h.entry(interventionKey(factOf(before)))).toMatchObject({ status: 'done', summary: 'intervention already in the event log' })

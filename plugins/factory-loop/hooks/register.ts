@@ -1,26 +1,22 @@
 // factory-loop: the issue orchestrator as one code loop (docs/factory-loop/SPEC.md).
 //
 // Every passEveryMs, or at once when pinged, a pass reads the factory (observe.ts) and plans
-// (plan.ts). In act mode, once the safety rails pass (rails.ts: the act lock, the role, the old
+// (v2/plan.ts). In act mode, once the safety rails pass (rails.ts: the act lock, the role, the old
 // watcher, another orchestrator's heartbeat), it runs plan's actions through their executors
 // (act.ts) and records each in the ledger (ledger.ts), which it keeps in $.store. In observe mode
 // (the default), or while a rail holds act mode back, it executes nothing and every command's
 // event writes go to a sink (SPEC 11.1). Each pass appends one decision-log line and sets the
 // session title. This is the only module that holds $: it builds the engine calls the others
 // make, and wires the hooks that feed the ledger between passes (agents' answers, recorded with
-// the answer script, in text or through their answer tools, and their repair messages; wake
-// turns) and the owner's controls
+// the answer script, and their repair messages; wake turns) and the owner's controls
 // (/factory, the control and answer tools), and keeps the loop's own agent types (agents/) from
-// the model. The setting `planner` picks the layer whose plan acts (v1's plan.ts or v2/plan.ts),
-// and the v2 shadow plans beside v1 and is only logged (v2 SPEC 2.3); v2's records and the PR heads
-// it has seen live in the store beside the ledger (records:<repo>, heads:<repo>).
+// the model. v2's records and the PR heads it has seen live in the store beside the ledger
+// (records:<repo>, heads:<repo>).
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
-  TOOL_LATE,
   actPass,
   agentAnswered,
-  agentToolAnswered,
   breakerEventArgv,
   capEventArgv,
   capKey,
@@ -38,9 +34,7 @@ import {
   wakeEnded,
   wakeStarted,
 } from './act'
-import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
-import { SUBAGENT_OF, stillAtWork } from './act-agents'
-import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
+import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair } from './act'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, gateLimits, jsonObject } from './config'
 import { DEFAULT_POOL_SIZE, RUNTIME_KEYS } from './config-keys'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
@@ -51,7 +45,7 @@ import type { FileIo } from './control'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs, type ActIo } from './exec'
 import { finish, load, onLoad, save, type StoreIo } from './ledger'
 import { GITHUB_BACKOFF_MS, emptyCache, observe, type Io, type Runtime, type Stored } from './observe'
-import { issueFromBranch } from './plan'
+import { issueFromBranch } from './foundation'
 import {
   EMPTY_RAIL_MEMORY,
   LOCK_CAS_SCRIPT,
@@ -97,7 +91,7 @@ import {
   wakeRows,
 } from './trace'
 import type { Tracer } from './trace'
-import type { Action, AgentStatus, AgentType, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
+import type { Action, AgentStatus, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
 import { logOwnerOp } from './v2/act-events'
 import type { V2Stored } from './v2/observe'
 import { opLanded, parkedOf } from './v2/ops'
@@ -125,8 +119,6 @@ const STOP_TIMEOUT_MS = 30_000
 const RENAME_TIMEOUT_MS = 10_000
 // $.agent.spawn resolves once the agent started; one that never does must not hold the pass
 const SPAWN_TIMEOUT_MS = 60_000
-// the agent list an interim answer is checked against: a hang must not hold the hooks behind it
-const LIST_TIMEOUT_MS = 10_000
 // $.session.send resolves once the repair message is queued (#548); one that hangs is undelivered
 const REPAIR_TIMEOUT_MS = 10_000
 // $.prompt.submit resolves once its turn starts, which waits for the session to be idle: a wake
@@ -174,7 +166,7 @@ let errorTold = false
 // while the lock names this session or still stands so (mayWrite)
 const live: Live & { loaded: boolean; repo: string; basis: string | null } = { ledger: [], loaded: false, repo: '', basis: null }
 // v2's records and the heads it has seen, kept as the ledger is (v2/store.ts), and the repo-local
-// settings as origin's default branch holds them under planner v2 (v2/settings.ts)
+// settings as origin's default branch holds them (v2/settings.ts)
 const liveV2 = newV2Live()
 const settingsCache = newSettingsCache()
 // the last pass's runtime and state, for the hooks between passes
@@ -269,7 +261,7 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   // when the shadow stands in, else the machine name's environment variable
   const deviceFrom: ViewInputs['deviceFrom'] = shadowing ? (typeof file.shadowDevice === 'string' && file.shadowDevice !== '' ? 'workspace' : 'plugin') : device === '' ? 'default' : 'env'
   // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
-  // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
+  // The repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
   const loaded = await repoLoaded(settingsIo($), settingsCache, checkout, jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
@@ -298,8 +290,7 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
-    ...(await gateLimits(argv => $.process.run(argv, { timeoutMs: 15_000 }), loaded.v2)),
-    v2Config: { ...loaded.v2, mode: config.mode },
+    ...(await gateLimits(argv => $.process.run(argv, { timeoutMs: 15_000 }), loaded.config)),
     configProblems: loaded.problems,
     repoSettings: loaded.raw,
     workspaceRaw: file,
@@ -890,11 +881,10 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
   const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
-  let v2Stored: V2Stored | undefined
-  if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') v2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
+  const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, lastTitleAt, stored, v2Stored)
   let state = observed.state
-  if (act && rt.config.planner === 'v2') await keepV2(liveV2, observed.v2Heads, state, keepInStore)
+  if (act) await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
   // ledger no longer (the next pass that holds it reloads the store)
@@ -925,7 +915,6 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
   let report: ActReport | null = null
   let result: PlanResult
-  let shadow: Shadowed | null = null
   // when plan handed the actions over, for the trace
   let queuedAt: Ms | null = null
   const told: string[] = []
@@ -947,13 +936,12 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
         state = { ...state, control: { ...state.control, updateDue: null } }
       }
       // wind-down (v2 SPEC 10.11): the status file of an active one, or a stale request removed
-      if (rt.config.planner === 'v2') problems.push(...(await windDownFiles({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, state, rt.config)))
+      problems.push(...(await windDownFiles({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, state, rt.config)))
       const acted = await actPass(env, state, listed, between)
       carve(tr, 'plan', acted.planned.ms)
       queuedAt = acted.planned.at
       state = acted.state
       result = acted.result
-      shadow = acted.shadow
       report = acted.report
       lastState = state
       if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) restartAsked = state.now
@@ -973,9 +961,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
       begin(tr, 'plan')
-      const planned = planPass(state, config, rt.v2Config)
-      result = planned.result
-      shadow = planned.shadow
+      result = planPass(state, config)
       begin(tr, 'act')
       if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
     }
@@ -1020,7 +1006,6 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   waits = waitSince(waits, result.skipped, state.now)
   const digest = digestOf(state)
   const at = new Date(state.now).toISOString()
-  const issues = state.issues
   begin(tr, 'log')
   const passMs = Math.round(performance.now() - t0)
   const line = {
@@ -1035,33 +1020,17 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     mode: rt.mode,
     executed: act,
     device: rt.device,
-    // the layer whose plan this is (v2 SPEC 2.3)
-    planner: rt.config.planner,
+    // the loop always plans with v2; the field keeps the line's shape for its readers
+    planner: 'v2',
     tier: result.tier,
     digest,
     sources: Object.fromEntries(
       [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
-    counts:
-      rt.config.planner === 'v2'
-        ? { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner }
-        : {
-            queued: state.queue.length,
-            dev: issues.filter(i => i.stage === 'designing' || i.stage === 'implementing').length,
-            pipeline: issues.filter(i => i.stage === 'in pipeline' || i.stage === 'parked').length,
-            merge: issues.filter(i => i.stage === 'ready to merge').length,
-            owner: result.owner,
-          },
+    counts: { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
-    transitions: rt.config.planner === 'v2' ? transitionsOf(result) : undefined,
+    transitions: transitionsOf(result),
     skipped: result.skipped.slice(0, 60),
-    // the v2 shadow's plan, logged and never executed, and the K it planned with (v2's own default)
-    shadow:
-      shadow === null
-        ? undefined
-        : 'error' in shadow
-          ? shadow
-          : { k: (rt.v2Config ?? rt.config).maxInFlightIssues, actions: shadow.actions.filter(a => a.kind !== 'title').map(summaryOf), skipped: shadow.skipped.slice(0, 60), transitions: transitionsOf(shadow) },
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
@@ -1100,7 +1069,6 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     title: result.title,
     actions: line.actions.length,
     owner: result.owner,
-    planner: rt.config.planner, shadow: rt.config.shadow,
   })
   const ledger = act ? live.ledger : state.ledger
   if (tr !== null) {
@@ -1178,7 +1146,6 @@ function summaryOf(a: Action) {
     class: a.class,
     rule: a.rule,
     issue: a.issue,
-    agent: a.kind === 'spawn' ? a.agent : undefined,
     step: a.kind === 'agent-step' ? a.step : undefined,
     run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
     pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
@@ -1346,8 +1313,7 @@ async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
 }
 
 // turn.complete of an agent of the loop: its answer recorded (act.ts agentAnswered), then a ping.
-// An interim answer is held while a fresh agent list shows the agent still at work (#545); an
-// unreadable one first gets its one repair message, while the loop may start things (#548). The
+// An unreadable one first gets its one repair message, while the loop may start things (#548). The
 // decision log says which path each answer took (answerLine).
 async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: string }) {
   const rt = await ledgerFor($)
@@ -1355,7 +1321,7 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
   const repair: Repair = (await actsNow($, rt)) ? (id, text, type) => repairTo($, id, text, type) : async () => 'the loop starts nothing until its restart'
-  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, id => atWork($, id), repair)
+  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, repair)
   const why = r.why === undefined || r.result === 'repair' ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
   const problems = [...why, ...env.problems]
   const path = answerLine(r)
@@ -1364,11 +1330,9 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
 }
 
 // answerLine: the path an agent's answer at its turn's end took, for its decision-log line: read
-// from the file it recorded with the answer script ('script', #561) or from its text ('text'),
-// with how its entry ended, or asked again ('repair', with why); scriptRefused is what kept a
-// recorded file out of a text answer, afterRepair marks an answer that came after the repair
-// message, and repairRefused is why one was not delivered, whole (#559). The tool's path is
-// agentTool's line.
+// from the file it recorded with the answer script ('script', #561), with how its entry ended, or
+// asked again ('repair', with why); afterRepair marks an answer that came after the repair
+// message, and repairRefused is why one was not delivered, whole (#559).
 function answerLine(r: Answered): Record<string, unknown> | null {
   if (r.key === undefined) return null
   if (r.result === 'repair') return { key: r.key, answer: 'repair', why: r.why }
@@ -1376,10 +1340,9 @@ function answerLine(r: Answered): Record<string, unknown> | null {
   const e = live.ledger.find(x => x.key === r.key)
   return {
     key: r.key,
-    answer: r.via ?? 'text',
+    answer: 'script',
     status: e?.status,
     summary: e?.summary,
-    scriptRefused: r.scriptProblem,
     afterRepair: r.repaired === true ? true : undefined,
     repairRefused: r.undelivered,
   }
@@ -1390,8 +1353,8 @@ function answerLine(r: Answered): Record<string, unknown> | null {
 // as a type it offers the model, and the loop hides its own (agent.offer below), so the agent's
 // type is offered while the message is on its way: hidden, the engine refused every repair of
 // testbed run 3 ("is not offered in this session", #559).
-async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType | `${string}:${string}`): Promise<string | null> {
-  const subagent = type.includes(':') ? type : SUBAGENT_OF[type as AgentType]
+async function repairTo($: EngineInterface, agentId: string, text: string, type: `${string}:${string}`): Promise<string | null> {
+  const subagent = type
   resuming.set(subagent, (resuming.get(subagent) ?? 0) + 1)
   try {
     const r = await within($, REPAIR_TIMEOUT_MS, $.session.send({ to: { agentId }, text }), 'repair message')
@@ -1402,17 +1365,6 @@ async function repairTo($: EngineInterface, agentId: string, text: string, type:
     const left = (resuming.get(subagent) ?? 1) - 1
     if (left > 0) resuming.set(subagent, left)
     else resuming.delete(subagent)
-  }
-}
-
-// atWork: the agent list shows the agent still at work (act-agents.ts stillAtWork). A list that
-// cannot be read proves nothing, so the answer is read as final.
-async function atWork($: EngineInterface, id: string): Promise<boolean> {
-  try {
-    const rows = await within($, LIST_TIMEOUT_MS, $.agent.list(), 'agent list')
-    return stillAtWork(rows.map(a => (a.parentId === undefined ? { id: a.id, status: a.status } : { id: a.id, status: a.status, parentId: a.parentId })), id)
-  } catch {
-    return false
   }
 }
 
@@ -1458,8 +1410,8 @@ const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was still b
 // written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
 // writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
 // decision-log line once it has its answer; retry clears the issue's exhausted entries in the
-// live ledger at once. Under planner v2 the ops take v2's meaning; an op that landed with v2 acting
-// before or after it is a person intervention (act-events.ts), and its writes the loop's (7.2).
+// live ledger at once. An op that landed with the loop acting before or after it is a person
+// intervention (act-events.ts), and its writes the loop's (7.2).
 function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
   const work = (claim: Claim) => {
     const run = ops.then(async (): Promise<OpAnswer> => {
@@ -1467,15 +1419,14 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const paths = { loopDir: rt.loopDir, configDir: await configDir($) }
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
-      const planner = rt.config.planner
-      const parked = parkedOf(planner, lastState?.v2?.records)
+      const parked = parkedOf(lastState?.v2?.records)
       const view = viewOf(rt)
-      const from = agentId === undefined ? { last, planner, parked, view } : { last, agentId, planner, parked, view }
+      const from = agentId === undefined ? { last, parked, view } : { last, agentId, parked, view }
       const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      const landed = reply.op === null ? null : opLanded({ planner, mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now)
+      const landed = reply.op === null ? null : opLanded({ mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now)
       const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
       const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
       if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })
@@ -1524,40 +1475,6 @@ function answer($: EngineInterface, input: Record<string, unknown>, agentId: str
   return bounded($, work, WAKE_LATE)
 }
 
-const NO_LEDGER = 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.'
-const LEDGER_LOADING = 'Not recorded: the factory loop has not loaded its ledger yet; reply with your text lines instead.'
-
-// agentTool: an agent's answer tool (act.ts agentToolAnswered, #548), answered at once (#558):
-// refused unless this session keeps the ledger, loaded, and the caller is an agent of the loop
-// whose answer it waits on; an accepted call has its input saved and is recorded in the ledger in
-// memory, which goes to the store at once (later). What follows, in the hook queue once the call
-// has its answer: its events, the ledger saved and its loop event, then a decision-log line for
-// each call (the answer's path, 'tool', or why it was refused) and an accepted call's ping.
-function agentTool($: EngineInterface, tool: string, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
-  const work = async (claim: Claim): Promise<OpAnswer> => {
-    const rt = await held($)
-    if (rt === 'none') return { ok: false, text: NO_LEDGER }
-    if (rt === 'loading') return { ok: false, text: LEDGER_LOADING }
-    const now = await $.clock.now()
-    const r = await agentToolAnswered(hookEnv($, rt, now), lastState ?? bareState(rt, now), tool, input, agentId, claim)
-    // the answer given: this one, or the bound's once it passed
-    const given: ToolAnswered = claim() ? r : { ok: false, text: TOOL_LATE, key: r.key }
-    const path = given.ok ? { answer: 'tool', afterRepair: given.repaired === true ? true : undefined } : { answer: 'tool refused', why: given.text }
-    later($, {
-      rt,
-      run: given.after,
-      line: problems => ({ agent: agentId, tool, key: given.key, ...path, problems: problems.length > 0 ? problems : undefined }),
-      // an accepted call ends its entry as the agent's turn.complete would: the same trigger
-      ping: given.ok ? `agent ${agentId ?? '?'}` : undefined,
-    })
-    return { ok: given.ok, text: given.text }
-  }
-  return bounded($, work, { ok: false, text: TOOL_LATE })
-}
-
-const agentReply = (r: OpAnswer) => (r.ok ? { result: r.text } : { deny: r.text })
-const AGENT_TOOL_FAILED = { deny: 'factory-loop: the answer could not be recorded; reply with your text lines instead.' }
-
 // toolInput: a tool call's own arguments, without the envelope the engine adds.
 function toolInput(e: Record<string, unknown>): Record<string, unknown> {
   const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...input } = e
@@ -1569,8 +1486,7 @@ async function registerControls($: EngineInterface) {
   // own command
   const command = () =>
     $.command.register({ name: 'factory', description: FACTORY_COMMAND.description, argumentHint: FACTORY_COMMAND.argumentHint, immediate: FACTORY_COMMAND.immediate })
-  const agentTools = AGENT_TOOLS.map(spec => () => $.tool.register(spec))
-  for (const register of [command, () => $.tool.register(CONTROL_TOOL), () => $.tool.register(ANSWER_TOOL), ...agentTools]) {
+  for (const register of [command, () => $.tool.register(CONTROL_TOOL), () => $.tool.register(ANSWER_TOOL)]) {
     try {
       await register()
     } catch {
@@ -1657,18 +1573,7 @@ export const register: Register = (on, opts) => {
     return r.ok ? { result: r.text } : { deny: r.text }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'factory-loop: the answer could not be recorded.' }))
 
-  // the agents' answer tools (#548), each name written out like the others'
-  on('tool.call', { tool: 'mcp__factory-loop__verdict' }, async ($, e) => agentReply(await agentTool($, VERDICT, toolInput(e), e.agentId))).catch(
-    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
-  )
-  on('tool.call', { tool: 'mcp__factory-loop__design' }, async ($, e) => agentReply(await agentTool($, DESIGN, toolInput(e), e.agentId))).catch(
-    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
-  )
-  on('tool.call', { tool: 'mcp__factory-loop__handoff' }, async ($, e) => agentReply(await agentTool($, HANDOFF, toolInput(e), e.agentId))).catch(
-    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
-  )
-
-  // the loop's own agent types (act-agents.ts SUBAGENT_OF) are its spawns alone: the model is
+  // the loop's own agent types (agents/) are its spawns alone: the model is
   // never offered them, so it keeps to the callum-flow agents it knows. The engine asks too when a
   // message resumes an agent, and resumes none of a type it does not offer: while the loop's own
   // repair message to one is on its way (repairTo), its type is offered (#559)

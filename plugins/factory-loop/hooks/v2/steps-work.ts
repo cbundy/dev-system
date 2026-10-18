@@ -40,7 +40,7 @@ const FETCH_MS = 120 * SEC
 const REASON_MAX = 2000
 const MODEL = /^[A-Za-z0-9._-]+$/
 
-// --- models (copies of act-agents.ts routedModel and modelLabelOf, a v1 module) ---------------------
+// --- models ---------------------------------------------------------------------------------------
 
 // routedModel: callum-flow-implementer-route prints exactly one line, the model alias; anything
 // else is null.

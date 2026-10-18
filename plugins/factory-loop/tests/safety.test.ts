@@ -4,15 +4,12 @@
 // and an act-mode observe pass's commands join them. Not one argv may pass --yes, run
 // `no-mistakes rerun` or `abort`, merge but through callum-flow-merge (which runs the guard),
 // edit a PR body, add a label (the readyLabel least of all), run a `coder` command or kill a
-// process by name; and stop-agent stops only an agent the ledger holds. The one exception is rule
-// P2a's env-retry (#537): exactly its detached `no-mistakes rerun`, with no other argument, once
-// per owner resume of an escalation whose verdicts were all ENV. The root node test
+// process by name; and stop-agent stops only an agent the ledger holds running. The root node test
 // tests/factory-loop-safety.test.js scans the hooks' string literals for the same, as a second
 // net.
 //
-// The v2 rule layer's kinds (docs/factory-loop/v2/SPEC.md appendix B) run here too, under planner
-// v2, every one of them and every op; an executor not built yet fails, never retried, and runs no
-// command. Its writes are widened deliberately, one argv each (v2Shape: a factory label set or
+// The v2 rule layer's kinds (docs/factory-loop/v2/SPEC.md appendix B) run here too, every one of
+// them and every op; an executor not built yet fails, never retried, and runs no command. Its writes are widened deliberately, one argv each (v2Shape: a factory label set or
 // created, a body from a file for the issue comment, the PR and a split's child, a split's
 // sub-issue and blocked_by links, the child's ready label, the one CI re-run), and every builder of
 // hooks/v2/argv.ts is held to the bans with that widening and no other.
@@ -20,22 +17,18 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
-import { SUBAGENT_OF } from '../hooks/act-agents'
-import { CHECKOUT_SCRIPT, ENV_RETRY_ARGV, FF_SCRIPT, LAUNCH_SCRIPT } from '../hooks/act-merge'
 import { ACTION_KINDS } from '../hooks/config'
-import { respondLogPath } from '../hooks/exec'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
 import { loopEvent, start } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
-import { plan } from '../hooks/plan'
 import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
-import type { Action, AdjudicatorPurpose, FixerPurpose, LedgerEntry, State } from '../hooks/types'
+import type { Action, LedgerEntry, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { emptyV2State } from '../hooks/v2/observe'
 import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
-import { DEVICE, MIN, NOW, PLUGIN_ROOT, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
+import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
@@ -47,7 +40,7 @@ const HEAD = 'abc1234'
 // the one shell signal the loop sends: signal 0, a liveness probe by pid that delivers nothing
 const PROBE = 'kill -0 "$1" 2>/dev/null'
 
-function runtime(planner: 'v1' | 'v2' = 'v1'): Runtime {
+function runtime(): Runtime {
   return {
     mode: 'act',
     repo: REPO,
@@ -60,7 +53,7 @@ function runtime(planner: 'v1' | 'v2' = 'v1'): Runtime {
     env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: READY, CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
     pluginRoot: PLUGIN_ROOT,
-    config: config({ readyLabel: READY, planner }),
+    config: config({ readyLabel: READY }),
     configProblems: [],
   }
 }
@@ -76,17 +69,6 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
     return { stdout: `${out[op ?? ''] ?? ''}\n` }
   }
   switch (cmd) {
-    case 'callum-flow-merge-guard':
-      return args.includes('--update-behind')
-        ? { stdout: `UPDATED pr=512 branch=issue-470-x from=${HEAD} to=def5678 run=${RUN} gated_patch=p rebased_from=main\n` }
-        : { stdout: 'GUARD author PASS\nGUARD test-weakening WARN tests/x.test.ts: an assertion removed\n' }
-    case 'callum-flow-fix-linkage':
-      return { stdout: 'REPAIRED PR #512: Closes #470\n' }
-    case 'sh':
-      if (args[2] === 'factory-loop-update-checkout') return { stdout: `UPDATED 1f08432 ${HEAD}\n` }
-      return args[2] === 'factory-loop-fast-forward' ? { stdout: `FORWARDED 1f08432 ${HEAD} ${SLOT}\n` } : {}
-    case 'callum-flow-merge':
-      return { stdout: 'merged\nClose issue #470 by hand: the PR targets epic/x\n' }
     case 'callum-flow-rollout':
       return { stdout: 'ROLLOUT run-it source=brief\n' }
     case 'callum-flow-implementer-route':
@@ -146,30 +128,6 @@ function recorder(): { io: ActIo; seen: Recorded } {
 // --- every action kind, every spawn purpose, every respond shape ---------------------------------
 
 const base = { reason: 'safety', issue: 470 }
-const fixers: FixerPurpose[] = ['gate', 'conflict', 'regate', 'weakening', 'review', 'guard', 'handoff']
-const adjudicators: AdjudicatorPurpose[] = ['gate', 'weakening', 'merge']
-
-function respond(action: 'approve' | 'fix' | 'skip', over: Partial<Extract<Action, { kind: 'respond' }>> = {}): Action {
-  return {
-    ...base,
-    kind: 'respond',
-    key: `respond:${RUN}:review:${HEAD}:${action}${over.key ?? ''}`,
-    class: 'drive',
-    rule: 'P3',
-    run: RUN,
-    branch: 'issue-470-x',
-    step: 'review',
-    head: HEAD,
-    action,
-    findings: null,
-    instructions: null,
-    addFinding: null,
-    ignore: null,
-    approveReason: null,
-    logReview: false,
-    ...over,
-  }
-}
 
 const ACTIONS: Action[] = [
   { ...base, issue: null, kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1' },
@@ -177,72 +135,11 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'claim', key: 'claim:470:new', class: 'start', rule: 'D1' },
   { ...base, kind: 'close-issue', key: 'close:470', class: 'free', rule: 'M7' },
   { ...base, kind: 'milestone-later', key: 'milestone-later:470', class: 'free', rule: 'M7' },
-  { ...base, kind: 'spawn', agent: 'designer', key: 'design:470:1', class: 'develop', rule: 'D2', model: 'opus', notes: ['use --yes nowhere'] },
-  ...adjudicators.map(
-    (purpose): Action => ({
-      ...base,
-      kind: 'spawn',
-      agent: 'adjudicator',
-      purpose,
-      key: `${purpose === 'gate' ? 'adjudicate' : `adjudicate-${purpose}`}:${RUN}:review:${HEAD}`,
-      class: 'drive',
-      rule: purpose === 'merge' ? 'M4' : 'P2',
-      run: RUN,
-      branch: 'issue-470-x',
-      step: purpose === 'gate' ? 'review' : null,
-      head: HEAD,
-      pr: 512,
-      brief: BRIEF,
-      model: null,
-      warns: purpose === 'weakening' ? ['GUARD test-weakening WARN tests/x.test.ts: an assertion removed'] : [],
-      handoffHead: purpose === 'merge' ? HEAD : null,
-      verdicts: ['CORRECT: review-1 real'],
-      guard: [],
-    }),
-  ),
-  ...fixers.map(
-    (purpose): Action => ({
-      ...base,
-      kind: 'spawn',
-      agent: 'fixer',
-      purpose,
-      key: `fixer:${purpose}:${RUN}:${HEAD}`,
-      class: 'drive',
-      rule: 'P3',
-      run: RUN,
-      branch: 'issue-470-x',
-      head: HEAD,
-      pr: 512,
-      brief: BRIEF,
-      model: 'sonnet',
-      instructions: 'rebase onto main; never pass --yes; Fixes #470',
-    }),
-  ),
-  { ...base, kind: 'delegate', key: `delegate:470:${BRIEF}`, class: 'develop', rule: 'D4', brief: BRIEF },
-  respond('approve', { approveReason: 'a false positive' }),
-  respond('approve', { key: ':park', step: null }),
-  respond('skip'),
-  respond('fix', { findings: 'review-1,review-2', instructions: '--yes is not an answer; reject a moved HEAD', addFinding: '{"id":"x","note":"--yes"}', logReview: true }),
-  { ...base, kind: 'env-retry', key: `env-retry:${RUN}:test:${HEAD}:r1`, class: 'drive', rule: 'P2a', run: RUN, branch: 'issue-470-x', step: 'test', head: HEAD },
-  { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
-  { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
-  { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, origin: HEAD, branch: 'issue-470-x' },
-  { ...base, issue: null, kind: 'update-checkout', key: 'update-checkout:0', class: 'free', rule: 'H5', branch: 'main', head: HEAD },
-  { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
-  { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
-  { ...base, kind: 'merge', key: `merge:512:${HEAD}`, class: 'free', rule: 'M5', pr: 512, run: RUN, head: HEAD, bump: 'minor', bumpReason: 'new' },
   { ...base, kind: 'release-parent', key: 'release-parent:470', class: 'free', rule: 'D3', created: [471, 472] },
-  { ...base, kind: 'abandon', key: 'abandon:470:1', class: 'free', rule: 'D6', run: RUN, branch: 'issue-470-x', note: 'dropped by the owner' },
-  { ...base, kind: 'abandon', key: 'abandon:470:2', class: 'free', rule: 'P5', run: null, branch: null, note: 'cancelled run dropped' },
-  { ...base, kind: 'milestone-expect', key: 'expect:minor:512', class: 'free', rule: 'M7', bump: 'minor', why: 'a new\ncapability' },
-  { ...base, kind: 'pr-close', key: 'pr-close:511', class: 'free', rule: 'M8', pr: 511, run: RUN, newBranch: 'issue-470-x-v2', by: 512 },
-  { ...base, kind: 'pr-comment', key: `pr-comment:512:${HEAD}`, class: 'free', rule: 'M3', pr: 512, body: 'Test change justified: --body edits are not ours' },
-  { ...base, kind: 'release-worktree', key: `release:${SLOT}:lease-2`, class: 'free', rule: 'H3', path: SLOT, branch: 'issue-470-x', lease: 'lease-2' },
   { ...base, issue: null, kind: 'restart-self', key: 'restart:7', class: 'free', rule: 'H4', why: 'image', at: 7 },
   { ...base, kind: 'rollout', key: 'rollout:470', class: 'free', rule: 'M7', pr: 512 },
   { ...base, kind: 'stop-agent', key: 'stop:agent-own', class: 'free', rule: 'A1', agentId: 'agent-own', entry: 'design:470:1' },
   { ...base, kind: 'judge', wake: 'sequence', key: `judge:sequence:512:${HEAD}`, class: 'drive', rule: 'M5', fields: { pr: '512', flags: 'image' }, context: ['SUMMARY: x'] },
-  { ...base, kind: 'judge', wake: 'report', key: 'judge:report:design:470:1', class: 'drive', rule: 'D3', fields: { entry: 'design:470:1' }, context: [] },
   { ...base, kind: 'task', wake: 'respond-stuck', key: `task:respond-stuck:${RUN}`, class: 'drive', rule: 'P3a', fields: { run: RUN }, context: [] },
   { ...base, kind: 'tell', wake: 'review-cap', key: `tell:review-cap:${RUN}:3`, class: 'owner', rule: 'P1', fields: { run: RUN }, context: ['WRONG: --yes'] },
   { ...base, issue: null, kind: 'title', key: 'title', class: 'free', rule: 'O1', text: '🔄 dev-system (Q:0 - D:1 - M:0)' },
@@ -351,10 +248,10 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
 }
 
 function world(): { state: State; ledger: LedgerEntry[] } {
-  const own = entry('design:470:1', 'spawn', { agent: 'designer', status: 'running', endedAt: null, agentId: 'agent-own', startedAt: NOW - MIN })
-  // agents whose answer is in (#548): one still at work, one ended
-  const answered = entry('fixer:guard:471:h', 'spawn', { agent: 'fixer', issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
-  const ended = entry('fixer:guard:472:h', 'spawn', { agent: 'fixer', issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
+  const own = entry('design:470:1', 'agent-step', { step: 'design', status: 'running', endedAt: null, agentId: 'agent-own', startedAt: NOW - MIN })
+  // agents whose answer is in: one still listed at work, one ended
+  const answered = entry('i471/answered', 'agent-step', { issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
+  const ended = entry('i472/ended', 'agent-step', { issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
   // the life's PR, as a done ensure of an earlier seq named it: a reviewer starts only after it
   const ensured = entry(`i470/l${LIFE}/s2/pr/ensure`, 'pr', { issue: 470, status: 'done', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'pr', pr: 512, created: true, reopened: false } })
   const ledger = [own, answered, ended, ensured]
@@ -371,26 +268,17 @@ function world(): { state: State; ledger: LedgerEntry[] } {
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles
-async function run(action: Action, poolless = false, attempt = 1, planner: 'v1' | 'v2' = 'v1'): Promise<Recorded & { status: string; summary: string }> {
+async function run(action: Action, poolless = false, attempt = 1): Promise<Recorded & { status: string; summary: string }> {
   const { io, seen } = recorder()
   const w = world()
   const s = poolless ? { ...w.state, pool: { free: 10, total: 16, slots: [] } } : w.state
-  const env: ActEnv = { io, rt: runtime(planner), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
+  const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const started = { ...start(w.ledger, action, NOW).entry, attempts: attempt }
   const exec = await dispatch(ctxOf(env, s, started), action)
   return { ...seen, status: exec.status, summary: exec.summary }
 }
 
 // --- the bans, one argv at a time -------------------------------------------------------------------
-
-// envRetryLaunch: the one rerun allowed (#537): rule P2a's env-retry, launched detached with
-// exactly ENV_RETRY_ARGV, `no-mistakes rerun` and no other argument, after the launch's fixed
-// slot, branch and log.
-function envRetryLaunch(argv: readonly string[], action: Action | undefined): boolean {
-  if (action?.kind !== 'env-retry' || action.rule !== 'P2a') return false
-  if (argv.length !== 9 || argv[0] !== 'sh' || argv[1] !== '-c' || argv[2] !== LAUNCH_SCRIPT) return false
-  return ENV_RETRY_ARGV.length === 2 && argv[7] === 'no-mistakes' && argv[8] === 'rerun' && ENV_RETRY_ARGV.every((a, i) => argv[7 + i] === a)
-}
 
 // scriptGit: each git command in a shell script that is neither a read nor a fast-forward (of a
 // worktree, #551, or of the main checkout, #555), the one git write a script may make, and that
@@ -416,8 +304,6 @@ function scriptGit(script: string): string[] {
 }
 
 function bans(argv: readonly string[], action?: Action): string[] {
-  // the rerun's launch is held to every other ban, its two-word command left out
-  if (envRetryLaunch(argv, action)) return bans(argv.slice(0, 7))
   const out: string[] = []
   const [cmd = '', ...args] = argv
   const v2 = v2Shape(argv, action)
@@ -509,9 +395,9 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
 const kindAction = (kind: Action['kind'] | Action): Action | undefined => (typeof kind === 'string' ? [...V2_ACTIONS, ...ACTIONS].find(a => a.kind === kind) : kind)
 
 describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
-  test('every v2 kind runs under planner v2: an executor not built yet fails, never retried, before any command; one built stays inside the bans and spawns only its step\'s agent', async () => {
+  test('every v2 kind runs: an executor not built yet fails, never retried, before any command; one built stays inside the bans and spawns only its step\'s agent', async () => {
     for (const action of V2_ACTIONS) {
-      const r = await run(action, false, 1, 'v2')
+      const r = await run(action)
       const stub = r.status === 'failed' && /not built yet \(U\d+\)/.test(r.summary)
       expect({ key: action.key, ran: r.status !== 'failed' || stub }).toEqual({ key: action.key, ran: true })
       if (stub) expect({ key: action.key, argvs: r.argvs, spawns: r.spawns.length }).toEqual({ key: action.key, argvs: [], spawns: 0 })
@@ -615,69 +501,51 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
       ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
       ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" -c core.hooksPath=/dev/null merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
-      ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', '/w', 'b', '/l'],
-      ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h', 'h'],
-      ['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 
-  test('the actions under test cover every action kind, spawn purpose and respond shape', () => {
+  test('the actions under test cover every action kind', () => {
     expect(ACTION_KINDS.filter(kind => !ACTIONS.some(a => a.kind === kind) && !V2_ACTIONS.some(a => a.kind === kind))).toEqual([])
     expect(V2_ACTION_KINDS.filter(kind => !V2_ACTIONS.some(a => a.kind === kind))).toEqual([])
     expect(ACTION_KINDS.filter(kind => EXECUTORS[kind] === undefined)).toEqual([])
-    const purposes = ACTIONS.flatMap(a => (a.kind === 'spawn' && a.agent !== 'designer' ? [`${a.agent}:${a.purpose}`] : []))
-    expect(purposes.sort()).toEqual([...adjudicators.map(p => `adjudicator:${p}`), ...fixers.map(p => `fixer:${p}`)].sort())
   })
 
   test('no executor passes --yes, reruns, aborts, merges past the guard, edits a PR body, adds a label, runs coder or kills by name', async () => {
-    const all: string[][] = []
     for (const action of ACTIONS) {
-      for (const poolless of action.kind === 'respond' || action.kind === 'env-retry' ? [false, true] : [false]) {
-        const r = await run(action, poolless)
-        expect(r.status === 'failed' ? `${action.key}: ${r.summary}` : 'ran').toBe('ran')
-        all.push(...r.argvs)
-        for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv, action) }).toEqual({ key: action.key, argv, bans: [] })
-        // only spawn and delegate start an agent, each exactly its agent's type (the loop's own
-        // adjudicator and designer, the callum-flow implementer and fixer)
-        const agent = action.kind === 'delegate' ? 'implementer' : action.kind === 'spawn' ? action.agent : null
-        for (const s of r.spawns) expect(s.subagentType).toBe(agent === null ? `no spawn from ${action.kind}` : SUBAGENT_OF[agent])
-      }
+      const r = await run(action)
+      expect(r.status === 'failed' ? `${action.key}: ${r.summary}` : 'ran').toBe('ran')
+      for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv, action) }).toEqual({ key: action.key, argv, bans: [] })
+      // no action of these starts an agent: agent steps are v2's
+      expect(r.spawns).toEqual([])
     }
-    // the merge goes only through callum-flow-merge, which runs the guard inside it
-    expect(all.filter(a => a.includes('merge') || a[0] === 'callum-flow-merge').map(a => a[0])).toEqual(['callum-flow-merge'])
-    // no-mistakes runs only inside the detached launch: `axi respond`, or env-retry's rerun (its
-    // slot found, then leased)
-    const nm = all.filter(a => a.includes('no-mistakes'))
-    expect(nm.every(a => a[0] === 'sh' && a[2] === LAUNCH_SCRIPT && (a.includes('respond') || a.slice(7).join(' ') === 'no-mistakes rerun'))).toBe(true)
-    expect(nm.filter(a => a.includes('rerun')).length).toBe(2)
   })
 
   test("every file an executor writes is the loop's own, in its loop dir: spawn records, and only the answer script's job files in answers/, never an answer file (#561)", async () => {
     const writes: string[] = []
-    for (const action of ACTIONS) writes.push(...(await run(action)).writes)
-    const agents = ACTIONS.filter(a => a.kind === 'spawn' || a.kind === 'delegate')
-    // one job file and one spawn record per agent the loop starts, on the default script channel
-    expect(writes.filter(p => p.endsWith('.job.json'))).toHaveLength(agents.length)
-    expect(writes.filter(p => p.startsWith(`${LOOP_DIR}/spawns/`))).toHaveLength(agents.length)
+    const agents = V2_ACTIONS.filter(a => a.kind === 'agent-step')
+    for (const action of [...ACTIONS, ...V2_ACTIONS]) writes.push(...(await run(action)).writes)
     for (const p of writes) {
-      const own = p.startsWith(`${LOOP_DIR}/spawns/`) || (p.startsWith(`${LOOP_DIR}/answers/`) && p.endsWith('.job.json')) || p.startsWith(`${LOOP_DIR}/respond/`)
+      const own = p.startsWith(`${LOOP_DIR}/spawns/`) || (p.startsWith(`${LOOP_DIR}/answers/`) && p.endsWith('.job.json'))
       expect({ path: p, own }).toEqual({ path: p, own: true })
       expect(p.split('/')).not.toContain('..')
     }
     // the answer script is named only from the plugin's own root, with this attempt's file
     for (const action of agents) {
-      const prompt = (await run(action)).spawns[0]?.prompt ?? ''
+      const prompt = (await run(action)).spawns[0]?.prompt
+      if (prompt === undefined) continue
       const named = [...prompt.matchAll(/(\S+\/bin\/factory-answer) --to (\S+)/g)]
-      expect(named).toHaveLength(1)
-      expect(named[0]?.[1]).toBe(`${PLUGIN_ROOT}/bin/factory-answer`)
-      expect(named[0]?.[2]).toStartWith(`${LOOP_DIR}/answers/`)
+      expect(named.length).toBeGreaterThan(0)
+      for (const n of named) {
+        expect(n[1]).toBe(`${PLUGIN_ROOT}/bin/factory-answer`)
+        expect(n[2]).toStartWith(`${LOOP_DIR}/answers/`)
+      }
     }
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {
     const own: string[][] = [eventArgv('loop', { note: 'kind=tell key=k status=running' }), capEventArgv('claim:470', NOW), capEventArgv('spawn', NOW)]
-    for (const e of [entry('design:470:1', 'spawn', { agent: 'designer' }), entry('tell:x', 'tell', { wake: 'blind' })]) {
+    for (const e of [entry('design:470:1', 'agent-step', { step: 'design' }), entry('tell:x', 'tell', { wake: 'blind' })]) {
       const argv = loopEvent(e)
       if (argv !== null) own.push(argv)
     }
@@ -719,79 +587,24 @@ describe('the argv safety net (SPEC 6.1)', () => {
     for (const argv of [...own, ...seen]) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 
-  test('stop-agent stops only an agent the ledger holds running, or one whose answer is in that the list shows at work; any other is refused before TaskStop', async () => {
+  test('stop-agent stops only an agent the ledger holds running; any other, an answered one included, is refused before TaskStop', async () => {
     const own = await run({ ...base, kind: 'stop-agent', key: 'stop:agent-own', class: 'free', rule: 'A1', agentId: 'agent-own', entry: 'design:470:1' })
     expect(own).toMatchObject({ status: 'done', stops: ['agent-own'] })
-    const answered = await run({ ...base, kind: 'stop-agent', key: 'stop:agent-answered', class: 'free', rule: 'A1', agentId: 'agent-answered', entry: 'fixer:guard:471:h' })
-    expect(answered).toMatchObject({ status: 'done', stops: ['agent-answered'] })
-    for (const agentId of ['agent-stranger', 'the-models-own-agent', 'agent-ended']) {
+    for (const agentId of ['agent-answered', 'agent-stranger', 'the-models-own-agent', 'agent-ended']) {
       const other = await run({ ...base, kind: 'stop-agent', key: `stop:${agentId}`, class: 'free', rule: 'A2', agentId, entry: 'design:470:1' })
       expect(other).toMatchObject({ status: 'failed', stops: [], summary: `refused: agent ${agentId} is not a running agent of the loop` })
-    }
-  })
-
-  test('the one rerun cannot widen: only env-retry of rule P2a, only `no-mistakes rerun`, once per resume (#537)', async () => {
-    const envRetry = ACTIONS.find(a => a.kind === 'env-retry') as Action
-    const launch = (tail: string[]) => ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', SLOT, 'issue-470-x', respondLogPath(LOOP_DIR, envRetry.key, 1), ...tail]
-    expect(bans(launch(['no-mistakes', 'rerun']), envRetry)).toEqual([])
-    // any other action, rule, argument or form is banned
-    const respondAction = ACTIONS.find(a => a.kind === 'respond') as Action
-    const widened: [string[], Action][] = [
-      [launch(['no-mistakes', 'rerun']), respondAction],
-      [launch(['no-mistakes', 'rerun']), { ...envRetry, rule: 'P3' }],
-      [launch(['no-mistakes', 'rerun', '--yes']), envRetry],
-      [launch(['no-mistakes', 'rerun', '--intent', 'x']), envRetry],
-      [launch(['no-mistakes', 'axi', 'abort']), envRetry],
-      [launch(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--yes']), envRetry],
-      [['no-mistakes', 'rerun'], envRetry],
-      [['sh', '-c', 'no-mistakes rerun'], envRetry],
-      [['sh', '-c', `${LAUNCH_SCRIPT}\nno-mistakes rerun`, 'x', SLOT, 'issue-470-x', 'log', 'no-mistakes', 'rerun'], envRetry],
-    ]
-    for (const [argv, action] of widened) expect({ argv, rule: action.rule, banned: bans(argv, action).length > 0 }).toEqual({ argv, rule: action.rule, banned: true })
-    // the executor runs exactly that launch, from the slot on the run's branch
-    expect(await run(envRetry)).toMatchObject({ status: 'done', argvs: [launch(['no-mistakes', 'rerun'])] })
-    // and refuses, before any command, another rule, a key that is no resume round, or a second attempt
-    const refusals: [Action, number][] = [
-      [{ ...envRetry, rule: 'P3' }, 1],
-      [{ ...envRetry, key: `env-retry:${RUN}:test:${HEAD}` }, 1],
-      [envRetry, 2],
-    ]
-    for (const [action, attempt] of refusals) {
-      const r = await run(action, false, attempt)
-      expect({ key: action.key, rule: action.rule, attempt, status: r.status, argvs: r.argvs }).toEqual({ key: action.key, rule: action.rule, attempt, status: 'failed', argvs: [] })
-    }
-  })
-
-  test('a code failure is never rerun: plan plans env-retry only when every verdict of the resumed escalation is ENV (#537)', () => {
-    const at = '01M4RQ0045AAAA:test:head45'
-    const VERDICTS = ['ENV: codex 401', 'CORRECT: a real bug', 'WRONG: a false positive', 'NIT: style', 'DUP: seen before']
-    // every subset of the five verdict kinds, the empty one included, with and without a resume note
-    for (const withNote of [false, true]) for (let mask = 0; mask < 1 << VERDICTS.length; mask++) {
-      const verdicts = VERDICTS.filter((_, i) => (mask & (1 << i)) !== 0)
-      const s = state({
-        issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
-        runs: [runOf(45, 'failed', { step: 'test' })],
-        control: control({ resumed: [{ subject: 'run:01M4RQ0045AAAA', at: NOW - MIN }], notes: withNote ? [{ issue: 45, text: 'change it', at: NOW - 2 * MIN }] : [] }),
-      })
-      const adj = entry(`adjudicate:${at}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: '01M4RQ0045AAAA', outcome: review({ type: 'escalate', why: 'x' }, null, verdicts) })
-      const kinds = plan({ ...s, ledger: [...s.ledger, adj] }, config()).actions.map(a => a.kind)
-      const envOnly = verdicts.length > 0 && verdicts.every(v => v.startsWith('ENV:'))
-      expect({ verdicts, withNote, rerun: kinds.includes('env-retry') }).toEqual({ verdicts, withNote, rerun: envOnly && !withNote })
-      expect({ verdicts, withNote, fixer: kinds.includes('spawn') }).toEqual({ verdicts, withNote, fixer: !(envOnly && !withNote) })
     }
   })
 
   test('restart-self runs only for rule H4 or v2\'s R2, and a pass of every action at once stays inside the bans', async () => {
     const wrong = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:8', class: 'free', rule: 'O1', why: 'x', at: 8 })
     expect(wrong).toMatchObject({ status: 'failed', argvs: [] })
-    const r2 = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:9', class: 'free', rule: 'R2', why: 'x', at: 9 }, false, 1, 'v2')
+    const r2 = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:9', class: 'free', rule: 'R2', why: 'x', at: 9 })
     expect(r2).toMatchObject({ status: 'done', argvs: [['dev-restart-self']] })
     const { io, seen } = recorder()
     const w = world()
     const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
     await runActions(env, w.state, ACTIONS)
-    // the pass's one env-retry may launch its rerun; every other argv stays inside the bans
-    const envRetry = ACTIONS.find(a => a.kind === 'env-retry')
-    for (const argv of seen.argvs) expect({ argv, bans: bans(argv, envRetry) }).toEqual({ argv, bans: [] })
+    for (const argv of seen.argvs) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 })

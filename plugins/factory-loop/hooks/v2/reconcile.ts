@@ -11,8 +11,7 @@
 //    since its claim (it leaves, `abandoned`), and unless this was its maxLives-th life (lives.ts):
 //    then it is rejected, factory:rejected on, with one comment and one owner tell listing why
 //    each life ended before its `abandoned`. A requeue waits for a read that shows the issue open
-//    (a closed one is the sweep's, H2). In observe mode and in the shadow the same plan is logged,
-//    not executed. A release is keyed by the claim it ends (claimOf), and keeps the outcome it
+//    (a closed one is the sweep's, H2). In observe mode the same plan is logged, not executed. A release is keyed by the claim it ends (claimOf), and keeps the outcome it
 //    began with. Once its event is done the issue is no ghost of that claim, whatever the factory
 //    still shows, so S1 may claim it again.
 // 3. Only this device's claims: another device's claims and labels are never looked at
@@ -27,7 +26,7 @@
 // R1 has no mode, no approval and no hold on claims (section 15, "Reconcile has no mode"). The
 // one-shot migration for what v1 left behind is bin/factory-reconcile (6.3). Pure: the time is
 // state.now.
-import { attemptsKindOf, gate, listedLive, skip, wake, want } from '../foundation'
+import { gate, listedLive, skip, wake, want } from '../foundation'
 import type { Gate } from '../foundation'
 import type { Action, Checkout, IssueView, LedgerEntry, Ms, Stage } from '../types'
 import { claimKey, lifeAt, lifeOf, short } from './keys'
@@ -40,9 +39,8 @@ import type { IssueRecord, Lease, V2Ctx } from './types'
 
 const MIN = 60_000
 
-// The agent kinds whose entries are steps an agent runs, for the tripwire's window: v2's, and v1's
-// while its ledger is still read.
-const AGENT_KINDS: readonly string[] = ['agent-step', 'spawn', 'delegate']
+// The agent kinds whose entries are steps an agent runs, for the tripwire's window.
+const AGENT_KINDS: readonly string[] = ['agent-step']
 
 // What the tripwire names at most, so the notice stays short.
 const LIST_MAX = 10
@@ -231,7 +229,7 @@ function release(ctx: V2Ctx, g: Ghost): void {
       ...ended.map(l => `- ${l}`),
       `bring it back: remove ${REJECTED_LABEL.name} and add ${ctx.config.readyLabel}`,
     ])
-    const told = gate(ctx, tell.key, attemptsKindOf(tell))
+    const told = gate(ctx, tell.key, tell.kind)
     if (told !== 'done' && told !== 'exhausted') {
       want(ctx, tell)
       waits.push('its owner told')
@@ -251,7 +249,7 @@ function release(ctx: V2Ctx, g: Ghost): void {
 // effect: an action of the release, planned unless its key is blocked; an exhausted key is the
 // caller's to report as stalled.
 function effect(ctx: V2Ctx, action: Action): Gate {
-  const g = gate(ctx, action.key, attemptsKindOf(action), action.maxAttempts)
+  const g = gate(ctx, action.key, action.kind, action.maxAttempts)
   return g === 'exhausted' ? g : want(ctx, action)
 }
 
