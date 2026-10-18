@@ -7,9 +7,10 @@
 #
 # Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
-#          [--if-changed]
+#          [--if-changed | --new-only]
 #        callum-flow-event --path [--repo O/N]
 #        callum-flow-event --new-path [--repo O/N]
+#        callum-flow-event --new-only --new-path [--repo O/N]
 #        callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N]
 #          [--actor NAME]
 #
@@ -38,6 +39,15 @@
 #
 # --new-path prints the absolute path of the new log like --path, and writes nothing. An older
 # image answers it with a usage error (exit 2): that is the capability probe.
+#
+# --new-only (cbundy/dev-system#825) is for the old-state mode: it builds the line as usual (same
+# validation, same note checks), translates it as dual write does and appends the result to
+# <events dir>/factory/<file> only; the old log is never appended to. It touches <events dir>/.wake
+# after the new line is written. The factory loop's v2 backfill uses it, so a backfilled row does not
+# reach the old log (and so factory.events a second time). A translator that misses, crashes or is
+# absent writes nothing to either log, warns once and exits 0. --if-changed with --new-only is a
+# usage error (exit 2): the old log is what --if-changed compares against. The capability probe is
+# `--new-only --new-path`: it prints the new path with exit 0, and an older image exits 2 on it.
 #
 # --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
 # newest line already in the log for the same subject (the same branch when
@@ -120,9 +130,10 @@ STATES="ready claimed briefed delegated run_started parked verdict fix_requested
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
-  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed]" >&2
+  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed | --new-only]" >&2
   echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "       callum-flow-event --new-path [--repo O/N]" >&2
+  echo "       callum-flow-event --new-only --new-path [--repo O/N]" >&2
   echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME]" >&2
   echo "states: $STATES" >&2
   exit 2
@@ -169,6 +180,9 @@ read_snap() {
   snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
 }
 
+if [ "$1" = --new-only ] && [ "$2" = --new-path ]; then
+  shift
+fi
 if [ "$1" = --path ] || [ "$1" = --new-path ]; then
   mode=$1
   shift
@@ -238,7 +252,13 @@ issue='' run='' branch='' pr='' head='' note=''
 actor=${CALLUM_FLOW_ACTOR:-agent}
 repo=${CALLUM_FLOW_REPO-}
 if_changed=
+new_only=
 while [ $# -gt 0 ]; do
+  if [ "$1" = --new-only ]; then
+    new_only=1
+    shift
+    continue
+  fi
   if [ "$1" = --if-changed ]; then
     if_changed=1
     shift
@@ -297,6 +317,7 @@ case "$state" in
     esac
     ;;
 esac
+[ -z "$new_only" ] || [ -z "$if_changed" ] || usage "--new-only cannot be combined with --if-changed"
 case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 
@@ -371,9 +392,14 @@ dual_write() {
   if [ ! -d "$dir/factory" ]; then
     mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
   fi
-  printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null || warn "cannot write $dir/factory/$file - new event not recorded"
+  if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then dw_wrote=1; else warn "cannot write $dir/factory/$file - new event not recorded"; fi
 }
-if printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
+dw_wrote=''
+
+if [ -n "$new_only" ]; then
+  dual_write
+  [ -z "$dw_wrote" ] || touch "$dir/.wake" 2>/dev/null || :
+elif printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
   touch "$dir/.wake" 2>/dev/null || :
   dual_write
   # again after the new line exists, so factory-event-push-loop wakes for it

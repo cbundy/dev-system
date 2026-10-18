@@ -257,6 +257,52 @@ PATH="$nonode" CALLUM_EVENTS_DIR="$d9" CALLUM_FLOW_REPO=cbundy/dev-system DEV_VE
 [ "$(wc -l < "$d9/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "no node: old line only"
 [ ! -e "$d9/factory" ] || fail "no node: old line only"
 
+# --new-only (#825): the new log only, never the old one; .wake touched after the new line
+dn1="$tmpdir/dwn1"
+NOTE='row=H1 life=a seq=1 from=queued to=building seqAt=1792182907816 since=1792182907816 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 approvedPatch=none prClosedAt=none via=dual-write brief=none question=none notes=none why=none'
+dw "$dn1" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "--new-only must exit 0"
+[ ! -s "$tmpdir/dw.err" ] || fail "--new-only must be silent: $(cat "$tmpdir/dw.err")"
+[ ! -e "$dn1/cbundy__dev-system.jsonl" ] || fail "--new-only must not create or append the old log"
+[ "$(wc -l < "$dn1/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--new-only: one new line expected"
+jq -e '.type == "transition" and .issue == 1 and .data.via == "dual-write" and .data.seq == 1' "$dn1/factory/cbundy__dev-system.jsonl" > /dev/null || fail "--new-only line: $(cat "$dn1/factory/cbundy__dev-system.jsonl")"
+[ -e "$dn1/.wake" ] || fail "--new-only must touch .wake"
+[ -z "$(find "$dn1/factory/cbundy__dev-system.jsonl" -newer "$dn1/.wake")" ] || fail "--new-only: .wake no earlier than the new line"
+# an existing old log stays byte-identical
+dn2="$tmpdir/dwn2"
+dw "$dn2" claimed --issue 7 || fail "claimed"
+cp "$dn2/cbundy__dev-system.jsonl" "$tmpdir/old.before"
+dw "$dn2" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only
+cmp -s "$dn2/cbundy__dev-system.jsonl" "$tmpdir/old.before" || fail "--new-only changed the old log"
+[ "$(wc -l < "$dn2/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 2 ] || fail "--new-only appends one new line"
+# the same validation: a bad note is a usage error, nothing written
+dn3="$tmpdir/dwn3"
+rc=0
+dw "$dn3" transition --issue 1 --note 'life=a' --new-only || rc=$?
+[ "$rc" = 2 ] || fail "--new-only keeps the note checks (exit $rc)"
+[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "a refused --new-only wrote something"
+# --if-changed with --new-only: usage error, nothing written
+rc=0
+dw "$dn3" transition --issue 1 --note "$NOTE" --new-only --if-changed || rc=$?
+[ "$rc" = 2 ] || fail "--new-only with --if-changed should exit 2, got $rc"
+[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "--new-only --if-changed wrote something"
+# a translator miss writes nothing to either log, warns once, exits 0
+rc=0
+dw "$dn3" transition --issue 1 --note 'life=a seq=1 from=bogus to=building' --new-only || rc=$?
+[ "$rc" = 0 ] || fail "a --new-only miss must exit 0"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a --new-only miss warns once: $(cat "$tmpdir/dw.err")"
+[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "a --new-only miss wrote something"
+# no translator: nothing written, one warning, exit 0
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$dn3" transition --issue 1 --note "$NOTE" --new-only || fail "--new-only without a translator must exit 0"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "--new-only without a translator warns once"
+[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "--new-only without a translator wrote something"
+# the capability probe
+[ "$(dw "$dn3" --new-only --new-path)" = "$dn3/factory/cbundy__dev-system.jsonl" ] || fail "--new-only --new-path should print the new log"
+[ "$(dw "$dn3" --new-only --new-path --repo a/b)" = "$dn3/factory/a__b.jsonl" ] || fail "probe with --repo"
+[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "the probe wrote something"
+rc=0
+dw "$dn3" --new-only --path || rc=$?
+[ "$rc" = 2 ] || fail "--new-only --path should exit 2, got $rc"
+
 # --if-changed suppression writes neither line
 d10="$tmpdir/dw10"
 dw "$d10" ready --issue 7 --branch issue-7

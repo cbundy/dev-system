@@ -28,7 +28,7 @@ export function seenIn(text: string, device: string, repo: string): Set<string> 
 export async function readDualWrite(ctx: SourceCtx): Promise<DualWriteRead> {
   const { rt, now } = ctx
   try {
-    const p = await ctx.run(['callum-flow-event', '--new-path', '--repo', rt.repo])
+    const p = await ctx.run(['callum-flow-event', '--new-only', '--new-path', '--repo', rt.repo])
     if (p.exitCode !== 0) return { dualWrite: null, error: null }
     const path = p.stdout.trim()
     if (path === '') return { dualWrite: null, error: 'the new log path was empty' }

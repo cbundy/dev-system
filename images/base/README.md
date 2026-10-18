@@ -1571,6 +1571,7 @@ restart never replays old events; transitions a watcher observes are always logg
 `CALLUM_EVENTS_DIR` default as a write) and writes nothing; `--new-path` does the same for the new
 log (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
+`--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
 
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
