@@ -56,6 +56,8 @@ function world(records: IssueRecord[], over: Partial<State> = {}, v2: Partial<V2
       ...base,
       sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK },
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
+      // the merge queue holds a record whose labels were not read, so each queued one has its issue read
+      reads: Object.fromEntries(records.filter(r => r.state === 'merge-queue').map(r => [r.issue, { at: NOW, open: true, labels: [] as string[] }])),
       ...v2,
     },
   }

@@ -31,7 +31,7 @@ import { claimRules, heartbeatRules, reclaimLost } from './rules-claim'
 import { dualWriteRules } from './rules-dualwrite'
 import { ensureActions, entryDone, entryItems, parkedTell, stalledOf, stalledTell, transitionLogged } from './rules-entry'
 import type { EntryItem } from './rules-entry'
-import { PLANS as QUEUE } from './rules-queue'
+import { PLANS as QUEUE, dontMergeOf } from './rules-queue'
 import { PLANS as REVIEW, lifePr } from './rules-review'
 import { PLANS as WORK } from './rules-work'
 import { waitKey } from './sources-waits'
@@ -348,9 +348,11 @@ export function stateCounts(records: readonly IssueRecord[]): StateCounts {
 }
 
 // stateTitle: the title's counts, Q (the ready queue and the queued records), D (in flight) and M
-// (merged in the last 6 hours), and its words of the layer's own: parked <n>, waiting <n>.
+// (merged in the last 6 hours), and its words of the layer's own: parked <n>, waiting <n>, held <n>.
 export function stateTitle(ctx: V2Ctx): { counts: string; after: string[] } {
   const c = stateCounts(ctx.v2.records)
+  // held: the queue records the owner's `don't-merge` label holds (they are in flight as well)
+  const held = ctx.v2.records.filter(r => r.state === 'merge-queue' && r.step === 'queue' && dontMergeOf(ctx, r) !== null).length
   const merged = ctx.v2.records.filter(r => r.state === 'closed' && (r.why === 'merged' || r.why === 'merged-by-hand') && ctx.state.now - r.since <= MERGED_WINDOW_MS).length
-  return { counts: `Q:${ctx.state.queue.length + c.queued} - D:${c.flight} - M:${merged}`, after: [...(c.parked > 0 ? [`parked ${c.parked}`] : []), ...(c.waiting > 0 ? [`waiting ${c.waiting}`] : [])] }
+  return { counts: `Q:${ctx.state.queue.length + c.queued} - D:${c.flight} - M:${merged}`, after: [...(c.parked > 0 ? [`parked ${c.parked}`] : []), ...(c.waiting > 0 ? [`waiting ${c.waiting}`] : []), ...(held > 0 ? [`held ${held}`] : [])] }
 }

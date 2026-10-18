@@ -103,6 +103,7 @@ const RUN_ONLY = [
   "6b. Reader shadow compares #0",
   "Split trackers closed by the loop #0",
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2",
+  "9. Interventions, judgement calls and claim completion #5",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
 ];
 

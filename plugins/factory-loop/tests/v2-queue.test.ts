@@ -23,7 +23,7 @@ import { checksOf, headsOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
-import { SLOT_STATES } from '../hooks/v2/types'
+import { ALL_FACTORY_LABELS, DONT_MERGE_LABEL, SLOT_STATES } from '../hooks/v2/types'
 import type { GuardClass, IssueRecord, Lease, V2State } from '../hooks/v2/types'
 import { executorBreaker } from '../hooks/foundation'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state as baseState } from './fixtures'
@@ -67,7 +67,7 @@ function check(over: Partial<CheckRun> = {}): CheckRun {
 // view: the record's open PR as the prs source reads it: clean, green, at HEAD with the approved
 // patch.
 function view(r: IssueRecord, over: Partial<PrView> = {}): PrView {
-  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, baseRef: 'main', checks: [check()], patch: PATCH, readAt: NOW, ...over }
+  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, baseRef: 'main', labels: [], checks: [check()], patch: PATCH, readAt: NOW, ...over }
 }
 
 const OK = { ok: true, at: NOW }
@@ -85,6 +85,7 @@ function world(records: IssueRecord[], prs: PrView[] = records.map(r => view(r))
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
       prs: { prs, main: { branch: 'main', sha: MAIN } },
       heads,
+      reads: Object.fromEntries(records.map(r => [r.issue, { at: NOW, open: true, labels: [] as string[] }])),
       ...v2,
     },
   }
@@ -154,6 +155,103 @@ describe('the order (v2 SPEC 9.1)', () => {
     const r = plan(world([paused, next], undefined, { control: control({ paused: [1] }) }))
     expect(queueActions(r).map(a => a.issue)).toEqual([2])
     expect(said(r, 1)).toContain('merge queue: paused by the owner, so the queue moves past it')
+  })
+})
+
+// --- the owner's hold (9.1) ---------------------------------------------------------------------------------
+
+describe("the don't-merge hold (v2 SPEC 9.1)", () => {
+  const issueRead = (labels: string[] | null) => ({ at: NOW, open: true, labels })
+  // pair: a head (older) and the record behind it, both clean and ready; `reads` and `edit` change what is read
+  function pair(opts: { issue1?: string[] | null; pr1?: string[] | null; noRead1?: boolean } = {}) {
+    const first = rec(1, { seqAt: NOW - 30 * MIN })
+    const second = rec(2, { seqAt: NOW - 20 * MIN })
+    const reads: Record<number, ReturnType<typeof issueRead>> = { 2: issueRead([]) }
+    if (opts.noRead1 !== true) reads[1] = issueRead(opts.issue1 === undefined ? [] : opts.issue1)
+    const views = [view(first, { labels: opts.pr1 === undefined ? [] : opts.pr1 }), view(second)]
+    return { first, second, s: world([first, second], views, {}, { reads }) }
+  }
+
+  test("the label on the issue (any case) holds the head: no Q1 or Q2 for it, the next record merges in the same pass, and the reason says where the label is", () => {
+    const { s } = pair({ issue1: ['Don\'t-Merge'] })
+    const r = plan(s)
+    expect(queueActions(r).map(a => [a.kind, a.issue])).toEqual([['queue-merge', 2]])
+    expect(said(r, 1)).toEqual(["merge queue: held by the don't-merge label on the issue"])
+    expect(of(r, 1).filter(a => a.kind === 'tell')).toEqual([])
+    expect(r.title).toContain('held 1')
+  })
+
+  test('the label on the PR holds it too, and the reason names the PR', () => {
+    const { s } = pair({ pr1: ["don't-merge"] })
+    const r = plan(s)
+    expect(queueActions(r).map(a => [a.kind, a.issue])).toEqual([['queue-merge', 2]])
+    expect(said(r, 1)).toEqual(["merge queue: held by the don't-merge label on PR #601"])
+  })
+
+  test('a held record keeps its place: with the label gone it is the head again, ahead of the later record', () => {
+    const { first, second } = pair()
+    expect(queueOf([first, second], [])[0]?.issue).toBe(1)
+    const held = pair({ issue1: ["don't-merge"] })
+    expect(queueOf([held.first, held.second], [1])[0]?.issue).toBe(2)
+    expect(held.first.seqAt).toBe(NOW - 30 * MIN)
+    const released = plan(pair({ issue1: [] }).s)
+    expect(queueActions(released).map(a => [a.kind, a.issue])).toEqual([['queue-merge', 1]])
+    expect(said(released, 2)).toEqual(['merge queue: waits behind #1 (2 of 2)'])
+  })
+
+  test('labels that cannot be read hold, fail closed, and the next record merges: issue read missing, issue labels null, PR labels null; no event is planned', () => {
+    for (const opts of [{ noRead1: true }, { issue1: null }, { pr1: null }]) {
+      const { s } = pair(opts)
+      const r = plan(s)
+      expect(queueActions(r).map(a => [a.kind, a.issue])).toEqual([['queue-merge', 2]])
+      expect(said(r, 1)).toEqual(['merge queue: labels not read, held until they are'])
+      expect(ivs(r, 1)).toEqual([])
+    }
+  })
+
+  test('near-miss labels do not hold', () => {
+    for (const l of ['dont-merge', "don't merge", "don't-merge-yet"]) {
+      const r = plan(pair({ issue1: [l] }).s)
+      expect(queueActions(r).map(a => [a.kind, a.issue])).toEqual([['queue-merge', 1]])
+    }
+  })
+
+  test('a hold is held, never waiting: no E6 tell however long the record has been held', () => {
+    const first = rec(1, { seqAt: NOW - 30 * MIN, since: NOW - 30 * HOUR })
+    const s = world([first], undefined, {}, { reads: { 1: issueRead(["don't-merge"]) } })
+    const r = plan(s)
+    expect(of(r, 1).filter(a => a.kind === 'tell')).toEqual([])
+    expect(said(r, 1)).toEqual(["merge queue: held by the don't-merge label on the issue"])
+  })
+
+  test('the label is the owner\'s: the loop does not make it', () => {
+    expect(ALL_FACTORY_LABELS.map(l => l.name)).not.toContain(DONT_MERGE_LABEL)
+  })
+
+  test('each hold and its release is one intervention, once per toggle', () => {
+    const held = pair({ issue1: ["don't-merge"] })
+    const first = plan(held.s)
+    expect(ivs(first, 1)).toEqual(['person hold:dont-merge'])
+    const act = of(first, 1).find(a => a.kind === 'event' && a.event.state === 'intervention')
+    expect(act).toBeDefined()
+    const logged = (a: Action) => entry(a.key, 'event', { issue: 1, startedAt: NOW - MIN, endedAt: NOW - MIN + 100 })
+    const withDone = (s: State, a: Action[]): State => withLedger(s, a.map(logged))
+    // the next pass of the same hold writes nothing
+    const again = plan(withDone(held.s, act === undefined ? [] : [act]))
+    expect(ivs(again, 1)).toEqual([])
+    // the release is one event, with a key of its own
+    const open = withDone(pair({ issue1: [] }).s, act === undefined ? [] : [act])
+    const rel = plan(open)
+    expect(ivs(rel, 1)).toEqual(['person hold:released'])
+    const relAct = of(rel, 1).find(a => a.kind === 'event' && a.event.state === 'intervention')
+    expect(relAct?.key).not.toBe(act?.key)
+    const closed = withDone(open, relAct === undefined ? [] : [relAct])
+    expect(ivs(plan(closed), 1)).toEqual([])
+    // a second hold in the same life is a new key
+    const second = plan(withDone(held.s, [act, relAct].filter((a): a is Action => a !== undefined)))
+    expect(ivs(second, 1)).toEqual(['person hold:dont-merge'])
+    const secondAct = of(second, 1).find(a => a.kind === 'event' && a.event.state === 'intervention')
+    expect([act?.key, relAct?.key]).not.toContain(secondAct?.key)
   })
 })
 
@@ -677,7 +775,7 @@ function actWorld(reply: (argv: string[]) => Reply, tick = 0) {
   return { argvs, run }
 }
 
-const pullJson = (over: Record<string, unknown> = {}) => JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: HEAD }, user: { login: 'cbundy' }, mergeable_state: 'clean', base: { ref: 'main', sha: MAIN2 }, ...over }, stripped: 0 })
+const pullJson = (over: Record<string, unknown> = {}) => JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: HEAD }, user: { login: 'cbundy' }, mergeable_state: 'clean', base: { ref: 'main', sha: MAIN2 }, labels: [], ...over }, stripped: 0 })
 const r60 = rec(60)
 const UPDATE: Action = { kind: 'queue-update', key: updateKey(r60, MAIN), class: 'free', rule: 'Q1', reason: 'x', issue: 60, pr: 660, base: MAIN, head: HEAD, maxAttempts: 1 }
 const MERGE: Action = { kind: 'queue-merge', key: mergeKey(r60, HEAD, 1), class: 'free', rule: 'Q2', reason: 'x', issue: 60, pr: 660, head: HEAD, patch: PATCH, maxAttempts: 1 }
@@ -938,6 +1036,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
       author: 'cbundy',
       base: MAIN2,
       baseRef: 'main',
+      labels: [],
       checks: [
         { name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: Date.parse('2026-10-13T02:40:00Z'), completedAt: Date.parse('2026-10-13T02:43:00Z'), runId: '123', link: 'https://github.com/cbundy/dev-system/actions/runs/123/job/9' },
         { name: 'image', state: 'QUEUED', bucket: 'pending', startedAt: null, completedAt: null, runId: null, link: null },
@@ -1083,6 +1182,12 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
   })
 
   test('the parsers: the REST pull and gh pr checks, whose exit 8 and 1 still carry the list; no checks yet is an empty list', () => {
+    // labels: the names of a list of named objects; null when missing or malformed
+    expect(pullOf(pullJson({ labels: [{ name: "don't-merge" }, { name: 'ready' }] }))?.labels).toEqual(["don't-merge", 'ready'])
+    expect(pullOf(pullJson({ labels: undefined }))?.labels).toBeNull()
+    expect(pullOf(pullJson({ labels: 'ready' }))?.labels).toBeNull()
+    expect(pullOf(pullJson({ labels: [{ name: 'a' }, { id: 3 }] }))?.labels).toBeNull()
+    expect(pullOf(pullJson({ labels: [] }))?.labels).toEqual([])
     expect(pullOf(pullJson({ state: 'closed', merged: false, closed_at: 'T' }))).toMatchObject({ state: 'closed', mergedHead: null, closedAt: 'T', base: 'main', baseSha: MAIN2 })
     expect(pullOf(JSON.stringify({ comments: [] }))).toBeNull()
     expect(pullOf('not json')).toBeNull()

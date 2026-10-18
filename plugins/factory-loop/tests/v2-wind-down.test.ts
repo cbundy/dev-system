@@ -35,7 +35,7 @@ function rec(n: number, over: Partial<IssueRecord> = {}): IssueRecord {
 const queued = (n: number) => rec(n, { state: 'merge-queue', step: 'queue', pr: 600 + n, head: HEAD, approvedPatch: PATCH, round: 1 })
 const leaseFor = (r: Pick<IssueRecord, 'issue' | 'life'>): Lease => ({ path: `/slots/${r.issue}`, lease: `L${r.issue}`, holder: `factory-loop:${r.issue}:${r.life}`, issue: r.issue, life: r.life, status: 'leased', busy: false })
 const check = (): CheckRun => ({ name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: NOW - 5 * MIN, completedAt: NOW - 2 * MIN, runId: '9001', link: `https://github.com/${REPO}/actions/runs/9001/job/1` })
-const view = (r: IssueRecord, over: Partial<PrView> = {}): PrView => ({ pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, baseRef: 'main', checks: [check()], patch: PATCH, readAt: NOW, ...over })
+const view = (r: IssueRecord, over: Partial<PrView> = {}): PrView => ({ pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, baseRef: 'main', labels: [], checks: [check()], patch: PATCH, readAt: NOW, ...over })
 
 // the request a stopper wrote `ago` ms before NOW
 const requested = (ago: number, over: Partial<NonNullable<WindDownRead['request']>> = {}): WindDownRead => ({ request: { requestedAt: NOW - ago, iso: new Date(NOW - ago).toISOString(), trigger: 'restart-self', problem: null, ...over }, stopNow: false, previous: null })
@@ -53,6 +53,7 @@ function world(records: IssueRecord[], windDown: WindDownRead | undefined, over:
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
       prs: { prs, main: { branch: 'main', sha: MAIN } },
       heads,
+      reads: Object.fromEntries(records.map(r => [r.issue, { at: NOW, open: true, labels: [] as string[] }])),
       ...(windDown === undefined ? {} : { windDown }),
       ...v2,
     },
