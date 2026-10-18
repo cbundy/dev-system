@@ -9,9 +9,16 @@
 // the image.
 //
 // Usage: callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
-//          [--rule S1..S5=<minutes>]... [--github on|off]
+//          [--rule S1..S5=<minutes>]... [--github on|off] [--source old|new|shadow]
 //
-// Exit codes: 0 ok, 2 bad arguments, 1 the required source (factory.events) that cannot be read.
+// Source switch (cbundy/dev-system#898, docs/factory-events/replay.md): `old` reads the events from
+// factory.events, `new` from the factory.event_log view through `dev-query --factory`, `shadow` (the
+// default) prints the old answer and records in factory/.shadow/factory-state.jsonl how the new
+// read differed. --source beats CALLUM_FLOW_FACTORY_STATE_SOURCE. Both reads fill one common event
+// shape (mapOldRow, mapEventLogRow) and one derivation runs over it.
+//
+// Exit codes: 0 ok, 2 bad arguments, 1 the required source (factory.events, or with --source new
+// factory.event_log) that cannot be read.
 // A missing optional source (nomistakes.runs, factory.workers_status, GitHub) shows as `n/a` with
 // the reason and is never an error: no-mistakes data can never blind a reader of the factory
 // (docs/factory-loop/v2/SPEC.md 2.4).
@@ -26,9 +33,12 @@
 // (the output says so under `github`).
 //
 // Environment (tests): CALLUM_FLOW_DEV_QUERY_BIN (dev-query), CALLUM_FLOW_ISSUE_READ_BIN
-// (callum-flow-issue-read).
+// (callum-flow-issue-read). DEV_SYSTEM_SHARE (where factory-source.js and factory-event-shapes.json
+// are found when they are not beside the tool).
 
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const DEV_QUERY = process.env.CALLUM_FLOW_DEV_QUERY_BIN || 'dev-query';
 const ISSUE_READ = process.env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read';
@@ -81,6 +91,19 @@ const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'park
 class UsageError extends Error {}
 class InputError extends Error {}
 
+// factory-source.js and factory-event-shapes.json are found beside the tool, else in
+// $DEV_SYSTEM_SHARE (the image copies both there; docs/factory-events/replay.md, "Source switch").
+function sharedFile(name) {
+  const dirs = [__dirname, process.env.DEV_SYSTEM_SHARE || '/usr/local/share/dev-system'];
+  const hit = dirs.map((d) => path.join(d, name)).find((f) => fs.existsSync(f));
+  if (!hit) throw new InputError(`cannot find ${name} beside the tool or in ${dirs[1]}`);
+  return hit;
+}
+let sourceLib = null;
+const factorySource = () => sourceLib || (sourceLib = require(sharedFile('factory-source.js')));
+let shapeVersions = null;
+const currentShapes = () => shapeVersions || (shapeVersions = JSON.parse(fs.readFileSync(sharedFile('factory-event-shapes.json'), 'utf8')).current);
+
 // ---------------------------------------------------------------- SQL
 
 // The canonical run-to-issue link of docs/metrics.md ("Linking pipeline runs to issues"),
@@ -116,6 +139,18 @@ SELECT coalesce(json_agg(json_build_object(
 FROM factory.events
 WHERE ts <= :'at'::timestamptz AND ${REPO_FILTER('lower(repo)')};`;
 
+// The new store's events (read through `dev-query --factory`, as the reader role): named view
+// columns only, never the `data` jsonb. Bounded by --at like SQL_EVENTS.
+const SQL_EVENT_LOG = `-- fs:event_log
+SELECT coalesce(json_agg(json_build_object(
+  'type', type, 'type_version', type_version, 'repo', repo, 'device', device, 'ts', ${T('ts')}, 'issue', issue,
+  'pr', pr, 'branch', branch, 'to_state', to_state, 'from_state', from_state, 'life', life,
+  'state_since', ${T('state_since')}, 'step', step, 'attempt', attempt, 'seq', seq, 'why', why,
+  'reason', reason, 'lease_minutes', lease_minutes)
+  ORDER BY ts, device, type, issue), '[]'::json)
+FROM factory.event_log
+WHERE ts <= :'at'::timestamptz AND ${REPO_FILTER('lower(repo)')};`;
+
 const SQL_RUNS = `-- fs:runs
 ${RUN_LINK}
 SELECT coalesce(json_agg(json_build_object(
@@ -129,8 +164,16 @@ WHERE r.repo IS NOT NULL AND r.created_at <= :'at'::timestamptz AND ${REPO_FILTE
 
 // ---------------------------------------------------------------- arguments
 
-function parseArgs(argv) {
-  const o = { repos: [], format: 'text', rules: { ...DEFAULT_RULES }, github: true };
+function parseArgs(argv, env = process.env) {
+  let resolved;
+  try {
+    resolved = factorySource().resolveSource('factory-state', argv, env, 'shadow');
+  } catch (e) {
+    if (e && e.code === 'USAGE') throw new UsageError(e.message);
+    throw e;
+  }
+  argv = resolved.argv;
+  const o = { repos: [], format: 'text', rules: { ...DEFAULT_RULES }, github: true, source: resolved.source };
   const need = (i, name) => {
     if (i + 1 >= argv.length) throw new UsageError(`${name} needs a value`);
     return argv[i + 1];
@@ -166,7 +209,7 @@ function parseArgs(argv) {
 }
 
 const USAGE = 'usage: callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] ' +
-  '[--rule S1..S5=<minutes>]... [--github on|off]';
+  '[--rule S1..S5=<minutes>]... [--github on|off] [--source old|new|shadow]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -199,6 +242,79 @@ function noteTokens(note) {
   return out;
 }
 
+// ---------------------------------------------------------------- the common event shape
+
+// Both stores fill one event shape and one derivation runs over it:
+//   { type, repo, device, issue, t (ms), pr, branch, run, to_state, from_state, life, state_since (ms),
+//     step, attempt, seq, why, reason, lease_minutes }
+// `type` is the derivation's name for the event (the old state names; the new types that were
+// renamed map back: requeued to reclaimed, claim_renewed to renewed, finding_handled to verdict,
+// loop_entry and loop_passes to loop). Fields an event does not carry are null.
+const blank = (e, type, t) => ({
+  type, repo: e.repo, device: e.device, issue: e.issue === undefined ? null : e.issue, t, pr: e.pr === undefined ? null : e.pr,
+  branch: e.branch || null, run: null, to_state: null, from_state: null, life: null, state_since: null, step: null,
+  attempt: null, seq: null, why: null, reason: null, lease_minutes: null,
+});
+
+// One factory.events row (the old store) to the common shape. This is the only place a note's
+// `key=value` tokens are read (the factory loop's notes, SPEC 7.1).
+function mapOldRow(e) {
+  const o = blank(e, e.state, ms(e.ts));
+  o.run = e.run_id || null;
+  if (e.state === 'transition') {
+    const f = noteTokens(e.note);
+    const since = f.since === null || f.since === undefined ? NaN : Number(f.since);
+    o.to_state = f.to === undefined ? null : f.to;
+    o.from_state = f.from === undefined ? null : f.from;
+    o.life = f.life || null;
+    o.state_since = Number.isFinite(since) ? since : null;
+    o.step = f.step || null;
+    o.attempt = Number.isInteger(Number(f.attempt)) ? Number(f.attempt) : null;
+    o.seq = Number.isInteger(Number(f.seq)) ? Number(f.seq) : null;
+    o.why = f.why || null;
+  } else if (e.state === 'claimed' || e.state === 'renewed') {
+    const m = /lease: *(\d+)/.exec(e.note || '');
+    o.lease_minutes = m && Number(m[1]) > 0 ? Number(m[1]) : DEFAULT_LEASE_MINUTES; // as the translator does for a claim with no lease note
+  } else if (e.state === 'closed' || e.state === 'abandoned') {
+    o.reason = e.note || null;
+  }
+  return o;
+}
+
+// The new types that are the old events under another name (docs/factory-events/translator.md).
+const NEW_TYPE_NAME = {
+  requeued: 'reclaimed', claim_renewed: 'renewed', finding_handled: 'verdict', loop_entry: 'loop', loop_passes: 'loop',
+};
+// Types with no old line the derivation reads (claim_lost, gate_run, intervention, reviewed,
+// shadow_read, test_weakened, untrusted_stripped, usage, wind_down): they keep their own name, which
+// no rule above names, so the derivation ignores them, as it ignores the old claim_lost and usage.
+// A type the shapes file lists but this tool has never seen is ignored the same way.
+
+// One factory.event_log row (the new store) to the common shape. A type or version the shapes file
+// does not list as current is refused: a newer writer's event is not read as if it were understood.
+function mapEventLogRow(e) {
+  const current = currentShapes();
+  if (!Object.prototype.hasOwnProperty.call(current, e.type) || current[e.type] !== e.type_version) {
+    throw new InputError(`unknown factory event: ${e.type} v${e.type_version}`);
+  }
+  const o = blank(e, NEW_TYPE_NAME[e.type] || e.type, ms(e.ts));
+  if (e.type === 'transition') {
+    o.to_state = e.to_state === undefined ? null : e.to_state;
+    o.from_state = e.from_state === undefined ? null : e.from_state;
+    o.life = e.life || null;
+    o.state_since = ms(e.state_since);
+    o.step = e.step || null;
+    o.attempt = e.attempt === undefined ? null : e.attempt;
+    o.seq = e.seq === undefined ? null : e.seq;
+    o.why = e.why || null;
+  } else if (e.type === 'claimed' || e.type === 'claim_renewed') {
+    o.lease_minutes = e.lease_minutes > 0 ? e.lease_minutes : DEFAULT_LEASE_MINUTES;
+  } else if (e.type === 'closed' || e.type === 'abandoned') {
+    o.reason = e.reason || null;
+  }
+  return o;
+}
+
 // The factory loop v2's state of an issue's current life: the newest `transition` event of its
 // newest life, when one says a state. A `claim-lost` close is another device's issue, never this
 // one's state, so it and the transitions of an older life are left out first: a loop that lost the
@@ -213,32 +329,30 @@ const lifeStart = (life) => {
   return /^[0-9a-z]+$/.test(String(life)) && Number.isFinite(n) ? n : -1;
 };
 function v2Of(evs) {
-  const tvs = evs.filter((e) => e.state === 'transition').map((e) => ({ e, f: noteTokens(e.note) }))
-    .filter((x) => (V2_STAGE[x.f.to] || x.f.to === 'closed') && x.f.life && !(x.f.to === 'closed' && x.f.why === 'claim-lost'));
+  const tvs = evs.filter((e) => e.type === 'transition')
+    .filter((e) => (V2_STAGE[e.to_state] || e.to_state === 'closed') && e.life && !(e.to_state === 'closed' && e.why === 'claim-lost'));
   if (!tvs.length) return null;
-  const newest = Math.max(...tvs.map((x) => lifeStart(x.f.life)));
-  const tv = last(tvs.filter((x) => lifeStart(x.f.life) === newest));
-  const f = tv.f;
-  if (evs.some((e) => e.t > tv.e.t && V2_RELEASES.has(e.state))) return null;
-  if (f.to === 'closed' && evs.some((e) => e.t > tv.e.t && NEW_LIFE_DECISIONS.has(e.state))) return null;
-  const since = Number(f.since);
+  const newest = Math.max(...tvs.map((e) => lifeStart(e.life)));
+  const tv = last(tvs.filter((e) => lifeStart(e.life) === newest));
+  if (evs.some((e) => e.t > tv.t && V2_RELEASES.has(e.type))) return null;
+  if (tv.to_state === 'closed' && evs.some((e) => e.t > tv.t && NEW_LIFE_DECISIONS.has(e.type))) return null;
+  const since = tv.state_since;
   return {
-    t: tv.e.t,
-    since: Number.isFinite(since) && since > 0 && since <= tv.e.t ? since : tv.e.t,
+    t: tv.t,
+    since: Number.isFinite(since) && since > 0 && since <= tv.t ? since : tv.t,
     view: {
-      state: f.to, step: f.step || null, attempt: Number.isInteger(Number(f.attempt)) ? Number(f.attempt) : null,
-      life: f.life, seq: Number.isInteger(Number(f.seq)) ? Number(f.seq) : null, why: f.why || null,
+      state: tv.to_state, step: tv.step || null, attempt: tv.attempt,
+      life: tv.life, seq: tv.seq, why: tv.why || null,
     },
   };
 }
 
-// The newest claim's lease: when it runs out and whether it has (callum-flow-claim records the
-// lease in each `claimed` and `renewed` note; 120 minutes without one).
+// The newest claim's lease: when it runs out and whether it has (the common event's lease_minutes,
+// the minutes callum-flow-claim recorded in each `claimed` and `renewed`; 120 minutes without one).
 function leaseOf(evs, at) {
-  const c = last(evs.filter((e) => e.state === 'claimed' || e.state === 'renewed'));
+  const c = last(evs.filter((e) => e.type === 'claimed' || e.type === 'renewed'));
   if (!c) return null;
-  const m = /lease: *(\d+)/.exec(c.note || '');
-  const end = c.t + (m && Number(m[1]) > 0 ? Number(m[1]) : DEFAULT_LEASE_MINUTES) * 60000;
+  const end = c.t + (c.lease_minutes > 0 ? c.lease_minutes : DEFAULT_LEASE_MINUTES) * 60000;
   return { end, lapsed: end <= at };
 }
 
@@ -280,7 +394,7 @@ function stageOfRun(rv) {
 function stageEntered(decisions, stage) {
   let t = null;
   for (let i = decisions.length - 1; i >= 0; i--) {
-    if (DECISION_STAGE[decisions[i].state] !== stage) break;
+    if (DECISION_STAGE[decisions[i].type] !== stage) break;
     t = decisions[i].t;
   }
   return t;
@@ -288,22 +402,22 @@ function stageEntered(decisions, stage) {
 
 // True when something strictly after the `abandoned` event `a` starts the issue's life again.
 function newLifeAfter(a, evs, runs) {
-  if (evs.some((e) => e.t > a.t && (NEW_LIFE_DECISIONS.has(e.state) || e.state === 'merged'))) return true;
-  if (runs.some((r) => ms(r.created_at) > a.t && !evs.some((e) => e.state === 'superseded' && e.run_id === r.id))) return true;
+  if (evs.some((e) => e.t > a.t && (NEW_LIFE_DECISIONS.has(e.type) || e.type === 'merged'))) return true;
+  if (runs.some((r) => ms(r.created_at) > a.t && !evs.some((e) => e.type === 'superseded' && e.run === r.id))) return true;
   const mirror = new Set(runs.map((r) => r.id));
-  const earlier = new Set(evs.filter((e) => e.t <= a.t && e.run_id).map((e) => e.run_id));
-  return evs.some((e) => e.t > a.t && NEW_LIFE_RUN_EVENTS.has(e.state) && e.run_id
-    && e.run_id !== a.run_id && !earlier.has(e.run_id) && !mirror.has(e.run_id));
+  const earlier = new Set(evs.filter((e) => e.t <= a.t && e.run).map((e) => e.run));
+  return evs.some((e) => e.t > a.t && NEW_LIFE_RUN_EVENTS.has(e.type) && e.run
+    && e.run !== a.run && !earlier.has(e.run) && !mirror.has(e.run));
 }
 
 function deriveIssue(repo, issue, evs, runs, at, rules) {
-  const decisions = evs.filter((e) => DECISION_STAGE[e.state]);
+  const decisions = evs.filter((e) => DECISION_STAGE[e.type]);
   const lastDec = last(decisions);
-  const lastClaim = last(evs.filter((e) => e.state === 'claimed'));
-  const lastFinalEv = last(evs.filter((e) => e.state === 'closed' || e.state === 'abandoned'));
-  const supersededRuns = new Set(evs.filter((e) => e.state === 'superseded' && e.run_id).map((e) => e.run_id));
-  const mergedEv = last(evs.filter((e) => e.state === 'merged'));
-  const reopened = lastFinalEv && (lastFinalEv.state === 'abandoned'
+  const lastClaim = last(evs.filter((e) => e.type === 'claimed'));
+  const lastFinalEv = last(evs.filter((e) => e.type === 'closed' || e.type === 'abandoned'));
+  const supersededRuns = new Set(evs.filter((e) => e.type === 'superseded' && e.run).map((e) => e.run));
+  const mergedEv = last(evs.filter((e) => e.type === 'merged'));
+  const reopened = lastFinalEv && (lastFinalEv.type === 'abandoned'
     ? newLifeAfter(lastFinalEv, evs, runs)
     : lastClaim && lastClaim.t > lastFinalEv.t);
   const final = lastFinalEv && !reopened ? lastFinalEv : null;
@@ -318,7 +432,7 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   let source = 'event';
   let rv = latestRun;
   const fromDecision = () => {
-    const s = DECISION_STAGE[lastDec.state];
+    const s = DECISION_STAGE[lastDec.type];
     stage = s;
     entered = stageEntered(decisions, s);
     detail = s === 'implementing' ? 'delegated, no pipeline run yet' : null;
@@ -336,9 +450,9 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
 
   let finalNow = Boolean(final);
   if (final) {
-    stage = merged || (final.state === 'closed' && rv && stageOfRun(rv).stage === 'merged') ? 'merged' : 'closed without merge';
+    stage = merged || (final.type === 'closed' && rv && stageOfRun(rv).stage === 'merged') ? 'merged' : 'closed without merge';
     entered = final.t;
-    detail = `${final.state}${final.note ? ` (${final.note})` : ''}`;
+    detail = `${final.type}${final.reason ? ` (${final.reason})` : ''}`;
   } else if (merged) {
     stage = 'merged';
     entered = merged.t;
@@ -377,8 +491,8 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
 
   let hint = null;
   if (!rv && !finalNow && stage !== 'merged') {
-    const h = last(evs.filter((e) => PIPELINE_HINTS.has(e.state) && (!lastClaim || e.t >= lastClaim.t)));
-    if (h) hint = `event-only: ${h.state} at ${iso(h.t)}, no matching run in the mirror`;
+    const h = last(evs.filter((e) => PIPELINE_HINTS.has(e.type) && (!lastClaim || e.t >= lastClaim.t)));
+    if (h) hint = `event-only: ${h.type} at ${iso(h.t)}, no matching run in the mirror`;
   }
 
   // Stuck rules (docs/factory-state.md).
@@ -396,7 +510,7 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   return {
     repo, issue, stage, detail, entered, source, stuck, final: finalNow, hint,
     holder: lastClaim ? lastClaim.device : null,
-    run: rv ? rv.id : (last(evs.filter((e) => e.run_id && e.state !== 'superseded')) || {}).run_id || null,
+    run: rv ? rv.id : (last(evs.filter((e) => e.run && e.type !== 'superseded')) || {}).run || null,
     runApprox: Boolean(rv && rv.approx),
     runStatus: rv ? rv.status : null,
     pr: rv && prNumber(rv.prUrl) ? prNumber(rv.prUrl) : event ? event.pr : null,
@@ -407,15 +521,16 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   };
 }
 
+// The common events in a total order. Ties after the time fall to the type, issue and then the
+// payload fields, so shuffled input gives the same report.
 function normalizeEvents(events, at) {
   return events
-    .map((e) => ({
-      repo: String(e.repo).toLowerCase(), device: e.device, state: e.state, issue: e.issue, run_id: e.run_id || null,
-      pr: e.pr === undefined ? null : e.pr, note: e.note || null, t: ms(e.ts),
-    }))
+    .map((e) => ({ ...e, repo: String(e.repo).toLowerCase() }))
     .filter((e) => e.t <= at)
-    .sort((a, b) => a.t - b.t || cmp(a.device || '', b.device || '') || cmp(a.state, b.state) || cmp(String(a.issue), String(b.issue)) ||
-      cmp(a.run_id || '', b.run_id || '') || cmp(a.note || '', b.note || '') || cmp(String(a.pr), String(b.pr)));
+    .sort((a, b) => a.t - b.t || cmp(a.device || '', b.device || '') || cmp(a.type, b.type) || cmp(String(a.issue), String(b.issue)) ||
+      cmp(a.run || '', b.run || '') || cmp(a.reason || '', b.reason || '') || cmp(String(a.pr), String(b.pr)) ||
+      cmp(a.life || '', b.life || '') || cmp(a.seq === null ? -1 : a.seq, b.seq === null ? -1 : b.seq) ||
+      cmp(a.to_state || '', b.to_state || '') || cmp(a.step || '', b.step || '') || cmp(a.attempt === null ? -1 : a.attempt, b.attempt === null ? -1 : b.attempt));
 }
 
 function dedupeRuns(runs, at) {
@@ -454,7 +569,8 @@ function labelStage(labels) {
 // Pure: rows in, the full report out. `github` is null (not read) or { <repo>: { ok, reason, open, states, claims } }.
 function deriveState(input) {
   const { at, rules, github = null, workers, pipeline = { available: true } } = input;
-  const events = normalizeEvents(input.events, at);
+  // `eventShape: 'common'` is a loader's output; raw factory.events rows (the fixtures) are mapped here
+  const events = normalizeEvents(input.eventShape === 'common' ? input.events : input.events.map(mapOldRow), at);
   const runs = dedupeRuns(input.runs.map((r) => ({ ...r, repo: String(r.repo).toLowerCase() })), at);
   const repoNames = new Set([...input.repos, ...events.map((e) => e.repo), ...runs.map((r) => r.repo)]);
   const repos = [];
@@ -462,7 +578,7 @@ function deriveState(input) {
 
   for (const repo of [...repoNames].sort()) {
     const evR = events.filter((e) => e.repo === repo);
-    const lifeR = evR.filter((e) => !BOOKKEEPING.has(e.state));
+    const lifeR = evR.filter((e) => !BOOKKEEPING.has(e.type));
     const runsR = runs.filter((r) => r.repo === repo);
     const gh = github && github[repo] ? github[repo] : null;
     const issueNums = new Set([...lifeR.filter((e) => Number.isInteger(e.issue)).map((e) => e.issue), ...runsR.filter((r) => r.issue !== null).map((r) => r.issue)]);
@@ -614,20 +730,20 @@ function deriveState(input) {
 
 // ---------------------------------------------------------------- sources
 
-function devQuery(sql, vars) {
-  const args = ['-At'];
+function devQuery(sql, vars, factory = false) {
+  const args = factory ? ['--factory', '-At'] : ['-At'];
   for (const [k, v] of Object.entries(vars)) args.push('-v', `${k}=${v}`);
   args.push('-c', sql);
   try {
     return execFileSync(DEV_QUERY, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 512 * 1024 * 1024 });
   } catch (e) {
     const err = String((e.stderr || e.message || '')).trim().split('\n').slice(-3).join(' | ');
-    throw new InputError(`cannot read the fleet database through dev-query (${e.status === undefined ? e.code || 'failed' : `exit ${e.status}`}): ${err}`);
+    throw new InputError(`cannot read the ${factory ? 'factory' : 'fleet'} database through dev-query${factory ? ' --factory' : ''} (${e.status === undefined ? e.code || 'failed' : `exit ${e.status}`}): ${err}`);
   }
 }
 
-function queryJson(sql, vars, what) {
-  const out = devQuery(sql, vars).trim();
+function queryJson(sql, vars, what, factory = false) {
+  const out = devQuery(sql, vars, factory).trim();
   try {
     return JSON.parse(out);
   } catch {
@@ -635,25 +751,80 @@ function queryJson(sql, vars, what) {
   }
 }
 
-function loadDatabase(opts) {
+// Everything but the events: the clock, the mirror's runs and the workers. These keep their
+// sources whichever store the events come from. `oldEvents` is true when factory.events is read
+// (source old or shadow), which then must exist.
+function loadBase(opts, oldEvents) {
   const meta = queryJson(SQL_META, {}, 'metadata');
-  if (!meta.events) throw new InputError('factory.events does not exist in the database');
+  if (oldEvents && !meta.events) throw new InputError('factory.events does not exist in the database');
   const at = opts.at !== undefined ? opts.at : Date.parse(meta.now);
   if (Number.isNaN(at)) throw new InputError('dev-query returned no usable current time');
   const vars = { at: iso(at), repos: opts.repos.join(',') };
-  const events = queryJson(SQL_EVENTS, vars, 'events');
   // nomistakes.runs is optional: without it, no run places an issue, and the report says so
   const pipeline = meta.runs ? { available: true } : { available: false, reason: 'nomistakes.runs does not exist in the database' };
   const runs = meta.runs ? queryJson(SQL_RUNS, vars, 'runs') : [];
-  if (!Array.isArray(events) || !Array.isArray(runs)) throw new InputError('dev-query returned unexpected data');
+  if (!Array.isArray(runs)) throw new InputError('dev-query returned unexpected data');
   // factory.workers_status belongs to #339 and its columns are not read here yet.
   const workers = meta.workers
     ? { available: false, reason: 'factory.workers_status exists but this version does not read it yet' }
     : { available: false, reason: 'factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)' };
-  return { at, atSource: opts.at !== undefined ? '--at' : 'database now()', events, runs, workers, pipeline };
+  return { at, atSource: opts.at !== undefined ? '--at' : 'database now()', vars, runs, workers, pipeline };
 }
 
+// The events of one store in the common shape. The old store is factory.events through plain
+// dev-query, the new one factory.event_log through `dev-query --factory`.
+function loadEvents(source, base) {
+  const rows = source === 'new'
+    ? queryJson(SQL_EVENT_LOG, base.vars, 'events', true)
+    : queryJson(SQL_EVENTS, base.vars, 'events');
+  if (!Array.isArray(rows)) throw new InputError('dev-query returned unexpected data');
+  return rows.map(source === 'new' ? mapEventLogRow : mapOldRow);
+}
+
+// Rows in, the full report out: the derivation, then (with --github on) a second pass with the
+// GitHub facts of the first one's issues.
+function buildReport(base, events, opts) {
+  const input = { at: base.at, atSource: base.atSource, events, eventShape: 'common', runs: base.runs, repos: opts.repos, rules: opts.rules, workers: base.workers, pipeline: base.pipeline };
+  let report = deriveState({ ...input, github: null });
+  if (opts.github) report = deriveState({ ...input, github: loadGithub(report) });
+  return report;
+}
+
+// What shadow compares: the two reports minus what differs by construction, each named here and in
+// docs/factory-state.md ("Sources"). Nothing else is dropped.
+//  1. coverage event counts and times (`coverage.events`, `coverage.last_event_at`, `devices[].events`,
+//     `devices[].last_event_at`): the new store holds no line of the skipped old states (delegated,
+//     fix_requested, merge_ready, the v1 states) and holds new-only types the old one never had.
+//  2. the v1 run id (`run` of an issue): no new event carries a run_id. Mirror runs are the same
+//     rows on both sides, so the id still shows through `source`, `pr` and `stage`.
+//  3. an abandoned final's free-text detail: the old note is free text, the new `reason` an enum, so
+//     `abandoned (...)` is reduced to `abandoned`.
+function normalizeForCompare(report) {
+  const out = JSON.parse(JSON.stringify(report));
+  for (const repo of out.repos || []) {
+    delete repo.coverage.events;
+    delete repo.coverage.last_event_at;
+    for (const d of repo.coverage.devices) {
+      delete d.events;
+      delete d.last_event_at;
+    }
+    for (const i of repo.issues.concat(repo.recent)) {
+      delete i.run;
+      if (typeof i.detail === 'string' && /^abandoned( \(|$)/.test(i.detail)) i.detail = 'abandoned';
+    }
+  }
+  return out;
+}
+
+// Answers are kept for the run, so the old and the new read of a shadow run see the same GitHub.
+const issueReads = new Map();
 function readIssue(repo, args) {
+  const key = JSON.stringify([repo, args]);
+  if (!issueReads.has(key)) issueReads.set(key, readIssueNow(repo, args));
+  return issueReads.get(key);
+}
+
+function readIssueNow(repo, args) {
   try {
     const out = execFileSync(ISSUE_READ, ['--json', ...args], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024,
@@ -769,32 +940,53 @@ function renderText(r) {
 
 // ---------------------------------------------------------------- main
 
-function main(argv) {
+async function main(argv) {
   const opts = parseArgs(argv);
   if (opts.help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const db = loadDatabase(opts);
-  const base = { ...db, repos: opts.repos, rules: opts.rules, workers: db.workers, pipeline: db.pipeline };
-  let report = deriveState({ ...base, github: null });
-  if (opts.github) report = deriveState({ ...base, github: loadGithub(report) });
+  let report;
+  if (opts.source === 'old') {
+    const base = loadBase(opts, true);
+    report = buildReport(base, loadEvents('old', base), opts);
+  } else if (opts.source === 'new') {
+    const base = loadBase(opts, false);
+    report = buildReport(base, loadEvents('new', base), opts);
+  } else {
+    // shadow: the old answer is printed and decides the exit code; the new read only gets recorded
+    const base = loadBase(opts, true);
+    report = await factorySource().runShadow({
+      tool: 'factory-state',
+      old: () => buildReport(base, loadEvents('old', base), opts),
+      new: () => buildReport(base, loadEvents('new', base), opts),
+      normalize: normalizeForCompare,
+      repo: opts.repos.length ? opts.repos.join(',') : null,
+      args: argv.join(' '),
+    });
+  }
   process.stdout.write(opts.format === 'json' ? `${JSON.stringify(report, null, 2)}\n` : renderText(report));
   return 0;
 }
 
 if (require.main === module) {
-  try {
-    process.exitCode = main(process.argv.slice(2));
-  } catch (e) {
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  }, (e) => {
     if (e instanceof UsageError) {
       process.stderr.write(`callum-flow-factory-state: ${e.message}\n${USAGE}\n`);
       process.exitCode = 2;
     } else if (e instanceof InputError) {
       process.stderr.write(`callum-flow-factory-state: ${e.message}\n`);
       process.exitCode = 1;
-    } else throw e;
-  }
+    } else {
+      process.stderr.write(`${e && e.stack ? e.stack : e}\n`);
+      process.exitCode = 1;
+    }
+  });
 }
 
-module.exports = { deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_RUNS, DEFAULT_RULES, STAGES };
+module.exports = {
+  deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_EVENT_LOG, SQL_RUNS, DEFAULT_RULES, STAGES,
+  mapOldRow, mapEventLogRow, normalizeForCompare,
+};

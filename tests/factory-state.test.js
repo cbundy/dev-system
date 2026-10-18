@@ -202,11 +202,15 @@ const a = process.argv.slice(2);
 if (process.env.FS_FAIL) { console.error("psql: connection refused"); process.exit(Number(process.env.FS_FAIL)); }
 const sql = a[a.indexOf("-c") + 1];
 const vars = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === "-v" ? [x.split(/=(.*)/s).slice(0, 2)] : [])));
-fs.appendFileSync(process.env.FS_LOG, JSON.stringify({ marker: sql.split("\\n")[0], vars }) + "\\n");
+fs.appendFileSync(process.env.FS_LOG, JSON.stringify({ marker: sql.split("\\n")[0], vars, factory: a.includes("--factory"), sql }) + "\\n");
 const fx = JSON.parse(fs.readFileSync(process.env.FS_FIXTURE, "utf8"));
 const m = sql.split("\\n")[0];
 if (m === "-- fs:meta") console.log(JSON.stringify({ now: "2026-10-10T12:00:00.000Z", events: true, runs: process.env.FS_NORUNS !== "1", workers: process.env.FS_WORKERS === "1" }));
 else if (m === "-- fs:events") console.log(JSON.stringify(fx.events));
+else if (m === "-- fs:event_log") {
+  if (process.env.FS_NEW_FAIL) { console.error("psql: no factory database"); process.exit(Number(process.env.FS_NEW_FAIL)); }
+  console.log(JSON.stringify(process.env.FS_EVENT_LOG ? JSON.parse(fs.readFileSync(process.env.FS_EVENT_LOG, "utf8")) : fx.event_log));
+}
 else if (m === "-- fs:runs" && process.env.FS_NORUNS !== "1") console.log(JSON.stringify(fx.runs));
 else process.exit(9);
 `, { mode: 0o755 });
@@ -237,6 +241,7 @@ function cli(args, env = {}, fixture = "missing-run-started") {
     encoding: "utf8",
     env: {
       PATH: process.env.PATH, CALLUM_FLOW_DEV_QUERY_BIN: devQuery, CALLUM_FLOW_ISSUE_READ_BIN: issueRead,
+      CALLUM_FLOW_FACTORY_STATE_SOURCE: "old", CALLUM_EVENTS_DIR: path.join(tmp, "events"),
       FS_FIXTURE: path.join(FIX, `${fixture}.input.json`), FS_LOG: log, ...env,
     },
   });
@@ -413,4 +418,210 @@ test("waiting (the loop's hold on wait conditions): a v2 record or a factory:wai
   assert.match(st(201).flags.join(";"), /label: .*waiting/, "a waiting record that carries factory:parked is a label problem");
   assert.deepEqual([st(204).stage, st(204).source], ["waiting", "github"], "an issue with only a factory:waiting label is waiting from github");
   assert.ok(st(205).flags.some((f) => f.startsWith("claim:")), "another device's claim on a waiting issue trips the claim check");
+});
+
+// ---------------------------------------------------------------- the source switch (#898)
+
+// The inverse of the old mapper, for the tests: a factory.events row as the factory.event_log row the
+// new store holds for it (docs/factory-events/translator.md), or null when the line makes no new event.
+const NEW_TYPE = { reclaimed: "requeued", renewed: "claim_renewed", verdict: "finding_handled" };
+const NEW_TYPES = new Set(Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, "images", "base", "factory-event-shapes.json"), "utf8")).current));
+const tokens = (note) => Object.fromEntries(String(note || "").split(" ").filter((w) => w.indexOf("=") > 0)
+  .map((w) => [w.slice(0, w.indexOf("=")), decodeURIComponent(w.slice(w.indexOf("=") + 1))]).map(([k, v]) => [k, v === "none" ? null : v]));
+function toEventLog(r) {
+  const type = r.state === "loop" ? (/(^| )kind=passes( |$)/.test(r.note) ? "loop_passes" : "loop_entry") : NEW_TYPE[r.state] || r.state;
+  if (!NEW_TYPES.has(type)) return null;
+  const o = {
+    type, type_version: 1, repo: r.repo, device: r.device, ts: r.ts, issue: r.issue, pr: r.pr === undefined ? null : r.pr, branch: r.branch || null,
+    to_state: null, from_state: null, life: null, state_since: null, step: null, attempt: null, seq: null, why: null, reason: null, lease_minutes: null,
+  };
+  if (r.state === "transition") {
+    const f = tokens(r.note);
+    Object.assign(o, {
+      to_state: f.to, from_state: f.from, life: f.life, step: f.step || null, why: f.why || null,
+      attempt: f.attempt === undefined ? null : Number(f.attempt), seq: f.seq === undefined ? null : Number(f.seq),
+      state_since: f.since ? new Date(Number(f.since)).toISOString() : null,
+    });
+  } else if (r.state === "claimed" || r.state === "renewed") {
+    const m = /lease: *(\d+)/.exec(r.note || "");
+    o.lease_minutes = m ? Number(m[1]) : 120;
+  } else if (r.state === "closed" || r.state === "abandoned") o.reason = r.note || null;
+  return o;
+}
+const withNew = (n) => {
+  const fx = input(n);
+  const f = path.join(tmp, `${n}-new.input.json`);
+  fs.writeFileSync(f, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
+  return f;
+};
+const withEventLog = (n, rows) => {
+  const f = path.join(tmp, `${n}.event-log.json`);
+  fs.writeFileSync(f, JSON.stringify(rows));
+  return f;
+};
+const shadowRecords = () => {
+  const f = path.join(tmp, "events", "factory", ".shadow", "factory-state.jsonl");
+  return fs.existsSync(f) ? fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+};
+const AT = ["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"];
+
+test("source: a bad --source or variable exits 2 with the usage; the flag beats the variable; shadow is the default", () => {
+  const bad = cli([...AT, "--source", "bad"]);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /invalid source 'bad' from the --source flag: use one of old, new, shadow/);
+  assert.match(bad.stderr, /usage: callum-flow-factory-state/);
+  const env = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" });
+  assert.equal(env.status, 2);
+  assert.match(env.stderr, /CALLUM_FLOW_FACTORY_STATE_SOURCE/);
+  const flag = cli([...AT, "--source", "old"], { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" });
+  assert.equal(flag.status, 0, flag.stderr);
+  assert.equal(flag.calls.some((c) => c.factory), false, "old never reads the factory database");
+  const viaEnv = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "new", FS_FIXTURE: withNew("v2-waiting") });
+  assert.equal(viaEnv.status, 0, viaEnv.stderr);
+  assert.equal(viaEnv.calls.some((c) => c.marker === "-- fs:events"), false, "the variable chose new");
+  const dflt = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "", FS_FIXTURE: withNew("v2-waiting") });
+  assert.equal(dflt.status, 0, dflt.stderr);
+  assert.ok(dflt.calls.some((c) => c.marker === "-- fs:events") && dflt.calls.some((c) => c.marker === "-- fs:event_log"), "the default reads both");
+});
+
+test("SQL_EVENT_LOG: named view columns only, never the data jsonb, read-only and bounded by --at", () => {
+  assert.doesNotMatch(mod.SQL_EVENT_LOG, /\bdata\b|\*/);
+  assert.doesNotMatch(mod.SQL_EVENT_LOG, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
+  assert.match(mod.SQL_EVENT_LOG, /FROM factory\.event_log/);
+  assert.match(mod.SQL_EVENT_LOG, /<= :'at'::timestamptz/);
+});
+
+const L = (extra) => ({ repo: A, device: "dev-a", ts: "2026-10-10T11:00:00.000Z", issue: 7, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
+const TRANSITION = "row=T11 life=t3xq00 seq=2 from=queued to=building seqAt=1791631200000 since=1791631200000 step=build attempt=1 why=none";
+const PAIRS = [
+  ["ready", L({ state: "ready" })],
+  ["claimed with a lease", L({ state: "claimed", note: "lease: 30" })],
+  ["claimed without one", L({ state: "claimed" })],
+  ["renewed", L({ state: "renewed", note: "lease: 45" })],
+  ["reclaimed", L({ state: "reclaimed", note: "lease expired" })],
+  ["verdict", L({ state: "verdict", note: "CORRECT: r1-2 fixed" })],
+  ["loop entry", L({ state: "loop", note: "kind=agent-step key=i7/a status=done" })],
+  ["loop passes", L({ state: "loop", note: "kind=passes key=passes:1 status=done" })],
+  ["closed", L({ state: "closed", note: "completed" })],
+  ["abandoned", L({ state: "abandoned", note: "reason=drop note=gone" })],
+  ["merged", L({ state: "merged", pr: 12 })],
+  ["transition", L({ state: "transition", pr: 12, branch: "issue-7", note: TRANSITION })],
+  ["transition to closed", L({ state: "transition", note: "row=T20 life=t3xq00 seq=9 from=merge-queue to=closed since=none step=none attempt=0 why=merged" })],
+];
+const NEW_NAME = { reclaimed: "requeued", renewed: "claim_renewed", verdict: "finding_handled" };
+
+test("mapping: the new store's row becomes the common event the old line becomes", () => {
+  for (const [name, row] of PAIRS) {
+    const log = toEventLog(row);
+    const want = mod.mapOldRow(row);
+    if (name.startsWith("loop")) assert.equal(want.type, "loop", name);
+    assert.deepEqual(mod.mapEventLogRow(log), want, name);
+    if (NEW_NAME[row.state]) assert.equal(log.type, NEW_NAME[row.state]);
+  }
+  assert.deepEqual(mod.mapOldRow(PAIRS[11][1]), {
+    type: "transition", repo: A, device: "dev-a", issue: 7, t: Date.parse("2026-10-10T11:00:00.000Z"), pr: 12, branch: "issue-7", run: null,
+    to_state: "building", from_state: "queued", life: "t3xq00", state_since: 1791631200000, step: "build", attempt: 1, seq: 2, why: null,
+    reason: null, lease_minutes: null,
+  });
+  assert.equal(mod.mapOldRow(PAIRS[1][1]).lease_minutes, 30);
+  assert.equal(mod.mapOldRow(PAIRS[2][1]).lease_minutes, 120, "a claim with no lease note holds the default");
+});
+
+test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
+  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read"]) {
+    const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
+    assert.equal(m.type, type);
+  }
+  assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "mystery" }), /unknown factory event: mystery v1/);
+  assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "claimed", type_version: 2 }), /unknown factory event: claimed v2/);
+});
+
+test("CLI new: the lease and the stages equal the old path's for the same claims", () => {
+  for (const n of ["v2-waiting", "closed-outside", "replayed-events"]) {
+    const fx = input(n);
+    const file = path.join(tmp, `${n}-new.input.json`);
+    fs.writeFileSync(file, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
+    const args = ["--at", fx.at, "--github", "off", "--format", "json"];
+    const old = cli([...args, "--source", "old"], {}, n);
+    const nu = cli([...args, "--source", "new"], { FS_FIXTURE: file });
+    assert.equal(nu.status, 0, nu.stderr);
+    assert.deepEqual(mod.normalizeForCompare(JSON.parse(nu.stdout)), mod.normalizeForCompare(JSON.parse(old.stdout)), n);
+    assert.ok(nu.calls.filter((c) => c.marker === "-- fs:event_log").every((c) => c.factory), "event_log is read through dev-query --factory");
+    assert.equal(nu.calls.some((c) => c.marker === "-- fs:events"), false);
+  }
+  const fx = input("lapsed-claim");
+  const file = path.join(tmp, "lapsed-new.input.json");
+  fs.writeFileSync(file, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
+  const lease = (r) => Object.fromEntries(JSON.parse(r.stdout).repos[0].issues.map((i) => [i.issue, i.lease]));
+  const args = ["--at", fx.at, "--github", "off", "--format", "json"];
+  const a = lease(cli([...args, "--source", "old"], {}, "lapsed-claim"));
+  const b = lease(cli([...args, "--source", "new"], { FS_FIXTURE: file }));
+  assert.ok(Object.keys(a).length > 3);
+  assert.deepEqual(b, a);
+});
+
+test("CLI new: an event_log row of an unknown type or version fails with exit 1; shadow prints the old answer and records new_error", () => {
+  const fx = input("v2-waiting");
+  for (const [bad, msg] of [[{ type: "mystery" }, "unknown factory event: mystery v1"], [{ type_version: 2 }, "unknown factory event: claimed v2"]]) {
+    const rows = fx.events.map(toEventLog).filter(Boolean);
+    rows.push({ ...rows.find((r) => r.type === "claimed"), ...bad });
+    const file = withEventLog("bad", rows);
+    const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
+    assert.equal(nu.status, 1);
+    assert.equal(nu.stdout, "");
+    assert.ok(nu.stderr.includes(msg), nu.stderr);
+    fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
+    const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
+    const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
+    assert.equal(sh.status, 0, sh.stderr);
+    assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
+    const rec = shadowRecords();
+    assert.equal(rec.length, 1);
+    assert.equal(rec[0].tool, "factory-state");
+    assert.equal(rec[0].differences, null);
+    assert.ok(rec[0].new_error.includes(msg));
+  }
+});
+
+test("CLI shadow: a matching run records zero differences, a seeded difference is recorded by path; the exit follows the old read", () => {
+  const fx = input("v2-waiting");
+  const rows = fx.events.map(toEventLog).filter(Boolean);
+  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
+  const ok = cli(AT, { FS_EVENT_LOG: withEventLog("match", rows), CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(shadowRecords().map((r) => [r.differences, r.paths, r.new_error]), [[0, [], null]]);
+  assert.equal(ok.stderr, "");
+  const seeded = rows.map((r) => (r.type === "transition" && r.issue === 200 ? { ...r, to_state: "parked" } : r));
+  assert.notDeepEqual(seeded, rows);
+  const diff = cli(AT, { FS_EVENT_LOG: withEventLog("seeded", seeded), CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
+  const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
+  assert.equal(diff.status, 0);
+  assert.equal(diff.stdout, old.stdout);
+  const rec = shadowRecords();
+  assert.equal(rec.length, 2);
+  assert.ok(rec[1].differences > 0, JSON.stringify(rec[1]));
+  assert.match(rec[1].paths[0].path, /^\$\.(repos|stuck)/);
+  assert.match(diff.stderr, /shadow: \d+ difference\(s\)/);
+  // a new read that fails is a record, not a failure
+  const down = cli(AT, { FS_NEW_FAIL: "78", CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
+  assert.equal(down.status, 0);
+  assert.equal(down.stdout, old.stdout);
+  assert.match(shadowRecords()[2].new_error, /cannot read the factory database/);
+  // and a failing old read fails the tool, as before
+  const oldDown = cli(AT, { FS_FAIL: "3", CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" });
+  assert.equal(oldDown.status, 1);
+});
+
+test("normalizeForCompare drops only the counts, the v1 run id and an abandoned final's free text", () => {
+  const r = derive(input("v2-waiting"));
+  const n = mod.normalizeForCompare(r);
+  const repo = n.repos[0];
+  assert.equal(repo.coverage.events, undefined);
+  assert.equal(repo.coverage.last_event_at, undefined);
+  assert.ok(repo.coverage.devices.every((d) => d.events === undefined && d.last_event_at === undefined && d.device));
+  assert.ok(repo.issues.every((i) => i.run === undefined && i.stage));
+  const fake = { repos: [{ coverage: { class: "full", devices: [] }, issues: [{ detail: "abandoned (reason=drop note=x)", stage: "closed without merge", run: "r1" }], recent: [{ detail: "closed (done)" }] }] };
+  const m = mod.normalizeForCompare(fake).repos[0];
+  assert.equal(m.issues[0].detail, "abandoned");
+  assert.equal(m.recent[0].detail, "closed (done)");
 });

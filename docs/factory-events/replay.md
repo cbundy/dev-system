@@ -92,6 +92,10 @@ these records stay on the device. Fields:
 
 A run with differences also prints `<tool>: shadow: N difference(s), first at <path> (see <file>)` on stderr.
 
+Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
+default `shadow`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
+shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)).
+
 To move a tool's default to `new`: its shadow runs must be clean, judged with the query in
 [docs/metrics.md](../metrics.md#shadow-runs-source-switch). The threshold is set in
 [#902](https://github.com/cbundy/dev-system/issues/902).
