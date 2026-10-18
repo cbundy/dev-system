@@ -28,6 +28,9 @@ check "callum-flow-event --type writes a checked new-format event only to the ne
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ]'
 check "factory-source.js loads and exports resolveSource, runShadow and diff" in_image '
   node -e "const m=require(\"/usr/local/share/dev-system/factory-source.js\");for(const k of [\"resolveSource\",\"runShadow\",\"diff\"])if(typeof m[k]!==\"function\")process.exit(1)"'
+check "evaluate-new-events.js loads, and callum-flow-evaluate finds the shared helpers and rejects a bad --source" in_image '
+  node -e "const m=require(\"/usr/local/share/dev-system/evaluate-new-events.js\");for(const k of [\"mapEvent\",\"loadNewEvents\",\"normalize\"])if(typeof m[k]!==\"function\")process.exit(1)" &&
+  callum-flow-evaluate --repo o/r --since 2026-10-01T00:00:00Z --source bogus 2>&1 | grep -q "invalid source"'
 check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
   [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
   ! /usr/local/share/dev-system/nm-export 2>/dev/null'

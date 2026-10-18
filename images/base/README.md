@@ -1583,7 +1583,8 @@ Every line also says which versions produced it: `base_image`, `dev_image`, `tem
 line's `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `event-push-loop`.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
+[--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
+[--source old|new|shadow] [--new-events <file>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
@@ -1600,6 +1601,13 @@ first-pass rate, fix rounds, tokens by model and purpose and time parked, comes 
 cover the whole fleet; `window.scope` says which scope each source covers. A missing source
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
+`--source` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `shadow`) picks the event store, as in
+[`docs/factory-events/replay.md`](../../docs/factory-events/replay.md#source-switch): `old` reads the old log
+(`--events`); `new` reads the new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<repo>.jsonl` or,
+with `--new-events`, a file of `factory.event_log` rows; `shadow` prints the `old` report and appends how the `new` one
+differed to `factory/.shadow/evaluate.jsonl` (skipped when `--events` is given without `--new-events`). The tool finds
+`factory-source.js` and `evaluate-new-events.js` beside itself, else under `$DEV_SYSTEM_SHARE`. Metrics that need a
+v1-only event read `n/a` under `new` ([`docs/metrics.md`](../../docs/metrics.md#reading-the-new-events)).
 
 `callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule S1..S5=<minutes>]... [--github on|off]`
 answers "what is the factory doing right now?": per repo, each live issue with its stage (queued,
