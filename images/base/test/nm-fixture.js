@@ -31,9 +31,9 @@ if (cmd === "create") {
 } else if (cmd === "unknown-column") {
   db.exec("ALTER TABLE runs ADD COLUMN brand_new TEXT; UPDATE runs SET brand_new = 'surprise', updated_at = updated_at + 10 WHERE id = 'r1'");
 } else if (cmd === "metrics") {
-  // Rows for the saved queries in docs/metrics.md (cbundy/dev-system#275): the columns the
-  // queries read are added to the subset schema, then two runs are inserted next to r1/r2.
-  // Run it after `create`; sections/09-agentsview.sh checks headline values of these rows.
+  // Rows for the mirror and the run-to-issue link (cbundy/dev-system#275): the columns the
+  // mirror's tables carry are added to the subset schema, then two runs are inserted next to r1/r2.
+  // Run it after `create`; sections/09-agentsview.sh pushes them and callum-flow-factory-state reads them.
   const add = {
     runs: "pr_url TEXT, pr_state TEXT, parked_ms INTEGER, awaiting_agent_since INTEGER",
     step_rounds: "trigger_type TEXT, findings_json TEXT, user_findings_json TEXT, selection_source TEXT",
@@ -52,7 +52,7 @@ if (cmd === "create") {
       ('s4a', 'r4', 'review', 'completed'), ('s4b', 'r4', 'test', 'failed'), ('s4c', 'r4', 'ci', 'pending'),
       ('s4d', 'r4', 'pr', 'skipped');
   `);
-  // Runs for the run-to-issue link (cbundy/dev-system#343, docs/metrics.md "Linking pipeline runs to
+  // Runs for the run-to-issue link (cbundy/dev-system#343, docs/factory-state.md "Linking pipeline runs to
   // issues"), modelled on the merged issues that have no run_started event. Times are epoch seconds
   // and the issue events in sections/09-agentsview.sh are timed against them.
   //   r5      issue 51, one run, no run_started event

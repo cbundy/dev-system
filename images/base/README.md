@@ -1902,9 +1902,8 @@ zero, 1 otherwise, and 2 on a usage error, an unreachable or unconfigured store,
 
 `nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with
 the same URL rules as `event-push-loop`. The source is `state.sqlite` under
-`NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`. See
-[docs/metrics.md](../../docs/metrics.md#no-mistakes-pipeline-data-nomistakes-schema) for the
-tables, export rules, generated DDL and the saved queries.
+`NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`.
+
 The state is `$AGENTSVIEW_DATA_DIR/nm-push/device-<hex>/state` (default parent
 `/persist/agentsview/nm-push`), where `<hex>` is the UTF-8
 hex encoding of `DEV_MACHINE_NAME` (else hostname). `NM_PUSH_STATE_DIR` overrides the parent
@@ -1919,6 +1918,47 @@ for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
 `dev-doctor` prints an INFO line with cumulative upsert counts (including repeated rows),
 the last push time and whether activity is newer than the checkpoint; it fails when a URL
 is configured but the loop is stopped.
+
+It mirrors six tables of the local `state.sqlite`: `repos`, `runs`, `step_results`, `step_rounds`,
+`agent_invocations` and `run_agent_sessions`. The tables are created on the first push
+(`CREATE SCHEMA/TABLE IF NOT EXISTS`) and written with upserts on the source key (`id`;
+`(run_id, role)` for `run_agent_sessions`), so a run is updated in place as it progresses.
+The exporter opens SQLite read-only and reads all available tables in one read transaction.
+Without a valid checkpoint, it backfills every row in each available table, even when a
+parent table is absent; unresolved repo attribution is NULL. Later passes send all
+nonterminal runs and terminal runs touched at or after the checkpoint (`>=`), with their
+children and repos. Touch timestamps come from `runs.updated_at`, step start/completion/
+activity, round creation, invocation completion and session updates. A missing table or
+one missing a primary-key column is skipped with a warning. Each push is one PostgreSQL
+transaction; the checkpoint advances only after success, so failures are retried in full.
+The exporter (`nm-export`) is the authoritative source for column names, types, keys and
+indexes; print the DDL from the repository root with
+`node -e 'console.log(require("./images/base/nm-export").ddl())'`.
+
+Column rules:
+
+- Every table has `device` (the exporter's device attribution) and
+  `repo` (lowercase `owner/name` from `repos.upstream_url`) beside the source columns.
+- Epoch-second `*_at` and `*_since` columns are `timestamptz`; other integers are `bigint`;
+  JSON columns (`findings_json`, `gates_json`, ...) stay `text`.
+- A column the mirror does not know goes into `raw jsonb` (blobs as base64) instead of failing
+  the push; a known column missing from the SQLite file is NULL.
+- Actual NUL characters are removed from string values before serialization; literal
+  backslash escape text is preserved.
+- Never shipped, and absent from `raw`: `repos.working_path`, `runs.worktree_dir`,
+  `step_results.log_path` and `agent_pid`, `step_rounds.global_config_yaml` and
+  `repo_config_yaml`, and the step log files.
+- `runs.no_mistakes_version` records which no-mistakes wrote the row.
+
+Stability: the mirror reads no-mistakes' internal `state.sqlite` directly. That layout is not a
+stable interface, and any no-mistakes release can add, rename or remove columns or tables.
+Unknown columns are tolerated (they land in `raw`), but a rename or removal shows up as NULLs
+or a skipped table until the exporter is updated. Check `runs.no_mistakes_version` when a
+column goes quiet. The upstream ask for a stable, schema-versioned export is
+[kunchenguid/no-mistakes#985](https://github.com/kunchenguid/no-mistakes/issues/985).
+The run-to-issue link rules are in [docs/factory-state.md](../../docs/factory-state.md#linking-pipeline-runs-to-issues),
+and the fleet export query that `callum-flow-evaluate` reads is in
+[docs/metrics.md](../../docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export).
 
 `/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
 without connecting to PostgreSQL. `--mark N` selects an incremental export;

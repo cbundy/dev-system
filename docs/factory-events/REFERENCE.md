@@ -112,6 +112,7 @@ Example:
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
+| `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
@@ -362,7 +363,7 @@ The model for the issue's build step was chosen. Written by callum-flow-implemen
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `model` | string | required | no | minLength 1 |  | The model alias chosen, for example sonnet or opus. |
+| `model` | string | required | no | minLength 1 | yes | The model alias chosen, for example sonnet or opus. |
 | `reason` | enum | required | no | one of "label", "default", "hash", "fallback" | yes | label: a model:<alias> label on the issue; default: no Opus share is set; hash: the issue's bucket against the Opus share; fallback: the labels could not be read. |
 | `bucket` | integer | required | yes | minimum 0; maximum 99 |  | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
 | `opus_pct` | integer | required | no | minimum 0; maximum 100 |  | The configured share of issues routed to Opus, in percent. |

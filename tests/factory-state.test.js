@@ -173,9 +173,9 @@ test("determinism: shuffled input rows give the identical report", () => {
   }
 });
 
-test("the SQL carries the canonical run_link CTE from docs/metrics.md verbatim", () => {
-  const canonical = extractRunLink(fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8"));
-  assert.ok(mod.RUN_LINK.includes(canonical), "RUN_LINK differs from docs/metrics.md");
+test("the SQL carries the canonical run_link CTE from docs/factory-state.md verbatim", () => {
+  const canonical = extractRunLink(fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8"));
+  assert.ok(mod.RUN_LINK.includes(canonical), "RUN_LINK differs from docs/factory-state.md");
   assert.ok(mod.SQL_RUNS.includes(canonical));
 });
 

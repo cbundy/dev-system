@@ -1,13 +1,14 @@
--- 0006: lift test_weakened.restored and reviewed.patch into factory.event_log.
+-- 0006: lift the fields the rewritten saved queries read into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; CREATE OR REPLACE VIEW keeps the view's existing ones.
 --
--- Adds restored (boolean) and patch, the fields marked "x-column": true in test_weakened.v1.json
--- and reviewed.v1.json, so a view export gives callum-flow-evaluate the same test_weakened and
--- review numbers as the local log. Postgres only adds columns at the end on OR REPLACE, so they
--- come last and every earlier column keeps its name, type and order. No @> and no DISTINCT ON.
+-- Adds model (implementer_routed), restored (test_weakened, boolean) and patch (reviewed), the
+-- fields marked "x-column": true in those schemas. docs/metrics.md query 8 (the implementer
+-- model), 5b (tests weakened) and 9 (a review counts once per (issue, round, patch)) read them.
+-- Migration 0005_shadow_read_columns lifted the shadow_read columns, which stay before these. Postgres only adds columns at the end on OR REPLACE, so they come last and every earlier column
+-- keeps its name, type and order. No @> and no DISTINCT ON.
 
 CREATE OR REPLACE VIEW factory.event_log AS
 SELECT
@@ -57,6 +58,7 @@ SELECT
   (e.data ->> 'settle_seconds')::int AS settle_seconds,
   (e.data ->> 'old_ok')::boolean AS old_ok,
   (e.data ->> 'new_ok')::boolean AS new_ok,
+  e.data ->> 'model' AS model,
   (e.data ->> 'restored')::boolean AS restored,
   e.data ->> 'patch' AS patch
 FROM factory.event_store e;

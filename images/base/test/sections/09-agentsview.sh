@@ -143,21 +143,20 @@ check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
   echo "$out" | grep -q "waiting: no"'
-# The saved queries in docs/metrics.md (#275): every sql block of the nomistakes section runs
-# against this PostgreSQL, filled through the real nm-push-loop path plus a factory.events
-# table seeded for run r3. Each query must return a row, and headline values are exact.
+# Seeding for the callum-flow-factory-state check below (#345): the mirrored runs of nm-fixture.js
+# (r1 to r11) pushed through the real nm-push-loop path, plus a factory.events table seeded for run
+# r3 and the run-to-issue link (#343). The saved queries of docs/metrics.md read the factory database
+# and are checked against a throwaway one by tests/metrics-queries.test.js (#652), not here.
 psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
-nm_metrics_queries() {
-  local root out ddl f
+nm_seed_factory_state() {
+  local root ddl
   root=$(cd "$TEST_DIR/../../.." && pwd)
-  out=$(mktemp -d)
-  node "$root/tests/metrics-blocks.js" "$root/docs/metrics.md" "$out" || return 1
   nm_fixture metrics && nm_push || return 1
   # factory.events as event-push-loop creates it (its DDL is read from the script), then the
   # orchestrator events for issue 42: claimed 300 s before run r3 was created, merged 120 s after it ended.
   ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/event-push-loop")
   printf '%s\n' "$ddl" | psql_file >/dev/null || return 1
-  psql_file >/dev/null <<'SQL' || return 1
+  psql_file >/dev/null <<'SQL'
 INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw) VALUES
   ('nm-metrics', 'acme/widgets', 1, to_timestamp(1700000700), 'claimed', 42, NULL, '{}'),
   ('nm-metrics', 'acme/widgets', 2, to_timestamp(1700001010), 'run_started', 42, 'r3', '{}'),
@@ -186,80 +185,9 @@ FROM (VALUES
   ('acme/widgets', 34, 1700041460, 'merge_ready', 54, NULL), ('acme/widgets', 35, 1700041560, 'merged', 54, NULL)
 ) AS v(repo, seq, t, state, issue, run_id)
 ON CONFLICT DO NOTHING;
--- The implementer model comparison (#506): the hash routed 42 and 52 to sonnet, 51 and 53 to opus
--- (53 then had a review fix requested), and a label routed 54 (left out). In acme/gadgets, away from
--- the factory-state check: 55 routed to both models (left out), 56 to opus and still in flight, 58 to
--- sonnet and abandoned.
-INSERT INTO factory.events (device, repo, seq, ts, state, issue, note, raw)
-SELECT 'nm-metrics', v.repo, v.seq, to_timestamp(v.t), v.state, v.issue, v.note, '{}'::jsonb
-FROM (VALUES
-  ('acme/widgets', 40, 1700000750, 'implementer_routed', 42, 'model=sonnet reason=hash bucket=60 pct=50'),
-  ('acme/widgets', 41, 1700010300, 'implementer_routed', 51, 'model=opus reason=hash bucket=10 pct=50'),
-  ('Acme/Widgets', 42, 1700020300, 'implementer_routed', 52, 'model=sonnet reason=hash bucket=70 pct=50'),
-  ('acme/widgets', 43, 1700030300, 'implementer_routed', 53, 'model=opus reason=hash bucket=20 pct=50'),
-  ('acme/widgets', 44, 1700030900, 'fix_requested', 53, 'review'),
-  ('acme/widgets', 45, 1700040300, 'implementer_routed', 54, 'model=opus reason=label bucket=- pct=50'),
-  ('acme/gadgets', 1, 1700050000, 'implementer_routed', 55, 'model=opus reason=hash bucket=30 pct=50'),
-  ('acme/gadgets', 2, 1700050100, 'implementer_routed', 55, 'model=sonnet reason=hash bucket=30 pct=20'),
-  ('acme/gadgets', 3, 1700050200, 'implementer_routed', 56, 'model=opus reason=hash bucket=5 pct=50'),
-  ('acme/gadgets', 4, 1700050300, 'implementer_routed', 58, 'model=sonnet reason=hash bucket=90 pct=50'),
-  ('acme/gadgets', 5, 1700050400, 'abandoned', 58, NULL)
-) AS v(repo, seq, t, state, issue, note)
-ON CONFLICT DO NOTHING;
 SQL
-  # 00 is the DDL block, 01 the example join, 02..08 the seven queries, 09 "Unlinked runs", then
-  # 10, 11 and 12: lead time by stage, the waiting split and the implementer model comparison, which
-  # live outside the nomistakes section.
-  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 13 ] || { echo "expected 13 sql blocks"; return 1; }
-  for f in "$out"/*.sql; do
-    psql_file < "$f" > "${f%.sql}.out" || { echo "$(basename "$f") failed"; cat "$f"; return 1; }
-    if [ "$(basename "$f")" != 00.sql ] && [ ! -s "${f%.sql}.out" ]; then echo "$(basename "$f") returned no rows"; return 1; fi
-  done
-  grep -Fx 'review|acme/widgets|nm-host|3|2|0.667' "$out/02.out" &&
-    grep -Fx 'test|2|3|2' "$out/03.out" &&
-    grep -Fx 'review|acme/widgets|nm-host|4|6|1.50|6|2|0.333|1' "$out/04.out" &&
-    grep -Fx 'merged_pr|acme/widgets||https://github.com/acme/widgets/pull/7||||4|2500|490|10000|400|140000' "$out/05.out" &&
-    grep -Fx 'totals|acme/widgets|nm-host||2|150000|75000|111000|120000|' "$out/06.out" &&
-    grep -E '^parked_now\|acme/widgets\|nm-host\|r4\|\|30000\|' "$out/06.out" &&
-    grep -Fx 'review-fix|gpt-test|exit|none|1' "$out/07.out" &&
-    grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out" &&
-    # the implementer model comparison (#506): one row per model, hash-routed issues only
-    grep -Fx 'opus|3|2|0|50.0|300|600|1650|1.00|0.50|0.50|0.50|0|60' "$out/12.out" &&
-    grep -Fx 'sonnet|3|2|1|100.0|300|1000|1600|1.50|0.00|0.50|0.00|60|1495' "$out/12.out" &&
-    [ "$(wc -l < "$out/12.out")" -eq 2 ] &&
-    nm_link_values "$out"
 }
-# The run-to-issue link (#343): issues with no run_started event still get their pipeline numbers
-# from the mirror. psql prints numeric seconds with six decimals; drop trailing zeros to compare.
-nm_link_values() {
-  local out=$1
-  norm() { sed -E 's/\.0+(\||$)/\1/g' "$1"; }
-  # the saved query 7 gains the new issues; issue 52 keeps its mixed-case repo and both its runs
-  grep -Fx 'acme/widgets|51|2400|600|0|1800|1' "$out/08.out" &&
-    grep -Fx 'Acme/Widgets|52|1900|700|0|1200|2' "$out/08.out" &&
-    grep -Fx 'acme/widgets|53|1500|600|0|900|1' "$out/08.out" &&
-    grep -Fx 'acme/widgets|54|1500|800|0|700|1' "$out/08.out" &&
-    # the example join places a run by branch alone
-    grep -E '^acme/widgets\|51\|r5\|completed\|' "$out/01.out" &&
-    ! grep -q '|r10|' "$out/01.out" &&
-    # unlinked runs: off-convention branches with no event, and a run with no repo; nothing else
-    grep -E '^acme/widgets\|nm-host\|r10\|chore/release-0\.9\.0\|completed\|' "$out/09.out" &&
-    grep -E '^\|nm-host\|r11\|feat/issue-60-orphan\|completed\|' "$out/09.out" &&
-    [ "$(wc -l < "$out/09.out")" -eq 5 ] &&
-    ! grep -Eq '\|(r3|r5|r6|r7|r8|r9)\|' "$out/09.out" &&
-    # query 1: implementation and pipeline from the mirror; issue 42 has none of the other events
-    norm "$out/10.out" | grep -Fx 'acme/widgets|51|00:01:00|00:05:00|00:05:00|00:10:00|00:20:00|00:41:00' &&
-    norm "$out/10.out" | grep -Fx 'Acme/Widgets|52|00:01:00|00:05:00|00:05:00|00:16:40|00:05:00|00:32:40' &&
-    norm "$out/10.out" | grep -Fx 'acme/widgets|53|00:01:00|00:05:00|00:05:00|00:10:00|00:05:00|00:26:00' &&
-    norm "$out/10.out" | grep -Fx 'acme/widgets|54|00:01:00|00:05:00|00:05:00|00:13:20|00:01:40|00:26:00' &&
-    norm "$out/10.out" | grep -Fx 'acme/widgets|42||||||' &&
-    # query 7: the waiting split on mirror run starts
-    norm "$out/11.out" | grep -Fx 'acme/widgets|51|nm-metrics|600|1260|0|600|2460' &&
-    norm "$out/11.out" | grep -Fx 'Acme/Widgets|52|nm-metrics|1000|360|0|600|1960' &&
-    norm "$out/11.out" | grep -Fx 'acme/widgets|53|nm-metrics|600|360|0|600|1560' &&
-    norm "$out/11.out" | grep -Fx 'acme/widgets|54|nm-metrics|800|160|0|600|1560'
-}
-check "the saved queries in docs/metrics.md run against the mirrored data and return the expected values" nm_metrics_queries
+check "the mirrored runs and the orchestrator events for callum-flow-factory-state are seeded" nm_seed_factory_state
 # The fleet-wide export query in docs/metrics.md (#274): run it against the same PostgreSQL, then
 # feed the JSON lines to callum-flow-evaluate --nm-export inside the image.
 nm_export_query() {
