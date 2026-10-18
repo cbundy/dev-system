@@ -31,7 +31,7 @@ import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, config, control, entry, issue, ru
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 2 * HOUR)
 const HEAD = '9e01b77c0ffee000000000000000000000000001'
 const BRIEF = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
@@ -712,7 +712,7 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     const designing = rec(110, { state: 'designing', step: 'design', seq: 5 })
     const asked = renderQuestion({ question: 'Which API?', context: 'Two shapes exist.', options: [{ key: 'A', title: 'v1', detail: 'old' }, { key: 'B', title: 'v2' }], recommendation: { key: 'B', reason: 'newer' } })
     const event = { kind: 'not-ok' as const, reason: 'question', data: { question: asked } }
-    const parked = { ...(nextRecord(designing, rowFor(designing, event, config({ planner: 'v2' })), event, NOW) as IssueRecord), seq: p.seq, seqAt: parkAt, since: parkAt }
+    const parked = { ...(nextRecord(designing, rowFor(designing, event, config()), event, NOW) as IssueRecord), seq: p.seq, seqAt: parkAt, since: parkAt }
     expect(parked).toMatchObject({ state: 'parked', question: asked })
     const body = parkText(parked, 'designing', 'question')
     for (const line of ['#### Context', '#### Options', '#### Recommendation', '- [ ] **A** - v1', '- [ ] **B** - v2', 'Tick one option, or write your answer as a comment.']) expect(body).toMatch(new RegExp(`^(\\d+\\. )?${line.replace(/[*[\]]/g, '\\$&')}`, 'm'))

@@ -82,7 +82,7 @@ function rt(): Runtime {
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: TOOLS,
     pluginRoot: PLUGIN_ROOT,
-    config: config({ planner: 'v2' }),
+    config: config(),
     configProblems: [],
   }
 }
@@ -355,11 +355,11 @@ describe('the act step routes a v2 agent\'s turn end to steps.ts (act.ts agentAn
       sent.push([id, type])
       return null
     }
-    const first = await agentAnswered(w.env, state(), { agentId: 'agent-7', answer: 'I think we should retry', reason: 'answer' }, between, async () => true, repair)
+    const first = await agentAnswered(w.env, state(), { agentId: 'agent-7', answer: 'I think we should retry', reason: 'answer' }, between, repair)
     expect(first).toEqual({ result: 'repair', why: 'no answer was recorded with the answer script', key: action.key })
     expect(sent).toEqual([['agent-7', 'factory-loop:triage']])
     expect(w.env.live.ledger[0]).toMatchObject({ status: 'running', reminded: true })
-    const second = await agentAnswered(w.env, state(), { agentId: 'agent-7', answer: 'still no answer', reason: 'answer' }, between, async () => true, repair)
+    const second = await agentAnswered(w.env, state(), { agentId: 'agent-7', answer: 'still no answer', reason: 'answer' }, between, repair)
     expect(second).toMatchObject({ result: 'applied', key: action.key, repaired: true })
     expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', step: 'triage', result: { event: 'unknown', why: 'bad-answer' } } })
     expect(sent).toHaveLength(1)

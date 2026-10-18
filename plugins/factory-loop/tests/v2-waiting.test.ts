@@ -135,7 +135,7 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
       // GitHub as the pass reads it: both conditions open until the test closes one
       const github: Github = { issue57: 'open', pr812: 'OPEN', ...('first' in c ? c.first : {}) }
       const h = host(on, {
-        config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+        config: { repo: REPO, mode: 'act', checkout: '/work' },
         store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [design] } },
         run: (argv, s) => world(github)(argv, s),
       })
@@ -205,7 +205,7 @@ describe('a designer that asks with options, end to end (#856)', () => {
     const posted: { body: string; at: number }[] = []
     let labels = [{ name: 'factory:parked' }]
     const h = host(on, {
-      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      config: { repo: REPO, mode: 'act', checkout: '/work' },
       store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [design] } },
       run: (argv, s) =>
         world({ issue57: 'open', pr812: 'OPEN' }, (a, seen) => {

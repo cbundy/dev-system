@@ -30,7 +30,7 @@ import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state as baseSta
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 2 * HOUR)
 const sha = (c: string) => c.repeat(40)
 const HEAD = sha('a')

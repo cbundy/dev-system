@@ -108,7 +108,7 @@ function answer(g: Gh, argv: string[], stdin: string | undefined): { exitCode?: 
 }
 
 function rt(): Runtime {
-  return { mode: 'act', repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: { CALLUM_FLOW_REPO: REPO }, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: config({ planner: 'v2', mode: 'act', readyLabel: READY }), configProblems: [] }
+  return { mode: 'act', repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: { CALLUM_FLOW_REPO: REPO }, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: config({ mode: 'act', readyLabel: READY }), configProblems: [] }
 }
 
 // act: the action through the act step's dispatcher, its commands answered by the fake GitHub.

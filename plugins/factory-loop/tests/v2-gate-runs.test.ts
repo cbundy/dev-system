@@ -55,12 +55,12 @@ function stateOf(companion: string, ledger: State['ledger'] = []): State {
 
 function ctxOf(companion: string): V2Ctx {
   const s = stateOf(companion)
-  return Object.assign(newCtx(s, config({ planner: 'v2', mode: 'act' }), { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2), { v2: s.v2 as V2State })
+  return Object.assign(newCtx(s, config({ mode: 'act' }), { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2), { v2: s.v2 as V2State })
 }
 
 type EventAction = Extract<Action, { kind: 'event' }>
 const runs = (actions: Action[]) => actions.filter((a): a is EventAction => a.kind === 'event' && a.event.state === 'gate_run')
-const plan = (s: State) => planV2(s, config({ planner: 'v2', mode: 'act' })).actions
+const plan = (s: State) => planV2(s, config({ mode: 'act' })).actions
 const dataOf = (companion: string) => runs(plan(stateOf(companion))).map(a => (a.event.state === 'gate_run' ? a.event.data : null))
 
 describe('one gate line, one gate_run', () => {
@@ -193,7 +193,7 @@ describe('what writes none', () => {
 })
 
 describe('gate lines and interventions', () => {
-  const causes = (companion: string) => planV2(stateOf(companion), config({ planner: 'v2', mode: 'act' })).actions.filter((a): a is EventAction => a.kind === 'event' && a.key.startsWith('iv/')).map(a => (a.event.state === 'intervention' ? a.event.cause : ''))
+  const causes = (companion: string) => planV2(stateOf(companion), config({ mode: 'act' })).actions.filter((a): a is EventAction => a.kind === 'event' && a.key.startsWith('iv/')).map(a => (a.event.state === 'intervention' ? a.event.cause : ''))
 
   test('gate-unknown gives its intervention and its gate_run; gate-pass and gate-fail give no intervention', () => {
     const unknown = line({ cause: 'gate-unknown', reason: 'the stop gate could not run' })
@@ -232,14 +232,14 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
   test('the argv the pass ran is callum-flow-event --type gate_run --data .. --issue N, and a second pass runs none', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
-      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      config: { repo: REPO, mode: 'act', checkout: '/work' },
       run: quiet,
       files: { [`${LOOP_DIR}/companion.jsonl`]: text(old({ waitMs: 0 }), line({ startedAt: new Date(NOW - 20 * MIN).toISOString() })) },
     })
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(60_000)
-    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.last()).toMatchObject({ executed: true })
     const writes = () => h.events().filter(e => e[1] === '--type')
     expect(writes()).toHaveLength(2)
     const argv = writes().find(e => (JSON.parse(e[4] ?? '{}') as { queued_behind: number }).queued_behind === 1) as string[]

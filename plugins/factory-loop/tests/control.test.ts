@@ -1,12 +1,11 @@
 // The owner's controls (SPEC 4.3; DECISIONS D-15, D-16, D-35, D-38): every `/factory` op and
 // its bad forms, applyOp's new Control and effects (the input never changes), control.json and
 // the workspace config file through a fake ActIo, the status answer, and the command and tool
-// specs. One test feeds the written control.json to plan, so the shapes are the ones it reads.
+// specs. One test reads the written control.json back, so the shapes are the ones the rules read.
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PassSummary } from '../types'
 import type { ConfigView } from '../hooks/config-view'
-import type { Planner } from '../hooks/v2/types'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
 import { effectText } from '../hooks/config-keys'
 import { sourceOf } from '../hooks/config-view'
@@ -16,7 +15,7 @@ import {
   MEANING,
   OPS,
   USAGE,
-  applyOp as applyOpFor,
+  applyOp,
   configFilePath,
   controlPath,
   controlTool,
@@ -26,22 +25,15 @@ import {
   hintText,
   issuesOf,
   loadControl,
-  parseOp as parseOpFor,
+  parseOp,
   retryText,
   runOp,
   statusText,
   withMode,
 } from '../hooks/control'
 import type { FileIo, Op } from '../hooks/control'
-import { plan } from '../hooks/plan'
 import type { Control, Ms } from '../hooks/types'
-import { MIN, NOW, config, control, issue, keys, state } from './fixtures'
-
-// The suite below tests v1's ops: these two default to planner v1 (the plugin's own default is v2
-// since #794), and the v2 cases pass 'v2'. Until the U10 delete wave.
-const parseOp = (text: string, planner: Planner = 'v1') => parseOpFor(text, planner)
-const applyOp = (c: Control, o: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1', view: ConfigView | null = null) =>
-  applyOpFor(c, o, now, last, planner, view)
+import { MIN, NOW, control } from './fixtures'
 
 const HOUR = 60 * MIN
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
@@ -111,13 +103,8 @@ describe('parseOp', () => {
     expect(op('override 95 2')).toEqual({ op: 'override', until: { pct: 95, hours: 2 } })
     expect(op('override 97.5% 1.5h')).toEqual({ op: 'override', until: { pct: 97.5, hours: 1.5 } })
     expect(op('override off')).toEqual({ op: 'override', until: null })
-    expect(op('resume 60')).toEqual({ op: 'resume', subject: 'issue:60' })
-    expect(op('resume #60')).toEqual({ op: 'resume', subject: 'issue:60' })
-    expect(op('resume issue:60')).toEqual({ op: 'resume', subject: 'issue:60' })
-    expect(op('resume 01M4RQ0045AAAA')).toEqual({ op: 'resume', subject: 'run:01M4RQ0045AAAA' })
-    expect(op('resume run:01M4RQ0045AAAA')).toEqual({ op: 'resume', subject: 'run:01M4RQ0045AAAA' })
-    // a run id that is all digits needs its prefix: bare, it reads as an issue
-    expect(op('resume run:12345')).toEqual({ op: 'resume', subject: 'run:12345' })
+    expect(op('resume 60')).toEqual({ op: 'unpark', issues: [60], note: null })
+    expect(op('resume #60, 61 "go on"')).toEqual({ op: 'unpark', issues: [60, 61], note: 'go on' })
     expect(op('update')).toEqual({ op: 'update', reason: 'owner' })
     expect(op('update off')).toEqual({ op: 'update', reason: null })
     expect(op('update   base image  1.4.0')).toEqual({ op: 'update', reason: 'base image 1.4.0' })
@@ -160,9 +147,9 @@ describe('parseOp', () => {
       ['override 95 0', 'override'],
       ['override 95 169', 'override'],
       ['resume', 'resume'],
-      ['resume 1 2', 'resume'],
       ['resume issue:abc', 'resume'],
-      ['resume run:', 'resume'],
+      ['resume 01M4RQ0045AAAA', 'resume'],
+      ['resume run:12345', 'resume'],
       ['resume a/b', 'resume'],
       ['retry', 'retry'],
       ['retry all', 'retry'],
@@ -241,12 +228,12 @@ describe('parseOp', () => {
   test('formatOp is canonical text that parses back to the same op', () => {
     const texts = [
       'status', 'pause #12', 'unpause 12', 'skip 3', 'noskip 3', 'priority 4,2', 'priority off', 'only 522', 'only off',
-      'serial on', 'new off', 'override 95% 2h', 'override off', 'resume 60', 'resume 01M4RQ0045AAAA', 'resume run:42',
+      'serial on', 'new off', 'override 95% 2h', 'override off', 'resume 60', 'resume 60 61 "a note"',
       'retry 5', 'update', 'update off', 'update base image', 'drop 9', 'note 5 keep it small', 'note be brief', 'mode act',
     ]
     for (const text of texts) expect(op(formatOp(op(text)))).toEqual(op(text))
     expect(formatOp(op('override 95% 2h'))).toBe('override 95 2')
-    expect(formatOp(op('resume #60'))).toBe('resume issue:60')
+    expect(formatOp(op('resume #60'))).toBe('resume 60')
   })
 })
 
@@ -270,7 +257,7 @@ describe('applyOp', () => {
     const before = JSON.stringify(frozen)
     const all = [
       'status', 'pause 13', 'unpause 12', 'skip 4', 'noskip 3', 'priority 1 2', 'priority off', 'only 522', 'only off',
-      'serial on', 'new off', 'override 95 2', 'override off', 'resume 60', 'resume R1', 'retry 5', 'update', 'update off',
+      'serial on', 'new off', 'override 95 2', 'override off', 'resume 60', 'resume 60 61 "a note"', 'retry 5', 'update', 'update off',
       'drop 9', 'note 5 x', 'mode act',
     ]
     for (const text of all) {
@@ -332,15 +319,6 @@ describe('applyOp', () => {
     expect(applyOp(BUSY, op('override off'), NOW)).toMatchObject({ changed: false, text: 'No usage override is set.' })
   })
 
-  test('resume appends issue:<N> or run:<id> at now, every time (plan counts resumes)', () => {
-    const issueResumed = applyOp(BUSY, op('resume #60'), NOW)
-    expect(issueResumed.control.resumed).toEqual([...BUSY.resumed, { subject: 'issue:60', at: NOW }])
-    expect(issueResumed.text).toBe('Resumed issue #60: its hold is released.')
-    const runResumed = applyOp(issueResumed.control, op('resume 01M4RQ0045AAAA'), NOW + 1)
-    expect(runResumed.control.resumed.slice(-1)).toEqual([{ subject: 'run:01M4RQ0045AAAA', at: NOW + 1 }])
-    expect(runResumed.text).toBe('Resumed run 01M4RQ0045AAAA: its hold is released.')
-  })
-
   test('retry changes no control: the effect asks the driver for the ledger retry (D-38)', () => {
     const retry = applyOp(BUSY, op('retry #5'), NOW)
     expect(retry).toEqual({ control: BUSY, effects: { retryIssue: 5 }, changed: false, text: 'Retry #5: its exhausted actions are cleared.' })
@@ -358,16 +336,6 @@ describe('applyOp', () => {
     expect(applyOp(due.control, op('update'), NOW + MIN).control.updateDue).toEqual({ reason: 'owner', at: NOW + MIN })
     expect(applyOp(due.control, op('update off'), NOW)).toMatchObject({ changed: true, control: { updateDue: null } })
     expect(applyOp(BUSY, op('update off'), NOW)).toMatchObject({ changed: false, text: 'No update is due.' })
-  })
-
-  test('drop appends { issue, at } once; a paused issue is named as still paused (rule D6)', () => {
-    const dropped = applyOp(BUSY, op('drop 9'), NOW)
-    expect(dropped.control.dropped).toEqual([{ issue: 9, at: NOW }])
-    expect(dropped.text).toBe('Dropped #9: the loop abandons it and stops its agents.')
-    expect(applyOp(dropped.control, op('drop 9'), NOW + MIN)).toMatchObject({ changed: false, text: '#9 is already dropped.' })
-    expect(applyOp(BUSY, op('drop 12'), NOW).text).toBe(
-      'Dropped #12: the loop abandons it and stops its agents. It is paused: unpause it for the abandon to run.',
-    )
   })
 
   test('note appends { issue, text, at } for one issue or all', () => {
@@ -392,16 +360,14 @@ describe('applyOp', () => {
     expect(applyOp(BUSY, op('status'), NOW, PASS)).toEqual({ control: BUSY, effects: {}, changed: false, text: statusText(PASS, BUSY, NOW) })
   })
 
-  test('the control state the ops write is the one plan reads (G4, D1, D-35)', () => {
+  test('the control state the ops write reads back as it was written (G4, D1, D-35)', () => {
     let c: Control = EMPTY_CONTROL
-    for (const text of ['only 4 2', 'priority 1', 'skip 2']) c = applyOp(c, op(text), NOW).control
+    for (const text of ['only 4 2', 'priority 1', 'skip 2', 'new off']) c = applyOp(c, op(text), NOW).control
     const read = controlFrom(JSON.parse(JSON.stringify(c)))
-    const s = state({ queue: [1, 2, 3, 4], issues: [issue(1), issue(2), issue(3), issue(4)] })
-    expect(keys(plan({ ...s, control: read }, config()))).toEqual([`claim:4:${NOW - 30 * MIN}`])
-    const wound = applyOp(read, op('new off'), NOW).control
-    expect(keys(plan({ ...s, control: wound }, config()))).toEqual([])
-    const back = applyOp(applyOp(wound, op('new on'), NOW).control, op('only off'), NOW).control
-    expect(keys(plan({ ...s, control: back }, config()))).toEqual([`claim:1:${NOW - 30 * MIN}`, `claim:3:${NOW - 30 * MIN}`, `claim:4:${NOW - 30 * MIN}`])
+    expect(read).toEqual(c)
+    expect(read).toMatchObject({ only: [4, 2], priority: [1], skip: [2], noNewWork: true })
+    const back = applyOp(applyOp(read, op('new on'), NOW).control, op('only off'), NOW).control
+    expect(back).toMatchObject({ only: [], noNewWork: false })
   })
 })
 
@@ -559,24 +525,14 @@ describe('the command and the tool', () => {
 
 // --- v2's ops (v2 SPEC appendix E, 2.3, 11) ----------------------------------------------------------
 
-function opV2(text: string): Op {
-  const parsed = parseOp(text, 'v2')
-  if (!parsed.ok) throw new Error(`${text}: ${parsed.error}`)
-  return parsed.op
-}
-
 describe('the v2 ops (v2 SPEC appendix E)', () => {
-  test('planner v1|v2 writes the workspace config file, keeping its other keys, and pings the loop', async () => {
-    expect(op('planner v2')).toEqual({ op: 'planner', planner: 'v2' })
-    expect(op('PLANNER V1')).toEqual({ op: 'planner', planner: 'v1' })
-    for (const bad of ['planner', 'planner v3', 'planner v1 v2']) expect(parseOp(bad)).toEqual({ ok: false, error: 'Usage: planner v1|v2' })
-    const before = { repo: 'cbundy/dev-system', mode: 'act', planner: 'v1' }
-    const { io, map, writes } = files({ [CONFIG_FILE]: JSON.stringify(before) })
-    const reply = await runOp(io, PATHS, 'planner v2', NOW)
-    expect(reply).toMatchObject({ ok: true, ping: true, logged: 'planner v2', text: 'Planner v2 set in the workspace config file; it plans and acts from the next pass.' })
-    expect(writes).toEqual([CONFIG_FILE])
-    expect(JSON.parse(map.get(CONFIG_FILE) ?? '')).toEqual({ ...before, planner: 'v2' })
-    expect(formatOp(op('planner v2'))).toBe('planner v2')
+  test('planner is no op any more: the loop always plans with v2', () => {
+    for (const text of ['planner v2', 'planner v1']) {
+      const parsed = parseOp(text)
+      expect(parsed.ok).toBe(false)
+      if (!parsed.ok) expect(parsed.error).toContain('planner')
+    }
+    expect((OPS as readonly string[]).includes('planner')).toBe(false)
   })
 
   test('stop-now writes wind-down.stop-now with the time and says whether a wind-down is requested; it takes no argument and an agent may not set it', async () => {
@@ -602,60 +558,55 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
     expect(await runOp(failing.io, PATHS, 'stop-now', NOW)).toMatchObject({ ok: false, text: expect.stringContaining('write failed') })
   })
 
-  test('under planner v2, resume takes issue numbers and an optional note in double quotes, and no run id', () => {
-    expect(opV2('resume 60')).toEqual({ op: 'unpark', issues: [60], note: null })
-    expect(opV2('resume #60 61,62 60')).toEqual({ op: 'unpark', issues: [60, 61, 62], note: null })
-    expect(opV2('resume 60 "use the old parser, not the new one"')).toEqual({ op: 'unpark', issues: [60], note: 'use the old parser, not the new one' })
-    expect(opV2('resume 60 61 ""')).toEqual({ op: 'unpark', issues: [60, 61], note: null })
-    const usage = 'resume: under planner v2, takes issue numbers and an optional note in double quotes. Usage: resume <N...> ["note"]|<run id>'
+  test('resume takes issue numbers and an optional note in double quotes, and no run id', () => {
+    expect(op('resume 60')).toEqual({ op: 'unpark', issues: [60], note: null })
+    expect(op('resume #60 61,62 60')).toEqual({ op: 'unpark', issues: [60, 61, 62], note: null })
+    expect(op('resume 60 "use the old parser, not the new one"')).toEqual({ op: 'unpark', issues: [60], note: 'use the old parser, not the new one' })
+    expect(op('resume 60 61 ""')).toEqual({ op: 'unpark', issues: [60, 61], note: null })
+    const usage = 'resume: takes issue numbers and an optional note in double quotes. Usage: resume <N...> ["note"]'
     for (const bad of ['resume', 'resume 01M4RQ0045AAAA', 'resume run:42', 'resume 60 note without quotes', 'resume "only a note"']) {
-      expect({ bad, parsed: parseOp(bad, 'v2') }).toEqual({ bad, parsed: { ok: false, error: usage } })
+      expect({ bad, parsed: parseOp(bad) }).toEqual({ bad, parsed: { ok: false, error: usage } })
     }
-    expect(parseOp(`resume 60 "${'x'.repeat(2001)}"`, 'v2')).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]|<run id>' })
-    // v1 reads it as before: one issue or a run
-    expect(op('resume 60')).toEqual({ op: 'resume', subject: 'issue:60' })
-    expect(parseOp('resume 60 61').ok).toBe(false)
+    expect(parseOp(`resume 60 "${'x'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
     // canonical text parses back
-    for (const text of ['resume 60', 'resume 60 61 "a note"']) expect(opV2(formatOp(opV2(text)))).toEqual(opV2(text))
+    for (const text of ['resume 60', 'resume 60 61 "a note"']) expect(op(formatOp(op(text)))).toEqual(op(text))
   })
 
   test('a v2 resume appends issue:<N> with its note for each issue, every time; the note is read back from control.json', async () => {
-    const applied = applyOp(EMPTY_CONTROL, opV2('resume 60 61 "the answer is yes"'), NOW, null, 'v2')
+    const applied = applyOp(EMPTY_CONTROL, op('resume 60 61 "the answer is yes"'), NOW, null)
     expect(applied.control.resumed).toEqual([
       { subject: 'issue:60', at: NOW, note: 'the answer is yes' },
       { subject: 'issue:61', at: NOW, note: 'the answer is yes' },
     ])
     expect(applied.text).toBe('Resumed #60 #61: back to queued, then on from where it parked, with your note for its next step.')
-    expect(applyOp(EMPTY_CONTROL, opV2('resume 60'), NOW, null, 'v2').control.resumed).toEqual([{ subject: 'issue:60', at: NOW }])
+    expect(applyOp(EMPTY_CONTROL, op('resume 60'), NOW, null).control.resumed).toEqual([{ subject: 'issue:60', at: NOW }])
     const { io, map } = files()
-    expect(await runOp(io, PATHS, 'resume 60 "go"', NOW, { planner: 'v2' })).toMatchObject({ ok: true, ping: true, logged: 'resume 60 "go"' })
+    expect(await runOp(io, PATHS, 'resume 60 "go"', NOW)).toMatchObject({ ok: true, ping: true, logged: 'resume 60 "go"' })
     expect(controlFrom(JSON.parse(map.get(CONTROL_FILE) ?? '')).resumed).toEqual([{ subject: 'issue:60', at: NOW, note: 'go' }])
   })
 
   test('a v2 resume of an issue that is not parked changes nothing for it and says to use note', async () => {
     const { io, writes, map } = files()
-    expect(await runOp(io, PATHS, 'resume 60', NOW, { planner: 'v2', parked: [61] })).toMatchObject({
+    expect(await runOp(io, PATHS, 'resume 60', NOW, { parked: [61] })).toMatchObject({
       ok: false,
       ping: false,
       text: 'Not changed: #60 is not parked; use /factory note 60.',
     })
     expect(writes).toEqual([])
-    const some = await runOp(io, PATHS, 'resume 60 61', NOW, { planner: 'v2', parked: [61] })
+    const some = await runOp(io, PATHS, 'resume 60 61', NOW, { parked: [61] })
     expect(some).toMatchObject({ ok: true, text: 'Resumed #61: back to queued, then on from where it parked. #60 is not parked; use /factory note 60.' })
     expect(controlFrom(JSON.parse(map.get(CONTROL_FILE) ?? '')).resumed).toEqual([{ subject: 'issue:61', at: NOW }])
     // not known (no records read yet): every issue named is resumed, and plan's rows decide
-    expect((await runOp(io, PATHS, 'resume 62', NOW, { planner: 'v2', parked: null })).ok).toBe(true)
+    expect((await runOp(io, PATHS, 'resume 62', NOW, { parked: null })).ok).toBe(true)
   })
 
   test('a v2 drop applies to the life it closes: dropping again, after the issue came back, records it again', () => {
-    const dropped = applyOp(EMPTY_CONTROL, op('drop 9'), NOW, null, 'v2')
+    const dropped = applyOp(EMPTY_CONTROL, op('drop 9'), NOW, null)
     expect(dropped).toMatchObject({ changed: true, text: 'Dropped #9: its record closes and its factory labels go; the issue stays open, and adding ready brings it back.' })
     expect(dropped.control.dropped).toEqual([{ issue: 9, at: NOW }])
-    const again = applyOp(dropped.control, op('drop 9'), NOW + HOUR, null, 'v2')
+    const again = applyOp(dropped.control, op('drop 9'), NOW + HOUR, null)
     expect(again.changed).toBe(true)
     expect(again.control.dropped).toEqual([{ issue: 9, at: NOW + HOUR }])
-    // v1's drop is as it was
-    expect(applyOp(dropped.control, op('drop 9'), NOW + HOUR)).toMatchObject({ changed: false, text: '#9 is already dropped.' })
   })
 
   test('the issues each op names, which its intervention attaches to; a fleet-level op names none', () => {
@@ -664,22 +615,17 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
       [op('priority 4 2'), [4, 2]],
       [op('note 5 x'), [5]],
       [op('note x'), []],
-      [op('resume 60'), [60]],
-      [op('resume R1'), []],
-      [opV2('resume 60 61 "x"'), [60, 61]],
+      [op('resume 60 61 "x"'), [60, 61]],
       [op('mode act'), []],
-      [op('planner v2'), []],
       [op('new off'), []],
     ]
     for (const [o, issues] of cases) expect({ op: formatOp(o), issues: issuesOf(o) }).toEqual({ op: formatOp(o), issues })
   })
 
-  test('status names the planner, and the v2 shadow beside v1; a pass from before the switch names neither', () => {
-    const line = (p: Partial<PassSummary>) => statusText({ ...PASS, ...p }, EMPTY_CONTROL, NOW).split('\n')[0]
-    expect(line({ planner: 'v2' })).toBe('Pass 184, 1m ago: act, planner v2, tier slow, 3 actions, 1 for the owner.')
-    expect(line({ planner: 'v1', shadow: 'v2' })).toBe('Pass 184, 1m ago: act, planner v1 with the v2 shadow, tier slow, 3 actions, 1 for the owner.')
-    expect(line({ planner: 'v1', shadow: 'off' })).toBe('Pass 184, 1m ago: act, planner v1, tier slow, 3 actions, 1 for the owner.')
-    expect(line({})).toBe('Pass 184, 1m ago: act, tier slow, 3 actions, 1 for the owner.')
+  test('status names no planner: the loop always plans with v2', () => {
+    const line = statusText(PASS, EMPTY_CONTROL, NOW).split('\n')[0]
+    expect(line).toBe('Pass 184, 1m ago: act, tier slow, 3 actions, 1 for the owner.')
+    expect(line).not.toContain('planner')
   })
 })
 
@@ -769,7 +715,7 @@ describe('config set and unset', () => {
     const f = files()
     expect((await run(f.io, 'config set maxInFlightIssues lots')).text).toBe('maxInFlightIssues: "lots" is not a whole number or null. Not changed.')
     expect((await run(f.io, 'config set mode act')).text).toContain('/factory mode off|observe|act')
-    expect((await run(f.io, 'config set planner v2')).text).toContain('/factory planner v1|v2')
+    expect((await run(f.io, 'config set planner v2')).text).toContain('planner: unknown setting')
   })
 
   test('an invalid or non-object workspace file is refused and left alone', async () => {
@@ -798,11 +744,11 @@ describe('config set and unset', () => {
     expect(file(f)).toEqual({})
   })
 
-  test('unset under planner v2 names the v2 default now in force', async () => {
-    const f = files({ [CONFIG_FILE]: JSON.stringify({ planner: 'v2', maxInFlightIssues: 5 }) })
+  test('unset names the default now in force', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ maxInFlightIssues: 5 }) })
     const reply = await run(f.io, 'config unset maxInFlightIssues', { view: view({}, file(f) as Record<string, unknown>) })
     expect(reply.text).toBe('Unset maxInFlightIssues: was 5, now 3; from the next pass.')
-    expect(file(f)).toEqual({ planner: 'v2' })
+    expect(file(f)).toEqual({})
   })
 
   test('a set that moves a short-spelling map to Ms turns its durations into numbers', async () => {

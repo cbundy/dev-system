@@ -15,7 +15,6 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
-  parseDirty,
   parseFactoryState,
   parseIssueRead,
   parseCommitDate,
@@ -23,19 +22,14 @@ import {
   parseOldestMerge,
   parseReleaseTag,
   parseTagCommit,
-  parsePipelineLine,
-  parsePipelineOnce,
   parsePool,
   parseQueue,
   parseQueueOnce,
-  parseReflog,
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
-import type { PipelineRun } from '../hooks/parse'
-import { plan } from '../hooks/plan'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
-import { buildState, runsFromWatch, seenRuns, subIssuesOf } from '../hooks/state'
+import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
 import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
@@ -200,40 +194,6 @@ describe('parse', () => {
         { path: '/t/2', branch: null, state: 'available', dirty: null, busy: false, lease: null, leasedAt: null, leaseBranch: null },
       ],
     })
-  })
-
-  test("a slot's reflog: the branches its checkouts moved to since the lease began, newest first (#563)", () => {
-    // the shape of `git reflog show --date=unix --format=%gd%x09%gs HEAD` in a pool slot: an
-    // earlier lease, then this one, which began on the earlier lease's branch, branched, rebased
-    // and detached
-    const text = [
-      'HEAD@{1791964800}\tcheckout: moving from feat/issue-12-x to HEAD',
-      'HEAD@{1791964700}\trebase (finish): returning to refs/heads/feat/issue-12-x',
-      'HEAD@{1791964600}\tcommit: b',
-      'HEAD@{1791964550}\tcheckout: moving from 195927b598c43132fb29cdd2be7c933d27cd8cb0 to feat/issue-12-x',
-      'HEAD@{1791964500}\tcheckout: moving from feat/issue-7-prev to 195927b598c43132fb29cdd2be7c933d27cd8cb0',
-      'HEAD@{1791960000}\tcheckout: moving from 0d1e2f3 to feat/issue-7-prev',
-      '',
-    ].join('\n')
-    expect(parseReflog(text, 1791964500_000)).toEqual(['feat/issue-12-x', 'feat/issue-12-x'])
-    expect(parseReflog(text, 0)).toEqual(['feat/issue-12-x', 'feat/issue-12-x', 'feat/issue-7-prev'])
-    expect(parseReflog('', 0)).toEqual([])
-    // `treehouse get --lease -b` checks the branch out before it records leased_at, so an entry up
-    // to 2 s before the lease is still the lease's
-    const branched = `HEAD@{1791964499}\tcheckout: moving from ${'0'.repeat(40)} to feat/issue-12-x\n`
-    expect(parseReflog(branched, 1791964500_900)).toEqual(['feat/issue-12-x'])
-    expect(parseReflog(branched, 1791964502_000)).toEqual([])
-    expect(parseReflog('fatal: your current branch has no commits\n', 0)).toBeNull()
-  })
-
-  test("a slot's tree: a tracked change or an untracked file, as treehouse return counts them; an ignored file is none (#563)", () => {
-    expect(parseDirty('')).toBe(false)
-    expect(parseDirty('1 .M N... 100644 100644 100644 abc abc src/x.ts\n')).toBe(true)
-    // treehouse v3.1.2 keeps a slot with an untracked file (exit 3, empty stdin), and returns one
-    // whose only extra files are gitignored, such as node_modules (listed `!` only with --ignored)
-    expect(parseDirty('? scratch.txt\n')).toBe(true)
-    expect(parseDirty('! node_modules/\n')).toBe(false)
-    expect(parseDirty('not porcelain\n')).toBeNull()
   })
 
   test('a tracker timeline: its open sub-issues on this repo, ascending, replayed in order (D-35)', () => {
@@ -477,69 +437,6 @@ describe('parse', () => {
     }
   })
 
-  // the lines are the watcher's own examples (features/test/callum-tools/pipeline-watch-once.test.sh),
-  // with real run ids and SHAs
-  test('pipeline-watch.sh --once: every state it prints, with its detail, step and PR', () => {
-    const lines: [string, PipelineRun][] = [
-      [`parked feat/issue-7-x ${RUN(7)} step=review pr=12 head=${SHA(7)}`, pl('parked', 'feat/issue-7-x', RUN(7), { step: 'review', pr: 12, head: SHA(7) })],
-      [`failed feat/issue-8-f unknown step=unknown pr=77 head=${SHA(8)}`, pl('failed', 'feat/issue-8-f', 'unknown', { pr: 77, head: SHA(8) })],
-      [`failed feat/issue-9-c ${RUN(9)} step=test head=${SHA(9)}`, pl('failed', 'feat/issue-9-c', RUN(9), { step: 'test', head: SHA(9) })],
-      [`cancelled feat/issue-10-x ${RUN(10)} pr=14 head=${SHA(10)}`, pl('cancelled', 'feat/issue-10-x', RUN(10), { pr: 14, head: SHA(10) })],
-      [`running feat/issue-11-r ${RUN(11)} head=${SHA(11)}`, pl('running', 'feat/issue-11-r', RUN(11), { head: SHA(11) })],
-      [`pending feat/u unknown head=unknown`, pl('pending', 'feat/u', 'unknown', {})],
-      [`merge-ready feat/issue-12-b ${RUN(12)} pr=12 head=${SHA(12)}`, pl('merge-ready', 'feat/issue-12-b', RUN(12), { pr: 12, head: SHA(12) })],
-      [`conflict feat/issue-12-b ${RUN(12)} pr=12 head=${SHA(12)}`, pl('conflict', 'feat/issue-12-b', RUN(12), { pr: 12, head: SHA(12) })],
-      [
-        `head-mismatch feat/issue-13-y ${RUN(13)} run=${SHA(13)} branch=${SHA(14)} worktree=${SHA(15)} pr=13 head=${SHA(13)}`,
-        pl('head-mismatch', 'feat/issue-13-y', RUN(13), { detail: `run=${SHA(13)} branch=${SHA(14)} worktree=${SHA(15)}`, pr: 13, head: SHA(13) }),
-      ],
-      [
-        `head-mismatch feat/issue-13-y ${RUN(13)} run=unknown branch=unknown head=unknown`,
-        pl('head-mismatch', 'feat/issue-13-y', RUN(13), { detail: 'run=unknown branch=unknown' }),
-      ],
-      [`ci-stalled feat/s ${RUN(16)} reason=no-workflow pr=16 head=${SHA(16)}`, pl('ci-stalled', 'feat/s', RUN(16), { detail: 'reason=no-workflow', pr: 16, head: SHA(16) })],
-      [`ci-stalled feat/s ${RUN(16)} reason=no-checks head=${SHA(16)}`, pl('ci-stalled', 'feat/s', RUN(16), { detail: 'reason=no-checks', head: SHA(16) })],
-    ]
-    for (const [line, want] of lines) expect([line, parsePipelineLine(line)]).toEqual([line, want])
-    // one poll: every line, blank lines ignored; nothing printed is no run in flight
-    const poll = parsePipelineOnce(`${lines.map(([l]) => l).join('\n')}\n\n`)
-    expect(poll).toEqual({ runs: lines.map(([, r]) => r), bad: [] })
-    expect(parsePipelineOnce('')).toEqual({ runs: [], bad: [] })
-  })
-
-  test('pipeline-watch.sh --once: a line off the grammar is unreadable, never another state', () => {
-    const run = RUN(7)
-    const head = `head=${SHA(7)}`
-    const bad = [
-      'timeout',
-      `stalled feat/x ${run} ${head}`,
-      `parked feat/x RUNA step=review ${head}`,
-      `running feat/x ${run} pr=3`,
-      `running feat/x ${run} head=main`,
-      `running  feat/x ${run} ${head}`,
-      `running feat/x ${run} ${head} `,
-      `running feat/x ${run} ${head}\r`,
-      `parked feat/x ${run} pr=3 ${head}`,
-      `parked feat/x ${run} pr=3 step=review ${head}`,
-      `parked feat/x ${run} step= ${head}`,
-      `running feat/x ${run} step=review ${head}`,
-      `ci-stalled feat/x ${run} reason=slow ${head}`,
-      `ci-stalled feat/x ${run} pr=3 ${head}`,
-      `head-mismatch feat/x ${run} run=${SHA(1)} ${head}`,
-      `head-mismatch feat/x ${run} run=${SHA(1)} branch=main ${head}`,
-      `merge-ready feat/x ${run} reason=no-checks ${head}`,
-      `merge-ready feat/x ${run} pr=0 ${head}`,
-      `merge-ready feat/x ${run} pr=12a ${head}`,
-      `merge-ready feat/x ${run} pr=3 extra=1 ${head}`,
-      `merge-ready feat/x ${run} pr=3 pr=4 ${head}`,
-    ]
-    for (const line of bad) expect([line, parsePipelineLine(line)]).toEqual([line, null])
-    const good = `running feat/issue-11-r ${run} ${head}`
-    expect(parsePipelineOnce([good, bad[1], good].join('\n'))).toEqual({
-      runs: [pl('running', 'feat/issue-11-r', run, { head: SHA(7) }), pl('running', 'feat/issue-11-r', run, { head: SHA(7) })],
-      bad: [bad[1]],
-    })
-  })
 })
 
 describe('derive', () => {
@@ -611,7 +508,7 @@ describe('derive', () => {
     expect(runsFromEvents(factory, facts).map(r => [r.run, r.branch, r.state, r.head])).toEqual([['R45B', 'feat/issue-45-x-2', 'parked', 'h9']])
   })
 
-  test('the ledger a device proves: keyed as plan keys it', () => {
+  test('the ledger a device proves: its claims, heartbeats, sweeps and the rollouts of its merges', () => {
     const events: FactoryEvent[] = [
       ev({ state: 'renewed', issue: 9, run: null, branch: null, actor: 'agent', ts: NOW - 8 * MIN }),
       ev({ state: 'closed', issue: 3, run: null, branch: null, actor: 'sweep', ts: NOW - 12 * MIN }),
@@ -623,16 +520,11 @@ describe('derive', () => {
       // the owner merged #51 by hand and the device noted it, with no PR
       ev({ state: 'merged', issue: 51, run: null, branch: null, head: null, note: 'PR 484 merged by owner', actor: 'agent', ts: NOW - MIN }),
     ]
-    const factory = parseFactoryState(factoryJson([fsIssue(60, 'designing', { entered_at: iso(NOW - 30 * MIN) })]), REPO)!
-    const keys = deriveLedger(events, factory, factsOf(events), DEVICE).map(e => [e.key, e.status])
+    const keys = deriveLedger(events, DEVICE).map(e => [e.key, e.status])
     expect(keys).toEqual([
       [`claim:60:derived:${NOW - 30 * MIN}`, 'done'],
-      [`design:60:${NOW - 30 * MIN}`, 'running'],
-      [`adjudicate:R45:park@${NOW - 25 * MIN}:h1`, 'done'],
-      [`respond:R45:park@${NOW - 25 * MIN}:h1:fix`, 'done'],
       ['sweep:derived', 'done'],
       ['heartbeat:derived', 'done'],
-      ['merge:550:m1', 'done'],
       // the merging device ran its follow-ups, so a rebuilt merge is never read again (M7)
       ['rollout:50', 'done'],
       ['rollout:51', 'done'],
@@ -641,17 +533,16 @@ describe('derive', () => {
 })
 
 describe('state', () => {
-  test('a gate the live orchestrator already answered is not adjudicated again', () => {
+  test('a parked run the mirror shows is carried into the state with its run id, whoever answered it', () => {
     const events: FactoryEvent[] = [
       ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 2 * MIN }),
-      ev({ state: 'closed', issue: 3, run: null, branch: null, actor: 'sweep', ts: NOW - 2 * MIN }),
       ev({ state: 'parked', ts: NOW - 6 * MIN }),
       ev({ state: 'verdict', note: 'NIT: fine', actor: 'agent', ts: NOW - 5 * MIN }),
     ]
     const factory = parseFactoryState(factoryJson([fsIssue(45, 'parked', { run: 'R45', pr: 545 })]), REPO)!
     const facts = factsOf(events)
     const base = state()
-    const observed = {
+    const s = buildState({
       now: NOW,
       repo: REPO,
       device: DEVICE,
@@ -667,25 +558,14 @@ describe('state', () => {
       pool: base.pool,
       agents: [],
       milestone: null,
-      ledger: deriveLedger(events, factory, facts, DEVICE),
+      ledger: deriveLedger(events, DEVICE),
       control: control(),
       lastTitle: null,
       lastTitleAt: null,
       githubBackoffUntil: null,
       trackerTitle: config().trackerTitle,
-    }
-    const s = buildState(observed)
+    })
     expect(s.runs.map(r => [r.issue, r.state, r.run])).toEqual([[45, 'parked', 'R45']])
-    // answered at the same head: the respond is done, so nothing new is planned yet
-    expect(plan(s, config()).actions.filter(a => a.kind !== 'title').map(a => a.key)).toEqual([])
-    // a park the log shows no answer for is adjudicated
-    const fresh = buildState({ ...observed, ledger: [] })
-    expect(plan(fresh, config()).actions.map(a => a.key)).toContain(`adjudicate:R45:park@${NOW - 6 * MIN}:h1`)
-    // parked again on the same head, at the next gate: a new gate to adjudicate (2026-10-12, #506)
-    const again = [...events, ev({ state: 'parked', ts: NOW - MIN })]
-    const facts2 = factsOf(again)
-    const second = buildState({ ...observed, facts: facts2, ledger: deriveLedger(again, factory, facts2, DEVICE) })
-    expect(plan(second, config()).actions.map(a => a.key)).toContain(`adjudicate:R45:park@${NOW - MIN}:h1`)
   })
 })
 
@@ -725,7 +605,7 @@ describe('config (SPEC 4.2)', () => {
       sweepEvery: 'soon',
       maxInFlightIssues: 4,
       rateCaps: { start: 10, merge: 5 },
-      maxAttempts: { claim: 5, respond: 0, bogus: 1 },
+      maxAttempts: { claim: 5, 'restart-self': 0, bogus: 1 },
       skipLabels: ['parked'],
       trackerTitle: '(',
       colour: 'blue',
@@ -734,14 +614,14 @@ describe('config (SPEC 4.2)', () => {
     expect(c.maxInFlightIssues).toBe(4)
     expect(c.rateCaps).toEqual({ start: 10, spawn: 120, wake: 20, perIssueKind: 6 })
     expect(c.maxAttempts.claim).toBe(5)
-    expect(c.maxAttempts.respond).toBe(2)
+    expect(c.maxAttempts['restart-self']).toBe(1)
     expect(c.skipLabels).toEqual(['parked'])
     expect([c.passEveryMs, c.sweepEveryMs, c.trackerTitle]).toEqual([DEFAULT_CONFIG.passEveryMs, DEFAULT_CONFIG.sweepEveryMs, DEFAULT_CONFIG.trackerTitle])
     expect(problems).toEqual([
       'passEveryMs: "60s" is not a number of milliseconds',
       'sweepEvery: "soon" is not a duration (like 60s, 5m, 2h)',
       'rateCaps.merge: unknown (merges are never capped)',
-      'maxAttempts.respond: 0 is not a whole number of at least 1',
+      'maxAttempts.restart-self: 0 is not a whole number of at least 1',
       'maxAttempts.bogus: unknown',
       'trackerTitle: "(" is not a regular expression',
       'colour: unknown setting',
@@ -770,7 +650,7 @@ describe('config (SPEC 4.2)', () => {
   test('the defaults the owner set on 2026-10-13', () => {
     expect(DEFAULT_CONFIG).toMatchObject({
       inDevLabel: 'in development',
-      maxInFlightIssues: 5,
+      maxInFlightIssues: 3,
       rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
       passEveryMs: 60_000,
       queueEveryMs: 120_000,
@@ -831,24 +711,17 @@ describe('the loop event (SPEC 7.4, 7.5, D-09)', () => {
     device: DEVICE,
   })
   const base = { issue: 50, pr: 550, head: 'head50', run: '01M4RQ0050AAAA' }
-  // every outcome kind plan reads, with free text already empty so the round trip is exact
+  // every outcome kind the rules read, with free text already empty so the round trip is exact
   const outcomes: [string, LedgerEntry][] = [
     ['cli', entry('release-parent:60', 'release-parent', { outcome: { kind: 'cli', exit: 1 } })],
     ['claim', entry('claim:7:new', 'claim', { class: 'start', issue: 7, outcome: { kind: 'claim', result: 'lost' } })],
-    ['designer', entry('design:60:5', 'spawn', { agent: 'designer', class: 'develop', issue: 60, agentId: 'a1', outcome: { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/60#issuecomment-1060', created: [61, 62], pendingDecision: true } })],
-    ['designer unparsed', entry('design:61:5', 'spawn', { agent: 'designer', class: 'develop', issue: 61, outcome: { kind: 'designer', unparsed: true } })],
-    ['adjudicator hold', entry('adjudicate-merge:550:head50', 'spawn', { ...base, agent: 'adjudicator', class: 'drive', outcome: review({ type: 'hold', reason: '' }, { summary: '', bumpReason: '', bump: 'major', flags: ['image', 'run-it'] }) })],
-    ['adjudicator gate', entry('adjudicate:R:review:h', 'spawn', { ...base, agent: 'adjudicator', class: 'drive', outcome: review({ type: 'fix', findings: null, instructions: null, addFinding: null, ignore: null }) })],
-    ['handoff', entry('delegate:63:u', 'delegate', { class: 'develop', issue: 63, agent: 'implementer', outcome: { kind: 'handoff', notGated: true, run: 'R63', head: 'h63', newBranch: 'feat/issue-63-x-v2' } })],
-    ['update-behind', entry('update-behind:550:head50', 'update-behind', { ...base, outcome: { kind: 'update-behind', result: 'updated', from: 'head50', to: 'head51', line: '' } })],
-    ['merge', entry('merge:550:head50', 'merge', { ...base, outcome: { kind: 'merge', result: 'merged', rollout: 'run-it', closeIssue: null, line: '' } })],
     ['rollout', entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout: 'merge', closeIssue: 70 } })],
     ['wake sequence', entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence', outcome: wakeAnswer('hold') })],
     ['wake report', entry('judge:report:design:61:5', 'judge', { class: 'drive', issue: 61, wake: 'report', outcome: wakeAnswer('parsed', { fields: { brief: null, created: [], pendingDecision: false } }) })],
     ['running wake', entry('tell:decision:60:u', 'tell', { class: 'owner', issue: 60, wake: 'decision', status: 'running', endedAt: null })],
   ]
 
-  test('every outcome kind plan reads comes back exactly from its note', () => {
+  test('every outcome kind the rules read comes back exactly from its note', () => {
     for (const [name, e] of outcomes) {
       expect([name, entryFromLoop(logged(e))]).toEqual([name, e])
       const note = loopNote(e)
@@ -862,15 +735,13 @@ describe('the loop event (SPEC 7.4, 7.5, D-09)', () => {
     const held = entry('tell:merge-hold:550:h', 'tell', { class: 'owner', wake: 'merge-hold', outcome: wakeAnswer('done', { reason: long, instructions: long }) })
     const back = entryFromLoop(logged(held))
     expect(back?.outcome).toEqual(wakeAnswer('done'))
-    const verdicts = entry('adjudicate:R:x:h', 'spawn', { agent: 'adjudicator', class: 'drive', outcome: review({ type: 'escalate', why: long }, null, [long]) })
-    expect(entryFromLoop(logged(verdicts))?.outcome).toEqual(review({ type: 'escalate', why: '' }))
     // spaces and percent signs in a value are encoded, so a key survives intact
     const odd = entry('judge:report:brief:60:https://x/a b%20', 'judge', { wake: 'report' })
     expect(entryFromLoop(logged(odd))?.key).toBe('judge:report:brief:60:https://x/a b%20')
-    // a guard re-runs after a lost store (M1), so its loop event rebuilds nothing
-    expect(entryFromLoop(logged(entry('guard:550:h:1', 'guard', { outcome: { kind: 'guard', fails: [], warns: [] } })))).toBeNull()
+    // a v2 agent step's event is for the trail: it rebuilds nothing
+    expect(entryFromLoop(logged(entry('i470/l1/s2/build/a1', 'agent-step', { step: 'build' })))).toBeNull()
     // a note too long for a row keeps the entry, without its outcome
-    const huge = entry(`delegate:9:${'x'.repeat(450)}`, 'delegate', { outcome: { kind: 'handoff', notGated: false, run: 'R'.repeat(40), head: 'h'.repeat(40), newBranch: null } })
+    const huge = entry(`release-parent:9:${'x'.repeat(450)}`, 'release-parent', { outcome: { kind: 'cli', exit: 3 } })
     expect(loopNote(huge)).not.toContain('out=')
     expect(entryFromLoop(logged(huge))?.outcome).toBeUndefined()
     expect(entryFromLoop({ ...logged(held), note: 'kind=nope key=x status=done attempts=1 class=free started=1' })).toBeNull()
@@ -878,28 +749,19 @@ describe('the loop event (SPEC 7.4, 7.5, D-09)', () => {
   })
 
   test('the arguments that log an entry put its subject in the columns', () => {
-    const e = outcomes[8]![1]
+    const e = entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence' })
     expect(loopEventArgs(e)).toEqual(['loop', '--issue', '50', '--run', '01M4RQ0050AAAA', '--pr', '550', '--head', 'head50', '--note', loopNote(e)])
     expect(loopEventArgs(entry('tell:blind:0', 'tell', { wake: 'blind' }))).toEqual(['loop', '--note', loopNote(entry('tell:blind:0', 'tell', { wake: 'blind' }))])
   })
 
   test('a lost store is rebuilt from the loop events, the latest per key winning over the rest', () => {
-    const factory = parseFactoryState(factoryJson([fsIssue(60, 'designing', { entered_at: iso(NOW - 30 * MIN) })]), REPO)!
-    const designing = entry(`design:60:${NOW - 30 * MIN}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 30 * MIN, endedAt: null, agentId: 'a1' })
-    const decided: LedgerEntry = {
-      ...designing,
-      status: 'done',
-      endedAt: NOW - 5 * MIN,
-      outcome: { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/60#issuecomment-9', created: [], pendingDecision: true },
-    }
+    const asked = entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence', status: 'running', startedAt: NOW - 30 * MIN, endedAt: null })
+    const decided: LedgerEntry = { ...asked, status: 'done', endedAt: NOW - 5 * MIN, outcome: wakeAnswer('hold') }
     const other = { ...logged(decided, NOW - 5 * MIN), device: 'someone-else' }
-    const events = [logged(designing, NOW - 30 * MIN), logged(decided, NOW - 5 * MIN), other]
-    const ledger = deriveLedger(events, factory, factsOf(events), DEVICE)
-    // the designer's pending decision, not the in-flight designer the stage alone suggests
-    expect(ledger.filter(e => e.key === designing.key)).toEqual([decided])
-    const s = buildState({ ...observedFrom(factory, events), ledger })
-    const brief = (decided.outcome as Extract<Outcome, { kind: 'designer'; brief: string | null }>).brief
-    expect(plan(s, config()).actions.map(a => a.key)).toContain(`tell:decision:60:${brief}`)
+    const events = [logged(asked, NOW - 30 * MIN), logged(decided, NOW - 5 * MIN), other]
+    const ledger = deriveLedger(events, DEVICE)
+    // the answered wake, not the open one it began as; another device's events prove nothing of this one's
+    expect(ledger.filter(e => e.key === asked.key)).toEqual([decided])
   })
 })
 
@@ -1073,7 +935,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(h.calls.length).toBeGreaterThan(6)
     // the very object register built: observe adds nothing of its own
     expect(h.calls.filter(c => c.env !== ENV || c.cwd !== '/work').map(c => c.argv.join(' '))).toEqual([])
-    expect(h.commands()).toContain(`${TOOLS}/pipeline-watch.sh --once`)
+    expect(h.commands().some(c => c.includes('pipeline-watch'))).toBe(false)
     expect(h.commands()).toContain(`${TOOLS}/queue-watch.sh --once --repo ${REPO} --label ready --known 114`)
     expect(h.commands()).toContain(`${TOOLS}/usage-check.sh`)
     expect(h.commands().filter(c => c.includes('/usr/local/share/callum-tools'))).toEqual([])
@@ -1103,73 +965,16 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(h.cache.repo).toBe(other)
   })
 
-  test("runSource local: the watcher's runs, with the event log's review rounds, verdicts and supersessions", async () => {
+  test('the loop reads no pipeline runs: the runs source says so, and no watcher runs; only the event log stands in for them (the shadow, the replay)', async () => {
     const h = host()
     const obs = await h.pass(runtime(), stored())
-    expect(obs.state.sources.runs).toEqual({ ok: true, at: NOW })
-    expect(obs.state.runs).toEqual([
-      // not an issue branch: kept, since a restart waits for every run (rule H4)
-      { branch: 'chore/docs', issue: null, run: 'unknown', state: 'pending', head: null, step: null, detail: null, pr: null, since: NOW, reviewFixRounds: 0, verdicts: [], superseded: false },
-      { ...run(44, 'running'), branch: 'feat/issue-44-old', run: R44, head: SHA(44), step: null, pr: 544, since: NOW, superseded: true },
-      { ...run(45, 'parked'), branch: BR45, run: R45, head: SHA(45), step: 'review', pr: 545, since: NOW, reviewFixRounds: 1, verdicts: ['CORRECT: review-1 x'] },
-    ])
-    // plan drives the parked gate of the run the watcher sees
-    expect(plan(obs.state, config()).actions.map(a => a.key)).toContain(`adjudicate:${R45}:review:${SHA(45)}`)
-
-    // runSource events (the shadow) still reads the runs from the log, and runs no watcher
+    expect(obs.state.sources.runs).toEqual({ ok: false, at: null, error: 'not read: the loop has no pipeline runs' })
+    expect(obs.state.runs).toEqual([])
+    expect(h.commands().some(c => c.includes('pipeline-watch'))).toBe(false)
     const s = host()
     const shadow = await s.pass(runtime({ mode: 'observe', runSource: 'events' }))
-    expect(s.commands().some(c => c.includes('pipeline-watch'))).toBe(false)
     expect(shadow.state.sources.runs.ok).toBe(true)
-  })
-
-  test("a run's since holds across passes until its state, head or step moves", async () => {
-    // no step known: the gate is told apart by when the park was first seen (plan's gateOf)
-    const parked = (head: string, step = 'unknown') => ({ stdout: `parked ${BR45} ${R45} step=${step} pr=545 head=${head}\n` })
-    const h = host({ pipeline: parked(SHA(1)) })
-    const rt = runtime()
-    const keyOf = (obs: Observation) => plan(obs.state, config()).actions.map(a => a.key).find(k => k.startsWith('adjudicate:'))
-    const first = await h.pass(rt, stored(), NOW)
-    expect(first.state.runs.find(r => r.issue === 45)?.since).toBe(NOW)
-    expect(keyOf(first)).toBe(`adjudicate:${R45}:park@${NOW}:${SHA(1)}`)
-    const again = await h.pass(rt, stored(), NOW + MIN)
-    expect(again.state.runs.find(r => r.issue === 45)?.since).toBe(NOW)
-    expect(keyOf(again)).toBe(keyOf(first))
-
-    // a failed poll keeps the runs it last saw, with their age
-    h.world.pipeline = { exitCode: 1, stderr: 'pipeline-watch.sh: no-mistakes runs failed\n' }
-    const failed = await h.pass(rt, stored(), NOW + 2 * MIN)
-    expect(failed.state.sources.runs).toEqual({ ok: false, at: NOW + MIN, error: 'exit 1: pipeline-watch.sh: no-mistakes runs failed' })
-    expect(failed.state.runs).toEqual(again.state.runs)
-
-    // answered and parked again on the same head: a new gate, seen anew
-    h.world.pipeline = { stdout: `running ${BR45} ${R45} pr=545 head=${SHA(1)}\n` }
-    expect((await h.pass(rt, stored(), NOW + 3 * MIN)).state.runs.find(r => r.issue === 45)?.state).toBe('running')
-    h.world.pipeline = parked(SHA(1))
-    const next = await h.pass(rt, stored(), NOW + 4 * MIN)
-    expect(next.state.runs.find(r => r.issue === 45)?.since).toBe(NOW + 4 * MIN)
-    // a new head or a new step is a new sight too
-    h.world.pipeline = parked(SHA(2))
-    expect((await h.pass(rt, stored(), NOW + 5 * MIN)).state.runs.find(r => r.issue === 45)?.since).toBe(NOW + 5 * MIN)
-    h.world.pipeline = parked(SHA(2), 'test')
-    expect((await h.pass(rt, stored(), NOW + 6 * MIN)).state.runs.find(r => r.issue === 45)?.since).toBe(NOW + 6 * MIN)
-
-    // the pure pieces: a branch gone from the poll is dropped, so its return starts over
-    const line = pl('parked', BR45, R45, { head: SHA(2), step: 'review' })
-    expect(seenRuns(seenRuns([], [line], NOW), [], NOW + MIN)).toEqual([])
-    expect(seenRuns([{ ...line, since: NOW }], [line], NOW + MIN)).toEqual([{ ...line, since: NOW }])
-    expect(runsFromWatch([{ ...line, run: 'unknown', since: NOW }], null)[0]).toMatchObject({ issue: 45, reviewFixRounds: 0, superseded: false })
-  })
-
-  test('an unreadable watcher line or a failed poll is a failed runs source, never no runs', async () => {
-    const h = host({ pipeline: { stdout: `${LINES}\ntimeout\n` } })
-    const obs = await h.pass(runtime(), stored())
-    expect(obs.state.sources.runs).toEqual({ ok: false, at: null, error: 'unreadable line: timeout' })
-    expect(obs.state.runs).toEqual([])
-    // plan leaves the P and M rules alone while the runs are unknown
-    expect(plan(obs.state, config()).skipped).toContainEqual({ rule: 'P', issue: null, why: 'runs source unavailable' })
-    h.world.pipeline = { exitCode: 127, stderr: 'sh: pipeline-watch.sh: not found' }
-    expect((await h.pass(runtime(), stored(), NOW + MIN)).state.sources.runs).toEqual({ ok: false, at: null, error: 'exit 127: sh: pipeline-watch.sh: not found' })
+    expect(s.commands().some(c => c.includes('pipeline-watch'))).toBe(false)
   })
 
   test('act mode reads the queue through queue-watch.sh with the stored known list; exit 1 is a failed source', async () => {
@@ -1208,28 +1013,31 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const h = host()
     const obs = await h.pass(runtime(), stored({ ledger: kept }))
     expect([obs.ledgerSource, obs.state.ledger]).toEqual(['store', kept])
-    expect(h.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3'])
+    // (v2 reads the last 90 days of its own device's events beside, for its dual write)
+    expect(h.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
 
     const o = host()
     const shadow = await o.pass(runtime({ mode: 'observe' }))
     expect(shadow.ledgerSource).toBe('events')
     expect(shadow.state.ledger.map(e => e.key)).toEqual(['heartbeat:derived', 'sweep:derived'])
-    expect(o.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3'])
+    expect(o.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
   })
 
   test('a lost store is rebuilt from 7 days of events, once: holds older than the facts window survive', async () => {
-    // a pending decision five days old: outside the 3-day facts window, inside the week
+    // an answered wake five days old: outside the 3-day facts window, inside the week
     const life = NOW - 5 * DAY
-    const decided = entry(`design:60:${life}`, 'spawn', {
-      agent: 'designer',
-      class: 'develop',
-      issue: 60,
-      agentId: 'a60',
+    const decided = entry('judge:sequence:550:head50', 'judge', {
+      class: 'drive',
+      rule: 'M5',
+      issue: 50,
+      pr: 550,
+      head: 'head50',
+      wake: 'sequence',
       startedAt: life,
       endedAt: life + 60 * MIN,
-      outcome: { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/60#issuecomment-60', created: [], pendingDecision: true },
+      outcome: wakeAnswer('hold'),
     })
-    const loop = ev({ state: 'loop', issue: 60, run: null, branch: null, head: null, note: loopNote(decided), actor: 'agent', ts: life + 60 * MIN })
+    const loop = ev({ state: 'loop', issue: 50, run: null, branch: null, pr: 550, head: 'head50', note: loopNote(decided), actor: 'agent', ts: life + 60 * MIN })
     const factory = [fsIssue(60, 'designing', { entered_at: iso(life) })]
     const h = host({ factory, week: [loop, ...RECENT] })
     const obs = await h.pass(runtime(), stored({ ledger: null }))
@@ -1237,15 +1045,12 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(h.calls.filter(c => c.argv[0] === 'dev-query').map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
       ['days=3', true],
       ['days=7', true],
+      ['days=90', false],
     ])
     expect(obs.state.ledger.find(e => e.key === decided.key)).toEqual(decided)
-    // so the owner's decision is still awaited, and no second designer starts
-    const planned = plan(obs.state, config()).actions.map(a => a.key)
-    expect(planned).toContain('tell:decision:60:https://github.com/cbundy/dev-system/issues/60#issuecomment-60')
-    expect(planned.filter(k => k.startsWith('design:'))).toEqual([])
-    // the 3-day window alone would have lost it: the stage's in-flight designer is all it shows
+    // the 3-day window alone would have lost it
     const shadow = await host({ factory, week: [loop, ...RECENT] }).pass(runtime({ mode: 'observe' }))
-    expect(shadow.state.ledger.find(e => e.key === decided.key)?.status).toBe('running')
+    expect(shadow.state.ledger.find(e => e.key === decided.key)).toBeUndefined()
 
     // register saved it: from now on the store holds it, and the week is not read again
     const next = await h.pass(runtime(), stored({ ledger: obs.state.ledger }), NOW + MIN)
@@ -1269,8 +1074,6 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       at: NOW,
       error: 'the store holds no ledger and the event log could not rebuild it: exit 1: psql: connection refused',
     })
-    // plan will not count review rounds it cannot see
-    expect(plan(failed.state, config()).skipped).toContainEqual({ rule: 'P2', issue: 45, why: 'event log unavailable: review rounds cannot be counted' })
     down.world.week = []
     await down.pass(runtime(), stored({ ledger: null }), NOW + MIN)
     expect(down.commands().filter(c => c.includes('days=7'))).toHaveLength(1)
@@ -1291,9 +1094,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(held.state.queue).toEqual([114, 470])
     expect(held.state.issues.find(i => i.number === 470)?.labels).toEqual(['ready'])
     expect(held.state.githubBackoffUntil).toBe(until)
-    expect(plan(held.state, config()).title).toContain('gh wait')
     // the other sources still run
-    expect(h.commands()).toContain(`${TOOLS}/pipeline-watch.sh --once`)
+    expect(h.commands()).toContain('treehouse status --json')
 
     // once it has passed, GitHub is read again and the state shows no wait
     const over = await h.pass(runtime(), stored({ githubBackoffUntil: NOW + 6 * MIN }), NOW + 6 * MIN)
@@ -1325,16 +1127,11 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(h.commands()).toContain('git symbolic-ref --quiet --short refs/remotes/origin/HEAD')
     expect(h.commands()).toContain('git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no')
     expect(first.state.checkout).toEqual({ branch: 'main', head: SHA(1), defaultBranch: 'main', dirty: [] })
-    expect(plan(first.state, config()).actions.map(a => a.key)).toContain(`design:60:${NOW - 30 * MIN}`)
 
-    // an agent checks out another issue's branch: the next pass sees it, tells, and holds the designer
+    // an agent checks out another issue's branch: the next pass sees it
     h.world.status = { stdout: `# branch.oid ${SHA(4)}\n# branch.head (detached)\n` }
     const moved = await h.pass(runtime(), stored(), NOW + MIN)
     expect(moved.state.checkout).toMatchObject({ branch: null, head: SHA(4) })
-    const r = plan(moved.state, config())
-    expect(r.actions.map(a => a.key)).toContain(`tell:checkout:detached@${SHA(4)}`)
-    expect(r.actions.filter(a => a.kind === 'spawn')).toEqual([])
-    expect(r.title).toContain('checkout')
 
     // a read that fails is a checkout not proven where it belongs; observe mode reads it too
     h.world.originHead = { exitCode: 1 }
@@ -1344,70 +1141,6 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     h.world.originHead = { stdout: 'origin/main\n' }
     h.world.status = { exitCode: 128, stderr: 'fatal: not a git repository\n' }
     expect((await h.pass(runtime({ mode: 'observe' }), undefined, NOW + 3 * MIN)).state.checkout).toEqual({ error: 'exit 128: fatal: not a git repository' })
-  })
-
-  test("a detached slot is matched to its issue by the lease's reflog, and a finished issue's slot has its tree read (#563)", async () => {
-    const LEASED = NOW - 60 * MIN
-    const sec = (ms: number) => Math.floor(ms / 1000)
-    const slotJson = (path: string, lease: string | null) => ({ name: path, path, status: lease === null ? 'available' : 'leased', branch: '', detached: true, lease_id: lease ?? '', leased_at: lease === null ? null : iso(LEASED), processes: [] })
-    const reflog = (...lines: [number, string][]): Reply => ({ stdout: lines.map(([at, s]) => `HEAD@{${sec(at)}}\t${s}`).join('\n') + '\n' })
-    // an earlier lease's issue, before this lease began, is never this lease's
-    const earlier: [number, string] = [LEASED - 10 * MIN, `checkout: moving from ${SHA(2)} to feat/issue-9-old`]
-    const h = host({
-      factory: [fsIssue(12, 'merged'), fsIssue(13, 'implementing')],
-      pool: { stdout: JSON.stringify([slotJson('/t/1', 'l1'), slotJson('/t/2', 'l2'), slotJson('/t/3', 'l3'), slotJson('/t/4', null)]) },
-      slots: {
-        // the implementer branched, committed, and detached once the pipeline held the branch
-        '/t/1 reflog': reflog(
-          [LEASED + 20 * MIN, 'checkout: moving from feat/issue-12-x to HEAD'],
-          [LEASED + 10 * MIN, 'commit: the fix'],
-          [LEASED + MIN, `checkout: moving from ${SHA(1)} to feat/issue-12-x`],
-          earlier,
-        ),
-        '/t/1 status': { stdout: '' },
-        '/t/2 reflog': reflog(
-          [LEASED + 5 * MIN, 'checkout: moving from feat/issue-13-y to HEAD'],
-          [LEASED + 2 * MIN, `checkout: moving from ${SHA(1)} to feat/issue-13-y`],
-          earlier,
-        ),
-        // leased, but its agent has not branched yet: the slot only left the earlier lease's branch
-        '/t/3 reflog': reflog([LEASED, `checkout: moving from feat/issue-9-old to ${SHA(1)}`], earlier),
-      },
-    })
-    const first = await h.pass(runtime(), stored())
-    expect(first.state.pool?.slots.map(s => [s.path, s.leaseBranch, s.dirty])).toEqual([
-      ['/t/1', 'feat/issue-12-x', false],
-      ['/t/2', 'feat/issue-13-y', null],
-      ['/t/3', null, null],
-      ['/t/4', null, null],
-    ])
-    // only leased slots are read, and only a finished issue's tree
-    const reads = () => h.commands().filter(c => c.startsWith('git -C '))
-    expect(reads()).toEqual([
-      'git -C /t/1 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
-      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=normal',
-      'git -C /t/2 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
-      'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
-    ])
-    expect(plan(first.state, config()).actions.map(a => a.key)).toContain('release:/t/1:l1')
-
-    // the next pass: a lease's branch, once found, is not read again; the tree is
-    h.world.slots['/t/1 status'] = { stdout: '1 .M N... 100644 100644 100644 abc abc src/x.ts\n' }
-    const second = await h.pass(runtime(), stored(), NOW + MIN)
-    expect(reads()).toEqual([
-      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=normal',
-      'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
-    ])
-    expect(second.state.pool?.slots[0]).toMatchObject({ leaseBranch: 'feat/issue-12-x', dirty: true })
-    expect(plan(second.state, config()).actions.map(a => a.key)).toContain('tell:worktree-dirty:/t/1:l1')
-
-    // an untracked file is a change too: treehouse return would keep the slot
-    h.world.slots['/t/1 status'] = { stdout: '? scratch.txt\n' }
-    expect((await h.pass(runtime(), stored(), NOW + 90_000)).state.pool?.slots[0]).toMatchObject({ dirty: true })
-
-    // a read that fails leaves the slot unknown, so it is kept
-    h.world.slots['/t/1 status'] = { exitCode: 128, stderr: 'fatal: not a git repository' }
-    expect((await h.pass(runtime(), stored(), NOW + 2 * MIN)).state.pool?.slots[0]).toMatchObject({ leaseBranch: 'feat/issue-12-x', dirty: null })
   })
 
   // an issue as the reader prints it once it is closed
@@ -1436,23 +1169,11 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       queue: { stdout: `queue known=none now=${queue.join(',')}\n` },
       issues: { '--json 40': CLOSED(40), '--json 41': CLOSED(41), '--json 32': CLOSED(32) },
     })
-    // the ledger rebuilt from run 2's events: 40's adjudication asked for a fixer
-    const adjudicated = entry(`adjudicate:${R40}:review:${SHA(40)}`, 'spawn', {
-      agent: 'adjudicator',
-      class: 'drive',
-      issue: 40,
-      run: R40,
-      head: SHA(40),
-      outcome: review({ type: 'fixer', instructions: 'add the missing test' }),
-    })
-    const kept = stored({ ledger: [...(stored().ledger ?? []), adjudicated], queueKnown: null })
+    const kept = stored({ queueKnown: null })
     const first = await h.pass(runtime(), kept)
     // the twelve reads of the pass: this device's issues, the other live one, then the queue
     expect(issueReads(h)).toEqual(['40', '41', '32', ...queue.slice(0, 9).map(String)])
     expect(first.state.issues.filter(i => i.open === false).map(i => i.number)).toEqual([32, 40, 41])
-    const r = plan(first.state, config())
-    expect(r.actions.filter(a => a.kind === 'spawn').map(a => a.key)).toEqual([])
-    expect(r.title).toContain('(Q:12 - D:0 - M:0)')
 
     // a closed issue is not read again, unless this device holds it: 40 and 41 are read again
     // with the oldest reads, after the rest of the queue; 32, another device's, is not
@@ -1461,17 +1182,16 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(issueReads(h)).toEqual(['69', '70', '71', '40', '41', ...queue.slice(0, 7).map(String)])
     // 40 was reopened: held and open, it is driven again (its lease renewed with it, rule H1)
     expect(second.state.issues.find(i => i.number === 40)?.open).toBe(true)
-    expect(plan(second.state, config()).actions.filter(a => a.kind === 'spawn' && a.issue === 40).map(a => a.rule)).toEqual(['P3'])
   })
 
   test('an issue with a running agent of the loop is read too; a failed read keeps the last state; a closed issue back in the queue is read again (#556)', async () => {
-    const fixer = entry('fixer:gate:x', 'spawn', { agent: 'fixer', class: 'drive', issue: 77, status: 'running', agentId: 'a77', startedAt: NOW - 5 * MIN, endedAt: null })
+    const fixer = entry('i77/l1/s2/fix/a1', 'agent-step', { step: 'fix', class: 'drive', issue: 77, status: 'running', agentId: 'a77', startedAt: NOW - 5 * MIN, endedAt: null })
     const kept = stored({ ledger: [...(stored().ledger ?? []), fixer] })
     const h = host({ issues: { '--json 77': CLOSED(77) } })
     const first = await h.pass(runtime(), kept)
     expect(issueReads(h)).toEqual(['77', '45', '114', '470'])
-    // the factory never saw 77, but its agent is the loop's: stopped, with the reason
-    expect(plan(first.state, config()).actions.find(a => a.key === 'stop:a77')).toMatchObject({ rule: 'A2', reason: 'issue closed' })
+    // the factory never saw 77, but its agent is the loop's: the closed issue is in the state
+    expect(first.state.issues.find(i => i.number === 77)?.open).toBe(false)
 
     // 45's next read fails: it stays open as last read, never unknown or closed
     h.world.issues['--json 45'] = { exitCode: 1, stderr: 'callum-flow-issue-read: cannot read issue #45' }
@@ -1536,7 +1256,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       { id: 'a1', type: 'callum-flow:adjudicator', status: 'running' as const },
       { id: 'other', type: 'general-purpose', status: 'running' as const },
     ]
-    const spawned = entry(`adjudicate:${R45}:review:${SHA(45)}`, 'spawn', { agent: 'adjudicator', class: 'drive', status: 'running', endedAt: null, agentId: 'a1' })
+    const spawned = entry('i45/l1/s2/review/a1', 'agent-step', { step: 'review', class: 'drive', status: 'running', endedAt: null, agentId: 'a1' })
     const io: Io = {
       now: async () => NOW,
       run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout: factoryJson([]), stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),

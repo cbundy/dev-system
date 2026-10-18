@@ -31,7 +31,7 @@ import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, issue, state as baseState
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`

@@ -5,7 +5,7 @@
 // treehouse status --json as it printed on 2026-10-13).
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CLI_TIMEOUT_MS, NO_EXIT, byCheck, cliExecutors, commandFailure, eventFailure, finish, ownAgent, prCloseCheck, slotState, stepsOf, usageError } from '../hooks/act-cli'
+import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, stepsOf, usageError } from '../hooks/act-cli'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, AgentView, LedgerEntry } from '../hooks/types'
@@ -13,8 +13,6 @@ import { DEVICE, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const IN_DEV = 'in development'
-const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/2/dev-system'
-const LEASE = 'b7e18f7e5e03e9d009121bfed17e0c33'
 const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
 
 type Call = { argv: string[]; init: RunInit }
@@ -114,34 +112,11 @@ const A = {
   claim: (issue: number | null = 470): Action => ({ ...base, class: 'start', kind: 'claim', key: `claim:${issue}:new`, rule: 'D1', issue }),
   close: (): Action => ({ ...base, kind: 'close-issue', key: 'close:470', rule: 'M7', issue: 470 }),
   releaseParent: (): Action => ({ ...base, kind: 'release-parent', key: 'release-parent:470', rule: 'D3', issue: 470, created: [471, 472] }),
-  abandon: (run: string | null = '01RUN', branch: string | null = 'feat/issue-470-x'): Action => ({
-    ...base,
-    kind: 'abandon',
-    key: 'abandon:470:1',
-    rule: 'D6',
-    issue: 470,
-    run,
-    branch,
-    note: 'dropped by the owner',
-  }),
   later: (): Action => ({ ...base, kind: 'milestone-later', key: 'milestone-later:470', rule: 'M7', issue: 470 }),
-  expect: (why = 'a new CLI flag'): Action => ({ ...base, kind: 'milestone-expect', key: 'expect:minor:512', rule: 'M7', issue: 470, bump: 'minor', why }),
-  reopen: (): Action => ({ ...base, kind: 'pr-reopen', key: 'reopen:512:01RUN', rule: 'P6a', issue: 470, pr: 512 }),
-  prClose: (): Action => ({ ...base, kind: 'pr-close', key: 'pr-close:44', rule: 'M8', issue: 32, pr: 44, run: '01RUN', newBranch: 'feat/issue-32-slug-v2', by: 50 }),
-  comment: (): Action => ({ ...base, kind: 'pr-comment', key: 'pr-comment:512:h1', rule: 'M3', issue: 470, pr: 512, body: 'Accepted:\n\nCORRECT: x' }),
-  release: (): Action => ({ ...base, kind: 'release-worktree', key: `release:${SLOT}:${LEASE}`, rule: 'H3', issue: 470, path: SLOT, branch: 'feat/issue-470-x', lease: LEASE }),
   restart: (rule = 'H4'): Action => ({ ...base, kind: 'restart-self', key: 'restart:1', rule, issue: null, why: 'image 1.2.3', at: 1 }),
   stop: (agentId = 'a1'): Action => ({ ...base, kind: 'stop-agent', key: `stop:${agentId}`, rule: 'A1', reason: 'timed out', issue: 470, agentId, entry: 'design:470:1' }),
   title: (text = '🔄 dev-system (Q:1 - D:2 - M:0)'): Action => ({ ...base, kind: 'title', key: 'title', rule: 'O1', issue: null, text }),
 }
-
-const STATUS_RETURNED = JSON.stringify([
-  { name: '1', path: '/workspaces/dev-system/.treehouse/dev-system-22f535/1/dev-system', status: 'leased', branch: 'feat/factory-loop', processes: [] },
-  { name: '2', path: SLOT, status: 'available', branch: '', detached: true, processes: [] },
-])
-// the slot still under the lease the return was pinned to, then under another one (re-leased)
-const STATUS_HELD = STATUS_RETURNED.replace('"available"', `"leased","lease_id":"${LEASE}"`)
-const STATUS_RELEASED = STATUS_RETURNED.replace('"available"', '"leased","lease_id":"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"')
 
 describe('stepsOf: the argv templates (SPEC 6.1)', () => {
   const argv = (a: Action) => {
@@ -156,25 +131,8 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
     expect(argv(A.claim())).toEqual([['callum-flow-claim', '470']])
     expect(argv(A.close())).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
     expect(argv(A.releaseParent())).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV], ['event:abandoned']])
-    expect(argv(A.abandon())).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV], ['event:abandoned']])
     expect(argv(A.later())).toEqual([['callum-flow-milestone', 'plan', '470', 'later']])
-    expect(argv(A.expect())).toEqual([['callum-flow-milestone', 'expect', 'minor', 'a new CLI flag']])
-    expect(argv(A.reopen())).toEqual([
-      ['gh', 'pr', 'close', '512', '--repo', REPO],
-      ['gh', 'pr', 'reopen', '512', '--repo', REPO],
-    ])
-    expect(argv(A.comment())).toEqual([['gh', 'pr', 'comment', '512', '--repo', REPO, '--body-file', '-']])
-    expect(argv(A.prClose())).toEqual([
-      ['gh', 'pr', 'view', '44', '--repo', REPO, '--json', 'state,headRefName'],
-      ['gh', 'pr', 'view', '50', '--repo', REPO, '--json', 'state,headRefName'],
-      ['gh', 'pr', 'close', '44', '--repo', REPO, '--comment', 'Superseded by #50: this work moved to `feat/issue-32-slug-v2`. Closed by the factory loop.'],
-    ])
-    expect(argv(A.release())).toEqual([['treehouse', 'return', SLOT, '--if-lease-id', LEASE], ['treehouse', 'status', '--json']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
-  })
-
-  test('a multi-line bump reason becomes the one line the milestone CLI takes', () => {
-    expect(argv(A.expect('adds a flag\n  and a mode\t'))).toEqual([['callum-flow-milestone', 'expect', 'minor', 'adds a flag and a mode']])
   })
 
   test('refusals: an issue kind with no issue, restart-self outside H4, a kind that runs no command', () => {
@@ -184,7 +142,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
   })
 
   test('no template can pass a forbidden flag or command (SPEC 6.1)', () => {
-    const all = [A.heartbeat(), A.sweep(), A.claim(), A.close(), A.releaseParent(), A.abandon(), A.later(), A.expect(), A.reopen(), A.comment(), A.prClose(), A.release(), A.restart()]
+    const all = [A.heartbeat(), A.sweep(), A.claim(), A.close(), A.releaseParent(), A.later(), A.restart()]
     for (const a of all) {
       for (const words of argv(a)) {
         const line = words.join(' ')
@@ -202,8 +160,6 @@ describe('the commands each executor runs', () => {
       [A.claim(), 120_000, undefined],
       [A.close(), 60_000, undefined],
       [A.later(), 60_000, undefined],
-      [A.expect(), 60_000, undefined],
-      [A.comment(), 60_000, 'Accepted:\n\nCORRECT: x'],
       [A.restart(), 600_000, undefined],
     ]
     for (const [action, timeoutMs, stdin] of cases) {
@@ -215,10 +171,6 @@ describe('the commands each executor runs', () => {
     }
   })
 
-  test('treehouse return gets an empty stdin, so a discard prompt can only decline', async () => {
-    const { calls } = await exec(A.release(), [{}, { stdout: STATUS_RETURNED }])
-    expect(calls.map(c => c.init)).toEqual([{ timeoutMs: 120_000, stdin: '' }, { timeoutMs: 120_000 }])
-  })
 })
 
 describe('heartbeat and sweep', () => {
@@ -285,7 +237,7 @@ describe('claim', () => {
   })
 })
 
-describe('gh writes: close-issue, pr-comment, pr-reopen', () => {
+describe('gh writes: close-issue', () => {
   test('close-issue: done on exit 0; gh exit 1 failed; gh exit 2 (cancelled) is retried, not a usage error', async () => {
     expect((await exec(A.close())).result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed #470' })
     const failed = (await exec(A.close(), [{ exitCode: 1, stderr: 'GraphQL: Could not resolve to an issue with the number of 470. (repository.issue)' }])).result
@@ -295,111 +247,9 @@ describe('gh writes: close-issue, pr-comment, pr-reopen', () => {
     expect('noRetry' in cancelled).toBe(false)
     expect((await exec(A.close(), [{ exitCode: 1, stderr: 'GraphQL: API rate limit exceeded for user ID 1234.' }])).result).toMatchObject({ rateLimited: true })
   })
-
-  test('pr-comment: the body goes on stdin, the comment URL into the summary', async () => {
-    const url = 'https://github.com/cbundy/dev-system/pull/512#issuecomment-99'
-    const { result, calls } = await exec(A.comment(), [{ stdout: `${url}\n` }])
-    expect(calls[0]?.init.stdin).toBe('Accepted:\n\nCORRECT: x')
-    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `commented on PR #512: ${url}` })
-    expect((await exec(A.comment(), [{ exitCode: 1, stderr: RATE }])).result).toMatchObject({ status: 'failed', rateLimited: true })
-  })
-
-  test('pr-reopen: close then reopen; a failed close never reopens, a failed reopen names its step', async () => {
-    const ok = await exec(A.reopen())
-    expect(ok.calls.map(c => c.argv[2])).toEqual(['close', 'reopen'])
-    expect(ok.calls.map(c => c.init)).toEqual([{ timeoutMs: 60_000 }, { timeoutMs: 60_000 }])
-    expect(ok.result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'PR #512 closed and reopened' })
-
-    const closeFailed = await exec(A.reopen(), [{ exitCode: 1, stderr: "Pull request #512 can't be closed because it was already merged" }])
-    expect(closeFailed.calls).toHaveLength(1)
-    expect(closeFailed.result).toMatchObject({ status: 'failed', summary: "gh pr close: exit 1: Pull request #512 can't be closed because it was already merged" })
-
-    const reopenFailed = await exec(A.reopen(), [{}, { exitCode: 1, stderr: RATE }])
-    expect(reopenFailed.calls).toHaveLength(2)
-    expect(reopenFailed.result).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
-    expect(reopenFailed.result.summary).toStartWith('gh pr reopen: exit 1')
-  })
 })
 
-describe('pr-close: the PR of a superseded run (rule M8, #553)', () => {
-  const view = (state: string, head = 'feat/issue-32-slug') => ({ stdout: `${JSON.stringify({ headRefName: head, state })}\n` })
-  const by = (state = 'OPEN', head = 'feat/issue-32-slug-v2') => view(state, head)
-  const close = A.prClose() as Extract<Action, { kind: 'pr-close' }>
-
-  test('an open PR on the old branch: read, the new PR read, then closed with a comment linking it', async () => {
-    const { result, calls } = await exec(A.prClose(), [view('OPEN'), by()])
-    expect(calls.map(c => c.argv.slice(0, 4))).toEqual([
-      ['gh', 'pr', 'view', '44'],
-      ['gh', 'pr', 'view', '50'],
-      ['gh', 'pr', 'close', '44'],
-    ])
-    expect(calls[2]?.argv).toContain('--repo')
-    expect(calls[2]?.argv).not.toContain('--delete-branch')
-    expect(calls.map(c => c.init)).toEqual([{ timeoutMs: 60_000 }, { timeoutMs: 60_000 }, { timeoutMs: 60_000 }])
-    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed PR #44, superseded by #50' })
-    // a chain links the newest PR, on a branch past the one the work first moved to
-    expect((await exec(A.prClose(), [view('OPEN'), by('OPEN', 'feat/issue-32-slug-v2-v2')])).calls).toHaveLength(3)
-    // the new PR merged meanwhile: the old one is closed all the same
-    expect((await exec(A.prClose(), [view('OPEN'), by('MERGED')])).result).toMatchObject({ status: 'done' })
-  })
-
-  test('never a merged PR, nor one closed already: left alone, done, and the close never runs', async () => {
-    for (const state of ['MERGED', 'CLOSED']) {
-      const { result, calls } = await exec(A.prClose(), [view(state)])
-      expect(calls).toHaveLength(1)
-      expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `PR #44 is already ${state.toLowerCase()}: left alone` })
-    }
-  })
-
-  test('a PR on the new branch, or on a branch of another issue, is refused and never retried', async () => {
-    for (const head of ['feat/issue-32-slug-v2', 'feat/issue-33-other', 'chore/docs']) {
-      const { result, calls } = await exec(A.prClose(), [view('OPEN', head)])
-      expect(calls).toHaveLength(1)
-      expect(result).toEqual({ status: 'failed', summary: `refused: PR #44 is on ${head}, not a superseded branch of #32`, noRetry: true })
-    }
-  })
-
-  test('the new PR is the fixer\'s word: one of another issue, or closed unmerged, is refused and the old PR stays open', async () => {
-    // stage D: a fixer for PR 44 (issue 32) named issue 38's branch, whose PR is 52
-    for (const [state, head] of [
-      ['OPEN', 'feat/issue-38-other'],
-      ['MERGED', 'feat/issue-38-other'],
-      ['OPEN', 'chore/docs'],
-      ['CLOSED', 'feat/issue-32-slug-v2'],
-    ] as const) {
-      const { result, calls } = await exec(A.prClose(), [view('OPEN'), by(state, head)])
-      expect(calls.map(c => c.argv[2])).toEqual(['view', 'view'])
-      expect(result).toEqual({ status: 'failed', summary: `refused: PR #50 is ${state.toLowerCase()} on ${head}, not a PR of #32 to supersede #44`, noRetry: true })
-    }
-    expect(byCheck(close, by('OPEN', 'feat/issue-38-other').stdout)).toMatchObject({ status: 'failed', noRetry: true })
-    expect(byCheck(close, by().stdout)).toBe('close')
-  })
-
-  test('a failed or unreadable read closes nothing and is retried; a failed close names its step', async () => {
-    const failed = await exec(A.prClose(), [{ exitCode: 1, stderr: RATE }])
-    expect(failed.calls).toHaveLength(1)
-    expect(failed.result).toMatchObject({ status: 'failed', rateLimited: true })
-    const unread = await exec(A.prClose(), [{ stdout: 'not json' }])
-    expect(unread.calls).toHaveLength(1)
-    expect(unread.result).toMatchObject({ status: 'failed', summary: 'gh pr view: PR #44 did not read' })
-    expect('noRetry' in unread.result).toBe(false)
-    const byFailed = await exec(A.prClose(), [view('OPEN'), { exitCode: 1, stderr: RATE }])
-    expect(byFailed.calls).toHaveLength(2)
-    expect(byFailed.result).toMatchObject({ status: 'failed', rateLimited: true })
-    for (const stdout of ['not json', '{"state":"OPEN"}', '{"state":"DRAFT","headRefName":"feat/issue-32-slug-v2"}']) {
-      const byUnread = await exec(A.prClose(), [view('OPEN'), { stdout }])
-      expect(byUnread.calls).toHaveLength(2)
-      expect(byUnread.result).toMatchObject({ status: 'failed', summary: 'gh pr view: PR #50 did not read' })
-      expect('noRetry' in byUnread.result).toBe(false)
-    }
-    const closeFailed = await exec(A.prClose(), [view('OPEN'), by(), { exitCode: 1, stderr: 'GraphQL: Something went wrong' }])
-    expect(closeFailed.result.summary).toStartWith('gh pr close: exit 1')
-    // the pure reading, as the executor uses it
-    expect(prCloseCheck(close, view('OPEN').stdout)).toBe('close')
-  })
-})
-
-describe('release-parent and abandon: the label, then the event, stopping at the first failure', () => {
+describe('release-parent: the label, then the event, stopping at the first failure', () => {
   test('release-parent: the claim label comes off, then `abandoned` notes the split', async () => {
     const { result, calls, events } = await exec(A.releaseParent())
     expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV]])
@@ -427,20 +277,8 @@ describe('release-parent and abandon: the label, then the event, stopping at the
     expect(unread.events).toEqual([{ state: 'abandoned', fields: { issue: 470, note: 'split into 471,472' } }])
   })
 
-  test('abandon: the event carries the run and branch when known, and leaves out what is not', async () => {
-    const known = await exec(A.abandon())
-    expect(known.calls.map(c => c.init)).toEqual([{ timeoutMs: 60_000 }])
-    expect(known.events).toEqual([
-      { state: 'abandoned', fields: { issue: 470, run: '01RUN', branch: 'feat/issue-470-x', note: 'dropped by the owner' } },
-    ])
-    expect(known.result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'abandoned #470' })
-    const unknown = await exec(A.abandon(null, null))
-    expect(unknown.events[0]?.fields).toEqual({ issue: 470, note: 'dropped by the owner' })
-    expect(Object.keys(unknown.events[0]?.fields ?? {}).sort()).toEqual(['issue', 'note'])
-  })
-
   test('a failed label edit logs no event; a rate limit is flagged', async () => {
-    const { result, events } = await exec(A.abandon(), [{ exitCode: 1, stderr: RATE }])
+    const { result, events } = await exec(A.releaseParent(), [{ exitCode: 1, stderr: RATE }])
     expect(events).toHaveLength(0)
     expect(result).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
   })
@@ -455,7 +293,7 @@ describe('release-parent and abandon: the label, then the event, stopping at the
       summary: 'event abandoned: callum-flow-event: unknown state',
       noRetry: true,
     })
-    const other = await exec(A.abandon(), [], { event: async () => Promise.reject(new Error('cannot start')) })
+    const other = await exec(A.releaseParent(), [], { event: async () => Promise.reject(new Error('cannot start')) })
     expect(other.result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: NO_EXIT } })
     expect('noRetry' in other.result).toBe(false)
   })
@@ -472,65 +310,6 @@ describe('the milestone', () => {
   test('milestone-later: exit 1 with no Later milestone is failed', async () => {
     const stderr = 'callum-flow-milestone: no open "Later" milestone in cbundy/dev-system - create it first (this helper never creates milestones)'
     expect((await exec(A.later(), [{ exitCode: 1, stderr }])).result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1, detail: stderr } })
-  })
-
-  test('milestone-expect: the line it set; a usage error is never retried', async () => {
-    const { result } = await exec(A.expect(), [{ stdout: 'Expected: minor - a new CLI flag\n' }])
-    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'Expected: minor - a new CLI flag' })
-    const usage = await exec(A.expect(), [{ exitCode: 2, stderr: 'callum-flow-milestone: the reason must not be empty' }])
-    expect(usage.result).toMatchObject({ status: 'failed', noRetry: true })
-  })
-})
-
-describe('release-worktree', () => {
-  test('returned, and treehouse status shows the slot available', async () => {
-    const { result, calls } = await exec(A.release(), [{}, { stdout: STATUS_RETURNED }])
-    expect(calls.map(c => c.argv)).toEqual([['treehouse', 'return', SLOT, '--if-lease-id', LEASE], ['treehouse', 'status', '--json']])
-    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `returned ${SLOT}` })
-  })
-
-  test('exit 0 but the slot is still held, or not listed: failed', async () => {
-    expect((await exec(A.release(), [{}, { stdout: STATUS_HELD }])).result).toEqual({
-      status: 'failed',
-      outcome: { kind: 'cli', exit: 0, detail: `${SLOT} is leased after treehouse return` },
-      summary: `${SLOT} is leased after treehouse return`,
-    })
-    expect((await exec(A.release(), [{}, { stdout: '[]' }])).result).toMatchObject({ status: 'failed', outcome: { detail: `${SLOT} is not listed after treehouse return` } })
-  })
-
-  test('a failed return skips the status read; treehouse exit 2 is not a usage error', async () => {
-    const { result, calls } = await exec(A.release(), [{ exitCode: 2, stderr: 'error: foreign process remains' }])
-    expect(calls).toHaveLength(1)
-    expect(result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 2 } })
-    expect('noRetry' in result).toBe(false)
-    // a slot that turned dirty, an untracked file included, declines the discard prompt (exit 3)
-    const dirty = await exec(A.release(), [{ exitCode: 3, stderr: 'worktree not returned: it has uncommitted changes and the confirmation could not be answered (stdin reached EOF)' }])
-    expect(dirty.calls).toHaveLength(1)
-    expect(dirty.result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 3 } })
-  })
-
-  test('a slot leased again since the plan fails the lease condition and is left alone, done (#563)', async () => {
-    // treehouse v3.1.2's answer to --if-lease-id with another lease on the slot
-    const mismatch = { exitCode: 1, stderr: `failed to return worktree: lease precondition failed: lease identity does not match worktree ${SLOT}\n` }
-    const { result, calls } = await exec(A.release(), [mismatch, { stdout: STATUS_RELEASED }])
-    expect(calls.map(c => c.argv[1])).toEqual(['return', 'status'])
-    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `left ${SLOT} alone: its lease changed since the plan` })
-    // handed to a plain treehouse get, it carries no lease: not this one either
-    const plain = STATUS_RETURNED.replace('"available"', '"in-use"')
-    expect((await exec(A.release(), [mismatch, { stdout: plain }])).result).toMatchObject({ status: 'done', summary: `left ${SLOT} alone: its lease changed since the plan` })
-    // an exit 1 with the lease still on the slot is a failed return, its own line the summary
-    expect((await exec(A.release(), [{ exitCode: 1, stderr: 'could not verify worktree processes stop' }, { stdout: STATUS_HELD }])).result).toMatchObject({
-      status: 'failed',
-      outcome: { kind: 'cli', exit: 1 },
-      summary: 'treehouse return: exit 1: could not verify worktree processes stop',
-    })
-  })
-
-  test('a failed status read is failed', async () => {
-    expect((await exec(A.release(), [{}, { exitCode: 1, stderr: 'not a git repository' }])).result).toMatchObject({
-      status: 'failed',
-      summary: 'treehouse status: exit 1: not a git repository',
-    })
   })
 })
 
@@ -583,6 +362,13 @@ describe('stop-agent: only the loop\'s own running agents', () => {
     }
   })
 
+  test('ownAgent reads the running entries only: an ended entry, or an agent the ledger does not hold, is not the loop\'s to stop', () => {
+    expect(ownAgent([running('a1')], 'a1')).toBe(true)
+    expect(ownAgent([running('a1')], 'a2')).toBe(false)
+    expect(ownAgent([{ ...running('a1'), status: 'timed-out' }], 'a1')).toBe(false)
+    expect(ownAgent([{ ...running('a1'), status: 'done', endedAt: NOW }], 'a1')).toBe(false)
+  })
+
   test('a stop that is not supported, or throws, is failed with the reason (SPEC 13)', async () => {
     const unsupported = await exec(A.stop('a1'), [], { ledger: [running('a1')], stop: async () => ({ stopped: false, error: 'TaskStop is not available to mods' }) })
     expect(unsupported.result).toEqual({ status: 'failed', summary: 'not stopped a1: TaskStop is not available to mods' })
@@ -590,28 +376,6 @@ describe('stop-agent: only the loop\'s own running agents', () => {
     expect(threw.result).toEqual({ status: 'failed', summary: 'not stopped a1: tool call failed' })
   })
 
-  test('ownAgent reads running entries, and done agent entries whose agent the list shows at work', () => {
-    const listed = (status: AgentView['status']) => [{ id: 'a1', type: 'factory-loop:designer', status }]
-    expect(ownAgent([running('a1')], 'a1', [])).toBe(true)
-    expect(ownAgent([running('a1')], 'a2', listed('running'))).toBe(false)
-    expect(ownAgent([{ ...running('a1'), status: 'timed-out' }], 'a1', listed('running'))).toBe(false)
-    const answered = { ...running('a1'), status: 'done' as const, endedAt: NOW }
-    expect(ownAgent([answered], 'a1', listed('waiting'))).toBe(true)
-    // idle: its turn ended (#560), so the loop stops nothing of it
-    for (const status of ['completed', 'idle', 'killed', 'failed'] as const) expect(ownAgent([answered], 'a1', listed(status))).toBe(false)
-    expect(ownAgent([running('a1')], 'a1', listed('idle'))).toBe(true)
-    expect(ownAgent([answered], 'a1', [])).toBe(false)
-  })
-
-  test('an agent that works on after its answer is recorded is stopped; one the list shows ended is not (#548)', async () => {
-    const answered = { ...running('a1'), status: 'done' as const, endedAt: NOW }
-    const { result, stops } = await exec(A.stop('a1'), [], { ledger: [answered], agents: [{ id: 'a1', type: 'callum-flow:fixer', status: 'waiting' }] })
-    expect(stops).toEqual(['a1'])
-    expect(result).toEqual({ status: 'done', summary: 'stopped a1 (timed out)' })
-    const ended = await exec(A.stop('a1'), [], { ledger: [answered], agents: [{ id: 'a1', type: 'callum-flow:fixer', status: 'completed' }] })
-    expect(ended.stops).toEqual([])
-    expect(ended.result).toMatchObject({ status: 'failed', noRetry: true })
-  })
 })
 
 describe('title', () => {
@@ -639,17 +403,11 @@ describe('guards and pure readers', () => {
   test('cliExecutors covers exactly the kinds that spend no tokens and need no parser of their own', () => {
     expect(Object.keys(cliExecutors).sort()).toEqual(
       [
-        'abandon',
         'claim',
         'close-issue',
         'heartbeat',
-        'milestone-expect',
         'milestone-later',
-        'pr-close',
-        'pr-comment',
-        'pr-reopen',
         'release-parent',
-        'release-worktree',
         'restart-self',
         'stop-agent',
         'sweep',
@@ -677,13 +435,6 @@ describe('guards and pure readers', () => {
   test('eventFailure reads an exit code off the error when it has one', () => {
     expect(eventFailure('abandoned', Object.assign(new Error('bad'), { exitCode: 2 }))).toMatchObject({ noRetry: true, outcome: { exit: 2 } })
     expect(eventFailure('abandoned', 'plain text')).toMatchObject({ status: 'failed', outcome: { exit: NO_EXIT, detail: 'plain text' } })
-  })
-
-  test('slotState reads treehouse status --json', () => {
-    expect(slotState(STATUS_RETURNED, SLOT)).toBe('available')
-    expect(slotState(STATUS_HELD, SLOT)).toBe('leased')
-    expect(slotState('[]', SLOT)).toBeNull()
-    expect(slotState('not json', SLOT)).toBeNull()
   })
 
   test('finish: a claim with no lost exit is claimed; a kind that runs no command is refused', () => {

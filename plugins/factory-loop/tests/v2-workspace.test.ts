@@ -19,7 +19,7 @@ import type { WorkspaceRead } from '../hooks/v2/workspace'
 import { MIN, NOW, config, entry, state as baseState } from './fixtures'
 import { ENGINE_TEST } from './host'
 
-const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
+const CFG = config({ mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 120 * MIN)
 const SESSION = 'session-1'
 const OK = { ok: true, at: NOW }

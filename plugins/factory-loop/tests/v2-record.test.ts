@@ -19,7 +19,7 @@ import type { IssueRecord, TableEvent } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, OTHER, config } from './fixtures'
 
 const DAY = 24 * 60 * MIN
-const CFG = config({ planner: 'v2' })
+const CFG = config()
 
 // A test's own codec: the record as JSON in the note. The selection is what these tests check;
 // the real note's codec is events.ts's.

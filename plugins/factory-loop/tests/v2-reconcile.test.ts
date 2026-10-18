@@ -44,7 +44,7 @@ import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST
 import type { Seen } from './host'
 
 const HOUR = 60 * MIN
-const CFG = config({ planner: 'v2' })
+const CFG = config()
 const STAGES: readonly (Stage | null)[] = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'ready to merge', 'merged', 'closed without merge', null]
 
 function record(over: Partial<IssueRecord> = {}): IssueRecord {
@@ -361,7 +361,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     s = ran(s, [event as Action])
     expect(r1(planV2(s, CFG))).toEqual([expect.objectContaining(releaseIv(487, event?.key ?? '', 'rejected'))])
     // a lower maxLives rejects sooner; a higher one puts it back in the queue
-    const cfg = (maxLives: number) => config({ planner: 'v2', maxLives })
+    const cfg = (maxLives: number) => config({ maxLives })
     const fresh = world({ issues: [held(488)] })
     expect(r1(planV2(fresh, cfg(1))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['reject', 'comment', 'tell'])
     expect(r1(planV2(world({ issues: [held(487, { stage: 'implementing' })], records: [first], ledger: [second, claim] }), cfg(4))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['requeue'])
@@ -822,7 +822,7 @@ describe('lives (v2 SPEC 3.2, 6.4)', () => {
     // its done transition is the owner's intervention, cause unreject
     const t = entry(back?.key ?? '', 'transition', { issue: 492, rule: 'S1', startedAt: NOW, endedAt: NOW, outcome: { kind: 'transition', row: 'S0', event: 'ok', cause: null, from: null, to: 'queued', step: null, stored: true, via: 'unreject' } })
     const next = back?.kind === 'transition' ? back.next : record()
-    const ivs = planV2(world({ records: [earlier, next], ledger: [rejected, done, t] }), config({ planner: 'v2', mode: 'act' })).actions.filter(isIv)
+    const ivs = planV2(world({ records: [earlier, next], ledger: [rejected, done, t] }), config({ mode: 'act' })).actions.filter(isIv)
     expect(ivs.map(a => (a.kind === 'event' && a.event.state === 'intervention' ? [a.event.who, a.event.cause] : []))).toContainEqual(['person', 'unreject'])
   })
 
@@ -871,13 +871,13 @@ function driverWorld(ghostIssue: number) {
 describe('R1 in the driver', () => {
   test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, run: driverWorld(470) })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: driverWorld(470) })
     await $.session.start(START)
     await clock.advance(6_000)
     // a second pass, once the issue's labels have been read
     await clock.advance(61_000)
     const line = h.last()
-    expect(line).toMatchObject({ mode: 'observe', executed: false, planner: 'v2' })
+    expect(line).toMatchObject({ mode: 'observe', executed: false })
     const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
     expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
     expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in implementing for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)

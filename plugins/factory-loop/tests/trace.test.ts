@@ -49,9 +49,14 @@ type Rec = Record<string, unknown>
 type Command = { phase: string; source?: string; cmd: string; t: number; ms: number; exit?: number | null; bytes?: number }
 
 // world: issue 470 in the ready queue, the rest quiet; both modes' reads answered.
-function world(issues: Rec[] = []) {
+function world(issues: Rec[] = [], repoFile: () => string | undefined = () => undefined) {
   return (argv: string[], s: Seen) => {
     const [cmd, ...args] = argv
+    // the repo's settings are origin's default branch's (v2 SPEC section 15)
+    if (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json') {
+      const body = repoFile()
+      return body === undefined ? { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/main'" } : { stdout: body }
+    }
     switch (cmd) {
       case 'callum-flow-factory-state':
         return { stdout: factoryDoc(issues) }
@@ -71,6 +76,9 @@ function world(issues: Rec[] = []) {
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         return { stdout: '[]' }
+      case 'gh':
+        // the PRs the claim adopts: none
+        return args[0] === 'pr' && args[1] === 'list' ? { stdout: '[]' } : undefined
     }
     return undefined
   }
@@ -164,7 +172,7 @@ describe('trace on', () => {
     expect(sources2.queue?.ageMs).toBe(Date.parse(String(t2.at)) - Date.parse(String(t1.at)))
 
     // what each issue waits on, and since when: the same skip keeps its start, so its age grows
-    const wait = (r: Rec) => (r.waiting as Rec[]).find(w => w.issue === 470 && w.rule === 'D1')
+    const wait = (r: Rec) => (r.waiting as Rec[]).find(w => w.issue === 470 && w.rule === 'S1')
     expect(wait(t1)).toMatchObject({ on: 'owner: no new work', since: t1.at, forMs: 0 })
     expect(wait(t2)).toMatchObject({ on: 'owner: no new work', since: t1.at, forMs: Date.parse(String(t2.at)) - Date.parse(String(t1.at)) })
     // observe mode executes nothing
@@ -173,7 +181,7 @@ describe('trace on', () => {
 
   test('the repo-local settings switch it on for the repo; the workspace file overrides them', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const h = host(on, { config: OBSERVE, run: world(), files: { [REPO_FILE]: JSON.stringify({ trace: true }) } })
+    const h = host(on, { config: OBSERVE, run: world([], () => h.files.get(REPO_FILE)), files: { [REPO_FILE]: JSON.stringify({ trace: true }) } })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.traces()).toHaveLength(1)
@@ -220,7 +228,7 @@ describe('trace on', () => {
     const store = ledgerOf([
       SWEPT,
       entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
-      entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+      entry(`step:design:470:${since}`, 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1', reminded: true }),
       entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
     ])
     const h = host(on, { config: { ...ACT, trace: true }, run: world(issues), store })
@@ -236,7 +244,8 @@ describe('trace on', () => {
     await clock.advance(5_000)
     await clock.advance(60_000)
     const triggers = h.passes().map(l => l.trigger)
-    expect(triggers).toEqual(['first', 'agent agent-1', 'wake w9', 'owner pause 470', 'timer'])
+    // the v2 rules may add their own cause to a pass a wake asked for
+    expect(triggers).toEqual(['first', 'agent agent-1', expect.stringContaining('wake w9'), 'owner pause 470', 'timer'])
     expect(h.traces().map(t => t.trigger)).toEqual(triggers)
   })
 })
@@ -251,9 +260,8 @@ describe('act mode, traced', () => {
     expect(t).toMatchObject({ mode: 'act', executed: true })
     const actions = t.actions as Rec[]
     expect(actions.map(a => [a.key, a.kind, a.status])).toEqual([
-      ['update-checkout:0', 'update-checkout', 'done'],
+      [expect.stringMatching(/^i470\/claim\//), 'claim', 'done'],
       ['sweep:0', 'sweep', 'done'],
-      ['claim:470:new', 'claim', 'done'],
       ['title', 'title', 'done'],
     ])
     let last = 0
@@ -272,31 +280,29 @@ describe('act mode, traced', () => {
 
   test("a wake's row: queued by its action, delivered when its turn starts, answered when its turn ends", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const since = NOW - 20 * MIN
-    const key = `design:470:${since}`
-    const issues = [{ issue: 470, stage: 'designing', entered_at: iso(since), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]
+    // a claim that used up its attempts: the loop tells the owner (rule S1)
+    const key = 'i470/claim/old'
     const store = ledgerOf([
       SWEPT,
-      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
-      entry('tell:agent-failed:9', 'tell', { wake: 'agent-failed', class: 'owner', status: 'done', startedAt: NOW - 40 * MIN, endedAt: NOW - 30 * MIN }),
+      entry(key, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
+      entry('tell:stalled:old', 'tell', { wake: 'stalled', class: 'owner', status: 'done', startedAt: NOW - 40 * MIN, endedAt: NOW - 30 * MIN }),
     ])
-    const h = host(on, { config: { ...ACT, trace: true }, run: world(issues), store })
+    const h = host(on, { config: { ...ACT, trace: true }, run: world(), store })
     await $.session.start(START)
     await clock.advance(6_000)
     const wake = h.prompts[0] ?? ''
     const id = /id=(\S+)/.exec(wake)?.[1] ?? ''
     const queued = NOW + 5_000
-    const row = (r: Rec) => (r.wakes as Rec[]).find(w => w.key === `judge:report:${key}`)
-    expect(row(h.traces()[0] as Rec)).toMatchObject({ wake: 'report', status: 'running', queued: iso(queued), delivered: null, ended: null })
+    const row = (r: Rec) => (r.wakes as Rec[]).find(w => String(w.key).startsWith(`tell:stalled:${key}:`))
+    expect(row(h.traces()[0] as Rec)).toMatchObject({ wake: 'stalled', status: 'running', queued: iso(queued), delivered: null, ended: null })
     // a wake that ended before this load is not news
-    expect(((h.traces()[0] as Rec).wakes as Rec[]).map(w => w.key)).toEqual([`judge:report:${key}`])
+    expect(((h.traces()[0] as Rec).wakes as Rec[]).map(w => w.key)).toEqual([`tell:stalled:${key}:${NOW - 2 * MIN}`])
 
     // the pass ran 5 s in; the clock stands at 6 s
     await clock.advance(2_000)
     await $.turn.start({ text: wake, turnId: 'turn-1' })
     await clock.advance(3_000)
-    const fields = JSON.stringify({ brief: BRIEF, created: [], pendingDecision: false })
-    await $.turn.complete({ turnId: 'turn-1', answer: `ANSWER ${id} parsed\nfields: ${fields}`, reason: 'answer', durationMs: 900, isAborted: false })
+    await $.turn.complete({ turnId: 'turn-1', answer: 'Noted, the owner is told.', reason: 'answer', durationMs: 900, isAborted: false })
     await clock.advance(5_000)
     const second = h.traces()[1] as Rec
     expect(second.trigger).toBe(`wake ${id}`)
@@ -325,7 +331,8 @@ describe('the cap (default 100 MiB, traceMaxBytes)', () => {
       old('2026-10-12', 9_000),
       [REPO_FILE, JSON.stringify({ traceMaxBytes: 50_000 })],
     ])
-    const h = host(on, { config: { ...OBSERVE, trace: true }, run: world(), files })
+    // origin's settings are read every githubEvery: a second, so the changed cap is seen next pass
+    const h = host(on, { config: { ...OBSERVE, trace: true, githubEvery: '1s' }, run: world([], () => h.files.get(REPO_FILE)), files })
     const traceBytes = () =>
       [...h.files.entries()].filter(([p]) => p.startsWith(`${LOOP_DIR}/trace-`)).reduce((n, [, body]) => n + new TextEncoder().encode(body).length, 0)
     await $.session.start(START)
@@ -361,7 +368,7 @@ describe('the cap (default 100 MiB, traceMaxBytes)', () => {
     const cap = 20_000
     const big = `${JSON.stringify({ v: 1, pass: 1, pad: 'x'.repeat(19_000) })}\n`
     const cut = big + cutLine(iso(NOW - MIN), cap)
-    const h = host(on, { config: { ...OBSERVE, trace: true }, run: world(), files: { [TRACE]: cut, [REPO_FILE]: JSON.stringify({ traceMaxBytes: cap }) } })
+    const h = host(on, { config: { ...OBSERVE, trace: true, githubEvery: '1s' }, run: world([], () => h.files.get(REPO_FILE)), files: { [TRACE]: cut, [REPO_FILE]: JSON.stringify({ traceMaxBytes: cap }) } })
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(60_000)
