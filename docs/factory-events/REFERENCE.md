@@ -44,7 +44,7 @@ One factory event: the fields every event has, with its payload in data. One lin
 | `repo` | string | required | no | pattern `^[^/\s]+/[^/\s]+$` |  | The repository whose factory wrote it, as owner/name. |
 | `device` | string | required | no | minLength 1 |  | The machine that wrote it: DEV_MACHINE_NAME, else the hostname. |
 | `actor` | string | required | no | minLength 1 |  | The tool or role that wrote it, for example sweep, watcher, fixer or factory-reconcile; agent when the caller named none. For provenance only: what a reader needs to know is in the type and the payload. |
-| `session_id` | string | required | yes |  |  | The Claude session that wrote it, from CLAUDE_SESSION_ID; null when that is unset. Never guessed. |
+| `session_id` | string | required | yes |  |  | The Claude session that wrote it, from CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (Claude Code sets it); null when both are unset. Never guessed. |
 | `issue` | integer | required | yes | minimum 1 |  | The GitHub issue the event is about; null for a fleet-level event. Each type's schema says whether it is required (x-issue). |
 | `base_image` | string | required | yes |  |  | The base image version running when it was written; null when unknown. |
 | `dev_image` | string | required | yes |  |  | The repo's dev image version running when it was written; null when unknown or none. |
@@ -90,7 +90,7 @@ Example:
 | `repo` | string | every event | The repository whose factory wrote it, as owner/name. |
 | `device` | string | every event | The machine that wrote it: DEV_MACHINE_NAME, else the hostname. |
 | `actor` | string | every event | The tool or role that wrote it, for example sweep, watcher, fixer or factory-reconcile; agent when the caller named none. For provenance only: what a reader needs to know is in the type and the payload. |
-| `session_id` | string | every event | The Claude session that wrote it, from CLAUDE_SESSION_ID; null when that is unset. Never guessed. |
+| `session_id` | string | every event | The Claude session that wrote it, from CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (Claude Code sets it); null when both are unset. Never guessed. |
 | `issue` | integer | every event | The GitHub issue the event is about; null for a fleet-level event. Each type's schema says whether it is required (x-issue). |
 | `base_image` | string | every event | The base image version running when it was written; null when unknown. |
 | `dev_image` | string | every event | The repo's dev image version running when it was written; null when unknown or none. |

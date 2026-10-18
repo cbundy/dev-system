@@ -86,6 +86,14 @@ test("a known type is written as one envelope-v1 line to the new log only, and r
   assert.deepEqual([e.base_image, e.dev_image, e.template_version, e.plugin_version], ["1.2.3", "4.5.6", "7.8.9", "0.1.2"]);
 });
 
+test("the session comes from CLAUDE_CODE_SESSION_ID, and CLAUDE_SESSION_ID wins over it", () => {
+  const only = native(claimed, { env: { CLAUDE_CODE_SESSION_ID: "sess-c" } });
+  assert.equal(only.r.status, 0, only.r.stderr);
+  assert.equal(JSON.parse(only.lines.join("")).session_id, "sess-c");
+  const both = native(claimed, { env: { CLAUDE_CODE_SESSION_ID: "sess-c", CLAUDE_SESSION_ID: "sess" } });
+  assert.equal(JSON.parse(both.lines.join("")).session_id, "sess");
+});
+
 test("the options, the session and the uuid source are used", () => {
   const uuid = path.join(tmp, "uuid");
   fs.writeFileSync(uuid, "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE\n");
