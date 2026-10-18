@@ -18,7 +18,7 @@ function problems<O>(r: ToolCheck<O>): string[] {
   return r.problems
 }
 
-describe('the tools (SPEC 7.3, #548)', () => {
+describe('the tools (v2 SPEC 13.7.3a, #548)', () => {
   test('one per answer: the adjudicator, the designer, the implementer and the fixer, each behind ToolSearch', () => {
     expect(AGENT_TOOLS.map(t => t.name)).toEqual(['verdict', 'design', 'handoff'])
     expect(TOOL_OF).toEqual({

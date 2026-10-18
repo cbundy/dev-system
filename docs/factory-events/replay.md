@@ -99,7 +99,7 @@ A run with differences also prints `<tool>: shadow: N difference(s), first at <p
 The claim tools (`callum-flow-claim`, `callum-flow-sweep`) are the exception
 ([#905](https://github.com/cbundy/dev-system/issues/905)): their rule is a shell file sourced inside the heartbeat
 and the sweep (`images/base/claim-events.sh`), so the switch is shell too. It uses the same names and values
-(`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, `old|new|shadow`, default `shadow`; an invalid value warns once and reads old,
+(`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, `old|new|shadow`, default `new`, `old` the way back; an invalid value warns once and reads old,
 because the rule must never fail its callers) and records each shadow compare as a `shadow_read` event
 (`reader` `claim-events`, `tool` the calling command), not as a line in `factory/.shadow/<tool>.jsonl`. The reason is
 that a sourced shell rule cannot call `runShadow`, and the event is a record the metrics query already reads

@@ -1,6 +1,6 @@
 "use strict";
 
-// Every `loop` event the factory loop builds (docs/factory-loop/SPEC.md 7.4, DECISIONS D-09) must
+// Every `loop` event the factory loop builds (docs/factory-loop/v2/SPEC.md 13.7.4, DECISIONS D-09) must
 // pass callum-flow-event's own check of a loop note (kind=, key= and status=, no field split by a
 // space): one refused is a usage error the loop only notes. This runs the real
 // images/base/callum-flow-event, into a scratch log, with the notes the plugin builds for an entry

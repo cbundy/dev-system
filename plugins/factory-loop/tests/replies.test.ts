@@ -1,6 +1,6 @@
 // The reply parsers (replies.ts) against replies shaped like the agents' real ones: the
-// designer's return with its RESULT line (SPEC 7.2), the adjudicator's output contract
-// (plugins/callum-flow/agents/adjudicator.md, SPEC 7.3; finding ids as no-mistakes names them,
+// designer's return with its RESULT line (the retired v1 designer reply), the adjudicator's output contract
+// (plugins/callum-flow/agents/adjudicator.md, the retired v1 adjudicator reply; finding ids as no-mistakes names them,
 // review-<n>), and the implementer's and fixer's handoff (implement-issue section 8) ending in
 // the RESULT line prompts.ts asks for. Each also against malformed ones.
 import { describe, expect, test } from 'claude-code/testing'
@@ -35,7 +35,7 @@ describe('isBriefUrl', () => {
   })
 })
 
-describe('parseDesigner (SPEC 7.2)', () => {
+describe('parseDesigner (the retired v1 designer reply)', () => {
   const report = (last: string) =>
     [
       `Brief: ${BRIEF}`,
@@ -188,7 +188,7 @@ describe('parseAction: the ACTION line grammar (adjudicator.md)', () => {
   })
 })
 
-describe('parseAdjudicator (SPEC 7.3)', () => {
+describe('parseAdjudicator (the retired v1 adjudicator reply)', () => {
   test('a gate: verdict lines then one ACTION line', () => {
     const reply = [
       'CORRECT: review-1 moved HEAD after recovery must not be accepted; reproduced with a two-commit branch.',

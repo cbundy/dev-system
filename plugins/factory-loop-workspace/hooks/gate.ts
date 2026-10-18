@@ -76,7 +76,7 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 
 // gateLine: every run as one line of the companion's log, which outlives factory-gate.json (the
 // next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
-// intervention (SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
+// intervention (v2 SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
 // waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
 // startedAt (ISO, 3 ms digits) is when it asked for its turn, before any wait, and queuedBehind how
 // many held a turn or waited ahead of it then (0: none); the loop writes `gate_run` from these.

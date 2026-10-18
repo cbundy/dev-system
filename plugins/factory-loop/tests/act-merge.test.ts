@@ -96,7 +96,7 @@ const A = {
   rollout: (issue: number | null = 50): Action => ({ ...base, issue, kind: 'rollout', key: `rollout:${issue}`, rule: 'M7', pr: 550 }),
 }
 
-describe('parsers, against the CLIs\' own lines (SPEC 6.2)', () => {
+describe('parsers, against the CLIs\' own lines (v2 SPEC 13.6.1)', () => {
   test('parseRollout: the three values, and conflict, invalid, unreadable', () => {
     expect(parseRollout('ROLLOUT merge source=brief\n')).toEqual({ rollout: 'merge', source: 'brief', line: 'ROLLOUT merge source=brief' })
     expect(parseRollout('ROLLOUT run-it source=body')).toMatchObject({ rollout: 'run-it', source: 'body' })

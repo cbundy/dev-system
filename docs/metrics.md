@@ -153,7 +153,7 @@ GROUP BY repo;
 
 How long the stop gate waited for a turn, and how long it ran, per gate run. The loop writes one
 `gate_run` event for each `gate-pass`, `gate-fail` and `gate-unknown` line of the workspace
-companion (`rules-gates.ts`, SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
+companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
 took one at once or there is no limit), `run_ms` the time the commands ran (0 when they never
 did), `queued_behind` how many gates held a turn or waited ahead when it asked, `concurrency` the
 limit it ran under (null: none), and `started_at` when it asked for its turn. A retried write can
@@ -178,7 +178,7 @@ ORDER BY started_at DESC;
 ```
 
 How often the stop gate hook itself failed or was cut off (the engine gives a hook 10 s of budget
-that host calls pause, SPEC 10.6). Every `gate-unknown` line is an `intervention` with cause
+that host calls pause, v2 SPEC 10.6). Every `gate-unknown` line is an `intervention` with cause
 `gate-unknown`; a cap wait or a gate that could not run also gives a `gate_run` with result
 `unknown`, but the hook's own `.catch` line has no `waitMs` and gives none. So per day, the excess
 of the first count over the second is the hook failures and cut-offs; its reason (the
@@ -248,7 +248,7 @@ GROUP BY repo;
 ```
 
 (c) Each cut step and its re-run: the first `transition` after `stopped_at` with the same repo,
-issue, life and step. `rerun_via` `free:load` with table row `U1` is the free re-run (SPEC 5.1,
+issue, life and step. `rerun_via` `free:load` with table row `U1` is the free re-run (v2 SPEC 5.1,
 docs/factory-loop/v2/SPEC.md:528, 731-733). Any other via is the cost of the cap: the attempt's
 free re-run was already spent. Null means no re-run yet. A seq key
 (`i<N>/l<life>/s<seq>/<step>/a<n>`) and a review key (`i<N>/l<life>/review/<patch7>/r<round>/a<n>`)
@@ -383,6 +383,51 @@ jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "S1" and (.reaso
   /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+### Split trackers closed by the loop
+
+When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and
+logs `closed` with reason `completed` for it. Each check, closed or not, is a `close-tracker` entry in the
+loop's ledger with its outcome `{parent, closed, open}` and summary (`closing #139: ...` or `kept #139 open: #190 open`).
+The split itself is an `abandoned` event with reason `split`; its `split_into` field (in `data` of
+`factory.event_store`, not lifted) lists the children. Per split parent, the query takes the time the last child merged
+(`last_merged_at`) and the time the loop closed the tracker (`closed_at`).
+`closed_at - last_merged_at` is how long the tracker stayed open after its last child merged. A parent with
+`all_merged` true and a null `closed_at` is the leftover case: every child merged but the tracker is still open (the
+last child's rollout was `run-it` or `keep-open`, whose issue stays open at its merge so no check ran, or the owner
+closed it as another reason). A parent with `all_merged` false is still waiting on a child.
+
+```sql
+WITH splits AS (
+  SELECT s.repo, s.issue AS parent, s.ts AS split_at,
+         (SELECT array_agg(c::int) FROM jsonb_array_elements_text(d.data -> 'split_into') AS c) AS children
+  FROM factory.event_log s
+  JOIN factory.event_store d ON d.event_id = s.event_id
+  WHERE s.type = 'abandoned' AND s.reason = 'split' AND s.repo = :'repo' AND s.ts >= :'since'::timestamptz
+),
+kids AS (
+  SELECT sp.repo, sp.parent, sp.split_at, c AS child,
+         (SELECT min(m.ts) FROM factory.event_log m
+           WHERE m.repo = sp.repo AND m.issue = c AND m.type = 'merged') AS merged_at
+  FROM splits sp, unnest(sp.children) AS c
+),
+agg AS (
+  SELECT repo, parent, split_at, count(*) AS children, count(merged_at) AS merged,
+         count(merged_at) = count(*) AS all_merged, max(merged_at) AS last_merged_at
+  FROM kids
+  GROUP BY repo, parent, split_at
+)
+SELECT a.repo, a.parent, a.split_at, a.children, a.merged, a.all_merged, a.last_merged_at,
+       c.ts AS closed_at, c.ts - a.last_merged_at AS open_after_last_merge
+FROM agg a
+LEFT JOIN LATERAL (
+  SELECT min(ts) AS ts FROM factory.event_log c
+  WHERE c.repo = a.repo AND c.issue = a.parent AND c.type = 'closed' AND c.reason = 'completed' AND c.ts > a.split_at
+) c ON true
+ORDER BY a.split_at DESC;
+```
+
+The leftover count is the rows with `all_merged AND closed_at IS NULL`.
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two
@@ -394,7 +439,7 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producer is the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
-event per run in their default `shadow` source (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`), with
+event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
 (lifecycle class, latest claim type, claim device) differs, over the last 7 days cut 10 minutes
 before now; the query groups by reader and tool.

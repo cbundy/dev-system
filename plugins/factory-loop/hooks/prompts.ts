@@ -1,4 +1,4 @@
-// What every prompt of the loop shares (SPEC 6.3): free text made safe for a prompt, so it never
+// What every prompt of the loop shares (v2 SPEC 13.6.3): free text made safe for a prompt, so it never
 // carries a GitHub closing keyword before an issue reference (I-33), the rules every agent is
 // told, and the shape check of the answer script's paths. The prompts themselves are v2's
 // (hooks/v2/prompts-*.ts). Pure, so tests/prompts.test.ts renders them with hostile inputs.

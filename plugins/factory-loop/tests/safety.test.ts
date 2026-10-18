@@ -1,4 +1,4 @@
-// What no executor can do, by construction (SPEC 6.1, 11): every action kind, every spawn
+// What no executor can do, by construction (v2 SPEC 13.6.1, 13.11): every action kind, every spawn
 // purpose and every respond shape runs through act.ts's dispatcher with a recording fake ActIo
 // whose commands answer as the real CLIs do, so each executor takes its whole path; the rails'
 // and an act-mode observe pass's commands join them. Not one argv may pass --yes, run
@@ -85,12 +85,15 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
     case 'callum-flow-issue-read':
       if (args.includes('--pr') && !args.includes('--comments')) return { stdout: JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: 'def5678' }, user: { login: 'cbundy' } }, stripped: 0 }) }
       if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
-      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]), state: 'open' }, stripped: 0 }) }
+      // #470 is merged and closed, a child of split parent #469 (v2's close-tracker)
+      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]), state: args[1] === '470' ? 'closed' : 'open', ...(args[1] === '470' ? { body: `Work.\n\n<!-- factory-loop:i469/lss1x2k/s3/child/a -->\n` } : {}) }, stripped: 0 }) }
       return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
       // v2's pr ensure finds no PR on the branch and opens one; a split's child is created
       if (args[0] === 'pr' && args[1] === 'list') return { stdout: '[]' }
+      // the sub-issues of a split parent, as `<number> <state>` lines (close-tracker), else their ids
+      if (args[0] === 'api' && args.includes('--jq')) return { stdout: args[args.indexOf('--jq') + 1]?.includes('.state') ? '470 closed\n' : '' }
       if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/pull/513\n' }
       if (args[0] === 'issue' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/issues/601\n' }
       return { stdout: args[1] === 'comment' ? 'https://github.com/cbundy/dev-system/pull/512#issuecomment-2\n' : '' }
@@ -193,6 +196,7 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
+  { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },
   { ...base, kind: 'link', key: `${at}/link/471`, class: 'free', rule: 'S3', blocker: 471 },
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
@@ -238,6 +242,12 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
       // only), and one blocked_by link is made
       return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/dependencies/blocked_by$`).test(p), '-F', f => /^issue_id=[1-9]\d*$/.test(f)) ||
         is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/dependencies/blocked_by$`).test(p), '--paginate', '--jq', '.[].id')
+        ? { api: true }
+        : {}
+    case 'close-tracker':
+      // the sub-issues' states are read (GET), and the tracker is closed as completed with a comment
+      return is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/sub_issues$`).test(p), '--paginate', '--jq', text) ||
+        is('gh', 'issue', 'close', num, '--repo', REPO, '--reason', 'completed', '--comment', text)
         ? { api: true }
         : {}
     case 'ci-rerun':
@@ -371,6 +381,9 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['split', ARGV.issueReadArgv(471)],
   ['split', ARGV.subIssuesReadArgv(REPO, 470)],
   ['split', ARGV.blockersReadArgv(REPO, 471)],
+  ['close-tracker', ARGV.issueReadArgv(471)],
+  ['close-tracker', ARGV.subIssueStatesArgv(REPO, 470)],
+  ['close-tracker', ARGV.trackerCloseArgv(REPO, 470, 'Every sub-issue is finished.')],
   ['link', ARGV.issueReadArgv(471)],
   ['link', ARGV.blockersReadArgv(REPO, 470)],
   ['link', ARGV.blockedByArgv(REPO, 470, 3_100_201)],
@@ -437,6 +450,7 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/470/sub_issues`, '-F', 'sub_issue_id=1'], kindAction('link')],
       [['gh', 'api', '--method', 'DELETE', `repos/${REPO}/issues/470/dependencies/blocked_by`, '-F', 'issue_id=1'], kindAction('link')],
       [['gh', 'issue', 'edit', '471', '--repo', REPO, '--add-label', 'ready'], label],
+      [['gh', 'issue', 'close', '470', '--reason', 'completed', '--comment', 'x'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
       [['gh', 'run', 'rerun', '183', '--failed', '--repo', REPO], label],
       [['no-mistakes', 'rerun'], kindAction('ci-rerun')],
@@ -446,7 +460,7 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
   })
 })
 
-describe('the argv safety net (SPEC 6.1)', () => {
+describe('the argv safety net (v2 SPEC 13.6.1)', () => {
   test('the bans catch every forbidden argv, and pass the loop\'s own forms', () => {
     const bad: string[][] = [
       ['no-mistakes', 'axi', 'respond', '--action', 'approve', '--yes'],

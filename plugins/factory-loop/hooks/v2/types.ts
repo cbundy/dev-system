@@ -14,7 +14,7 @@ import type { PrsRead } from './sources-prs'
 import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
 
-// --- states, steps and the record (SPEC 3.1, 3.2) ------------------------------------------------
+// --- states, steps and the record (v2 SPEC 3.1, 3.2) ------------------------------------------------
 
 export const ISSUE_STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting', 'closed'] as const
 export type IssueState = (typeof ISSUE_STATES)[number]
@@ -123,7 +123,7 @@ export type IssueRecord = {
 // A record's identity at one seq: what the transition executor compares before it stores (3.3).
 export type RecordRef = { issue: number; life: string; seq: number }
 
-// --- the table's input and rows (SPEC 4.1, 4.6, 5) -------------------------------------------------
+// --- the table's input and rows (v2 SPEC 4.1, 4.6, 5) -------------------------------------------------
 
 export const EVENT_KINDS = ['ok', 'not-ok', 'unknown', 'triage', 'drop', 'cleared', 'unpark', 'issue-closed', 'pr-merged', 'pr-closed', 'claim-lost', 'timeout'] as const
 export type EventKind = (typeof EVENT_KINDS)[number]
@@ -167,7 +167,7 @@ export type Row = {
   via: string
 }
 
-// --- what a step reports (SPEC 4.2, 5.1, 10.8) -----------------------------------------------------
+// --- what a step reports (v2 SPEC 4.2, 5.1, 10.8) -----------------------------------------------------
 
 // A step's result, as steps.ts records it on the step's ledger entry and plan reads it: ok,
 // not-ok with a reason, or unknown with why. head: a writer's head, read on origin. choice: a
@@ -217,6 +217,8 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
+  // a close-tracker check: the split parent found (null: the issue is no split child), whether it was closed, and the sub-issues still open
+  | { kind: 'close-tracker'; parent: number | null; closed: boolean; open: number[] }
   // leftovers: the patch file a prepare or a free saved the slot's leftovers to (10.2): its uncommitted
   // work and its commits not on origin, against the commit the next step starts from; a retry's
   // prompt names it (5.1), and a resumed life finds a free's through rules-agent.ts leftoversOf; null
@@ -228,7 +230,11 @@ export type V2Outcome =
 
 // --- the action kinds (appendix B) ----------------------------------------------------------------
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link'] as const
+// How deep trackers nest: observe reads sub-issues this many levels down, and a close-tracker chain
+// checks this many trackers up (state.ts re-exports it).
+export const TRACKER_DEPTH = 3
+
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker'] as const
 export type V2ActionKind = (typeof V2_ACTION_KINDS)[number]
 
 // What the transition executor re-checks against the live ledger and records before it stores
@@ -309,6 +315,8 @@ export type V2Action =
   // a waiting record's issue linked as blocked by an issue it waits on (blocker): the GitHub dependency
   // link, once per condition; a closed blocker is skipped, a pull request is no blocker (act-split.ts)
   | (ActionBase & { kind: 'link'; blocker: number })
+  // a merged split child's check upward: issue is the one to check from; its split parent is closed when every sub-issue is closed (act-tracker.ts)
+  | (ActionBase & { kind: 'close-tracker' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
@@ -374,14 +382,14 @@ export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'work
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
-// --- rule ids (SPEC 14.1) -------------------------------------------------------------------------
+// --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
   'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 
-// --- interventions (SPEC 7.2) ---------------------------------------------------------------------
+// --- interventions (v2 SPEC 7.2) ---------------------------------------------------------------------
 
 export type InterventionWho = 'person' | 'loop'
 
@@ -392,7 +400,7 @@ export const LOOP_CAUSES = [
   'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'prompt-denied', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
 ] as const
 
-// --- what v2 reads (SPEC 2.4) ---------------------------------------------------------------------
+// --- what v2 reads (v2 SPEC 2.4) ---------------------------------------------------------------------
 
 // A pool slot's lease, by its holder (10.1): `factory-loop:<N>:<life>` names the loop's own.
 export type Lease = { path: string; lease: string; holder: string; issue: number | null; life: string | null; status: string; busy: boolean }
@@ -459,7 +467,7 @@ export type V2State = {
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
 export type V2Ctx = PlanCtx & { v2: V2State }
 
-// --- what the executors may change beside the ledger (SPEC 3.3, 4.6) -------------------------------
+// --- what the executors may change beside the ledger (v2 SPEC 3.3, 4.6) -------------------------------
 
 // The live records: only the transition executor updates them, under the act lock. update applies
 // fn to the records as they are now (null: no change), saves them to the store, and resolves once

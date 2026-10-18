@@ -32,6 +32,11 @@ trusted_authors = "cbundy:13131067"
 # "Testing template changes from a workspace" in README.md).
 template_tester_secrets_dir = "/etc/dev-system/template-tester"
 
+# The Coder CLI login token, mounted only into workspaces with the coder_login
+# parameter on. Inert until the directory is set up (see "Coder CLI login
+# (opt-in)" in README.md).
+coder_login_secrets_dir = "/etc/dev-system/coder-login"
+
 # Credentials for private per-repo images (see "Private images" in README.md). The
 # dev-system and Orchestrator templates were pushed with this path by hand; setting it here
 # keeps every push, orchestrator-loop included, able to pull a private image.

@@ -13,17 +13,18 @@ import { executors as review } from './act-review'
 import { executors as slots } from './act-slots'
 import { executors as split } from './act-split'
 import { executors as state } from './act-state'
+import { executors as tracker } from './act-tracker'
 import { pollPauseArgv } from './argv'
 import { executors as steps } from './steps'
 
-export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...review, ...ci, ...queue, ...slots, ...steps }
+export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...tracker, ...review, ...ci, ...queue, ...slots, ...steps }
 
 // The pauses, in seconds, before an attempt that failed on a GitHub blip runs again (5.1).
 const BLIP_PAUSES_S: readonly number[] = [5, 15]
 
 // transientGitHub: GitHub's transient answers in a command's output (5.1): a 5xx (gh's `HTTP 502`,
 // git's `returned error: 503`, or its name), GraphQL's "Something went wrong", a gateway or
-// connection timeout. Never a rate limit, whose backoff holds GitHub (v1 SPEC 10.2); credentials, a
+// connection timeout. Never a rate limit, whose backoff holds GitHub (v2 SPEC 13.10 item 2); credentials, a
 // 404, a validation error and a refusal do not read this way.
 function transientGitHub(text: string): boolean {
   if (rateLimited(text)) return false

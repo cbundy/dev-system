@@ -1,7 +1,7 @@
 "use strict";
 
 // The factory loop's daily prune of its loop dir (plugins/factory-loop/hooks/exec.ts pruneArgvs,
-// docs/factory-loop/SPEC.md 11.6), run for real by find on a scratch loop dir: the files that only
+// docs/factory-loop/v2/SPEC.md 13.11.6), run for real by find on a scratch loop dir: the files that only
 // grow go once older than a week, the act lock, control.json and the event sink never do. Plugin
 // tests cannot run a command, so this lives here.
 const { test, before, after } = require("node:test");

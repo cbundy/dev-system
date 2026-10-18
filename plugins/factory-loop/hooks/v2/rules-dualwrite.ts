@@ -1,4 +1,4 @@
-// dualWriteRules (H1, SPEC 4.1): when dual write starts, each record's current stage the new log lacks
+// dualWriteRules (H1, v2 SPEC 4.1): when dual write starts, each record's current stage the new log lacks
 // is logged again, once. It runs for every record, closed ones too, so it sits beside heartbeatRules
 // (which returns early with no live record).
 import { want } from '../foundation'

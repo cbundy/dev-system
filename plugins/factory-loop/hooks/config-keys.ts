@@ -1,4 +1,4 @@
-// The settings `/factory config set|unset` writes into the workspace config file (SPEC 4.3): which
+// The settings `/factory config set|unset` writes into the workspace config file (v2 SPEC 13.4.3): which
 // keys the file may hold, how a typed key and value are checked (by loadConfig itself, so the op
 // accepts exactly what the loader would), when a change applies, and the edit of the file's text.
 // Pure: control.ts runs it over the file's read and write.

@@ -591,7 +591,7 @@ describe('state', () => {
   })
 })
 
-describe('config (SPEC 4.2)', () => {
+describe('config (v2 SPEC 13.4.2)', () => {
   test('durations: ms, s, m, h and d; anything else is not one', () => {
     expect([parseDuration('500ms'), parseDuration('60s'), parseDuration('5m'), parseDuration('2h'), parseDuration('1d'), parseDuration('1.5h')]).toEqual([
       500, 60_000, 300_000, 7_200_000, 86_400_000, 5_400_000,
@@ -686,7 +686,7 @@ describe('config (SPEC 4.2)', () => {
   })
 })
 
-describe('control (SPEC 4.3)', () => {
+describe('control (v2 SPEC 13.4.3)', () => {
   test('control.json is read field by field: a bad field or item never voids the others', () => {
     expect(controlFrom(null)).toEqual(EMPTY_CONTROL)
     expect(
@@ -718,7 +718,7 @@ describe('control (SPEC 4.3)', () => {
   })
 })
 
-describe('the loop event (SPEC 7.4, 7.5, D-09)', () => {
+describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
   // the event callum-flow-event would log for an entry: its columns and the note
   const logged = (e: LedgerEntry, ts = NOW): FactoryEvent => ({
     ts,
@@ -811,7 +811,7 @@ describe('trackers (D-35)', () => {
   })
 })
 
-describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
+describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', () => {
   const TOOLS = '/opt/branch/callum-tools'
   const LOOP = '/cfg/factory-loop/cbundy__dev-system'
   const ENV = { CALLUM_FLOW_REPO: REPO, PATH: '/opt/branch/bin:/usr/bin', CALLUM_FLOW_READY_LABEL: 'ready' }

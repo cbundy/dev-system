@@ -1,4 +1,4 @@
-// The owner's controls, the files (SPEC 4.3): control.json and the workspace config file, read and
+// The owner's controls, the files (v2 SPEC 13.4.3): control.json and the workspace config file, read and
 // written whole over ActIo's readFile and writeFile. control.ts holds the ops and re-exports these.
 import { EMPTY_CONTROL, controlFrom } from './config'
 import { editSetting } from './config-keys'
@@ -10,7 +10,7 @@ export function controlPath(loopDir: string): string {
   return `${loopDir}/control.json`
 }
 
-// The workspace config file (SPEC 4.1), where `mode` lives beside repo, shadowDevice and the rest.
+// The workspace config file (v2 SPEC 13.4.1), where `mode` lives beside repo, shadowDevice and the rest.
 export function configFilePath(configDir: string): string {
   return `${configDir}/factory-loop/config.json`
 }
@@ -65,7 +65,7 @@ export async function readControl(io: FileIo, loopDir: string): Promise<LoadedCo
   return loadControl(await io.readFile(controlPath(loopDir)))
 }
 
-// writeControl: the whole file, every field (SPEC 4.3).
+// writeControl: the whole file, every field (v2 SPEC 13.4.3).
 export async function writeControl(io: FileIo, loopDir: string, control: Control): Promise<void> {
   await io.writeFile(controlPath(loopDir), controlText(control))
 }

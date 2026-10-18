@@ -24,7 +24,7 @@
 // (docs/factory-loop/v2/SPEC.md 2.4).
 //
 // The factory loop v2 logs a `transition` event at every change of an issue's state, with the
-// state and the rest of its record as `key=value` tokens in the note (SPEC 7.1). An issue whose
+// state and the rest of its record as `key=value` tokens in the note (v2 SPEC 7.1). An issue whose
 // current life has one takes its stage from the newest one, above the mirror's runs, and is
 // checked for the `factory:*` label of its state (docs/factory-state.md).
 //
@@ -76,15 +76,15 @@ const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 
 const NEW_LIFE_RUN_EVENTS = new Set(['run_started', 'parked', 'verdict', 'fix_requested', 'merge_ready']);
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const LABEL_QUEUED = 'ready';
-// The factory loop v2's states (SPEC 3.1; waiting is the loop's hold on wait conditions), each with the stage it shows as; closed shows as merged
-// or closed without merge, by why. Its labels are `factory:<state>` (SPEC 3.4), closed has none.
+// The factory loop v2's states (v2 SPEC 3.1; waiting is the loop's hold on wait conditions), each with the stage it shows as; closed shows as merged
+// or closed without merge, by why. Its labels are `factory:<state>` (v2 SPEC 3.4), closed has none.
 const V2_STAGE = {
   queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
   'merge-queue': 'ready to merge', parked: 'parked', waiting: 'waiting',
 };
 const V2_MERGED = new Set(['merged', 'merged-by-hand']);
 const FACTORY_LABEL = 'factory:';
-// an issue the loop rejected at its last life (SPEC 6.4): out of the factory, so not a state
+// an issue the loop rejected at its last life (v2 SPEC 6.4): out of the factory, so not a state
 const LABEL_REJECTED = 'factory:rejected';
 const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']);
 
@@ -223,7 +223,7 @@ const prNumber = (url) => {
   return m ? Number(m[1]) : null;
 };
 
-// A note's `key=value` tokens (the factory loop's notes, SPEC 7.1): values are percent-encoded,
+// A note's `key=value` tokens (the factory loop's notes, v2 SPEC 7.1): values are percent-encoded,
 // and `none` is no value.
 function noteTokens(note) {
   const out = {};
@@ -257,7 +257,7 @@ const blank = (e, type, t) => ({
 });
 
 // One factory.events row (the old store) to the common shape. This is the only place a note's
-// `key=value` tokens are read (the factory loop's notes, SPEC 7.1).
+// `key=value` tokens are read (the factory loop's notes, v2 SPEC 7.1).
 function mapOldRow(e) {
   const o = blank(e, e.state, ms(e.ts));
   o.run = e.run_id || null;
@@ -321,7 +321,7 @@ function mapEventLogRow(e) {
 // issue to a second loop never hides the live life's view. The state holds only while nothing
 // released the issue after it: a `ready` or `reclaimed` (a sweep, or R1, put it back in the queue)
 // or a `claimed` newer than the transition shows no v2 state, whatever its `to` (the loop's own
-// re-claim logs the transition again right after, SPEC 4.1). A closed one is of the current life
+// re-claim logs the transition again right after, v2 SPEC 4.1). A closed one is of the current life
 // only while no new life followed it (a `ready`, a claim, a delegation).
 const V2_RELEASES = new Set(['ready', 'reclaimed', 'claimed']);
 const lifeStart = (life) => {

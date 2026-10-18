@@ -1,4 +1,4 @@
-// Waking the model and reading its answers (wake.ts; SPEC 8, 9.2, 10.8; D-04, D-25, D-26): the
+// Waking the model and reading its answers (wake.ts; v2 SPEC 13.8, 13.9.2, 13.10 item 8; D-04, D-25, D-26): the
 // prompt of every wake the planner emits, the ANSWER blocks and the answer tool, turn tracking with its
 // one reminder and the timeouts' fallbacks.
 import { describe, expect, test } from 'claude-code/testing'
@@ -123,7 +123,7 @@ function apply(ledger: readonly LedgerEntry[], updates: readonly WakeUpdate[], n
 const lines = (prompt: string) => prompt.split('\n')
 const answerOf = (u: WakeUpdate | undefined) => (u?.outcome?.kind === 'wake' ? u.outcome : undefined)
 
-describe('the prompt (SPEC 8.1)', () => {
+describe('the prompt (v2 SPEC 13.8.1)', () => {
   const B = brief(47)
   const R = `repo=${REPO}`
   // every wake plan.ts emits (grep `wake(` there), with the fields it gives, plus the driver's
@@ -226,7 +226,7 @@ describe('the prompt (SPEC 8.1)', () => {
   })
 })
 
-describe('ANSWER blocks (SPEC 8.2)', () => {
+describe('ANSWER blocks (v2 SPEC 13.8.2)', () => {
   test('a block amid prose and a code fence; its key lines end at a blank line or any other line', () => {
     const text = [
       'I checked the milestone: nothing else waits for the next release.',
@@ -275,7 +275,7 @@ describe('ANSWER blocks (SPEC 8.2)', () => {
   })
 })
 
-describe('checking an answer (SPEC 8.2)', () => {
+describe('checking an answer (v2 SPEC 13.8.2)', () => {
   const ledger = [
     open('judge:sequence:550:head50', 'judge', 'sequence', 'w1', { issue: 50, pr: 550, head: 'head50' }),
     open('task:run-it:60', 'task', 'run-it', 'w2', { issue: 60 }),
@@ -290,7 +290,7 @@ describe('checking an answer (SPEC 8.2)', () => {
     checkAnswer(ledger, { id, decision, ...more }, REPO)
   const problem = (c: ReturnType<typeof check>) => (c.ok ? null : c.problem)
 
-  test('each wake takes only the decisions SPEC 8.2 allows', () => {
+  test('each wake takes only the decisions v2 SPEC 13.8.2 allows', () => {
     expect(allowedDecisions('judge', 'sequence')).toEqual(['merge', 'hold'])
     expect(allowedDecisions('judge', 'guard-fail')).toEqual(['fixer', 'wait', 'hold'])
     expect(allowedDecisions('judge', 'cancelled')).toEqual(['redrive', 'drop'])
@@ -374,7 +374,7 @@ describe('checking an answer (SPEC 8.2)', () => {
     expect(problem(parsed({ brief: brief(47), created: 'none', pendingDecision: false }))).toBe('ANSWER w4 parsed: fields.created must be a list of issue numbers ([] for none)')
     expect(problem(parsed({ brief: brief(47), created: [] }))).toBe('ANSWER w4 parsed: fields.pendingDecision must be true or false')
     expect(problem(parsed({ brief: null, created: [], pendingDecision: false }))).toBe('ANSWER w4 parsed: parsed needs a brief or created issues; with neither, answer hold')
-    // hold needs nothing (SPEC 8.2): the owner designs it again
+    // hold needs nothing (v2 SPEC 13.8.2): the owner designs it again
     expect(check('w4', 'hold').ok).toBe(true)
   })
 
@@ -384,7 +384,7 @@ describe('checking an answer (SPEC 8.2)', () => {
   })
 })
 
-describe('turns: answers, the one reminder, tells delivered (SPEC 8.2, 10.8, D-25)', () => {
+describe('turns: answers, the one reminder, tells delivered (v2 SPEC 13.8.2, 13.10 item 8, D-25)', () => {
   const action = w('judge', 'sequence', { pr: 550, issue: 50, head: 'head50', flags: 'image', bump: 'minor' }, ['SUMMARY: s'])
   const first = wakeLine(action, 'w1', REPO)
   const judge = open('judge:sequence:550:head50', 'judge', 'sequence', 'w1', { issue: 50, pr: 550, head: 'head50', summary: first, turnId: 't1' })
@@ -441,7 +441,7 @@ describe('turns: answers, the one reminder, tells delivered (SPEC 8.2, 10.8, D-2
     ])
   })
 
-  test('an interrupted or failed wake turn is reminded too (SPEC 8.2: a turn that ends without an answer)', () => {
+  test('an interrupted or failed wake turn is reminded too (v2 SPEC 13.8.2: a turn that ends without an answer)', () => {
     for (const reason of ['aborted', 'error', 'refusal'] as const) {
       expect(onTurnComplete([judge], { turnId: 't1', reason, answer: '' }, REPO).updates).toEqual([{ key: judge.key, status: 'running', reminded: true }])
     }
@@ -497,10 +497,10 @@ describe('turns: answers, the one reminder, tells delivered (SPEC 8.2, 10.8, D-2
   })
 })
 
-describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
+describe('timeouts: the fallback never acts (v2 SPEC 13.8.2, 13.10 item 8)', () => {
   const at = (minutesAgo: number) => NOW - minutesAgo * MIN
 
-  test("a wake another session submitted, or a sessionless one open before this load, is lost at once with its attempt given back; this session's waits (SPEC 7.5)", () => {
+  test("a wake another session submitted, or a sessionless one open before this load, is lost at once with its attempt given back; this session's waits (v2 SPEC 13.7.5)", () => {
     const open = (key: string, kind: WakeKind, startedAt: number, session?: string) =>
       entry(key, kind, { wake: 'x', status: 'running', startedAt, endedAt: null, wakeId: key, ...(session === undefined ? {} : { session }) })
     const loadedAt = at(2)
@@ -568,7 +568,7 @@ describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
   })
 })
 
-describe('the answer tool (SPEC 8.2, D-04)', () => {
+describe('the answer tool (v2 SPEC 13.8.2, D-04)', () => {
   const ledger = [
     open('judge:sequence:550:head50', 'judge', 'sequence', 'w1', { issue: 50 }),
     open('judge:report:design:47:1000', 'judge', 'report', 'w4', { issue: 47 }),
