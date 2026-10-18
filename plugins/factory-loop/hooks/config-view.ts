@@ -190,6 +190,8 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('maxTriages', 'maxTriages', String(c.maxTriages))),
         ...render(row('windDown', 'windDownMinutes', c.windDownMinutes === 0 ? 'off' : `${c.windDownMinutes}m`)),
         ...render(ms('minimumReleaseCadenceMs')),
+        ...render(row('releaseBranchPrefix', 'releaseBranchPrefix', c.releaseBranchPrefix ?? 'none')),
+        ...render(row('releaseHold', 'releaseHoldMs', c.releaseHoldMs === 0 ? 'off' : shortDuration(c.releaseHoldMs))),
         ...render({ label: 'stateTimeout', value: '', source: from, ...(from === 'mixed' && changed.length > 0 ? { note: changed.join('; ') } : {}) }),
         clip(`    ${compact.slice(0, half).join(' ')}`),
         clip(`    ${compact.slice(half).join(' ')}`),

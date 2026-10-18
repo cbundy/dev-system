@@ -57,6 +57,12 @@ export function openPrsArgv(repo: string): string[] {
   return ['gh', 'pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(OPEN_PRS_LIMIT), '--json', 'number,headRefName']
 }
 
+// The open PRs with the fields the release hold reads (sources-release.ts): head branch, creation
+// time and whether the PR is from a fork.
+export function releasePrsArgv(repo: string): string[] {
+  return ['gh', 'pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(OPEN_PRS_LIMIT), '--json', 'number,headRefName,createdAt,isCrossRepository']
+}
+
 // The branch's PRs, every state.
 export function branchPrsArgv(repo: string, branch: string): string[] {
   return ['gh', 'pr', 'list', '--repo', repo, '--head', branch, '--state', 'all', '--json', 'number,state,headRefOid']

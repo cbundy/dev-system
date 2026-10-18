@@ -1,3 +1,4 @@
 {
-  "gateCommands": ["npm run lint", "npm test"]
+  "gateCommands": ["npm run lint", "npm test"],
+  "releaseBranchPrefix": "chore/release-"
 }

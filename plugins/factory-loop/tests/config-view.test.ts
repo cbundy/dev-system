@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -105,6 +105,19 @@ describe('configText', () => {
     expect(line(fallback, 'passEvery')).toEndWith(' default')
     expect(fallback.split('Config problems\n')[1]).toContain('passEvery: "soon" is not a duration')
     expect(configText(view({}), control(), NOW).split('Config problems\n')[1]).toBe('  none')
+  })
+
+  test('releaseBranchPrefix and releaseHold show their value and source; a hold of 0 shows off', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'releaseBranchPrefix')).toContain('none')
+    expect(line(def, 'releaseBranchPrefix')).toEndWith(' default')
+    expect(line(def, 'releaseHold')).toContain('10m')
+    expect(line(def, 'releaseHold')).toEndWith(' default')
+    const set = configText(view({ releaseBranchPrefix: 'chore/release-', releaseHold: '0' }, { releaseHold: 0 }), control(), NOW)
+    expect(line(set, 'releaseBranchPrefix')).toContain('chore/release-')
+    expect(line(set, 'releaseBranchPrefix')).toEndWith(' repo')
+    expect(line(set, 'releaseHold')).toContain('off')
+    expect(line(set, 'releaseHold')).toEndWith(' workspace')
   })
 
   test('minimumReleaseCadence shows short form with its source, and a rejected value shows the fallback (#772)', () => {

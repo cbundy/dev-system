@@ -93,7 +93,12 @@ fix the notes until the validator passes and the preview reads well. Do not wait
 ## 5. Ship
 1. On a branch from main: `node scripts/release-bump.js X.Y.Z` (add `--image A.B.C` when image
    inputs changed, at the level you picked); add `release-notes/vX.Y.Z.md`
-   to the same bump PR (`npm run lint` fails without it).
+   to the same bump PR (`npm run lint` fails without it). The bump PR's branch is
+   `chore/release-vX.Y.Z`: the factory loop holds its own merges for 10 minutes from the moment a PR
+   on that prefix opens (`releaseBranchPrefix`, `releaseHold`), so main stays put while the bump
+   PR's CI runs. Open the PR only when the notes are final, and merge it as soon as `ci` is green.
+   If the 10 minutes run out first, the loop merges again and the bump PR may fall behind main:
+   update it and re-run `ci`, as before.
 2. Merge when `ci` is green, then wait for `ci` to pass on the merge commit on main: the
    Release workflow refuses while that run is in progress.
 3. `gh workflow run release.yml -f version=X.Y.Z`, wait for it, then confirm the published

@@ -16,6 +16,10 @@
 //   untrusted author, a wait on GitHub past its bound; otherwise Q1, a CI re-run, the body written again after a linkage FAIL,
 //   the PR reopened after a hand close the record handled, or Q2. A PR that did not read is a wait
 //   on GitHub, bounded like any other (4.4); only a GitHub rate limit holds it with no clock.
+// - Release hold (9.1): while a release bump PR is open within `releaseHold` of its creation
+//   (rules-release-hold.ts), the head plans no Q2 and its step is `held`, with no clock. Every record
+//   stays in the queue at its place, and Q1, CI re-runs and fixers go on, so the head is ready the
+//   moment the hold ends.
 // - Every action of the head is wanted through the foundation, so one that failed is tried again
 //   after its backoff. A queue action or a CI re-run that used up its attempts makes the step
 //   unknown, so the queue moves past a head that cannot move (9.1); a PR write is an effect, and
@@ -31,6 +35,7 @@ import type { Gate } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { prKey, rerunKey, short } from './keys'
 import { lifeEntries, triggerOf, unknownOf } from './rules-agent'
+import { releaseHoldOf, utcTime } from './rules-release-hold'
 import { RERUN_ATTEMPTS } from './rules-review'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import type { PrView } from './sources-prs'
@@ -209,6 +214,8 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
       return wait(env, facts, view, `merge queue: no check has reported on ${short(head)} yet`)
   }
   if (!MERGEABLE.includes(view.mergeable ?? '')) return wait(env, facts, view, `merge queue: CI is green on ${short(head)}, and GitHub shows it ${view.mergeable ?? 'not computed'}`)
+  const release = releaseHoldOf(ctx)
+  if (release !== null) return held(`merge queue: held for release PR #${release.pr} until ${utcTime(release.until)}`)
   return merge(env, view, head, tries)
 }
 
