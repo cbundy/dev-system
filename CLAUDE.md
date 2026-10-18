@@ -129,7 +129,8 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
 The factory loop's stop gate (`gateCommands` in `.claude/factory-loop.json`), the no-mistakes lint
 and test steps of the manual path (`.no-mistakes.yaml`) and CI all run exactly these two commands:
 `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
-on every pull request and every push to main. Its `ci` check is the one branch protection
+on every pull request and every push to main; CI runs `npm test` as `TEST_SHARD=K/N` shards in
+parallel, joined by the `ci` job, while `npm test` with no shard stays the one whole gate. Its `ci` check is the one branch protection
 requires. A new test or script check belongs inside one of these entrypoints, not in a
 bespoke CI step.
 
