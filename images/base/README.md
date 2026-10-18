@@ -566,16 +566,15 @@ container never fails to start because of it.
    printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones. One
    `WARNING` names every directory with no volume behind it, whose state is lost on the
    next rebuild, with the fix for a devcontainer, `docker run` and Kubernetes. It shows in
-   the post-start output and the container log. Right after, it runs
-   `dev-restart-self --resume` (see [`dev-restart-self`](#dev-restart-self)): it restores
-   what a scheduled restart saved and logs the last request; with nothing saved it does
-   nothing.
-1a. With `DEV_CODER_TOKEN_FILE` set (the opt-in Coder CLI login), writes the file's first
-   line to the CLI's `session` file and the URL (`CODER_URL`, else `CODER_AGENT_URL`) to
-   `url` in `${CODER_CONFIG_DIR:-~/.config/coderv2}` (directory 0700, files 0600), then
-   logs the user `coder whoami` returns. A missing or empty file, no URL or no `coder`
-   gives one `WARNING` and no login. It runs before `dev-restart-self --resume`, which can
-   use the login. Unset, it does nothing.
+   the post-start output and the container log.
+   Then, with `DEV_CODER_TOKEN_FILE` set (the opt-in Coder CLI login), it writes the file's
+   first line to the CLI's `session` file and the URL (`CODER_URL`, else `CODER_AGENT_URL`)
+   to `url` in `${CODER_CONFIG_DIR:-~/.config/coderv2}` (directory 0700, files 0600), then
+   logs the user `coder whoami` reports. A missing or empty file, no URL or no `coder`
+   gives one `WARNING` and no login. Unset, it does nothing.
+   Last, it runs `dev-restart-self --resume` (see [`dev-restart-self`](#dev-restart-self)),
+   which can use the login: it restores what a scheduled restart saved and logs the last
+   request; with nothing saved it does nothing.
 2. Records Claude's `installMethod: native` in `.claude.json` if missing (`claude doctor`
    warns without it, because the config directory starts empty).
 3. Seeds `$CODEX_HOME/config.toml` with a top-level `sandbox_mode = "danger-full-access"`

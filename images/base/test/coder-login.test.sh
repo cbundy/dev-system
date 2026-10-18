@@ -41,7 +41,7 @@ cat > "$bin/coder" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$FIX/coder.calls"
 [ "${STUB_WHOAMI_FAIL:-}" != 1 ] || exit 1
-echo "alice"
+echo "[ Coder is running at http://127.0.0.1:1, You're authenticated as alice !"
 STUB
 chmod +x "$bin/coder"
 

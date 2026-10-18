@@ -374,7 +374,7 @@ setup_gh_token() {
   fi
 }
 
-# 4b. Coder CLI login (cbundy/dev-system#540, opt-in): with DEV_CODER_TOKEN_FILE
+# 1a. Coder CLI login (cbundy/dev-system#540, opt-in): with DEV_CODER_TOKEN_FILE
 #    set (the template mounts the token only into workspaces that opt in), the
 #    CLI's login is rebuilt on every start, because ~/.config/coderv2 is not on a
 #    volume. The token's first line goes to <config dir>/session (directory 0700,
@@ -416,7 +416,9 @@ setup_coder_login() {
     return 0
   fi
   who=$(CODER_URL="$url" timeout 10 coder whoami 2>/dev/null) || who=""
-  who=$(printf '%s\n' "$who" | head -n 1)
+  # The CLI prints "[ Coder is running at <url>, You're authenticated as <user> ! ..."
+  # (v2.36); take the name after "authenticated as", else a bare one-word answer.
+  who=$(printf '%s\n' "$who" | sed -n -e "s/.*authenticated as \([^ ]*\).*/\1/p" -e t -e '/^[^ ]*$/p' | head -n 1)
   if [ -n "$who" ]; then
     log "coder CLI is logged in as $who from DEV_CODER_TOKEN_FILE ($tf)"
   else
