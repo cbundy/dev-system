@@ -36,6 +36,38 @@ function origin(argv: readonly string[]): Reply | undefined {
   return argv.join(' ') === 'git remote get-url origin' ? { stdout: `https://github.com/${REPO}.git\n` } : undefined
 }
 
+// issuesRead: `callum-flow-issue-read --json --issues <N,...>` answered from the same test's
+// single-read replies (`--json <N>`), as the real reader composes them: an issue the single read
+// answered becomes an item, exit 3 a refused number, any other failure a missing one; a reply that is no issue a missing one; a rate limit
+// fails the whole call. Undefined for any other command. (observe reads its due issues this way, #922.)
+type SingleRun = (argv: string[]) => Reply | undefined | Promise<Reply | undefined>
+export function issuesRead(argv: readonly string[], single: SingleRun): Promise<Reply> | undefined {
+  const at = argv.indexOf('--issues')
+  if (argv[0] !== 'callum-flow-issue-read' || at < 0) return undefined
+  return (async () => {
+    const issues: unknown[] = []
+    const refused: number[] = []
+    const missing: number[] = []
+    for (const n of (argv[at + 1] ?? '').split(',').map(Number)) {
+      const r = (await single(['callum-flow-issue-read', '--json', String(n)])) ?? {}
+      if (r.exitCode === 3) refused.push(n)
+      else if ((r.exitCode ?? 0) !== 0 && /rate.?limit/i.test(r.stderr ?? '')) return { exitCode: 1, stderr: r.stderr }
+      else if ((r.exitCode ?? 0) !== 0) missing.push(n)
+      else {
+        let item: unknown
+        try {
+          item = JSON.parse(r.stdout ?? '').issue
+        } catch {
+          item = undefined
+        }
+        if (item === null || typeof item !== 'object') missing.push(n)
+        else issues.push({ ...(item as object), number: n })
+      }
+    }
+    return { stdout: JSON.stringify({ issues, refused, missing, stripped: refused.length }) }
+  })()
+}
+
 export const CHECKOUT_HEAD = '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff'
 
 // checkout: the main checkout on its default branch with nothing changed (#544), and as current
@@ -255,6 +287,8 @@ export function host(on: On, opts: HostOptions = {}) {
     }
     // the old-watcher rail asks whether a lock directory exists: one does when a file is under it
     if (argv[0] === 'test' && argv[1] === '-d') return done({ exitCode: [...files.keys()].some(p => p.startsWith(`${argv[2]}/`)) ? 0 : 1 })
+    const batch = issuesRead(argv, a => opts.run?.(a, { ...s, argv: a }))
+    if (batch !== undefined) return done(await batch)
     return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? checkout(argv) ?? {})
   })
   on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage } }))

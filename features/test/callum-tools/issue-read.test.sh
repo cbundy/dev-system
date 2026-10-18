@@ -36,6 +36,22 @@ d=${STUB_DIR:?}
 [ "$1" = api ] || { echo "unexpected gh $*" >&2; exit 1; }
 shift
 [ "$1" != --paginate ] || shift
+if [ "$1" = graphql ]; then
+  # the Nth graphql call serves graphql_N.json, else graphql.json; graphql.rc is the exit code
+  # gh gives when the answer carries errors (it still prints the body)
+  echo graphql >> "$d/calls"
+  shift
+  [ "$1" = -f ] || { echo "graphql without -f query" >&2; exit 1; }
+  printf '%s\n' "$2" >> "$d/queries"
+  k=$(wc -l < "$d/queries" | tr -d ' ')
+  f="$d/graphql_$k.json"
+  [ -f "$f" ] || f="$d/graphql.json"
+  [ -f "$f" ] || { echo "no graphql fixture" >&2; exit 1; }
+  cat "$f"
+  [ ! -f "$d/graphql.err" ] || cat "$d/graphql.err" >&2
+  [ ! -f "$d/graphql.rc" ] || exit "$(cat "$d/graphql.rc")"
+  exit 0
+fi
 name=$(printf '%s' "$1" | tr '/?&=' '____')
 echo "$1" >> "$d/calls"
 [ ! -f "$d/$name.fail" ] || exit 1
@@ -474,6 +490,147 @@ jq -n --argjson u "$OWNER" '{number: 30, state: "open", title: "P", body: "b", u
 rc_of "$READ" --pr 30
 expect_rc 0 "pr with summary"
 no_dep_calls "pr"
+
+# --- --issues: many issues in one GraphQL request -------------------------------------
+# gq <n> <login> <id> <state> <title> [typename] -> a GraphQL alias value
+gq() {
+  jq -n --argjson n "$1" --arg l "$2" --argjson i "$3" --arg s "$4" --arg t "$5" --arg k "${6:-User}" \
+    '{number: $n, title: $t, state: $s, author: {__typename: $k, login: $l, databaseId: $i},
+      labels: {totalCount: 2, nodes: [{name: "ready"}, {name: "queue"}]},
+      issueDependenciesSummary: {blockedBy: 1, blocking: 3, totalBlockedBy: 2, totalBlocking: 4},
+      subIssuesSummary: {total: 5, completed: 2}}'
+}
+# gresp <alias-json-object> [errors-json] -> graphql.json
+gresp() { jq -n --argjson r "$1" --argjson e "${2:-null}" '{data: {repository: $r}} + (if $e == null then {} else {errors: $e} end)' > "$d/graphql.json"; }
+reset
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'Title 45')" --argjson b "$(gq 114 CBundy 13131067 CLOSED 'Title 114')" '{i45: $a, i114: $b}')"
+issue 45 "$OWNER" "Title 45" "B"
+rc_of "$READ" --json --issues 45,114
+expect_rc 0 "--issues"
+[ "$(grep -c graphql "$d/calls")" = 1 ] || fail "--issues: not one graphql call: $(cat "$d/calls")"
+[ "$(grep -c '^repos' "$d/calls" || true)" = 0 ] || fail "--issues made a REST call"
+jq -e '.stripped == 0 and .refused == [] and .missing == [] and (.issues | map(.number) == [45, 114])
+  and .issues[0].state == "open" and .issues[1].state == "closed" and .issues[0].labels == [{name: "ready"}, {name: "queue"}]
+  and .issues[0].user == {login: "cbundy", id: 13131067}
+  and .issues[0].issue_dependencies_summary == {blocked_by: 1, blocking: 3, total_blocked_by: 2, total_blocking: 4}
+  and .issues[0].sub_issues_summary == {total: 5, completed: 2} and (.issues[0] | has("body") | not)' "$tmpdir/out" >/dev/null || fail "--issues json: $(cat "$tmpdir/out")"
+rc_of "$READ" --issues 45,114
+expect_rc 0 "--issues text"
+present "#45 open [ready, queue] Title 45" "--issues text"
+present "#114 closed [ready, queue] Title 114" "--issues text"
+present "stripped: 0" "--issues text"
+# the same ordering as asked
+rc_of "$READ" --json --issues 114,45
+jq -e '.issues | map(.number) == [114, 45]' "$tmpdir/out" >/dev/null || fail "--issues order: $(cat "$tmpdir/out")"
+
+# an untrusted author, a wrong id and a ghost are refused and never printed
+reset
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'Good')" --argjson b "$(gq 2 evil 99 OPEN 'SECRET2')" --argjson c "$(gq 3 cbundy 5 OPEN 'SECRET3')" \
+  '{i1: $a, i2: $b, i3: $c, i4: (($a | .number = 4 | .title = "SECRET4") | .author = null)}')"
+rc_of "$READ" --json --issues 1,2,3,4
+expect_rc 0 "--issues untrusted"
+absent SECRET "--issues untrusted"
+jq -e '.issues | map(.number) == [1]' "$tmpdir/out" >/dev/null || fail "--issues untrusted items"
+jq -e '.refused == [2, 3, 4] and .stripped == 3' "$tmpdir/out" >/dev/null || fail "--issues refused: $(cat "$tmpdir/out")"
+[ "$(events | grep -c untrusted_stripped)" = 3 ] || fail "--issues: wanted 3 untrusted_stripped events: $(events)"
+events | grep -q '"issue":2' || events | grep -q '"issue": 2' || fail "untrusted_stripped does not name #2: $(events)"
+rc_of "$READ" --issues 1,2,3,4
+present "stripped: 3" "--issues text refused"
+absent SECRET "--issues text refused"
+
+# a Bot author matches a name[bot]:id entry
+reset
+TRUSTED='cbundy:13131067,my-app[bot]:4242'
+gresp "$(jq -n --argjson a "$(gq 6 my-app 4242 OPEN 'By bot' Bot)" '{i6: $a}')"
+rc_of "$READ" --json --issues 6
+expect_rc 0 "--issues bot"
+jq -e '.issues[0].user.login == "my-app[bot]" and .refused == []' "$tmpdir/out" >/dev/null || fail "--issues bot: $(cat "$tmpdir/out")"
+# a User of the same login is not the bot
+gresp "$(jq -n --argjson a "$(gq 6 my-app 4242 OPEN 'By user')" '{i6: $a}')"
+rc_of "$READ" --json --issues 6
+jq -e '.refused == [6]' "$tmpdir/out" >/dev/null || fail "--issues user posing as bot: $(cat "$tmpdir/out")"
+
+# NOT_FOUND goes in missing, the rest still prints (gh exits 1 with the body)
+reset
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One')" '{i1: $a, i2: null}')" '[{"type":"NOT_FOUND","path":["repository","i2"],"message":"Could not resolve"}]'
+echo 1 > "$d/graphql.rc"
+rc_of "$READ" --json --issues 1,2
+expect_rc 0 "--issues missing"
+jq -e '.missing == [2] and (.issues | map(.number) == [1]) and .stripped == 0' "$tmpdir/out" >/dev/null || fail "--issues missing: $(cat "$tmpdir/out")"
+rc_of "$READ" --issues 1,2
+present "missing: #2" "--issues text missing"
+
+# anything else fails closed with nothing on stdout
+reset
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One')" '{i1: $a, i2: null}')" '[{"type":"FORBIDDEN","path":["repository","i2"],"message":"no"}]'
+rc_of "$READ" --json --issues 1,2
+expect_rc 1 "--issues other graphql error"; no_out "--issues other graphql error"
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One')" '{i1: $a}')" '[{"type":"NOT_FOUND","message":"no path"}]'
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues error without a path"; no_out "--issues error without a path"
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One')" '{i1: $a, i2: null}')"
+rc_of "$READ" --json --issues 1,2
+expect_rc 1 "--issues null alias without error"; no_out "--issues null alias without error"
+echo 'not json' > "$d/graphql.json"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues malformed"; no_out "--issues malformed"
+echo '{"data":null}' > "$d/graphql.json"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues null data"; no_out "--issues null data"
+rm -f "$d/graphql.json"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues transport failure"; no_out "--issues transport failure"
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One')" '{i1: $a}')"
+echo 1 > "$d/graphql.rc"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues gh failed without errors"; no_out "--issues gh failed without errors"
+rm -f "$d/graphql.rc"
+# a rate limit: gh's stderr reaches the caller, so it can tell the limit from a bad answer
+gresp "$(jq -n '{i1: null}')" '[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1234."}]'
+echo 'gh: API rate limit exceeded for user ID 1234.' > "$d/graphql.err"
+echo 1 > "$d/graphql.rc"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues rate limit"; no_out "--issues rate limit"
+grep -q "API rate limit exceeded" "$tmpdir/err" || fail "--issues rate limit: gh stderr not passed on: $(cat "$tmpdir/err")"
+rm -f "$d/graphql.rc" "$d/graphql.err"
+# more labels than the page returned
+gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One' | jq '.labels.totalCount = 101')" '{i1: $a}')"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues label overflow"; no_out "--issues label overflow"
+# a different issue than asked for
+gresp "$(jq -n --argjson a "$(gq 9 cbundy 13131067 OPEN 'One')" '{i1: $a}')"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues wrong number"; no_out "--issues wrong number"
+
+# 51 issues make two calls
+reset
+nums=$(seq -s, 1 51)
+jq -n '[range(1; 51) | {key: "i\(.)", value: null}] | from_entries' > /dev/null
+r1=$(for i in $(seq 1 50); do gq "$i" cbundy 13131067 OPEN "T$i" | jq -c --arg k "i$i" '{($k): .}'; done | jq -s 'add')
+r2=$(gq 51 cbundy 13131067 OPEN T51 | jq -c '{i51: .}')
+gresp "$r1"; mv "$d/graphql.json" "$d/graphql_1.json"
+gresp "$r2"; mv "$d/graphql.json" "$d/graphql_2.json"
+rc_of "$READ" --json --issues "$nums"
+expect_rc 0 "--issues 51"
+[ "$(grep -c graphql "$d/calls")" = 2 ] || fail "--issues 51: not two calls"
+[ "$(head -1 "$d/queries" | grep -o 'issue(number' | wc -l | tr -d ' ')" = 50 ] || fail "--issues 51: first chunk not 50 aliases"
+jq -e '(.issues | length) == 51 and (.issues | map(.number) == [range(1; 52)])' "$tmpdir/out" >/dev/null || fail "--issues 51 output"
+
+# bad lists and forbidden combinations are usage errors
+reset
+for bad in '' ',' '1,' ',1' '1,,2' 'a' '1,a' '1,1' '01' '0' '-1' '1 2'; do
+  rc_of "$READ" --json --issues "$bad"
+  expect_rc 2 "--issues '$bad'"; no_out "--issues '$bad'"
+done
+rc_of "$READ" --issues; expect_rc 2 "--issues without a value"
+rc_of "$READ" --issues 1 --comments; expect_rc 2 "--issues --comments"
+rc_of "$READ" --issues 1 --label x; expect_rc 2 "--issues --label"
+rc_of "$READ" --issues 1 --state closed; expect_rc 2 "--issues --state"
+rc_of "$READ" --issues 1 2; expect_rc 2 "--issues with an issue number"
+rc_of "$READ" 2 --issues 1; expect_rc 2 "an issue number then --issues"
+rc_of "$READ" --list --issues 1; expect_rc 2 "--list --issues"
+rc_of "$READ" --issues 1 --pr 2; expect_rc 2 "--issues --pr"
+[ ! -s "$d/queries" ] || fail "a usage error made a graphql call"
 
 # --- token mode: the token account's identity file joins the trusted list (#728) ---
 reset
