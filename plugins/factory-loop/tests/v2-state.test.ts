@@ -847,6 +847,16 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
   ]
   const held = (...keys: string[]) => ({ waits: Object.fromEntries(keys.map(k => [k, { at: NOW - MIN, held: true }])) })
 
+  test('T16: an issue condition on another repo adds no blocked_by link; one without repo still links', () => {
+    const wait = [
+      { kind: 'issue-closed' as const, issue: 57, repo: 'cbundy/other' },
+      { kind: 'issue-closed' as const, issue: 58 },
+    ]
+    const entered = rec(133, { state: 'waiting', step: null, wait, resumeTo: 'designing', notes: ['x'], seq: 6, seqAt: waitAt, since: waitAt })
+    const r = plan(withLedger(world([entered]), [transitioned(entered, 'T16', 'designing', 'wait')]))
+    expect(of(r, 133).filter(a => a.kind === 'link')).toEqual([expect.objectContaining({ kind: 'link', blocker: 58, key: entryKey(entered, 'link/58') })])
+  })
+
   test('T16: a designer that answers wait enters waiting at once, with its conditions, no owner tell; its entry posts one comment, links each issue condition and labels factory:waiting', () => {
     const d = rec(131, { state: 'designing', step: 'design', seq: 5, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
     const answer = { kind: 'wait', brief: null, question: null, conditions: WAIT, reason: 'needs #57 and PR #812', reasons: null, children: [] }

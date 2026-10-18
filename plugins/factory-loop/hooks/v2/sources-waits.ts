@@ -15,9 +15,12 @@ import { compareArgv, issueReadArgv, prWaitArgv } from './argv'
 import type { SourceCtx } from './observe'
 import type { IssueRecord, WaitCondition, WaitRead } from './types'
 
-// waitKey: a condition's key in V2State.waits: `issue:<n>`, `pr:<n>` or `tag:<sha>`, as the transition note writes it.
+// waitKey: a condition's key in V2State.waits: `issue:<n>`, `pr:<n>` or `tag:<sha>`; with a `repo`,
+// `issue:<repo>#<n>` or `tag:<repo>@<sha>`, so a foreign and a local condition never share an entry.
 export function waitKey(c: WaitCondition): string {
-  return c.kind === 'issue-closed' ? `issue:${c.issue}` : c.kind === 'pr-merged' ? `pr:${c.pr}` : `tag:${c.sha}`
+  if (c.kind === 'pr-merged') return `pr:${c.pr}`
+  if (c.kind === 'issue-closed') return c.repo === undefined ? `issue:${c.issue}` : `issue:${c.repo}#${c.issue}`
+  return c.repo === undefined ? `tag:${c.sha}` : `tag:${c.repo}@${c.sha}`
 }
 
 // conditionsOf: the distinct conditions the waiting records wait on, by key.
@@ -68,6 +71,8 @@ export async function readWaits(ctx: SourceCtx, kept: Readonly<Record<string, Wa
     .filter(([key, c]) => {
       const w = waits[key]
       if (w?.held === true) return false
+      // a condition on another repo is never read against the loop's own: it stays open until the reads learn it
+      if ('repo' in c && c.repo !== undefined) return false
       // a tag condition is read once per tag; with no tag known (none released yet, or its read failed) it stays open
       if (c.kind === 'tag-contains') return ctx.tag !== null && w?.tag !== ctx.tag
       return w === undefined || ctx.now - w.at >= everyMs
