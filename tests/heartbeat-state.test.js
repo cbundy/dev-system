@@ -404,10 +404,23 @@ test("every event schema other than envelope is in exactly one of the lifecycle 
   for (const t of [...hb.EV_LIFECYCLE, ...hb.EV_NOISE]) assert.ok(types.includes(t), `${t} has no schema`);
 });
 
-test("shadow (the default): prints old's output and writes one clean record when the reads agree", () => {
+test("default is new: an empty variable shows new's answer and writes no shadow record; the old variable and --source old show old's", () => {
+  writeEvents([ev("claimed", 5)]);
+  writeNew([nev("merged", 5)]);
+  const dflt = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" });
+  assert.deepEqual(issuesOf(dflt.out), [], "new says 5 is merged");
+  assert.deepEqual(shadowRecords(), []);
+  const viaVar = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
+  assert.deepEqual(issuesOf(viaVar.out), [5], "old says 5 is in flight");
+  const viaFlag = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" }, { args: ["--source", "old"] });
+  assert.deepEqual(issuesOf(viaFlag.out), [5]);
+  assert.deepEqual(shadowRecords(), []);
+});
+
+test("shadow (opt-in): prints old's output and writes one clean record when the reads agree", () => {
   writeEvents([ev("claimed", 5, { branch: "issue-5" })]);
   writeNew([nev("claimed", 5, { branch: "issue-5" })]);
-  const env = { CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" };
+  const env = { CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "shadow" };
   const shadow = run(env);
   const old = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
   assert.deepEqual(shadow.out, old.out);

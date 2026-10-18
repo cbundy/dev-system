@@ -8,15 +8,15 @@
   "additionalProperties": false,
   "required": ["kind", "key", "status", "attempts", "class", "rule", "started_at", "ended_at", "agent_id", "wake"],
   "properties": {
-    "kind": { "enum": ["agent-step", "tell", "task"], "description": "agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step." },
-    "key": { "type": "string", "minLength": 1, "description": "The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1." },
-    "status": { "enum": ["running", "done", "failed", "timed-out", "lost"], "description": "The status it changed to." },
-    "attempts": { "type": "integer", "minimum": 0, "description": "Attempts of this key so far." },
-    "class": { "enum": ["free", "owner", "drive", "develop", "start"], "description": "The planner's class for the work." },
+    "kind": { "enum": ["agent-step", "tell", "task"], "description": "agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step.", "x-column": true },
+    "key": { "type": "string", "minLength": 1, "description": "The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1.", "x-column": true },
+    "status": { "enum": ["running", "done", "failed", "timed-out", "lost"], "description": "The status it changed to.", "x-column": true },
+    "attempts": { "type": "integer", "minimum": 0, "description": "Attempts of this key so far.", "x-column": true },
+    "class": { "enum": ["free", "owner", "drive", "develop", "start"], "description": "The planner's class for the work.", "x-column": true },
     "rule": { "type": "string", "minLength": 1, "description": "The planner rule that planned it, for example S2 or S3." },
     "started_at": { "type": "string", "description": "When this attempt started.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
-    "ended_at": { "type": ["string", "null"], "description": "When it ended; null while running.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$" },
-    "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise." },
+    "ended_at": { "type": ["string", "null"], "description": "When it ended; null while running.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
+    "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise.", "x-column": true },
     "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise." }
   },
   "examples": [

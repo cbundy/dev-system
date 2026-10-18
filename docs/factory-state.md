@@ -276,8 +276,8 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
 The events come from one of two stores ([source switch](factory-events/replay.md#source-switch)): `old`,
 `factory.events` through plain `dev-query`, or `new`, the `factory.event_log` view through
 `dev-query --factory` (named columns only, never the `data` jsonb). `--source` beats
-`CALLUM_FLOW_FACTORY_STATE_SOURCE`; the default is `shadow`, which prints the old answer, exits as the old read
-does and records how the new read differed in `factory/.shadow/factory-state.jsonl` under the events folder. A
+`CALLUM_FLOW_FACTORY_STATE_SOURCE`; the default is `new` (the default moved from `shadow` on 2026-10-18, see [replay.md](factory-events/replay.md#defaults-moved-to-new)) and `old` is the way back. `shadow` is opt-in: it prints the old answer, exits as the old read
+does and records how the new read differed in `factory/.shadow/factory-state.jsonl` under the events folder. In shadow a
 failing or refused new read is only a record (`new_error`). `nomistakes.runs` and `factory.workers_status` come
 from the same place whichever store is chosen, with the same `n/a` handling.
 

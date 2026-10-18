@@ -74,6 +74,10 @@ override_data {
   target = data.coder_parameter.memory_gb
   values = { value = "8" }
 }
+override_data {
+  target = data.coder_parameter.coder_login
+  values = { value = "false" }
+}
 
 run "single_host_default" {
   command = plan

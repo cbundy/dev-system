@@ -109,9 +109,9 @@ both reads and `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) cuts `differenc
 counts the whole window.
 
 Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
-default `shadow`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
+default `new`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
 shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)) and
-`heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `shadow`; its replay reader is
+`heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `new`; its replay reader is
 `scripts/factory-events-replay/readers/heartbeat-state.js`; `new` reads this device's local new log under a 500 ms
 deadline, and a shadow record is kept for every difference or error but an agreeing run only once per quiet period).
 
@@ -122,6 +122,26 @@ Switched readers and their known differences from `old` (dropped before comparin
 | `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
 | `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900)) | [`readers/heartbeat-state.js`](../../scripts/factory-events-replay/readers/heartbeat-state.js) | the per-entry `state` (old state names against new types); the v1-only events the new log lacks (`run_started`, `superseded`, `owner_wait`, `briefed`, `design_routed`, `delegated` and the replayed run facts `failed`, `head_mismatch`, `conflict`, `ci_stalled`); history from before the device's dual write |
 
-To move a tool's default to `new`: its shadow runs must be clean, judged with the query in
-[docs/metrics.md](../metrics.md#shadow-runs-source-switch). The threshold is set in
-[#902](https://github.com/cbundy/dev-system/issues/902).
+## Defaults moved to new
+
+The default source of these tools moved from `shadow` to `new` on 2026-10-18
+([#902](https://github.com/cbundy/dev-system/issues/902)). The owner decided to skip the shadow runs: the evidence is the
+full-history compare ([#650](https://github.com/cbundy/dev-system/issues/650)) and the dual-write check. The way back
+is the same for each: `--source old` or `<VARIABLE>=old`, at once. `--source shadow` still works and still writes its
+records ([metrics.md](../metrics.md#shadow-runs-source-switch)).
+
+| Tool | Moved | Evidence | Way back |
+|---|---|---|---|
+| `callum-flow-factory-state` | 2026-10-18 | owner's decision to skip shadow runs; corpus compare in `npm test`; full-history compare (see below) | `CALLUM_FLOW_FACTORY_STATE_SOURCE=old` |
+| `callum-flow-evaluate` | 2026-10-18 | the same; evaluate's v1-only metrics read n/a under `new` | `CALLUM_FLOW_EVALUATE_SOURCE=old` |
+| `heartbeat-state` | 2026-10-18 | the same; `new` reads only this device's local new log under a 500 ms deadline, so an issue whose only lifecycle events came before the device's dual write reads idle | `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=old` |
+| the factory HUD (via factory-state) | 2026-10-18 | it passes no source when `FACTORY_HUD_SOURCE` is unset, so it follows factory-state | `FACTORY_HUD_SOURCE=old` |
+
+Full-history compare (`load`, then `compare --reader scripts/factory-events-replay/readers/<tool>.js` from
+2026-10-16T02:00Z): the builder of this change could not run it. The slot has no `FACTORY_DB_ADMIN_URL` and no
+old-store URL, so there is no PASS or FAIL line, event count or difference count to record here, and none is
+invented. The reader issues ([#898](https://github.com/cbundy/dev-system/issues/898),
+[#899](https://github.com/cbundy/dev-system/issues/899), [#900](https://github.com/cbundy/dev-system/issues/900))
+asked their builders for the full-history result in their answers. Whoever has database access should run the
+compare for each reader and add the PASS or FAIL line, event count and difference count to this section. The claim tools
+keep their own default.
