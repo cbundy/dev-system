@@ -1409,6 +1409,13 @@ The designer is a reader: it writes nothing to GitHub.
   a release: whether to cut one is the judge's decision (11), so a release wait is a `tag-contains`
   wait: for example a change that ships in two releases waits until a release tag carries the
   commit its readers ship in. The transition note's `wait` token writes it as `tag:<sha>`.
+  `bin/factory-answer` also reads each condition on GitHub for the job's repo before it records the
+  wait (`hooks/v2/wait-check.mjs`, #980; all conditions at once, each `gh` call limited to 15 s): a
+  `tag-contains` sha must be a commit of the repo and the repo must have a release, an `issue-closed`
+  issue must exist, a `pr-merged` PR must exist and not be closed unmerged. A definite negative (HTTP
+  404 or 422, "release not found", an unresolvable PR) is refused like any problem, one per
+  condition; an indeterminate read (no `gh`, network, rate limit, auth, timeout) records the wait and
+  names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
   `callum-flow-issue-read --json N` shows it closed, a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
@@ -2644,7 +2651,9 @@ Appendix E gives what v2 makes of it (4.5).
      is in; any other path is refused before anything is written. It checks the JSON against the job's contract
      and prints every problem, exit 1; a usage error exits 2. On success it writes
      `{ v: 1, contract, answer }` atomically (a new temp file in the same directory, flushed, then
-     renamed over the answer file), prints that it is recorded, and exits 0. It runs from any
+     renamed over the answer file), prints that it is recorded, and exits 0. For a `design-v2` wait it
+     first reads the conditions on GitHub (8.7): a definite negative is refused, an indeterminate
+     read is recorded and named on stderr. It runs from any
      directory under plain node, as a CommonJS script or an ES module alike.
    - **Reading.** The loop reads the answer file at the path it issued for that step and attempt,
      and nowhere else: who answered is the path. It checks the answer again against what it knows

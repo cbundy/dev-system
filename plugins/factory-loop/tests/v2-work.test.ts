@@ -377,6 +377,7 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(design).toContain('conditions: 1 to 8')
     expect(design).toContain('never #300 itself')
     expect(design).toContain('a release tag that carries a commit')
+    expect(design).toContain('The answer script checks each condition on GitHub before it records the wait')
     expect(design).not.toContain('No other kind is supported')
     expect(design).toContain('never ask the owner to cut a release')
     expect(design).toContain('you change nothing in the repository')

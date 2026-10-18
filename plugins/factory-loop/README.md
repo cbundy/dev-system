@@ -125,7 +125,8 @@ The intended design is that the loop's agents answer through validated tools
 an agent the loop spawns from its timer never reaches them ([v2 SPEC 13.13](../../docs/factory-loop/v2/SPEC.md#1313-known-gaps-and-risks)). So, as a **temporary
 workaround**, agents record their answer with a checked script, `bin/factory-answer`: each
 prompt names the script and an answer file for that one attempt, the script checks the JSON
-against the same contract the tools use (`hooks/contract.mjs`) and names every problem, and the
+against the same contract the tools use (`hooks/contract.mjs`) and names every problem (a design wait's
+conditions are also checked on GitHub, `hooks/v2/wait-check.mjs`), and the
 loop reads the file when the agent's turn ends (v2 SPEC 13.7.3a, DECISIONS D-74). Text stays the
 fallback, and the decision log says which way each answer came (`script`, `tool`, `text`,
 `repair`).

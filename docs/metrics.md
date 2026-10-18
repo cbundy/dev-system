@@ -597,6 +597,36 @@ dispatcher-bound time with another device idle. The B-or-gate call needs the pip
 well, so read it from `callum-flow-evaluate`'s `waiting` section, whose `decision` is `B` when more
 than 50% of the wait was dispatcher-bound with another device idle and `gate` otherwise.
 
+## 7a. How waits end
+
+A design wait (v2 SPEC 8.7) is the transition to `waiting` (T16). The answer script refuses a wait
+that could never clear (a commit of another repo, a repo with no release, an issue or PR that does
+not exist; #980), so after it ships the share of waits that never end should drop. This lists each
+wait with the transition that ended it and how long it lasted: `ended_via` is the next transition's
+`via` (the loop's own check clearing it, a tell, the owner's resume), and a null `ended_at` is a
+wait still open. Time is by `seq_at`; a retried write counts once. It takes `-v repo=... -v since=...`.
+
+```sql
+-- per wait: when it began, how it ended and how long it lasted
+WITH tr AS (       -- one row per (issue, life, seq), with the issue's next transition
+  SELECT repo, issue, life, seq, to_state, via, seq_at,
+         lead(seq_at) OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_at,
+         lead(via)    OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_via
+  FROM (SELECT repo, issue, life, seq, to_state, via, seq_at,
+          row_number() OVER (PARTITION BY repo, issue, life, seq ORDER BY ts, device, device_seq) AS n
+        FROM factory.event_log WHERE type = 'transition' AND issue IS NOT NULL AND repo = :'repo') x
+  WHERE n = 1
+)
+SELECT repo, issue, life, seq, seq_at AS waited_at, next_at AS ended_at, next_via AS ended_via,
+  extract(epoch FROM next_at - seq_at) AS wait_seconds
+FROM tr
+WHERE to_state = 'waiting' AND seq_at >= :'since'::timestamptz
+ORDER BY seq_at DESC;
+```
+
+Group by `ended_via` for how waits end, and count the rows with a null `ended_at` older than a day for
+waits that look stuck.
+
 ## 8. Implementer model comparison
 
 Sonnet against Opus as the implementer, from the split `callum-flow-implementer-route` makes (see the
