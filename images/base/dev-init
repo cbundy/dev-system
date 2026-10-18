@@ -3,7 +3,8 @@
 # dev-init: start-up setup for the dev-system base image.
 #
 # Wires up the state that cannot be baked into the image: it checks the
-# /persist volumes, seeds tool config that must exist before first use,
+# /persist volumes, logs the coder CLI in from DEV_CODER_TOKEN_FILE when the
+# workspace opts in, seeds tool config that must exist before first use,
 # moves an older Claude login into a shared Claude login directory,
 # points codex's telemetry at OTEL_EXPORTER_OTLP_ENDPOINT when the runtime
 # sets one, re-points git at gh's credentials, clones the workspace repo
@@ -371,6 +372,59 @@ setup_gh_token() {
     rm -f "$tmp"
     log "WARNING: could not write $idf"
   fi
+}
+
+# 1a. Coder CLI login (cbundy/dev-system#540, opt-in): with DEV_CODER_TOKEN_FILE
+#    set (the template mounts the token only into workspaces that opt in), the
+#    CLI's login is rebuilt on every start, because ~/.config/coderv2 is not on a
+#    volume. The token's first line goes to <config dir>/session (directory 0700,
+#    file 0600, written under umask 077; never echoed, never on a command line) and
+#    the URL (CODER_URL, else CODER_AGENT_URL, trailing slash stripped) to url.
+#    Runs before resume_restart_self, which needs the login. A missing or empty
+#    file, no URL or no coder on PATH logs one WARNING and writes no session file.
+#    Without DEV_CODER_TOKEN_FILE this does nothing and leaves the config alone.
+setup_coder_login() {
+  [ -n "${DEV_CODER_TOKEN_FILE:-}" ] || return 0
+  local tf="$DEV_CODER_TOKEN_FILE" dir="${CODER_CONFIG_DIR:-$HOME/.config/coderv2}"
+  local url="${CODER_URL:-${CODER_AGENT_URL:-}}" token="" who=""
+  url="${url%/}"
+  if ! command -v coder >/dev/null 2>&1; then
+    log "WARNING: DEV_CODER_TOKEN_FILE ($tf) is set but coder is not on PATH - no Coder login"
+    return 0
+  fi
+  if [ ! -r "$tf" ]; then
+    log "WARNING: DEV_CODER_TOKEN_FILE ($tf): the file does not exist or is not readable - no Coder login"
+    return 0
+  fi
+  IFS= read -r token < "$tf" || true
+  token="${token%$'\r'}"
+  if ! printf '%s' "$token" | grep -q '[^[:space:]]'; then
+    log "WARNING: DEV_CODER_TOKEN_FILE ($tf): the file is empty - no Coder login"
+    return 0
+  fi
+  if [ -z "$url" ]; then
+    log "WARNING: DEV_CODER_TOKEN_FILE ($tf) is set but neither CODER_URL nor CODER_AGENT_URL is - no Coder login"
+    return 0
+  fi
+  if ! (
+    umask 077
+    mkdir -p "$dir" && chmod 700 "$dir" \
+      && printf '%s' "$token" > "$dir/session" && chmod 600 "$dir/session" \
+      && printf '%s' "$url" > "$dir/url" && chmod 600 "$dir/url"
+  ); then
+    log "WARNING: could not write the Coder login under $dir"
+    return 0
+  fi
+  who=$(CODER_URL="$url" timeout 10 coder whoami 2>/dev/null) || who=""
+  # The CLI prints "[ Coder is running at <url>, You're authenticated as <user> ! ..."
+  # (v2.36); take the name after "authenticated as", else a bare one-word answer.
+  who=$(printf '%s\n' "$who" | sed -n -e "s/.*authenticated as \([^ ]*\).*/\1/p" -e t -e '/^[^ ]*$/p' | head -n 1)
+  if [ -n "$who" ]; then
+    log "coder CLI is logged in as $who from DEV_CODER_TOKEN_FILE ($tf)"
+  else
+    log "WARNING: DEV_CODER_TOKEN_FILE ($tf): coder whoami failed - the token may be expired or rejected"
+  fi
+  return 0
 }
 
 # 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
@@ -763,6 +817,7 @@ if [ "${1:-}" = --plugins ]; then
 fi
 
 check_persist_dirs
+setup_coder_login
 resume_restart_self
 seed_claude_config
 adopt_claude_login

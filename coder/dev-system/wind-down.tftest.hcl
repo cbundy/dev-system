@@ -72,6 +72,10 @@ override_data {
   target = data.coder_parameter.memory_gb
   values = { value = "8" }
 }
+override_data {
+  target = data.coder_parameter.coder_login
+  values = { value = "false" }
+}
 
 run "default_has_no_wind_down" {
   command = plan

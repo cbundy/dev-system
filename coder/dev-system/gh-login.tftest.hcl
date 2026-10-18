@@ -79,6 +79,10 @@ override_data {
   values = { value = "false" }
 }
 override_data {
+  target = data.coder_parameter.coder_login
+  values = { value = "false" }
+}
+override_data {
   target = data.coder_parameter.ring
   values = { value = "consumer" }
 }

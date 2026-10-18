@@ -35,6 +35,10 @@
 # - an opt-in Template Admin token for push-next.sh (variable
 #   template_tester_secrets_dir, parameter template_testing), mounted only into
 #   workspaces that turn the parameter on (cbundy/dev-system#118);
+# - an opt-in Coder CLI login (variable coder_login_secrets_dir, parameter
+#   coder_login): a host token directory mounted read-only only into workspaces
+#   that turn the parameter on; dev-init logs the coder CLI in from it on each
+#   start (cbundy/dev-system#540);
 # - an optional shared gh login, chosen per workspace (parameter gh_login,
 #   default shared; shared volume named by variable gh_volume_name): a named
 #   volume over /persist/gh (cbundy/dev-system#195);
@@ -288,6 +292,25 @@ variable "template_tester_secrets_dir" {
   type        = string
 }
 
+# The opt-in Coder CLI login: a Coder session token in coder-session-token,
+# mounted only into workspaces with the coder_login parameter on, so a workspace
+# that drives other workspaces (the factory loop's shadow and testbed runs) can
+# use `coder ssh`. Only the path passes through Terraform, never the token. It
+# must not sit under secrets_dir or workspace_secrets_dir, which reach workspaces
+# that did not opt in.
+variable "coder_login_secrets_dir" {
+  default     = ""
+  description = "Directory on the Docker host holding coder-session-token for the Coder CLI login (owned 1000:1000, mode 0700). Mounted read-only at /run/secrets/dev-system-coder-login only into workspaces with the coder_login parameter on. Must not be equal to or under secrets_dir or workspace_secrets_dir. Empty turns the feature off."
+  type        = string
+  validation {
+    condition = (var.coder_login_secrets_dir == "" || (
+      (var.secrets_dir == "" || (var.coder_login_secrets_dir != var.secrets_dir && !startswith(var.coder_login_secrets_dir, "${var.secrets_dir}/")))
+      && (var.workspace_secrets_dir == "" || (var.coder_login_secrets_dir != var.workspace_secrets_dir && !startswith(var.coder_login_secrets_dir, "${var.workspace_secrets_dir}/")))
+    ))
+    error_message = "coder_login_secrets_dir must not be secrets_dir or workspace_secrets_dir, or under either: they reach workspaces that did not opt in."
+  }
+}
+
 # Private images (e.g. a per-repo image built FROM the base image) need
 # registry credentials for both the digest lookup and the pull. They are read
 # from a Docker config.json on the machine running the provisioner, so the
@@ -442,6 +465,16 @@ data "coder_parameter" "template_testing" {
   default      = false
   mutable      = true
   order        = 8
+}
+
+data "coder_parameter" "coder_login" {
+  name         = "coder_login"
+  display_name = "Coder CLI login"
+  description  = "Logs the coder CLI in inside this workspace with a session token from the host, so agents here can drive other workspaces (e.g. the factory loop's shadow and testbed runs). That token can reach every workspace its user can reach. Only for a workspace that drives other workspaces. Needs the template's coder_login_secrets_dir variable; takes effect on the next workspace start."
+  type         = "bool"
+  default      = false
+  mutable      = true
+  order        = 14
 }
 
 # Shared or private Claude login (variable claude_auth_volume_name). Coder
@@ -610,6 +643,11 @@ locals {
     local.gh_login_token ? ["DEV_GH_TOKEN_FILE=/run/secrets/dev-system-workspace/gh-token"] : [],
     local.git_email != "" ? ["DEV_GIT_EMAIL=${local.git_email}"] : [],
   )
+
+  # Opt-in Coder CLI login: dev-init reads the token from this path (only the
+  # path is set here, never the token).
+  coder_login_on  = var.coder_login_secrets_dir != "" ? tobool(data.coder_parameter.coder_login.value) : false
+  coder_login_env = local.coder_login_on ? ["DEV_CODER_TOKEN_FILE=/run/secrets/dev-system-coder-login/coder-session-token"] : []
 
   # The owner's git identity; a token workspace acts as the token's account.
   git_identity_env = local.gh_login_token ? {} : {
@@ -871,7 +909,7 @@ resource "docker_container" "workspace" {
   # minute. null (Docker's default) when there is no wind-down.
   destroy_grace_seconds = var.wind_down_minutes > 0 ? var.wind_down_minutes * 60 + 60 : null
   entrypoint            = ["sh", "-c", coder_agent.main.init_script]
-  env                   = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env)
+  env                   = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env, local.coder_login_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)
@@ -935,6 +973,16 @@ resource "docker_container" "workspace" {
     )
     content {
       container_path = "/run/secrets/dev-system-template-tester"
+      host_path      = volumes.value
+      read_only      = true
+    }
+  }
+  # The Coder CLI login token: only with both the variable set and the
+  # workspace opted in (parameter coder_login).
+  dynamic "volumes" {
+    for_each = local.coder_login_on ? [var.coder_login_secrets_dir] : []
+    content {
+      container_path = "/run/secrets/dev-system-coder-login"
       host_path      = volumes.value
       read_only      = true
     }

@@ -126,9 +126,10 @@ coder_run() {
 
 push() {
   # coder reads the variables from terraform.tfvars; the flag overrides the file's
-  # template_tester_secrets_dir, so no dev-system-next workspace ever mounts the token.
+  # template_tester_secrets_dir and coder_login_secrets_dir, so no dev-system-next
+  # workspace ever mounts either token.
   set -- templates push "$TEMPLATE" --directory "$TEMPLATE_DIR" --yes \
-    --variable template_tester_secrets_dir=
+    --variable template_tester_secrets_dir= --variable coder_login_secrets_dir=
   version=$("$TEMPLATE_DIR/../version-name.sh" "$TEMPLATE_DIR")
   message=$("$TEMPLATE_DIR/../version-name.sh" --message push-next.sh "$TEMPLATE_DIR")
   set -- "$@" --name "$version"
