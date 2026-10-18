@@ -8,7 +8,7 @@
   "additionalProperties": false,
   "required": ["model", "reason", "bucket", "opus_pct"],
   "properties": {
-    "model": { "type": "string", "minLength": 1, "description": "The model alias chosen, for example sonnet or opus." },
+    "model": { "type": "string", "minLength": 1, "description": "The model alias chosen, for example sonnet or opus.", "x-column": true },
     "reason": { "enum": ["label", "default", "hash", "fallback"], "description": "label: a model:<alias> label on the issue; default: no Opus share is set; hash: the issue's bucket against the Opus share; fallback: the labels could not be read.", "x-column": true },
     "bucket": { "type": ["integer", "null"], "minimum": 0, "maximum": 99, "description": "hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise." },
     "opus_pct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "The configured share of issues routed to Opus, in percent." }

@@ -83,7 +83,7 @@ class InputError extends Error {}
 
 // ---------------------------------------------------------------- SQL
 
-// The canonical run-to-issue link of docs/metrics.md ("Linking pipeline runs to issues"),
+// The canonical run-to-issue link of docs/factory-state.md ("Linking pipeline runs to issues"),
 // copied verbatim; tests/factory-state.test.js fails if the copies drift.
 const RUN_LINK = `WITH run_link AS (
   SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,

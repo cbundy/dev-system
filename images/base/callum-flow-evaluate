@@ -1313,7 +1313,7 @@ function computePipeline(nm, win, linked) {
   const pipeline = {
     runs: runs.length,
     by_status: Object.fromEntries(Object.keys(byStatus).sort().map((k) => [k, byStatus[k]])),
-    // this repo's runs in the window that no issue claims (docs/metrics.md "Unlinked runs")
+    // this repo's runs in the window that no issue claims (the link rules of docs/factory-state.md)
     unlinked_runs: runs.filter((r) => !linked.has(r.id)).length,
   };
   if (nm.rounds) {

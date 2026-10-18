@@ -100,8 +100,8 @@ Highest first. A lower source never overrides a higher one.
 3. The factory loop v2's state: the newest `transition` event of the current life (see
    [The factory loop v2](#the-factory-loop-v2)). The mirror's runs no longer set such an issue's stage.
 4. Pipeline facts from the `nomistakes.runs` mirror: start, status, parked, PR. A run belongs to an
-   issue by the one definition in [metrics.md](metrics.md#linking-pipeline-runs-to-issues), copied
-   verbatim into the tool's SQL (a test fails if the copies drift). The agent-logged `run_started`,
+   issue by the one definition in [Linking pipeline runs to issues](#linking-pipeline-runs-to-issues),
+   copied verbatim into the tool's SQL (a test fails if the copies drift). The agent-logged `run_started`,
    `parked`, `merge_ready`, `failed`, `head_mismatch`, `conflict` and `ci_stalled` events never set a
    stage; when the mirror has no run they only appear as an `event-only` hint. A `failed` replayed after
    `merged` or `closed` (#344) is therefore ignored.
@@ -114,6 +114,46 @@ a newer decision event exists, the decision wins (a re-delegated or reopened iss
 
 GitHub is read live, so for a past `--at` its facts are not as of that time; the output says so. Use
 `--github off` for a database-only view.
+
+## Linking pipeline runs to issues
+
+`run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have
+none. The no-mistakes database records every run itself and `nm-push-loop` mirrors it into the
+`nomistakes` schema, so the mirror is the source of every pipeline fact (start time, status, parked
+time, PR). A run belongs to issue N of repo R when:
+
+- `runs.repo = lower(R)` (the exporter lowercases `repo`; `factory.events.repo` is not lowercased,
+  so compare with `lower()`), and
+- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` convention the
+  `implement-issue` skill uses (the CTE reads up to nine digits).
+
+Legacy fallback: a run whose branch carries no issue number is linked through a `run_started` event
+with the same `run_id`, so old rows keep working. The branch wins when the two disagree. Every
+other run, including one with NULL `repo`, is unlinked: it is left out of per-issue numbers, never
+counted against an issue by guess. The start of a pipeline run in any issue-level number is the
+linked run's `created_at`; `run_started` timestamps are never read.
+
+`callum-flow-factory-state` copies the CTE verbatim (`tests/factory-state.test.js` fails if the copy
+drifts), and `callum-flow-evaluate` applies the same rules to the no-mistakes source (see "Offline
+computation" in [metrics.md](metrics.md#offline-computation-callum-flow-evaluate)). The
+tool's SQL reads the old `factory.events` table until
+[#898](https://github.com/cbundy/dev-system/issues/898) moves it to the factory database.
+
+```sql
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+)
+SELECT * FROM run_link ORDER BY repo, issue, created_at;
+```
 
 ## Time and `--at`
 
