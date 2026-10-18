@@ -21,7 +21,7 @@ import { decisionOf, parkText, waitText } from './park-text'
 import { fixWhyOf, lifeEntries } from './rules-agent'
 import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
-import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
+import { ALL_FACTORY_LABELS, TRACKER_DEPTH, labelOf, resumeStep } from './types'
 import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
 
 // One entry action: soft ones are best effort (a stop, a kill), and a tell never holds the step.
@@ -209,6 +209,25 @@ function mergedItem(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   return [{ action: { ...base(r, merged, 'the merge has no merged event'), kind: 'event', event: { state: 'merged', issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.why === 'merged' ? 'merged by the factory loop' : 'merged by hand' } }, soft: false, tell: false }]
 }
 
+// trackerItems: a merge whose rollout read `merge` (a run-it or keep-open issue stays open) checks its
+// split parent once its epic-base close, when planned, is done; a check that closed a tracker checks
+// that tracker's own parent, TRACKER_DEPTH checks in all (#946). The keys sit under follow/.
+function trackerItems(ctx: V2Ctx, r: IssueRecord, o: { rollout: string | null; closeIssue: number | null } | null): EntryItem[] {
+  if (o === null || o.rollout !== 'merge') return []
+  if (o.closeIssue !== null && ctx.byKey.get(followKey(r, 'close-issue'))?.status !== 'done') return []
+  const items: EntryItem[] = []
+  let key = followKey(r, 'close-tracker')
+  let issue = r.issue
+  for (let level = 0; level < TRACKER_DEPTH; level++) {
+    items.push({ action: { ...base(r, key, level === 0 ? 'the merged issue may be the last of a split' : 'its tracker closed, so its own parent may be done'), issue, kind: 'close-tracker' }, soft: false, tell: false })
+    const e = ctx.byKey.get(key)
+    if (e?.status !== 'done' || e.outcome?.kind !== 'close-tracker' || !e.outcome.closed || e.outcome.parent === null) break
+    issue = e.outcome.parent
+    key = `${key}/up`
+  }
+  return items
+}
+
 // closedItems: a closed record's follow-ups by why (4.5): a drop's `abandoned`; a merge's rollout
 // read, then a close for an epic base or a later milestone for a run-it or keep-open rollout
 // (D-29); a split's parent released.
@@ -222,6 +241,7 @@ function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
     const read = ctx.byKey.get(rolloutKey)
     const o = read?.status === 'done' && read.outcome?.kind === 'rollout' ? read.outcome : null
     if (o !== null && o.closeIssue !== null) add({ ...base(r, followKey(r, 'close-issue'), 'its PR targets an epic base'), issue: o.closeIssue, kind: 'close-issue' })
+    items.push(...trackerItems(ctx, r, o))
     if (o !== null && (o.rollout === 'run-it' || o.rollout === 'keep-open') && ctx.state.sources.milestone.ok && ctx.state.milestone !== null) {
       add({ ...base(r, followKey(r, 'milestone-later'), `${o.rollout} leaves the issue open`), kind: 'milestone-later' })
     }

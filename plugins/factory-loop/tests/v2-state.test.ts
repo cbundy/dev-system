@@ -412,6 +412,35 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
   })
 
+  test('a merge whose rollout read merge checks its split tracker, after its epic-base close; a closed tracker checks its own parent, TRACKER_DEPTH checks in all; run-it, keep-open, a drop and a split plan none (#946)', () => {
+    const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
+    const key = followKey(merged, 'close-tracker')
+    const read = (rollout: 'merge' | 'run-it' | 'keep-open' | null, closeIssue: number | null = null) => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue } })
+    const checks = (extra: LedgerEntry[], r = merged) => plan(withLedger({ ...world([r]), issues: [issue(r.issue, { stage: 'merged', stageSince: NOW - 2 * MIN })] }, [transitioned(r, 'T13', 'merge-queue', 'merged'), ...extra])).actions.filter(a => a.kind === 'close-tracker')
+    const closed = (k: string, parent: number, isClosed: boolean) => done(k, 'close-tracker', { issue: 76, outcome: { kind: 'close-tracker', parent, closed: isClosed, open: [] } })
+    // waits for the rollout read
+    expect(checks([])).toEqual([])
+    expect(checks([read('merge')])).toEqual([expect.objectContaining({ key, issue: 76 })])
+    // run-it and keep-open leave the issue open: no check
+    expect([checks([read('run-it')]), checks([read('keep-open')]), checks([read(null)])]).toEqual([[], [], []])
+    // an epic base: the close of the issue comes first
+    const close = (status: LedgerEntry['status']) => done(followKey(merged, 'close-issue'), 'close-issue', { issue: 77, status })
+    expect(checks([read('merge', 77)])).toEqual([])
+    expect(checks([read('merge', 77), close('running')])).toEqual([])
+    expect(checks([read('merge', 77), close('done')])).toHaveLength(1)
+    // a drop and a split plan none
+    const dropped = rec(78, { state: 'closed', step: null, why: 'dropped', seq: 4, seqAt: NOW - MIN, since: NOW - MIN })
+    const split = rec(79, { state: 'closed', step: null, why: 'split', seq: 4, seqAt: NOW - MIN, since: NOW - MIN })
+    expect([checks([], dropped), checks([], split)]).toEqual([[], []])
+    // the chain: a plan holds what is not done yet. Only a check that closed a tracker goes up, to that tracker's parent, three checks in all
+    expect(checks([read('merge'), closed(key, 139, false)])).toEqual([])
+    expect(checks([read('merge'), closed(key, 139, true)]).map(a => [a.key, a.issue])).toEqual([[`${key}/up`, 139]])
+    expect(checks([read('merge'), closed(key, 139, true), closed(`${key}/up`, 140, true)]).map(a => [a.key, a.issue])).toEqual([[`${key}/up/up`, 140]])
+    expect(checks([read('merge'), closed(key, 139, true), closed(`${key}/up`, 140, true), closed(`${key}/up/up`, 141, true)])).toEqual([])
+    // a null parent ends the chain
+    expect(checks([read('merge'), { ...closed(key, 139, true), outcome: { kind: 'close-tracker', parent: null, closed: true, open: [] } }])).toEqual([])
+  })
+
   test('a merged issue whose rollout read keep-open while open issues wait on it tells the owner once; nothing else does', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })

@@ -13,10 +13,11 @@ import { executors as review } from './act-review'
 import { executors as slots } from './act-slots'
 import { executors as split } from './act-split'
 import { executors as state } from './act-state'
+import { executors as tracker } from './act-tracker'
 import { pollPauseArgv } from './argv'
 import { executors as steps } from './steps'
 
-export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...review, ...ci, ...queue, ...slots, ...steps }
+export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...tracker, ...review, ...ci, ...queue, ...slots, ...steps }
 
 // The pauses, in seconds, before an attempt that failed on a GitHub blip runs again (5.1).
 const BLIP_PAUSES_S: readonly number[] = [5, 15]

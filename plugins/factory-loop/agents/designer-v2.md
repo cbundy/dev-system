@@ -154,7 +154,7 @@ unless the child has its own `## Run it`, is research or a proposal, or needs a 
 blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
 and whether it is ready. A child is not ready only when it carries an open owner
 decision. The loop makes each child an issue under this one, links its `blocked_by`, labels the
-ready ones `ready` once every link exists, and keeps this issue as the tracking epic.
+ready ones `ready` once every link exists, and keeps this issue as the tracking epic. The loop closes it once every child is closed.
 
 The `reasons` object has exactly four keys, each a short, concrete text (at most 500 characters)
 that names what you weighed: `why_split` (size, the areas touched, an owner decision or spike
