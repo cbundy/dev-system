@@ -1,7 +1,7 @@
 // The fleet's rules (docs/factory-loop/v2/SPEC.md 14.1) that name no record: H2 sweeps (on its
 // period, and once a record closed, so the claim of a merged or closed issue ends at once), O3 wakes
 // the judge for the release task, R2 restarts for an update, and what used up its attempts with no
-// issue to hold is told to the owner. They keep v1's meaning and keys (v1 SPEC 5: H2, O3, H4), with
+// issue to hold is told to the owner. They keep v1's meaning and keys (v2 SPEC 13.5.3 and 14.1: H2, O3, R2), with
 // v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
 // with nothing else to start (section 15, "Restart without a drain"); a running step it cuts
 // re-runs free (row U1). Pure.

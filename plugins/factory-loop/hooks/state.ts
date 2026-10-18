@@ -1,4 +1,4 @@
-// buildState: what observe read, assembled into the State plan takes (SPEC 3.1, 3.2). Pure,
+// buildState: what observe read, assembled into the State plan takes (v2 SPEC 13.3.1, 13.3.2). Pure,
 // so the pass driver and the replay harness build state the same way.
 import type { Facts } from './derive'
 import { runsFromEvents } from './derive'
@@ -141,7 +141,7 @@ export function buildState(o: Observed): State {
 }
 
 // digestOf: a short hash of the state without its clock readings, so a pass that saw nothing
-// new is easy to spot in the decision log (SPEC 12). FNV-1a over a stable rendering.
+// new is easy to spot in the decision log (v2 SPEC 13.12). FNV-1a over a stable rendering.
 export function digestOf(state: State): string {
   const { now: _now, sources, lastTitle: _title, lastTitleAt: _titleAt, ...rest } = state
   const quiet = { ...rest, sources: Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, v.ok])) }

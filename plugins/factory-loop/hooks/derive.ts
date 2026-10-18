@@ -1,5 +1,5 @@
 // What the factory event log says, turned into what plan reads: per-issue and per-run facts,
-// pipeline runs, and a ledger derived from what a device already did (SPEC 7.5). Pure: the events
+// pipeline runs, and a ledger derived from what a device already did (v2 SPEC 13.7.5). Pure: the events
 // come in as values. The keys of derived entries are the ones plan would have used, so plan sees
 // the work as done. The loop's own `loop` events (D-09) carry its ledger entries, so a lost store
 // is rebuilt from them.
@@ -73,7 +73,7 @@ export type Facts = {
   reclaimed: Map<number, number>
 }
 
-// factsOf: what plan reads from the log (SPEC 3.3 `facts`).
+// factsOf: what plan reads from the log (v2 SPEC 13.3.3 `facts`).
 export function factsOf(events: FactoryEvent[]): Facts {
   const facts: Facts = {
     briefs: new Map(),
@@ -197,7 +197,7 @@ function runState(
 }
 
 // deriveLedger: the ledger entries a device's own events prove, keyed as plan keys them
-// (SPEC 7.5): claims, heartbeats, sweeps, the rollouts of merges, and every entry the loop logged
+// (v2 SPEC 13.7.5): claims, heartbeats, sweeps, the rollouts of merges, and every entry the loop logged
 // in a `loop` event (the latest per key), which wins over what the other events suggest.
 export function deriveLedger(events: FactoryEvent[], device: string): LedgerEntry[] {
   const out = new Map<string, LedgerEntry>()
@@ -247,7 +247,7 @@ export function deriveLedger(events: FactoryEvent[], device: string): LedgerEntr
   return [...out.values()].sort((a, b) => a.startedAt - b.startedAt || (a.key < b.key ? -1 : 1))
 }
 
-// --- the loop's own events (SPEC 7.4, 7.5, D-09) ------------------------------------------------
+// --- the loop's own events (v2 SPEC 13.7.4, 13.7.5, D-09) ------------------------------------------------
 
 // The note stays short enough for one event row; free text (reasons, instructions, verdict
 // lines, the report's summary) is left out: plan needs none of it to rebuild a hold exactly.

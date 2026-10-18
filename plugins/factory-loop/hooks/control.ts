@@ -1,4 +1,4 @@
-// The owner's controls (SPEC 4.3; DECISIONS D-15, D-16, D-33, D-35, D-38). `/factory <op>` and
+// The owner's controls (v2 SPEC 13.4.3; DECISIONS D-15, D-16, D-33, D-35, D-38). `/factory <op>` and
 // the control tool (mcp__factory-loop__control, input { op }) take the same op text: parseOp
 // reads it, applyOp returns the new Control (the old one is never changed) with the effects the
 // driver carries out and the one line the command or tool answers, and runOp makes the round
@@ -28,7 +28,7 @@ const HOUR = 60 * MIN
 // an override longer than the seven-day usage window is a typo, not a plan (I-19)
 const OVERRIDE_MAX_HOURS = 168
 // a reason rides on the restart's ledger entry and the drain-slow tell; a note goes into every
-// matching agent prompt (SPEC 6.3). Both are refused past these, never cut.
+// matching agent prompt (v2 SPEC 13.6.3). Both are refused past these, never cut.
 const REASON_MAX = 300
 const NOTE_MAX = 2000
 
@@ -400,7 +400,7 @@ export type ControlPaths = { loopDir: string; configDir: string }
 export type OpFrom = { last?: PassSummary | null; agentId?: string; parked?: readonly number[] | null; view?: ConfigView | null }
 
 // What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
-// a retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
+// a retry to run), so the driver pings the loop and logs `logged` (v2 SPEC 13.4.3). retryIssue: the
 // driver runs the ledger's retryIssue and may answer retryText in place of `text`.
 export type OpReply = {
   ok: boolean
@@ -426,7 +426,7 @@ const refused = (text: string, op: Op | null = null): OpReply => ({
 
 // runOp: one op, start to finish: parse, read control.json, apply, write what changed. Only the
 // main conversation changes directives: an agent the loop spawned may read the status, never
-// set an op (SPEC 6.1: the loop's agents act on their own issue only).
+// set an op (v2 SPEC 13.6.1: the loop's agents act on their own issue only).
 export async function runOp(io: FileIo, paths: ControlPaths, input: string, now: Ms, from: OpFrom = {}): Promise<OpReply> {
   const parsed = parseOp(input)
   if (!parsed.ok) return refused(parsed.error)

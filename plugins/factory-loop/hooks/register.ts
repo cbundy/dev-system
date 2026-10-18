@@ -1,11 +1,11 @@
-// factory-loop: the issue orchestrator as one code loop (docs/factory-loop/SPEC.md).
+// factory-loop: the issue orchestrator as one code loop (docs/factory-loop/v2/SPEC.md 13).
 //
 // Every passEveryMs, or at once when pinged, a pass reads the factory (observe.ts) and plans
 // (v2/plan.ts). In act mode, once the safety rails pass (rails.ts: the act lock, the role, the old
 // watcher, another orchestrator's heartbeat), it runs plan's actions through their executors
 // (act.ts) and records each in the ledger (ledger.ts), which it keeps in $.store. In observe mode
 // (the default), or while a rail holds act mode back, it executes nothing and every command's
-// event writes go to a sink (SPEC 11.1). Each pass appends one decision-log line and sets the
+// event writes go to a sink (v2 SPEC 13.11.1). Each pass appends one decision-log line and sets the
 // session title. The driver is this module and the driver-*.ts modules under it, the only ones
 // that hold $: this one wires the hooks; driver-state.ts holds the state they share (one holder,
 // `S`), driver-io.ts builds the engine calls, driver-store.ts keeps the ledger in $.store,
@@ -69,7 +69,7 @@ export const register: Register = (on, opts) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // /factory <op>: the owner's controls from any client (SPEC 4.3)
+  // /factory <op>: the owner's controls from any client (v2 SPEC 13.4.3)
   on('command.run', { command: 'factory' }, async ($, e) => ({ text: (await ownerOp($, e.args, undefined)).text })).catch(() => ({
     text: 'factory-loop: the op could not run; nothing was changed.',
   }))

@@ -253,7 +253,7 @@ export function parseQueue(json: string): number[] | null {
 
 // --- queue-watch.sh --once ------------------------------------------------------------------
 
-// parseQueueOnce: the one line `queue-watch.sh --once` prints (SPEC 3.4),
+// parseQueueOnce: the one line `queue-watch.sh --once` prints (v2 SPEC 13.3.4),
 // `queue known=<n1,n2|none> now=<n1,n2|none>`, as ascending issue numbers; null for anything
 // else, so a garbled read is a failed source, never an empty queue.
 export function parseQueueOnce(text: string): { known: number[]; now: number[] } | null {

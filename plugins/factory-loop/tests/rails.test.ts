@@ -1,7 +1,7 @@
 // The safety rails (rails.ts), rail by rail against fake files and commands: the act lock's
-// lease, takeover and release (SPEC 11.2), the role, the old watcher's lock as
+// lease, takeover and release (v2 SPEC 13.11.2), the role, the old watcher's lock as
 // orchestrator-watch.sh places and judges it, the heartbeat guard over factory.workers (D-28),
-// all of them together, the usage pre-check per tier and class (SPEC 10.7) and the pass
+// all of them together, the usage pre-check per tier and class (v2 SPEC 13.10 item 7) and the pass
 // scheduler's ping-storm breaker (D-39). The heartbeat CSV is what psql --csv printed for the
 // query over heartbeat-loop's own DDL on PostgreSQL 17; the lock names are GNU tr's output.
 import { describe, expect, test } from 'claude-code/testing'
@@ -118,7 +118,7 @@ const lease = (session: string, expiresAt: number, renewedAt = expiresAt - 5 * M
 
 // --- the act lock -------------------------------------------------------------------------------
 
-describe('the act lock (SPEC 11.2)', () => {
+describe('the act lock (v2 SPEC 13.11.2)', () => {
   test('a free lock is taken and written as a JSON lease of a few passes, never under fifteen minutes', async () => {
     const { io, files } = fakeIo()
     const r = await holdActLock(io, LOCK, 'session-a', NOW, leaseMsOf(CFG))
@@ -158,7 +158,7 @@ describe('the act lock (SPEC 11.2)', () => {
     expect(decideLock('{"sess', 'session-a', NOW, MIN)).toEqual({ hold: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + MIN }, took: null })
   })
 
-  test('of two sessions that both read the lock free, only the first write lands: the other refuses (SPEC 11.2)', async () => {
+  test('of two sessions that both read the lock free, only the first write lands: the other refuses (v2 SPEC 13.11.2)', async () => {
     // A reads free, B reads free, A writes and reads back, B writes and reads back
     const files: Record<string, string> = {}
     const a = await holdActLock(fakeIo(files).io, LOCK, 'session-a', NOW, 5 * MIN)
@@ -223,7 +223,7 @@ describe('the act lock (SPEC 11.2)', () => {
 
 // --- the role ---------------------------------------------------------------------------------
 
-describe('the role (SPEC 11.2, D-28)', () => {
+describe('the role (v2 SPEC 13.11.2, D-28)', () => {
   test('act needs DEV_ROLE=orchestrator unless the repo allows acting outside it', () => {
     expect(roleProblem('orchestrator', CFG)).toBeNull()
     expect(roleProblem('dev', CFG)).toBe('role: DEV_ROLE is dev, act needs orchestrator')
@@ -235,7 +235,7 @@ describe('the role (SPEC 11.2, D-28)', () => {
 
 // --- the old watcher ------------------------------------------------------------------------------
 
-describe('the old watcher (SPEC 11.2, D-28)', () => {
+describe('the old watcher (v2 SPEC 13.11.2, D-28)', () => {
   test("its lock directory follows the watcher's ${A:-${B:-${C:-/tmp}}}, an empty value falling through", () => {
     const name = 'orchestrator-watch-cbundy_dev-system.lock'
     expect(watcherLockPath({ ORCHESTRATOR_WATCH_LOCK_DIR: '/l', XDG_RUNTIME_DIR: '/x', TMPDIR: '/t' }, REPO)).toBe(`/l/${name}`)
@@ -393,7 +393,7 @@ describe('the heartbeat guard (D-28)', () => {
 
 // --- the rails together ----------------------------------------------------------------------------
 
-describe('checkRails (SPEC 11.2)', () => {
+describe('checkRails (v2 SPEC 13.11.2)', () => {
   test('every rail passes: the lease is taken and the loop acts', async () => {
     const { io, calls, files } = fakeIo()
     const r = await checkRails(io, input())
@@ -445,7 +445,7 @@ describe('checkRails (SPEC 11.2)', () => {
     expect(quiet).toMatchObject({ act: true, reasons: [], notices: [], memory: { heartbeat: null, watcher: null } })
   })
 
-  test("the old watcher's lock must stay gone ten minutes: the released skill arms it again each turn (SPEC 11.2, D-28)", async () => {
+  test("the old watcher's lock must stay gone ten minutes: the released skill arms it again each turn (v2 SPEC 13.11.2, D-28)", async () => {
     const armed = { [`${WATCH_LOCK}/pid`]: '4242\n' }
     const seen = await checkRails(fakeIo(armed, world({ kill: 0 })).io, input())
     expect(seen.act).toBe(false)
@@ -510,7 +510,7 @@ function usageIo(reading: UsageReading | Error) {
   }
 }
 
-describe('the usage pre-check (SPEC 10.7)', () => {
+describe('the usage pre-check (v2 SPEC 13.10 item 7)', () => {
   test('each tier refuses the classes it forbids, and only those', () => {
     const refused: Record<Tier, ActionClass[]> = {
       normal: [],
@@ -571,7 +571,7 @@ function pings(s: Scheduler, times: number[]) {
 
 const every = (from: number, n: number, gap = PASS_GAP_MS) => Array.from({ length: n }, (_, k) => from + k * gap)
 
-describe('the pass scheduler and the ping-storm breaker (SPEC 2, D-39)', () => {
+describe('the pass scheduler and the ping-storm breaker (v2 SPEC 13.2, D-39)', () => {
   test('passes never overlap: requests during a pass make one more pass, the timer named first', () => {
     let s = requestPass(newScheduler(), 'ping', NOW)
     const first = nextPass(s, NOW)
@@ -644,7 +644,7 @@ describe('the pass scheduler and the ping-storm breaker (SPEC 2, D-39)', () => {
 
 // --- notices as tells ----------------------------------------------------------------------------------
 
-describe('notices as tell wakes (SPEC 9.2)', () => {
+describe('notices as tell wakes (v2 SPEC 13.9.2)', () => {
   test('each notice is a tell keyed by its spell, so it goes out once', () => {
     const base = { kind: 'tell', class: 'owner', rule: 'O2', issue: null, context: [] }
     expect(noticeTell({ kind: 'heartbeat-other', device: OTHER, since: NOW })).toEqual({

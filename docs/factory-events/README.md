@@ -121,8 +121,8 @@ SQL
   The old line still goes to today's file, and nothing that reads today's file sees the new one: not
   `--if-changed` (which keeps comparing old lines only) or the old shipper's `$DIR/*.jsonl` glob
   (`images/base/event-push-loop:202`). `callum-flow-claim` and `callum-flow-sweep` read both logs under a
-  source switch (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, [replay.md](replay.md#source-switch)): `old` reads the old log and
-  `factory.events`, `new` reads this file and `factory.event_log`, and `shadow` (the default) decides on old and
+  source switch (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, [replay.md](replay.md#source-switch)): `new` (the default) reads this file and `factory.event_log`, `old` (the way back) reads the old log and
+  `factory.events`, and `shadow`, when set, decides on old and
   records a `shadow_read` event of how new differs.
 - **Shipping.** `factory-event-push-loop` (as the writer role, with `FACTORY_DB_WRITER_URL` or the
   `factory-db-writer-url` secret) keeps its own cursor in `factory/.pushed/` and stores each line's number in the file

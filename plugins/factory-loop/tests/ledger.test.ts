@@ -1,4 +1,4 @@
-// The ledger, transition by transition (SPEC 7): attempts and retries under one key, what a
+// The ledger, transition by transition (v2 SPEC 13.7): attempts and retries under one key, what a
 // reload and the agent list prove, the 7-day prune and the size budget, the store or the event
 // log, `/factory retry` against plan's own exhaustion rule (D-38), the loop's own events (D-09)
 // and the round trip through the store. Where a transition exists for plan's sake, the test
@@ -81,7 +81,7 @@ function only(ledger: readonly LedgerEntry[], key: string): LedgerEntry {
   return found[0] as LedgerEntry
 }
 
-describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
+describe('start and finish (v2 SPEC 13.5.1, 13.6.1, 13.7.1)', () => {
   test('a new key starts at attempt 1, running, with its subject from the action', () => {
     const before: LedgerEntry[] = []
     const s = start(before, claim(7), NOW)
@@ -110,7 +110,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(start([], rollout, NOW).entry).toMatchObject({ run: null, pr: 550, head: null, class: 'free' })
     const wake = start([], judge, NOW).entry
     expect(wake).toMatchObject({ wake: 'sequence', pr: null, head: null, class: 'drive' })
-    // a wake records the session submitting it, and the store keeps it (SPEC 7.5); nothing else does
+    // a wake records the session submitting it, and the store keeps it (v2 SPEC 13.7.5); nothing else does
     const sessioned = start([], judge, NOW, 'session-1').entry
     expect(sessioned.session).toBe('session-1')
     expect(fromStored(JSON.parse(JSON.stringify(toStored([sessioned], NOW))))?.[0]?.session).toBe('session-1')
@@ -185,7 +185,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(only(ledger, respond.key)).toMatchObject({ status: 'done', endedAt: NOW, outcome: launched })
   })
 
-  test('a usage error uses up the attempts, so the rules tell the owner instead of retrying (SPEC 10.1)', () => {
+  test('a usage error uses up the attempts, so the rules tell the owner instead of retrying (v2 SPEC 13.10 item 1)', () => {
     const key = `claim:1:${NOW - 30 * MIN}`
     const base = started([claim(1, key)], NOW - 10 * MIN)
     const usage: Exec = { status: 'failed', outcome: cliFail(2), summary: 'usage error', noRetry: true }
@@ -222,7 +222,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     })
   })
 
-  test('a stop of rule A1 marks the agent timed-out, even when TaskStop failed (SPEC A1, 13)', () => {
+  test('a stop of rule A1 marks the agent timed-out, even when TaskStop failed (the retired v1 rule A1; v2 SPEC 13.13)', () => {
     const agent = (id: string) => entry(`design:70:${id}`, 'agent-step', { class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: id })
     const base = [agent('a70'), agent('a71')]
     const stopped = finish(started([stop('a70', 'A1')], NOW, base), 'stop:a70', { status: 'done', summary: 'stopped' }, NOW)
@@ -253,7 +253,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
   })
 })
 
-describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
+describe('a reload and the agent list (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4)', () => {
   const cli = entry('guard:550:head50:1', 'rollout', { status: 'running', endedAt: null })
   const spawning = entry(`design:60:${LIFE}`, 'agent-step', { status: 'running', endedAt: null })
   const agentEntry = (id: string) => entry(`agent:${id}`, 'agent-step', { class: 'drive', status: 'running', endedAt: null, agentId: id })
@@ -302,7 +302,7 @@ describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
 
 })
 
-describe('the prune and the size budget (SPEC 7.1)', () => {
+describe('the prune and the size budget (v2 SPEC 13.7.1)', () => {
   test('an entry is kept 7 days after it ends, a running one forever', () => {
     const ended = (key: string, endedAt: number) => entry(key, 'rollout', { startedAt: endedAt - MIN, endedAt })
     const ledger = [
@@ -357,7 +357,7 @@ describe('the prune and the size budget (SPEC 7.1)', () => {
   })
 })
 
-describe('the store or the event log (SPEC 7.5)', () => {
+describe('the store or the event log (v2 SPEC 13.7.5)', () => {
   const stored = [entry('claim:7:new', 'claim', { class: 'start', issue: 7 })]
   const derived = [entry('claim:7:derived:1', 'claim', { class: 'start', issue: 7 }), entry('heartbeat:derived', 'heartbeat')]
 
@@ -393,7 +393,7 @@ describe('/factory retry (D-38)', () => {
       [ended('j', 'judge', 'timed-out', 1), true],
       [ended('r', 'rollout', 'failed', 3), true],
       [ended('r', 'rollout', 'failed', 2), false],
-      // heartbeat and sweep retry at their cadence however often they failed (SPEC 6.1)
+      // heartbeat and sweep retry at their cadence however often they failed (v2 SPEC 13.6.1)
       [ended('h', 'heartbeat', 'failed', 9), false],
       [ended('s', 'sweep', 'failed', 3), false],
       [ended('x', 'claim', 'running', 9), false],
@@ -430,7 +430,7 @@ describe('/factory retry (D-38)', () => {
 
 })
 
-describe("the loop's own events (D-09, SPEC 7.4)", () => {
+describe("the loop's own events (D-09, v2 SPEC 13.7.4)", () => {
   test('wake entries log a loop event at their start and end, which rebuilds them', () => {
     let ledger = started([judge], NOW - 5 * MIN)
     const startEvent = loopEvent(only(ledger, judge.key))
@@ -441,7 +441,7 @@ describe("the loop's own events (D-09, SPEC 7.4)", () => {
     ledger = finish(ledger, judge.key, { status: 'failed', summary: 'no reply' }, NOW)
     const ended = only(ledger, judge.key)
     const argv = loopEvent(ended) as string[]
-    // what a lost store is rebuilt from (SPEC 7.5): the event gives the entry back
+    // what a lost store is rebuilt from (v2 SPEC 13.7.5): the event gives the entry back
     const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 50, run: null, branch: null, pr: null, head: null, note: argv[argv.length - 1] ?? null, actor: null, device: null }
     expect(entryFromLoop(event)).toEqual({ ...ended, summary: undefined })
   })
@@ -466,7 +466,7 @@ describe("the loop's own events (D-09, SPEC 7.4)", () => {
   })
 })
 
-describe('the store (SPEC 7.1)', () => {
+describe('the store (v2 SPEC 13.7.1)', () => {
   // fakeStore: $.store as the engine documents it: JSON data, read back as its JSON round
   // trip, and a set that would put the store over 4 MiB of JSON in all is refused.
   function fakeStore(initial: Record<string, unknown> = {}): StoreIo & { data: Map<string, unknown> } {

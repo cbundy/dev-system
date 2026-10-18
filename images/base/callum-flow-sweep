@@ -63,7 +63,7 @@
 # A reader failure is an error for that issue, never "no comments".
 #
 # Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL; CALLUM_FLOW_CLAIM_EVENTS_SOURCE (old,
-# new or shadow, the default: which event store the rule reads, claim-events.sh),
+# new (the default) or shadow: which event store the rule reads, claim-events.sh),
 # CALLUM_FLOW_SHADOW_WINDOW_SECONDS (default 604800) and CALLUM_FLOW_SHADOW_SETTLE_SECONDS
 # (default 600), the shadow compare's window and settle time; for tests
 # CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN

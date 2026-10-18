@@ -164,7 +164,7 @@ issue() {
 }
 
 run() {
-  PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
+  PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-old}" \
     CALLUM_FLOW_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
     CALLUM_FLOW_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
@@ -396,6 +396,28 @@ echo '2000-01-01T00:00:00Z|7|merged|devB' > "$d/central"
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 hb
 [ "$(calls)" = "PATCH 100" ] || fail "heartbeat, older central end: $(calls)"
+# the default source is new (cbundy/dev-system#906): the deciding row is in the new store, the old one is not read
+reset
+seed claimed 7
+echo '2999-01-01T00:00:00Z|7|merged|devB' > "$d/central-new"
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+CLAIM_SRC=
+hb
+unset CLAIM_SRC
+expect_rc 0 "heartbeat, default source, end in the new store"
+no_calls "heartbeat, default source, end in the new store"
+no_renewed "heartbeat, default source, end in the new store"
+grep -q -- '--factory' "$d/dq-calls-new" || fail "heartbeat, default source: no --factory query"
+[ ! -e "$d/dq-calls" ] || fail "heartbeat, default source read the old store: $(cat "$d/dq-calls")"
+# a row only in the old store does not stop it: the default does not read there
+reset
+echo '2026-10-10T10:00:00Z|7|claimed|devA' > "$d/central-new"
+echo '2999-01-01T00:00:00Z|7|merged|devB' > "$d/central"
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+CLAIM_SRC=
+hb
+unset CLAIM_SRC
+[ "$(calls)" = "PATCH 100" ] || fail "heartbeat, default source ignores the old store: $(calls)"
 # the central read failing warns once and renews from this device's log; unconfigured (78) is silent
 reset
 seed claimed 7
@@ -456,7 +478,7 @@ exec "$REAL_EVENT" "$@"
 STUB
 chmod +x "$tmpdir/no-path-event"
 set +e
-PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r REAL_EVENT="$EVENT" \
+PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old REAL_EVENT="$EVENT" \
   CALLUM_FLOW_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
   CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
@@ -780,6 +802,26 @@ grep -q 'factory.events' "$d/dq-calls" || fail "central: no query"
 n=$(events | wc -l)
 dq
 [ "$(events | wc -l)" = "$n" ] || fail "central twice: $(events)"
+# the default source is new: an issue only another device saw, in the new store, is closed from there
+reset
+closed_issue 9 not_planned
+echo '2026-10-10T10:00:00Z|9|transition|devB' > "$d/central-new"
+CLAIM_SRC=
+dq
+unset CLAIM_SRC
+expect_rc 0 "sweep central, default source"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 9 and .note == "not_planned" and .actor == "sweep"' > /dev/null || fail "central, default source: $(events)"
+grep -q -- '--factory' "$d/dq-calls-new" || fail "central, default source: no --factory query"
+[ ! -e "$d/dq-calls" ] || fail "central, default source read the old store: $(cat "$d/dq-calls")"
+# an end another device logged in the new store is seen: nothing to close
+reset
+closed_issue 9 completed
+seed claimed 9
+echo '2999-01-01T00:00:00Z|9|closed|devB' > "$d/central-new"
+CLAIM_SRC=
+dq
+unset CLAIM_SRC
+[ "$(events | grep -c '"state":"closed"')" = 0 ] || fail "central final, default source: $(events)"
 # central says closed later than the local log: nothing
 reset
 closed_issue 9 completed

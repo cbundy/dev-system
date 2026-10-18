@@ -1,4 +1,4 @@
-// Throwaway probe for the factory loop (docs/factory-loop/SPEC.md 13, #560, #561): can an agent
+// Throwaway probe for the factory loop (docs/factory-loop/v2/SPEC.md 13.13, #560, #561): can an agent
 // that a mod spawns with $.agent.spawn call that mod's own tool? The loop's passes run from its
 // timer, so its agents are spawned from a $.clock callback; on Claude Code 2.1.296 and 2.1.299
 // such an agent's call fails in milliseconds with "<plugin> registered the tool ... but no

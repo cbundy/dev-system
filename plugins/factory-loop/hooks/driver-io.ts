@@ -42,7 +42,7 @@ export async function configDir($: EngineInterface) {
   return dir.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1')
 }
 
-// runtime: the settings one pass runs with (SPEC 4.1): plugin options, then the workspace
+// runtime: the settings one pass runs with (v2 SPEC 13.4.1): plugin options, then the workspace
 // file ${CLAUDE_CONFIG_DIR}/factory-loop/config.json, then the repo's .claude/factory-loop.json.
 // env is every command's base environment: the repo, the configured labels (callum-flow-claim
 // and callum-flow-sweep read them), binDir ahead of PATH when the workspace file names one (a
@@ -65,7 +65,7 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
   // where the device came from, for `/factory config`: the workspace file or the plugin option
   // when the shadow stands in, else the machine name's environment variable
   const deviceFrom: ViewInputs['deviceFrom'] = shadowing ? (typeof file.shadowDevice === 'string' && file.shadowDevice !== '' ? 'workspace' : 'plugin') : device === '' ? 'default' : 'env'
-  // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
+  // the repo-local settings, durations and all (v2 SPEC 13.4.2), then the workspace file's over them.
   // The repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
   const loaded = await repoLoaded(settingsIo($), settingsCache, checkout, jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
@@ -123,7 +123,7 @@ export async function originOf($: EngineInterface, checkout: string, env?: Recor
   }
 }
 
-// observing: the runtime of a pass that executes nothing: its events go to the sink (SPEC 11.1).
+// observing: the runtime of a pass that executes nothing: its events go to the sink (v2 SPEC 13.11.1).
 export function observing(rt: Runtime): Runtime {
   const sink = `${rt.loopDir}/sink-events`
   return { ...rt, sink, env: { ...rt.env, CALLUM_EVENTS_DIR: sink } }
@@ -231,7 +231,7 @@ export async function append($: EngineInterface, path: string, line: string) {
 }
 
 // appendLine: one more decision-log line, beside the pass lines: an owner op, a turn's
-// problems, a pass that threw (SPEC 12).
+// problems, a pass that threw (v2 SPEC 13.12).
 export async function appendLine($: EngineInterface, rt: Runtime, line: Record<string, unknown>) {
   const at = new Date(await $.clock.now()).toISOString()
   await append($, `${rt.loopDir}/decisions-${at.slice(0, 10)}.jsonl`, JSON.stringify({ v: 1, at, ...line }) + '\n').catch(() => undefined)
@@ -249,7 +249,7 @@ export async function setTitle($: EngineInterface, title: string) { // every ren
   S.lastTitleAt = await $.clock.now()
 }
 
-// wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (SPEC 8.1).
+// wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (v2 SPEC 13.8.1).
 export function wakeIdAt(now: Ms): string {
   S.lastWakeAt = Math.max(now, S.lastWakeAt + 1)
   return `w${S.lastWakeAt.toString(36)}`
@@ -283,7 +283,7 @@ export function afterSaves($: EngineInterface, rt: Runtime | null, write: () => 
   return run.catch(() => false)
 }
 
-// killed: the kill switch exists (SPEC 11.3).
+// killed: the kill switch exists (v2 SPEC 13.11.3).
 export async function killed($: EngineInterface): Promise<boolean> {
   return $.fs.exists(`${await configDir($)}/factory-loop/OFF`)
 }

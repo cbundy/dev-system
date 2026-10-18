@@ -1,4 +1,4 @@
-// The owner's controls (SPEC 4.3, D-38): /factory, the control tool and the answer tool, and
+// The owner's controls (v2 SPEC 13.4.3, D-38): /factory, the control tool and the answer tool, and
 // ensure, which starts the driver once per module load.
 import type { EngineInterface } from 'claude-code'
 

@@ -1,4 +1,4 @@
-// The owner's controls (SPEC 4.3; DECISIONS D-15, D-16, D-35, D-38): every `/factory` op and
+// The owner's controls (v2 SPEC 13.4.3; DECISIONS D-15, D-16, D-35, D-38): every `/factory` op and
 // its bad forms, applyOp's new Control and effects (the input never changes), control.json and
 // the workspace config file through a fake ActIo, the status answer, and the command and tool
 // specs. One test reads the written control.json back, so the shapes are the ones the rules read.
@@ -81,7 +81,7 @@ const PASS: PassSummary = {
 }
 
 describe('parseOp', () => {
-  test('every op in its good forms (SPEC 4.3)', () => {
+  test('every op in its good forms (v2 SPEC 13.4.3)', () => {
     expect(op('')).toEqual({ op: 'status' })
     expect(op('status')).toEqual({ op: 'status' })
     expect(op('  STATUS ')).toEqual({ op: 'status' })

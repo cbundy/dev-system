@@ -78,7 +78,7 @@ function tagsOf(issues: readonly number[]): string {
   return issues.map(n => `#${n}`).join(' ')
 }
 
-// stopNow: `/factory stop-now` (SPEC 10.11): during a wind-down, tell the stopper not to wait for what
+// stopNow: `/factory stop-now` (v2 SPEC 10.11): during a wind-down, tell the stopper not to wait for what
 // still runs. It writes wind-down.stop-now (one shot) and answers whether a wind-down is requested.
 export async function stopNow(io: FileIo, loopDir: string, op: Op, now: Ms): Promise<OpReply> {
   const files = windDownPaths(loopDir)

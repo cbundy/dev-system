@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-// Replay harness for the factory loop (docs/factory-loop/SPEC.md; conversion brief, phase 2).
+// Replay harness for the factory loop (docs/factory-loop/v2/SPEC.md 13; conversion brief, phase 2).
 // It rebuilds the factory's state at past moments and runs plan() on it, then compares what the
 // loop would have done with what the live orchestrator did next. Every source is read-only:
 //
@@ -9,14 +9,14 @@
 //   GitHub         each issue's timeline and state through callum-flow-issue-read, replayed to <t>:
 //                  labels (labeled/unlabeled), open blockers (blocked_by_added/removed and each
 //                  blocker's closed_at) and sub-issues (sub_issue_added/removed)
-//   the ledger     derived from the device's own events up to <t> (derive.ts, SPEC 7.5)
+//   the ledger     derived from the device's own events up to <t> (derive.ts, v2 SPEC 13.7.5)
 //
 // Samples are every --step-minutes and one second before each live decision. It writes
 // <out>/replay.json (every sample's plan) and <out>/comparison.json, and prints a summary.
 //
 // usage: node scripts/factory-loop-replay.js --repo owner/name --device <device>
 //          --from <ISO> --to <ISO> [--step-minutes 2] [--out <dir>] [--skip-labels a,b]
-//          [--control <JSON>]   owner directives in force over the window (SPEC 4.3), e.g.
+//          [--control <JSON>]   owner directives in force over the window (v2 SPEC 13.4.3), e.g.
 //                               '{"noNewWork":true}' for a drain the memory file records
 //          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
 //                               the live orchestrator instead of replaying: the shadow's
@@ -195,7 +195,7 @@ function matches(action, d) {
       return action.kind === "spawn" && action.agent === "adjudicator" && action.run === d.run;
     case "merge":
     case "update-behind":
-      // the merge flow: guard, update-behind, the merge adjudicator (SPEC M4), a sequencing
+      // the merge flow: guard, update-behind, the merge adjudicator (the retired v1 merge rule M4), a sequencing
       // judge (M5) and the merge itself; v2's queue update and merge (v2 SPEC 9)
       return (
         ((["guard", "merge", "update-behind", "queue-update", "queue-merge"].includes(action.kind) || action.key.startsWith("adjudicate-merge:")) && action.pr === d.pr) ||

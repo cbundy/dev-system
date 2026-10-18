@@ -384,7 +384,7 @@ function cutText(cap: number): string {
 }
 
 // isCutLine: the line is the cut line of this cap, so the file it ends stays closed today; a cut
-// under another cap does not close it (SPEC 12.1).
+// under another cap does not close it (v2 SPEC 13.12.1).
 export function isCutLine(line: string, cap: number): boolean {
   try {
     const v: unknown = JSON.parse(line)
