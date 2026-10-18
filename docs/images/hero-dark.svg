@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 36 744 588" width="744" height="588" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5">
+<title>The dev-system factory running as a session in the Claude app</title>
+<rect x="16" y="44" width="728" height="572" rx="12" fill="#0d1117"/>
+<path d="M28 45H316V615H28A11 11 0 0 1 17 604V56A11 11 0 0 1 28 45Z" fill="#151b23"/>
+<rect x="16" y="44" width="728" height="572" rx="12" fill="none" stroke="#3d444d" stroke-width="1.25"/>
+<line x1="316" y1="44" x2="316" y2="616" stroke="#3d444d" stroke-width="1.25"/>
+<path d="M30 66H44M30 72H44M30 78H40" fill="none" stroke="#f0f6fc" stroke-width="1.5"/>
+<rect x="56" y="64" width="16" height="16" rx="3" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<line x1="62" y1="64" x2="62" y2="80" stroke="#f0f6fc" stroke-width="1.25"/>
+<text x="84" y="78" font-size="16" fill="#f0f6fc">←</text>
+<text x="108" y="78" font-size="16" fill="#9198a1">→</text>
+<rect x="244" y="58" width="64" height="28" rx="8" fill="none" stroke="#3d444d" stroke-width="1.25"/>
+<rect x="277" y="60" width="29" height="24" rx="6" fill="#4493f8" fill-opacity="0.15"/>
+<rect x="254" y="65" width="14" height="11" rx="3" fill="none" stroke="#9198a1" stroke-width="1.25"/>
+<text x="291.5" y="76" font-size="11" font-weight="600" text-anchor="middle" fill="#f0f6fc">&lt;/&gt;</text>
+<rect x="28" y="96" width="276" height="28" rx="6" fill="none" stroke="#3d444d" stroke-width="1.25"/>
+<circle cx="43" cy="109" r="5" fill="none" stroke="#9198a1" stroke-width="1.25"/>
+<line x1="47" y1="113" x2="51" y2="117" stroke="#9198a1" stroke-width="1.25"/>
+<text x="60" y="114" fill="#9198a1">Search</text>
+<circle cx="36" cy="148" r="8" fill="none" stroke="#656c76" stroke-width="1.25"/>
+<text x="36" y="152.5" font-size="13" text-anchor="middle" fill="#f0f6fc">+</text>
+<text x="52" y="152" fill="#f0f6fc">New</text>
+<path d="M30 181l4 -8l4 8z" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<circle cx="41" cy="177" r="3.5" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<text x="52" y="181" fill="#f0f6fc">Artifacts</text>
+<circle cx="36" cy="205" r="6" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<path d="M36 202v3l2 2" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<text x="52" y="210" fill="#f0f6fc">Routines</text>
+<rect x="30" y="229" width="12" height="9" rx="2" fill="none" stroke="#f0f6fc" stroke-width="1.25"/>
+<line x1="30" y1="232" x2="42" y2="232" stroke="#f0f6fc" stroke-width="1.25"/>
+<text x="52" y="239" fill="#f0f6fc">Customize</text>
+<text x="30" y="272" font-size="12" fill="#9198a1">Pinned ›</text>
+<text x="30" y="300" font-size="12" fill="#9198a1">Orchestrators</text>
+<path d="M116 294l4 4l4 -4" fill="none" stroke="#9198a1" stroke-width="1.25"/>
+<text x="302" y="302" font-size="15" text-anchor="end" fill="#9198a1">+</text>
+<rect x="22" y="336" width="288" height="22" rx="6" fill="#4493f8" fill-opacity="0.12"/>
+<rect x="30" y="313" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="49" y="323" font-size="11.5" fill="#f0f6fc">plant-console (Q:44 - D:1 - M:0) · owner 1</text>
+<rect x="30" y="341" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="49" y="351" font-size="11.5" font-weight="600" fill="#f0f6fc">dev-system (Q:11 - D:3 - M:10)</text>
+<rect x="336" y="62" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="356" y="73" font-size="13" font-weight="600" fill="#f0f6fc">dev-system (Q:11 - D:3 - M:10)</text>
+<path d="M548 67l4 4l4 -4" fill="none" stroke="#9198a1" stroke-width="1.25"/>
+<text x="336" y="114" font-size="12" fill="#9198a1">12 background tasks completed</text>
+<rect x="380" y="124" width="348" height="180" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="396" y="146" fill="#f0f6fc">The factory-loop plugin sent a message:</text>
+<text x="396" y="166" font-size="11.5" fill="#f0f6fc">TASK release id=wmvdu1xr3 repo=cbundy/dev-system</text>
+<text x="396" y="182" font-size="11.5" fill="#f0f6fc">closed=4 tag=v0.53.0</text>
+<text x="396" y="198" font-size="11.5" fill="#f0f6fc">oldest=2026-10-18T12:36:42.000Z cadence=6h</text>
+<text x="396" y="218" fill="#f0f6fc">Answer with the factory-loop:judge skill.</text>
+<text x="396" y="242" font-size="12" fill="#9198a1">This is how Claude Code surfaces a prompt a</text>
+<text x="396" y="258" font-size="12" fill="#9198a1">plugin submits between turns - it starts this</text>
+<text x="396" y="274" font-size="12" fill="#9198a1">turn in the user's place. Address the message</text>
+<text x="396" y="290" font-size="12" fill="#9198a1">above.</text>
+<text x="336" y="330" font-size="12" fill="#9198a1">Used factory-loop: answer ›</text>
+<text x="336" y="356" fill="#f0f6fc">I'm holding off on another release for now. <tspan fill="#4493f8">v0.53.0</tspan></text>
+<text x="336" y="374" fill="#f0f6fc">went out less than an hour ago, and only 4 issues have</text>
+<text x="336" y="392" fill="#f0f6fc">closed since. Unless a priority bug merges sooner, I'll</text>
+<text x="336" y="410" fill="#f0f6fc">release once a few more have landed.</text>
+<text x="336" y="440" font-size="12" fill="#9198a1">2 background tasks completed</text>
+<text x="336" y="466" fill="#f0f6fc">Session renamed to:</text>
+<rect x="468" y="455" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="487" y="466" fill="#f0f6fc">dev-system (Q:13 - D:2 - M:9)</text>
+<text x="336" y="494" font-size="12" fill="#9198a1">6 background tasks completed</text>
+<text x="336" y="520" fill="#f0f6fc">Session renamed to:</text>
+<rect x="468" y="509" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="487" y="520" fill="#f0f6fc">dev-system (Q:12 - D:3 - M:9)</text>
+<text x="336" y="548" font-size="12" fill="#9198a1">3 background tasks completed</text>
+<text x="336" y="574" fill="#f0f6fc">Session renamed to:</text>
+<rect x="468" y="563" width="13" height="13" rx="3" fill="#4493f8" fill-opacity="0.85"/>
+<text x="487" y="574" fill="#f0f6fc">dev-system (Q:12 - D:2 - M:10)</text>
+<text x="336" y="602" font-size="12" fill="#9198a1">Background command completed · export TMPDIR='/persist/…</text>
+</svg>

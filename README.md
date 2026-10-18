@@ -1,120 +1,140 @@
+<div align="center">
+
 # dev-system
 
-Run autonomous coding agents on any repo, from issue to merged pull request, with one shared,
-versioned setup. It is for people who want to hand work to Claude Code (or codex) from a phone or
-a browser and come back to a reviewed PR, without keeping a shell open on any machine.
+A software factory that runs inside a single Claude Code session.
 
-## How it works
+[![ci](https://github.com/cbundy/dev-system/actions/workflows/ci.yml/badge.svg)](https://github.com/cbundy/dev-system/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/cbundy/dev-system)](https://github.com/cbundy/dev-system/releases)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](plugins/factory-loop/README.md)
 
-- **Every agent environment is its own container.** The same image runs as a desktop dev
-  container, under `docker run`, on Kubernetes or as a Coder workspace. In an orchestrator
-  container, tmux holds one Claude session and a supervisor restarts it when it exits.
-  dev-system is not a tmux multiplexer running many terminals on one machine; you scale out
-  by running more containers.
-- **Two ways to give it work.**
-  1. Talk to a persistent orchestrator session in the Claude app (via Remote Control). It stays
-     alive across restarts, so you come back to it and dispatch work from anywhere.
-  2. Label a GitHub issue `ready`. The orchestrator session watching the repo delegates design
-     and implementation to sub-agents, which work in git worktrees and open PRs through the
-     no-mistakes pipeline.
-- **Sub-agents do the work inside the orchestrator's container.** Each issue goes to a sub-agent
-  in its own worktree; the orchestrator does not start new containers.
-- **You never need a shell on the host.** Logins, sessions and approvals happen from the Claude
-  app or a link on your phone.
+[How it works](#how-it-works) · [Architecture](#architecture) · [Docs](#docs) · [Releases](https://github.com/cbundy/dev-system/releases)
 
-## Architecture
+</div>
 
-Three layers, each pinned independently:
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.svg">
+    <img alt="The factory as a session in the Claude app: the loop asks the model whether to cut a release, and the session title shows the issues queued, in flight and merged" src="docs/images/hero-light.svg" width="744">
+  </picture>
+  <br>
+  <sub>The session title is a live status board: Q queued · D in flight · M merged</sub>
+</p>
 
-- **Agent behaviour** - the `callum-flow` plugin in [`plugins/callum-flow/`](plugins/callum-flow/):
-  the skills and hooks that turn issues into PRs. Beside it, the opt-in
-  [`factory-hud`](plugins/factory-hud/README.md) mod shows usage and factory counts on every
-  client, the phone included.
-- **Environment** - the base image in [`images/base/`](images/base/README.md): the tools, headless
-  Claude with Remote Control, logins and persistent state.
-- **Repo config** - [`templates/`](templates/README.md) synced into each repo by `callum-dev`, so
-  a repo pins a version and pulls updates.
+Label a GitHub issue `ready`. The factory designs it, builds it, reviews it and merges it. When it
+needs a decision, it asks you - on the issue, or in the Claude app on your phone.
+
+## Why it's different
+
+Most agent factories put a program in charge and call Claude for each task. Others hand one model
+the whole job and let it improvise. This one puts the program inside the Claude session.
+
+- **Code runs the line.** Every minute, a loop reads the whole factory and acts from a fixed table:
+  claim, start an agent, review, merge. Nothing routine waits on a model.
+- **The model is kept for judgment.** It is woken to cut releases and to talk to you, and for
+  little else.
+- **The factory is a conversation.** It lives in a Claude session, so you reach it the way you
+  reach any session: phone, desktop or terminal. Ask what it's doing, or steer it with
+  `/factory pause`, `priority` or `drop`.
 
 ```mermaid
 flowchart LR
-  app["Claude app<br/>(Remote Control)"] --> orch
-  gh["GitHub issue<br/>labelled ready"] --> orch
-  subgraph c1["Container: orchestrator (one per repo)"]
-    orch["Orchestrator session<br/>(one supervised Claude)"]
-    orch --> w1["Sub-agent<br/>worktree A"]
-    orch --> w2["Sub-agent<br/>worktree B"]
+  you(["You"])
+  gh["GitHub<br/>issues, pull requests, CI"]
+  app["Claude app<br/>phone, desktop, terminal"]
+  you ==>|"create issues, label them ready"| gh
+  you -.->|"optional: ask, steer, answer"| app
+  subgraph factory["The factory: one Claude Code session"]
+    loop["Loop (code)<br/>plans and acts every minute"]
+    model["Model<br/>judgment and owner chat"]
+    agents["Agents<br/>design, build, review, fix"]
+    loop -->|wakes| model
+    loop --> agents
   end
-  subgraph c2["Container: hands-on workspace"]
-    ws["Remote Control server<br/>(own worktree per new session)"]
-  end
-  app --> ws
-  w1 --> pr["Pull requests<br/>(no-mistakes pipeline)"]
-  w2 --> pr
-  ws --> pr
+  gh <-->|"claims issues, merges PRs"| loop
+  app <-.-> model
 ```
 
-Containers are independent and sit side by side. See [`docs/architecture.md`](docs/architecture.md)
-for the layers, versioning and the runtime map.
+Writing issues is enough: the factory picks up anything labelled `ready` and comes back with a
+merged pull request. The Claude app is there for when you want to talk to it.
 
-## Typical flows
+## How it works
 
-**Dispatch from a phone**
+- **Agents do the craft.** Designer, builder, reviewer and fixer each work in their own git
+  worktree, and can't finish until the repo's lint and tests pass.
+- **Surprises dealt with quickly.** A retry, then a triage agent with a fixed menu, then a
+  question for you on the issue, with options to tick.
+- **Everything is bounded.** Each state has a timeout, each retry a cap, and a breaker pauses new
+  work when failures pile up.
 
-1. Open the repo's orchestrator session in the Claude app.
-2. Describe the work or point at an issue.
-3. The orchestrator hands it to a sub-agent in a fresh worktree.
-4. The pipeline reviews, tests and opens a PR; the orchestrator verifies and merges it,
-   asking you when an owner decision is needed.
+<details>
+<summary><b>All <code>/factory</code> commands</b></summary>
 
-**Label an issue `ready`**
+| Command | What it does |
+|---|---|
+| `status` | The last pass and the directives in force |
+| `pause <N>` / `unpause <N>` | No action at all on an issue, though its claim still renews |
+| `skip <N>` / `noskip <N>` | Never claim an issue |
+| `priority <N...>` | Claim these first, in order |
+| `only <N...>` | Claim only these, in order |
+| `serial on\|off` | One issue in flight at a time |
+| `new on\|off` | Off starts no new claims, designs or implementations |
+| `resume <N>` | Release a hold on an issue or a run |
+| `retry <N>` | Let an issue's exhausted actions run again |
+| `drop <N>` | Abandon an issue and stop its agents |
+| `note [<N>] <text>` | An instruction the next agent prompts carry |
+| `mode off\|observe\|act` | Switch the loop off, to watching only, or to acting |
+| `trace on\|off` | Detailed per-pass timing records |
 
-1. Write the issue and add the `ready` label.
-2. The orchestrator session picks it up and delegates design and implementation to sub-agents.
-   Large or high-risk issues follow the [designer's split rules](plugins/callum-flow/agents/designer.md).
-3. The implementation sub-agent works in a worktree; the no-mistakes pipeline gates the change
-   and opens a PR linked to the issue. The orchestrator then verifies and merges it.
+The full list, with every option, is in the [factory loop README](plugins/factory-loop/README.md#the-factory-command).
 
-## What's included
+</details>
 
-- **An environment that runs anywhere** - one image for desktop, `docker run`, Kubernetes and
-  Coder ([`images/base/`](images/base/README.md)).
-- **Agents you drive without a shell** - headless Claude with Remote Control, restarted when it
-  exits ([`images/base/`](images/base/README.md)).
-- **Logins from your phone** - sign-in links reach you as a log line, login page or push
-  notification ([first-run logins](images/base/README.md#first-run-logins)).
-- **State that survives rebuilds** - logins and tool state live on `/persist` volumes
-  ([runtime storage](images/base/README.md#how-runtimes-should-mount-it)).
-- **An issue-to-PR workflow** - `issue-orchestrator`, `implement-issue`, `/update-dev` and
-  `/callum-flow:onboard` (plugin in [`plugins/callum-flow/`](plugins/callum-flow/)).
-- **Repo config that stays current** - `callum-dev init`, `update` and `check`
-  ([`templates/`](templates/README.md)).
-- **Coder workspaces** - including an orchestrator workspace that resumes across restarts
-  ([Coder template reference](coder/dev-system/README.md#orchestrator-workspace)).
-- **Central session history and telemetry** - optional session sync to one searchable
-  viewer and OTLP export ([`images/base/`](images/base/README.md)).
+## Architecture
 
-## Start
+- **Event-sourced.** Each pass reads the factory from an append-only event log and GitHub; the
+  loop's own records can be rebuilt from the events.
+- **A pure planner.** `plan(state, config)` does no I/O and reads no clock, so recorded days of
+  events can be replayed through it.
+- **One state machine.** Every issue has one state with a timeout. Every step ends ok, not ok or
+  unknown, and unknown has one path.
+- **Code and model in one process.** The loop is a plugin inside the Claude session, and wakes the
+  model only for judgment.
+- **Idempotent actions.** Each action has a ledger key and checks what an earlier try did, so a
+  retry never repeats work.
+- **Approval follows the diff.** A review approves a git patch identity: rebasing onto main keeps
+  it, any real change loses it.
+- **Guards in the engine.** Hooks pin each agent to its worktree and refuse to let it stop while
+  the repo's lint or tests fail.
+- **Interventions are data.** Every unplanned step-in, by a person or the loop, is an event, so
+  "untouched" is a query, not an opinion.
 
-New or existing repo: open an agent in the folder and tell it to follow
-[`docs/onboarding.md`](docs/onboarding.md) ("make this a dev-system repo"), or, with the
-`callum-flow` plugin installed, run `/callum-flow:onboard`.
+## What you need today
 
-By hand:
+> [!NOTE]
+> A factory runs in a Coder workspace built from this repo's `orchestrator-loop` template: the
+> base image, a factory database and the factory-loop plugins.
+>
+> Where we're heading is simpler: install a plugin, type one command, and the session you're in
+> becomes the factory. [Set up a factory](coder/dev-system/README.md#loop-orchestrator-workspace).
 
-```bash
-npm i -D github:cbundy/dev-system#semver:0.x
-npx callum-dev init          # then fill every <REPLACE> and commit
-```
+This evolved from my own setup, which relies heavily on Coder, a Docker swarm to run the
+workloads, and a few other things. I hope to soon have the capacity to make it more general, and
+I'm open to learning how someone else would want to run it.
+
+- Each orchestrator (loop) runs as its own container, with a single persistent Claude Code session
+  started on boot.
+- It attaches to a single repository, which it clones. Agents run as sub-agents in this process,
+  each given its own worktree.
 
 ## Docs
 
 | Page | Read it for |
 |---|---|
-| [`docs/onboarding.md`](docs/onboarding.md) | Making a repo a dev-system repo (written for agents) |
-| [`docs/architecture.md`](docs/architecture.md) | Layers, versioning, how updates reach repos, the runtime map for debugging |
-| [`docs/metrics.md`](docs/metrics.md) | Factory metrics queries over the factory database |
-| [`images/base/README.md`](images/base/README.md) | The base image: persistence, `dev-init`, `dev-doctor`, Remote Control, logins, agentsview |
-| [`coder/dev-system/README.md`](coder/dev-system/README.md) | The Coder templates: pushing them, parameters, OTLP |
-| [`docs/developing-on-coder.md`](docs/developing-on-coder.md) | Developing dev-system itself from a Coder workspace: logins, and what only CI can verify |
-| [`templates/README.md`](templates/README.md) | Each template file: what is synced and what the repo owns |
-| [`RELEASING.md`](RELEASING.md) | Cutting a release of each layer |
+| [Factory loop](plugins/factory-loop/README.md) | Running and steering the loop, `/factory` commands |
+| [Factory loop v2 spec](docs/factory-loop/v2/SPEC.md) | States, steps, failure handling, the merge queue |
+| [Onboarding](docs/onboarding.md) | Making a repo a dev-system repo |
+| [Architecture](docs/architecture.md) | Layers, versioning, the runtime map |
+| [Base image](images/base/README.md) | The environment every workspace runs |
+| [Factory database](docs/factory-db.md) and [metrics](docs/metrics.md) | Standing up the database; measuring the factory |
+| [Releasing](RELEASING.md) | Cutting a release |
