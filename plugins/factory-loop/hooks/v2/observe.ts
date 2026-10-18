@@ -44,7 +44,7 @@ export const RECORD_KEEP_MS = 7 * DAY
 export type SourceCtx = {
   now: Ms
   rt: Runtime
-  run: (argv: string[], stdin?: string, timeoutMs?: number) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+  run: (argv: string[], stdin?: string, timeoutMs?: number, env?: Record<string, string>) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   readFile: Io['readFile']
   state: State
   records: readonly IssueRecord[]
@@ -57,6 +57,8 @@ export type SourceCtx = {
   reads?: Record<number, IssueRead>
   // the newest release tag observe read (observe-milestone.ts); null when none is known
   tag: string | null
+  // the newest release tag of each other repo a waiting record names (null: no release yet); absent: unknown
+  tags: Record<string, string | null>
 }
 
 // What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
@@ -279,6 +281,7 @@ export type ObserveV2Input = {
   state: State
   // the newest release tag (observe-milestone.ts); none or null when unknown
   tag?: string | null
+  tags?: Record<string, string | null>
   // the store's, as register.ts read it; undefined when it read none
   stored: V2Stored | undefined
   // `treehouse status --json` as observe read it this pass; null when it did not
@@ -306,7 +309,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const now = state.now
   const sources = {} as Record<V2SourceName, Source>
   const blocked = () => input.backoff || input.limited()
-  const run: SourceCtx['run'] = (argv, stdin, t) => input.run(argv, stdin, t)
+  const run: SourceCtx['run'] = (argv, stdin, t, env) => input.run(argv, stdin, t, env)
 
   // the records: the store's, else a rebuild from this device's transition events (3.3); none
   // when the store could not be read, which the planner reads as blind for them
@@ -353,6 +356,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     kept,
     reads,
     tag: input.tag ?? null,
+    tags: input.tags ?? {},
   }
   const prs = await readers.prs(ctx)
   sources.prs = prs.source

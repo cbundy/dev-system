@@ -134,9 +134,13 @@ request merged, or a release must carry a commit. Give `{"kind": "wait", "condit
 that says what you wait for and why, and the `brief` you have so far or null. The loop links this
 issue as blocked by each issue you name, posts one comment that lists the conditions, checks them
 itself without a model, and resumes your design with a note naming what cleared. A tag condition
-is met once the newest release tag contains that commit; it links no issue. The answer script
-checks each condition on GitHub before it records the wait: the sha must be a commit of this repo,
-this repo must already have a release, and the issue or PR must exist (a PR closed unmerged can
+is met once the newest release tag contains that commit; it links no issue. An `issue-closed` or
+`tag-contains` condition may name another repo with `"repo": "owner/name"`: a consumer repo waiting
+on a dev-system release gives `{"kind": "tag-contains", "sha": "<sha>", "repo": "cbundy/dev-system"}`.
+The loop then reads that repo's issue or newest release, and links no issue for another repo's
+issue (the waiting comment names it). A `pr-merged` condition takes no `repo`. The answer script
+checks each condition on GitHub before it records the wait: the sha must be a commit of this repo
+(or of the repo the condition names), that repo must already have a release, and the issue or PR must exist (a PR closed unmerged can
 never be merged); a wait that could never clear is refused with the reason.
 
 Wait when the work is blocked only on one of those fixed, checkable facts. Ask a question when it

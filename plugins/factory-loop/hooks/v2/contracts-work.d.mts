@@ -34,7 +34,7 @@ export function rolloutReasonOf(brief: string): string | null
 // blockedBy: sibling keys, or "#<N>" for an existing issue of the repo
 export type DesignChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
 export type SplitReasons = Record<(typeof REASON_KEYS)[number], string>
-export type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number }
+export type WaitCondition = { kind: 'issue-closed'; issue: number; repo?: string } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string; repo?: string }
 // conditions and reason are present for a wait alone
 export type DesignAnswer = {
   kind: (typeof DESIGN_KINDS)[number]

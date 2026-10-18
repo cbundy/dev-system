@@ -127,6 +127,26 @@ describe('the design-v2 contract (8.7)', () => {
     expect(problems('design-v2', 'a brief')).toHaveLength(1)
   })
 
+  test('a wait condition may name another repo (#981): lower-cased, dropped for the job\'s own repo, refused on a PR or when malformed; the self issue is refused only in the own repo; the same sha in two repos is not twice', () => {
+    const wait = (conditions: unknown[]) => ({ kind: 'wait', conditions, reason: 'why', brief: null })
+    const out = (conditions: unknown[]) => {
+      const c = check('design-v2', wait(conditions))
+      return c.ok ? (c.outcome as { conditions: unknown[] }).conditions : c.problems
+    }
+    expect(out([{ kind: 'tag-contains', sha: '35BB655', repo: 'CBundy/Other' }, { kind: 'issue-closed', issue: 57, repo: 'O/N' }])).toEqual([
+      { kind: 'tag-contains', sha: '35bb655', repo: 'cbundy/other' },
+      { kind: 'issue-closed', issue: 57, repo: 'o/n' },
+    ])
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: REPO.toUpperCase() }, { kind: 'issue-closed', issue: 57, repo: REPO }])).toEqual([{ kind: 'tag-contains', sha: '35bb655' }, { kind: 'issue-closed', issue: 57 }])
+    expect(out([{ kind: 'pr-merged', pr: 4, repo: 'o/n' }])).toEqual(['repo is not a field of conditions[0] (only kind, pr)'])
+    for (const bad of ['o', 'o/n/x', 'o n/x', '/n', 5]) expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: bad }])).toHaveLength(1)
+    expect(out([{ kind: 'issue-closed', issue: 300, repo: REPO }])).toEqual(['conditions[0].issue 300 is the issue itself, which stays open until its work is done, so the wait would never end'])
+    expect(out([{ kind: 'issue-closed', issue: 300, repo: 'o/n' }])).toEqual([{ kind: 'issue-closed', issue: 300, repo: 'o/n' }])
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }, { kind: 'tag-contains', sha: '35bb655', repo: 'a/b' }, { kind: 'tag-contains', sha: '35bb655' }])).toHaveLength(3)
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }, { kind: 'tag-contains', sha: '35BB655', repo: 'O/N' }])).toEqual(['conditions[1] repeats tag-contains:o/n@35bb655'])
+    expect(out([{ kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'issue-closed', issue: 5 }])).toEqual(['conditions[1] repeats issue-closed:o/n#5'])
+  })
+
   test('a wait names 1 to 8 conditions (an issue closed or a PR merged), one line of reason and optionally a draft; the outcome carries them for a wait alone', () => {
     const conditions = [
       { kind: 'issue-closed', issue: 57 },
@@ -165,7 +185,7 @@ describe('the design-v2 contract (8.7)', () => {
       'conditions[4] must be an object { kind, issue }, { kind, pr } or { kind, sha }',
     ])
     // stray fields: a PR number on an issue condition, a field of another kind of answer
-    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue)'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue, repo)'])
     expect(problems('design-v2', { ...wait, children: [] })).toEqual(['children must be absent or null unless kind is split'])
     expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)'])
     // the reason is required, one line, and at most 500 characters
