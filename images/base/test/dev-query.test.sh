@@ -42,12 +42,14 @@ chmod +x "$fakebin/psql"
 
 secrets="$tmpdir/secrets"
 mkdir -p "$secrets"
+wssecrets="$tmpdir/wssecrets"
+mkdir -p "$wssecrets"
 URL='postgres://app:s3cret@db:5432/av?sslmode=disable&options=-c%20default_transaction_read_only%3Doff'
 
 # run [-nopsql] ARGS...: stdin from /dev/null unless piped by the caller
 run() {
   PATH="$toolbin:$fakebin" DEV_SYSTEM_SHARE="$BASE" DEV_SECRETS_DIR="$secrets" \
-    "$BASH" "$DQ" "$@" > "$tmpdir/out" 2> "$tmpdir/err" < "${STDIN:-/dev/null}" && rc=0 || rc=$?
+    DEV_WORKSPACE_SECRETS_DIR="$wssecrets" "$BASH" "$DQ" "$@" > "$tmpdir/out" 2> "$tmpdir/err" < "${STDIN:-/dev/null}" && rc=0 || rc=$?
 }
 expect_rc() { [ "$rc" = "$1" ] || fail "$2: exit $rc, want $1 ($(cat "$tmpdir/err"))"; }
 expect_err() { grep -q -- "$1" "$tmpdir/err" || fail "$2: stderr lacks '$1': $(cat "$tmpdir/err")"; }
@@ -108,6 +110,42 @@ expect_err 'password=\*\*\*' "masked"
 grep -q s3cret "$tmpdir/err" "$tmpdir/out" && fail "secret leaked on failure"
 [ ! -s "$tmpdir/out" ] || fail "error text on stdout"
 rm "$fakebin/psql-fail"
+
+# --factory: the reader URL, never the agentsview one
+FURL='postgres://dbx_reader:rdr-s3cret@fdb:5432/dbx'
+unset FACTORY_DB_READER_URL || true
+rm -f "$secrets/agentsview-pg-url"
+printf '%s\n' "$URL" > "$secrets/agentsview-pg-url"
+run --factory -c 'select 1'
+expect_rc 78 "factory: only agentsview url"
+expect_err "$secrets/factory-db-reader-url" "factory: only agentsview url"
+expect_err 'FACTORY_DB_READER_URL' "factory: only agentsview url"
+: > "$secrets/factory-db-reader-url"
+run --factory -c 'select 1'
+expect_rc 77 "factory: empty reader file"
+expect_err "$secrets/factory-db-reader-url" "factory: empty reader file"
+printf '%s\n' 'postgres://shared_reader:shr-s3cret@fdb/shared' > "$secrets/factory-db-reader-url"
+run -At --factory -c 'select 1'
+expect_rc 0 "factory: shared file"
+grep -qx 'PGPASSWORD=shr-s3cret' "$fakebin/psql-env" || fail "factory: shared file password"
+printf '%s\n' 'postgres://ws_reader:ws-s3cret@fdb/ws' > "$wssecrets/factory-db-reader-url"
+run --factory --factory -c 'select 1'
+expect_rc 0 "factory: workspace file, flag twice"
+grep -qx 'PGPASSWORD=ws-s3cret' "$fakebin/psql-env" || fail "factory: workspace file wins"
+grep -q '^PGOPTIONS=\(.* \)\{0,1\}-c default_transaction_read_only=on$' "$fakebin/psql-env" || fail "factory: read-only last: $(cat "$fakebin/psql-env")"
+case $(cat "$fakebin/psql-args") in *s3cret* | *postgres://*) fail "factory: url in argv" ;; esac
+! grep -q 'postgres://' "$fakebin/psql-fullenv" || fail "factory: url left in the environment"
+! grep -v '^PG' "$fakebin/psql-fullenv" | grep -q 's3cret' || fail "factory: password in the environment"
+grep -q 's3cret' "$tmpdir/out" "$tmpdir/err" && fail "factory: secret in output"
+FACTORY_DB_READER_URL=$FURL run -At -c 'select 1' --factory
+expect_rc 0 "factory: env"
+grep -qx 'PGPASSWORD=rdr-s3cret' "$fakebin/psql-env" || fail "factory: env password"
+: > "$fakebin/psql-fail"
+FACTORY_DB_READER_URL=$FURL run --factory -c 'select 1'
+expect_rc 2 "factory: psql status passthrough"
+grep -q s3cret "$tmpdir/err" "$tmpdir/out" && fail "factory: secret leaked on failure"
+rm "$fakebin/psql-fail" "$secrets/factory-db-reader-url" "$wssecrets/factory-db-reader-url"
+run --help; grep -q -- '--factory' "$tmpdir/out" || fail "--help lists --factory"
 
 # psql missing: 69
 rm "$fakebin/psql"

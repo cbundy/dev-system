@@ -4,11 +4,14 @@
 # and nomistakes tables) without the URL ever reaching argv, the environment, or
 # output (cbundy/dev-system#292). images/base/README.md, "dev-query".
 #
-# Usage: dev-query [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
+# Usage: dev-query [--factory] [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
 #   The SQL comes from -c or from stdin (not both). Sessions are read-only by
 #   default (default_transaction_read_only=on); there is no write mode.
+#   --factory queries the factory database with the reader role's secret
+#   (factory_db_url reader, factory-db.sh) instead of the agentsview database.
 # Exit: 0 ok; 64 usage; 69 psql missing; 77 URL file unreadable or empty;
-#   78 no URL configured; otherwise psql's own status (1, 2 or 3).
+#   78 no URL configured (77 and 78 name the reader secret with --factory);
+#   otherwise psql's own status (1, 2 or 3).
 set -u
 
 SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
@@ -17,11 +20,13 @@ SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
 
 usage() {
   cat <<'USAGE'
-Usage: dev-query [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
+Usage: dev-query [--factory] [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
 
 Runs SQL against the central agentsview PostgreSQL, read-only. The SQL comes
 from -c or from stdin (not both).
 
+  --factory     query the factory database as its reader role (secret
+                factory-db-reader-url or FACTORY_DB_READER_URL) instead
   -A, -t, -At   unaligned / tuples-only output (psql flags)
   --csv         CSV output
   -v NAME=VALUE set a psql variable, used as :'NAME' in the SQL (repeatable)
@@ -29,7 +34,8 @@ from -c or from stdin (not both).
   -h, --help    show this help
 
 Exit codes: 64 usage, 69 psql missing, 77 URL file unreadable or empty,
-78 no URL configured, otherwise psql's own status.
+78 no URL configured, otherwise psql's own status. With --factory, 77 and 78
+name the factory reader secret.
 USAGE
 }
 
@@ -40,10 +46,11 @@ die() {
   exit "$code"
 }
 
-sql='' have_sql=0 args=()
+sql='' have_sql=0 factory=0 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) usage; exit 0 ;;
+    --factory) factory=1 ;;
     -A | -t | -At | -tA | --csv) args+=("$1") ;;
     -v)
       [ $# -ge 2 ] || die 64 "-v needs NAME=VALUE (see dev-query --help)"
@@ -78,12 +85,23 @@ fi
 
 command -v psql >/dev/null 2>&1 || die 69 "psql is not installed: this container image is older than the base image that ships postgresql-client (dev-version compares them). Fix: rebuild the container (dev-restart-self, or Rebuild Container in a desktop dev container); do not install the tool by hand."
 
-url=$(agentsview_pg_url)
-case $? in
-  0) ;;
-  1) die 78 "no PostgreSQL URL configured: put it in $(agentsview_pg_url_file) (or set AGENTSVIEW_PG_URL)" ;;
-  *) die 77 "$(agentsview_pg_url_file) exists but is unreadable or empty: fix its permissions or content (or set AGENTSVIEW_PG_URL)" ;;
-esac
+if [ "$factory" = 1 ]; then
+  # shellcheck source=factory-db.sh
+  . "$SHARE/factory-db.sh"
+  url=$(factory_db_url reader)
+  case $? in
+    0) ;;
+    1) die 78 "no factory reader URL configured: put it in $(factory_db_url_file reader) (or set FACTORY_DB_READER_URL)" ;;
+    *) die 77 "$(factory_db_url_file reader) exists but is unreadable or empty: fix its permissions or content (or set FACTORY_DB_READER_URL)" ;;
+  esac
+else
+  url=$(agentsview_pg_url)
+  case $? in
+    0) ;;
+    1) die 78 "no PostgreSQL URL configured: put it in $(agentsview_pg_url_file) (or set AGENTSVIEW_PG_URL)" ;;
+    *) die 77 "$(agentsview_pg_url_file) exists but is unreadable or empty: fix its permissions or content (or set AGENTSVIEW_PG_URL)" ;;
+  esac
+fi
 
 tmp=$(mktemp -d) || die 1 "cannot create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT
