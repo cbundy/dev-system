@@ -1,4 +1,4 @@
-// The pass scheduler (SPEC 2, D-39) and one pass (SPEC 2): one at a time, 5 s apart, pings first,
+// The pass scheduler (v2 SPEC 13.2, D-39) and one pass (v2 SPEC 13.2): one at a time, 5 s apart, pings first,
 // each reading the factory, planning and, in act mode, running plan's actions, then logging.
 import type { EngineInterface } from 'claude-code'
 
@@ -139,13 +139,13 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   let act = false
   let sid = ''
 
-  // the rails, at the start of every act-mode pass, before anything acts (SPEC 11.2)
+  // the rails, at the start of every act-mode pass, before anything acts (v2 SPEC 13.11.2)
   begin(tr, 'rails')
   if (rt.mode === 'act') {
     sid = await $.session.id()
     const remembered = railMemoryFrom(await storeGet($, keys.rails))
     // the CLIs act on the checkout's own origin, the gh executors on rt.repo: they must be one
-    // repo, or a merge lands in one and its follow-ups in the other (SPEC 11.5)
+    // repo, or a merge lands in one and its follow-ups in the other (v2 SPEC 13.11.5)
     const origin = await originOf($, rt.cwd, rt.env)
     const refusals = origin.toLowerCase() === rt.repo.toLowerCase() ? [] : [`repo: the checkout ${rt.cwd} is ${origin === '' ? 'no GitHub repository' : origin}, not ${rt.repo}`]
     // the rails' probes join the pass's command list; the lease's write does not
@@ -264,7 +264,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
       if (report.killed) await setTitle($, offTitle(rt))
-      // a rate-cap hold has no entry of its own: one loop event per cap per hour (SPEC 11.4)
+      // a rate-cap hold has no entry of its own: one loop event per cap per hour (v2 SPEC 13.11.4)
       const hour = `:${Math.floor(state.now / HOUR)}`
       for (const capped of result.capped) {
         const key = capKey(capped, state.now)
@@ -282,7 +282,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
     }
 
-    // notices from outside plan go out once no wake is open, acting or not (SPEC 9.2, 11.2), until a
+    // notices from outside plan go out once no wake is open, acting or not (v2 SPEC 13.9.2, 13.11.2), until a
     // restart was asked for
     if (rt.mode === 'act' && S.restartAsked === null) {
       book.pending = book.pending.filter(n => !stale(n, memory, state.now))
@@ -360,7 +360,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     title: result.title,
   }
   await append($, `${rt.loopDir}/decisions-${at.slice(0, 10)}.jsonl`, JSON.stringify(line) + '\n')
-  // full states for the replay harness, in observe mode only (SPEC 4.2 recordStates), a day's worth
+  // full states for the replay harness, in observe mode only (v2 SPEC 13.4.2 recordStates), a day's worth
   // at most
   const day = at.slice(0, 10)
   if (S.statesToday.day !== day) S.statesToday = { day, count: 0 }
@@ -372,7 +372,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     }
     S.lastDigest = digest
   }
-  // once a day, the loop dir's files older than the ledger's week go (SPEC 11.6)
+  // once a day, the loop dir's files older than the ledger's week go (v2 SPEC 13.11.6)
   if (S.prunedDay !== day) {
     S.prunedDay = day
     for (const argv of pruneArgvs(rt.loopDir, LOOP_FILES_KEEP_DAYS)) await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
@@ -413,7 +413,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     for (const attempt of reportedWakes) if (!shown.has(attempt)) reportedWakes.delete(attempt)
   }
   S.prevPassAt = state.now
-  // the title says error until the store takes the ledger again (SPEC 10.9)
+  // the title says error until the store takes the ledger again (v2 SPEC 13.10 item 9)
   if (act && S.saveProblem !== null) throw new Error(`ledger: not saved: ${S.saveProblem}`)
   holdsLock(act)
   recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false)

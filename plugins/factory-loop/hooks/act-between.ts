@@ -1,4 +1,4 @@
-// Between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4). What an agent's answer, a
+// Between passes: the hooks that feed the ledger (v2 SPEC 13.2, 13.8.2, 13.10 item 4). What an agent's answer, a
 // wake's turn, the wake answer tool and `/factory retry` do to the live ledger. act.ts holds the
 // pass and the executors; this module reads them and is read by driver-between.ts alone, so nothing
 // here is imported back by act.ts.

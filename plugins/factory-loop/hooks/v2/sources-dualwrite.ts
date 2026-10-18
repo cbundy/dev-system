@@ -1,4 +1,4 @@
-// The dual-write source (SPEC 2.4, 4.1): in act mode with the v2 planner, whether this image writes the
+// The dual-write source (v2 SPEC 2.4, 4.1): in act mode with the v2 planner, whether this image writes the
 // new event log (`callum-flow-event --new-path`, exit 0 and the path; an older image exits 2) and,
 // when it does, which transitions of this device and repo the log already holds. Read once per load.
 import { readEvent } from './event-reader'

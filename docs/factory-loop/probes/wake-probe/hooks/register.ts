@@ -1,4 +1,4 @@
-// Throwaway probe for the factory loop (docs/factory-loop/SPEC.md 8.4): in the orchestrators'
+// Throwaway probe for the factory loop (docs/factory-loop/v2/SPEC.md 13.8.4): in the orchestrators'
 // launch mode, can a mod wake the main model with one fixed line, hand it hidden context, and
 // get a typed answer back through a tool it registers? Runs only on request
 // (touch REQUEST), and writes one JSON line per observation to LOG:

@@ -1,4 +1,4 @@
-// What no executor can do, by construction (SPEC 6.1, 11): every action kind, every spawn
+// What no executor can do, by construction (v2 SPEC 13.6.1, 13.11): every action kind, every spawn
 // purpose and every respond shape runs through act.ts's dispatcher with a recording fake ActIo
 // whose commands answer as the real CLIs do, so each executor takes its whole path; the rails'
 // and an act-mode observe pass's commands join them. Not one argv may pass --yes, run
@@ -446,7 +446,7 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
   })
 })
 
-describe('the argv safety net (SPEC 6.1)', () => {
+describe('the argv safety net (v2 SPEC 13.6.1)', () => {
   test('the bans catch every forbidden argv, and pass the loop\'s own forms', () => {
     const bad: string[][] = [
       ['no-mistakes', 'axi', 'respond', '--action', 'approve', '--yes'],

@@ -7,7 +7,7 @@
 // tool reads. Observe changes nothing; --act re-checks each named issue and does what its proposal
 // now says, in the release's order (labels, the slot, the closing event, the intervention), and
 // refuses to act until every event it writes is one the factory's readers count. Every release
-// leaves the factory, whatever the issue's labels: the migration requeues nothing (SPEC 6.3). It
+// leaves the factory, whatever the issue's labels: the migration requeues nothing (v2 SPEC 6.3). It
 // also lists the issues that show as active with no live claim and no ready label (no holder, or
 // queued after a claim lapsed), and releases a live issue only when it is named. The tool runs
 // through a runner that gives it an events.ts with U4's note tokens and parser (TEST_EVENTS below),
@@ -531,7 +531,7 @@ test("the pure helpers: issue branches by the repo's convention, spans as people
   assert.equal(mod.parseArgs(["--repo", "a/b", "--act", "all"]).act, "all");
 });
 
-// The migration writes its events through hooks/v2/events.ts (SPEC 6.4, 7.1). Here the tool runs as
+// The migration writes its events through hooks/v2/events.ts (v2 SPEC 6.4, 7.1). Here the tool runs as
 // the owner will run it, with the real events.ts and the branch's images/base/callum-flow-event,
 // and every line it logged parses back with events.ts's own parser.
 test("the migration's events pass the real callum-flow-event, and parse back with events.ts to the release's fields", async () => {

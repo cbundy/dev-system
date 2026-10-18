@@ -1,4 +1,4 @@
-// The act half's contract (SPEC 6, 7, 8): what an executor is given and what it reports.
+// The act half's contract (v2 SPEC 13.6, 13.7, 13.8): what an executor is given and what it reports.
 // register.ts builds ActIo over $ (the only module that holds $); every executor module
 // (act-cli.ts, act-merge.ts, wake.ts and v2's) takes an ExecCtx and returns an Exec, and the
 // driver records the result in the ledger (ledger.ts). Executors decide nothing: plan already
@@ -21,20 +21,20 @@ export type SpawnInput = {
 }
 
 // ActIo: the engine calls the act half makes. Commands always go through ExecCtx.cmd, which
-// adds the repo, the mode's environment (SPEC 11.1) and the decision log's command list.
+// adds the repo, the mode's environment (v2 SPEC 13.11.1) and the decision log's command list.
 export type ActIo = {
   now: () => Promise<Ms>
   run: (argv: string[], init: RunInit & { cwd: string; env: Record<string, string> }) => Promise<RunResult>
   // $.agent.spawn: resolves once the agent started; its answer arrives as its turn.complete
   spawnAgent: (input: SpawnInput) => Promise<{ agentId?: string; deny?: string }>
-  // TaskStop through $.tool.call, for one of the loop's own agents only (SPEC 6.1, 13)
+  // TaskStop through $.tool.call, for one of the loop's own agents only (v2 SPEC 13.6.1, 13.13)
   stopAgent: (agentId: string) => Promise<{ stopped: boolean; error?: string }>
-  // $.prompt.submit: a turn of its own once the session is idle (SPEC 8.1)
+  // $.prompt.submit: a turn of its own once the session is idle (v2 SPEC 13.8.1)
   submit: (text: string) => Promise<void>
-  // $.command.run rename (SPEC 9.1)
+  // $.command.run rename (v2 SPEC 13.9.1)
   rename: (title: string) => Promise<void>
   // $.session.usage().rateLimits as percentages, for the pre-check before a token-spending
-  // action (SPEC 10.7); null where the session has no reading
+  // action (v2 SPEC 13.10 item 7); null where the session has no reading
   usage: () => Promise<{ fiveHour: number | null; sevenDay: number | null }>
   readFile: (path: string) => Promise<string | null>
   writeFile: (path: string, text: string) => Promise<void>
@@ -53,9 +53,9 @@ export type ExecCtx = {
   // runs a command from the main checkout (or init.cwd) with the repo and mode environment;
   // never through a shell unless the argv itself is `sh -c` for a detached launch
   cmd: (argv: string[], init: RunInit) => Promise<RunResult>
-  // logs one factory event through callum-flow-event (SPEC 7.4)
+  // logs one factory event through callum-flow-event (v2 SPEC 13.7.4)
   event: (state: string, fields: EventFields) => Promise<void>
-  // a fresh wake id, unique across restarts (SPEC 8.1 `id=`)
+  // a fresh wake id, unique across restarts (v2 SPEC 13.8.1 `id=`)
   wakeId: () => string
 }
 
@@ -74,8 +74,8 @@ export type EventFields = {
 //   with its answer (wakeId);
 // - skipped: a pre-check refused it (a usage tier that forbids its class, a rail), so no
 //   attempt is counted and the entry is dropped.
-// noRetry: a usage error (exit 2) is a loop bug, never retried (SPEC 10.1).
-// rateLimited: stderr showed a GitHub rate limit; the driver sets githubBackoffUntil (SPEC 10.2).
+// noRetry: a usage error (exit 2) is a loop bug, never retried (v2 SPEC 13.10 item 1).
+// rateLimited: stderr showed a GitHub rate limit; the driver sets githubBackoffUntil (v2 SPEC 13.10 item 2).
 export type Exec =
   | { status: 'done'; outcome?: Outcome; summary: string }
   | { status: 'failed'; outcome?: Outcome; summary: string; noRetry?: boolean; rateLimited?: boolean }
@@ -87,12 +87,12 @@ export type Executor<A extends Action = Action> = (ctx: ExecCtx, action: A) => P
 // One agent's answer, as its turn.complete gives it.
 export type AgentAnswer = { agentId: string; answer: string; reason: 'answer' | 'aborted' | 'refusal' | 'error' }
 
-// GitHub's rate-limit signatures in a command's stderr (SPEC 10.2).
+// GitHub's rate-limit signatures in a command's stderr (v2 SPEC 13.10 item 2).
 export function rateLimited(stderr: string): boolean {
   return /API rate limit exceeded|secondary rate limit|HTTP (403|429)[^\n]*rate.?limit/i.test(stderr)
 }
 
-// The first 2 000 characters of a failed command's stderr, for the outcome (SPEC 10.1).
+// The first 2 000 characters of a failed command's stderr, for the outcome (v2 SPEC 13.10 item 1).
 export function detailOf(r: RunResult): string {
   return (r.stderr.trim() || r.stdout.trim()).slice(0, 2000)
 }
@@ -108,7 +108,7 @@ export const ANSWER_SCRIPT = 'bin/factory-answer'
 // The last line of every wake prompt (skills/judge/SKILL.md answers by it).
 export const WAKE_POINTER = 'Answer with the factory-loop:judge skill.'
 
-// The loop dir's files that only grow (SPEC 11.6): spawn records, saved answers, old respond logs,
+// The loop dir's files that only grow (v2 SPEC 13.11.6): spawn records, saved answers, old respond logs,
 // recorded states and the decision logs, kept as long as the ledger keeps entries (7 days).
 export const LOOP_FILES_KEEP_DAYS = 7
 

@@ -117,7 +117,7 @@ const judge: Action = {
   context: [],
 }
 
-describe('the dispatcher (SPEC 6.1)', () => {
+describe('the dispatcher (v2 SPEC 13.6.1)', () => {
   test('every action kind has an executor', () => {
     expect(ACTION_KINDS.filter(kind => EXECUTORS[kind] === undefined)).toEqual([])
   })
@@ -158,7 +158,7 @@ describe('the dispatcher (SPEC 6.1)', () => {
   })
 })
 
-describe('runActions: the ledger around each executor (SPEC 7)', () => {
+describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
   test('start, executor, finish: a claim is done in the ledger, saved, with its outcome', async () => {
     const f = fake([])
     const report = await runActions(f.env, state(), [claim])
@@ -169,7 +169,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.saves.map(l => l.map(e => e.status))).toEqual([['running'], ['done']])
   })
 
-  test('a usage pre-check refusal drops a new entry and puts a retried one back as it stood (SPEC 10.7)', async () => {
+  test('a usage pre-check refusal drops a new entry and puts a retried one back as it stood (v2 SPEC 13.10 item 7)', async () => {
     const prior = entry('claim:470:new', 'claim', { status: 'failed', attempts: 1, endedAt: NOW - 10 * MIN })
     const f = fake([prior], () => ({}), { usage: async () => ({ fiveHour: 96, sevenDay: 10 }) })
     const report = await runActions(f.env, state(), [claim, judge])
@@ -182,7 +182,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.calls).toEqual([])
   })
 
-  test('a GitHub rate limit holds the pass\'s later GitHub writes, not its agents (SPEC 10.2)', async () => {
+  test('a GitHub rate limit holds the pass\'s later GitHub writes, not its agents (v2 SPEC 13.10 item 2)', async () => {
     const f = fake([], argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: RATE } : {}))
     const report = await runActions(f.env, state(), [claim, closer, judge])
     expect(report.rateLimited).toBe(true)
@@ -194,7 +194,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.env.live.ledger.map(e => e.key)).toEqual(['claim:470:new', judge.key])
   })
 
-  test('once the act lock is no longer this session\'s, the pass runs nothing more (SPEC 11.2)', async () => {
+  test('once the act lock is no longer this session\'s, the pass runs nothing more (v2 SPEC 13.11.2)', async () => {
     const f = fake([])
     let saves = 0
     f.env.save = async () => {
@@ -210,7 +210,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
   })
 
-  test('the kill switch set mid-pass skips every action not yet started; the running one finishes (SPEC 11.3)', async () => {
+  test('the kill switch set mid-pass skips every action not yet started; the running one finishes (v2 SPEC 13.11.3)', async () => {
     let off = false
     let checks = 0
     // the switch is created while the claim runs
@@ -238,7 +238,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.env.live.ledger.map(e => [e.key, e.status])).toEqual([['claim:470:new', 'done']])
   })
 
-  test('a notice from outside plan waits while the kill switch is set (SPEC 11.3)', async () => {
+  test('a notice from outside plan waits while the kill switch is set (v2 SPEC 13.11.3)', async () => {
     const f = fake([])
     f.env.killed = async () => true
     const tell: Action = { kind: 'tell', wake: 'pass-error', key: 'tell:pass-error:1', class: 'owner', rule: 'O2', reason: 'tell', issue: null, fields: {}, context: [] }
@@ -260,7 +260,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
     expect(f.env.live.ledger).toMatchObject([{ key: judge.key, status: 'done', summary: 'answered merge' }])
   })
 
-  test('restart-self saves the ledger, with its entry running, before the restart runs (SPEC 7.5)', async () => {
+  test('restart-self saves the ledger, with its entry running, before the restart runs (v2 SPEC 13.7.5)', async () => {
     const restart: Action = { kind: 'restart-self', key: 'restart:1', class: 'free', rule: 'H4', reason: 'update', issue: null, why: 'image', at: 1 }
     const f = fake([])
     await runActions(f.env, state(), [restart])
@@ -326,7 +326,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(prompts[0]).toStartWith('TELL heartbeat-other id=w1 repo=cbundy/dev-system device=other')
   })
 
-  test('a rate-cap hold is one loop event per cap per hour, status held (SPEC 11.4)', () => {
+  test('a rate-cap hold is one loop event per cap per hour, status held (v2 SPEC 13.11.4)', () => {
     expect(capKey('spawn', NOW)).toBe(`cap:spawn:${Math.floor(NOW / 3_600_000)}`)
     expect(capEventArgv('spawn', NOW)).toEqual(['callum-flow-event', 'loop', '--note', `kind=spawn key=${capKey('spawn', NOW)} status=held`])
     expect(capEventArgv('claim:470', NOW)).toEqual([
