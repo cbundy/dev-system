@@ -907,6 +907,18 @@ jq -s --arg since 2026-10-18T00:00:00Z '
   })' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/*.jsonl
 ```
 
+For one tool, `callum-flow-evaluate`, the share of runs that agree per day, and the most common
+differing paths (a run whose new side was skipped or failed has `new_error` set and is not counted as agreeing):
+
+```sh
+jq -s --arg since 2026-10-18T00:00:00Z '
+  map(select(.tool == "evaluate" and .ts >= $since)) | {
+    per_day: (group_by(.ts[:10]) | map({day: .[0].ts[:10], runs: length,
+      agree_pct: (100 * (map(select(.differences == 0 and .new_error == null)) | length) / length | round)})),
+    top_paths: ([.[].paths[]?.path] | group_by(.) | map({path: .[0], n: length}) | sort_by(-.n) | .[:5])
+  }' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/evaluate.jsonl
+```
+
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
@@ -945,11 +957,47 @@ export is passed (see the skill).
   merged issue its review and fix rounds and its time in flight less the time parked. Each counts a
   retried event once, as section 9 does. A merged issue's lead-time row takes its pipeline start from
   its first `transition` to reviewing when it has no linked run (`run_source` `transition`).
+- `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `shadow`) picks the event store
+  ([source switch](factory-events/replay.md#source-switch)). `old` is the behaviour above. `new` reads the
+  new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<name>.jsonl`, or with
+  `--new-events <file>` from a file of `factory.event_log` rows (`--events` is ignored under `new`).
+  `shadow` prints the `old` report and appends one record to `factory/.shadow/evaluate.jsonl`; it
+  skips the new side when `--events` is given without `--new-events`, and a failing new side never fails
+  the tool. See "Reading the new events" below.
 - `--ready-times <file>` is a JSON object `{"<issue>": "<ISO>" | ["<ISO>", ...]}` of the times
   each issue got its `ready` label, from the GitHub timeline. The tool takes the last one at or
   before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
+
+### Reading the new events
+
+Under `--source new` one mapping (`images/base/evaluate-new-events.js`) turns each new event, from the
+local log (payload under `data`) or from a `factory.event_log` row (flat columns), into the record the
+derivations above already read, so there is one copy of every metric. A transition logged more than
+once counts once per (issue, life, seq), the first kept.
+
+| New event | Becomes |
+|---|---|
+| `transition` | a `transition` timed by its `seq_at`, with `life`, `seq`, `row` (`table_row`), `from`, `to` and `via` |
+| `transition` into `building`, `fixing`, `merge-queue` (from another state) | also `delegated`, `fix_requested`, `merge_ready`, timed by `seq_at` |
+| `finding_handled` | `verdict`: `fixed` is `CORRECT`, `declined` is `WRONG` |
+| `claim_renewed`, `requeued` | `renewed`, `reclaimed` |
+| `loop_entry`, `loop_passes` | `loop` |
+| `intervention` | `intervention` with `who`, `cause`, `life`, `fact` |
+| `reviewed` | `reviewed` with `verdict`, `round`, `patch` |
+| `test_weakened` | `test_weakened` with `restored` (no step: always `none` under v2) |
+| `abandoned` | `abandoned` with `reason` |
+| `ready`, `claimed`, `claim_lost`, `merged`, `closed`, `implementer_routed`, `untrusted_stripped`, `usage` | the same name |
+
+Metrics that need a v1-only state read `n/a`, never 0, and `sources` names each one and why:
+`waiting` (needs `run_started` and `parked`), `adjudicator_agreement` (pairs verdicts by the v1 `run_id`).
+`first_pass` keeps its number but counts only `fix_requested` as a setback, as `failed` is v1 only
+(`sources` says so). The per-issue lead-time stages `design`, `implementation`, `pipeline` and
+`waiting_for_merge` can differ by seconds from `old`, which times `delegated` and `merge_ready` by the
+line's write time; the shadow comparison leaves them out, with the `sources` block and the two `n/a` metrics.
+A view export carries `reviewed.patch` and `test_weakened.restored` from migration 0006. The fleet export is
+`dev-query --factory -At -c "SELECT row_to_json(e) FROM factory.event_log e WHERE repo = :'repo' AND ts >= :'since'" -v repo=<owner/name> -v since=<ISO>`.
 
 ### Scope and the fleet-wide no-mistakes export
 
