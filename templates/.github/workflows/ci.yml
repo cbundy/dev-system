@@ -6,7 +6,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main] # set to this repo's default branch
 
 jobs:
   ci:

@@ -266,7 +266,7 @@ async function init(options) {
 
   for (const file of written) console.log(`created   ${file}`);
   for (const file of skipped)
-    console.log(`skipped   ${file} (already exists - 'callum-dev update' will merge into it)`);
+    console.log(`skipped   ${file} (already exists - kept as is; 'callum-dev update' merges into synced files only)`);
   console.log(
     `stamped   ${STAMP_FILE} (template version ${PKG_VERSION}, devcontainer ${answers.devcontainer})`,
   );

@@ -267,7 +267,8 @@ install anything under `/persist`, or set a `devcontainer.metadata` label. See
 Do this after the `gateCommands` are final. Without a workflow, a PR gets no checks.
 
 1. If `.github/workflows/` already has a CI workflow, keep it and delete the scaffolded
-   `ci.yml`, after checking that it runs the same lint and test commands as `gateCommands`
+   `ci.yml` and its baseline copy `.callum-dev/baseline/.github/workflows/ci.yml` (while the
+   baseline exists, `callum-dev update` restores a deleted `ci.yml`), after checking that it runs the same lint and test commands as `gateCommands`
    (fix it if not). Otherwise fill the scaffolded `.github/workflows/ci.yml`.
 2. In the scaffolded `ci.yml`:
    - Replace the toolchain-and-install step with what the gate commands need (for example
