@@ -75,11 +75,12 @@ export function compareRebuilds(events: readonly FactoryEvent[], rows: readonly 
   return { at, data, diffs: settled }
 }
 
-// a compare that could not be made: a side failed to read
-function failedShadow(at: number, oldError: string | null, newError: string | null): RecordsShadow {
+// failedShadow: the data of a compare that could not be made because a side failed to read (shared
+// with sources-facts.ts); the reader names whose compare it is.
+export function failedShadow(reader: string, oldError: string | null, newError: string | null): ShadowReadData {
   const detail = [oldError === null ? null : `old: ${oldError}`, newError === null ? null : `new: ${newError}`].filter(x => x !== null).join('; ')
-  const data: ShadowReadData = {
-    reader: SHADOW_READER,
+  return {
+    reader,
     tool: 'factory-loop',
     compared: 0,
     differences: 0,
@@ -90,13 +91,12 @@ function failedShadow(at: number, oldError: string | null, newError: string | nu
     settle_seconds: SETTLE_MS / 1000,
     detail: detail.slice(0, 500),
   }
-  return { at, data, diffs: [] }
 }
 
 // --- the reads --------------------------------------------------------------------------------------
 
-type Ctx = Pick<SourceCtx, 'now' | 'rt' | 'run'>
-type Read<T> = { ok: true; value: T } | { ok: false; error: string }
+export type Ctx = Pick<SourceCtx, 'now' | 'rt' | 'run'>
+export type Read<T> = { ok: true; value: T } | { ok: false; error: string }
 
 const vars = (ctx: Ctx): string[] => ['-v', `repo=${ctx.rt.repo}`, '-v', `device=${ctx.rt.device}`, '-v', `at=${new Date(ctx.now).toISOString()}`, '-v', `days=${REBUILD_DAYS}`]
 
@@ -153,10 +153,10 @@ export async function readRecords(ctx: Ctx, cache: RecordsCache, storeEmpty: boo
       try {
         cache.shadow = compareRebuilds(old.value, fresh.value.rows, rt.device, now, now)
       } catch (err) {
-        cache.shadow = failedShadow(now, null, String(err).slice(0, 200))
+        cache.shadow = { at: now, data: failedShadow(SHADOW_READER, null, String(err).slice(0, 200)), diffs: [] }
       }
     } else {
-      cache.shadow = failedShadow(now, old.ok ? null : old.error, fresh.ok ? null : fresh.error)
+      cache.shadow = { at: now, data: failedShadow(SHADOW_READER, old.ok ? null : old.error, fresh.ok ? null : fresh.error), diffs: [] }
     }
   }
   return error

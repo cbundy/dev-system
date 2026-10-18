@@ -23,6 +23,7 @@ import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
 import type { PrView, PrsRead, PrUnread } from './sources-prs'
 import { readRecords } from './sources-records'
+import type { FactsShadow } from './sources-facts'
 import type { RecordsShadow } from './sources-records'
 import { readWorkspace } from './sources-workspace'
 import { windDownPaths } from './wind-down'
@@ -292,6 +293,8 @@ export type ObserveV2Input = {
   // the pass's read of the event log (observe.ts: the rebuild's week on the pass it ran, else the
   // facts read); none when the caller has none
   events?: readonly FactoryEvent[]
+  // the last compare of the facts' two stores (sources-facts.ts); none when none was made this load
+  factsShadow?: FactsShadow
   // a GitHub backoff holds this pass's reads; limited: a rate limit met this pass ends them
   backoff: boolean
   limited: () => boolean
@@ -444,6 +447,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     checkoutBase: cache.checkoutBase,
     dualWrite,
     ...(cache.shadow === null ? {} : { recordsShadow: cache.shadow }),
+    ...(input.factsShadow === undefined ? {} : { factsShadow: input.factsShadow }),
   }
   if (workspace !== undefined) v2.workspace = workspace
   v2.windDown = await readWindDown(input.io, rt, now)

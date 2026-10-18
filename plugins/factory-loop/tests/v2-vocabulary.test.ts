@@ -165,7 +165,7 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
     }
     expect(V2_ACTION_KINDS).toHaveLength(13)
     expect(V2_RULES).toHaveLength(21)
-    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'wait-unreadable'])
+    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable'])
   })
 
   test('the eight labels, one per state but closed, with appendix D\'s colours', () => {

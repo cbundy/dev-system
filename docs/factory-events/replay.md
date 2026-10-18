@@ -124,12 +124,22 @@ read, and `shadow` reads both once per load and then hourly, compares the two re
 sides cut 600 s back, answers from old, and writes one `shadow_read` event (`reader` `loop-records`, `tool`
 `factory-loop`). A compare with differences also tells the owner once per distinct set of issues.
 
+The same setting also picks where the loop reads its facts every pass and the 7-day ledger rebuild of a lost store
+([#977](https://github.com/cbundy/dev-system/issues/977), `hooks/v2/sources-facts.ts`), and with them the events
+behind v2's once keys. `new` reads the types `requeued`, `claimed`, `claim_renewed`, `merged`, `loop_entry`,
+`intervention` and `reviewed`, and `closed` by the sweep, maps each row to the event the facts code reads and fails the
+whole read, naming the event_id, on a row it cannot read. `shadow` decides on old and compares three things hourly,
+cut 600 s back: the newest `reclaimed` per issue, this device's derived ledger and the once keys (`shadow_read` with
+`reader` `loop-facts`, `diff_keys` `reclaimed:#N`, `ledger:<key>` or `once:<key>`; the owner is told once per distinct
+set, `tell(facts-shadow)`).
+
 Switched readers and their known differences from `old` (dropped before comparing, in `normalize`):
 
 | Tool | Reader | Known differences |
 |---|---|---|
 | `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
 | the factory loop's record rebuild ([#976](https://github.com/cbundy/dev-system/issues/976)) | [`readers/loop-records.js`](../../scripts/factory-events-replay/readers/loop-records.js) | none known: it runs the plugin's own `record.ts` over both stores, per repo and device |
+| the factory loop's facts and ledger rebuild ([#977](https://github.com/cbundy/dev-system/issues/977)) | [`readers/loop-facts.js`](../../scripts/factory-events-replay/readers/loop-facts.js) | the facts left out under `new` because no v2 path reads them: `briefs` (only `IssueView.delegatedBrief`, which only `state.ts` sets), and `reviewFixes`, `verdicts`, `superseded`, `answered` and `pipeline` (only `runsFromEvents`, whose `state.runs` only the plan replay, `scripts/factory-loop-replay.js`, and the state digest read); the `out`, `decision` columns and the run, PR and head of a `loop_entry`, dropped from the loop-logged ledger entries on both sides (no v2 path reads the outcome of a tell, task or judge entry: the outcomes v2 reads are the claim, adopt and rollout ones of entries it keys itself, which are never logged through `loop`); times are whole seconds on both sides (the old log stores no milliseconds) |
 | `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900)) | [`readers/heartbeat-state.js`](../../scripts/factory-events-replay/readers/heartbeat-state.js) | the per-entry `state` (old state names against new types); the v1-only events the new log lacks (`run_started`, `superseded`, `owner_wait`, `briefed`, `design_routed` and the replayed run facts `failed`, `head_mismatch`, `conflict`, `ci_stalled`); history from before the device's dual write; a window that ends in the few seconds between a transition into building, fixing or merge-queue and the v1 line the loop writes after it (`new` derives `delegated`, `fix_requested` and `merge_ready` from the transition) |
 
 ## Defaults moved to new

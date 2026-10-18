@@ -451,7 +451,7 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
 loop setting `eventsSource` `shadow`, the default, once per load and then at most hourly; `differences` counts issues whose
-rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers) and the claim tools'
+rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
@@ -757,9 +757,10 @@ query counts a retried event once (see the reading rules above), and all of them
 that logs these types. `callum-flow-evaluate` reports the same numbers over a window (its
 `interventions`, `judgement_calls`, `claim_completion` and `rounds` sections).
 
-**Interventions** (#632 metric 1): an `intervention` event is any point where a person, or the loop
-with unplanned judgement or recovery, had to step in. A merged issue is **untouched** when no
-intervention of either kind names its merged work; untouched merges are the target outcome. An
+**Interventions** (#632 metric 1): an `intervention` event is any point where a person, the loop's judge
+(`who=judge`, a control op run through the control tool) or the loop with unplanned judgement or
+recovery (`who=loop`), had to step in. A merged issue is **untouched** when no
+intervention of any kind names its merged work; untouched merges are the target outcome. An
 intervention names the merged work by its `life` when that life began by the first `merged` (a
 `transition` of the life, timed by `seq_at`, at or before it), whenever the intervention itself was
 logged: the loop derives most of them a pass or more after their fact, so a hand merge's can land
@@ -832,6 +833,7 @@ WITH iv AS (
 SELECT s.repo, s.issue, s.merged_at,
   count(mine.cause) FILTER (WHERE mine.who = 'person') AS person,
   count(mine.cause) FILTER (WHERE mine.who = 'loop')   AS loop,
+  count(mine.cause) FILTER (WHERE mine.who = 'judge')  AS judge,
   count(mine.cause) = 0                                AS untouched,
   string_agg(DISTINCT mine.cause, ',')                 AS causes
 FROM spans s

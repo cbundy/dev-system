@@ -23,6 +23,7 @@ const CLAIM_READER = path.join(ROOT, "scripts", "factory-events-replay", "reader
 const EVALUATE_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "evaluate.js");
 const HEARTBEAT_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "heartbeat-state.js");
 const LOOP_RECORDS_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "loop-records.js");
+const LOOP_FACTS_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "loop-facts.js");
 const ADMIN = process.env.FACTORY_TEST_PG_ADMIN_URL;
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -312,6 +313,55 @@ test("compare: the loop-records reader matches on the corpus, is not vacuous, an
   assert.notEqual(refused.status, 0);
   assert.ok((refused.out + refused.err).includes(id), refused.out + refused.err);
   assert.ok(issue);
+});
+
+test("compare: the loop-facts reader matches on the corpus, is not vacuous, and catches a change seeded in the new store", opts, async (t) => {
+  // the corpus holds no reclaimed row and no loop tell, so the old store gets one of each beside it: a
+  // sweep's requeue, and a tell the loop logged with the old outcome tokens the new event drops
+  const device = "coder-dev-system-testbed-loop";
+  const repo = "cbundy/dev-system-scratch";
+  const extra = (seq, ts, raw) => ({ ts, device, repo, seq, raw: { v: 2, ts, repo, device, pr: null, head: null, branch: null, run_id: null, base_image: "2.32.2", dev_image: null, session_id: null, plugin_version: "0.37.0", template_version: "x", ...raw } });
+  const rows = [
+    ...corpus,
+    extra(1001, "2026-10-16T02:31:00Z", { state: "reclaimed", actor: "sweep", issue: 48, note: "lease expired", event_id: crypto.randomUUID() }),
+    extra(1002, "2026-10-16T02:32:00Z", { state: "loop", actor: "agent", issue: 8, note: "kind=tell key=tell:parked:8 status=done attempts=1 class=owner rule=H1 started=1792117900000 ended=1792117901000 wake=parked out=wake decision=ok", event_id: crypto.randomUUID() }),
+  ];
+  const old = oldStore(t, rows);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "f.json")], dest, old).status, 0);
+  const r = cli(["compare", "--reader", LOOP_FACTS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /old and new match/);
+  // both sides hold reclaimed, ledger and once keys, so the match is not empty
+  const reader = require(LOOP_FACTS_READER);
+  const ctx = { oldUrl: old.url, newUrl: dest.url, since: SINCE, until: null, psql: (url, sql) => psql(url, sql, { readOnly: true }) };
+  const seen = await reader.old(ctx);
+  const view = seen[repo];
+  assert.deepEqual(Object.keys(view.reclaimed), ["48"]);
+  const mine = view.devices[device];
+  assert.ok(mine.ledger.some((e) => e.kind === "claim"), "a derived claim");
+  assert.ok(mine.ledger.some((e) => e.key === "heartbeat:derived" || e.key === "sweep:derived"), "a derived heartbeat or sweep");
+  assert.ok(mine.ledger.some((e) => e.key === "tell:parked:8" && e.status === "done"), "the loop's tell");
+  assert.ok(mine.once.some((k) => k.startsWith("reviewed ")) && mine.once.some((k) => k.startsWith("intervention ")), mine.once.join("|"));
+  assert.deepEqual(await reader.new(ctx), seen);
+  // a change in the new store alone: the requeue happened an hour later
+  dest.query(`UPDATE factory.event_store SET ts = ts + interval '1 hour' WHERE type = 'requeued'`);
+  const moved = cli(["compare", "--reader", LOOP_FACTS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(moved.status, 1, moved.out + moved.err);
+  assert.match(moved.out, /reclaimed/);
+  dest.query(`UPDATE factory.event_store SET ts = ts - interval '1 hour' WHERE type = 'requeued'`);
+  // another answer file for a review: the once key differs
+  dest.query(`UPDATE factory.event_store SET data = jsonb_set(data, '{answer_path}', '"/other.answer.json"') WHERE event_id = (SELECT event_id FROM factory.event_store WHERE type = 'reviewed' LIMIT 1)`);
+  const rekeyed = cli(["compare", "--reader", LOOP_FACTS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(rekeyed.status, 1, rekeyed.out + rekeyed.err);
+  assert.match(rekeyed.out, /reviewed/);
+  // a row the loop's reader refuses fails the read rather than being skipped
+  const id = dest.query(`SELECT event_id FROM factory.event_store WHERE type = 'requeued'`);
+  dest.query(`UPDATE factory.event_store SET data = data - 'reason' WHERE type = 'requeued'`);
+  const refused = cli(["compare", "--reader", LOOP_FACTS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.notEqual(refused.status, 0);
+  assert.ok(id && (refused.out + refused.err).includes(id), refused.out + refused.err);
 });
 
 test("diff: paths, missing keys, array lengths and type changes", () => {

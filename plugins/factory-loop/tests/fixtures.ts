@@ -268,3 +268,34 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     ...over,
   }
 }
+
+// The columns of the facts' new-store read (NEW_EVENTS_SQL), and eventRow: one row of it, as dev-query
+// --csv prints it, for an event of `type` with payload `data` at `ts`.
+export const EVENT_HEADER = ['envelope', 'event_id', 'ts', 'type', 'type_version', 'repo', 'device', 'actor', 'session_id', 'issue', 'base_image', 'dev_image', 'template_version', 'plugin_version', 'device_seq', 'data']
+let eventRows = 0
+export function eventRow(type: string, data: Record<string, unknown>, ts: number, over: Record<string, string> = {}): Record<string, string> {
+  eventRows += 1
+  return {
+    envelope: '1',
+    event_id: `00000000-0000-4000-8000-${String(eventRows).padStart(12, '0')}`,
+    ts: new Date(ts).toISOString(),
+    type,
+    type_version: '1',
+    repo: 'cbundy/dev-system',
+    device: DEVICE,
+    actor: 'agent',
+    session_id: '',
+    issue: '',
+    base_image: '',
+    dev_image: '',
+    template_version: '',
+    plugin_version: '',
+    device_seq: String(eventRows),
+    data: JSON.stringify(data),
+    ...over,
+  }
+}
+
+const csvCell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+// eventsCsv: rows as dev-query --csv prints them, in the given columns
+export const eventsCsv = (rows: Record<string, string>[], header: string[] = EVENT_HEADER): string => [header.join(','), ...rows.map(r => header.map(h => csvCell(r[h] ?? '')).join(','))].join('\n') + '\n'

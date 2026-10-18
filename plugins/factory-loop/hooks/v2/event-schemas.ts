@@ -182,7 +182,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "fact": {"type":["null","string"]},
       "life": {"pattern":"^[0-9a-z]+$","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
-      "who": {"enum":["loop","person"]},
+      "who": {"enum":["judge","loop","person"]},
     },
   },
   "loop_entry.v1": {

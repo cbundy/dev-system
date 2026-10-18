@@ -11,6 +11,7 @@ import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
+import type { FactsShadow } from './sources-facts'
 import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
@@ -387,7 +388,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'wait-unreadable'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -400,7 +401,7 @@ export type V2Rule = (typeof V2_RULES)[number]
 
 // --- interventions (v2 SPEC 7.2) ---------------------------------------------------------------------
 
-export type InterventionWho = 'person' | 'loop'
+export type InterventionWho = 'person' | 'loop' | 'judge'
 
 // The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
 // and `guard:<what>` take their suffix from the lists above or the op's name.
@@ -482,6 +483,8 @@ export type V2State = {
   dualWrite: DualWrite | null
   // the last compare of the record rebuild's two stores (sources-records.ts), as of the pass that made it; absent: none made this load
   recordsShadow?: RecordsShadow
+  // the last compare of the facts' and ledger rebuild's two stores (sources-facts.ts); absent: none made this load
+  factsShadow?: FactsShadow
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead
