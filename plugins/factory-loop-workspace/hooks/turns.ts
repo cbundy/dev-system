@@ -9,6 +9,11 @@ export type TurnIo = {
   after: (ms: number, fn: () => void) => { cancel: () => void }
   // the longest a waiter waits for a turn
   maxWaitMs: number
+  // optional: one slice of waiting that holds a host call, so the engine's handler budget (which host
+  // calls pause and clock ops do not) does not run while queued. The wait calls it again as each
+  // slice ends; a rejection ends the calls and the wait goes on with the grant alone. Absent: the
+  // wait is the grant and the cap timer only.
+  idle?: () => Promise<unknown>
 }
 
 // A turn taken (release gives it back, once: a second call does nothing), or the wait ran past its
@@ -70,6 +75,21 @@ export function createTurns(): Turns {
         queue.splice(at, 1)
         settle(false)
       })
+      let idle = io.idle
+      if (idle !== undefined) {
+        let over = false
+        const done = outcome.then(() => {
+          over = true
+        })
+        while (!over && idle !== undefined) {
+          try {
+            await Promise.race([done, idle()])
+          } catch {
+            // a failing slice must not spin: the rest of the wait is the grant alone
+            idle = undefined
+          }
+        }
+      }
       const granted = await outcome
       timer.cancel()
       // a granted turn is held already: if reading the clock fails it goes back, never leaks

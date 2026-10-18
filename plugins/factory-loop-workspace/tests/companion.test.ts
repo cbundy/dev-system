@@ -60,6 +60,7 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     checked: [] as Record<string, unknown>[],
     decided: { decision: 'ask' } as Record<string, unknown>,
     ids: 0,
+    sleeps: 0,
   }
   const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT]])
   const gates = [...(opts.gates ?? [])]
@@ -85,6 +86,12 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     if (cmd === 'git' && e.argv.includes('symbolic-ref')) return ran(`${opts.head ?? 'issue-571'}\n`)
     if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran('4c2d8aa0000000000000000000000000000000ff\n')
     if (cmd === 'find') return ran('')
+    // the stop gate's idle slice while it queues: answers after a short real delay, never at once
+    if (cmd === 'sleep') {
+      w.sleeps++
+      await new Promise<void>(resolve => setTimeout(resolve, 200))
+      return ran('')
+    }
     if (cmd === 'callum-flow-event') {
       w.events.push(e.argv)
       return ran('', opts.eventExit ?? 0)
@@ -478,10 +485,33 @@ describe('the stop gate', () => {
       expect(r1.block).toBeUndefined()
       expect(r2.block).toBeUndefined()
       expect(companionLines(w).map(l => l.cause)).toEqual(['gate-unknown', 'gate-wait', 'gate-pass'])
-      expect(companionLines(w)[0]).toMatchObject({ reason: 'the stop gate hook failed' })
+      expect(companionLines(w)[0]).toMatchObject({ reason: expect.stringMatching(/^the stop gate hook failed \(.+output.+\)$/) })
       // the catch path's bare line is unchanged: it has no waitMs, startedAt or queuedBehind
       expect(companionLines(w)[0]).not.toHaveProperty('startedAt')
       expect(companionLines(w)[0]).not.toHaveProperty('waitMs')
+    })
+
+    // a held command over 10 s of real time fails the world's own process.run (a handler with the same budget), so each of the first writer's two commands is held for about 6 s
+    const heldSix = (first: { promise: Promise<void> }) => (n: number) => (n <= 2 ? new Promise<void>(resolve => setTimeout(resolve, 6_000)) : n === 0 ? first.promise : undefined)
+
+    test('a gate queued for more than 10 s of real time is not cut off: it logs gate-wait and passes', { timeoutMs: 30_000 }, async ($, on) => {
+      const w = world(on, { marker: withLimit, hold: heldSix(deferred()) })
+      await two($)
+      const [r1, r2] = await Promise.all([stop($, 'agent-1'), stop($, 'agent-2')])
+      expect(r1.block).toBeUndefined()
+      expect(r2.block).toBeUndefined()
+      expect(companionLines(w).map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-pass'])
+      expect(w.sleeps).toBeGreaterThan(0)
+      expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass' })
+    })
+
+    test('a gate queued for more than 10 s still blocks the finish when it fails', { timeoutMs: 30_000 }, async ($, on) => {
+      const w = world(on, { marker: withLimit, gates: [{ exitCode: 0, output: 'ok\n' }, { exitCode: 0, output: 'ok\n' }, { exitCode: 1, output: 'not ok\n' }], hold: heldSix(deferred()) })
+      await two($)
+      const [r1, r2] = await Promise.all([stop($, 'agent-1'), stop($, 'agent-2')])
+      expect(r1.block).toBeUndefined()
+      expect(r2.block).toContain('exited 1')
+      expect(companionLines(w).map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-fail'])
     })
 
     test('a wait past gateWaitTimeoutMs is gate-unknown with the wait\'s why, and the gate never runs; the holder is unaffected', async ($, on) => {
