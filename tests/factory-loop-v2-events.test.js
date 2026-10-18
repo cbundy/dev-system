@@ -225,6 +225,36 @@ test("a gate_run goes through the real writer's native mode: exit 0, no warning,
   assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data });
 });
 
+// A shadow_read (sources-records.ts) is written in the new format alone and for no issue: the argv has no
+// --issue, the real writer takes it with no warning, and its line matches the strict schema.
+test("a shadow_read goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", async () => {
+  const records = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "sources-records.ts"));
+  const compared = records.compareRebuilds([], [], "box", NOW, NOW).data;
+  assert.equal(compared.reader, "loop-records");
+  const found = { reader: "loop-records", tool: "factory-loop", compared: 42, differences: 2, live_differences: 3, diff_keys: ["12", "15"], old_ok: true, new_ok: false, settle_seconds: 600, detail: "#12 round: old 0, new 4" };
+  for (const data of [compared, found]) {
+    const argv = ev.eventArgv({ state: "shadow_read", data });
+    assert.deepEqual(argv, ["callum-flow-event", "--type", "shadow_read", "--data", JSON.stringify(data)]);
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "", `shadow_read warned: ${r.stderr}`);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, before + 1, "one line");
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.type, "shadow_read");
+    assert.equal(got.issue ?? null, null);
+    assert.deepEqual(got.data, data);
+    assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+    assert.deepEqual(reader.validateStrict("shadow_read", 1, got.data), []);
+  }
+});
+
 test("the operator's hand-recorded rescue, as the playbook writes it, reads as a person intervention", () => {
   const line = log(["callum-flow-event", "intervention", "--issue", "571", "--note", "who=person cause=rescue reason=patched%20the%20trust%20file"]);
   assert.deepEqual(ev.parseIntervention({ ...line, run: undefined }), {

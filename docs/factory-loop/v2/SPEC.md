@@ -306,6 +306,20 @@ type IssueRecord = {
   carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` parses it with
   `events.ts`. A step in flight is not rebuilt: S2 starts the same attempt again, and an
   agent step first looks for an answer already recorded for its key (10.8).
+- **Source switch.** The setting `eventsSource` (`old`, `new`, `shadow`; default `shadow`; next pass; an
+  invalid value is a config problem and reads `old`) picks where the rebuild reads
+  (`hooks/v2/sources-records.ts`). `old` reads `factory.events` as above. `new` reads this device's and
+  repo's `transition` events from `factory.event_store` (`dev-query --factory --csv`, `NEW_REBUILD_SQL`),
+  each row through the shared reader (`event-reader.ts`) into the same record: a row of an unknown type or
+  version, or whose payload the reader refuses, fails the whole read (the `store` source is not ok, its
+  error names the event_id and the source `new`), a missing factory URL (`dev-query` exit 77, 78) too, and
+  no row is skipped. `shadow` reads both stores once per load and then at most hourly, whether or not the
+  store holds records, rebuilds records from each, compares them per issue and field with both sides cut
+  600 s back, and writes one `shadow_read` event (`reader` `loop-records`, `tool` `factory-loop`; rule H1,
+  key `records-shadow:<time>`). The records still come from the store, else the old read; a failing new
+  read never fails the pass. A compare with differences tells the owner once per distinct set of issues
+  (`tell(records-shadow)`, key `tell:records-shadow:<issues>`; it names the issues, the first difference
+  and the way back, `/factory config set eventsSource old`).
 
 ### 3.4 Labels
 
@@ -1176,7 +1190,9 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   stuck issues (query 6). Lead time (query 1) has no `run` stage for v2 issues; its v2 twin uses
   the first `transition` to reviewing.
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
-  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`.
+  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`. Under
+  `eventsSource` `new` it reads them from the new store instead, as `transition.v1` data through the
+  shared reader, and under `shadow` (the default) it reads both and writes a `shadow_read` (3.3).
 
 ## 8. Design briefs and review
 
@@ -2912,7 +2928,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks` and `reopened`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened` and `records-shadow`) go out before any other
 wake, and the title counts the open ones.
 
 Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act

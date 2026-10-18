@@ -334,6 +334,9 @@ export type Config = {
   // or in text alone; text stays every channel's fallback. The workspace file's own
   // `answerChannel` overrides the repo's
   answerChannel: AnswerChannel
+  // where the record rebuild reads (v2 SPEC 3.3): the old store (old), the new one (new), or both,
+  // compared, with the records from the old (shadow, the default)
+  eventsSource: EventsSource
   // --- v2 (v2 SPEC 2.3, appendix A) ---
   // the step timeouts and the waiting states' tell periods (v2 SPEC 4.4)
   stateTimeoutMs: StateTimeouts
@@ -365,6 +368,7 @@ export type Config = {
 }
 
 export type AnswerChannel = 'script' | 'tool' | 'text'
+export type EventsSource = 'old' | 'new' | 'shadow'
 
 export type WakeKind = 'judge' | 'task' | 'tell'
 

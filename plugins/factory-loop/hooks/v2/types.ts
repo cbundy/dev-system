@@ -11,6 +11,7 @@ import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
+import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
 
@@ -386,7 +387,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 
 // The notice (TELL) kinds v2 adds; the first seven are owner items, which go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -474,6 +475,8 @@ export type V2State = {
   checkoutBase: CheckoutBase | null
   // the new log's transitions; null when dual write is off or not read (act mode, planner v2 only)
   dualWrite: DualWrite | null
+  // the last compare of the record rebuild's two stores (sources-records.ts), as of the pass that made it; absent: none made this load
+  recordsShadow?: RecordsShadow
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead

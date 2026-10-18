@@ -2,7 +2,7 @@
 // state. The repo-local .claude/factory-loop.json overrides any setting; the plugin ships no
 // repo-specific values. Types only are imported, so the pure planner and the replay can use this
 // too, and v2's vocabulary (v2/types.ts), which holds constants alone.
-import type { ActionKind, AgentType, AnswerChannel, Config, Control, Ms } from './types'
+import type { ActionKind, AgentType, AnswerChannel, Config, Control, EventsSource, Ms } from './types'
 import { MODELS, V2_ACTION_KINDS } from './v2/types'
 
 const MIN = 60_000
@@ -86,6 +86,7 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
+  eventsSource: 'shadow',
   // v2 (v2 SPEC appendix A)
   stateTimeoutMs: {
     design: 45 * MIN,
@@ -147,6 +148,7 @@ export function resolveGateConcurrency(value: 'auto' | number, cpus: number): nu
 }
 
 export const ANSWER_CHANNELS: readonly AnswerChannel[] = ['script', 'tool', 'text']
+export const EVENTS_SOURCES: readonly EventsSource[] = ['old', 'new', 'shadow']
 
 export const EMPTY_CONTROL: Control = {
   paused: [],
@@ -317,6 +319,11 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
         const channel = ANSWER_CHANNELS.find(c => c === value)
         if (channel !== undefined) out[key] = channel
         else bad(raw, value, 'script, tool or text')
+      } else if (key === 'eventsSource') {
+        // a value the loop cannot read reads as the old store: the way back
+        const source = EVENTS_SOURCES.find(c => c === value)
+        out[key] = source ?? 'old'
+        if (source === undefined) bad(raw, value, 'old, new or shadow (read as old)')
       } else if (key === 'trackerTitle') {
         if (typeof value === 'string' && compiles(value)) out[key] = value
         else bad(raw, value, 'a regular expression')

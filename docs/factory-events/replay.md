@@ -115,11 +115,21 @@ shadow comparison leaves out is listed in [factory-state.md](../factory-state.md
 `scripts/factory-events-replay/readers/heartbeat-state.js`; `new` reads this device's local new log under a 500 ms
 deadline, and a shadow record is kept for every difference or error but an agreeing run only once per quiet period).
 
+The factory loop ([#976](https://github.com/cbundy/dev-system/issues/976)) is the other exception: its switch is the
+loop setting `eventsSource` (`old|new|shadow`, default `shadow`, `/factory config set eventsSource old` the way
+back; an invalid value is a config problem and reads old), taken on the next pass. It picks where the record
+rebuild reads (`hooks/v2/record.ts`, `hooks/v2/sources-records.ts`): `old` reads `factory.events`, `new` reads
+`factory.event_store` with `dev-query --factory` and fails the whole read, naming the event_id, on a row it cannot
+read, and `shadow` reads both once per load and then hourly, compares the two rebuilds per issue and field with both
+sides cut 600 s back, answers from old, and writes one `shadow_read` event (`reader` `loop-records`, `tool`
+`factory-loop`). A compare with differences also tells the owner once per distinct set of issues.
+
 Switched readers and their known differences from `old` (dropped before comparing, in `normalize`):
 
 | Tool | Reader | Known differences |
 |---|---|---|
 | `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
+| the factory loop's record rebuild ([#976](https://github.com/cbundy/dev-system/issues/976)) | [`readers/loop-records.js`](../../scripts/factory-events-replay/readers/loop-records.js) | none known: it runs the plugin's own `record.ts` over both stores, per repo and device |
 | `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900)) | [`readers/heartbeat-state.js`](../../scripts/factory-events-replay/readers/heartbeat-state.js) | the per-entry `state` (old state names against new types); the v1-only events the new log lacks (`run_started`, `superseded`, `owner_wait`, `briefed`, `design_routed` and the replayed run facts `failed`, `head_mismatch`, `conflict`, `ci_stalled`); history from before the device's dual write; a window that ends in the few seconds between a transition into building, fixing or merge-queue and the v1 line the loop writes after it (`new` derives `delegated`, `fix_requested` and `merge_ready` from the transition) |
 
 ## Defaults moved to new

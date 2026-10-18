@@ -110,7 +110,23 @@ export type GateRunData = {
 }
 export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent
+// One shadow compare (shadow_read.v1): written in the new format alone, for no issue, by
+// `callum-flow-event --type shadow_read --data <json>`; sources-records.ts builds the data.
+export type ShadowReadData = {
+  reader: string
+  tool: string
+  compared: number
+  differences: number
+  live_differences: number
+  diff_keys: string[]
+  old_ok: boolean
+  new_ok: boolean
+  settle_seconds: number
+  detail: string | null
+}
+export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -253,6 +269,8 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
     case 'gate_run':
       return { issue: e.issue, branch: null, pr: null, head: e.data.head }
+    case 'shadow_read':
+      return { issue: null, branch: null, pr: null, head: null }
     default:
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: 'head' in e ? e.head : null }
   }
@@ -355,6 +373,7 @@ export function eventNote(e: V2Event): string {
       return interventionNote(e)
     case 'reclaimed':
       return releaseNote(e)
+    case 'shadow_read':
     case 'gate_run':
       // no old-format note: the payload is its own JSON (eventArgv)
       return JSON.stringify(e.data)
@@ -370,6 +389,7 @@ export function eventNote(e: V2Event): string {
 // With opts.target 'new' it ends with --new-only: the line goes to the new log only (H1's backfill).
 export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   // a gate run is a new-format event: its payload is the schema's data, not an old note
+  if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]
