@@ -22,7 +22,8 @@ const lifted = new Set();
 for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
-const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop"]);
+const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds"]);
+const BOOLS = new Set(["old_ok", "new_ok"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at"]);
 const JSONS = new Set(["cut_at_stop_keys"]);
 
@@ -36,7 +37,7 @@ test("event_log has the envelope columns, device_seq and each x-column field", o
   assert.equal(new Set(have).size, have.length);
   const types = Object.fromEntries(db.query("SELECT column_name || ' ' || data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log'").split("\n").map((l) => [l.slice(0, l.indexOf(" ")), l.slice(l.indexOf(" ") + 1)]));
   for (const col of lifted) {
-    const type = JSONS.has(col) ? "jsonb" : INTS.has(col) ? "integer" : TIMES.has(col) ? "timestamp with time zone" : "text";
+    const type = JSONS.has(col) ? "jsonb" : BOOLS.has(col) ? "boolean" : INTS.has(col) ? "integer" : TIMES.has(col) ? "timestamp with time zone" : "text";
     assert.equal(types[col], type, `event_log.${col}`);
   }
   assert.equal(types.ts, "timestamp with time zone");
