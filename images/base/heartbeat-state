@@ -41,7 +41,7 @@
 // never fails the beat.
 //
 // Source switch (cbundy/dev-system#900, docs/factory-events/replay.md): which log decides the
-// in-flight issues. CALLUM_FLOW_HEARTBEAT_STATE_SOURCE or --source, old|new|shadow, default shadow.
+// in-flight issues. CALLUM_FLOW_HEARTBEAT_STATE_SOURCE or --source, old|new|shadow, default new (old is the way back).
 //   old     the old lines in $CALLUM_EVENTS_DIR/*.jsonl, as above.
 //   new     this device's new events in $CALLUM_EVENTS_DIR/factory/*.jsonl (regular files only, so
 //           .shadow/ and .pushed/ are skipped), by the same rule written for the new types: an issue is
@@ -402,7 +402,7 @@ async function main() {
   const dev = device();
   const dir = process.env.CALLUM_EVENTS_DIR || '/persist/events';
   let source = 'old';
-  try { source = resolveSource('heartbeat-state', process.argv.slice(2), process.env, 'shadow').source; } catch (e) { warn(`${e.message}: reading old`); }
+  try { source = resolveSource('heartbeat-state', process.argv.slice(2), process.env, 'new').source; } catch (e) { warn(`${e.message}: reading old`); }
   const runs = readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes');
   const empty = { issues: [], runIssue: new Map(), superseded: new Set() };
   const derivedOld = () => {
