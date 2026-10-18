@@ -76,12 +76,17 @@ const RX = (re) => (v) => typeof v === "string" && re.test(v);
 const L = (k) => (v) => Array.isArray(v) && v.every(k);
 const L1 = (k) => (v) => L(k)(v) && v.length > 0;
 const opt = (k) => Object.assign((v) => k(v), { optional: true });
-const COND = (v) =>
-  v !== null &&
-  typeof v === "object" &&
-  ((Object.keys(v).length === 2 && v.kind === "issue-closed" && I(1)(v.issue)) ||
-    (Object.keys(v).length === 2 && v.kind === "pr-merged" && I(1)(v.pr)) ||
-    (Object.keys(v).length === 2 && v.kind === "tag-contains" && HEX(v.sha)));
+// A condition: kind and its argument, plus an optional lower-case repo on issue-closed and tag-contains.
+const REPO = RX(/^[a-z0-9._-]+\/[a-z0-9._-]+$/);
+const COND = (v) => {
+  if (v === null || typeof v !== "object") return false;
+  const n = Object.keys(v).length - ("repo" in v ? 1 : 0);
+  if ("repo" in v && !REPO(v.repo)) return false;
+  if (n !== 2) return false;
+  if (v.kind === "issue-closed") return I(1)(v.issue);
+  if (v.kind === "pr-merged") return I(1)(v.pr) && !("repo" in v);
+  return v.kind === "tag-contains" && HEX(v.sha);
+};
 const WAIT = (v) => Array.isArray(v) && v.length >= 1 && v.length <= 8 && v.every(COND);
 const HEX = RX(/^[0-9a-f]{7,40}$/);
 const ISO = RX(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
@@ -262,7 +267,8 @@ function tList(t, k) {
   return v === "none" || v === "" ? [] : v.split(",").map(dec);
 }
 
-// The wait list: `issue:<n>`, `pr:<n>`, `tag:<sha>`, comma-joined; `none` is null; absent is undefined.
+// The wait list: `issue:<n>`, `pr:<n>`, `tag:<sha>`, comma-joined, plus the long forms
+// `issue:<owner>/<name>#<n>` and `tag:<owner>/<name>@<sha>` (lower-case repo); `none` is null; absent is undefined.
 function tWait(t) {
   const v = t.get("wait");
   if (v === undefined) return undefined;
@@ -273,13 +279,19 @@ function tWait(t) {
     const i = item.indexOf(":");
     const prefix = i < 0 ? item : item.slice(0, i);
     const arg = i < 0 ? "" : item.slice(i + 1);
-    if (prefix === "issue" || prefix === "pr") {
+    if (prefix === "issue") {
+      const m = /^(?:([a-z0-9._-]+\/[a-z0-9._-]+)#)?([1-9][0-9]*)$/.exec(arg);
+      if (m === null) miss(`bad wait=: ${JSON.stringify(item)}`);
+      return m[1] === undefined ? { kind: "issue-closed", issue: Number(m[2]) } : { kind: "issue-closed", issue: Number(m[2]), repo: m[1] };
+    }
+    if (prefix === "pr") {
       if (!/^[1-9][0-9]*$/.test(arg)) miss(`bad wait=: ${JSON.stringify(item)}`);
-      return prefix === "issue" ? { kind: "issue-closed", issue: Number(arg) } : { kind: "pr-merged", pr: Number(arg) };
+      return { kind: "pr-merged", pr: Number(arg) };
     }
     if (prefix === "tag") {
-      if (!/^[0-9a-f]{7,40}$/.test(arg)) miss(`bad wait=: ${JSON.stringify(item)}`);
-      return { kind: "tag-contains", sha: arg };
+      const m = /^(?:([a-z0-9._-]+\/[a-z0-9._-]+)@)?([0-9a-f]{7,40})$/.exec(arg);
+      if (m === null) miss(`bad wait=: ${JSON.stringify(item)}`);
+      return m[1] === undefined ? { kind: "tag-contains", sha: m[2] } : { kind: "tag-contains", sha: m[2], repo: m[1] };
     }
     return miss(`bad wait=: ${JSON.stringify(item)}`);
   });

@@ -171,9 +171,12 @@ function waitOf(raw: unknown): IssueRecord['wait'] | undefined {
   const out: NonNullable<IssueRecord['wait']> = []
   for (const c of raw) {
     const o = c !== null && typeof c === 'object' ? (c as Record<string, unknown>) : {}
-    if (o.kind === 'issue-closed' && isInt(o.issue, 1)) out.push({ kind: 'issue-closed', issue: o.issue })
-    else if (o.kind === 'pr-merged' && isInt(o.pr, 1)) out.push({ kind: 'pr-merged', pr: o.pr })
-    else if (o.kind === 'tag-contains' && typeof o.sha === 'string' && /^[0-9a-f]{7,40}$/.test(o.sha)) out.push({ kind: 'tag-contains', sha: o.sha })
+    const repo = o.repo === undefined || o.repo === null ? undefined : typeof o.repo === 'string' && /^[a-z0-9._-]+\/[a-z0-9._-]+$/.test(o.repo) ? o.repo : null
+    if (repo === null) return undefined
+    const r = repo === undefined ? {} : { repo }
+    if (o.kind === 'issue-closed' && isInt(o.issue, 1)) out.push({ kind: 'issue-closed', issue: o.issue, ...r })
+    else if (o.kind === 'pr-merged' && isInt(o.pr, 1) && repo === undefined) out.push({ kind: 'pr-merged', pr: o.pr })
+    else if (o.kind === 'tag-contains' && typeof o.sha === 'string' && /^[0-9a-f]{7,40}$/.test(o.sha)) out.push({ kind: 'tag-contains', sha: o.sha, ...r })
     else return undefined
   }
   return out

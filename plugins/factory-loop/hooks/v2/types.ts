@@ -65,8 +65,9 @@ export const STEP_AGENT: Readonly<Record<AgentStep, `factory-loop:${string}`>> =
 }
 
 // One condition a waiting record waits on (3.2, 8.7): an issue closed, a PR merged or a release
-// tag that carries a commit. A record waits until every one holds.
-export type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string }
+// tag that carries a commit. A record waits until every one holds. `repo` (owner/name, lower-case) names
+// another repository for issue-closed and tag-contains; absent means the loop's own repo.
+export type WaitCondition = { kind: 'issue-closed'; issue: number; repo?: string } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string; repo?: string }
 
 // The record (3.2). The slot is not a field: a record holds the slot whose lease holder is
 // `factory-loop:<N>:<life>` (10.1).
