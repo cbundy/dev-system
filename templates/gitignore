@@ -31,9 +31,10 @@
 #   .callum-dev/baseline/   pristine template copies
 #     Both are what make `callum-dev update` a real 3-way merge rather than an
 #     overwrite. Ignoring them breaks updates for every fresh clone (README.md).
-#   .no-mistakes.yaml       this repo's pipeline config, which lives right next to
-#     the ignored .no-mistakes/ state directory. This is why the rule above ends
-#     in a slash: a bare `.no-mistakes` would be one typo from catching the config.
+#   .claude/factory-loop.json   the factory loop's gate commands.
+#   .no-mistakes.yaml       if this repo still has one: its pipeline config, which lives
+#     right next to the ignored .no-mistakes/ state directory. This is why the rule above
+#     ends in a slash: a bare `.no-mistakes` would be one typo from catching the config.
 
 # Node / TypeScript.
 node_modules/

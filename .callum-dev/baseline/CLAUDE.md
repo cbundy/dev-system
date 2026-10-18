@@ -85,9 +85,9 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
   to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
   answer and the loop does it.
 - **The manual path**, for a person or an interactive session. Code changes go in a worktree
-  (the mechanism is in "Implementation sub-agents" below). A sub-agent delegated an issue follows
-  the `implement-issue` skill (worktree, build, verify, evidence, /no-mistakes pipeline, handoff),
-  and an interactive orchestrator follows the `issue-orchestrator` skill.
+  (the mechanism is in "Implementation sub-agents" below). Run every canonical command once
+  before the PR opens: they are the same commands CI and `.claude/factory-loop.json`
+  `gateCommands` run.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->
@@ -102,8 +102,9 @@ has passed. The single-entrypoint rule is for the gate: below, also name how to 
 suite while debugging (ideally the gate entrypoint with a filter), then run the gate once at the end.
 
 <REPLACE: list this repo's canonical commands, one per gate, e.g. lint / typecheck / test /
-e2e / a combined check command. Use exactly the commands in `.no-mistakes.yaml` `commands`,
-minus its install step. Each must be non-interactive, exit non-zero on failure, print at
+e2e / a combined check command. Use exactly the commands in `.claude/factory-loop.json`
+`gateCommands` and `.github/workflows/ci.yml`, minus any install step. Each must be
+non-interactive, exit non-zero on failure, print at
 most a one-line summary on success, and print only failing test names or file:line plus
 the error on failure, with no per-test pass lines, progress bars or coverage tables (the
 dev-system onboarding doc, "Settle the commands first"). State which command CI calls for
@@ -114,10 +115,8 @@ adding a bespoke CI step.>
 ## Implementation sub-agents (manual path)
 
 Any agent making code changes - solo or delegated - works inside a <REPLACE: this repo's
-worktree/isolation mechanism, e.g. a treehouse worktree>. Sub-agents delegated an issue
-follow the `implement-issue` skill for the full working procedure (worktree, build, verify,
-evidence, /no-mistakes pipeline, handoff). Orchestration is driven by the
-`issue-orchestrator` skill.
+worktree/isolation mechanism, e.g. a treehouse worktree>, then runs the gate commands
+(`.claude/factory-loop.json` `gateCommands`, the same commands CI runs) before the PR opens.
 
 <REPLACE: note any repo-specific variations to the above (e.g. extra build/boot steps
 before an agent can safely run this repo's app).>

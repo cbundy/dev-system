@@ -3,7 +3,7 @@ name: onboard
 description: >-
   Make the repo (or empty folder) in the current directory a dev-system repo:
   install the callum-dev CLI, scaffold and fill the synced config (CLAUDE.md,
-  .no-mistakes.yaml, devcontainer, .gitignore, .claude/settings.json), wire
+  .claude/factory-loop.json, ci.yml, devcontainer, .gitignore, .claude/settings.json), wire
   the repo's real lint and test commands into one entrypoint per gate, verify,
   and tell the user how to run it on the desktop and on Coder. Use when the user
   asks to onboard this repo, set it up for dev-system or callum-dev, or

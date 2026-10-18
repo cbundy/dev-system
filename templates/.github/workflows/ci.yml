@@ -1,0 +1,21 @@
+# CI for this repo. Repo-owned: dev-system scaffolds it once (`callum-dev init`) and never syncs it.
+# The lint and test commands below must match `gateCommands` in .claude/factory-loop.json and the
+# "Canonical commands" section of CLAUDE.md: the factory loop's gate and CI run the same commands.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main] # set to this repo's default branch
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and install
+        run: "<REPLACE: set up this repo's toolchain and install dependencies>"
+      - name: Lint
+        run: "<REPLACE: lint command>"
+      - name: Test
+        run: "<REPLACE: test command>"

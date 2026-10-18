@@ -3,9 +3,9 @@
   "baseline": ".callum-dev/baseline",
   "devcontainer": "base-image",
   "files": [
-    ".no-mistakes.yaml",
-    ".github/pull_request_template.md",
     "treehouse.toml",
+    ".claude/factory-loop.json",
+    ".github/workflows/ci.yml",
     "CLAUDE.md",
     ".claude/settings.json",
     ".devcontainer/devcontainer.json",
