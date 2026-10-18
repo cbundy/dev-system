@@ -22,6 +22,7 @@ const READER = path.join(ROOT, "scripts", "factory-events-replay", "self-test-re
 const CLAIM_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "claim-events.js");
 const EVALUATE_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "evaluate.js");
 const HEARTBEAT_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "heartbeat-state.js");
+const LOOP_RECORDS_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "loop-records.js");
 const ADMIN = process.env.FACTORY_TEST_PG_ADMIN_URL;
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -276,6 +277,41 @@ test("compare: the heartbeat-state reader reports a missing merged row under its
   const r = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE], dest, old);
   assert.equal(r.status, 1, r.out + r.err);
   assert.ok(r.out.includes(`$["${device}"]`), r.out);
+});
+
+test("compare: the loop-records reader matches on the corpus, is not vacuous, and catches a change seeded in the new store", opts, async (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "l.json")], dest, old).status, 0);
+  const r = cli(["compare", "--reader", LOOP_RECORDS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /old and new match/);
+  // the corpus holds rebuilt records on both sides, one set per repo and device
+  const reader = require(LOOP_RECORDS_READER);
+  const ctx = { oldUrl: old.url, newUrl: dest.url, since: SINCE, until: null, psql: (url, sql) => psql(url, sql, { readOnly: true }) };
+  const records = await reader.old(ctx);
+  const total = Object.values(records).reduce((n, list) => n + list.length, 0);
+  assert.ok(total >= 4, `the corpus rebuilds ${total} records`);
+  assert.deepEqual(await reader.new(ctx), records);
+  // a change in the new store alone: the newest transition of an issue gets another round
+  const [id, repo, device, issue] = dest
+    .query(`SELECT event_id, repo, device, issue FROM factory.event_store WHERE type = 'transition' AND issue IS NOT NULL ORDER BY ts DESC, device_seq DESC LIMIT 1`)
+    .split("|");
+  assert.ok(id, "the corpus has a transition");
+  dest.query(`UPDATE factory.event_store SET data = jsonb_set(data, '{round}', '99') WHERE event_id = '${id}'`);
+  const changed = cli(["compare", "--reader", LOOP_RECORDS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(changed.status, 1, changed.out + changed.err);
+  assert.ok(changed.out.includes(`$["${repo} ${device}"]`), changed.out);
+  assert.match(changed.out, /round/);
+  const keys = new Set([...changed.out.matchAll(/\$\["([^"]+)"\]\[(\d+)\]/g)].map((m) => `${m[1]}#${m[2]}`));
+  assert.equal(keys.size, 1, changed.out);
+  // a row the loop's reader refuses fails the read rather than being skipped
+  dest.query(`UPDATE factory.event_store SET data = data - 'round' WHERE event_id = '${id}'`);
+  const refused = cli(["compare", "--reader", LOOP_RECORDS_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.notEqual(refused.status, 0);
+  assert.ok((refused.out + refused.err).includes(id), refused.out + refused.err);
+  assert.ok(issue);
 });
 
 test("diff: paths, missing keys, array lengths and type changes", () => {

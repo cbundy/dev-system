@@ -110,7 +110,23 @@ export type GateRunData = {
 }
 export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent
+// One shadow compare (shadow_read.v1): written in the new format alone, for no issue, by
+// `callum-flow-event --type shadow_read --data <json>`; sources-records.ts builds the data.
+export type ShadowReadData = {
+  reader: string
+  tool: string
+  compared: number
+  differences: number
+  live_differences: number
+  diff_keys: string[]
+  old_ok: boolean
+  new_ok: boolean
+  settle_seconds: number
+  detail: string | null
+}
+export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -184,10 +200,15 @@ function unlist(v: string | undefined): string[] | undefined {
   return v === NONE ? [] : v.split(',').map(dec)
 }
 
-// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined; `none` outside waiting.
+// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined, with the long forms
+// `issue:<owner>/<name>#<n>` and `tag:<owner>/<name>@<sha>` for a condition on another repo; `none` outside waiting.
 function waitToken(wait: readonly WaitCondition[] | null): string {
   if (wait == null || wait.length === 0) return NONE
-  return wait.map(c => (c.kind === 'issue-closed' ? `issue:${c.issue}` : c.kind === 'pr-merged' ? `pr:${c.pr}` : `tag:${c.sha}`)).join(',')
+  return wait
+    .map(c =>
+      c.kind === 'issue-closed' ? (c.repo === undefined ? `issue:${c.issue}` : `issue:${c.repo}#${c.issue}`) : c.kind === 'pr-merged' ? `pr:${c.pr}` : c.repo === undefined ? `tag:${c.sha}` : `tag:${c.repo}@${c.sha}`,
+    )
+    .join(',')
 }
 
 // unwait: the conditions of a wait token; null for `none` or an absent token (a note from before
@@ -196,9 +217,15 @@ function unwait(v: string | undefined): WaitCondition[] | null | undefined {
   if (v === undefined || v === NONE) return null
   const out: WaitCondition[] = []
   for (const item of v.split(',')) {
-    const t = /^tag:([0-9a-f]{7,40})$/.exec(item)
+    const t = /^tag:(?:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)@)?([0-9a-f]{7,40})$/.exec(item)
     if (t !== null) {
-      out.push({ kind: 'tag-contains', sha: t[1] as string })
+      if (t[1] !== undefined && t[1] !== t[1].toLowerCase()) return undefined
+      out.push(t[1] === undefined ? { kind: 'tag-contains', sha: t[2] as string } : { kind: 'tag-contains', sha: t[2] as string, repo: t[1] })
+      continue
+    }
+    const l = /^issue:([a-z0-9._-]+\/[a-z0-9._-]+)#([1-9]\d*)$/.exec(item)
+    if (l !== null) {
+      out.push({ kind: 'issue-closed', issue: Number(l[2]), repo: l[1] as string })
       continue
     }
     const m = /^(issue|pr):([1-9]\d*)$/.exec(item)
@@ -242,6 +269,8 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
     case 'gate_run':
       return { issue: e.issue, branch: null, pr: null, head: e.data.head }
+    case 'shadow_read':
+      return { issue: null, branch: null, pr: null, head: null }
     default:
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: 'head' in e ? e.head : null }
   }
@@ -344,6 +373,7 @@ export function eventNote(e: V2Event): string {
       return interventionNote(e)
     case 'reclaimed':
       return releaseNote(e)
+    case 'shadow_read':
     case 'gate_run':
       // no old-format note: the payload is its own JSON (eventArgv)
       return JSON.stringify(e.data)
@@ -359,6 +389,7 @@ export function eventNote(e: V2Event): string {
 // With opts.target 'new' it ends with --new-only: the line goes to the new log only (H1's backfill).
 export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   // a gate run is a new-format event: its payload is the schema's data, not an old note
+  if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]

@@ -61,6 +61,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   trace: 'next-pass',
   traceMaxBytes: 'next-pass',
   answerChannel: 'next-pass',
+  eventsSource: 'next-pass',
   stateTimeoutMs: 'next-pass',
   ciStartMs: 'next-pass',
   ciRunMs: 'next-pass',

@@ -301,6 +301,18 @@ WHERE type = 'finding_handled'
 GROUP BY repo;
 ```
 
+### Fix rounds with no new head
+
+A fix round can end with no new head because a finding was fixed outside the branch (transition row
+T17, via `unchanged`). This counts them per repo and week.
+
+```sql
+SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS unchanged_fixes
+FROM factory.event_log
+WHERE type = 'transition' AND table_row = 'T17'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ## 4. Merges per device
 
 ```sql
@@ -437,7 +449,9 @@ sides cut at the settle time, `live_differences` the same on everything read (pu
 and `old_ok` / `new_ok` say whether that side's central read succeeded. A retried write can repeat
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
-`factory.event_store`. It takes `-v repo=... -v since=...`. The producer is the claim tools'
+`factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
+loop setting `eventsSource` `shadow`, the default, once per load and then at most hourly; `differences` counts issues whose
+rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
@@ -584,6 +598,36 @@ Sum the columns for totals. `sum(dispatcher_bound_other_idle) / sum(dispatcher_b
 dispatcher-bound time with another device idle. The B-or-gate call needs the pipeline-bound seconds as
 well, so read it from `callum-flow-evaluate`'s `waiting` section, whose `decision` is `B` when more
 than 50% of the wait was dispatcher-bound with another device idle and `gate` otherwise.
+
+## 7a. How waits end
+
+A design wait (v2 SPEC 8.7) is the transition to `waiting` (T16). The answer script refuses a wait
+that could never clear (a commit of another repo, a repo with no release, an issue or PR that does
+not exist; #980), so after it ships the share of waits that never end should drop. This lists each
+wait with the transition that ended it and how long it lasted: `ended_via` is the next transition's
+`via` (the loop's own check clearing it, a tell, the owner's resume), and a null `ended_at` is a
+wait still open. Time is by `seq_at`; a retried write counts once. It takes `-v repo=... -v since=...`.
+
+```sql
+-- per wait: when it began, how it ended and how long it lasted
+WITH tr AS (       -- one row per (issue, life, seq), with the issue's next transition
+  SELECT repo, issue, life, seq, to_state, via, seq_at,
+         lead(seq_at) OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_at,
+         lead(via)    OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_via
+  FROM (SELECT repo, issue, life, seq, to_state, via, seq_at,
+          row_number() OVER (PARTITION BY repo, issue, life, seq ORDER BY ts, device, device_seq) AS n
+        FROM factory.event_log WHERE type = 'transition' AND issue IS NOT NULL AND repo = :'repo') x
+  WHERE n = 1
+)
+SELECT repo, issue, life, seq, seq_at AS waited_at, next_at AS ended_at, next_via AS ended_via,
+  extract(epoch FROM next_at - seq_at) AS wait_seconds
+FROM tr
+WHERE to_state = 'waiting' AND seq_at >= :'since'::timestamptz
+ORDER BY seq_at DESC;
+```
+
+Group by `ended_via` for how waits end, and count the rows with a null `ended_at` older than a day for
+waits that look stuck.
 
 ## 8. Implementer model comparison
 
@@ -1066,7 +1110,7 @@ ORDER BY device, hour;
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
-kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. Per tool since a given time:
+kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`). Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
 

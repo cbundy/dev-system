@@ -123,7 +123,7 @@ export function host(on: On, opts: HostOptions = {}) {
   // an empty value leaves the variable unset
   const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', ...opts.env }).filter(([, v]) => v !== '')
   mock.env(on, Object.fromEntries(env))
-  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify({ ...opts.config })], ['/proc/self/stat', PROC_STAT]])
+  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify({ eventsSource: 'old', ...opts.config })], ['/proc/self/stat', PROC_STAT]])
   for (const [path, body] of Object.entries(opts.files ?? {})) files.set(path, body)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   const seen: Seen[] = []

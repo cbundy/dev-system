@@ -165,7 +165,7 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
     }
     expect(V2_ACTION_KINDS).toHaveLength(13)
     expect(V2_RULES).toHaveLength(21)
-    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened'])
+    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow'])
   })
 
   test('the eight labels, one per state but closed, with appendix D\'s colours', () => {
@@ -205,6 +205,18 @@ describe('the store\'s records and heads (v2 SPEC 3.3, 2.4)', () => {
     const { lives: _lives, ...uncounted } = record({ lives: 2 })
     expect(recordOf(uncounted)).toEqual(record({ lives: 1 }))
     expect(recordOf({ ...record(), lives: 0 })).toBeNull()
+  })
+
+  test('a stored wait reads back with its repo on issue-closed and tag-contains; without it as before; a repo on pr-merged or a bad repo makes the record unreadable', () => {
+    const w = (wait: unknown[]) => ({ ...record({ state: 'waiting', step: null, resumeTo: 'designing' }), wait })
+    const withRepo = [{ kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }]
+    expect(recordOf(w(withRepo))?.wait).toEqual(withRepo)
+    const plain = [{ kind: 'issue-closed', issue: 5 }, { kind: 'pr-merged', pr: 6 }]
+    expect(recordOf(w(plain))?.wait).toEqual(plain)
+    expect(recordOf(w([{ kind: 'issue-closed', issue: 5, repo: null }]))?.wait).toEqual([{ kind: 'issue-closed', issue: 5 }])
+    for (const bad of [{ kind: 'pr-merged', pr: 6, repo: 'o/n' }, { kind: 'issue-closed', issue: 5, repo: 'Owner/n' }, { kind: 'issue-closed', issue: 5, repo: 'x' }, { kind: 'tag-contains', sha: '35bb655', repo: 3 }]) {
+      expect(recordOf(w([bad]))).toBeNull()
+    }
   })
 
   test('a closed record goes from the store 7 days after it closed; an open one stays, whatever its age', () => {

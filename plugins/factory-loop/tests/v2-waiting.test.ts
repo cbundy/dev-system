@@ -6,7 +6,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { SourceCtx } from '../hooks/v2/observe'
-import { heldOf, readWaits } from '../hooks/v2/sources-waits'
+import { heldOf, readWaits, waitKey } from '../hooks/v2/sources-waits'
 import { handshakePath } from '../hooks/v2/workspace'
 import { entryKey, stepKey } from '../hooks/v2/keys'
 import { recordsToStore } from '../hooks/v2/observe'
@@ -291,6 +291,16 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       expect({ bad, issue: heldOf(issue(57), bad) }).toEqual({ bad, issue: null })
     }
     expect(heldOf(pr(812), JSON.stringify({ state: 'weird' }))).toBeNull()
+  })
+
+  test('waitKey: the long forms carry the repo; a condition with repo is never read against the loop\'s own repo and stays open, while a sibling without repo is read', async () => {
+    const fi: WaitCondition = { kind: 'issue-closed', issue: 57, repo: 'o/n' }
+    const ft: WaitCondition = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
+    expect([waitKey(issue(57)), waitKey(fi), waitKey(pr(8)), waitKey({ kind: 'tag-contains', sha: '35bb655' }), waitKey(ft)]).toEqual(['issue:57', 'issue:o/n#57', 'pr:8', 'tag:35bb655', 'tag:o/n@35bb655'])
+    const c = ctx([waiting(1, [fi, ft, issue(57)])], { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
+    const out = await readWaits(c.c, {}, EVERY)
+    expect(c.ran).toEqual(['callum-flow-issue-read --json 57'])
+    expect(out).toEqual({ waits: { 'issue:57': { at: NOW, held: true } }, failed: [] })
   })
 
   test('each distinct condition of the waiting records is read once with no model call; other states\' records are not read; a read that shows it held is kept and not read again', async () => {

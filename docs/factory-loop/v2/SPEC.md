@@ -245,7 +245,7 @@ type IssueRecord = {
   fixes: number                // entries to fixing in this life, at most fixCap
   round: number                // entries to reviewing in this life
   question: string | null      // parked: the question for the owner
-  wait: WaitCondition[] | null // waiting: 1 to 8 conditions, every one of which must hold; null in any other state
+  wait: WaitCondition[] | null // waiting: 1 to 8 conditions (issue-closed and tag-contains may carry an optional repo), every one of which must hold; null in any other state
   why: ClosedWhy | null        // closed: why
   notes: string[]              // owner, triage and decline notes for the step of this seq
   prClosedAt: string | null    // GitHub's closedAt of the newest hand close the record has handled (E4, P1)
@@ -266,7 +266,9 @@ type IssueRecord = {
 - A record that parks from queued or waiting keeps that state's own `resumeTo`, so "resumeTo same
   state" in the rows below means that target, never queued or waiting itself.
 - `wait` is set only in waiting. The transition note carries it as the token `wait=issue:57,pr:812`
-  (`issue:<n>` for an issue to be closed, `pr:<n>` for a PR to be merged, comma-joined) and
+  (`issue:<n>` for an issue to be closed, `pr:<n>` for a PR to be merged, `tag:<sha>` for a release
+  tag that carries a commit, comma-joined; an issue or tag condition on another repo takes the long
+  form `issue:<owner>/<name>#<n>` or `tag:<owner>/<name>@<sha>`, repo lower-case) and
   `wait=none` in any other state; `parseTransition` rebuilds `wait` from it, and a note without the
   token (from before it) reads as null.
 
@@ -304,6 +306,20 @@ type IssueRecord = {
   carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` parses it with
   `events.ts`. A step in flight is not rebuilt: S2 starts the same attempt again, and an
   agent step first looks for an answer already recorded for its key (10.8).
+- **Source switch.** The setting `eventsSource` (`old`, `new`, `shadow`; default `shadow`; next pass; an
+  invalid value is a config problem and reads `old`) picks where the rebuild reads
+  (`hooks/v2/sources-records.ts`). `old` reads `factory.events` as above. `new` reads this device's and
+  repo's `transition` events from `factory.event_store` (`dev-query --factory --csv`, `NEW_REBUILD_SQL`),
+  each row through the shared reader (`event-reader.ts`) into the same record: a row of an unknown type or
+  version, or whose payload the reader refuses, fails the whole read (the `store` source is not ok, its
+  error names the event_id and the source `new`), a missing factory URL (`dev-query` exit 77, 78) too, and
+  no row is skipped. `shadow` reads both stores once per load and then at most hourly, whether or not the
+  store holds records, rebuilds records from each, compares them per issue and field with both sides cut
+  600 s back, and writes one `shadow_read` event (`reader` `loop-records`, `tool` `factory-loop`; rule H1,
+  key `records-shadow:<time>`). The records still come from the store, else the old read; a failing new
+  read never fails the pass. A compare with differences tells the owner once per distinct set of issues
+  (`tell(records-shadow)`, key `tell:records-shadow:<issues>`; it names the issues, the first difference
+  and the way back, `/factory config set eventsSource old`).
 
 ### 3.4 Labels
 
@@ -476,7 +492,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 | designing | `design` | the designer agent in the slot, then the loop posts the brief or creates the children (8.7) | reader | a brief, posted | a question; a wait on conditions (`wait`); or a split, its children created | the generic agent unknown (below) |
 | building | `build` | the builder agent in the slot | writer | a valid answer, and origin's branch, read directly, has commits beyond the base at or past the answered head | the answer says it cannot (with a reason); or origin's branch has no commit beyond the base (`no-commit`) | the generic agent unknown, or the direct read of origin failed |
 | reviewing | `review` | `pr` ensure (8.1), then the reviewer agent and CI on the head (8.3, 8.5) | reader | the reviewer approved the head's patch in this round, every check on the head passed or was skipped, and the PR does not conflict | the reviewer asked for changes; a check failed after its one re-run; the PR conflicts (`dirty`), which ends the step at once | the reviewer's generic agent unknown; a GitHub wait past its bound (4.4) |
-| fixing | `fix` | the fixer agent in the slot | writer | a new head on origin's branch, read directly | every finding declined with reasons, and no new head | the generic agent unknown, or the direct read of origin failed |
+| fixing | `fix` | the fixer agent in the slot | writer | a new head on origin's branch, read directly | every finding declined with reasons, and no new head (`declined`); or nothing pushed and a finding fixed outside the branch, such as on the PR description or evidence (`unchanged`) | the generic agent unknown, or the direct read of origin failed |
 | merge-queue, the head | `queue` | Q1 and Q2 (9) | - | the PR merged at a head that a `queue-merge` entry of this life names | `conflict`, `ci-red` (a failed check after its one re-run), `patch` (the head's patch is not `approvedPatch`), `policy` (9.3) | a Q1 or Q2 CLI failure; a guard FAIL of class `read`; a refusal GitHub gives no reason for; a GitHub wait past its bound |
 | a step state | `triage` | the triage agent (5.2) | reader | a valid answer: its choice is the `triage` event | - | the generic agent unknown |
 | merge-queue, not the head; parked; waiting; closed | none | - | - | - | - | - |
@@ -492,7 +508,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
 and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`). `maxTriages` is 2. "Step
-states" are designing, building, reviewing, fixing and the merge-queue head. 35 rows. The Events
+states" are designing, building, reviewing, fixing and the merge-queue head. 36 rows. The Events
 column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
 `merge_ready`) is logged by every row that enters the state, T1 included (4.5).
 
@@ -518,7 +534,8 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | T9 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; fixes < fixCap | fixing | fixes +1; pr set; findings, failed checks or the conflict to notes | transition, `fix_requested` |
 | T10 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; fixes = fixCap | parked | question (the fix cap, with the findings); resumeTo fixing; pr set | transition |
 | T11 | fixing | ok | - | reviewing | head set; round +1 | transition |
-| T12 | fixing | not-ok | - | reviewing | decline reasons to notes; round +1 | transition |
+| T12 | fixing | not-ok | `declined` | reviewing | decline reasons to notes; round +1 | transition |
+| T17 | fixing | not-ok | `unchanged` | reviewing | fixed and decline reasons to notes; round +1; via `unchanged` | transition |
 | T13 | merge-queue | ok | - | closed | why merged | transition |
 | T14 | merge-queue | not-ok | `patch` | reviewing | approvedPatch cleared; round +1 | transition |
 | T15 | merge-queue | not-ok | `policy` | parked | question (the guard's FAIL lines); resumeTo merge-queue | transition |
@@ -586,7 +603,7 @@ Interventions (7.2) are not listed per row. `rules-interventions.ts` derives the
 | designing | T2 | T3, T4, T16 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | building | T5 | T6, T7 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | reviewing | T8 | T9, T10 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
-| fixing | T11 | T12 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
+| fixing | T11 | T12, T17 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | merge-queue | T13 | T9, T10, T14, T15 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 | E4 | E5 | U1-U4 (a running step) or E6 (waiting) |
 | parked | E7 | E7 | E7 | E7 | E1 | E7 | P1 | E2 | E3 | E7 | E5 | E6 |
 | waiting | E7 | E7 | E7 | E7 | E1 | C1 | P1 | E2 | E3 or E7 | E4 or E7 | E5 | E6 |
@@ -1173,7 +1190,9 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   stuck issues (query 6). Lead time (query 1) has no `run` stage for v2 issues; its v2 twin uses
   the first `transition` to reviewing.
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
-  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`.
+  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`. Under
+  `eventsSource` `new` it reads them from the new store instead, as `transition.v1` data through the
+  shared reader, and under `shadow` (the default) it reads both and writes a `shadow_read` (3.3).
 
 ## 8. Design briefs and review
 
@@ -1348,6 +1367,7 @@ is a new `Reviewer` implementation and a setting, nothing more.
 - A fixer that declines every finding sends the PR back to reviewing with its reasons (T12). The
   new round's reviewer judges the declines, and a failed check gets the new round's re-run. That
   costs a round, not a fix.
+- A fixer that pushes nothing but fixed a finding outside the branch (on the PR description or evidence) answers `unchanged`; the PR goes back to reviewing with notes naming each finding (T17), and the answer's evidence is written into the PR body. A `fixed` answer whose origin head did not move stays an unknown bad-answer.
 - An owner resume resets `fixes` (P1).
 - Rounds have no cap of their own. Without outside pushes they are bounded by `fixCap` and
   `maxTriages` (property 7).
@@ -1405,6 +1425,13 @@ The designer is a reader: it writes nothing to GitHub.
   a release: whether to cut one is the judge's decision (11), so a release wait is a `tag-contains`
   wait: for example a change that ships in two releases waits until a release tag carries the
   commit its readers ship in. The transition note's `wait` token writes it as `tag:<sha>`.
+  `bin/factory-answer` also reads each condition on GitHub for the job's repo before it records the
+  wait (`hooks/v2/wait-check.mjs`, #980; all conditions at once, each `gh` call limited to 15 s): a
+  `tag-contains` sha must be a commit of the repo and the repo must have a release, an `issue-closed`
+  issue must exist, a `pr-merged` PR must exist and not be closed unmerged. A definite negative (HTTP
+  404 or 422, "release not found", an unresolvable PR) is refused like any problem, one per
+  condition; an indeterminate read (no `gh`, network, rate limit, auth, timeout) records the wait and
+  names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
   `callum-flow-issue-read --json N` shows it closed, a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
@@ -1563,6 +1590,7 @@ The owner confirmed this (section 15).
 - For a conflict, the fixer merges `origin/<default>` into the branch and resolves it. It never
   rebases or force-pushes (10.4). For red CI it gets the failed checks' names and links and reads
   the logs with `gh run view --log-failed`.
+- A finding fixed without a code change is answered `unchanged`, with no head and the evidence in the answer. A fixer never pushes an empty commit or a change made only to move the head.
 - After a fix the PR goes back through reviewing: a fix changes the patch, and approval is keyed
   by patch.
 
@@ -2639,7 +2667,9 @@ Appendix E gives what v2 makes of it (4.5).
      is in; any other path is refused before anything is written. It checks the JSON against the job's contract
      and prints every problem, exit 1; a usage error exits 2. On success it writes
      `{ v: 1, contract, answer }` atomically (a new temp file in the same directory, flushed, then
-     renamed over the answer file), prints that it is recorded, and exits 0. It runs from any
+     renamed over the answer file), prints that it is recorded, and exits 0. For a `design-v2` wait it
+     first reads the conditions on GitHub (8.7): a definite negative is refused, an indeterminate
+     read is recorded and named on stderr. It runs from any
      directory under plain node, as a CommonJS script or an ES module alike.
    - **Reading.** The loop reads the answer file at the path it issued for that step and attempt,
      and nowhere else: who answered is the path. It checks the answer again against what it knows
@@ -2898,7 +2928,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks` and `reopened`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened` and `records-shadow`) go out before any other
 wake, and the title counts the open ones.
 
 Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act

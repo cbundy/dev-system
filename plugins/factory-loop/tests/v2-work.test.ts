@@ -282,7 +282,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
     expect(problems('fix', { result: 'declined', summary: 's', findings: [] })).toEqual(['a declined fix names each finding it declines, with its reason'])
     expect(problems('fix', { result: 'declined', summary: 's', head: SHA('c'), findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'x' }] })).toEqual([
       'head must be absent or null here',
-      'findings: r2-1 is fixed, so the result is fixed, with the head you pushed',
+      'findings: r2-1 is fixed, so the result is fixed, with the head you pushed, or unchanged when you pushed nothing',
     ])
     expect(problems('fix', { result: 'fixed', summary: 's', findings: [{ id: 'r2-1', disposition: 'maybe' }, { id: 'r2-1', disposition: 'fixed', reason: 'x' }] })).toEqual([
       'head is required: the commit you pushed, 7 to 40 hex digits',
@@ -290,6 +290,18 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
       'findings[0].reason is required',
       'findings[1].id r2-1 is given twice',
     ])
+  })
+
+  test('fix: unchanged is nothing pushed with a finding fixed outside the branch', () => {
+    const un = { result: 'unchanged', summary: 's', evidence: 'the PR text', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'edited the description' }, { id: 'r2-2', disposition: 'declined', reason: 'wrong' }] }
+    expect(check('fix', un, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...un, head: null } })
+    expect(problems('fix', { ...un, head: SHA('c') })).toEqual(['head must be absent or null here'])
+    expect(problems('fix', { ...un, findings: [] })).toEqual(['an unchanged fix names each finding, with its reason'])
+    expect(problems('fix', { ...un, findings: [{ id: 'r2-1', disposition: 'declined', reason: 'x' }] })).toEqual(['findings: every finding is declined, so the result is declined'])
+    expect(problems('fix', { ...un, findings: [{ id: 'conflict', disposition: 'fixed', reason: 'x' }] })).toEqual([
+      'findings: a conflict is fixed only by a pushed merge, so the result is fixed, with the head you pushed',
+    ])
+    expect(problems('fix', un, { findings: ['r2-1', 'r2-3'] })).toEqual(['finding r2-3 has no disposition: fix it, or decline it with a reason'])
   })
 
   test('fix: the answer may give the PR\'s evidence, as a build does, fixed or declined', () => {
@@ -365,6 +377,7 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(design).toContain('conditions: 1 to 8')
     expect(design).toContain('never #300 itself')
     expect(design).toContain('a release tag that carries a commit')
+    expect(design).toContain('The answer script checks each condition on GitHub before it records the wait')
     expect(design).not.toContain('No other kind is supported')
     expect(design).toContain('never ask the owner to cut a release')
     expect(design).toContain('you change nothing in the repository')
@@ -716,6 +729,8 @@ describe('the fix step (8.6, 9.7, 10.8)', () => {
     const h = harness(rc, origin('issue-310', SHA('a')), [t9ci])
     await h.spawn('fix')
     expect(h.spawns[0]?.prompt).toContain('A check on the PR failed after its one re-run.')
+    expect(h.spawns[0]?.prompt).toContain('"result": "unchanged"')
+    expect(h.spawns[0]?.prompt).toContain('Never push an empty commit')
     expect(h.spawns[0]?.prompt).toContain('Give each of these findings a disposition: check:7-70.')
     const job = [...h.files.entries()].find(([k]) => k.endsWith('.job.json'))?.[1] ?? ''
     expect(parseJob(job)).toMatchObject({ contract: 'fix', data: { findings: ['check:7-70'] } })
@@ -730,7 +745,16 @@ describe('the fix step (8.6, 9.7, 10.8)', () => {
     const still = harness(r, origin('issue-310', SHA('a')), [prepared(SHA('a'))])
     const s2 = await still.spawn('fix')
     still.answer('fix', 'fix', { result: 'fixed', head: SHA('b'), summary: 'fixed', findings: [] })
-    expect(resultOf(await still.atEnd(s2.entry))).toMatchObject({ event: 'unknown', why: 'bad-answer' })
+    expect(resultOf(await still.atEnd(s2.entry))).toMatchObject({ event: 'unknown', why: 'bad-answer', reason: expect.stringContaining('answered with result unchanged') })
+  })
+
+  test('a fix answered unchanged is not-ok from the answer alone, whatever origin did, with notes naming what was fixed', async () => {
+    const h = harness(r, origin('issue-310', SHA('a')), [prepared(SHA('a'))])
+    const { entry: e } = await h.spawn('fix')
+    h.answer('fix', 'fix', { result: 'unchanged', summary: 'edited the PR', evidence: 'ev', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'edited the description' }] })
+    const exec = await h.early(e)
+    expect(exec === null ? null : resultOf(exec)).toMatchObject({ event: 'not-ok', reason: 'unchanged', head: null, data: { notes: ['the fixer fixed r2-1 without a code change: edited the description'] } })
+    expect(h.runs.filter(x => x.argv[0] === 'git')).toEqual([])
   })
 })
 
@@ -867,5 +891,7 @@ describe('the builder\'s and the fixer\'s results through the table (T5, T6, T11
     expect(transitionOf(plan(withLedger(world([f]), [stepDone(f, 'fix', { event: 'ok', head: SHA('b') })])), 341)).toMatchObject({ row: 'T11', next: { state: 'reviewing', head: SHA('b'), round: 2 } })
     const notes = ['the fixer declined r1-1: the test covers it']
     expect(transitionOf(plan(withLedger(world([f]), [stepDone(f, 'fix', { event: 'not-ok', reason: 'declined', data: { notes } })])), 341)).toMatchObject({ row: 'T12', next: { state: 'reviewing', notes, round: 2 } })
+    const fixedNotes = ['the fixer fixed r1-1 without a code change: edited the PR']
+    expect(transitionOf(plan(withLedger(world([f]), [stepDone(f, 'fix', { event: 'not-ok', reason: 'unchanged', data: { notes: fixedNotes } })])), 341)).toMatchObject({ row: 'T17', via: 'unchanged', next: { state: 'reviewing', notes: fixedNotes, round: 2 } })
   })
 })

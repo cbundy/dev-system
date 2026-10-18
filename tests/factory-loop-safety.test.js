@@ -298,12 +298,16 @@ test("the answer script's only writes are its own temp file and the rename over 
   assert.deepEqual(writes, ["open(tmp", "writeFile(body", "rename(tmp", "unlink(tmp"]);
   assert.ok(src.includes("await fs.open(tmp, 'wx', 0o644)"), "the temp file is created exclusively, never opened over another");
   assert.ok(src.includes("await fs.rename(tmp, path.join(dir, name))"), "the rename lands on the answer file placeOf checked");
-  assert.doesNotMatch(src, /child_process|\bspawn\(|\bexec(File)?(Sync)?\(|\bfork\(/);
-  // the modules it loads: node's own, and the contract beside the hooks
-  const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]);
-  assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'"]);
-  assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 1);
+  // it runs no command, bar one: a design wait's read-only `gh` lookups (hooks/v2/wait-check.mjs, #980),
+  // by execFile with an argv and no shell
+  assert.doesNotMatch(src, /\bspawn\w*\(|\bexec(Sync)?\(|\bexecFileSync\(|\bfork\(|shell:/);
+  assert.deepEqual([...src.matchAll(/\bexecFile\(([^,]*),/g)].map((m) => m[1]), ["'gh'"]);
+  // the modules it loads: node's own, and the contract and the wait check beside the hooks
+  const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'", "'node:child_process'", "'node:url'"].sort());
+  assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 2);
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
+  assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', 'wait-check.mjs')).href)"));
 });
 
 // The act step holds GitHub writes for the rest of a pass that met a rate limit (v2 SPEC 13.10 item 2): the
