@@ -245,7 +245,7 @@ type IssueRecord = {
   fixes: number                // entries to fixing in this life, at most fixCap
   round: number                // entries to reviewing in this life
   question: string | null      // parked: the question for the owner
-  wait: WaitCondition[] | null // waiting: 1 to 8 conditions, every one of which must hold; null in any other state
+  wait: WaitCondition[] | null // waiting: 1 to 8 conditions (issue-closed and tag-contains may carry an optional repo), every one of which must hold; null in any other state
   why: ClosedWhy | null        // closed: why
   notes: string[]              // owner, triage and decline notes for the step of this seq
   prClosedAt: string | null    // GitHub's closedAt of the newest hand close the record has handled (E4, P1)
@@ -266,7 +266,9 @@ type IssueRecord = {
 - A record that parks from queued or waiting keeps that state's own `resumeTo`, so "resumeTo same
   state" in the rows below means that target, never queued or waiting itself.
 - `wait` is set only in waiting. The transition note carries it as the token `wait=issue:57,pr:812`
-  (`issue:<n>` for an issue to be closed, `pr:<n>` for a PR to be merged, comma-joined) and
+  (`issue:<n>` for an issue to be closed, `pr:<n>` for a PR to be merged, `tag:<sha>` for a release
+  tag that carries a commit, comma-joined; an issue or tag condition on another repo takes the long
+  form `issue:<owner>/<name>#<n>` or `tag:<owner>/<name>@<sha>`, repo lower-case) and
   `wait=none` in any other state; `parseTransition` rebuilds `wait` from it, and a note without the
   token (from before it) reads as null.
 

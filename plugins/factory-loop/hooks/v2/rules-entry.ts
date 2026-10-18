@@ -192,7 +192,7 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   // owner tell: the owner has nothing to answer)
   if (changed && r.state === 'waiting') {
     add({ ...base(r, entryKey(r, 'comment'), 'the wait\'s conditions on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: waitText(r) })
-    for (const c of r.wait ?? []) if (c.kind === 'issue-closed') add({ ...base(r, entryKey(r, `link/${c.issue}`), `link #${r.issue} as blocked by #${c.issue}`), kind: 'link', blocker: c.issue })
+    for (const c of r.wait ?? []) if (c.kind === 'issue-closed' && c.repo === undefined) add({ ...base(r, entryKey(r, `link/${c.issue}`), `link #${r.issue} as blocked by #${c.issue}`), kind: 'link', blocker: c.issue })
   }
   if (changed && r.state === 'closed') items.push(...closedItems(ctx, r))
   return items
