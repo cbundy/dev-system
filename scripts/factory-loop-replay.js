@@ -21,8 +21,8 @@
 //          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
 //                               the live orchestrator instead of replaying: the shadow's
 //                               logged actions stand in for plan()'s
-//          [--planner v1|v2]    the layer that plans (docs/factory-loop/v2/SPEC.md 2.3): v1's
-//                               plan(), the default, or v2's planV2() over the same states with
+//          [--planner v1|v2]    the layer that plans, v2 by default (docs/factory-loop/v2/SPEC.md 2.3): v1's
+//                               plan(), or v2's planV2() over the same states with
 //                               v2's fields empty (no v2 records in a v1 history), for its
 //                               claims and titles
 const { execFileSync } = require("node:child_process");
@@ -60,7 +60,7 @@ order by ts;
 `;
 
 function args(argv) {
-  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked", planner: "v1" };
+  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked", planner: "v2" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i].replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     out[key] = argv[i + 1];

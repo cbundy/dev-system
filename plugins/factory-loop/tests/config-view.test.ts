@@ -49,6 +49,13 @@ describe('configText', () => {
     expect(Math.max(...text.split('\n').map(l => l.length))).toBeLessThanOrEqual(60)
   })
 
+  test('planner: v2 plans and acts for a workspace that sets none; v1 only where it is set (#794)', () => {
+    const unset = configText(view({}), control(), NOW)
+    expect(line(unset, 'planner')).toContain('v2')
+    expect(unset).toContain('v2 plans and acts')
+    expect(configText(view({}, { planner: 'v1' }), control(), NOW)).toContain('v1 plans and acts')
+  })
+
   test('a long value, problem or gate command is cut to the width', () => {
     const long = 'x'.repeat(200)
     const text = configText(view({ gateCommands: [long], [long]: 1 }), control(), NOW)
