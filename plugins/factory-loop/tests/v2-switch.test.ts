@@ -208,7 +208,7 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
 
   test('O3 (v2) wakes the release review once per UTC hour, keyed by tag and hour, through the shared helper', () => {
     const cfg = config({ planner: 'v2' })
-    const base: State = { ...state({ milestone: { open: 0, closed: 5, expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } }), v2: emptyV2State(NOW) }
+    const base: State = { ...state({ milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } }), v2: emptyV2State(NOW) }
     const tasks = (s: State) => planV2(s, cfg).actions.filter(x => x.kind === 'task')
     expect(tasks(base)).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { closed: '5', expected: 'minor', tag: 'v1.0.0', cadence: '6h' } }])
     const held = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
@@ -222,7 +222,7 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     const cfg = config({ planner: 'v2' })
     const waitingOn = (issue: number, kind: 'tag-contains' | 'issue-closed') =>
       record({ issue, state: 'waiting', step: null, resumeTo: 'designing', wait: [kind === 'tag-contains' ? { kind, sha: '35bb655' } : { kind, issue: 99 }] })
-    const open = state({ milestone: { open: 2, closed: 5, expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } })
+    const open = state({ milestone: { open: 2, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } })
     const withRecords = (records: IssueRecord[], s: State = open): State => ({ ...s, v2: { ...emptyV2State(NOW), records } })
     const tasks = (s: State) => planV2(s, cfg).actions.filter(x => x.kind === 'task')
     // an issue condition or no waiting record leaves the due rule and fields as they were
@@ -230,7 +230,7 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     const due = tasks(withRecords([waitingOn(9, 'tag-contains'), waitingOn(7, 'tag-contains'), waitingOn(8, 'issue-closed')]))
     expect(due).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { tag: 'v1.0.0', waiting: '7,9' } }])
     // a milestone with none closed is due too
-    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], state({ milestone: { open: 0, closed: 0, expected: null } })))).toHaveLength(1)
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], state({ milestone: { open: 0, closed: 0, openIssues: [], expected: null } })))).toHaveLength(1)
     // at most one release task per UTC hour
     const held = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
     expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, ledger: [...open.ledger, held] }))).toEqual([])
@@ -242,7 +242,7 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     const cfg = config({ planner: 'v2' })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
-    const release: State = { ...quiet, milestone: { open: 0, closed: 3, expected: 'patch' } }
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
     const both = planV2(release, cfg)
     expect(both.actions.map(a => a.kind)).toEqual(['task', 'title'])
     expect(both.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: this pass starts task:release:unknown:2026-10-13T03 first' })

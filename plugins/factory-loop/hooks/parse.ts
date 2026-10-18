@@ -467,13 +467,16 @@ export function parseMilestone(text: string): Milestone | null {
   if (!/Next release/i.test(text)) return null
   let open = 0
   let closed = 0
+  const openIssues: number[] = []
   for (const line of text.split('\n')) {
-    const m = line.match(/^#\d+\s+(open|closed)\s/)
-    if (m?.[1] === 'open') open++
-    else if (m?.[1] === 'closed') closed++
+    const m = line.match(/^#(\d+)\s+(open|closed)\s+(issue\s)?/)
+    if (m?.[2] === 'open') {
+      open++
+      if (m[3] !== undefined) openIssues.push(Number(m[1]))
+    } else if (m?.[2] === 'closed') closed++
   }
   const bump = text.match(/Expected:\s*(patch|minor|major)\b/)?.[1] as Bump | undefined
-  return { open, closed, expected: bump ?? null }
+  return { open, closed, openIssues, expected: bump ?? null }
 }
 
 // --- the last release and the oldest merge since it --------------------------------------------

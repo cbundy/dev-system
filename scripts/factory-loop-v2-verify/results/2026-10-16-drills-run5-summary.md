@@ -13,7 +13,7 @@ without the companion (R4-F3), background Bash was refused (R4-O4), the leftover
 `fix_requested` is logged on a resume into fixing (R4-F1), a merge's claim ends within seconds (R4-O1), and the
 store wipe kept the PR evidence, logged nothing twice and kept long questions whole (R4-F4, R4-F5, R4-O5). The
 measured hour merged four new issues in 6 to 9.5 minutes each with no touch, and the loop's own GitHub commands
-fell about 20% per busy hour (PR reads about 40%). Two new seam bugs were found and fixed during the run, and both
+fell about 20% per busy hour (PR reads about 40%). Two new bugs were found and fixed during the run, and both
 fixes pass on d9c358c: an owner's resume note never reached the resumed step (R5-F2, high), and a second loss of
 the companion in the same conversation was never told (R5-F1, medium). No finding needs a special case. 9 loop
 merges; no failed outcome, no unknown, no pass error.
@@ -75,7 +75,7 @@ Not merged: #73, parked again at the fix cap by its run-4 reviewer note (check 4
 
 ## Findings, most severe first
 
-1. **R5-F2 (seam bug, high; fixed in 87fe5aa, verified on d9c358c): the owner's resume note was dropped before the
+1. **R5-F2 (bug, high; fixed in 87fe5aa, verified on d9c358c): the owner's resume note was dropped before the
    resumed step ran.** P1 put the note on the queued record (table.ts:346; SPEC 4.3 P1 "notes += the op's note, or
    the trusted comments posted after the park comment"), and the next row, T1 queued -> resumeTo, entered a state,
    which takes "the row's notes alone" (SPEC.md:677; table.ts:429), while T1's change added none (table.ts:175-178).
@@ -84,7 +84,7 @@ Not merged: #73, parked again at the fix cap by its run-4 reviewer note (check 4
    reviewers kept following run 4's note and #73 parked again at the cap. By the code, a label resume's owner
    comments (the answer to a parked question) took the same path. The fix makes T1 carry queued's notes. On
    d9c358c, #92's resumed designer had the owner's answer in its prompt and designed option A without asking again.
-2. **R5-F1 (seam bug, medium; fixed in c924160, verified on d9c358c): a second loss of the companion in the same
+2. **R5-F1 (bug, medium; fixed in c924160, verified on d9c358c): a second loss of the companion in the same
    conversation was held but never told or counted.** The rail is judged per process, but the tell was keyed per
    session (workspace.ts:73), and its ledger entry outlives restarts and wipes (a `loop` event the ledger is rebuilt
    from). The supervisor resumes the same conversation on every restart, so after run 4's tell (06:44) the outage in
