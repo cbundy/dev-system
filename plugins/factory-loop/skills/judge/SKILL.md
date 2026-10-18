@@ -80,7 +80,9 @@ the model was involved.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
   still needs asking) becomes an owner item, a comment on the issue and one `[ACTION]` line to the
   owner, and the task goes on. Answer `failed` (reason) when the release cannot be cut. A merge
-  never waits for a release.
+  waits for a release only briefly: the loop holds its own merges while the release's bump PR is
+  open, for at most `releaseHold` (10 minutes) from its creation, when the repo sets
+  `releaseBranchPrefix`. You hold nothing yourself.
 
 ### Release decisions
 You decide when the repo releases; the release agent does the steps. The aim: merged work ships

@@ -27,6 +27,7 @@ import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
+import { fromReleaseHold } from './rules-release-hold'
 import { holdOf } from './rules-queue'
 import { lifePr } from './rules-review'
 import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
@@ -461,7 +462,7 @@ export function fileFacts(facts: InterventionFacts): FileFact[] {
 
 // interventionsOf: every intervention the facts hold, done or not; the gate leaves out the done.
 export function interventionsOf(ctx: V2Ctx): Planned[] {
-  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromHolds(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
+  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromHolds(ctx), ...fromReleaseHold(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
 }
 
 // interventionRules: one `event` action per intervention the ledger has not logged, marked logged

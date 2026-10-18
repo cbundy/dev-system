@@ -420,13 +420,20 @@ export type IssueRead = { at: Ms; open: boolean | null; labels: string[] | null 
 // `tag`: the release tag a tag-contains read compared against, so it is read again only when the tag changes.
 export type WaitRead = { at: Ms; held: boolean; tag?: string }
 
+// An open release bump PR (sources-release.ts): its branch and GitHub's creation time, which the
+// merge queue's hold window runs from (9.1).
+export type ReleasePr = { pr: number; branch: string; createdAt: Ms }
+// What the merge queue's release hold reads: the open bump PRs, and how the ones that left the list
+// ended (merged or closed), until their end is logged.
+export type ReleasePrsRead = { prs: ReleasePr[]; left: Record<number, 'merged' | 'closed'> }
+
 // A trusted comment on an issue (callum-flow-issue-read --comments), for a resume's note (11).
 export type IssueComment = { body: string; at: Ms; url: string | null }
 
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).
 export type HeadSeen = { pr: number; at: Ms }
 
-export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite'] as const
+export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs'] as const
 // What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
 // was read and the "<issue>:<life>:<seq>" of this device's transitions it holds.
 export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
@@ -451,6 +458,8 @@ export type V2State = {
   // the conditions waiting records wait on, by key (`issue:57`, `pr:812`, `tag:35bb655`): the last read that
   // showed one; a condition with no entry was not read, or its read failed, and stays open
   waits?: Record<string, WaitRead>
+  // the open release bump PRs (sources-release.ts) the merge queue holds for; absent: none read
+  releasePrs?: ReleasePrsRead
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>

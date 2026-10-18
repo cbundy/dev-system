@@ -104,6 +104,8 @@ export const DEFAULT_CONFIG: Config = {
   maxTriages: 2,
   windDownMinutes: 10,
   minimumReleaseCadenceMs: 6 * 60 * MIN,
+  releaseBranchPrefix: null,
+  releaseHoldMs: 10 * MIN,
   maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
@@ -284,6 +286,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'mode') {
         if (value === 'off' || value === 'observe' || value === 'act') out[key] = value
         else bad(raw, value, 'off, observe or act')
+      } else if (key === 'releaseBranchPrefix') {
+        if (value === null || (typeof value === 'string' && value !== '')) out[key] = value
+        else bad(raw, value, 'a non-empty string or null')
       } else if (key === 'shadowDevice') {
         if (value === null || typeof value === 'string') out[key] = value
         else bad(raw, value, 'a device name or null')

@@ -974,6 +974,49 @@ LEFT JOIN LATERAL (
 ORDER BY h.held_at DESC;
 ```
 
+**Release holds** (the merge queue's hold for a release's bump PR, v2 SPEC 9.1): the loop logs one
+`hold:release` loop intervention when a hold starts, fact `hold/release/pr<p>/start`, and one end,
+fact `hold/release/pr<p>/end`, with cause `hold:release-merged`, `hold:release-closed` or
+`hold:release-timeout`. Each device logs its own, so an event is counted once per fact. The detail
+names the queue heads whose merge the hold deferred. A hold with no end yet has a null `held_s`.
+
+```sql
+-- per hold: when the bump PR's hold started, how it ended and how long it lasted
+WITH ev AS (
+  SELECT repo, pr, fact, cause, min(ts) AS ts
+  FROM factory.event_log
+  WHERE type = 'intervention' AND who = 'loop' AND cause LIKE 'hold:release%'
+    AND fact LIKE 'hold/release/pr%' AND pr IS NOT NULL
+  GROUP BY repo, pr, fact, cause
+)
+SELECT s.repo, s.pr, s.ts AS held_at,
+  e.ts AS ended_at,
+  e.cause AS ended_by,
+  round(extract(epoch FROM e.ts - s.ts))::bigint AS held_s
+FROM ev s
+LEFT JOIN ev e ON e.repo = s.repo AND e.pr = s.pr AND e.fact = regexp_replace(s.fact, '/start$', '/end')
+WHERE s.cause = 'hold:release'
+ORDER BY s.ts DESC;
+```
+
+```sql
+-- per week: how many release holds ended, and the share that ran out their window (is 10 minutes enough)
+WITH ends AS (
+  SELECT repo, fact, cause, min(ts) AS ts
+  FROM factory.event_log
+  WHERE type = 'intervention' AND who = 'loop' AND cause LIKE 'hold:release-%'
+    AND fact LIKE 'hold/release/pr%/end'
+  GROUP BY repo, fact, cause
+)
+SELECT date_trunc('week', ts)::date AS week,
+  count(*) AS holds,
+  count(*) FILTER (WHERE cause = 'hold:release-timeout') AS timeouts,
+  round(100.0 * count(*) FILTER (WHERE cause = 'hold:release-timeout') / count(*), 1) AS timeout_pct
+FROM ends
+GROUP BY 1
+ORDER BY 1 DESC;
+```
+
 ## Workers
 
 The [base image's worker heartbeat reference](../images/base/README.md#worker-heartbeat)

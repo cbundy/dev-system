@@ -403,6 +403,8 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 | `maxInFlightIssues` | 3 | How many issues the loop works on at once. Parked and waiting issues do not count. |
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
 | `minimumReleaseCadence` | `"6h"` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
+| `releaseBranchPrefix` | none | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
+| `releaseHold` | `"10m"` | The longest the queue holds for a bump PR, counted from the PR's opening; `0` turns the hold off. |
 
 The rest are in [the v2 SPEC, appendix A](factory-loop/v2/SPEC.md#appendix-a-settings). The
 workspace file, `${CLAUDE_CONFIG_DIR}/factory-loop/config.json` (`/persist/claude/factory-loop/config.json`

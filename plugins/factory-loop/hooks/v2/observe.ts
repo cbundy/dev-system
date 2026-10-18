@@ -18,6 +18,8 @@ import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
+import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
+import type { ReleaseCache } from './sources-release'
 import { readWaits } from './sources-waits'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
@@ -79,12 +81,14 @@ export type V2Cache = {
   prs: PrsRead
   // the wait conditions' last reads (sources-waits.ts)
   waits: Record<string, WaitRead>
+  // the release bump PRs the merge queue holds for (sources-release.ts)
+  release: ReleaseCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
   dualWrite: { at: Ms; read: DualWriteRead } | null
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, dualWrite: null }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, release: EMPTY_RELEASE, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -369,6 +373,11 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const waited = await readWaits(ctx, cache.waits, rt.config.githubEveryMs)
   cache.waits = waited.waits
 
+  // the release bump PRs the merge queue holds for (sources-release.ts)
+  const release = await readReleasePrs(ctx, cache.release)
+  cache.release = release.read
+  sources.releasePrs = release.source
+
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
   const comments: Record<number, IssueComment[]> = {}
@@ -428,6 +437,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     comments,
     prs: prs.read,
     waits: cache.waits,
+    releasePrs: { prs: cache.release.prs, left: cache.release.left },
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
@@ -484,7 +494,7 @@ export function commentsOf(json: string): IssueComment[] | null {
 export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
   const off: Source = { ok: false, at: null, error: 'not read' }
   return {
-    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now } },
+    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now } },
     records,
     recordsFrom: records.length > 0 ? 'store' : 'none',
     heads: {},
