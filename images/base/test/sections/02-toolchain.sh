@@ -26,6 +26,8 @@ check "callum-flow-event --type writes a checked new-format event only to the ne
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && ! ls "$d"/*.jsonl >/dev/null 2>&1 &&
   ! CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event --type claimed --issue 1 --data "{}" 2>/dev/null &&
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ]'
+check "factory-source.js loads and exports resolveSource, runShadow and diff" in_image '
+  node -e "const m=require(\"/usr/local/share/dev-system/factory-source.js\");for(const k of [\"resolveSource\",\"runShadow\",\"diff\"])if(typeof m[k]!==\"function\")process.exit(1)"'
 check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
   [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
   ! /usr/local/share/dev-system/nm-export 2>/dev/null'

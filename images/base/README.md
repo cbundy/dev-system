@@ -2004,8 +2004,8 @@ the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metr
 ### factory-db-bootstrap
 
 `factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
-server. `factory-event-push-loop` and the heartbeat (which writes to both databases) write to it, and `dev-query --factory` reads it with the reader role; the other push loops still use the agentsview
-database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
+server. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops still use the agentsview
+database, and `dev-query` reads it only with `--factory`. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
 the agentsview database by accident. Running it again changes nothing. The full procedure (provision
@@ -2040,7 +2040,7 @@ and `factory.workers` with its view and notify triggers.
 
 `dev-query` (base image 2.15.0 and later) runs SQL against the central agentsview
 PostgreSQL (`factory.events`, the `nomistakes` mirror) from any container that has the
-database URL. Agents use it instead of
+database URL; with `--factory` it reads the factory database instead (below). Agents use it instead of
 `psql "$AGENTSVIEW_PG_URL"`: the URL is deliberately not in the environment, so that
 fails. The saved queries are in [docs/metrics.md](../../docs/metrics.md).
 
@@ -2052,17 +2052,8 @@ select count(*) from nomistakes.runs where created_at >= :'since'::timestamptz
 SQL
 ```
 
-The SQL comes from `-c` or from stdin, not both. Accepted flags: `--factory`, `-A`, `-t` (or `-At`), `--csv`,
-`-v NAME=VALUE` (repeatable) and `--help`; anything else is a usage error.
-
-`--factory` (anywhere among the options) queries the factory database instead, as its reader role: the
-URL comes from `FACTORY_DB_READER_URL`, else the workspace `factory-db-reader-url` secret when it exists,
-else the shared one (see [factory-db-bootstrap](#factory-db-bootstrap)). It never reads `AGENTSVIEW_PG_URL`
-or `agentsview-pg-url`. The session is read-only and secrets are masked exactly as without the flag.
-
-```sh
-dev-query --factory -At -c 'select count(*) from factory.event_log'
-```
+The SQL comes from `-c` or from stdin, not both. Accepted flags: `-A`, `-t` (or `-At`), `--csv`,
+`-v NAME=VALUE` (repeatable), `--factory` and `--help`; anything else is a usage error.
 
 - **Read-only.** Every session starts with `default_transaction_read_only=on`, appended after
   any `options=` in the URL, so an `INSERT`, `UPDATE`, `DELETE` or DDL statement fails with
@@ -2074,6 +2065,11 @@ dev-query --factory -At -c 'select count(*) from factory.event_log'
   push loops), handed to `psql` as `PG*` variables only in its own environment, and never put
   in argv or exported to the caller. Stdout and stderr are each passed through the secret
   masker, so a redirect such as `> file` never captures error text.
+- **`--factory`.** Reads the factory database (`factory.event_log`) as the reader role. The URL comes
+  from `FACTORY_DB_READER_URL` or the secret `factory-db-reader-url` (see
+  [docs/factory-db.md](../../docs/factory-db.md)), never from `AGENTSVIEW_PG_URL` or `agentsview-pg-url`,
+  even when the reader URL is missing. Sessions are read-only and output is masked as in the default mode.
+  `dev-query --factory -At -c 'select count(*) from factory.event_log'`.
 - **TLS.** With `sslmode=verify-ca` or `verify-full` and no root cert, the system store is trusted.
 
 | Exit | Meaning |
@@ -2081,7 +2077,7 @@ dev-query --factory -At -c 'select count(*) from factory.event_log'
 | 0 | ok |
 | 64 | usage error (unknown flag, both `-c` and stdin, no SQL, a terminal on stdin with no `-c`) |
 | 69 | `psql` is not installed: the container image is older than the base image that ships `postgresql-client`; rebuild the container (see [`dev-version`](#dev-version)), do not install it by hand |
-| 77 | the secret file `agentsview-pg-url` exists but is unreadable or empty; with `--factory`, the reader secret file `factory-db-reader-url` in use |
+| 77 | the secret file `agentsview-pg-url` (with `--factory`, `factory-db-reader-url`) exists but is unreadable or empty |
 | 78 | no URL configured (no secret file and no `AGENTSVIEW_PG_URL`); with `--factory`, no `factory-db-reader-url` and no `FACTORY_DB_READER_URL` |
 | 1, 2, 3 | `psql`'s own status (SQL error, connection failure, ...), passed through |
 

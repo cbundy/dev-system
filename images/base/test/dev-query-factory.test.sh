@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# Tests for dev-query --factory (cbundy/dev-system#904) against a real PostgreSQL
-# (scripts/test-pg.sh) with a bootstrapped throwaway factory database. Skips cleanly with no server.
+# Real-PostgreSQL test for `dev-query --factory` (cbundy/dev-system#897): it reads factory.event_log
+# as the reader role and cannot write. Follows the factory-db-doctor.test.sh pattern; skips cleanly
+# with no server.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -eu
 
@@ -37,7 +38,7 @@ if [ -z "${FACTORY_TEST_PG_ADMIN_URL:-}" ]; then
   own_cluster=1
 fi
 if [ -z "${FACTORY_TEST_PG_ADMIN_URL:-}" ]; then
-  echo "dev-query --factory tests skipped: no PostgreSQL server"
+  echo "dev-query-factory tests skipped: no PostgreSQL server"
   exit 0
 fi
 ADMIN=$FACTORY_TEST_PG_ADMIN_URL
@@ -51,34 +52,37 @@ url_for() {
   if [ -n "${2:-}" ]; then cred="$2${3:+:$3}@"; fi
   printf '%s://%s%s/%s%s\n' "$scheme" "$cred" "$hostpart" "$1" "${query:+?$query}"
 }
+ADMIN_USER=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^\([^:@/?]*\).*@.*/\1/p')
+ADMIN_PW=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^[^:@/?]*:\([^@/?]*\).*@.*/\1/p')
+q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "$ADMIN_USER" "$ADMIN_PW")" -c "$2"; }
 
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL
 export DEV_SECRETS_DIR="$tmpdir/secrets"
 export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
-mkdir -p "$DEV_SECRETS_DIR"
 export DEV_SYSTEM_SHARE="$ROOT/images/base"
+mkdir -p "$DEV_SECRETS_DIR"
 
-WPW=wpw-$$-secret
 RPW=rpw-$$-secret
-suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
-db="factory_test_$$_$suffix"
+db="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 names="$names $db"
-FACTORY_DB_ADMIN_URL=$ADMIN FACTORY_DB_WRITER_PASSWORD=$WPW FACTORY_DB_READER_PASSWORD=$RPW \
+FACTORY_DB_ADMIN_URL=$ADMIN FACTORY_DB_WRITER_PASSWORD=wpw-$$ FACTORY_DB_READER_PASSWORD=$RPW \
   bash "$BOOTSTRAP" --db "$db" > "$tmpdir/boot.out" 2>&1 || fail "bootstrap: $(cat "$tmpdir/boot.out")"
-url_for "$db" "${db}_reader" "$RPW" > "$DEV_SECRETS_DIR/factory-db-reader-url"
+(umask 077 && url_for "$db" "${db}_reader" "$RPW" > "$DEV_SECRETS_DIR/factory-db-reader-url")
 
-run() { bash "$DQ" "$@" > "$tmpdir/out" 2> "$tmpdir/err" < /dev/null && rc=0 || rc=$?; }
+q "$db" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) VALUES (1, '11111111-1111-4111-8111-111111111111', now(), 'ready', 1, 'acme/widgets', 'dev-box', 'x', 1, '{}')" > /dev/null
 
-run --factory -At -c 'select current_user'
-[ "$rc" = 0 ] || fail "current_user: exit $rc: $(cat "$tmpdir/err")"
-[ "$(cat "$tmpdir/out")" = "${db}_reader" ] || fail "current_user is '$(cat "$tmpdir/out")'"
+# the reader selects from factory.event_log
+got=$(bash "$DQ" --factory -At -c 'select count(*) from factory.event_log' < /dev/null 2> "$tmpdir/err") || fail "select failed: $(cat "$tmpdir/err")"
+[ "$got" = 1 ] || fail "expected 1 row from factory.event_log, got '$got'"
+echo "ok: --factory reads factory.event_log as the reader"
 
-run --factory -At -c 'select count(*) from factory.event_log'
-[ "$rc" = 0 ] || fail "event_log: exit $rc: $(cat "$tmpdir/err")"
-[ "$(cat "$tmpdir/out")" = 0 ] || fail "event_log count is '$(cat "$tmpdir/out")'"
-
-run --factory -c "insert into factory.event_store default values"
-[ "$rc" != 0 ] || fail "insert succeeded for the reader"
-grep -q "$RPW" "$tmpdir/out" "$tmpdir/err" && fail "reader password in output"
-
-echo "PASS: dev-query --factory (real PostgreSQL)"
+# a write fails
+rc=0
+bash "$DQ" --factory -c "insert into factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) values (1, '22222222-2222-4222-8222-222222222222', now(), 'ready', 1, 'a/b', 'd', 'x', 2, '{}')" \
+  < /dev/null > "$tmpdir/out" 2> "$tmpdir/err" || rc=$?
+[ "$rc" != 0 ] || fail "an INSERT must fail"
+grep -qi "read-only\|permission denied" "$tmpdir/err" || fail "unexpected error: $(cat "$tmpdir/err")"
+[ "$(q "$db" 'select count(*) from factory.event_store')" = 1 ] || fail "the INSERT landed"
+grep -q "$RPW" "$tmpdir/err" "$tmpdir/out" && fail "password leaked"
+echo "ok: an INSERT is refused"
+echo "dev-query-factory tests passed"
