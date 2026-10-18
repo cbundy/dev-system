@@ -97,47 +97,87 @@ Example:
 | `template_version` | string | every event | The Coder template version running when it was written; null when unknown. |
 | `plugin_version` | string | every event | The callum-flow plugin version running when it was written; null when unknown. |
 | `device_seq` | integer | every event | The line number of the event in its device's local log, set by the shipper. |
+| `acting` | integer | `loop_passes` | Of those passes, how many acted (did something rather than finding nothing to do). |
+| `acting_mean_ms` | integer | `loop_passes` | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
+| `additions` | integer | `merged` | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
+| `agent_id` | string | `loop_entry` | The agent's id, for an agent step; null otherwise. |
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
 | `attempt` | integer | `transition` | The attempt of that step, from 1. |
+| `attempts` | integer | `loop_entry` | Attempts of this key so far. |
+| `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
 | `branch` | string | `abandoned`, `finding_handled`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
+| `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
+| `bucket` | integer | `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
+| `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
+| `class` | enum | `loop_entry` | The planner's class for the work. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
+| `deletions` | integer | `merged` | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
+| `ended_at` | string | `loop_entry` | When it ended; null while running. |
+| `errors` | integer | `loop_passes`, `reviewed` | Of those passes, how many threw. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
+| `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `five_hour_pct` | integer | `usage` | Percent of the five-hour window used, rounded up. |
+| `five_hour_resets_at` | string | `usage` | When the five-hour window resets. |
+| `fixes` | integer | `transition` | Loop state, for the record rebuild: entries to fixing so far in this life. |
+| `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
+| `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
+| `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
+| `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
+| `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
+| `mean_ms` | integer | `loop_passes` | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
+| `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
 | `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
+| `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
+| `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
+| `p50_ms` | integer | `loop_passes` | The median duration (nearest rank), in milliseconds; null when there was no pass. |
+| `p90_ms` | integer | `loop_passes` | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
+| `pass_every_ms` | integer | `loop_passes` | The loop's configured time between passes, in milliseconds. |
+| `passes` | integer | `loop_passes` | Passes that ended in the minute. 0 when none did; then every duration below is null. |
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
+| `planner` | enum | `loop_passes` | Which planner the loop ran. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
+| `resume_to` | enum | `transition` | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; when waiting, the state the loop resumes to once every condition in wait holds; null otherwise. |
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
 | `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
+| `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
+| `seven_day_resets_at` | string | `usage` | When that seven-day window resets. |
+| `split_into` | array of integer | `abandoned` | split: the new issues it was split into; empty otherwise. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
+| `status` | enum | `loop_entry` | The status it changed to. |
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
+| `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
+| `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
@@ -159,14 +199,14 @@ The factory stopped work on the issue and it left the factory without a merge: i
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `reason` | enum | required | no | one of "dropped", "split", "triage", "reconcile", "rejected", "other" | yes | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
-| `split_into` | array of integer | required | no |  |  | split: the new issues it was split into; empty otherwise. |
+| `split_into` | array of integer | required | no |  | yes | split: the new issues it was split into; empty otherwise. |
 | `why_split` | string | optional | yes |  |  | split: why the designer split the issue (size, areas touched, an owner decision or spike inside it, risk); null for any other abandon and for a split logged before the designer gave reasons. |
 | `why_count` | string | optional | yes |  |  | split: why this many parts, not fewer or more; null otherwise. |
 | `why_parts` | string | optional | yes |  |  | split: why the boundaries between the parts fall where they do; null otherwise. |
 | `why_order` | string | optional | yes |  |  | split: why the blockedBy order is what it is, or that the parts are independent; null otherwise. |
 | `child_whys` | array of string | optional | yes |  |  | split: what makes each new issue a part of its own, in the order of split_into; null otherwise. |
 | `stage` | string | required | yes |  |  | reconcile and rejected: the stage callum-flow-factory-state showed the issue in, in its words, not a transition state; null otherwise. |
-| `lives` | integer | required | yes | minimum 1 |  | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
+| `lives` | integer | required | yes | minimum 1 | yes | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The abandoned work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The abandoned work's pull request, when there is one. |
 | `detail` | string | required | yes |  |  | One line for people: the owner's note, or what reconcile checked. Never parse it. |
@@ -366,8 +406,8 @@ The model for the issue's build step was chosen. Written by callum-flow-implemen
 | --- | --- | --- | --- | --- | --- | --- |
 | `model` | string | required | no | minLength 1 | yes | The model alias chosen, for example sonnet or opus. |
 | `reason` | enum | required | no | one of "label", "default", "hash", "fallback" | yes | label: a model:<alias> label on the issue; default: no Opus share is set; hash: the issue's bucket against the Opus share; fallback: the labels could not be read. |
-| `bucket` | integer | required | yes | minimum 0; maximum 99 |  | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
-| `opus_pct` | integer | required | no | minimum 0; maximum 100 |  | The configured share of issues routed to Opus, in percent. |
+| `bucket` | integer | required | yes | minimum 0; maximum 99 | yes | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
+| `opus_pct` | integer | required | no | minimum 0; maximum 100 | yes | The configured share of issues routed to Opus, in percent. |
 
 Example:
 
@@ -424,15 +464,15 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `kind` | enum | required | no | one of "agent-step", "tell", "task" |  | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
-| `key` | string | required | no | minLength 1 |  | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
-| `status` | enum | required | no | one of "running", "done", "failed", "timed-out", "lost" |  | The status it changed to. |
-| `attempts` | integer | required | no | minimum 0 |  | Attempts of this key so far. |
-| `class` | enum | required | no | one of "free", "owner", "drive", "develop", "start" |  | The planner's class for the work. |
+| `kind` | enum | required | no | one of "agent-step", "tell", "task" | yes | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
+| `key` | string | required | no | minLength 1 | yes | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
+| `status` | enum | required | no | one of "running", "done", "failed", "timed-out", "lost" | yes | The status it changed to. |
+| `attempts` | integer | required | no | minimum 0 | yes | Attempts of this key so far. |
+| `class` | enum | required | no | one of "free", "owner", "drive", "develop", "start" | yes | The planner's class for the work. |
 | `rule` | string | required | no | minLength 1 |  | The planner rule that planned it, for example S2 or S3. |
 | `started_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this attempt started. |
-| `ended_at` | string | required | yes | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | When it ended; null while running. |
-| `agent_id` | string | required | yes |  |  | The agent's id, for an agent step; null otherwise. |
+| `ended_at` | string | required | yes | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When it ended; null while running. |
+| `agent_id` | string | required | yes |  | yes | The agent's id, for an agent step; null otherwise. |
 | `wake` | string | required | yes |  |  | The wake's name, for a tell or task, for example parked; null otherwise. |
 
 Example:
@@ -464,20 +504,20 @@ Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of 
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `from_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | The start of the UTC minute summed up, inclusive. |
-| `to_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | The end of that minute, exclusive: one minute after from_at. |
-| `passes` | integer | required | no | minimum 0 |  | Passes that ended in the minute. 0 when none did; then every duration below is null. |
-| `acting` | integer | required | no | minimum 0 |  | Of those passes, how many acted (did something rather than finding nothing to do). |
-| `errors` | integer | required | no | minimum 0 |  | Of those passes, how many threw. |
-| `mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
-| `p50_ms` | integer | required | yes | minimum 0 |  | The median duration (nearest rank), in milliseconds; null when there was no pass. |
-| `p90_ms` | integer | required | yes | minimum 0 |  | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
-| `max_ms` | integer | required | yes | minimum 0 |  | The longest duration, in milliseconds; null when there was no pass. |
-| `acting_mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
-| `idle_mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
-| `mode` | enum | required | no | one of "off", "observe", "act" |  | The loop's mode: off, observe (plans, does not act) or act. |
-| `planner` | enum | required | no | one of "v1", "v2" |  | Which planner the loop ran. |
-| `pass_every_ms` | integer | required | no | minimum 1 |  | The loop's configured time between passes, in milliseconds. |
+| `from_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | The start of the UTC minute summed up, inclusive. |
+| `to_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | The end of that minute, exclusive: one minute after from_at. |
+| `passes` | integer | required | no | minimum 0 | yes | Passes that ended in the minute. 0 when none did; then every duration below is null. |
+| `acting` | integer | required | no | minimum 0 | yes | Of those passes, how many acted (did something rather than finding nothing to do). |
+| `errors` | integer | required | no | minimum 0 | yes | Of those passes, how many threw. |
+| `mean_ms` | integer | required | yes | minimum 0 | yes | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
+| `p50_ms` | integer | required | yes | minimum 0 | yes | The median duration (nearest rank), in milliseconds; null when there was no pass. |
+| `p90_ms` | integer | required | yes | minimum 0 | yes | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
+| `max_ms` | integer | required | yes | minimum 0 | yes | The longest duration, in milliseconds; null when there was no pass. |
+| `acting_mean_ms` | integer | required | yes | minimum 0 | yes | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
+| `idle_mean_ms` | integer | required | yes | minimum 0 | yes | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
+| `mode` | enum | required | no | one of "off", "observe", "act" | yes | The loop's mode: off, observe (plans, does not act) or act. |
+| `planner` | enum | required | no | one of "v1", "v2" | yes | Which planner the loop ran. |
+| `pass_every_ms` | integer | required | no | minimum 1 | yes | The loop's configured time between passes, in milliseconds. |
 
 Example:
 
@@ -515,11 +555,11 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `pr` | integer | required | yes | minimum 1 | yes | The merged pull request; null when the loop found a merge it cannot name. |
 | `branch` | string | required | yes |  | yes | The merged branch, when known. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit that was merged, when known. |
-| `by` | enum | required | no | one of "factory", "hand" |  | factory: the factory merged it; hand: a person merged it outside the factory. |
+| `by` | enum | required | no | one of "factory", "hand" | yes | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `recovered` | boolean | required | no |  |  | true when the loop logged it afterwards because no merged event was recorded at the merge. |
-| `files` | array of string | optional | yes | items: minLength 1 |  | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
-| `additions` | integer | optional | yes | minimum 0 |  | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
-| `deletions` | integer | optional | yes | minimum 0 |  | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
+| `files` | array of string | optional | yes | items: minLength 1 | yes | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
+| `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 
 Example:
 
@@ -566,7 +606,7 @@ The issue's claim was given back and the issue is in the queue again (ready labe
 | --- | --- | --- | --- | --- | --- | --- |
 | `reason` | enum | required | no | one of "lease-expired", "reconcile" | yes | Why: lease-expired (no renewal in time) or reconcile (reconcile found no live work behind the claim and requeued it). |
 | `stage` | string | required | yes |  |  | reconcile: the stage callum-flow-factory-state showed the issue in, in its words (queued, designing, implementing, in pipeline, parked), not a transition state; null otherwise. |
-| `lives` | integer | required | yes | minimum 1 |  | reconcile: the released life's number among the issue's lives, when known; null otherwise. |
+| `lives` | integer | required | yes | minimum 1 | yes | reconcile: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The released work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The released work's open pull request, when there is one. |
 | `detail` | string | required | yes |  |  | reconcile: what was checked, one line for people; never parse it. null otherwise. |
@@ -602,7 +642,7 @@ One review of the issue's pull request finished. Written by the loop from the re
 | `verdict` | enum | required | no | one of "approve", "changes", "unknown" | yes | approve, changes (findings to fix), or unknown (no valid answer). |
 | `round` | integer | required | no | minimum 1 | yes | The review round in this life, from 1. |
 | `patch` | string | required | no | minLength 1 | yes | The patch id reviewed: an approval holds for exactly this patch. |
-| `errors` | integer | required | no | minimum 0 |  | Findings of severity error. |
+| `errors` | integer | required | no | minimum 0 | yes | Findings of severity error. |
 | `warnings` | integer | required | no | minimum 0 |  | Findings of severity warning. |
 | `infos` | integer | required | no | minimum 0 |  | Findings of severity info. |
 | `reviewer` | string | required | no | minLength 1 |  | Which reviewer answered, for example adjudicator. |
@@ -684,7 +724,7 @@ A commit on a merged pull request deleted or weakened a test (removed an asserti
 | `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` |  | The flagged commit (short sha). |
 | `restored` | boolean | required | no |  | yes | true when a later commit on the branch put the test back. |
 | `kinds` | array of string | required | no | minItems 1 |  | What the commit did to the tests, one code each, for example removed-assertion. |
-| `files` | array of string | required | no | minItems 1 |  | The test files it touched, repo-relative. |
+| `files` | array of string | required | no | minItems 1 | yes | The test files it touched, repo-relative. |
 
 Example:
 
@@ -724,24 +764,24 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `via` | string | required | no | pattern `^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$` | yes | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `seq_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `state_since` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the issue entered to_state; earlier than seq_at when the state did not change. |
-| `resume_to` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed", null |  | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; when waiting, the state the loop resumes to once every condition in wait holds; null otherwise. |
+| `resume_to` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed", null | yes | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; when waiting, the state the loop resumes to once every condition in wait holds; null otherwise. |
 | `branch` | string | required | no | minLength 1 | yes | The life's branch, fixed for the life. |
 | `pr` | integer | required | yes | minimum 1 | yes | The life's pull request; null until there is one. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The head commit a step last confirmed on origin; null before the first push. |
 | `approved_patch` | string | required | yes |  |  | Loop state, for the record rebuild: the patch id the reviewer approved; null until an approval. |
-| `brief_url` | string | required | yes |  |  | The URL of the design brief comment; null until the designer posts one. |
+| `brief_url` | string | required | yes |  | yes | The URL of the design brief comment; null until the designer posts one. |
 | `step` | enum | required | yes | one of "lease", "design", "build", "review", "fix", "queue", "triage", null | yes | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `attempt` | integer | required | no | minimum 1 | yes | The attempt of that step, from 1. |
 | `cut` | boolean | required | no |  |  | Loop state, for the record rebuild: true when this attempt already had its one free re-run. |
-| `triages` | integer | required | no | minimum 0 |  | Loop state, for the record rebuild: triage calls so far in this life. |
-| `fixes` | integer | required | no | minimum 0 |  | Loop state, for the record rebuild: entries to fixing so far in this life. |
+| `triages` | integer | required | no | minimum 0 | yes | Loop state, for the record rebuild: triage calls so far in this life. |
+| `fixes` | integer | required | no | minimum 0 | yes | Loop state, for the record rebuild: entries to fixing so far in this life. |
 | `round` | integer | required | no | minimum 0 | yes | Entries to reviewing so far in this life: the review round. |
-| `question` | string | required | yes | maxLength 2000 |  | parked: the question for the owner; null otherwise. For people; never parse it. |
+| `question` | string | required | yes | maxLength 2000 | yes | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `wait` | array of object | optional | yes | minItems 1; maxItems 8 |  | waiting: the conditions the loop re-checks each pass; null otherwise |
 | `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null | yes | closed: why the life ended; null otherwise. |
-| `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 |  | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
+| `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
-| `lives` | integer | required | no | minimum 1 |  | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |
+| `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |
 
 Example:
 
@@ -815,11 +855,11 @@ A reading of the Claude subscription's usage windows. Written by usage-check, wh
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `available` | boolean | required | no |  |  | true when a reading was had; false when no source gave one (then every reading field is null). |
-| `five_hour_pct` | integer | required | yes | minimum 0 |  | Percent of the five-hour window used, rounded up. |
-| `five_hour_resets_at` | string | required | yes | format date-time |  | When the five-hour window resets. |
-| `seven_day_pct` | integer | required | yes | minimum 0 |  | Percent of the most used seven-day window, rounded up. |
-| `seven_day_resets_at` | string | required | yes | format date-time |  | When that seven-day window resets. |
+| `available` | boolean | required | no |  | yes | true when a reading was had; false when no source gave one (then every reading field is null). |
+| `five_hour_pct` | integer | required | yes | minimum 0 | yes | Percent of the five-hour window used, rounded up. |
+| `five_hour_resets_at` | string | required | yes | format date-time | yes | When the five-hour window resets. |
+| `seven_day_pct` | integer | required | yes | minimum 0 | yes | Percent of the most used seven-day window, rounded up. |
+| `seven_day_resets_at` | string | required | yes | format date-time | yes | When that seven-day window resets. |
 | `source` | enum | required | yes | one of "oauth", "statusline", null |  | Where the reading came from; null when unavailable. |
 | `reasons` | array of string | required | no |  |  | When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise. |
 

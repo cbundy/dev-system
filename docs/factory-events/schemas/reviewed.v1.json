@@ -14,7 +14,7 @@
     "verdict": { "enum": ["approve", "changes", "unknown"], "description": "approve, changes (findings to fix), or unknown (no valid answer).", "x-column": true },
     "round": { "type": "integer", "minimum": 1, "description": "The review round in this life, from 1.", "x-column": true },
     "patch": { "type": "string", "minLength": 1, "description": "The patch id reviewed: an approval holds for exactly this patch.", "x-column": true },
-    "errors": { "type": "integer", "minimum": 0, "description": "Findings of severity error." },
+    "errors": { "type": "integer", "minimum": 0, "description": "Findings of severity error.", "x-column": true },
     "warnings": { "type": "integer", "minimum": 0, "description": "Findings of severity warning." },
     "infos": { "type": "integer", "minimum": 0, "description": "Findings of severity info." },
     "reviewer": { "type": "string", "minLength": 1, "description": "Which reviewer answered, for example adjudicator." },
