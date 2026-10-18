@@ -5,6 +5,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PassSummary } from '../types'
+import type { ConfigView } from '../hooks/config-view'
+import type { Planner } from '../hooks/v2/types'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
 import { effectText } from '../hooks/config-keys'
 import { sourceOf } from '../hooks/config-view'
@@ -14,7 +16,7 @@ import {
   MEANING,
   OPS,
   USAGE,
-  applyOp,
+  applyOp as applyOpFor,
   configFilePath,
   controlPath,
   controlTool,
@@ -24,7 +26,7 @@ import {
   hintText,
   issuesOf,
   loadControl,
-  parseOp,
+  parseOp as parseOpFor,
   retryText,
   runOp,
   statusText,
@@ -32,8 +34,14 @@ import {
 } from '../hooks/control'
 import type { FileIo, Op } from '../hooks/control'
 import { plan } from '../hooks/plan'
-import type { Control } from '../hooks/types'
+import type { Control, Ms } from '../hooks/types'
 import { MIN, NOW, config, control, issue, keys, state } from './fixtures'
+
+// The suite below tests v1's ops: these two default to planner v1 (the plugin's own default is v2
+// since #794), and the v2 cases pass 'v2'. Until the U10 delete wave.
+const parseOp = (text: string, planner: Planner = 'v1') => parseOpFor(text, planner)
+const applyOp = (c: Control, o: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1', view: ConfigView | null = null) =>
+  applyOpFor(c, o, now, last, planner, view)
 
 const HOUR = 60 * MIN
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'

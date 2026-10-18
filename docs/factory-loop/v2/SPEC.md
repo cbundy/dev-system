@@ -108,9 +108,9 @@ The foundation stays (OB:22-23; V:13). v2 uses it through the interfaces FM sect
 Two settings, in the repo-local `.claude/factory-loop.json` or the workspace `config.json`, which
 wins:
 
-| Key | Values | Default until cutover | Meaning |
+| Key | Values | Default | Meaning |
 |---|---|---|---|
-| `planner` | `v1`, `v2` | `v1` | the layer whose plan the act step executes |
+| `planner` | `v1`, `v2` | `v2` (`v1` is an opt-in until the U10 delete wave) | the layer whose plan the act step executes |
 | `shadow` | `off`, `v2` | `off` | with `planner: v1`, v2 also plans each pass on the same State; its result is logged, never executed |
 
 - Only the planner acts. The shadow never executes, never writes the store and never writes an
@@ -2937,7 +2937,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 
 | Key | Default | Meaning |
 |---|---|---|
-| `planner` | `v1` until cutover | 2.3 |
+| `planner` | `v2`; `v1` is an explicit opt-in until the U10 delete wave | 2.3 |
 | `shadow` | `off` | 2.3 |
 | `stateTimeoutMs` | design 45m, build 90m, review 30m, fix 60m, triage 15m, queued 6h, queueWait 2h, parked 24h, waiting 24h | 4.4 |
 | `ciStartMs` | `10m` | 4.4 |

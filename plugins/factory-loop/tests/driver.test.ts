@@ -21,7 +21,7 @@ import type { Host, HostOptions, Seen } from './host'
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 // the first pass of a life brings the main checkout up to date (rule H5), already current here
 const UPDATED = { key: 'update-checkout:0', status: 'done', ms: 0, summary: `main checkout: CURRENT ${CHECKOUT_HEAD}` }
-const ACT = { repo: REPO, mode: 'act', checkout: '/work' }
+const ACT = { planner: 'v1', repo: REPO, mode: 'act', checkout: '/work' }
 const SINK = `${LOOP_DIR}/sink-events`
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-9001'
 const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
