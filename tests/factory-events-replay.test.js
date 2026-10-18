@@ -19,6 +19,7 @@ const { diff } = require("../scripts/factory-events-replay/compare.js");
 const ROOT = path.join(__dirname, "..");
 const CLI = path.join(ROOT, "scripts", "factory-events-replay.js");
 const READER = path.join(ROOT, "scripts", "factory-events-replay", "self-test-reader.js");
+const CLAIM_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "claim-events.js");
 const ADMIN = process.env.FACTORY_TEST_PG_ADMIN_URL;
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -140,6 +141,45 @@ test("compare: a seeded difference is reported by path with old and new values, 
   // the window bounds the read: past the corpus both sides are empty and match
   const later = cli(["compare", "--reader", READER, "--db", dest.name, "--since", "2026-10-17T00:00:00Z"], dest, old);
   assert.equal(later.status, 0, later.out + later.err);
+});
+
+test("compare: the claim-events reader matches on the corpus", opts, (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "e.json")], dest, old).status, 0);
+  const r = cli(["compare", "--reader", CLAIM_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /old and new match/);
+  // the reader reads something: the decisions of the corpus's issues are not empty
+  const reader = require(CLAIM_READER);
+  const out = reader.old({ oldUrl: old.url, newUrl: dest.url, since: SINCE, until: null, psql: (url, sql) => psql(url, sql, { readOnly: true }) });
+  assert.ok(Object.keys(out).length > 0);
+  assert.ok(Object.values(out).some((v) => v.claim === "merged"));
+  assert.ok(Object.values(out).some((v) => v.claim === "none"));
+});
+
+test("compare: the claim-events reader reports a claim row missing from the new side on its key", opts, (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "f.json")], dest, old).status, 0);
+  // remove one claim row: the merged row of an issue that has an earlier claim row, so its decision changes
+  const [id, repo, issue] = dest
+    .query(`SELECT event_id, repo, issue FROM (
+      SELECT event_id, repo, issue, type, ts, row_number() OVER (PARTITION BY repo, issue ORDER BY ts DESC, device DESC, device_seq DESC) rn,
+        count(*) OVER (PARTITION BY repo, issue) c
+      FROM factory.event_store WHERE type IN ('claimed', 'ready', 'requeued', 'merged', 'closed', 'abandoned')) x
+      WHERE rn = 1 AND c >= 2 AND type = 'merged' ORDER BY ts LIMIT 1`)
+    .split("|");
+  assert.ok(id, "the corpus has an issue merged after an earlier claim row");
+  dest.query(`DELETE FROM factory.event_store WHERE event_id = '${id}'`);
+  const r = cli(["compare", "--reader", CLAIM_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 1, r.out + r.err);
+  assert.ok(r.out.includes(`$["${repo}#${issue}"]`), r.out);
+  // no other key is reported
+  const keys = new Set([...r.out.matchAll(/\$\["([^"]+)"\]/g)].map((m) => m[1]));
+  assert.deepEqual([...keys], [`${repo}#${issue}`]);
 });
 
 test("diff: paths, missing keys, array lengths and type changes", () => {
