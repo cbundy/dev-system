@@ -17,7 +17,7 @@
 # factory event docs, version lock or shapes are stale or a schema breaks the authoring or bump
 # rules (`node scripts/build-event-docs.js --check`), when a
 # file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
-# with its allowlist below), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
+# whose allowlist is empty), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
 #
 # The per-file checks run in parallel through the test pool (scripts/lint-files.sh), sized by

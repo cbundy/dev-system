@@ -1,17 +1,19 @@
 # Factory loop v2: spike findings
 
 Three spikes ran on 2026-10-15 (11:27 to 11:45 UTC), on Claude Code 2.1.300 in the 16-CPU dev
-container. They answered the questions the v2 workspace design depended on (OWNER-BRIEF decision
-6). This page gives each question, its answer, the mechanism and the evidence in plain language.
-The full working reports, with every command, log and probe file, are outside the repo:
+container. They answered the questions the v2 workspace design depended on (the owner's
+decision on the workspace). This page gives each question, its answer, the mechanism and the
+evidence in plain language. The full working reports, with every command, log and probe file, were
+kept outside the repo and are no longer available. The probe code the repo keeps is in
+[`docs/factory-loop/probes/workspace-probe/`](../../factory-loop/probes/workspace-probe/).
 
 | Spike | Report | Probe files |
 |---|---|---|
-| Agent folder | `/persist/claude/factory-loop-v2-build/w1/spikes/agent-folder.md` | `/persist/claude/factory-loop-v2-build/w1/spikes/agent-folder/` |
-| Hooks | `/persist/claude/factory-loop-v2-build/w1/spikes/hooks.md` | `/persist/claude/factory-loop-v2-build/w1/spikes/hooks/` |
-| Timeout and stop gate | `/persist/claude/factory-loop-v2-build/w1/spikes/timeout-and-stop-gate.md` | `/persist/claude/factory-loop-v2-build/w1/spikes/timeout-and-stop-gate/` |
+| Agent folder | kept outside the repo, no longer available | kept outside the repo, no longer available |
+| Hooks | kept outside the repo, no longer available | kept outside the repo, no longer available |
+| Timeout and stop gate | kept outside the repo, no longer available | kept outside the repo, no longer available |
 
-[SPEC.md](SPEC.md) section 10 is the design built on these answers.
+[The loop spec](../../factory-loop/v2/SPEC.md) section 10 is the design built on these answers.
 
 ## The short version
 

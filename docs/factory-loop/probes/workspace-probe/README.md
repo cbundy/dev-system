@@ -1,7 +1,7 @@
 # Workspace probe: do the companion plugin's routes work for agents the loop starts?
 
 The v2 workspace design ([SPEC](../../v2/SPEC.md) section 10) rests on engine behaviour that the
-spikes ([SPIKES.md](../../v2/SPIKES.md)) showed on Claude Code 2.1.300. Two points were shown only
+spikes ([the spike notes](../../../spikes/factory-loop-workspace/README.md)) showed on Claude Code 2.1.300. Two points were shown only
 in nearby shapes, so build unit U9 re-probed them before building the companion
 (v2 SPEC 10.9): a long `$.process.run` inside a second plugin's `classic.SubagentStop` for an agent
 spawned from a frameless timer, and `$.env.set` with no hook frame open. The probe also re-runs

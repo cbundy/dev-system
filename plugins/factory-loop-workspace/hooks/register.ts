@@ -1,6 +1,6 @@
 // factory-loop-workspace: the factory loop's companion plugin (docs/factory-loop/v2/SPEC.md 10.3 to
 // 10.6, 10.9). The engine never runs a plugin's hooks for what that plugin's own code started, and
-// the loop starts its agents from its timer, so its own hooks never see them (SPIKES.md). This
+// the loop starts its agents from its timer, so its own hooks never see them (docs/spikes/factory-loop-workspace/README.md). This
 // second plugin's hooks do, and carry what the loop needs around each agent it starts:
 //
 // - the folder (10.3): a spawn whose prompt opens with `factory-slot: <path>` is started in that

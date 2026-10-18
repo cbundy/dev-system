@@ -95,11 +95,9 @@ Each change is logged and asks for a pass at once. The ops:
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;
 - `override <pct> <hours>|off`: run past the usage tiers up to pct, for up to 168 hours;
-- `resume <N|run id>`: release a hold on an issue (a pending decision) or a run (an escalation,
-  a merge hold, the review cap). For an escalated gate, follow the notice's explanation of what
-  a plain resume will do. To request a change, record `note <N> <change>` after the escalation,
-  then `resume <run id>`; see [the owner ops](../../docs/factory-loop/v2/SPEC.md#appendix-e-owner-ops)
-  for what each op does under v2;
+- `resume <N...> ["note"]`: unpark issues that are parked, with an optional note for their next step;
+  on an issue that is not parked it changes nothing. See
+  [the owner ops](../../docs/factory-loop/v2/SPEC.md#appendix-e-owner-ops) for what each op does;
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
 - `drop <N>`: abandon N and stop its agents;
