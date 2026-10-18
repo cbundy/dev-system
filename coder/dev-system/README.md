@@ -22,7 +22,7 @@ Remote Control mode default and the long-lived session's settings:
 |---|---|---|---|
 | `dev-system` | dev-system (Docker icon) | `auto`: `server` with a repo, else `session` | Working on a repo, one worktree per claude.ai session |
 | `orchestrator` | Orchestrator (🔄) | `session`, resumed on every start | One long-running interactive Claude running the issue orchestrator. See [Orchestrator workspace](#orchestrator-workspace). |
-| `orchestrator-loop` | Orchestrator (loop) (🏭) | `session`, resumed on every start | The same session, with the repo run by the factory loop instead of the issue-orchestrator skill. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
+| `orchestrator-loop` | Orchestrator (loop) (🏭) | `session`, resumed on every start | A repo run by the factory loop, with one long-running Claude as its judge. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 
 From the repo root, with the `coder` CLI logged in as a template admin:
 
@@ -250,22 +250,54 @@ on GitHub, so a lossy compaction or a lost transcript costs little.
 
 ## Loop orchestrator workspace
 
-The `orchestrator-loop` template is the [Orchestrator workspace](#orchestrator-workspace) with
-one difference: the repo is run by the [factory loop](../../plugins/factory-loop/README.md), a
-plugin that claims, gates and merges issues in code each minute and wakes Claude only for
-judgment calls. The session starts with `/factory-loop:judge` and, on a resume, is told the loop
-carries on by itself: there is no watcher to re-arm.
+The `orchestrator-loop` template runs one repo's factory: the factory loop, a plugin that every
+minute reads the repo's issues, PRs and checks, claims issues labelled `ready`, starts agents
+that design, build, review and fix each one in its own worktree, and merges each PR through its
+merge queue once CI passes. It runs in code, and wakes Claude only for judgment calls and to speak
+to the owner. The design is the [v2 SPEC](../../docs/factory-loop/v2/SPEC.md); putting a repo on it
+is [onboarding step 7](../../docs/onboarding.md#7-put-the-repo-on-the-factory-loop-if-the-user-said-yes).
 
-- **Plugins**: `push.sh` pins callum-flow and factory-loop to the package version of the
-  checkout it pushes from, so push it from main after a release. A repo whose
-  `.claude/settings.json` pins the `callum` marketplace to an older release wins over that pin
-  and has no factory-loop to install: bring the repo up to date (`npx callum-dev update`) first.
-- **Mode**: the loop starts in observe mode, reading the repo the checkout's `origin` names and
-  executing nothing. Act mode is set in `${CLAUDE_CONFIG_DIR}/factory-loop/config.json`, and only
-  acts while its safety rails pass (the plugin README's "Run it in act mode"); never run it beside
-  an `orchestrator` workspace on the same repo.
-- **Stop**: create `/persist/claude/factory-loop/OFF` in the workspace; the loop stops within a
-  minute.
+```bash
+coder create <repo>-loop --template orchestrator-loop \
+  --parameter repo_url=<https clone url> \
+  --parameter remote_control_skip_permissions=true --parameter cpus=8
+```
+
+The loop's agents run unattended, so a tool call that would ask for approval is refused instead
+(SPEC 10.10); every loop workspace in use runs with `remote_control_skip_permissions` on. The
+stop gate runs one full gate per 8 CPUs at once, beside the agents. Logins are as for any
+workspace ([First-run logins](#first-run-logins)).
+
+- **On boot**: one long-lived interactive Claude in `session` mode, named `🏭 <repo> loop` in
+  claude.ai. A fresh conversation starts with `/factory-loop:judge`, so the session is the loop's
+  judge: it answers the loop's wakes and is where the owner talks to the factory. The loop
+  starts with the session and runs its first pass within a minute. There is nothing to arm.
+- **On resume**: `remote_control_resume` is on, so a stop, restart, rebuild, template update or
+  crash brings back the same conversation, told that the loop resumes by itself. The loop picks up
+  where it stopped from what it keeps on the workspace's `/persist` volume: its records and its
+  ledger of started work in the plugin store (`/persist/claude/plugins/store/`), and its decision
+  log, control file and agents' answers in `/persist/claude/factory-loop/<owner>__<repo>/`.
+- **Plugins**: `push.sh` pins `callum-flow`, `factory-loop` and `factory-loop-workspace` to the
+  package version of the checkout it pushes from, so push it from main after a release. The
+  template's refs win over a ref the repo's `.claude/settings.json` declares
+  (`default_plugin_refs_win`), and `dev-doctor` fails on a missing one. `factory-loop-workspace`
+  is the loop's companion: it starts each agent in its worktree, guards what it may write and runs
+  the stop gate ([its README](../../plugins/factory-loop-workspace/README.md)). Without it the loop
+  holds every agent step and sends a `workspace` notice.
+- **Settings**: the repo's `.claude/factory-loop.json`, read from its default branch on GitHub,
+  then the workspace file `/persist/claude/factory-loop/config.json`, which may set any key and
+  wins. `/factory config` shows each setting and its source.
+- **Observe and act**: the loop starts in observe mode: it reads the repo its checkout's `origin`
+  names, plans and logs, and executes nothing. `/factory mode act` switches it on from the next
+  pass. It acts only while its safety rails pass: the role is `orchestrator` (this template sets
+  it), no other orchestrator workspace on the repo has sent a heartbeat in the last 2 minutes, and
+  no other session in the workspace holds the act lock. While one fails it keeps observing, and the
+  decision log's `rails` field says why. Never run two loop workspaces, or a loop and an
+  `orchestrator` workspace, on one repo.
+- **Stop the loop**: `/factory new off` lets work in flight finish and starts nothing new.
+  `/factory mode off` stops it from the next pass. The kill switch, which needs no session, is
+  the `OFF` file: create `/persist/claude/factory-loop/OFF` in the workspace and the loop stops
+  within a minute, whatever its mode, until the file is deleted.
 - **Stopping the workspace** (`wind_down_minutes`, 10 here): the stop path is Coder stop, then the
   `Wind down` stop script (`wind-down.sh`), then the loop's wind-down mode
   ([SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace

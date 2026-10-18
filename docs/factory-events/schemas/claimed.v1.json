@@ -8,7 +8,7 @@
   "additionalProperties": false,
   "required": ["lease_minutes"],
   "properties": {
-    "lease_minutes": { "type": "integer", "minimum": 1, "description": "How long the claim holds without a renewal, in minutes." }
+    "lease_minutes": { "type": "integer", "minimum": 1, "x-column": true, "description": "How long the claim holds without a renewal, in minutes." }
   },
   "examples": [
     { "lease_minutes": 120 }
