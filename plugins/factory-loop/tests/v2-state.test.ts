@@ -22,6 +22,8 @@ import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
 import type { TriageInput } from '../hooks/v2/prompts-triage'
 import { resultsOf, stepFiles, triageInput, triageResult } from '../hooks/v2/steps-triage'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
+import { parkText } from '../hooks/v2/park-text'
+import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
 import { FACTORY_LABELS, SLOT_STATES } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2Io, V2State } from '../hooks/v2/types'
@@ -671,6 +673,19 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     expect(noteOf([park(['A'], { ...p, seq: p.seq - 1 }), answer])).toEqual(['Go with it.'])
     // a comment of the owner quoting the template is no park comment
     expect(noteOf([{ body: '- [x] **A** - option A', at: NOW - 20 * MIN, url: null }, answer])).toEqual(['- [x] **A** - option A Go with it.'])
+  })
+
+  test('a designer\'s question with options, stored by T3 and worded by parkText, is a park comment whose tick the label-off unpark reads back (#856)', () => {
+    const designing = rec(110, { state: 'designing', step: 'design', seq: 5 })
+    const asked = renderQuestion({ question: 'Which API?', context: 'Two shapes exist.', options: [{ key: 'A', title: 'v1', detail: 'old' }, { key: 'B', title: 'v2' }], recommendation: { key: 'B', reason: 'newer' } })
+    const event = { kind: 'not-ok' as const, reason: 'question', data: { question: asked } }
+    const parked = { ...(nextRecord(designing, rowFor(designing, event, config({ planner: 'v2' })), event, NOW) as IssueRecord), seq: p.seq, seqAt: parkAt, since: parkAt }
+    expect(parked).toMatchObject({ state: 'parked', question: asked })
+    const body = parkText(parked, 'designing', 'question')
+    for (const line of ['#### Context', '#### Options', '#### Recommendation', '- [ ] **A** - v1', '- [ ] **B** - v2', 'Tick one option, or write your answer as a comment.']) expect(body).toMatch(new RegExp(`^(\\d+\\. )?${line.replace(/[*[\]]/g, '\\$&')}`, 'm'))
+    const comment = { body: `${body.replace('- [ ] **B**', '- [x] **B**')}\n\n${hiddenKey(entryKey(p, 'comment'))}`, at: parkAt + 2 * MIN, url: null }
+    const r = plan(withLedger(world([p], {}, { reads: { 110: { at: NOW - 5 * MIN, open: true, labels: ['enhancement'] } }, comments: { 110: [comment] } }), settledPark))
+    expect(((transitionOf(r, 110)?.next) as IssueRecord).notes[0]).toMatch(/^Owner chose option B: /)
   })
 
   test('the resume note reaches the step the resume leads to: P1 puts it on queued, T1 carries it into designing, fixing or reviewing, and that step\'s prompt says it (R5-F2)', async () => {

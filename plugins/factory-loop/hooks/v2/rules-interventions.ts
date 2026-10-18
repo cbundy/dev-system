@@ -21,6 +21,7 @@
 // (another device's work), tells for waiting states, and status and help. Pure.
 import { gate, skip } from '../foundation'
 import type { LedgerEntry, Ms } from '../types'
+import { decisionOf } from './park-text'
 import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
@@ -155,7 +156,7 @@ export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
     }
   }
   if (o.to === 'parked') {
-    const question = record !== undefined && record.seq === f.seq && record.question !== null ? `: ${record.question}` : ''
+    const question = record !== undefined && record.seq === f.seq && record.question !== null ? `: ${decisionOf(record.question)}` : ''
     loop('park', `parked from ${from} (${o.row})${question}`)
   }
   const fact = entry.key
