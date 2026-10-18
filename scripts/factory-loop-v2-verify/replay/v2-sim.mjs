@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// v2 world simulation over the recorded night of 2026-10-14/15 (v2 SPEC 17.2, as far as a scratch
-// harness goes). It drives the real planV2 pass by pass from the branch build (a scratch copy of
+// v2 world simulation over the recorded night of 2026-10-14/15 (a scratch harness). It drives the real planV2 pass by pass from the branch build (a scratch copy of
 // feat/factory-loop-v2 at 901a0a8), executes its actions against a simulated world at the outcome
 // level (the ledger, records, leases, PRs, CI, main), and checks invariants every pass.
 //

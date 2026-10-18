@@ -27,7 +27,7 @@ Hard rules:
 - Run long commands in the foreground with an explicit timeout; never leave background polling loops behind.
 Write your working notes and evidence under ${OUT}/.
 `
-function V2NOTES() { return `${WT}/docs/factory-loop/v2/BUILD-NOTES-W1.md and the commit bodies on feat/factory-loop-v2 (git -C ${WT} log origin/main..origin/feat/factory-loop-v2)` }
+function V2NOTES() { return `${WT}/docs/factory-loop/v2/SPEC.md and the commit bodies on feat/factory-loop-v2 (git -C ${WT} log origin/main..origin/feat/factory-loop-v2)` }
 
 const SETUP_SCHEMA = {
   type: 'object',

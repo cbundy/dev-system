@@ -60,7 +60,7 @@ You need the `coder` CLI logged in and `gh` logged in as the repo owner.
    `obs.sh`, `timeline.sh` and `passes.sh`.
 6. Record each drill in a new dated file under `results/`, and end with `drills/setmode.sh off`.
 
-The drill list and the expected outcome of each is section 17.3 of the spec. A drill passes when its
+The drill list and the expected outcome of each are in the dated files under `results/` (the first run, `results/2026-10-15-drills.md`, lists them). A drill passes when its
 expected events and interventions appear in the events, and no other intervention does.
 
 ## How faults are provoked

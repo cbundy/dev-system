@@ -1,34 +1,23 @@
 # Factory loop v2: specification
 
-**Status.** Revised in workflow 1, 2026-10-15, after three critics and three spikes, then updated
-the same day with the owner's answers to its ten open questions (section 15) and two structural
-decisions: the module layout with a size guard (2.5), and structured event payloads (7.1), which
-the owner later withdrew: v2 writes today's event format (section 15). What changed and why, finding by finding, is in [BUILD-NOTES-W1.md](BUILD-NOTES-W1.md). The spike
-answers are in [SPIKES.md](SPIKES.md). Workflow 2 builds from this version.
+This is the specification of the factory loop as built: the record each issue carries, the
+transition table, the one path for an unknown result, reconcile, the events, the merge queue, the
+workspaces, and the foundation the loop runs on. It states what the code does and why each rule
+exists.
 
-**Sources and short names.**
-
-- OB: the owner brief, `/persist/claude/factory-loop-v2-build/OWNER-BRIEF.md`. Where it and this
-  spec differ, the brief wins (OB:4-5).
-- V: the verdict, `/persist/claude/factory-loop-review/2026-10-14-verdict.md`.
-- C3, C4, G1, G2, G4: the review reports in the same folder.
-- DB: the original brief, `/persist/claude/factory-loop-review/2026-10-14-deep-dive-brief.md`
-  (the 12 failure types, DB:77-95).
-- FM: the foundation map, [FOUNDATION-MAP.md](FOUNDATION-MAP.md).
-- W1: the workflow 1 critic and spike reports in `/persist/claude/factory-loop-v2-build/w1/`.
-  Findings are named `failures/F<n>`, `totality/T-<nn>` and `simplicity/F<n>`, as in
-  BUILD-NOTES-W1.md.
-- D-nn: an entry of `docs/factory-loop/DECISIONS.md`. The first loop's sections and rules that
-  still hold are in section 13.
-
-Code paths are under `plugins/factory-loop/` unless they start with `docs/`, `tests/`,
-`scripts/`, `images/`, `features/`, `coder/` or `plugins/`. Line numbers are at `d633030`. Times
-are UTC.
+**How it is organised.** Sections 1 and 2 give the goals and how the parts fit. Sections 3 to 12
+are the loop's design. Section 13 is the foundation: the pass driver, observe, configuration, the
+ledger, safety rails and observability. Section 14.1 counts the rule layer, section 15 holds the
+decisions still in force, and section 17.1 lists the properties the tests keep true. Appendices A
+to E list the vocabulary (settings, action kinds, key families, labels and notices, owner ops).
 
 **How to read it.** Sections 3 to 6 are the core: the record, the transition table, the unknown
-path and reconcile. Section 10 is the workspace design the spikes chose. Section 13 is the foundation the first
-loop built and v2 keeps, as built. Appendices A to E list the
-vocabulary (settings, action kinds, key families, labels and notices, owner ops).
+path and reconcile. Section 10 is the workspace design. Section 13 is the base the rest plugs
+into. A reference such as `13.7.4` names a section of this document; `D-nn` is an entry of
+`docs/factory-loop/DECISIONS.md`.
+
+Code paths are under `plugins/factory-loop/` unless they start with `docs/`, `tests/`,
+`scripts/`, `images/`, `features/`, `coder/` or `plugins/`. Times are UTC.
 
 ## 1. Goals and non-goals
 
@@ -36,67 +25,61 @@ Goals:
 
 - One issue goes from claim to merge untouched most of the time: no intervention by a person or
   by the loop is attached to it (7.2). The bar: at least 7 of the first 10 claims merge within 3
-  hours untouched (OB:115-116; 17.5).
+  hours untouched.
 - Every issue has one explicit state with a timeout. Every step ends ok, not ok or unknown, and
-  unknown has one path (OB:33-46).
+  unknown has one path.
 - The loop owns what it reconciles: the record, the branch, the PR, the slot and the merge. It
-  never mirrors another tool's private state (V:16-23).
-- Fewer mechanisms: 21 rule ids against 46 (OB:95-102). Section 14 counts the layer like for like
-  against C3's estimates.
+  never mirrors another tool's private state.
+- Few mechanisms: 21 rule ids. Section 14.1 counts the layer.
 - Every intervention is an event: each time a person, or the loop with unplanned judgement or
   recovery, had to step in. So "untouched", operator interventions and judgement calls can be
-  read from factory data alone (OB:57-58; issue #632, metrics 1 and 2).
+  read from factory data alone (issue #632, metrics 1 and 2).
 
 Non-goals:
 
 - no-mistakes anywhere in the loop's path: not in its sources, its guard calls, its agent
   definitions or its prompts. It stays for people and other repos; `.no-mistakes.yaml` is not
-  changed (OB:69-75).
-- Release sequencing in the merge path (OB:89-91).
-- Running tests in the loop. GitHub CI is the test gate (OB:83-85).
-- Changing the foundation beyond the couplings FM section 4 names.
-- A GitHub merge queue: it needs an organisation-owned repo, and dev-system is user-owned (C4
-  (d5)).
+  changed.
+- Release sequencing in the merge path.
+- Running tests in the loop. GitHub CI is the test gate.
+- A GitHub merge queue: it needs an organisation-owned repo, and dev-system is user-owned.
 
 ## 2. The foundation, and how v2 plugs in
 
 ### 2.1 What stays
 
-The foundation stays (OB:22-23; V:13). Section 13 describes it as built, and v2 uses it through the interfaces named below.
+The foundation is the base the loop runs on. Section 13 describes it, and the loop uses it through the interfaces named below.
 
-| Part | Where | In v2 |
+| Part | Where | In the loop |
 |---|---|---|
-| Pass driver, clock, pings, scheduler, phases | 13.2; `register.ts` and the `driver-*.ts` modules, `rails.ts` | unchanged; the plan call is switched (2.3) |
+| Pass driver, clock, pings, scheduler, phases | 13.2; `register.ts` and the `driver-*.ts` modules, `rails.ts` | the plan call is `planV2` (2.3) |
 | Rails, act lock, kill switch | 13.11; `rails.ts`, `act.ts` | one more rail: the workspace plugin is loaded (10.9) |
 | Executor contract and dispatcher | 13.6; `exec.ts`, `act.ts` | v2 kinds register in `EXECUTORS` |
 | Ledger | 13.7.1; `ledger.ts` | same API; v2 key families (appendix C) |
-| Usage tiers and action classes | 13.5.2; `foundation.ts` `tierOf` and the class matrix | unchanged; v2 classes in appendix B |
+| Usage tiers and action classes | 13.5.2; `foundation.ts` `tierOf` and the class matrix | the loop's classes are in appendix B |
 | Breakers and rate caps | 13.11.4 | one more breaker bucket: step unknowns across issues (5.3) |
-| Owner controls | 13.4.3; `control.ts`, `control.json` | kept; some ops change (appendix E) |
+| Owner controls | 13.4.3; `control.ts`, `control.json` | the ops are in appendix E |
 | Wakes and one wake at a time | 13.8; `wake.ts` | `tell` and `task release` only |
 | Answer channel and repair message | 13.7.3a; `contract.mjs`, `bin/factory-answer` | the `script` channel only; new contracts |
-| Event emitter | 13.7.4; `act.ts` `ctx.event` | unchanged; three new states (7.1) |
-| Decision log, trace, daily prune | 13.12, 13.11.6; `trace.ts`, `exec.ts` | unchanged; the `planner` field is always `v2` |
+| Event emitter | 13.7.4; `act.ts` `ctx.event` | three states of its own (7.1) |
+| Decision log, trace, daily prune | 13.12, 13.11.6; `trace.ts`, `exec.ts` | the `planner` field is always `v2` |
 | Store | 13.7.1; `$.store` | new keys `records:<repo>` (3.3) and `heads:<repo>` (2.4) |
 | Settings layers | 13.4; `config.ts` | new keys (appendix A) |
 
 ### 2.2 The seam
 
-- **Plan.** `planV2(state: State, config: Config): PlanResult` in `hooks/v2/plan.ts`. It has the
-  signature of v1's `plan` (`plan.ts:178`; FM 2.3) and is pure: it imports types,
-  `hooks/v2/*.ts` and `hooks/foundation.ts` only. The purity test
+- **Plan.** `planV2(state: State, config: Config): PlanResult` in `hooks/v2/plan.ts`. It is pure: it imports types, `hooks/v2/*.ts` and `hooks/foundation.ts` only. The purity test
   (`tests/factory-loop-plan.test.js`) covers `hooks/v2/`.
-- **Foundation helpers.** `hooks/foundation.ts` holds the generic plan code v2 needs: the tier
+- **Foundation helpers.** `hooks/foundation.ts` holds the generic plan code the loop needs: the tier
   (re-exporting `tierOf`), the class matrix, `gate` and `want`, the generic admission filters
   (control, tier, GitHub backoff, breakers, rate caps), `oneWake` and the title frame. These are
-  the code v1's `plan.ts` held (FM coupling C1). v1 and `plan.ts` are deleted (#926):
-  `foundation.ts` is the only copy.
+  the one copy of that code.
 - **Observe.** `observe()` calls `observeV2()` (`hooks/v2/observe.ts`). It adds the State fields
-  in 2.4. It reads no `runs` source (`pipeline-watch.sh`) and does no slot reflog inference.
-- **Act.** v2 executors live in `hooks/v2/act-*.ts` and join `EXECUTORS` (`act.ts:31`) through
+  in 2.4. It reads no no-mistakes run data and does no slot reflog inference.
+- **Act.** The loop's executors live in `hooks/v2/act-*.ts` and join `EXECUTORS` (`act.ts`) through
   `hooks/v2/registry.ts`.
-- **Events.** Every v2 event is built by one module, `hooks/v2/events.ts`, and written through
-  `ctx.event` (`act.ts:102`). `callum-flow-event` gains three states (7.1).
+- **Events.** Every event is built by one module, `hooks/v2/events.ts`, and written through
+  `ctx.event` (`act.ts`). `callum-flow-event` has three states of its own (7.1).
 - **Wakes.** `tell` and `task release` through `wake.ts`. Triage is a spawned agent, not a wake
   (section 15).
 - **Store.** `records:<repo>` (3.3) and `heads:<repo>` (2.4).
@@ -104,7 +87,7 @@ The foundation stays (OB:22-23; V:13). Section 13 describes it as built, and v2 
 
 ### 2.3 The loop always plans with v2
 
-v1 is gone (#926). The loop plans with v2 alone, and there is no switch.
+The loop plans with `planV2` alone, and there is no switch.
 
 - The settings `planner` and `shadow` of earlier releases are retired. A settings file, repo-local
   or workspace, that still sets either one (any value, `v1` included) loads: the key is ignored,
@@ -123,27 +106,27 @@ v1 is gone (#926). The loop plans with v2 alone, and there is no switch.
 
 ### 2.4 What v2 reads
 
-v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simplicity/F9`):
+The loop reads these sources each pass, and no `runs` source (no-mistakes run data):
 
-| Source | Command | Cadence | In v2 |
+| Source | Command | Cadence | Notes |
 |---|---|---|---|
-| `factory` | `callum-flow-factory-state --format json --github off` | every pass | kept (G2): claims, their holders and lapses. `nomistakes.runs` becomes optional in that tool (U4), so no-mistakes data can never blind v2 (`simplicity/F3`) |
-| `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1), and says which facts are logged (7.2) |
-| `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | kept |
-| `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
-| `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
-| `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | v1's `pool` without inference |
+| `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses. `nomistakes.runs` is optional in that tool, so no-mistakes data can never blind the loop |
+| `facts` | `dev-query` with `EVENTS_SQL` | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
+| `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
+| `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
+| `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
+| `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | the slot pool's holders, read without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
-| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify) | as v1 (`milestoneEveryMs`) | kept (the release task); also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is new (8.7) |
-| store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
-| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | new; a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
-| `dualWrite` | act mode with the v2 planner only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | new; its failure blocks nothing (4.1) |
+| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
+| store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | the records are in 3.3 |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records |
+| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
+| `dualWrite` | act mode only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
 - **The PR cadence.** A PR read costs about two GitHub calls, so at a 10 s pass a PR read every
-  pass took about 720 calls an hour, and K PRs most of the account's shared 5,000 (drill run 3).
+  pass took about 720 calls an hour, and K PRs most of the account's shared 5,000.
   A PR's read stands, with its own time, until it is due: `prEveryMs` (30 s) after it, or at once
   when something the loop knows changed it, its record's transition (any change of the record) or
   an action of the loop's own on the PR (an ensure, an update, a merge, a CI re-run) that ended
@@ -154,42 +137,65 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 - **Read order.** GitHub reads are taken in this order until the pass's budget is spent: the merge
   queue's head, the other records in reviewing and merge-queue, parked and waiting records, the other
   records, then the queue and the rest. The PR reads are bounded by K records; the issue reads
-  keep v1's 12 per pass (`observe.ts:35`). All are skipped during a GitHub backoff, as v1's are
-  (13.10 item 2) (`totality/T-26`).
+  are capped at 12 per pass (`GITHUB_READS_PER_PASS` in `observe.ts`). All are skipped during a
+  GitHub backoff (13.10 item 2).
 - **The companion's log** (`<loop dir>/companion.jsonl`, 7.2) is read each pass with the loop
   dir's answer files (10.8), not as a source of its own. Its gate lines also give the `gate_run`
   events (10.6).
-- **Not read** (each was in the draft): a mirror of every `factory:*` label, a 5-minute scan of
-  open PRs, main's check runs and the session environment. Their rules are gone (3.4, 3.5, 9.5,
-  10.5).
+- **Not read:** a mirror of every `factory:*` label, a 5-minute scan of open PRs, main's check
+  runs and the session environment. The loop has no rule that needs them.
 
 ### 2.5 Module layout
 
-v1's rule layer is a few large files: `plan.ts` 2,541 lines, `register.ts` 1,600, `act-merge.ts`
-722, `act.ts` 704, `act-agents.ts` 646, `control.ts` 603. v2 is laid out so that cannot recur:
+The loop's code is split so that no file grows large. The root of `plugins/factory-loop/hooks/` holds
+the foundation (section 13) and the glue:
 
-- **One module per area and kind** under `hooks/v2/`: `rules-*` (what to plan), `steps-*` (how a
-  step runs and reads its answer), `act-*` (executors), `contracts-*` (answer checks),
-  `prompts-*` (agent prompts), plus `events.ts`, `record.ts`, `reconcile.ts`, `release.ts` and
-  `lives.ts`.
+- **Registration and passes.** `register.ts` (the plugin entry), `passes.ts`, `pass-summary.ts`
+  and the `driver-*.ts` modules (`driver-pass`, `driver-state`, `driver-store`, `driver-io`,
+  `driver-controls`, `driver-between`, `driver-pass-log`).
+- **Observe.** `observe.ts` with `observe-github.ts` and `observe-milestone.ts`, `derive.ts`,
+  `parse.ts` and `state.ts`.
+- **Act.** `act.ts` (the dispatcher and `EXECUTORS`) with `act-cli.ts`, `act-merge.ts` and
+  `act-between.ts`, `exec.ts` and `agent-tools.ts`.
+- **Control.** `control.ts` with `control-files.ts` and `control-help.ts`.
+- **Configuration.** `config.ts` with `config-keys.ts` and `config-view.ts`.
+- **Shared.** `foundation.ts`, `rails.ts`, `ledger.ts`, `wake.ts`, `prompts.ts`, `replies.ts`,
+  `report.ts`, `trace.ts`, `within.ts`, `types.ts` and the answer contract (`contract.mjs`).
+
+`hooks/v2/` holds the loop itself, one module per area and kind:
+
+- `rules-*` (what to plan): `rules-agent`, `rules-claim`, `rules-dualwrite`, `rules-entry`,
+  `rules-fleet`, `rules-gates`, `rules-interventions`, `rules-queue`, `rules-review`,
+  `rules-slots`, `rules-state`, `rules-work`.
+- `steps-*` (how a step runs and reads its answer): `steps`, `steps-queue`, `steps-review`,
+  `steps-triage`, `steps-work`.
+- `act-*` (executors): `act-ci`, `act-events`, `act-pr`, `act-queue`, `act-review`, `act-slots`,
+  `act-split`, `act-state`, `act-tracker`.
+- `contracts-*` (answer checks): `contracts-review`, `contracts-triage`, `contracts-work`.
+- `prompts-*` (agent prompts): `prompts-review`, `prompts-triage`, `prompts-work`.
+- `sources-*` (what observe reads): `sources-dualwrite`, `sources-interventions`, `sources-prs`,
+  `sources-waits`, `sources-workspace`.
+- The named singles: `plan.ts`, `observe.ts`, `registry.ts`, `table.ts`, `record.ts`,
+  `reconcile.ts`, `events.ts` with `event-reader.ts` and `event-schemas.ts`, `release.ts`,
+  `lives.ts`, `keys.ts`, `store.ts`, `settings.ts`, `ops.ts`, `argv.ts`, `workspace.ts`,
+  `wind-down.ts` with `wind-down-files.ts`, `question.mjs`, `reviewer.ts`, `park-text.ts` and `types.ts`.
+
+Rules for the layout:
+
 - **The pure planner is a thin composer.** `hooks/v2/plan.ts` calls the `rules-*` modules in a
   fixed order and merges their actions. It holds no rule of its own.
 - **The table is data** (`table.ts`, 4.6), not code paths.
-- **No module is shared by two parallel build units** (16). Where v2 must touch a foundation file,
-  it adds a call into a v2 module, not logic.
-- **The size guard.** `npm run lint` (`scripts/lint.sh`) fails when any file under
-  `plugins/factory-loop/hooks/` is over 600 lines. An explicit allowlist names today's six
-  oversized v1 files, each with a cap: its line count when U1 set it. Both only ever shrink: a
-  listed file over its cap fails (a call into a v2 module goes in, and the logic it replaces comes
-  out), a listed file at or under 600 lines also fails the check, so its entry must go, and nothing
-  is ever added. A cap may be lowered when its file shrinks, never raised. It must be empty after
-  the delete wave (U10). U1 builds the guard.
+- **A foundation file gains a call into a `hooks/v2/` module, not logic.**
+- **The size guard.** `npm run lint` (`scripts/lint.sh`, through `scripts/size-guard.sh`) fails
+  when any file under `plugins/factory-loop/hooks/` is over 600 lines. The allowlist
+  (`HOOKS_OVERSIZED` in `scripts/lint.sh`) is empty, so every file is held to 600. A new oversized
+  file is split, never listed.
 
 ## 3. The record and the labels
 
 ### 3.1 States
 
-The owner's label set, exactly (OB:33-41):
+The owner's label set, exactly:
 
 | State | Label | Meaning | Holds a slot | In flight |
 |---|---|---|---|---|
@@ -246,7 +252,7 @@ type IssueRecord = {
 }
 ```
 
-- Step, attempt, round and the approved patch live in the record (OB:42-43).
+- Step, attempt, round and the approved patch live in the record.
 - Each claim of an issue is one life, and the record counts lives (owner, 2026-10-15). S0 sets
   `lives` from the issue's earlier lives (6.4, "Lives"); the count starts again with the first
   claim after a rejection.
@@ -266,19 +272,18 @@ type IssueRecord = {
 ### 3.3 Where it lives, and how it changes
 
 - **Store.** `records:<repo>` = `{ v: 1, savedAt, records: IssueRecord[] }` in `$.store`, beside
-  the ledger (FM 2.12, coupling C2).
-- **One writer.** Only an acting pass under the act lock writes it. Observe and shadow passes only
+  the ledger (13.7.1).
+- **One writer.** Only an acting pass under the act lock writes it. Observe passes only
   read it.
 - **Only the `transition` executor changes a record** (4.6). It does two things:
   1. it re-checks the row's trigger against the live ledger and records (the step entry and the
      status the plan saw, or the GitHub fact). When the trigger no longer holds, for example
-     because an answer arrived after the plan, it does nothing and the next pass plans again
-     (`totality/T-17`);
+     because an answer arrived after the plan, it does nothing and the next pass plans again;
   2. it stores the next record with a compare on `(issue, life, seq)`.
 - **The ledger is the outbox.** Every effect of a transition is an entry action of the new seq
   with its own key (4.5): the `transition` event, stopping the old step, the label and the rest.
   A crash after the store write leaves the entry actions planned on the next pass, so no event is
-  lost (`failures/F12`, `totality/T-05`). The `transition` entry carries its row, the state and
+  lost. The `transition` entry carries its row, the state and
   step it leaves and its via code from its start, so an entry the reload marks lost still names
   them: the row's events, the park's comment and the breaker read them from there. The next transition of a record waits until its current
   seq's `transition` event is logged, so the trail has no gaps.
@@ -289,9 +294,9 @@ type IssueRecord = {
   again under its own key whatever the queue says, since `ready` is gone, and holds its place
   under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim once `claimed` is logged and
   otherwise makes it fresh.
-  A v2 claim never becomes a ghost (`totality/T-14`).
+  A claim never becomes a ghost.
 - **Life.** The start time of the claim action, in base-36 seconds: unique, and needs no counter
-  that pruning could reset (`totality/T-14`).
+  that pruning could reset.
 - **Pruning.** A closed record goes 7 days after it closed, as ledger entries do (13.7.1).
 - **Rebuild.** With no records in the store (a new device, a wiped config), act mode rebuilds them
   from this device's `transition` events: the newest per issue over 90 days. The event's note
@@ -302,7 +307,7 @@ type IssueRecord = {
 ### 3.4 Labels
 
 - **Names.** `factory:queued`, `factory:designing`, `factory:building`, `factory:reviewing`,
-  `factory:fixing`, `factory:merge-queue`, `factory:parked`, `factory:waiting` (OB:33-41; the last is
+  `factory:fixing`, `factory:merge-queue`, `factory:parked`, `factory:waiting` (the last is
   the waiting state, 3.1). Colours and descriptions
   are in appendix D.
 - **`factory:rejected`** (owner, 2026-10-15) is a ninth label and no state: the issue is out of
@@ -313,37 +318,32 @@ type IssueRecord = {
 - **Exactly one** `factory:*` state label on the issue of an active or parked record; none on a
   closed one.
 - **One writer.** The loop is the only writer, except that the owner removing `factory:parked` is
-  the resume signal (OB:42-44). Removing `factory:waiting` is not one: a waiting record resumes
+  the resume signal. Removing `factory:waiting` is not one: a waiting record resumes
   when its conditions hold or by `/factory resume N` (11).
-- **The record is the authority and the label its mirror** (OB:42-43). A state change's entry
+- **The record is the authority and the label its mirror**. A state change's entry
   action `label` writes it in one call: `gh issue edit <N> --repo R --add-label <new>
   --remove-label <the other seven>`. The loop does not read labels back to correct them: there is no
   mirror check and no label-drift intervention. Stale label reads made such a check undo parks
-  and log false touches (`totality/T-01`, `simplicity/F6`, `simplicity/F9`).
+  and log false touches.
 - **The one label read.** For a parked record, the `github` source reads the issue directly. A
   read made after the park's `label` action finished (it comes on the next pass, 2.4) that lacks
   `factory:parked` is the unpark signal (4.1). Older reads are ignored. The label list is not used, because it lags behind
-  edits (`images/base/callum-flow-sweep:37`, `:142`).
+  edits (`images/base/callum-flow-sweep`).
 - **Creation.** Action `label` with op `ensure` once per module load, and again after a label write
   fails with a missing label: `gh label create <name> --repo R --color <c> --description <d>
   --force` for each of the nine (the eight state labels and `factory:rejected`). `--force`
   updates a label that exists.
-- **No claim label.** v2 neither writes nor reads `In development` (owner, 2026-10-15). The claim
+- **No claim label.** The loop neither writes nor reads `In development` (owner, 2026-10-15). The claim
   is the claim comment and its `claimed` and `renewed` events; the `factory:*` label shows the
   state. The claim tools change to match (3.6). A closed record's `label` op `clear` removes every
   `factory:*` label, unless another device holds a live claim on the issue: then it removes none,
-  because the winner owns the labels (`callum-flow-claim:18-21`; `totality/T-02`).
-- **Migration.** No issue has a `factory:*` label before cutover. The owner's own `parked` label
+  because the winner owns the labels (`images/base/callum-flow-claim`).
+- **The owner's `parked` label.** The owner's own `parked` label
   convention (`skipLabels`, D-17) is unrelated and unchanged.
-- **Rollback.** The `planner` and `shadow` keys are retired and ignored, so rollback means the previous release (OB:117). The
-  runbook (17.5) first stops new work and lets v2's records reach parked or closed, because v1
-  ignores v2's records, slot holders and labels (`totality/T-27`). It then deletes the nine
-  labels with `gh label delete <name> --repo R --yes`, after re-adding `ready` to any rejected
-  issue the owner still wants.
 
 ### 3.5 One branch, one PR, one slot per life
 
-- **The branch is `issue-<N>`, for every life** (OB:65-66; `simplicity/F14`):
+- **The branch is `issue-<N>`, for every life**:
   - At claim, the `claim` executor lists open PRs once (`gh pr list --repo R --state open --limit
     1000 --json number,headRefName`; gh lists 30 without a limit). An open PR by a trusted author on a branch matching
     `(^|/)issue-<N>(-|$)` is adopted: the branch is that PR's head branch, `pr` is set, and
@@ -351,7 +351,7 @@ type IssueRecord = {
     adopted and the others are named in the transition note and left alone.
   - Otherwise the branch is `issue-<N>`. When origin already has it, from an earlier life or a
     released ghost, the work continues from its head: the slot is prepared from it and the builder
-    merges main when it needs to (`totality/T-28`). Nothing on origin is ever reset.
+    merges main when it needs to. Nothing on origin is ever reset.
 - **No `-vN` branches, no superseded PRs.** The loop never force-pushes, never rebases a pushed
   branch and never closes a PR, and the write guard stops agents doing any of these (10.4).
 - **The PR** is opened, adopted or reopened by the loop on each entry to reviewing (8.1).
@@ -359,11 +359,9 @@ type IssueRecord = {
 
 ### 3.6 The claim tools without `In development`
 
-The owner dropped `In development` now (section 15). Today the claim, heartbeat and sweep tools
-use it as the fleet's claim marker (`images/base/callum-flow-claim:21`, `:126`;
-`images/base/callum-flow-sweep:9-21`, `:82`), and the factory-state view checks it
-(`images/base/callum-flow-factory-state:63`, `:343-345`, `:412`). U4 changes all of them, so no
-tool the loop calls writes or reads the label:
+The owner dropped `In development` (section 15). The claim, heartbeat and sweep tools
+(`images/base/callum-flow-claim`, `images/base/callum-flow-sweep`) and the factory-state view
+(`images/base/callum-flow-factory-state`) neither write nor read it:
 
 - **`callum-flow-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
   `In development`. A device's own live claim after a restart does the same while this device's
@@ -378,11 +376,10 @@ tool the loop calls writes or reads the label:
   claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`) is a `claimed` by this
   device. A failed or unconfigured central read falls back to this device's log. The store the rule
   reads is `CALLUM_FLOW_CLAIM_EVENTS_SOURCE`: `new`, the default (`factory.event_log` through
-  `dev-query --factory` and the new log, where `reclaimed` is `requeued`), `old` (as above; the way back) or
-  `shadow`, set to re-measure, which decides on old and records a `shadow_read` event of how new differs. v2's H1 passes
-  numbers, as now (14.1).
+  `dev-query --factory` and the new log, where `reclaimed` is `requeued`), or `old` (as above; the way back). H1 passes
+  numbers (14.1).
 - **`callum-flow-sweep`.** Its candidates are the issues the event log and factory-state list as
-  live, the list its closed-issue pass already reads (`callum-flow-sweep:224-236`), not the label
+  live, the list its closed-issue pass already reads (`images/base/callum-flow-sweep`), not the label
   list. Rules: a closed issue logs `closed` when its latest event is not final; an open issue with
   a PR merged on its branch after the newest claim (checked before the lease, whoever holds the
   claim) logs `merged --actor sweep` and the issue is left alone; an open issue whose last claim
@@ -396,27 +393,17 @@ tool the loop calls writes or reads the label:
   "GitHub label only" list takes an open issue with a `factory:*` state label (its stage from the
   label) or `ready`, and no events. `factory:rejected` names no stage, and is not flagged on a
   closed record's issue.
-- Both tools drop `CALLUM_FLOW_IN_DEV_LABEL`. The old orchestrator's skill lines that name the
-  label (`plugins/callum-flow/skills/issue-orchestrator/SKILL.md:22`, `:77`) are updated.
+- Neither tool reads `CALLUM_FLOW_IN_DEV_LABEL`.
 - **`derive.ts`** reads no label: `EVENTS_SQL` and the derivation use events only
-  (`derive.ts:38-50`), and v2's records come from events (3.3). Nothing changes there for this.
+  (`EVENTS_SQL` in `derive.ts`), and the records come from events (3.3).
 - **The migration** (6.3) removes `In development` from the issues it touches.
-- **v1 is unaffected.** Before the delete wave, v1 runs in the same release with the new tools. No
-  v1 rule reads the label (`plan.ts:2214-2217` reads `ready` and skip labels only), and v1's
-  removals of it (`act-cli.ts:63-69`) become no-ops. They go at the delete wave with `inDevLabel`
-  (`config.ts:13`, `register.ts:263`). The label stays defined in each repo, so a removal never
-  fails. Rollback to v1 after the delete wave is running the previous release (v0.38.x), which
-  still carries the old tools, so v1 is unaffected there too. An issue v2 claimed has no
-  `In development`; the rollback runbook (17.5) brings it back by re-adding `ready`, and v1 labels
-  it again at its claim.
 
 ## 4. Steps and the transition table
 
 ### 4.1 Events
 
 The table's input. Each pass, a record takes at most one event that changes it: the first present
-in this order. Rows that change nothing (E6, E7) run beside it and never stop it
-(`totality/T-03`). A transition pings the driver, so the next event is taken at once (4.6).
+in this order. Rows that change nothing (E6, E7) run beside it and never stop it. A transition pings the driver, so the next event is taken at once (4.6).
 
 1. `pr-merged`
 2. `issue-closed`
@@ -428,7 +415,7 @@ in this order. Rows that change nothing (E6, E7) run beside it and never stop it
 8. `unpark`
 
 `pr-merged` comes first because a merge cannot be undone, and before `issue-closed` because a merge
-with `Closes #N` closes the issue in the same instant (`failures/F14`).
+with `Closes #N` closes the issue in the same instant.
 
 The order holds across sources. The PRs are read more often than the issue, so a
 `pr-closed` waits while the issue's last read is older than the PR's `closedAt`; that read is due on
@@ -440,19 +427,18 @@ the next pass (2.4). An issue closed with its PR then closes (E2) and never park
 | `not-ok` | the step | the step answered, and the answer says the work cannot go on as it is; it carries a reason |
 | `unknown` | the step | no usable answer (4.2, 5.1), including a timeout of a running step (4.4) |
 | `triage` | the triage step | the triage answer's choice (5.2) |
-| `drop` | owner | a `control.dropped` entry for the issue newer than the life's claim (an edge: it applies to that life only, `failures/F10`) |
+| `drop` | owner | a `control.dropped` entry for the issue newer than the life's claim (an edge: it applies to that life only) |
 | `cleared` | the loop | every condition of a waiting record holds, as the `waits` source read them (2.4), none of them failed or skipped |
 | `unpark` | owner | a `/factory resume N` entry newer than the park, or a direct read after the park label write that lacks `factory:parked` (3.4); for a waiting record only the `/factory resume N` entry |
 | `issue-closed` | GitHub | the issue closed, and no loop merge or `close-issue` of this life is done, running or lost |
-| `pr-merged` | GitHub | the record's PR merged at a head that no `queue-merge` entry of this life names (done, running or lost). A merge the loop made is the queue step's `ok` instead (`totality/T-05`) |
+| `pr-merged` | GitHub | the record's PR merged at a head that no `queue-merge` entry of this life names (done, running or lost). A merge the loop made is the queue step's `ok` instead |
 | `pr-closed` | GitHub | the record's PR is closed unmerged, and its `closedAt` is newer than the record's `prClosedAt` (an edge on GitHub's own timestamp) |
 | `claim-lost` | claims | another device holds a live claim on the issue, or a re-claim exits 3 |
 | `timeout` | the clock | a running step passed its timeout (read as `unknown`), or a waiting state passed its tell period (E6) (4.4) |
 
 GitHub events are edges, not conditions. `issue-closed`, `pr-merged` and `claim-lost` end the
 record, so they fire once. `pr-closed` compares GitHub's `closedAt` with the record's
-`prClosedAt`. `drop` and `unpark` compare the op's time with the life's claim and the park
-(`totality/T-03`).
+`prClosedAt`. `drop` and `unpark` compare the op's time with the life's claim and the park.
 
 A CI result is not an event of its own. CI belongs to two steps, reviewing and the merge-queue
 head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
@@ -464,7 +450,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
   the record's last claim; never the `ready` label list, which lags, 3.4) is claimed again with
   `callum-flow-claim N`. That keeps the record and its state; exit 3 is `claim-lost`. The re-claim
   logs the record's current `transition` event again, so readers see the stage at once
-  (`failures/F16`, `totality/T-14`).
+  .
 - **Dual write.** While the image writes the new event log (the `dualWrite` source, 2.4; act mode
   only), H1 logs a `transition` event with `via=dual-write` for every record, open or closed, whose
   current `<issue>:<life>:<seq>` the log lacks. Its key is `dual-write:<issue>:<life>:<seq>`, so
@@ -485,7 +471,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 
 | State | Step | Who | Role | ok | not-ok | unknown |
 |---|---|---|---|---|---|---|
-| queued | `lease` | W1's `slot` op `lease` (10.1) | - | a lease with the record's holder exists | - | - (a lease is an effect: it retries, then holds the record as `stalled`, 4.5) |
+| queued | `lease` | the workspace `slot` op `lease` (10.1) | - | a lease with the record's holder exists | - | - (a lease is an effect: it retries, then holds the record as `stalled`, 4.5) |
 | designing | `design` | the designer agent in the slot, then the loop posts the brief or creates the children (8.7) | reader | a brief, posted | a question; a wait on conditions (`wait`); or a split, its children created | the generic agent unknown (below) |
 | building | `build` | the builder agent in the slot | writer | a valid answer, and origin's branch, read directly, has commits beyond the base at or past the answered head | the answer says it cannot (with a reason); or origin's branch has no commit beyond the base (`no-commit`) | the generic agent unknown, or the direct read of origin failed |
 | reviewing | `review` | `pr` ensure (8.1), then the reviewer agent and CI on the head (8.3, 8.5) | reader | the reviewer approved the head's patch in this round, every check on the head passed or was skipped, and the PR does not conflict | the reviewer asked for changes; a check failed after its one re-run; the PR conflicts (`dirty`), which ends the step at once | the reviewer's generic agent unknown; a GitHub wait past its bound (4.4) |
@@ -504,7 +490,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 ### 4.3 The table
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
-and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts:32`). `maxTriages` is 2 (C3:85). "Step
+and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`). `maxTriages` is 2. "Step
 states" are designing, building, reviewing, fixing and the merge-queue head. 35 rows. The Events
 column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
 `merge_ready`) is logged by every row that enters the state, T1 included (4.5).
@@ -616,16 +602,16 @@ A step's clock counts only the time the step actually runs: from the start of it
 entry (the agent step or the step's own action). A step that admission holds (`noNewWork`,
 `serial`, a rate cap, a tier, the breaker, a pause, a GitHub backoff, a stalled effect) has no
 running entry, so it cannot time out and spends no attempt. Its skip line names the filter
-(`failures/F1`, `totality/T-07`). Waiting states have a tell period instead.
+. Waiting states have a tell period instead.
 
 | State, step | Timeout | Counted from | On expiry | Why this value |
 |---|---|---|---|---|
 | queued (waiting for capacity) | 6 h | entry | `tell(waiting)`; stays | waiting for capacity is not a fault; 6 h means the factory was full or held for most of a working session |
-| designing, design | 45 min | step start | unknown | v1 allowed 60 (`config.ts:41`); C3 proposes 30 (C3:76); a healthy design takes about 4 (C3:292); designers that ended with an async explorer running lost 53 issue-minutes (G1:123) |
-| building, build | 90 min | step start | unknown | v1 allowed 120 (`config.ts:41`). Old-regime delegation to first merge-ready was p50 33.4, p90 79.0 min (C3:280-282), including about 19 min of pipeline (V:139), so a build's p90 is about 60; 90 is 1.5 times that. No one command holds longer than 10 minutes (10.5) |
-| reviewing, the reviewer | 30 min | the reviewer's start | unknown | no-mistakes' review took a median 3.4 and at most 25.9 min (C3:272) |
-| fixing, fix | 60 min | step start | unknown | about 14 min for a healthy fix round (C3:292); v1's 120 kept stuck fixers too long (`config.ts:41`) |
-| a step state, triage | 15 min | step start | unknown | one bounded call; v1's judge wake had 30 (`config.ts:42`) for a wider job |
+| designing, design | 45 min | step start | unknown | a healthy design takes a few minutes; 45 leaves room for a long exploration and still catches a stuck designer |
+| building, build | 90 min | step start | unknown | A build's p90 is about 60 min; 90 is 1.5 times that. No one command holds longer than 10 minutes (10.5) |
+| reviewing, the reviewer | 30 min | the reviewer's start | unknown | a review takes a few minutes; 30 catches a stuck reviewer |
+| fixing, fix | 60 min | step start | unknown | a healthy fix round takes about 14 min; a longer wait only keeps a stuck fixer |
+| a step state, triage | 15 min | step start | unknown | one bounded call |
 | merge-queue (behind the head) | 2 h | entry | `tell(waiting)`; stays | a PR waits behind at most K - 1 heads |
 | parked | 24 h | entry, then each reminder | `tell(parked)` reminder; stays | one reminder a day |
 | waiting | 24 h (`stateTimeoutMs.waiting`) | entry, then each tell | `tell(waiting)`, naming the conditions still open; stays | the conditions are checked every pass, so 24 h without them holding is long enough for the owner to look; one tell a day, not an owner item |
@@ -636,13 +622,13 @@ step waiting on GitHub, with nothing of its own running, is unknown when either 
 
 - no check has started on its head `ciStartMs` (10 min) after the latest of: the head's first
   sighting (2.4), the end of the step's last action, and the last check's completion;
-- a check has been running for longer than `ciRunMs` (30 min). CI's p90 is 3.0 min (C3:276).
+- a check has been running for longer than `ciRunMs` (30 min).
 
 Both are judged at the PR's read, not at the pass: a read an earlier pass took (2.4) cannot show
 a check that started since it, so the bound counts to the read's time.
 
 This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with nothing to run
-(`totality/T-10`). In reviewing, the PR's own read is bounded the same way: a PR not in the
+. In reviewing, the PR's own read is bounded the same way: a PR not in the
 pass's read (a PR whose read, checks or patch id failed is left out: its own record's wait, never
 another's), a read older than the seq, no head or no patch id is unknown `ciStartMs` after the
 latest of the seq's start, the end of the PR's ensure and, for a PR whose reads fail, the first
@@ -669,7 +655,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
 | waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **The owner's tick** (`park-text.ts` `ticksOf`). On the label route of an unpark, the loop reads
@@ -683,11 +669,11 @@ S3 plans these for the record's current seq until each is done. Keys are
   every parked issue's comment).
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
   reads the issue's or PR's comments for that key before posting, so a retry never posts twice
-  (`totality/T-05`).
+ .
 - **An effect that uses up its attempts holds its record.** The record's skip line reads
   `stalled: <key>: <error>`, the owner hears once (`tell(stalled)`, an owner item), and
   `/factory retry N` clears it (D-38). A retry of the step could not fix a failing effect, so the
-  record is not sent down the unknown path (`totality/T-06`).
+  record is not sent down the unknown path.
 - The slot is freed by W2, not by an entry action, so it is freed however the record parked or
   closed (10.1).
 
@@ -731,10 +717,10 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
 ### 5.1 The path
 
 1. A first unknown whose cause is outside the issue runs the step again for free, once per
-   attempt (U1).
-2. Otherwise the first unknown in a step runs it again (U2).
-3. The second runs one triage call (U3), unless this life already had `maxTriages` triage calls,
-   or the step was triage itself (U4 parks).
+   attempt (the free re-run).
+2. Otherwise the first unknown in a step runs it again (the plain retry).
+3. The second runs one triage call, unless this life already had `maxTriages` triage calls,
+   or the step was triage itself (then the issue parks).
 4. After a triage `retry`, the step gets exactly one more attempt (X1 sets attempt 2), so its next
    unknown goes to step 3.
 
@@ -742,19 +728,19 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   ended in error, aborted or refused; an API error, a 429 included; an answer that fails its
   contract after its repair message; a CLI result outside the step's known outcomes; a GitHub
   wait past its bound (4.4).
-- **A GitHub blip is not a result.** Under planner v2, an action whose attempt fails on a
+- **A GitHub blip is not a result.** An action whose attempt fails on a
   transient GitHub error runs again inside the attempt, after 5 s and then 15 s, before its
   failure counts (`registry.ts` `executorOf`): a 5xx, GraphQL's "Something went wrong", a gateway
   or connection timeout. A rate limit is not retried there, since its 15-minute backoff holds
   GitHub (13.10 item 2), and neither are credentials, a 404, a validation error or a refusal. So a
-  blip never ends a step unknown or holds an effect, and logs no intervention (drill finding
-  R2-F4: one `gh pr update-branch` error made the head's step unknown). The result must carry the
+  blip never ends a step unknown or holds an effect, and logs no intervention (one
+  `gh pr update-branch` error once made the head's step unknown). The result must carry the
   error's text: a command's output, or the merge guard's FAIL reason, which names what its read
   printed (9.4). Running an action again is safe: each reads what a try before it did before it
   acts or records, as the ledger's own retries need (an update found up to date reads its head
   back, since GitHub may have made it before its error, 9.2).
-- **Causes outside the issue** (U1), each from a fact the loop already holds, never inferred
-  (`failures/F2`, `totality/T-12`, `totality/T-13`):
+- **Causes outside the issue** (the free re-run), each from a fact the loop already holds, never
+  inferred:
   - `load`: the step's entry started before this module load and ended `lost` (the loop
     restarted, for whatever reason);
   - `usage`: the step's entry ended rate-limited (why `rate-limited`: a 429), or the tier was
@@ -765,22 +751,22 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
     timeout: a running agent is stopped by the next seq's entry actions, and a prepare counts only
     for the lease it ran in, so no agent starts in a slot that was not prepared for it.
 
-  Each is free once per attempt (`cut`), so a step that itself brings the session down meets U2
-  on its second cut, and work stays bounded (property 7).
+  Each is free once per attempt (`cut`), so a step that itself brings the session down meets the
+  plain retry on its second cut, and work stays bounded (property 7).
 - **Usage limits.** A free re-run waits until its class is allowed. The pre-check skips a spawn
   without counting while the tier stops it (13.10 item 7). So a step killed by the usage window
-  runs again after the window resets, at no cost to the issue (C3:201).
+  runs again after the window resets, at no cost to the issue.
 - **Clean retries.** Every attempt starts in a freshly prepared slot (10.2): its processes killed,
   its leftovers saved, and the slot reset to origin's branch head. A retry's prompt names the
   previous attempt's result and its leftovers file, so uncommitted work can be applied and side
-  effects are not repeated (`totality/T-13`, `totality/T-18`).
+  effects are not repeated.
 - **Bounds.** Per life: one free re-run per attempt, at most two attempts of a step per triage
   grant, `maxTriages` triage calls and `fixCap` fix rounds. An owner resume resets them (P1).
   Property 7 checks the bound (17.1).
 
 ### 5.2 The triage agent
 
-- **Agent.** `factory-loop:triage`, a new loop-owned definition (`agents/triage.md`). It is
+- **Agent.** `factory-loop:triage`, a loop-owned definition (`agents/triage.md`). It is
   spawned as a step in the issue's slot, as a reader. Model `triageModel` (default `opus`).
   Timeout 15 minutes. One repair message on a bad answer (D-68).
 - **Inputs.** Ids and pointers in the prompt; free text is keyword-rewritten (D-56):
@@ -793,7 +779,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
     review answer's path, the PR's `mergeable_state` and the guard's FAIL lines;
   - the owner's notes for the issue;
   - the menu, with what each choice does in this state.
-- **The menu** is fixed (OB:44-46):
+- **The menu** is fixed:
 
   | Choice | Effect | Valid when |
   |---|---|---|
@@ -805,7 +791,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
 
   A `fix` that is not valid parks the issue, with the triage's reason in the question (X4).
 - **Output contract** `triage`, recorded with the answer script only (D-74; the loop's own tools
-  never reach agents it spawns from its timer, SPIKES.md):
+  never reach agents it spawns from its timer, the workspace spikes, `docs/spikes/factory-loop-workspace/README.md`):
 
   ```json
   { "choice": "retry | fix | redesign | park | drop",
@@ -834,16 +820,16 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   The owner hears once, on the first pass after the trip, whether or not that pass asks for
   anything the breaker holds (`tell(breaker)`, an owner item); its tell logs the trip (7.2).
 - **Why.** An outage (an API failure, a token expiry, an Actions incident) would otherwise spend
-  every issue's retries and triages, then park them all (C3:112; `failures/F2`,
-  `totality/T-12`). It replaces the draft's park bucket, which acted only after the damage.
+  every issue's retries and triages, then park them all. Holding the classes acts before the
+  damage, not after it.
 - **Where.** It is the foundation's executor breaker (13.11.4) with one more bucket, in the
-  admission filters that `foundation.ts` copies.
+  admission filters of `foundation.ts`.
 
 ## 6. Reconcile
 
 ### 6.1 The rule
 
-Every issue that shows as active must have a live step (OB:48-55). An issue that shows as active
+Every issue that shows as active must have a live step. An issue that shows as active
 but has had no live agent, slot lease, pipeline or PR activity within its state's timeout is
 released. A release puts the issue back in the queue by re-adding `ready` (owner, 2026-10-15),
 where S1 claims it as a new life, with two exceptions:
@@ -853,18 +839,19 @@ where S1 claims it as a new life, with two exceptions:
   instead of `ready`, and leaves (6.4).
 
 The owner's first rule, "still labelled `ready` goes back to the queue, otherwise it leaves",
-never put an issue back: claiming removes `ready` (`callum-flow-claim:21`), so every claimed
+never put an issue back: claiming removes `ready` (`callum-flow-claim`), so every claimed
 issue read as not labelled `ready`. The one-shot migration (6.3) requeues nothing: every issue it
 releases leaves (owner, 2026-10-15).
 
 Events are append-only. A release writes a closing event with reason `reconcile` and deletes
-nothing (OB:51-54).
+nothing.
 
-v2 applies the rule in two places (`simplicity/F1`, `failures/F11`, `totality/T-16`):
+The loop applies the rule in two places:
 
-- **R1, on every pass**, over v2's own facts. It has no mode, no approval and no hold on claims.
-- **The one-shot migration** (6.3), for what v1 left behind. This is the reconcile that "runs in
-  observe mode and lists the proposed releases before acting" (OB:54).
+- **R1, on every pass**, over the loop's own facts. It has no mode, no approval and no hold on
+  claims.
+- **The one-shot migration** (6.3), for what an earlier loop left behind. It runs in observe mode
+  and lists the proposed releases before acting.
 
 ### 6.2 R1: every pass
 
@@ -878,81 +865,76 @@ after a load or a rebuild, S1 and S2 start nothing until R1 has run.
 2. **A live claim with no record is a ghost.** This covers an issue that the `factory` source shows
    live with this device as the holder, that has no non-closed record and no `claim` action in
    flight. In act mode R1 releases it at once (6.4); the decision log and the closing event name
-   it. In observe mode and in the shadow, the release is planned and logged, not executed.
+   it. In observe mode the release is planned and logged, not executed.
    After the migration, a ghost can only come from a bug or a lost store with no events, because
    S0 makes every record from its done claim (3.3). The release goes back to the queue unless the
    owner dropped the issue since its claim (`control.dropped`), and unless this was its
    `maxLives`-th life; a requeue waits for a read that shows the issue open (a closed one is the
    sweep's, H2). The cap is what stops such a bug from claiming and releasing one issue forever.
-3. **Only this device's claims.** R1 never looks at another device's claims or labels
-   (`totality/T-02`).
+3. **Only this device's claims.** R1 never looks at another device's claims or labels.
 4. **The main-checkout tripwire** (10.7) also runs here: it compares the loop's own record of the
    main checkout with what it now sees.
 
 One owner of ghost claims: R1 releases ghosts at once, so no ghost's claim can lapse while it waits
-and be brought back by the sweep. H1 renews only records' claims (`totality/T-15`).
+and be brought back by the sweep. H1 renews only records' claims.
 
 ### 6.3 The one-shot migration
 
-`bin/factory-reconcile` in the factory-loop plugin, built in wave 1. It applies the owner's rule to
-the issues v1 left behind, with v1's evidence, so v2's every-pass rule never has to read
-v1-only facts.
+`bin/factory-reconcile` in the factory-loop plugin. It applies the owner's rule to
+the issues an earlier loop left behind, with that loop's evidence, so the every-pass rule never
+has to read facts of the earlier loop.
 
 - **Observe by default.** `factory-reconcile --repo R` lists this device's live claims (from
-  `callum-flow-factory-state`) that have no v2 record, and the issues the view shows as live with
+  `callum-flow-factory-state`) that have no record, and the issues the view shows as live with
   no live claim and no `ready` label (owner, 2026-10-15): those with no holder at all, in a live
   stage or queued, and those queued after their claim ended or lapsed, whoever made it. No device
   holds them, so nothing else would ever end them (#286, #289, #290, #468 and #469 on dev-system
   showed as queued for 3 to 6 days with no holder; #590 there, and #54 and #57 on plant-console,
   as queued after the loops' claims lapsed). One labelled `ready` is in the queue and is left out,
-  and so is a v2 record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the v2 state its
+  and so is a record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the state its
   factory-state stage maps to (designing to designing, implementing to building, in pipeline and
   parked to reviewing, ready to merge to merge-queue; any other stage, queued among them, 2 h):
   - a no-mistakes run of the issue's branch updated within `T`, as the `factory` source reports it;
   - the open PR's head pushed, a check run started or finished, or a review within `T`;
-  - a v1 slot checked out on the issue's branch whose tree or HEAD changed within `T`.
+  - a slot of the earlier loop checked out on the issue's branch whose tree or HEAD changed within `T`.
 
   It also lists the pool's other slots, those with no `factory-loop:` holder. A slot checked out
   on an issue branch whose issue has no live claim and no record is proposed for freeing. A slot
-  on no branch is only listed: v1 implementers detached theirs (#563), and the tool does not guess
+  on no branch is only listed: the earlier loop's implementers detached theirs (#563), and the tool does not guess
   owners from reflogs.
 
   It prints the report and writes it to `<loop dir>/reconcile-<date>.md`. Each issue or slot gets
   one line: why it shows as active, what was checked, and the proposal. The proposal is `leave the
   factory`, `free the slot`, `remove the label`, or `live: check again later`, and the line names
-  the issue's open PR and its v1 slot.
+  the issue's open PR and its slot.
 - **Nothing is requeued** (owner, 2026-10-15). Every issue the migration releases leaves the
   factory, whatever its labels, and the report says so: the owner re-adds `ready` for any issue
-  still wanted, and S1 adopts its open PR (3.5). R1's requeue (6.4) is for v2's own releases.
+  still wanted, and S1 adopts its open PR (3.5). R1's requeue (6.4) is for the loop's own releases.
 - **Act on approval.** `factory-reconcile --repo R --act <N...>|all`. It checks each named issue
-  again and releases those that still qualify (6.4). It also frees a v1 slot on the issue's
+  again and releases those that still qualify (6.4). It also frees a slot on the issue's
   branch: the slot's processes are killed, its leftovers saved (10.2) and it is returned. Approval
   is by issue, so a proposal that changes between the report and the approval is checked again,
-  and there is no digest to go stale (`totality/T-16`). `--act all` leaves every live proposal
+  and there is no digest to go stale. `--act all` leaves every live proposal
   alone; a live issue named in `--act` is released all the same, since the owner has judged it
   stalled (the report lists these as "released only when named").
 - **`In development`.** It removes the label from each issue it releases. The report also lists
   the issues that still carry it with no live claim, open or closed, with the proposal `remove
   the label`, approved by issue like the rest (3.6).
-- **When.** In wave 1, while both live loops stay in observe mode (the owner's choice, section
-  15). Again just before cutover (17.5). The act run comes after U4 lands on
-  `feat/factory-loop-v2`: `--act` fails closed, refusing with exit 1 and changing nothing until
-  `events.ts` writes and reads back the release's and the intervention's note fields and the
-  `callum-flow-event` in use logs an `intervention` (the branch's `images/base/callum-flow-event`,
-  through `CALLUM_FLOW_EVENT_BIN`, until the base image ships it).
+- **When.** Run by the owner, observe first. `--act` fails closed, refusing with exit 1 and
+  changing nothing unless `events.ts` writes and reads back the release's and the intervention's
+  note fields and the `callum-flow-event` in use logs an `intervention`.
 - **Nothing is lost.** A slot is returned only once its leftovers are saved or its tree is clean;
   else its issue fails and the slot is left for the owner. Each event is looked for in the log
   after it is written, since `callum-flow-event` exits 0 when a write fails. One that is not there
   fails its issue (exit 1), and its argv is kept in `<loop dir>/unlogged-events.jsonl` to log
   again.
-- **Deleted** at the delete wave, once both repos' loops have cut over.
 
 ### 6.4 Release
 
 | Outcome | When | Actions, in order | Event |
 |---|---|---|---|
 | requeue | R1's default | stop any agent of the loop on it; in one call, `ready` on and the eight state labels off (`label` op `requeue`); W2 frees a `factory-loop:` slot leased for it | `reclaimed`, with the release fields (7.1) |
-| leave | R1, when the owner dropped the issue since its claim; the migration, always | stop any agent; the eight off (op `clear`); the slot freed. The migration removes every `factory:*` label and `In development`, and frees the v1 slot on the issue's branch | `abandoned`, with the release fields |
+| leave | R1, when the owner dropped the issue since its claim; the migration, always | stop any agent; the eight off (op `clear`); the slot freed. The migration removes every `factory:*` label and `In development`, and frees the slot on the issue's branch | `abandoned`, with the release fields |
 | reject | R1, at the issue's `maxLives`-th life | stop any agent; in one call, `factory:rejected` on and the eight off (op `reject`); one comment on the issue and one owner tell (`rejected`, appendix D), each listing why every life ended and how to bring it back; the slot freed | `abandoned`, with the release fields and outcome `reject` |
 
 - The event is logged last, so it is never logged for a release that did not happen (the order
@@ -976,8 +958,7 @@ v1-only facts.
   churn, which comes within hours, and the rejection's comment names the lives that were pruned.
 - After a release the issue no longer shows as active: its labels are off, and its newest decision
   event is `reclaimed` or `abandoned`, which every factory reader takes as the end of a claim
-  (`docs/metrics.md:225-247`; `docs/factory-state.md`, "Stages"). No new kind is needed
-  (OB:52-54).
+  (`docs/metrics.md`, section 6; `docs/factory-state.md`, "Stages"). No new kind is needed.
 - The release's free-text field reads `no live step in <stage>: <what was checked>`.
 - The issue's open PR is never updated or closed. A requeued issue's next claim adopts it (3.5),
   and the report names it, so the owner can re-add `ready` for an issue that left.
@@ -985,10 +966,9 @@ v1-only facts.
 ### 6.5 Today's ghosts
 
 At 09:30 on 2026-10-15 the factory-state view showed 17 live issues on dev-system, at least 7 of
-them ghosts (OB:54-55). G1's end states at the 07:25 snapshot (G1:69-85) fall into these cases for
-the migration:
+them ghosts. Their end states at the 07:25 snapshot fall into these cases for the migration:
 
-| Case (G1) | What the migration sees | Proposal |
+| Case | What the migration sees | Proposal |
 |---|---|---|
 | Limbo: the implementer stopped with no commit and no rule moved it (#613) | in-dev label, no run, no PR | leave (`abandoned`) |
 | Stuck on a refused respond or a dead run, told `agent-failed` (#589, #620, #591) | in-dev label; #589's PR #626 open; no activity since 02:35 | leave; the report names PR #626 |
@@ -996,7 +976,7 @@ the migration:
 | Merge holds on clean PRs (#467 with PR #621; #571 with PR #631) | in-dev label, open PR, no activity | #571 has merged since (`dd73ce2`), so it no longer shows as active. #467's run looks live (no-mistakes' CI monitor keeps touching it), so the owner names it in `--act` and it leaves; re-adding `ready` brings it back and S1 adopts PR #621 |
 | Dropped and re-queued (#533), labelled `ready` | queued with `ready`: no live claim | not a ghost: S1 claims it and adopts any open PR on an `issue-533` branch |
 | Queued for days with no holder and no `ready` (#286, #289, #290, #468, #469) | the view shows them queued; no device holds them | leave (`abandoned`) |
-| Abandoned with a dirty slot (#602, slot 8) | no labels; a v1 slot | the slot is freed if it is on #602's branch (its leftovers saved), else listed for the owner |
+| Abandoned with a dirty slot (#602, slot 8) | no labels; a slot | the slot is freed if it is on #602's branch (its leftovers saved), else listed for the owner |
 
 Whatever the view shows when the tool runs, the same rule applies.
 
@@ -1007,18 +987,18 @@ Whatever the view shows when the tool runs, the same rule applies.
 **The format.** v2 writes its events in today's format (owner, 2026-10-15; section 15):
 `callum-flow-event` states with their existing fields (issue, run, branch, pr, head, note,
 actor), and v2's extra fields as `key=value` tokens in the note, in the encoding today's `loop`
-notes use (`loopNote` and its inverse `entryFromLoop`, `derive.ts:369` and `:445`;
+notes use (`loopNote` and its inverse `entryFromLoop` in `derive.ts`;
 `docs/metrics.md`, "loop"):
 
 - Tokens are separated by single spaces. A value holds no spaces: `%` and whitespace are
-  percent-encoded (`enc`, `derive.ts:352`). A missing value is `none`, a list is comma-joined, a
+  percent-encoded (`enc` in `derive.ts`). A missing value is `none`, a list is comma-joined, a
   flag is `yes` or `no`.
 - The identifying tokens come first and free text (a reason, a question, notes) last. Nothing is
   clipped: each field is bounded where it is made (the table keeps a question to 2000
   characters and at most 8 notes of 1000; a reason is one line of 200), and `callum-flow-event`
   and `factory.events` put no bound on a note. So a note carries every field whole.
 - `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
-  and `status=` for `loop` (`images/base/callum-flow-event:147-155`): `transition` needs `life=`,
+  and `status=` for `loop` (`images/base/callum-flow-event`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
   `who=` and `cause=`.
 - **One seam.** `hooks/v2/events.ts` builds every event v2 writes: the state, the columns, the
@@ -1026,7 +1006,7 @@ notes use (`loopNote` and its inverse `entryFromLoop`, `derive.ts:369` and `:445
   only it, so a later format change touches one module.
 
 Three new states in `callum-flow-event`, whose vocabulary is closed
-(`images/base/callum-flow-event:27-30`; the last addition was `loop`, D-09):
+(`images/base/callum-flow-event`; the last addition was `loop`, D-09):
 
 | State | When | Columns | Note fields |
 |---|---|---|---|
@@ -1054,10 +1034,10 @@ the note today's queries read:
 | `ready` | `queue-watch.sh --once` | unchanged |
 | `reclaimed`, `closed` | `callum-flow-sweep`; R1 for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, its `outcome` (`requeue`, `leave` or `reject`), `lives` (the released life's number; `none` for the migration's), the stage, what was checked, the open PR |
 | `abandoned` | v2 executors; the migration | drop, split, a triage drop, a release out of the factory or a rejection (with the release fields) |
-| `delegated` | entry to building, `--note "brief <url>"` | keeps the metrics' design stage (`docs/metrics.md:108-113`) |
-| `fix_requested` | entry to fixing, `--note review\|ci\|conflict\|triage` | keeps the first-pass query (`docs/metrics.md:120-143`) |
+| `delegated` | entry to building, `--note "brief <url>"` | keeps the metrics' design stage (`docs/metrics.md`, section 1) |
+| `fix_requested` | entry to fixing, `--note review\|ci\|conflict\|triage` | keeps the first-pass query (`docs/metrics.md`, section 2) |
 | `merge_ready` | entry to merge-queue | keeps the merge-ready point of lead time and the waiting split |
-| `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md:145-159`) |
+| `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md`, section 3) |
 | `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
 | `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
@@ -1080,14 +1060,14 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `planner`, `stop-now` and `update`. `ownerOp` (`register.ts:1389`) logs it after the op lands, when planner v2 in act mode is in force before or after the op, so the ops that turn the loop on (`mode act`, `planner v2`) and off are logged too | the issues the op names, else none |
+| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
 | `pr-closed` | E4 | the issue |
 | `issue-closed` | E2 | the issue |
 | `control-file` | `control.json` or the `OFF` file changed with no op (against the last version the loop read or wrote, kept as `files:<repo>` beside the records; each change found, by an acting pass or by an op that finds its file already changed, is kept there as an edit to log, keyed by when it was found, so a change back to an earlier version is logged too; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
-| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op (a landed `config set` or `config unset` is also logged with this cause, its detail the op text): capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
+| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op (a landed `config set` or `config unset` is also logged with this cause, its detail the op text): capacity (K) and every other setting. While the loop does not act (mode off or observe), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`) is one too | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `hold` | `hold:dont-merge` when a merge-queue record is first held by the `don't-merge` label (on its issue or PR; the reason says which), and `hold:released` when the label is gone from both. One event for each toggle within a life, keyed `hold/i<N>/l<life>/k<n>` with `n` the count of the life's earlier hold events. A failed label read (`labels not read`) writes none (9.1) | the issue |
@@ -1098,9 +1078,9 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `triage` | every triage call (T6, U3) | the issue |
+| `triage` | every triage call (T6) | the issue |
 | `unknown:<why>` | every step that ended unknown and is not a free re-run. `why` is `timeout`, `agent-dead` (the agent failed, was lost or crashed, or its turn ended in error, aborted or refused), `bad-answer` (no valid answer after the repair message), `api` (an API error other than a rate limit: a 5xx, overloaded), `rate-limited` (a 429 or the usage window; a free re-run, cause `usage`, so it is logged as `unknown:rate-limited` only once its attempt's free re-run is spent), `spawn` (the companion refused the spawn), `cli` (a CLI result outside the step's known outcomes, a failed origin read, a failed prepare, a guard FAIL of class `read`) or `github-wait` (a wait past its bound) | the issue |
-| `free:<cause>` | every free re-run (U1): `load` (after a restart), `usage` (a usage-limit kill), `slot` (a lost slot) or `breaker` | the issue |
+| `free:<cause>` | every free re-run (the free re-run): `load` (after a restart), `usage` (a usage-limit kill), `slot` (a lost slot) or `breaker` | the issue |
 | `park` | every entry to parked: a question to the owner | the issue |
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
 | `ci-rerun` | a failed or cancelled check re-run (8.5) | the issue |
@@ -1124,7 +1104,7 @@ and frees; tells for waiting states (E6); a held step's skip line; `claim-lost` 
 another device's work; `status` and `help`. Each owner item (`parked`, `breaker`, `stalled`,
 `checkout`, `workspace`, `rejected`; appendix D) has its intervention.
 
-**How they are made.** One unit (U4) owns them, so no other unit emits one:
+**How they are made.** One module owns them, so no other emits one:
 
 - Loop interventions and the detected person ones are derived, never emitted ad hoc.
   `hooks/v2/rules-interventions.ts` plans one `intervention` event for each fact in the ledger
@@ -1156,10 +1136,9 @@ issue exactly when it names the issue.
 
 Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it parses today's
 `loop` and `implementer_routed` notes (for example `substring(e.note FROM 'model=([^ ]+)')`,
-`docs/metrics.md:433`), and decodes percent-encoded values.
+`docs/metrics.md`, section 8), and decodes percent-encoded values.
 
-- **`callum-flow-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes in
-  U4:
+- **`callum-flow-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes:
   - A new step between 2 and 3: an issue whose current life has a `transition` event takes its
     stage from the newest one's `to`. queued maps to `queued`, designing to `designing`, building to
     `implementing`, reviewing and fixing to `in pipeline`, merge-queue to `ready to merge`, parked
@@ -1167,8 +1146,7 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
     shows the v2 state, the step and the attempt. Mirror runs no longer set the stage of such an
     issue. Stuck rules S1 to S5 stay as they are.
   - `nomistakes.runs` becomes an optional source, shown as `n/a` when missing, as
-    `factory.workers_status` already is (`images/base/callum-flow-factory-state:532`;
-    `simplicity/F3`);
+    `factory.workers_status` already is (`images/base/callum-flow-factory-state`);
   - the label checks without `In development` (3.6).
 - **`callum-flow-evaluate`** (`docs/metrics.md`, "Offline computation"). New sections, each also
   a saved query in `docs/metrics.md`:
@@ -1192,7 +1170,7 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   stuck issues (query 6). Lead time (query 1) has no `run` stage for v2 issues; its v2 twin uses
   the first `transition` to reviewing.
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
-  (`derive.ts:38-50`) gains the three states; `record.ts` parses their notes with `events.ts`.
+  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`.
 
 ## 8. Design briefs and review
 
@@ -1208,19 +1186,18 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
      to describe the work (an adopted PR, or a record rebuilt from events, 3.3), the body keeps the
      PR's own summary, and its own evidence unless a fix gave newer.
 
-  A re-run never makes a second PR (`totality/T-04`). The PR's number is in the done `pr` entry, so
+  A re-run never makes a second PR. The PR's number is in the done `pr` entry, so
   plan sees it at once, and the row that ends the reviewing step (T8, T9, T10) writes it to the
   record.
 - **The life's PR** is the record's `pr`, else the PR the life's newest done ensure named
   (`lifePr` in `hooks/v2/rules-review.ts`). Every reader of a life's PR goes through it: the `prs`
   source, which so reads a PR the ensure just opened on the next pass (2.4); GitHub's PR events
   (E3, E4); the push check (7.2); and the triage and work prompts. No reader takes the record's
-  field alone: in the first review round it is still empty. (Fault drill 1, 2026-10-15: the `prs`
-  source read only the record's field, so a new PR was never read and the review waited until
-  its GitHub bound.)
+  field alone: in the first review round it is still empty, so a source that read only the
+  record's field would never read a new PR and the review would wait until its GitHub bound.
 - **Title:** the builder's answer `title`, one line of at most 72 characters, closing keywords
   rewritten (D-56).
-- **Body**, written only by the loop (OB:71):
+- **Body**, written only by the loop:
 
   ```text
   <summary from the builder's answer>
@@ -1235,17 +1212,17 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   Opened by the factory loop for #N.
   ```
 
-  Every free-text part goes through `neutral()` (`prompts.ts:47-73`), which caps it at 4 000
+  Every free-text part goes through `neutral()` (`prompts.ts`), which caps it at 4 000
   characters and rewrites closing keywords (D-56). So only the loop's own line links an issue. A
-  stray reference in evidence text once broke linkage for 80 minutes (G1:116).
+  stray reference in evidence text can otherwise break linkage.
 - **The body follows the Rollout.** The guard derives linkage from the issue's current Rollout. A
   `linkage` FAIL at Q2 re-renders the body once per queue attempt (`pr` op `body`), then Q2 runs
-  again (9.3; `totality/T-21`).
+  again (9.3).
 - **A PR closed by a person** parks the issue (E4). On resume, the ensure step reopens it.
 
 ### 8.2 The reviewer interface
 
-Swappable (OB:72-74):
+Swappable:
 
 ```ts
 interface Reviewer {
@@ -1262,7 +1239,7 @@ type Finding = { id: string; severity: 'error' | 'warning' | 'info'; file: strin
 ```
 
 - `reviewer` (setting) picks the implementation from the registry in `hooks/v2/reviewer.ts`. The
-  owner's A/B test can run any implementation on frozen base and head pairs (V:305-308) outside
+  owner's A/B test can run any implementation on frozen base and head pairs outside
   the loop.
 - `changes` needs at least one `error` finding. `approve` may carry warnings and infos. The
   contract (`hooks/v2/contracts-review.mjs`) refuses anything else. Finding ids are
@@ -1270,13 +1247,12 @@ type Finding = { id: string; severity: 'error' | 'warning' | 'info'; file: strin
 
 ### 8.3 The interim reviewer
 
-The existing merge adjudicator's judgement, given the brief and the whole diff (OB:72), in a
-definition of its own: `agents/reviewer.md`, agent type `factory-loop:reviewer`
-(`simplicity/F4`). The v1 adjudicator's definition is a no-mistakes gate adjudicator with another
-output contract (`agents/adjudicator.md:3`, `:20`, `:35`), and it must stay unchanged while v1 can
-still plan.
+The existing merge adjudicator's judgement, given the brief and the whole diff, in a
+definition of its own: `agents/reviewer.md`, agent type `factory-loop:reviewer`. The
+adjudicator's definition (`agents/adjudicator.md`) is a no-mistakes gate adjudicator with another
+output contract, so the reviewer is not an edit of it.
 
-- **Model** `reviewerModel` (default `opus`; V:194). It runs in the issue's slot as a reader, on
+- **Model** `reviewerModel` (default `opus`). It runs in the issue's slot as a reader, on
   the PR head.
 - **The definition** carries the merge adjudicator's rules that still apply: judge against the
   brief's acceptance criteria and test plan; reproduce a claimed defect before reporting it; no
@@ -1287,7 +1263,7 @@ still plan.
   - the TEST POLICY sentence (`plugins/callum-flow/agents/fixer.md`);
   - the instruction to run `callum-flow-test-weakening origin/<default>..HEAD` and judge its
     output;
-  - its own earlier rounds and the fixer's dispositions, so it does not repeat itself (V:194);
+  - its own earlier rounds and the fixer's dispositions, so it does not repeat itself;
   - the owner's notes.
 - **It checks** that every acceptance criterion and owner requirement in the brief is met, nothing
   unrelated was added, no test was weakened, and a visual change has UI evidence. It constructs a
@@ -1297,7 +1273,7 @@ still plan.
   (`gh pr comment <p> --body-file -`): the verdict, the findings and the summary. It also logs one
   `reviewed` event per result (7.1).
 
-After the owner's A/B test, this slot may take no-mistakes' review or its prompt (OB:73-75). That
+This slot may later take no-mistakes' review or its prompt. That
 is a new `Reviewer` implementation and a setting, nothing more.
 
 ### 8.4 Approval keyed by patch identity
@@ -1309,12 +1285,12 @@ is a new `Reviewer` implementation and a setting, nothing more.
   up one hash per file. It goes through review like any other patch.
 - `-U0` leaves context lines out, so a clean `gh pr update-branch`, which only brings in main's
   changes around the PR's lines, keeps the id. With context lines, git's patch id changes whenever
-  main touched a line within three lines of a hunk (C3:441).
+  main touched a line within three lines of a hunk.
 - The record keeps `approvedPatch` from the approving review. A head whose patch equals it is
   approved; any other is not, and merge-queue sends it back to reviewing (T14).
 - **A review is keyed by patch and round**: `i<N>/l<L>/review/<patch7>/r<round>/a<k>`. A done
   review of the head's patch in the current round is used, whatever the attempt or the head
-  (`totality/T-11`):
+ :
   - a head that moved without changing the patch, such as a person's merge from main, keeps its
     review, and CI runs on the new head;
   - an unknown CI result does not re-run the reviewer;
@@ -1345,7 +1321,7 @@ is a new `Reviewer` implementation and a setting, nothing more.
   or a list shorter than `total_count`, leaves the PR unread like a failed `gh pr checks`.
 - **One re-run.** A check that fails or is cancelled gets one re-run before it counts as failed:
   action `ci-rerun`, `gh run rerun <run id> --failed --repo R`, keyed by round and run id
-  (`failures/F6`, `totality/T-09`). A flaky check then passes without a fixer. A new round, after
+  A flaky check then passes without a fixer. A new round, after
   a fixer, gets its own re-run. A run is re-run only once it has finished: GitHub refuses to
   re-run a run with a job still going. The key keeps it once per round, but the call itself is
   retried: a GitHub blip inside the attempt (5.1), and a `gh` timeout or a restart during the call
@@ -1356,16 +1332,16 @@ is a new `Reviewer` implementation and a setting, nothing more.
   `unknown`, never `ci-red`, as any queue action that used up its attempts does, so the queue
   moves past a head that cannot move (9.1).
 - **A conflict.** GitHub does not run `pull_request` workflows for a PR with a merge conflict, and
-  `ci.yml` triggers only on `pull_request` for branches (`.github/workflows/ci.yml:24-27`). So a
+  `ci.yml` triggers on `pull_request` and on pushes to main (`.github/workflows/ci.yml`). So a
   `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.
-  The GitHub rule is from GitHub's documentation and was not re-verified in this workflow.
+  The GitHub rule is from GitHub's documentation.
 - **Waits** are bounded by `ciStartMs` and `ciRunMs` (4.4).
 
 ### 8.6 Rounds and the cap
 
 - `round` counts entries to reviewing in the life. `fixes` counts entries to fixing.
-- Each reviewing, fixing, reviewing cycle adds one fix. At `fixCap` (3; `config.ts:32`) the next
-  not-ok parks instead (T10; OB:63-65).
+- Each reviewing, fixing, reviewing cycle adds one fix. At `fixCap` (3; `config.ts`) the next
+  not-ok parks instead (T10).
 - A fixer that declines every finding sends the PR back to reviewing with its reasons (T12). The
   new round's reviewer judges the declines, and a failed check gets the new round's re-run. That
   costs a round, not a fix.
@@ -1375,14 +1351,14 @@ is a new `Reviewer` implementation and a setting, nothing more.
 
 ### 8.7 The design brief
 
-The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
+The designer is a reader: it writes nothing to GitHub.
 
-- **Agent.** `factory-loop:designer-v2` (`agents/designer-v2.md`): the v1 designer's method (read
-  the issue with `callum-flow-issue-read`, reproduce a bug first, explore with its own reads, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
+- **Agent.** `factory-loop:designer-v2` (`agents/designer-v2.md`): the designer method (read
+  the issue with `callum-flow-issue-read`, reproduce a bug first, explore with its own reads, the brief's fixed shape with its `## Rollout` line), with the command rule
   (10.4) and no GitHub writes. It has no Agent tool: a sub-agent's call always runs in the
-  background and a v2 turn end is final (10.8), so an explorer's report would arrive after the
+  background and a turn end is final (10.8), so an explorer's report would arrive after the
   answer and never be recorded; the definition carries an exploration checklist instead
-  ([#851](https://github.com/cbundy/dev-system/issues/851)). It is renamed `designer` at the delete wave, when v1's goes.
+  ([#851](https://github.com/cbundy/dev-system/issues/851)).
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
@@ -1400,7 +1376,7 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
   links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
-  (`agents/designer.md:71-77`) until every sub-issue is closed, whatever its close reason: then the loop closes it
+  until every sub-issue is closed, whatever its close reason: then the loop closes it
   (action `close-tracker`, planned by the closed row when a split child's merge is done; the child is
   found by its hidden key, so a merged issue without one, such as a child the owner made under an epic by hand,
   closes nothing). The parent is read live: any sub-issue still open leaves it open until the next sibling's merge checks again.
@@ -1459,11 +1435,10 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   (`held <n>`). The hold is a hold, not a state: no record transition is made for it, and a
   hold and its release are interventions (7.2).
 - Every transition sets `seqAt`. So a head whose step ends other than ok (an unknown, a retry, a
-  triage's retry) goes to the back, and the next PR becomes the head (`failures/F4`,
-  `totality/T-10`; OB:62-63).
-- The head is the first. Only the head is ever touched: updated, checked or merged (OB:60-62). A
+  triage's retry) goes to the back, and the next PR becomes the head.
+- The head is the first. Only the head is ever touched: updated, checked or merged. A
   PR behind the head waits untouched, however far behind main it falls.
-- No other open PR is ever updated or rebased, by any rule (OB:65-66). The safety tests check that
+- No other open PR is ever updated or rebased, by any rule. The safety tests check that
   `queue-update` names only the head's PR and that no rebase exists (17.1 property 8).
 
 ### 9.2 Q1: update the head
@@ -1471,13 +1446,13 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 - **When:** the head is behind, and no queue action of the head is running. Behind is read from
   facts the loop has: the PR's base commit (`base.sha`) is not main's head on origin, or GitHub
   shows `mergeable_state` `behind`. GitHub computes mergeability lazily and shows `unknown` for up
-  to two minutes after main moves, so the loop does not wait for it (drill run 3, R3-O1). A
+  to two minutes after main moves, so the loop does not wait for it. A
   conflict (`dirty`) is still GitHub's to say.
 - **Action** `queue-update`: `gh pr update-branch <p> --repo R`. GitHub merges main into the
-  branch; no history is rewritten (OB:61).
+  branch; no history is rewritten.
 - **Key:** `i<N>/l<L>/queue/update/<base7>`, where `<base7>` is main's head at plan time. Each
-  outside merge moves main and so earns one more update; the patch-keyed draft key could never
-  update twice (`failures/F4`).
+  outside merge moves main and so earns one more update: a key that did not name the base could never
+  update twice.
 - **Outcomes:** GitHub's update is asynchronous, so the executor reads the PR's head until it
   moves (30 s bound) and records the new head in its ledger entry. That makes it a head the loop
   produced (4.1). An update GitHub finds needless (already up to date) records the head it reads
@@ -1493,12 +1468,11 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 - **Action** `queue-merge`: `callum-flow-merge <p> --patch <approvedPatch> --issue <N>`, keyed
   `i<N>/l<L>/queue/merge/<head7>`. The guard runs inside it, and the merge uses
   `--match-head-commit`, so a push in between makes GitHub refuse
-  (`images/base/callum-flow-merge:14-17`). `--issue` is the record's issue: the guard never has
+  (`images/base/callum-flow-merge`). `--issue` is the record's issue: the guard never has
   to read it from the branch name. `check-pr-linkage.sh` reads `issue-<N>` from the branch too
-  (the number followed by `-` or the end of the name), so the linkage is checked, never skipped
-  (factory drill 1 of run 2 parked two green, approved PRs on that skip).
+  (the number followed by `-` or the end of the name), so the linkage is checked, never skipped, and a skipped check would park a green, approved PR.
 - **Outcomes.** Merged is `ok` (T13). A FAIL line of the guard carries a class (9.4), and each
-  class has one outcome (`failures/F3`):
+  class has one outcome:
 
   | Class | Guard clauses | Outcome |
   |---|---|---|
@@ -1515,8 +1489,8 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 ### 9.4 The guard
 
-`callum-flow-merge-guard` gains `--patch <id>`, which `callum-flow-merge` passes through. With it
-the guard checks only facts the loop owns (V:217; OB:60-66):
+`callum-flow-merge-guard` takes `--patch <id>`, which `callum-flow-merge` passes through. With it
+the guard checks only facts the loop owns:
 
 | Guard | Check | With `--patch` |
 |---|---|---|
@@ -1531,39 +1505,37 @@ the guard checks only facts the loop owns (V:217; OB:60-66):
 | gates | the no-mistakes run has no parked step | not run |
 | test-weakening | advisory WARN lines | printed; not acted on, because the reviewer judges the detector (8.3) |
 
-- **No no-mistakes call.** With `--patch` the guard skips its run lookup, which today calls
+- **No no-mistakes call.** With `--patch` the guard skips its run lookup, which otherwise calls
   `pipeline-watch.sh --resolve` and `no-mistakes axi status` before any clause
-  (`images/base/callum-flow-merge-guard:215-227`). Its test asserts that `--patch` mode calls
-  neither (`simplicity/F3`).
+  (`images/base/callum-flow-merge-guard`). Its test asserts that `--patch` mode calls
+  neither.
 - **Classes.** In `--patch` mode each FAIL line ends with `class=<class>`, one of `behind`,
   `conflict`, `checks`, `patch`, `linkage`, `read` and `policy` (9.3). So the loop never parses
-  the reasons' wording (`failures/F3`). A `read` reason ends with what the read printed on
+  the reasons' wording. A `read` reason ends with what the read printed on
   stderr, so a GitHub blip in it is tried again like any other (5.1).
-- Without `--patch` the guard behaves as today, for people and the old orchestrator
-  (`images/base/callum-flow-merge-guard:20-43`).
+- Without `--patch` the guard behaves as today, for people
+  (`images/base/callum-flow-merge-guard`).
 
 ### 9.5 No hold while main is red
 
-The queue never holds for a red main, and the loop does not read main's checks
-(`simplicity/F5`, `failures/F5`, `totality/T-08`):
+The queue never holds for a red main, and the loop does not read main's checks:
 
 - With "Require branches to be up to date" on, every PR's CI after its update runs on main plus
   the PR, so the head's own checks already carry main's state.
 - A flake on main shows on the head as a failed check, and its one re-run clears it (8.5).
 - A real break on main shows as `ci-red` on the head. The owner's rule then applies: the PR leaves
-  the queue for a fixer, and the queue moves on (OB:62-64). A fixer may fix the break in the PR
+  the queue for a fixer, and the queue moves on. A fixer may fix the break in the PR
   or decline it; the fix cap and the step-unknown breaker bound the cost.
-- The draft's hold came from the strict-off design (C3:102; V:268). Here it would have made the
-  queue wait on a person while holding K slots (OB:92), and its failed-workflow signal included
-  the scheduled and release workflows, which would have let a failed release hold merges (OB
-  decision 7).
+- A hold on a red main would make the queue wait on a person while holding K slots, and a
+  failed-workflow signal would include the scheduled and release workflows, which would let a
+  failed release hold merges.
 
 The owner confirmed this (section 15).
 
 ### 9.6 Throughput
 
 - A merge needs at most one update, one CI run and one merge: about 4 to 5 minutes, so 12 to 15
-  merges an hour against a demand of about 1 (V:260; OB:66-67; CI median 2.8 min, max 3.0).
+  merges an hour against a demand of about 1 (CI takes about 3 minutes).
 - An outside merge during the head's CI wait makes the head `behind` again. Q1 then updates once
   more, under the new base's key. If main keeps moving, the GitHub wait bound and the unknown path
   bound it, and an unknown head goes to the back of the queue.
@@ -1576,22 +1548,22 @@ The owner confirmed this (section 15).
   rebases or force-pushes (10.4). For red CI it gets the failed checks' names and links and reads
   the logs with `gh run view --log-failed`.
 - After a fix the PR goes back through reviewing: a fix changes the patch, and approval is keyed
-  by patch (OB:63-64).
+  by patch.
 
 ## 10. Workspaces
 
-The loop owns each agent's workspace (OB:77-87). The spikes decided the design (SPIKES.md): a
+The loop owns each agent's workspace. The workspace spikes decided the design
+([docs/spikes/factory-loop-workspace/README.md](../../spikes/factory-loop-workspace/README.md)): a
 small companion plugin, `factory-loop-workspace`, starts each agent in its slot and carries the
 write guard, the Bash timeout and the stop gate. It must be a plugin of its own, because the
 engine skips a plugin's own hooks for everything its own code starts, and the loop starts its
-agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings debug.log:266-268).
+agents from its timer (the spike notes, above).
 
 ### 10.1 Slots: W1 leases, W2 frees
 
 - **Pool.** The treehouse pool of the main checkout, as today (`poolSize` 16, 13.4.1). The
   loop leases with the holder `factory-loop:<N>:<life>` and finds its leases again by holder in
-  `treehouse status --json`. It never infers a slot's owner from reflogs (FM 2.2, the `pool`
-  row).
+  `treehouse status --json`. It never infers a slot's owner from reflogs.
 - **W1, lease.** A record that needs a slot and has none: a queued record (resumes first, by park
   time, then new claims, by claim time) when the records in designing to merge-queue number fewer
   than `maxInFlightIssues` (K), free slots exceed `worktreeReserve`, and the tier allows the class
@@ -1608,7 +1580,7 @@ agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings
   shows available. From the free's start the lease counts as gone, so a record resumed meanwhile
   waits for it to go back rather than step onto it. A second lease of a live life (a lease whose
   answer was lost, taken again) is freed the same way once nothing of the life runs. For one
-  issue, W2 runs before W1 (`totality/T-19`). Parking and waiting free the slot, so W2 passes `--keep-scratch`
+  issue, W2 runs before W1, so a slot the issue still holds is freed before it asks for another. Parking and waiting free the slot, so W2 passes `--keep-scratch`
   when a record of that issue and life is `parked` or `waiting`: a resume continues the life and its scratch
   folders. A free of the life after the resume removes them; the tool also prunes any older than
   7 days, which bounds the folders of a parked issue never resumed.
@@ -1616,7 +1588,7 @@ agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings
   the tool ends its own commands inside it, so no `treehouse get` it started can finish later and
   take a second slot.
 - W2 is a rule over the pool, not an entry action, so a slot is freed however its issue left:
-  parked, waiting, dropped, merged, closed by hand or lost to another device (DB:81, #601).
+  parked, waiting, dropped, merged, closed by hand or lost to another device (#601).
 
 ### 10.2 Preparing a slot for a step
 
@@ -1634,7 +1606,7 @@ Before every agent step (each attempt and each triage included), action `slot` o
    --ignore-other-worktrees -C <branch> origin/<branch>` (or `origin/<default>` when origin has no
    such branch). A stale slot or a person's worktree that still has the branch checked out no
    longer blocks the step. Checked locally on git 2.56.0: without the option the switch fails with
-   "is already used by worktree", exit 128 (`totality/T-19`);
+   "is already used by worktree", exit 128;
 5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
    step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir, scratch, gateConcurrency?, gateWaitTimeoutMs? }`
@@ -1654,24 +1626,24 @@ its leftovers file, which the retry's prompt names (5.1). A `prepare` that fails
 
 ### 10.3 Starting the agent in its slot
 
-- The loop spawns as today (`register.ts:351`). The prompt's first line is `factory-slot:
+- The loop spawns the agent with `$.agent.spawn` (`driver-io.ts`). The prompt's first line is `factory-slot:
   <absolute slot path>`. The loop also passes `cwd`, so it keeps working once the engine honours
-  that argument, which on 2.1.300 it drops (SPIKES.md).
+  that argument, which on 2.1.300 it drops (the spike notes).
 - The companion's `agent.spawn` hook reads that line and the slot's step marker. It checks that
   they match the spawn (issue and seq; D-11 puts the issue in the agent's name), calls
   `next({ ...e, cwd: slot })`, and records `agentId -> marker` from the result. It refuses the
   spawn (`deny`) when the marker is missing or does not match, and the refused spawn is the step's
   `unknown`.
 - Children the agent starts (a builder's sub-agent) inherit the folder, and the companion maps
-  them through `parentAgentId` (`spikes/agent-folder.md`, run 8).
+  them through `parentAgentId` (the spike notes).
 - Proven on Claude Code 2.1.300 for a spawn from a frameless timer, headless and interactive:
   `pwd`, relative Bash and Write paths, Read, `git` and the agent's system prompt all resolve to
-  the slot. A `cd` elsewhere is reset to the slot on the next call (runs 5, 7 and 8).
+  the slot. A `cd` elsewhere is reset to the slot on the next call.
 
 ### 10.4 The write guard
 
 The companion's `tool.call` hook, for agents in its map and their children. A second plugin's
-hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
+hooks fire and block for timer-spawned agents (the spike notes):
 
 - **File tools** (Edit, Write, MultiEdit, NotebookEdit): the path, resolved against the slot
   because Write's `file_path` can arrive relative, must be inside the slot for a writer. A reader
@@ -1683,14 +1655,14 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
     flags: the loop owns these. The companion's list (`hooks/guard.ts` `GH_WRITES`) also holds
     their aliases (`gh pr new`, `gh issue new`) and the other GitHub writes (`gh pr revert`,
     `gh repo edit`, `gh secret`, `gh variable`, `gh run rerun` and the like);
-  - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin` (`simplicity/F2`);
+  - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin`;
   - any call with `run_in_background: true`, `Bash` and `Agent` alike: a loop agent works in the
     foreground, a command under its 10-minute timeout (10.5), so it neither ends its turn while
-    work it started runs (`failures/F13`) nor sits polling for it (drill run 4, R4-O4). The
+    work it started runs nor sits polling for it. The
     reason tells it to run the call in the foreground with a timeout;
   - an `Agent` call with any `isolation` (`"remote"` always runs in the background, and
     `"worktree"` makes a git worktree).
-- **Bash, refused for a writer** (`failures/F7`):
+- **Bash, refused for a writer:**
   - `git push` to any ref but `origin <branch>`;
   - any force push (`-f`, `--force`, `--force-with-lease`, a `+ref`);
   - branch creation (`git switch -c|-C`, `git checkout -b|-B`, `git branch <name>`) and
@@ -1698,8 +1670,7 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
 - **Bash, refused for a reader:** `git commit` and `git push`.
 - **The main checkout.** callum-flow's `forbid-main-checkout-write.sh` already refuses a
   sub-agent's writes there, Bash included, and it fires for these agents
-  (`plugins/callum-flow/hooks/forbid-main-checkout-write.sh:1-55`; `spikes/agent-folder.md`,
-  run3-debug.log:278-286). v2 relies on it and leaves callum-flow's `hooks.json` alone.
+  (`plugins/callum-flow/hooks/forbid-main-checkout-write.sh`). The loop relies on it and leaves callum-flow's `hooks.json` alone.
 - **Each refusal** is appended to the companion's log, and the loop logs it as an intervention
   (`guard:*`, 7.2).
 - **Command lines.** The rules apply to every simple command a line runs, through separators,
@@ -1711,13 +1682,13 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
 
 ### 10.5 The 10-minute Bash timeout
 
-Every agent the loop starts runs with a 10-minute Bash timeout (OB:80-82), set two independent
-ways inside the plugins. No image or template change is needed (`simplicity/F11`):
+Every agent the loop starts runs with a 10-minute Bash timeout, set two independent
+ways inside the plugins. No image or template change is needed:
 
 - the loop's `session.start` calls `$.env.set('BASH_DEFAULT_TIMEOUT_MS', '600000')` and
-  `$.env.set('BASH_MAX_TIMEOUT_MS', '600000')` (spike run A3);
+  `$.env.set('BASH_MAX_TIMEOUT_MS', '600000')` (proven in the spike);
 - the companion's `tool.call` hook gives a loop agent's Bash call with no `timeout` the value
-  `600000` (spike run A4's rewrite, moved into the companion, whose hooks reach these agents).
+  `600000` (the spike's rewrite, in the companion, whose hooks reach these agents).
 
 - the companion's `tool.call` hook gives a mapped agent's Bash call (the agent and its children)
   the marker's `scratch` as `TMPDIR`, `TMP` and `TEMP`: the command becomes `export TMPDIR='<s>'
@@ -1729,25 +1700,24 @@ ways inside the plugins. No image or template change is needed (`simplicity/F11`
   command as it is.
 
 A foreground test run then finishes instead of being moved to the background after 120 seconds,
-which is what led agents to write polling loops that matched themselves (G4:222; V E15). The
-prompts keep v1's `FOREGROUND_RULE` (`prompts.ts:140`) and a v2 `COMMAND_RULE` without the
-no-mistakes exception that v1's has (`prompts.ts:148`; `simplicity/F2`).
+which is what led agents to write polling loops that matched themselves. The
+prompts carry `FOREGROUND_RULE` (`prompts.ts`) and the `COMMAND_RULE` of `prompts-triage.ts`, which
+has no no-mistakes exception.
 
 ### 10.6 The stop gate
 
 The companion's `classic.SubagentStop` hook, for a writer whose marker lists `gateCommands`
-(OB:83-85):
+(the owner's rule: a builder's work is checked before it ends):
 
 - It runs the commands in the slot, joined with `&&`, through `$.process.run` with one total
   budget, `gateTimeoutMs` (10 minutes). The gates take about 58 s serially on the 16-CPU container
-  (`spikes/timeout-and-stop-gate.md`, Q2).
+  (the spike notes).
 - **On failure** it returns `{ block }` with the failing command, its exit code and the last 150
   lines of its output. The agent carries on with them, and is refused again while they fail. There
-  is no cap. The step's own timeout (90 or 60 minutes) and the unknown path bound it
-  (`simplicity/F8`).
+  is no cap. The step's own timeout (90 or 60 minutes) and the unknown path bound it.
 - **When the gate cannot run** (the budget runs out, or the run fails to start), the hook lets
-  the agent finish and records the gate as unknown. CI stays the authority (OB:83) and decides in
-  reviewing. A gate is never passed silently (`totality/T-25`): it is appended to the companion's
+  the agent finish and records the gate as unknown. CI stays the authority and decides in
+  reviewing. A gate is never passed silently: it is appended to the companion's
   log, an intervention (`gate-unknown`, 7.2).
 - **Each run** is one line of the companion's log (`<loop dir>/companion.jsonl`, 7.2) with the
   slot's HEAD, its duration and, for a fail, the command and its exit code: cause `gate-pass`,
@@ -1801,21 +1771,19 @@ safeguards remain:
   planned on every pass until it is told, so a pass that holds it back (one wake at a time, a rate
   cap, a store-blind pass, a failed read) loses nothing. After a restart, changes not told before
   are told. No step's outcome changes: a writer's ok already needs its commits on origin, and
-  failing every step that overlapped would charge other issues for one agent's mistake
-  (`failures/F8`). The loop never cleans the main checkout.
+  failing every step that overlapped would charge other issues for one agent's mistake. The loop never cleans the main checkout.
 
 ### 10.8 Ending a step, and reading answers
 
 - **An answer ends the step when it is read.** The loop reads each running agent step's answer
-  file on every pass, not only at the agent's `turn.complete` (`failures/F15`). A valid answer
+  file on every pass, not only at the agent's `turn.complete`. A valid answer
   ends the step at once. The one exception is a writer's `ok`, which is read when the agent's turn
   ends, so the stop gate has its say first.
 - **Before an agent step treats its agent as lost,** and before it spawns, it looks for a valid
-  answer already recorded for its key (`answers/<key>.a*`). One that is there is the result, as
-  v1 does before marking an agent lost (`act.ts:417-422`; `totality/T-13`).
+  answer already recorded for its key (`answers/<key>.a*`). One that is there is the result, as the foundation does before marking an agent lost (13.6, `exec.ts`).
 - **A writer's answer is confirmed on origin.** On a builder's or fixer's answer, the loop reads
   `git ls-remote origin refs/heads/<branch>` directly and attaches the head to the result. A failed
-  read makes the result unknown, never not-ok (`totality/T-20`).
+  read makes the result unknown, never not-ok.
 - **Stopping.** At the next seq the entry actions stop the old step: TaskStop for its agent when
   it is still listed at work (13.6.1, `stop-agent`), then `factory-slot kill <path>`, both best
   effort (4.5). There is no grace period and no inference from a listed status.
@@ -1825,8 +1793,7 @@ safeguards remain:
   names it, so an agent that left processes behind shows in the decision log. It refuses a path
   outside the pool and a lease whose holder is not `factory-loop:`-prefixed. A process that moved
   its working directory out of the slot survives it until W2's `treehouse return`, which ends
-  lingering processes. The 10-minute timeout removes the reason agents left pollers behind
-  (`totality/T-24`).
+  lingering processes. The 10-minute timeout removes the reason agents left pollers behind.
 
 ### 10.9 The rail, and the fallbacks
 
@@ -1842,19 +1809,18 @@ safeguards remain:
   session and process). The process check catches a session resumed under the same id without the
   companion: the old process's file names the old process, and each such restart is told. The age check catches a companion that stopped in this process. Without the companion,
   agents would start in the main checkout, unguarded. The orchestrator-loop template's plugin list
-  (`coder/push.sh:79`) gains `factory-loop-workspace`, pushed at cutover (section 15).
-- **Re-probe.** U9 re-runs the spikes' frameless checks before it builds. Two points are proven
+  (`coder/push.sh`) lists `factory-loop-workspace` beside `factory-loop`.
+- **Re-probe.** Two points are proven
   only in nearby shapes: a long `$.process.run` inside a second plugin's `classic.SubagentStop`,
   and `$.env.set` with no hook frame open. The probe stays in the repo and is re-run on each
-  Claude Code upgrade (SPIKES.md).
+  Claude Code upgrade (`docs/factory-loop/probes/workspace-probe/`).
 - **Fallbacks**, stated and not built:
   - if the companion's long gate run proves unreliable: the same gate as a classic command hook
     in the companion's `hooks/hooks.json` (`timeout` 900, the gate's own budget 600 s), keyed by
-    agent id through a map file the companion writes at spawn. This shape is proven (spike runs B
-    and run-plugincmd);
+    agent id through a map file the companion writes at spawn. This shape is proven (the spike notes);
   - if a future engine stops applying a `cwd` set by a hook: start each agent as a separate
-    `claude -p` process in its slot (spike run 0). That is a large change for the owner to decide;
-  - if no hook route fires at all: the owner's fallback (OB:86-87). The loop runs the gates after
+    `claude -p` process in its slot (the spike notes). That is a large change for the owner to decide;
+  - if no hook route fires at all: the owner's fallback: the loop runs the gates after
     the answer, resumes the agent with the failures, and fails a step that leaves the main
     checkout dirty.
 
@@ -1887,8 +1853,8 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
 - **The map** keeps what the note needs: `agentType` (per agent, children included), `attempt` (the
   name's `a<k>`), `pr` (the step marker's, `null` when the issue has none or an older loop wrote the
   marker) and `transcript`. A record kept before this change logs `none` for them.
-- **The rule.** The v2 command rule gains: "Never `rm` a glob under an unguarded variable: use
-  `"${VAR:?}"/*` or a literal path.", in every v2 prompt and agent definition.
+- **The rule.** The command rule carries: "Never `rm` a glob under an unguarded variable: use
+  `"${VAR:?}"/*` or a literal path.", in every prompt and agent definition.
 
 ### 10.11 Wind-down
 
@@ -1977,17 +1943,16 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 ## 11. Releases and parking
 
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
-  Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold are
-  gone (14.1).
+  Run it or a template change. There is no sequencing call and no run-it hold
+  (14.1).
 - **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
   clock hour, whatever its key; also while a record waits on a `tag-contains` condition, even with open items or none closed, a readable milestone source still required), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
   tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
   `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form), and `waiting` (the issues of the records that wait on a release tag, comma-joined; omitted when none); a release wait is the judge's to answer, never the owner's; the judge
   decides whether to cut the release now or `hold` until the next hour, and cuts the release with its standing
-  authority (OB:89-90; PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
-  chooses the commit to tag, then does the Run its of the milestone's run-it issues, which v1 did
-  one `task(run-it)` at a time (M7).
+  authority (PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
+  chooses the commit to tag, then does the Run its of the milestone's run-it issues.
 
   A merged issue that comes back open would hold Next forever (a closed record is absorbing and no
   `ready` label brings it back). Under O3, when the milestone reading (taken after the record closed)
@@ -1999,10 +1964,9 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   it merges again. Detection relies on the closed record, kept 7 days: a later revert is not caught.
 - **The release task never waits on the owner inside its wake.** A Run it that needs the owner
   (a workspace restart still needs asking) becomes an owner item, a comment and a tell, and the
-  task ends. A wake held for the owner would hold every tell behind it (D-26, D-44;
-  `failures/F17`).
+  task ends. A wake held for the owner would hold every tell behind it (D-26, D-44).
 - **Parking frees capacity.** A parked (or waiting) issue leaves the in-flight count at once, and W2 frees its
-  slot (OB:92). Its claim stays live (H1 renews it), so no other device takes it.
+  slot. Its claim stays live (H1 renews it), so no other device takes it.
 - **Waiting is not parking.** A designer that is blocked only on a checkable fact waits (8.7): the
   record enters waiting (T16), leaves the in-flight count and frees its slot as a parked one does,
   and its claim stays live. Nobody has to act: the loop checks the conditions every pass and
@@ -2010,18 +1974,18 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   owner may still end it earlier: `/factory resume N ["note"]` is the same `unpark` event (P1) and
   `/factory drop N` closes the life (E1) as for any record; removing `factory:waiting` is not a
   resume. The tell after 24 h is not an owner item.
-- **One way to resume** (OB:92-93): remove `factory:parked`, or `/factory resume N ["note"]` (a
+- **One way to resume:** remove `factory:parked`, or `/factory resume N ["note"]` (a
   list of numbers is allowed). Both are the `unpark` event (P1). The note is the op's note or,
   for a label removal, the trusted comments posted after the loop's park comment (read with
   `callum-flow-issue-read --comments`). So an owner who answers on GitHub and removes the label is
-  heard (DB:93, #591). The daily reminder says that a comment alone does not resume.
+  heard (#591). The daily reminder says that a comment alone does not resume.
 - **Resume** goes through queued, because a slot is needed again, and resets the attempt, triage
   and fix budgets. It resumes the state the issue parked from, with the note for that state's
   step; a park at the fix cap resumes fixing (T10).
 - **Drop, and bringing an issue back.** `/factory drop N` closes the current life (E1, `abandoned`
   with note `dropped`) and removes its labels. The issue stays open on GitHub (section 15).
   To bring it back, add `ready`: S1 claims it as a new life, and the old drop does not apply to it
-  (4.1). No edit of `control.json` is needed (`failures/F10`). A drop also keeps R1 from putting
+  (4.1). No edit of `control.json` is needed. A drop also keeps R1 from putting
   a ghost of that claim back in the queue (6.4).
 - **Rejected, and bringing an issue back.** An issue R1 released at its `maxLives`-th life carries
   `factory:rejected`, a comment and an owner tell that list why each life ended (6.4). It waits on
@@ -2035,26 +1999,26 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 "Avoided": the mechanism no longer exists. "Generic": a table row or the unknown path handles it,
 with no rule of its own. "Environment": a one-time fix outside the loop's rules.
 
-| # | Failure (evidence) | v2 | How |
+| # | Failure (evidence) | Outcome | How |
 |---|---|---|---|
-| 1 | Agents that had answered but were still listed at work held the main-checkout update and branch writes for up to 2 h; processes killed by hand at 18:30:21 and 19:16:52 (DB:77; G1:49-50) | avoided, and generic | An answer ends the step when it is read, every pass (10.8); the next seq stops the agent and kills the slot's processes. Nothing waits on another issue's agent: no step reads the main checkout, and each branch has one writer by structure and by the write guard. A step that never answers meets its timeout. Bash calls end at 10 minutes (10.5) |
-| 2 | The guard failed `head` after the loop's own update-behind, then judge, fixer and `-vN` PRs: 8 supersedes (DB:78; V E4) | avoided | No update of non-head PRs, no head or worktree clause, no new branches (3.5, 9.4), and agents cannot make branches (10.4) |
-| 3 | A resumed escalation with an owner note reran the old head (#596; DB:79) | generic | One unpark path: the parked state's step runs with the note (P1) |
-| 4 | A run killed by a workspace restart was never recovered (#600; DB:80) | avoided, and generic | No daemon runs. A step cut by a restart runs again free, once (U1), after the loop looks for its recorded answer (10.8). Review is keyed by patch and round, CI by head |
-| 5 | Dropping an issue never returned its slot (#601; DB:81) | generic | W2 frees every loop slot whose record is not in a slot state (10.1) |
-| 6 | no-mistakes' fix agents in untrusted repo copies (#613; DB:82) | avoided | no-mistakes is out of the loop's path, and the write guard refuses it (10.4); every agent runs in a loop slot |
-| 7 | no-mistakes 1.84's PR body budget, body compare and self-abort; the `--closes` and `--ignore` adaptations (DB:83-87) | avoided | The loop writes the PR body through `neutral()` and its linkage (8.1); there are no gate responses |
-| 8 | An inconclusive test gate was answered "fix" twice, then quiet for 80 minutes (#620; DB:88) | avoided, and generic | No no-mistakes test gate; CI is the authority. The stop gate refuses while the gates fail, within the step's timeout; a gate that cannot run lets CI decide (10.6). A flaky check gets one re-run (8.5) |
-| 9 | Implementers wrote to the main checkout (#624; DB:89, DB:160) | generic | Agents start in their slot, the companion confines file writes to it, and callum-flow's guard refuses writes to the main checkout (10.3, 10.4). The tripwire tells the owner of anything that gets past them (10.7). No other issue waits on the main checkout |
-| 10 | `maxInFlightIssues` in the workspace file ignored; restart-self with no Coder token (#590); claims swept after 2 h offline (#589); an owner answer on GitHub released no hold (#591); the judge could not finish a release (#592) (DB:90-93) | mixed | Settings: the workspace file may set every key, and both files are read every pass (section 15). Token: environment; R2 tells the owner once when a restart fails, as v1's H4 did. A lapsed claim is claimed again onto the same record (4.1). An owner answer on GitHub plus the label removal resumes with that answer as the note (11). Release: the judge's standing authority (PR #634); releases are out of the merge path |
-| 11 | Usage tier stop-all for 42 and 197 minutes (DB:94; G1:54, :59) | kept, and generic | The foundation's tiers. A step killed by the window is a free re-run (U1), held until the tier allows it, so it costs the issue nothing. Merges are class `free` and go on in stop-all |
-| 12 | Strict protection put every PR behind on every merge: 27 update-behinds for 4 merges (DB:95; V E4) | avoided | Only the head is updated: once per merge, plus once per outside merge during its CI wait (9.2) |
-| E9 | #613's implementer stopped with no commit and no rule moved it for 549 minutes; #591's run died on a 429 and was answered as live (V:407-417) | generic | No commit is `not-ok` (T6), so triage runs at once. Every record has a running step, a planned action or a named wait (property 3). A step killed by a 429 is a free re-run after the window (U1) |
-| E10 | 282 passes from 02:41 at cap 7 of 7 with 4 queued and nothing moving (V:420-426) | avoided | The seven were two merge holds (no such thing in v2), an owner decision and a limbo (both parked, freeing capacity) and three no-mistakes refusals (no no-mistakes). Parked issues do not count, so the queued issues would have started (C3:244). No wait on the owner holds capacity: there is no main-red hold and no reconcile hold |
-| E20 | A gap in release authority held two green PRs for 583 issue-minutes (V:513-519) | avoided | Merges never wait for releases, and the judge has standing release authority (11) |
-| E21 | The usage window cost 1,119 issue-minutes (V:521-526) | kept, and generic | Tiers unchanged. Steps killed by the window re-run free when it resets (U1). The step-unknown breaker stops an outage from spending every issue's budget (5.3). With no gate adjudicators and no churn re-runs the loop starts fewer agents, though the reviewer draws much of what no-mistakes' review did (C4 section 3, an estimate) |
+| 1 | Agents that had answered but were still listed at work held the main-checkout update and branch writes for up to 2 h; processes killed by hand | avoided, and generic | An answer ends the step when it is read, every pass (10.8); the next seq stops the agent and kills the slot's processes. Nothing waits on another issue's agent: no step reads the main checkout, and each branch has one writer by structure and by the write guard. A step that never answers meets its timeout. Bash calls end at 10 minutes (10.5) |
+| 2 | The guard failed `head` after the loop's own update-behind, then judge, fixer and `-vN` PRs: 8 supersedes | avoided | No update of non-head PRs, no head or worktree clause, no new branches (3.5, 9.4), and agents cannot make branches (10.4) |
+| 3 | A resumed escalation with an owner note reran the old head (#596) | generic | One unpark path: the parked state's step runs with the note (P1) |
+| 4 | A run killed by a workspace restart was never recovered (#600) | avoided, and generic | No daemon runs. A step cut by a restart runs again free, once (U1), after the loop looks for its recorded answer (10.8). Review is keyed by patch and round, CI by head |
+| 5 | Dropping an issue never returned its slot (#601) | generic | W2 frees every loop slot whose record is not in a slot state (10.1) |
+| 6 | no-mistakes' fix agents in untrusted repo copies (#613) | avoided | no-mistakes is out of the loop's path, and the write guard refuses it (10.4); every agent runs in a loop slot |
+| 7 | no-mistakes 1.84's PR body budget, body compare and self-abort; the `--closes` and `--ignore` adaptations | avoided | The loop writes the PR body through `neutral()` and its linkage (8.1); there are no gate responses |
+| 8 | An inconclusive test gate was answered "fix" twice, then quiet for 80 minutes (#620) | avoided, and generic | No no-mistakes test gate; CI is the authority. The stop gate refuses while the gates fail, within the step's timeout; a gate that cannot run lets CI decide (10.6). A flaky check gets one re-run (8.5) |
+| 9 | Implementers wrote to the main checkout (#624) | generic | Agents start in their slot, the companion confines file writes to it, and callum-flow's guard refuses writes to the main checkout (10.3, 10.4). The tripwire tells the owner of anything that gets past them (10.7). No other issue waits on the main checkout |
+| 10 | `maxInFlightIssues` in the workspace file ignored; restart-self with no Coder token (#590); claims swept after 2 h offline (#589); an owner answer on GitHub released no hold (#591); the judge could not finish a release (#592) | mixed | Settings: the workspace file may set every key, and both files are read every pass (section 15). Token: environment; R2 tells the owner once when a restart fails, as the foundation's restart notice does (13.9). A lapsed claim is claimed again onto the same record (4.1). An owner answer on GitHub plus the label removal resumes with that answer as the note (11). Release: the judge's standing authority (PR #634); releases are out of the merge path |
+| 11 | Usage tier stop-all for 42 and 197 minutes | kept, and generic | The foundation's tiers. A step killed by the window is a free re-run (U1), held until the tier allows it, so it costs the issue nothing. Merges are class `free` and go on in stop-all |
+| 12 | Strict protection put every PR behind on every merge: 27 update-behinds for 4 merges | avoided | Only the head is updated: once per merge, plus once per outside merge during its CI wait (9.2) |
+| E9 | #613's implementer stopped with no commit and no rule moved it for 549 minutes; #591's run died on a 429 and was answered as live | generic | No commit is `not-ok` (T6), so triage runs at once. Every record has a running step, a planned action or a named wait (property 3). A step killed by a 429 is a free re-run after the window (U1) |
+| E10 | 282 passes from 02:41 at cap 7 of 7 with 4 queued and nothing moving | avoided | The seven were two merge holds (the loop has no such thing), an owner decision and a limbo (both parked, freeing capacity) and three no-mistakes refusals (no no-mistakes). Parked issues do not count, so the queued issues would have started. No wait on the owner holds capacity: there is no main-red hold and no reconcile hold |
+| E20 | A gap in release authority held two green PRs for 583 issue-minutes | avoided | Merges never wait for releases, and the judge has standing release authority (11) |
+| E21 | The usage window cost 1,119 issue-minutes | kept, and generic | The foundation's tiers. Steps killed by the window re-run free when it resets (U1). The step-unknown breaker stops an outage from spending every issue's budget (5.3). |
 
-C3's other overnight failures (C3:196-208) are generic too:
+The other overnight failures are generic too:
 
 - A designer that ended its turn with an async explorer running gave no answer. That is the U
   rows, and the guard now refuses background agents (10.4). The designer has no Agent tool at all
@@ -2067,14 +2031,11 @@ C3's other overnight failures (C3:196-208) are generic too:
 
 ## 13. The foundation
 
-This section is the part of the first loop that v2 keeps, written as built. It began as v1's
-specification, which this change deletes (git keeps it at `5e7de35`). A v1 section N.M is
-13.N.M here, and a v1 numbered item K is "13.N item K". What v2 dropped is left out and its
-numbers are not reused: the P, M, D and A rule sections (5.4 to 5.7), G5 and H3 to H5 inside 5.2
-and 5.3, the designer `RESULT` line (7.2), the adjudicator's reply (7.3), the cutover plan (14),
-and the parts whose code is gone. The cites in the rest of this document, in DECISIONS.md and in
-the code name these numbers. A bare N.M elsewhere in this section is a section of this document
-outside section 13.
+This section is the foundation of the loop, written as built: the driver, the sources, the
+configuration, the foundation's rules, the actions, the ledger, wakes, notices, failure handling,
+safety rails and observability. Its subsections and numbered items keep their numbers, because the
+code, DECISIONS.md and the rest of this document cite them as "13.N.M" and "13.N item K". A bare
+N.M elsewhere in this section is a section of this document outside section 13.
 
 ### 13.2 Architecture
 
@@ -2223,8 +2184,8 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
 | `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1) | every pass | v2's facts (2.4) |
-| `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, a shadow's and the replay's, marks it from `facts`) | - | nothing |
-| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so a shadow logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
+| `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
+| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
 | `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
 | `pool` | `treehouse status --json` from the main checkout: the slots and who holds them. It does no reflog or status read of a slot (2.4 `leases`) | every pass | slot capacity (10.1) |
@@ -2269,8 +2230,8 @@ as they do today.
 
 - **Plugin options** (`userConfig`): `mode` (`off`, `observe` default, `act`), `repo` (default:
   the session checkout's GitHub `origin`), `shadowDevice` (observe mode only: plan as this device,
-  the live orchestrator's, so a shadow can be compared with it; ignored in act mode) and
-  `runSource` (`local`, the default, or `events`, which a shadow and the replay set: the `runs` source is then marked from the event log; the loop reads no pipeline runs either way, 13.3.3).
+  the live orchestrator's, so an observe run can be compared with it; ignored in act mode) and
+  `runSource` (`local`, the default, or `events`, which the replay sets: the `runs` source is then marked from the event log; the loop reads no pipeline runs either way, 13.3.3).
 - **The workspace file** `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/config.json` overrides the
   options and adds `checkout` (the consumer's main checkout, when it is not the session's
   directory), `poolSize` (default 16), `toolsDir` (where `queue-watch.sh`
@@ -2281,7 +2242,7 @@ as they do today.
   `/factory mode` writes `mode`; and `answerChannel` (`script`, `tool` or `text`, 13.4.2), over the
   repo's. A bad value of either is left out and named in the decision log, as the repo's are; so
   is `answerTools`, the switch `answerChannel` replaced, named as replaced and not read. It is
-  plain JSON, easy to read and set from a shell, which the shadow run uses (DECISIONS D-33). A testbed
+  plain JSON, easy to read and set from a shell, which an observe run uses (DECISIONS D-33). A testbed
   points `toolsDir` at a checkout's `features/src/callum-tools` and `binDir` at its
   `images/base` (DECISIONS D-42).
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 13.4.2.
@@ -2315,7 +2276,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `checkoutEveryMs` | `5m` | how often the main-checkout tripwire reads the checkout (10.7) |
 | `slowGapMs` | `10m` | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; 3 since v2, section 15). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
 | `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
 | `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
@@ -2400,7 +2361,7 @@ order (finish in-flight work before starting new work). The tier gate, the contr
 caps apply to every emitted action before it is kept. The generic code is `hooks/foundation.ts`:
 the tier, the class matrix, `gate` and `want`, `admit`, `oneWake` and the title frame. The rules
 below are the foundation's own, G1 to G4, H1, H2, O1 and O2; O3 is in 14.1. Rule ids that earlier
-versions had and v2 dropped are not reused.
+versions had and the loop dropped are not reused.
 
 #### 13.5.1 Helpers
 
@@ -2635,8 +2596,8 @@ Appendix E gives what v2 makes of it (4.5).
 
 1. **The channel.** The mod registers three answer tools, `mcp__factory-loop__verdict`,
    `mcp__factory-loop__design` and `mcp__factory-loop__handoff`, the intended answer channel, and
-   serves them whatever `answerChannel` says (13.4.2). v2's steps ask for the script and read
-   nothing else (10.8); the tools' v1 schemas go with the delete wave.
+   serves them whatever `answerChannel` says (13.4.2). the loop's steps ask for the script and read
+   nothing else (10.8).
 
    **The answer script, a temporary workaround** (#561, DECISIONS D-74). On Claude Code 2.1.296
    and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook (13.13),
@@ -2879,7 +2840,7 @@ in act mode with no kill switch. Only one wake is open at a time (rule `O2`).
 - **Owner chat**: relaying `tell` lines, answering questions, turning instructions into control
   calls, and keeping `.claude/orchestrator-memory.md` (I-81).
 
-Triage, which was model work in v1, is a spawned agent (5.2).
+Triage is a spawned agent, not model work in the main conversation (5.2).
 
 #### 13.8.4 Proven by the wake probe
 
@@ -3220,19 +3181,19 @@ later child of #684.
   the agent list to show it ended, and the owner is told.
 - **Agent ids from a mod**: the engine's test host never returns an agent id from
   `$.agent.spawn`, so spawning from a mod, and each agent's `turn.complete` carrying that id, is
-  proven only once act mode runs on the testbed (17.3). `act.test.ts` drives the same act-step
+  proven only once act mode runs on the testbed. `act.test.ts` drives the same act-step
   functions outside the host instead.
 - **The observe-mode event sink** is one append-only file per repo that nothing prunes yet.
 - **Per-agent OTEL attributes**: `agent.spawn` has no environment field, so the
   `OTEL_RESOURCE_ATTRIBUTES=issue=<N>` tagging in skill step 3 cannot be reproduced (DECISIONS D-11).
 - **Long-running agents** (implementers for an hour or more, several at once) are untested from a
-  mod (FINDINGS section 6). A shadow cannot test them either, since observe mode spawns nothing.
+  mod (FINDINGS section 6). Observe mode cannot test them either, since it spawns nothing.
 - **Auto mode**: if orchestrators move from bypass to auto mode, every agent report hands back to
   the main conversation and wakes the model (FINDINGS check 4). The loop must then stay in bypass.
 - **The mod API is early access**: the plugin pins Claude Code 2.1.296 in its README, and the
   spike's checks are re-run before each upgrade.
-- **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
-  shadow reads labels, blockers and sub-issues live, so it can judge claims.
+- **GitHub reads in an observe-mode workspace**: since the owner approved a login on 2026-10-12, an
+  observe-mode workspace reads labels, blockers and sub-issues live, so it can judge claims.
 - **Agents' tools**: the loop spawns its own agent types (13.6.1), which list their answer tool
   and ToolSearch. Only the testbed can prove three things: that a mod-registered tool
   named in a plugin agent's `tools:` line is reachable through ToolSearch; that the call carries
@@ -3288,7 +3249,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-21, the verdict's estimate (V:168; OB:100-102).
+Twenty-one rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3299,11 +3260,11 @@ later child of #684.
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
-| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1). See wind-down (10.11) |
-| S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then issues labelled `priorityLabel`, then ascending; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
+| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
+| S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then issues labelled `priorityLabel`, then ascending; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
-| S4 | unknown | an unknown result, a running step's timeout, or a GitHub wait past its bound | U1 to U4 |
+| S4 | unknown | an unknown result, a running step's timeout, or a GitHub wait past its bound | the unknown path, rows U1 to U4 (5.1) |
 | S5 | triage | U3 or T6 | the triage step; its answer through X1 to X5 |
 | S6 | owner and GitHub | drop, unpark, issue-closed, pr-merged, pr-closed, claim-lost, a waiting state's period | E1 to E7, P1 |
 | Q1 | update | the merge queue's head is behind | `queue-update` keyed by main's head |
@@ -3314,40 +3275,10 @@ later child of #684.
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour; also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
 
-### 14.2 Like for like against C3's estimates
-
-The id count alone no longer measures the layer: conditions now live in the table's rows
-(`simplicity/F10`). So this is the full count, against C3's sizing (C3:145-157). Counted on this
-revision.
-
-| Measure | v1 (G2 section 1) | C3's estimate | Draft | Now | The difference |
-|---|---|---|---|---|---|
-| Rule ids | 46 | about 21 | 21 | 21 | none |
-| Table rows | inside rule code | the table as one mechanism | 47, plus 3 side events | 33, plus 2 side checks (re-claim, push intervention) | rows are where conditions live; counted from here on |
-| Action kinds | 29 | about 15 | 24 | 25: 13 new, 12 reused (appendix B) | C3's list has no events, no CI re-run and no split. v2 logs its own state events (OB decision 3), re-runs flaky checks, and owns briefs and sub-issues so retries cannot repeat them |
-| Key families | about 62 | about 12 | 17 | 13 new, plus the foundation's 5 (appendix C) | the extra families are the CI re-run, the split children and the intervention key |
-| Guard checks | 10 failure classes | 6 | 7 with `--patch` | 7 with `--patch` (9.4) | rollout and linkage check the loop's own Closes or Refs line, which the owner's rule needs (OB:71) |
-| Notice kinds of the new layer | about 24 in all | about 5: parked, breaker, blind, untrusted PR, main red | 9 | 7: parked, breaker, stalled, waiting, checkout, workspace, rejected | main red and untrusted PR are gone (no hold; a policy park asks the question). stalled makes an exhausted effect visible; waiting gives waiting states their timeout (OB:44); checkout and workspace are the owner's backstop and the companion's rail; rejected tells the owner the lives cap was reached (6.4) |
-| Sources | 10 | 6, counted differently, and fewer than 10 | about 15 | 10 (2.4) | `runs` out, `prs` in. The rest are the foundation's, and C3's 6 folds several of them together |
-| Intervention causes | 0 | - | 12 detected touch kinds | 12 person and 17 loop cause families (7.2) | the owner widened the measure to every unplanned step-in, by a person or the loop (section 15). Each cause is an exact fact the loop already holds, derived in one module; none adds a rule id, a row or a source |
-| New settings | - | - | 12 | 12 (appendix A) | `maxLives`, the owner's cap on lives (6.4) |
-
-Text, by `wc -w`: about 28,500 words in all, against the draft's 21,400 and v1's whole spec at its
-build, 14,003 (`b5f40da`; `simplicity/F10`). The rules themselves, sections 3 to 11, are about
-14,800 words; the old sections 13 to 15 (what was deleted, this count and the decisions) were about 6,600.
-Section 13 is now the foundation, as built.
-The growth is citations and the reasons for each change, not rules: the row, rule, kind, family,
-notice and source counts above all went down or stayed level. The owner's decisions added about
-2,800 words, mostly the intervention causes (7.2), the claim tools (3.6) and the decisions
-themselves; they added no rule id, row, action kind or source.
-
 ## 15. Decisions
 
-Unnumbered, so parallel work cannot collide (OB:111-113). Each records a choice this spec makes
-that the owner brief does not. BUILD-NOTES-W1.md gives the critic finding behind each change.
-
-The first entries are the owner's answers of 2026-10-15 to the ten questions workflow 1 asked,
-and the owner's two structural decisions. They are settled.
+Unnumbered, so parallel work cannot collide. Each entry records a choice the loop makes and why.
+The first entries are the owner's own decisions; they are settled.
 
 ### A drop does not close the GitHub issue (owner)
 
@@ -3366,9 +3297,10 @@ and the owner's two structural decisions. They are settled.
 
 ### The reconcile migration runs now (owner)
 
-- **Decision:** `factory-reconcile` is built in wave 1 (U3). Its report goes to the owner, and the
-  releases the owner approves run while both live loops stay in observe mode (6.3).
-- **Why:** the ghosts are a big gap now (OB:48), and the tool needs nothing from waves 2 and 3.
+- **Decision:** `factory-reconcile` is a one-shot tool. Its report goes to the owner, and the
+  releases the owner approves run when the owner says so (6.3).
+- **Why:** ghosts, issues the factory shows as live that nothing works on, are a gap the loop's own
+  reconcile (R1) does not cover for work from before it.
 
 ### The migration's ghosts leave the factory (owner)
 
@@ -3377,7 +3309,7 @@ and the owner's two structural decisions. They are settled.
   adopted (3.5, 6.3). Nothing is requeued (owner, 2026-10-15, superseding "still labelled
   `ready` goes back to the queue").
 - **Why:** the owner's first rule never requeued anything (claiming removes `ready`), and for
-  what v1 left behind the owner chooses what comes back.
+  what earlier loops left behind the owner chooses what comes back.
 
 ### A release puts the issue back in the queue (owner, 2026-10-15)
 
@@ -3385,8 +3317,8 @@ and the owner's two structural decisions. They are settled.
   the issue is closed, when it leaves; and unless the lives cap is reached (below). The seven
   state labels go and `ready` comes back in one call (`label` op `requeue`), the one place the
   loop adds `ready` but a split's ready child (6.4, appendix B).
-- **Alternatives:** "still labelled `ready` goes back to the queue, otherwise it leaves" (OB:51).
-- **Why:** that rule never fired, because claiming removes `ready`; a ghost of v2's own is a loop
+- **Alternatives:** "still labelled `ready` goes back to the queue, otherwise it leaves".
+- **Why:** that rule never fired, because claiming removes `ready`; a ghost of the loop's own is a loop
   bug, not the owner's judgement that the issue is unwanted.
 
 ### Three lives, then `factory:rejected` (owner, 2026-10-15)
@@ -3417,7 +3349,7 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** no hold. A failed check on the head gets one re-run, then a fixer, and the queue
   moves on (9.5).
-- **Why:** the owner's rule (OB:62-64). With "up to date" on, the head's own CI carries main's
+- **Why:** the owner's rule. With "up to date" on, the head's own CI carries main's
   state; a hold would make the queue wait on a person while holding K slots.
 
 ### Interventions, by a person or by the loop (owner)
@@ -3425,8 +3357,8 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** the measure is every unplanned step-in, not only a person's touch (7.2). An
   `intervention` event names who (`person` or `loop`), a cause code, a one-line reason and the
   issue when there is one. An issue is untouched only when no intervention of either kind names
-  it. Issues that change the loop itself are no longer left out of the cutover's ten (17.5).
-- **Alternatives:** count only what a person did (the recommendation workflow 1 made).
+  it.
+- **Alternatives:** count only what a person did.
 - **Why:** the owner's words: "I would like it to include any point where the orchestrator had to
   unexpectedly step in with judgement. For example, something is not merging correctly, or an
   agent does something strange or crashes. Otherwise these signals are lost." Every cause is an
@@ -3434,21 +3366,15 @@ and the owner's two structural decisions. They are settled.
 
 ### The companion plugin is enabled through the Coder template (owner)
 
-- **Decision:** `factory-loop-workspace` joins the orchestrator-loop template's plugin list
-  (`coder/push.sh:79`), pushed at cutover. The operator or the owner may push it (10.9, 17.5).
+- **Decision:** `factory-loop-workspace` is in the orchestrator-loop template's plugin list
+  (`coder/push.sh`). The operator or the owner pushes the template (10.9).
 - **Why:** one place, and the rail holds agent steps and tells the owner if it is missing.
-
-### Capacity is 2 at cutover, then 3 (owner)
-
-- **Decision:** K = 2 for the first 5 claims, then 3; v2's `maxInFlightIssues` default is 3 (v1's
-  is 5, `config.ts:30`).
-- **Why:** C3's model meets the baseline of 12 to 22 merges a day from K = 2 (C3:299-303).
 
 ### The release task stays in the loop (owner)
 
 - **Decision:** O3 is kept; `task(run-it)` goes into it, and it never waits on the owner inside its
   wake (11).
-- **Why:** the judge has standing release authority (OB:89), and a merge never waits on it.
+- **Why:** the judge has standing release authority, and a merge never waits on it.
 - **Hourly review (#761):** the wake was keyed by the milestone's counts and ran once per key, so a
   later milestone reaching a used count never woke the judge, and a `hold` was final. It is now
   keyed by the last release tag and the UTC hour, at most one release task starts per hour, so a
@@ -3458,33 +3384,29 @@ and the owner's two structural decisions. They are settled.
 ### `fixCap` 3 and `maxTriages` 2 per life (owner)
 
 - **Decision:** both, as settings (appendix A).
-- **Why:** 3 is today's review cap (`config.ts:32`) and 2 is C3's.
+- **Why:** 3 review rounds is the review cap the loop has always had, and 2 triages bound a step's unknown path without letting it loop.
 
 ### `In development` is dropped now (owner)
 
-- **Decision:** v2 neither writes nor reads `In development`. The claim, heartbeat, sweep and
+- **Decision:** the loop neither writes nor reads `In development`. The claim, heartbeat, sweep and
   factory-state tools use the claim comments, the claim events and the `factory:*` labels instead
-  (3.6, U4). The migration removes `In development` from the issues it touches (6.3, U3).
-- **Alternatives:** keep it until the old orchestrator is retired (the recommendation workflow 1
-  made).
-- **Why:** one label set per issue. v1 is unaffected: no v1 rule reads the label, and rollback is
-  running the previous release (v0.38.x), which still carries the old tools.
+  (3.6). The migration removes `In development` from the issues it touches (6.3).
+- **Alternatives:** keep it until the old orchestrator is retired.
+- **Why:** one label set per issue.
 
 ### Small modules, and a size guard (owner)
 
 - **Decision:** the layout of 2.5: one module per area and kind, the planner a thin composer, the
-  table as data, no module shared by two parallel units. `npm run lint` fails on any file under
-  `plugins/factory-loop/hooks/` over 600 lines, outside an allowlist of today's six v1 files that
-  only shrinks and is empty after the delete wave (U1, U10); each listed file is capped at its
-  size when listed, so it can only shrink too.
-- **Why:** today's loop grew into a few large files (`plan.ts` alone is 2,541 lines). A check
-  keeps v2 from doing the same.
+  table as data. `npm run lint` fails on any file under `plugins/factory-loop/hooks/` over 600
+  lines. The allowlist is empty, and an oversized file is split, never listed.
+- **Why:** the first loop grew into a few large files (one planner file of over 2,500 lines). A
+  check keeps the loop from doing the same.
 
-### v2's events use today's format (owner)
+### The loop's events use today's format (owner)
 
 - **Decision:** on 2026-10-15 the owner withdrew the decision to use issue #534's structured
-  event format, and the idea of a new database table: "it's going to be too complex to add". v2
-  writes today's format: existing `callum-flow-event` states and fields, with its extra fields as
+  event format, and the idea of a new database table: "it's going to be too complex to add". The
+  loop writes today's format: existing `callum-flow-event` states and fields, with its extra fields as
   `key=value` tokens in the note, encoded as `loop` notes are. `hooks/v2/events.ts` is the one
   seam, so a later format change touches one module (7.1).
 
@@ -3492,7 +3414,7 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** the transition table is an array of rows in `hooks/v2/table.ts`; `rowFor` is the
   only reader, and it throws when zero or two rows match.
-- **Alternatives:** transitions coded in rule functions, as v1 did.
+- **Alternatives:** transitions coded in rule functions.
 - **Why:** totality and exclusivity become testable properties (17.1), and a new case is a row a
   reviewer can see, not a branch in code.
 
@@ -3509,7 +3431,7 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** 4.1.
 - **Alternatives:** conditions with a fixed priority.
 - **Why:** a closed PR stayed "present" and outranked every unpark, and a pending reminder did the
-  same (`totality/T-03`).
+  same.
 
 ### The ledger is the outbox
 
@@ -3522,24 +3444,24 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** the one bounded triage call is a `factory-loop:triage` agent with the answer
   script.
-- **Alternatives:** a JUDGE wake to the main session (FM 2.11's suggestion).
+- **Alternatives:** a JUDGE wake to the main session.
 - **Why:** wakes go one at a time (D-26) and queue behind tells and owner chat. An agent has its
   own timeout, its own model and no claim on the main session's context, and it uses the same
   checked answer path as every other step.
 
 ### Free re-runs for causes outside the issue, once per attempt
 
-- **Decision:** U1, with four causes the loop holds as facts (5.1).
-- **Alternatives:** no free re-runs (`simplicity/F12`); free re-runs without a bound (the draft).
-- **Why:** two restarts and two usage windows in one night (G1:52, :56; V:523) would otherwise
-  spend issues' retries and triages on the environment. The bound keeps work finite.
+- **Decision:** the free re-run row (U1, 5.1), with four causes the loop holds as facts.
+- **Alternatives:** no free re-runs; free re-runs without a bound.
+- **Why:** a night with two restarts and two usage windows would otherwise spend issues' retries
+  and triages on the environment. The bound keeps work finite.
 
 ### The breaker counts step unknowns across issues
 
 - **Decision:** 5.3.
-- **Alternatives:** count parks (the draft); no breaker.
-- **Why:** counting parks acts after every in-flight issue has spent its budget. C3's breaker
-  counted same-kind failures across issues (C3:112).
+- **Alternatives:** count parks; no breaker.
+- **Why:** counting parks acts after every in-flight issue has spent its budget. Counting the same
+  kind of failure across issues acts on the first few.
 
 ### Every record change is a transition event, self-transitions included
 
@@ -3551,7 +3473,7 @@ and the owner's two structural decisions. They are settled.
 ### Records have their own store key
 
 - **Decision:** `records:<repo>`, written only by the `transition` executor, rebuilt from events.
-- **Alternatives:** records as a ledger entry kind (FM coupling C2).
+- **Alternatives:** records as a ledger entry kind.
 - **Why:** the record is state, not an action; keeping it apart keeps the ledger's prune, fit and
   retry rules away from it.
 
@@ -3559,8 +3481,8 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** each step attempt has its own key, `maxAttempts` 1. Effects (labels, comments,
   events, PR writes) keep the ledger's retries.
-- **Alternatives:** the ledger's same-key retries for steps, as v1 did.
-- **Why:** one retry mechanism per thing. A step's second attempt is the table's decision (U2),
+- **Alternatives:** the ledger's same-key retries for steps.
+- **Why:** one retry mechanism per thing. A step's second attempt is the table's decision (5.1),
   visible in the record and the events.
 
 ### A GitHub blip is retried inside the attempt
@@ -3575,7 +3497,7 @@ and the owner's two structural decisions. They are settled.
 ### An exhausted effect holds its record and tells the owner
 
 - **Decision:** 4.5.
-- **Alternatives:** send it down the step's unknown path (`totality/T-06`).
+- **Alternatives:** send it down the step's unknown path.
 - **Why:** a retry of the step cannot fix a failing label or comment write; the owner's `retry`
   can, once the cause is fixed.
 
@@ -3583,29 +3505,29 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** T6.
 - **Alternatives:** park at once; retry.
-- **Why:** "cannot" is often a fixable misunderstanding (C3:77); triage can redesign, instruct or
+- **Why:** "cannot" is often a fixable misunderstanding; triage can redesign, instruct or
   park, and it is bounded.
 
 ### Patch identity has no context lines
 
 - **Decision:** `git diff -U0 ... | git patch-id --stable`.
 - **Alternatives:** git's default context; the PR's commit list.
-- **Why:** a clean update keeps approval, which the serial queue relies on (OB:63-64); C3:441 shows
-  the context form would re-review after harmless updates.
+- **Why:** a clean update keeps approval, which the serial queue relies on; the form with context
+  lines would re-review after harmless updates.
 
 ### Review is keyed by patch and round
 
 - **Decision:** 8.4.
-- **Alternatives:** by attempt (the draft).
+- **Alternatives:** by attempt.
 - **Why:** a CI problem or a retry must not buy a second opus review of the same patch, and a new
   round must let the reviewer judge a fixer's declines.
 
 ### A failed check is re-run once per round
 
 - **Decision:** 8.5.
-- **Alternatives:** no re-run (the draft); a special path for a fixer's decline of a red check.
-- **Why:** a flake should not spend a fix round; one re-run is the generic retry for CI, as C3's
-  check step had (C3:78).
+- **Alternatives:** no re-run; a special path for a fixer's decline of a red check.
+- **Why:** a flake should not spend a fix round; one re-run is the generic retry for CI, as a
+  check step has.
 
 ### Rounds have no cap of their own
 
@@ -3618,21 +3540,21 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** order by `seqAt`; a head's non-ok result sends it to the back (9.1).
 - **Alternatives:** keep the head through its retries and triage.
-- **Why:** one stuck head could block every merge for about 150 minutes (`totality/T-10`), against
-  OB:62-63.
+- **Why:** one stuck head could block every merge for about 150 minutes, against the owner's rule
+  that a merge never waits.
 
-### The interim reviewer has its own definition
+### The reviewer has its own definition
 
 - **Decision:** `agents/reviewer.md`, built from the merge adjudicator's judgement rules (8.3).
-- **Alternatives:** the v1 adjudicator with a review purpose (the draft).
-- **Why:** that definition is a no-mistakes gate adjudicator with another contract, and it must
-  stay as it is while v1 can plan.
+- **Alternatives:** the adjudicator definition with a review purpose.
+- **Why:** that definition is a no-mistakes gate adjudicator with another contract, and it stays as
+  it is.
 
 ### The designer is a reader
 
 - **Decision:** the designer returns the brief or the split; the loop posts and creates them
   (8.7).
-- **Alternatives:** the designer writes to GitHub, as in v1.
+- **Alternatives:** the designer writes to GitHub.
 - **Why:** a retried designer made duplicate sub-issues, and the write guard would block the labels
   a split needs. Keyed effects make both idempotent.
 
@@ -3640,7 +3562,7 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** fixed is `CORRECT`, declined is `WRONG`, actor `fixer`.
 - **Alternatives:** a new event kind.
-- **Why:** the reviewer false-positive query keeps working unchanged (`docs/metrics.md:145-159`).
+- **Why:** the reviewer false-positive query keeps working unchanged (`docs/metrics.md`).
 
 ### An open PR is adopted at claim
 
@@ -3652,27 +3574,27 @@ and the owner's two structural decisions. They are settled.
 ### One branch name per issue, across lives
 
 - **Decision:** `issue-<N>`, continued from its origin head (3.5).
-- **Alternatives:** `issue-<N>-<k>` for a new life (the draft).
-- **Why:** the owner's "one branch and one PR per issue for life" (OB:65-66). Continuing needs no
+- **Alternatives:** `issue-<N>-<k>` for a new life.
+- **Why:** the owner's "one branch and one PR per issue for life". Continuing needs no
   force-push, and it keeps a released ghost's work.
 
 ### The issue keeps one slot from designing to merge-queue
 
 - **Decision:** the designer and the reviewer read in the issue's slot too.
 - **Alternatives:** a slot only for writers; readers in the main checkout.
-- **Why:** no agent reads the main checkout (V:276), and one slot per life needs no hand-over.
+- **Why:** no agent reads the main checkout, and one slot per life needs no hand-over.
 
 ### Leftovers are saved as a patch file
 
 - **Decision:** 10.2.
-- **Alternatives:** push a `park/issue-N` ref (C3:118); discard them.
+- **Alternatives:** push a `park/issue-N` ref; discard them.
 - **Why:** no extra branches on origin; the work is still recoverable for 7 days, and the retry's
   prompt names it.
 
 ### A companion plugin owns the agent's folder, its guard, its timeout and its stop gate
 
 - **Decision:** `factory-loop-workspace` (10.3 to 10.6).
-- **Alternatives:** the loop's own hooks; command hooks in callum-flow (the draft); a separate
+- **Alternatives:** the loop's own hooks; command hooks in callum-flow; a separate
   `claude -p` process per agent.
 - **Why:** the spikes showed that the loop's own hooks never see agents it starts from its timer,
   and that a second plugin's hooks do. callum-flow must stay generic (CLAUDE.md, "This repo"). A
@@ -3681,8 +3603,8 @@ and the owner's two structural decisions. They are settled.
 ### The stop gate refuses while the gates fail
 
 - **Decision:** no cap; a gate that cannot run lets CI decide (10.6).
-- **Alternatives:** refuse twice, then let the answer stand (the draft).
-- **Why:** it is the owner's rule (OB:84-85). The step's timeout and the unknown path bound it.
+- **Alternatives:** refuse twice, then let the answer stand.
+- **Why:** it is the owner's rule. The step's timeout and the unknown path bound it.
 
 ### Gate commands are repo settings
 
@@ -3694,43 +3616,43 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** `$.env.set` at session start, and the companion's per-call value (10.5).
 - **Alternatives:** an export in `dev-remote-control` (an image release); the Coder template.
-- **Why:** both proven routes live in the plugins, need no release on the cutover path, and cover
-  the plant-console loop too.
+- **Why:** both proven routes live in the plugins, need no image release, and cover other repos'
+  loops too.
 
 ### Reconcile has no mode
 
-- **Decision:** R1 acts on v2's own facts every pass; the one-shot migration observes first and
+- **Decision:** R1 acts on the loop's own facts every pass; the one-shot migration observes first and
   acts on approval by issue (6).
-- **Alternatives:** an observe mode for R1 with approval sets and a hold on claims (the draft).
-- **Why:** the owner asked for the first reconcile in observe mode (OB:54), not a permanent one.
-  The hold made one ghost stop every claim, a wait on the owner holding capacity (OB:92).
+- **Alternatives:** an observe mode for R1 with approval sets and a hold on claims.
+- **Why:** the owner asked for the first reconcile in observe mode, not a permanent one. The hold
+  made one ghost stop every claim, a wait on the owner holding capacity.
 
 ### Releases reuse `reclaimed` and `abandoned`
 
 - **Decision:** 6.4: `reclaimed` for a requeue, `abandoned` for a release that leaves or rejects,
   each with the release fields (`outcome` and `lives` among them, 7.1).
 - **Alternatives:** a new `released` kind; a new `rejected` kind.
-- **Why:** every reader already ends a claim on them (OB:52-54), and the note's `outcome` tells a
+- **Why:** every reader already ends a claim on them, and the note's `outcome` tells a
   rejection apart for the metrics.
 
 ### Three new event states; everything else reused
 
 - **Decision:** `transition`, `reviewed`, `intervention` (7.1).
-- **Alternatives:** a new kind per v2 state; carry state changes in `loop` notes.
+- **Alternatives:** a new kind per state; carry state changes in `loop` notes.
 - **Why:** `loop` is never a stage (D-09), so state changes need their own kind; reusing
   `delegated`, `fix_requested`, `merge_ready` and `verdict` keeps every existing query working.
 
 ### No label mirror
 
 - **Decision:** labels are written, not read back, except the parked label (3.4).
-- **Alternatives:** rewrite drifted labels each pass (the draft).
-- **Why:** the record is the authority (OB:43); the label list lags, and the rewrite undid parks.
+- **Alternatives:** rewrite drifted labels each pass.
+- **Why:** the record is the authority; the label list lags, and the rewrite undid parks.
 
 ### A drop applies to the life it closed
 
 - **Decision:** 4.1, 11.
-- **Alternatives:** a drop list that never expires (v1).
-- **Why:** bringing an issue back needed a hand edit of `control.json` (#602, G1:375).
+- **Alternatives:** a drop list that never expires.
+- **Why:** bringing an issue back needed a hand edit of `control.json` (#602).
 
 ### Waiting states tell; running steps go unknown
 
@@ -3754,15 +3676,9 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** R2 restarts at once except during a queue action or the release task, on a pass
   that admits nothing else (what it would start would only be cut); a running step it cuts
-  re-runs free (U1).
-- **Alternatives:** v1's drain (D-15); waiting for agent steps.
+  re-runs free (5.1).
+- **Alternatives:** a drain before the restart; waiting for agent steps.
 - **Why:** steps are re-runnable and pushed work survives; the drain held the factory for hours.
-
-### Foundation helpers are copied, not moved, until the delete wave
-
-- **Decision:** `foundation.ts` copies them with a parity test.
-- **Alternatives:** move them out of `plan.ts` now.
-- **Why:** `plan.ts` stays untouched until the delete wave (OB:107-109).
 
 ### A resume resets the budgets and hears GitHub answers
 
@@ -3783,47 +3699,9 @@ and the owner's two structural decisions. They are settled.
 
 - **Decision:** the repo-local file is read from origin's default branch with `git show` every
   `githubEveryMs`; the workspace file, read every pass, may set any key and wins.
-- **Alternatives:** v1's reading (the repo file at session start; the workspace file for a few
-  keys).
-- **Why:** DB:91 (`maxInFlightIssues` silently ignored). Nothing in v2 keeps the main checkout up
-  to date, so the repo file is read from the branch, not the tree.
-
-## 16. Build units
-
-Units in one wave must not share a file unless the order is stated. Waves 2 and 3 run side by side
-in workflow 3, so their units must not share files with each other either. U1 pre-wires every
-shared registry (action kinds, executor registry, source modules, contract modules, safety
-allowlists), so later units only fill their own files.
-
-| Unit | Wave | Creates | Changes | Depends on | Effort |
-|---|---|---|---|---|---|
-| U1 Skeleton, switch and vocabulary | 1 (first) | `hooks/foundation.ts` (with the breaker's step-unknown bucket); `hooks/v2/types.ts`, `plan.ts`, `observe.ts`, `registry.ts`, `steps.ts`; stub modules for U2 to U9 (`rules-state.ts`, `reconcile.ts`, `release.ts`, `rules-queue.ts`, `rules-slots.ts`, `rules-interventions.ts`, `sources-prs.ts`, `sources-interventions.ts`, `events.ts` (its types and signatures), `act-state.ts`, `act-events.ts`, `act-pr.ts`, `act-split.ts`, `act-review.ts`, `act-ci.ts`, `act-queue.ts`, `act-slots.ts`, `steps-work.ts`, `steps-review.ts`, `steps-queue.ts`, `steps-triage.ts`, `contracts-work.mjs`, `contracts-review.mjs`, `contracts-triage.mjs`), each failing `noRetry` until built; `tests/foundation.test.ts` (parity); `tests/v2-switch.test.ts` | `hooks/types.ts`, `config.ts` (v2 kinds and keys; the workspace file may set every key), `act.ts` (planner switch, registry), `register.ts` (planner and shadow, the records and heads keys, transition pings, decision-log fields, `ownerOp` calls `act-events.ts`), `control.ts` (ops of appendix E), `contract.mjs` (imports the v2 contract modules), `observe.ts` (calls `observeV2`), `scripts/factory-loop-replay.js` (`--planner`), `tests/factory-loop-plan.test.js` (purity over `hooks/v2/`), `tests/factory-loop-safety.test.js` and `plugins/factory-loop/tests/safety.test.ts` (every v2 argv of appendix B, `gh run rerun` among them), `plugins/factory-loop/tests/control.test.ts`; `scripts/lint.sh` (the size guard and its allowlist, 2.5) and a test of the guard | - | xhigh |
-| U2 State model, table and triage | 1 | `hooks/v2/table.ts`, `record.ts`; fills `rules-state.ts` (S0 to S6, H1 with the re-claim, O1's counts), `act-state.ts` (`transition` with its trigger, `label`, `comment` with the hidden key, `event` through `events.ts`, follow-ups reusing v1's `rollout`, `close-issue`, `release-parent` and `milestone-later` executors), `steps-triage.ts`, `contracts-triage.mjs`; `hooks/v2/prompts-triage.ts`; `agents/triage.md`; `plugins/factory-loop/tests/v2-table.test.ts`, `v2-state.test.ts`, `v2-record.test.ts` | `hooks/derive.ts` (v2 states in `EVENTS_SQL`; `recordsFromEvents` lives in `record.ts`, so `derive.ts` stays under the size budget), `skills/judge/SKILL.md` (v2 TELL kinds and the release task with Run its, beside the v1 sections), `tests/factory-loop-judge-skill.test.js`, `tests/factory-loop-agents.test.js` (triage) | U1 | xhigh |
-| U3 Reconcile | 1 | fills `reconcile.ts` (R1 and the tripwire), `release.ts` (the release actions of 6.4, shared); `bin/factory-reconcile` (the one-shot migration, 6.3, which also removes `In development` from the issues it touches); `plugins/factory-loop/tests/v2-reconcile.test.ts`; `tests/factory-loop-reconcile.test.js` (the tool over fixtures) | - | U1; U4 for one test: the migration's event notes are parsed with `events.ts`, which U4 fills, so that test lands with or after U4 | xhigh |
-| U4 Events, interventions and the claim tools | 1 | fills `hooks/v2/events.ts` (the one seam: every v2 event's state, columns, `key=value` note, argv and the note's parser, 7.1), `rules-interventions.ts` and `sources-interventions.ts` (every intervention of 7.2, the push detection, the companion's log, the control and config digests), `act-events.ts`; `plugins/factory-loop/tests/v2-events.test.ts`, `v2-interventions.test.ts` | `images/base/callum-flow-event` (three states and their required note tokens) and its test; `images/base/callum-flow-claim` (no `In development`; the heartbeat's own claims from factory-state, 3.6) and `features/test/callum-tools/claim.test.sh`; `images/base/callum-flow-sweep` (candidates from events, no `In development`, and the merged-PR pattern `(^\|/)issue-<N>(-\|$)`, `totality/T-27`) and its test; `images/base/callum-flow-factory-state` (the v2 stage from the `transition` note; `nomistakes.runs` optional; the label checks of 3.6), `tests/factory-state.test.js`, `tests/fixtures/factory-state/` (new fixtures), `docs/factory-state.md`; `images/base/callum-flow-evaluate` (interventions and judgement calls from the notes) and its tests; `docs/metrics.md`; `images/base/README.md` (event log and claim tool reference); `plugins/callum-flow/skills/issue-orchestrator/SKILL.md` (its two `In development` lines) | U1 | xhigh |
-| U5 Designer, builder, fixer and the PR | 2 | `agents/designer-v2.md`, `agents/builder.md`, `agents/fixer.md`; `hooks/v2/prompts-work.ts` (the three prompts, `FOREGROUND_RULE`, the v2 `COMMAND_RULE`, the slot line, the retry context); fills `contracts-work.mjs` (design, build, fix), `steps-work.ts` (design, build, fix, the direct origin read), `act-pr.ts` (ensure, body), `act-split.ts` (children); `plugins/factory-loop/tests/v2-work.test.ts`, `v2-pr.test.ts`; a test that no v2 prompt or loop-owned definition names `axi`, `no-mistakes` or `implement-issue` | `tests/factory-loop-agents.test.js` (the new types); the synced `Two ways work gets done` section of `templates/CLAUDE.md` (and its baseline and this repo's copy) says what a loop agent leaves to the loop and which text is the manual path. It is synced, so `callum-dev update` merges it without conflict, and the repo-owned block is left alone apart from its heading | U1, U2 | high |
-| U6 Reviewer and CI | 2 | `agents/reviewer.md`; `hooks/v2/reviewer.ts`, `prompts-review.ts`; fills `contracts-review.mjs`, `steps-review.ts` (the review and CI halves), `act-review.ts` (PR comment, `reviewed` and fixer `verdict` events), `act-ci.ts` (`ci-rerun`); `plugins/factory-loop/tests/v2-review.test.ts` | - | U1, U2 | high |
-| U7 Merge queue | 2 | fills `rules-queue.ts` (order, Q1, Q2), `steps-queue.ts`, `act-queue.ts`, `sources-prs.ts` (PRs, checks, patch ids, heads first seen); `images/base/callum-flow-patch-id` and its test; `plugins/factory-loop/tests/v2-queue.test.ts`; `tests/factory-loop-v2-patch-id.test.js` (real git) | `images/base/callum-flow-merge-guard` (`--patch`: no run lookup, class tokens) and `images/base/callum-flow-merge` (passes it), their tests; `images/base/README.md` (the guard mode) | U1, U2 | xhigh |
-| U8 Slots | 3 | fills `rules-slots.ts` (W1, W2), `act-slots.ts`; `bin/factory-slot` (`lease`, `prepare`, `kill`, `free`); `plugins/factory-loop/tests/v2-slots.test.ts`; `tests/factory-loop-v2-slot.test.js` (real git, a fake treehouse, a branch held by another worktree) | - | U1, U2 | high |
-| U9 The companion plugin | 3 | first, the frameless re-probe (10.9) as `docs/factory-loop/probes/workspace-probe/`; then `plugins/factory-loop-workspace/` (`.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.ts`: the folder, the map, the write guard, the timeout, the stop gate, the handshake file, and the refusal and gate lines it appends to `<loop dir>/companion.jsonl`, 7.2) and its tests (`claude plugin test`) | `plugins/factory-loop/hooks/register.ts` (`$.env.set` at session start, the slot line in spawns, `cwd` in the spawn arguments), `hooks/rails.ts` (the workspace rail), `hooks/exec.ts` (`SpawnInput.cwd`); `.claude-plugin/marketplace.json`; `coder/push.sh` and `coder/test/push.test.sh` (the orchestrator-loop plugin list) | U1, U8 | high |
-| U10 Delete v1 | 4 | `tests/v2-plan.test.ts` and `v2-queue.test.ts` receive the moved cases | deletes the v1 rule layer, executors, agent definitions and tests and cuts the v1 half of each kept hook file; renames `designer-v2` to `designer`; moves the reused executors into `hooks/v2/`; removes `planner` and `shadow` (a `planner: v1` setting is then named in the decision log's `config` problems); removes `inDevLabel` and `CALLUM_FLOW_IN_DEV_LABEL` (`config.ts:13`, `register.ts:263`); splits the kept `register.ts` into the engine wiring and the pass driver, and splits any other kept file still over 600 lines (`act.ts`, `act-agents.ts` and `control.ts` are over today), so the size guard's allowlist in `scripts/lint.sh` is empty | the cutover bar met (17.5) | xhigh |
-| U11 Docs | 4 (after U10) | - | this spec's section 13 (the foundation, as built, in place of v1's specification), `docs/factory-loop/DECISIONS.md` (unnumbered: 32 kept, 22 changed and section 15's), `plugins/factory-loop/README.md`, `skills/judge/SKILL.md` and `tests/factory-loop-judge-skill.test.js` (v1 sections out), `docs/architecture.md`; deletes the v1 build records | U10 | high |
-
-Notes:
-
-- Workflow 2 runs U1 first, then U2, U3 and U4 in parallel. They share no file: U2 and U3 write
-  events only by calling `events.ts`, which U1 stubs and U4 fills. U4 alone changes the image's
-  event, claim, sweep and factory-state tools.
-- U4 runs beside U2 and U3 after U1. It waits on nothing outside the branch: v2 writes today's
-  event format (7.1).
-- Workflow 3 runs U5, U6 and U7 beside U8 and U9. Only U9 touches `register.ts`, `rails.ts`,
-  `exec.ts`, the marketplace and `coder/`. Only U7 touches `images/base/README.md` in that
-  workflow.
-- U9 starts with the re-probe. If it fails, U9 builds the stated fallback for that point (10.9) and
-  notes it in its PR.
-- Image changes (U4, U7) reach the loop through a base image release, or earlier on the scratch
-  repo through `binDir` (D-42). The companion reaches the orchestrator-loop workspace through the
-  template's plugin list (U9), pushed at cutover.
+- **Alternatives:** the repo file read at session start, and the workspace file for a few keys.
+- **Why:** a `maxInFlightIssues` set in one file was silently ignored. Nothing keeps the main
+  checkout up to date, so the repo file is read from the branch, not the tree.
 
 ## 17. Test plan
 
@@ -3859,11 +3737,10 @@ own test.
 11. **Held steps never time out.** A record whose step admission holds, for any number of passes,
     spends no attempt.
 12. **Edges.** From every reachable parked record, `unpark` reaches queued within one pass,
-    whatever else is present (`totality/T-03`). A resumed record whose PR a person closed is not
+    whatever else is present. A resumed record whose PR a person closed is not
     parked again for that same close.
 13. **Interventions are exact.** Replaying any interleaving of the loop's writes and delayed
-    reads gives no `unpark` and no person intervention without a person's action
-    (`totality/T-01`). A happy-path life (design, build, an approving review, green CI, merge)
+    reads gives no `unpark` and no person intervention without a person's action. A happy-path life (design, build, an approving review, green CI, merge)
     logs no intervention. Each loop intervention of 7.2 is logged exactly once for its fact.
 14. **The queue moves.** A head whose step ends other than ok is not the head on the next pass
     while another record waits.
@@ -3881,115 +3758,21 @@ own test.
 18. **Events.** Every transition's seq logs exactly one `transition` event before the next
     transition, and rebuilding from any history of them gives back the records. Every note
     `events.ts` builds parses back to the same fields, whole.
-19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines outside the
-    allowlist, no listed file is over its cap, and no listed file is at or under 600 (2.5;
-    `npm run lint`).
+19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines, and the allowlist is
+    empty (2.5; `npm run lint`).
 20. **Lives.** S0's record counts one more than the issue's earlier lives since its count last
     started (a record's count, then one per R1 release after it), and the first claim after a
     rejection is life 1, logged as `unreject`. S1 never claims an issue that carries
     `factory:rejected`. No release re-adds `ready` at or past `maxLives`.
 
-### 17.2 Replay of 2026-10-14/15
-
-A harness, `scripts/factory-loop-v2-replay.js` (built in workflow 5), makes a timeline per issue
-from `evidence/decisions-2026-10-14.jsonl` and `-15.jsonl` (claims, agent starts, answers and
-their contents), `factory.events` (ready, merged, closures), PR and check metadata, the control
-file and the tier changes. It drives `planV2` pass by pass in a simulated world where steps take
-their recorded time. A run that went green maps to an approving review and green CI; refusals and
-limbo map as G1 records them. Checks:
-
-- each of the 17 claims ends merged, parked with a question, or closed, and is never silent past a
-  timeout;
-- after 02:41 no pass sits at the cap with queued work while records are parked;
-- zero updates of non-head PRs, zero new branches, zero PR closes;
-- #613 reaches triage within one build timeout of 22:13:51;
-- #591's 429 becomes a free re-run after the 02:20 reset;
-- the 21:27 `noNewWork` and the 22:27:44 rate cap spend no attempt (G1:500; V:479);
-- #467's and #571's merge holds do not happen;
-- triage calls and parks are counted against v1's 13 judge wakes and its escalations.
-
-The existing replay harness also runs with `--planner v2` on a recorded window, for claims and titles.
-Its results are not kept in the repo: the harness writes only to the `--out` folder it is given.
-
-### 17.3 Fault drills on cbundy/dev-system-scratch
-
-The scratch repo is public, with "up to date before merging" on and `ci` required (OB:113-114).
-Each drill passes when its expected events appear in `factory.events`, its expected
-interventions are logged, and no other intervention is.
-
-| Drill | Expected |
-|---|---|
-| A conflict pair: two issues edit the same lines | the second head's update conflicts, a fixer merges main and resolves, reviewing, then merged |
-| A PR that conflicts while in reviewing | `not-ok(conflict)` at once, a fixer, then reviewing; no wait for CI |
-| An outside merge during the head's CI wait | the head goes behind, one more update under the new base, merged; no other PR touched |
-| A flaky check (fails once, then passes) | one `ci-rerun` (intervention `ci-rerun`), then merged; no fixer |
-| A restart in the middle of a build | the step runs again free (U1; interventions `restart` and `free:load`); with the store wiped, records rebuild from events |
-| A usage-limit error (thresholds lowered during a build) | a free re-run held until the tier allows it (`free:usage`); merges go on |
-| Three steps failing with an API error on two issues | the breaker closes agent steps for 30 minutes and tells the owner (`unknown:api`, `breaker`); no issue parks |
-| `/factory new off` for 2 hours with work in flight | no attempt spent; steps resume when it is turned on |
-| A parked question (a brief that needs a decision) | parked, comment, tell; the label removed with an answer comment resumes designing with the answer (`park`, then person `unpark`) |
-| A PR closed by hand | parked; on resume the PR is reopened and review runs; not parked again |
-| A merge by hand of the record's PR with `Closes #N` | closed `merged-by-hand`, rollout follow-ups run, intervention (person, `hand-merge`) |
-| An issue closed by hand during a build | closed, slot freed, intervention (person, `issue-closed`) |
-| A hand push to a branch in reviewing | intervention (person, `push`); the new patch is reviewed |
-| A hung process (`sleep 3600 &` left by a builder) | killed at the next seq (`KILLED 1`) |
-| An agent told to write in the main checkout, or push to another branch | refused by the guard, the reason fed back (`guard:write`, `guard:push`) |
-| The companion plugin disabled | agent steps held with the skip line `workspace`; `tell(workspace)` once |
-| A ghost (a claim of this device with no record) | released at once, with the right closing event |
-| Two v2 loops on two devices, with a forced lease lapse | neither releases or relabels the other's claim (`totality/T-02`) |
-| A reviewer that always asks for changes | parked after 3 fix rounds; the only intervention is the `park` |
-| A triage that times out | one retry of the triage, then parked (`triage`, `unknown:timeout` twice, `park`) |
-
-### 17.4 Shadow day on dev-system
-
-v2 as `shadow: v2` (or in observe mode) for 24 hours. Measured, in
-`docs/factory-loop/v2/SHADOW-DAY.md`:
-
-- R1's release proposals, against the migration tool's report;
-- v2's planned claims, against the queue filters;
-- no planned update of a non-head PR;
-- no flapping: no planned transition reversed within 3 passes;
-- pass time within twice v1's;
-- no plan error.
-
-### 17.5 Cutover, its bar and rollback
-
-- **Before:** the migration tool's report (6.3), the owner's approval, and its act run; the
-  companion plugin in the orchestrator-loop template's plugin list, pushed at cutover, and the
-  workspace restarted onto it (a restart the owner is asked for); the shadow day.
-- **K** = 2 for the first 5 claims, then 3 (section 15). The change is a fleet-level person
-  intervention (`config-file` or `op`); it names no issue, so it is attached to none (7.2).
-- **The bar** (OB:115-116): at least 7 of the first 10 claims merge within 3 hours of their claim
-  untouched: no intervention of either kind names the issue (7.2). Every claim counts, those that
-  change the loop itself included (section 15). A restart to ship a loop fix during cutover shows
-  as `free:load` on each issue whose step it cut.
-- **Also required:** no update of a non-head PR, no new branch, a question comment on every park,
-  no record without a running step, a planned action or a named wait (from the decision log), and
-  no new rule needed.
-- **A miss** is classified. A miss that needs a new rule goes to the owner as a design question
-  (V:555, "the new layer's first-contact bugs do not settle").
-- **Rollback runbook:**
-  1. `/factory new off`;
-  2. let in-flight records reach parked or closed, or drop them;
-  3. remove the `factory:*` labels;
-  4. switch: `planner: v1` before the delete wave, or the previous release after it (OB:117).
-
-  A parked v2 issue comes back to v1 by re-adding `ready`.
-
-## 18. Open questions for the owner
-
-None. The owner answered all ten on 2026-10-15; the answers are in section 15.
-
 ## Appendix A. Settings
 
-New keys, in the repo-local file or the workspace file (which wins). Durations take `60s`, `5m`,
+The loop's own keys, in the repo-local file or the workspace file (which wins). Durations take `60s`, `5m`,
 `2h` as the foundation's do (13.4.2).
 
 | Key | Default | Meaning |
 |---|---|---|
 | `priorityLabel` | `priority` | 3.3: S1 claims issues with this label after the owner's `only`/`priority` list and before the rest, ignoring case; order only, never a filter |
-| `planner` | `v2`; `v1` is an explicit opt-in until the U10 delete wave | 2.3 |
-| `shadow` | `off` | 2.3 |
 | `stateTimeoutMs` | design 45m, build 90m, review 30m, fix 60m, triage 15m, queued 6h, queueWait 2h, parked 24h, waiting 24h | 4.4 |
 | `ciStartMs` | `10m` | 4.4 |
 | `ciRunMs` | `30m` | 4.4 |
@@ -4006,13 +3789,19 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `gateConcurrency` | `auto` (`max(1, floor(cpus / 8))`) | 10.6 |
 | `gateWaitTimeoutMs` | `30m` in all | 10.6 |
 
-Reused with their v1 meaning: `maxInFlightIssues` (K; default 3, and 2 for the first 5 claims at cutover, section 15), `worktreeReserve`,
+The foundation's settings (13.4) also apply: `maxInFlightIssues` (K; default 3), `worktreeReserve`,
 `poolSize`, `reviewFixCap` (`fixCap`), `retryBackoffMs` and `maxAttempts` (for effects),
 `rateCaps`, the usage thresholds, the read cadences, `heartbeatEveryMs`, `sweepEveryMs`,
 `checkoutEveryMs`, `slowGapMs`, `maxStartsPerPass`, `answerChannel` (`script`), `trace`,
-`traceMaxBytes`. v1-only keys (`guardRecheckMs`, `guardTtlMs`, `respondSettleMs`,
-`updateBehindRetryMs`, `updateBehindRetries`, `ciStallRecheckMs`, `agentTimeoutMs`) go at the
-delete wave.
+`traceMaxBytes`.
+
+Retired keys: `planner` and `shadow` chose between the first loop and this one (2.3). A settings
+file that still sets either one, to any value, loads; the key is ignored and `problems` reports it
+as retired (`/factory config` shows it).
+
+Keys only the first loop read: `guardRecheckMs`, `guardTtlMs`, `respondSettleMs`,
+`updateBehindRetryMs`, `updateBehindRetries`, `ciStallRecheckMs` and `agentTimeoutMs`. The loop
+still accepts them in a settings file, and they have no effect.
 
 ## Appendix B. Action kinds
 
@@ -4026,17 +3815,17 @@ delete wave.
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
-| `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
+| `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
 | `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>` | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
-| `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | as v1 | as v1 (13.6.1); `claim` also lists open PRs for adoption (3.5) | as v1 |
+| `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
 
-13 new kinds, 12 reused. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
-command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other v1
-ban (FM coupling C10). `rerun` is banned there today, so `gh run rerun` is allowed deliberately,
-as one argv.
+13 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
+command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other
+ban of the foundation (13.11). `rerun` is banned there otherwise, so `gh run rerun` is allowed
+deliberately, as one argv.
 
 ## Appendix C. Key families
 
@@ -4055,9 +3844,9 @@ as one argv.
 | follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
-| heartbeat, sweep, tell, restart, release task | as v1 (the release task: hourly review, 11) |
+| heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-13 new families, plus the foundation's 5, against about 62 (G2 section 1).
+13 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 
@@ -4089,19 +3878,18 @@ Notices (TELL kinds), owner items first:
 | `task-timeout` | no | the release task timed out |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `pass-error` | no | foundation, unchanged |
 
-7 new kinds, 6 of them owner items, plus the foundation's.
+7 kinds of the loop's own, 6 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 
-| Op | v2 meaning |
+| Op | Meaning |
 |---|---|
-| `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`". `resume <run id>` is v1-only |
+| `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
 | `drop <N>` | E1, for the current life only (4.1) |
 | `note [N] <text>` | a note for the issue's next step (or every issue's) |
-| `planner v1\|v2` | writes the workspace file, as `mode` does |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
-| `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `help` | unchanged (13.4.3) |
+| `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `config`, `help` | as the foundation (13.4.3) |
 
 Every op but `status` and `help` is logged as a person intervention (7.2). Rescues the loop cannot
 see are recorded by hand with `callum-flow-event intervention` (7.2); there is no `/factory touch`

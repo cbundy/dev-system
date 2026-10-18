@@ -13,9 +13,9 @@
 // numbers, and a retired number is gone).
 //
 // Dated evidence is left as written: release notes, changelogs, docs/spikes/ and the v2 verify
-// results. So are the first loop's build records, which later children delete: each is named in
-// PENDING_DELETE, must still exist (a stale entry fails, so the child that deletes the file drops
-// its entry), and is not scanned.
+// results. A record a later change deletes is named in PENDING_DELETE, must still exist (a stale
+// entry fails, so the change that deletes the file drops its entry), and is not scanned. The list
+// is empty now.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
@@ -28,11 +28,8 @@ const OLD_SPEC_PATH = "docs/factory-loop/SPEC.md";
 const SELF = "tests/factory-loop-spec-refs.test.js";
 const DECISIONS_PATH = "docs/factory-loop/DECISIONS.md";
 
-// The first loop's build records, which #945 deletes.
-const PENDING_DELETE = [
-  "docs/factory-loop/v2/FOUNDATION-MAP.md",
-  "docs/factory-loop/v2/BUILD-NOTES-W1.md",
-];
+// Records a pending change deletes; empty while none is pending.
+const PENDING_DELETE = [];
 
 const EXCLUDED_PREFIXES = ["release-notes/", "docs/spikes/", "scripts/factory-loop-v2-verify/results/"];
 
@@ -146,7 +143,7 @@ function decisionProblemsOf(text, file, decisions) {
 
 // ---- the scan ----------------------------------------------------------------------------------
 
-const pending = (file) => PENDING_DELETE.some((p) => (p.endsWith("/") ? file.startsWith(p) : file === p));
+const pending = (file, list = PENDING_DELETE) => list.some((p) => (p.endsWith("/") ? file.startsWith(p) : file === p));
 const excluded = (file) =>
   file === SELF || EXCLUDED_PREFIXES.some((p) => file.startsWith(p)) || /(^|\/)CHANGELOG[^/]*$/.test(file) || pending(file);
 
@@ -240,12 +237,11 @@ test("the ref parser reads a list item by item", () => {
 });
 
 test("a stale PENDING_DELETE entry is caught, and only a listed file is left unscanned", () => {
-  assert.deepEqual(stale([...PENDING_DELETE, "docs/factory-loop/no-such-record.md", "docs/factory-loop/no-such-dir/"]), [
-    "docs/factory-loop/no-such-record.md",
-    "docs/factory-loop/no-such-dir/",
-  ]);
-  assert.equal(pending("docs/factory-loop/no-such-record.md"), false, "an entry the list lacks is scanned");
-  assert.equal(pending("docs/factory-loop/v2/FOUNDATION-MAP.md"), true);
+  const listed = ["docs/factory-loop/v2/SPEC.md", "docs/factory-loop/no-such-record.md", "docs/factory-loop/no-such-dir/"];
+  assert.deepEqual(stale(listed), ["docs/factory-loop/no-such-record.md", "docs/factory-loop/no-such-dir/"]);
+  assert.equal(pending("docs/factory-loop/no-such-record.md", listed), true, "a listed file is left unscanned");
+  assert.equal(pending("docs/factory-loop/no-such-dir/x.md", listed), true, "a file under a listed directory is left unscanned");
+  assert.equal(pending("docs/factory-loop/v2/OTHER.md", listed), false, "an entry the list lacks is scanned");
   assert.equal(excluded("docs/spikes/reconcile-mod/README.md"), true);
   assert.equal(excluded("plugins/factory-loop/CHANGELOG.md"), true);
   assert.equal(excluded("plugins/factory-loop/README.md"), false);

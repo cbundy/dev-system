@@ -6,7 +6,7 @@ workspace, and does for each agent the loop starts what the loop cannot do itsel
 
 The engine never runs a plugin's hooks for anything that plugin's own code started, and the loop
 starts its agents from its timer, so its own hooks never see them
-([SPIKES.md](../../docs/factory-loop/v2/SPIKES.md)). A second plugin's hooks do. That is why this
+([the spike notes](../../docs/spikes/factory-loop-workspace/README.md)). A second plugin's hooks do. That is why this
 is a plugin of its own.
 
 ## What it does
