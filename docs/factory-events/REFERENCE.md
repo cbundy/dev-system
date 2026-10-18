@@ -23,6 +23,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
 | [`reviewed`](#reviewed) | v1 | required | One review of the issue's pull request finished. |
+| [`shadow_read`](#shadow_read) | v1 | none | One shadow compare made by a reader that has an old/new source switch: the command read the same keys from the old source and the new central one and counted where the answers differ. |
 | [`test_weakened`](#test_weakened) | v1 | required | A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or \|\| true, or commented an assertion out). |
 | [`transition`](#transition) | v1 | required | The loop's record of the issue changed: it moved to a new state, or its step, attempt or notes changed. |
 | [`untrusted_stripped`](#untrusted_stripped) | v1 | required | A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. |
@@ -101,16 +102,22 @@ Example:
 | `branch` | string | `abandoned`, `finding_handled`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
+| `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
+| `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
+| `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
+| `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
+| `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
+| `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
@@ -119,12 +126,14 @@ Example:
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
 | `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
+| `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
+| `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
@@ -610,6 +619,46 @@ Example:
   "infos": 2,
   "reviewer": "adjudicator",
   "answer_path": "/persist/claude/factory-loop/cbundy__plant-console/answers/i92_ltn0brb_review_c46dbb8_r1_a1.answer.json"
+}
+```
+
+## shadow_read
+
+One shadow compare made by a reader that has an old/new source switch: the command read the same keys from the old source and the new central one and counted where the answers differ. Written once per compare, not for an issue. A retried write can repeat it: count one per (repo, device, ts).
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: (repo, device, ts)
+
+### shadow_read v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `reader` | string | required | no | pattern `^[a-z][a-z0-9-]*$` | yes | Which reader was compared, an open family such as claim-events. |
+| `tool` | string | required | no | minLength 1 | yes | The command that made the compare, such as callum-flow-sweep. |
+| `compared` | integer | required | no | minimum 0 | yes | How many keys were compared. |
+| `differences` | integer | required | no | minimum 0 | yes | How many keys whose answers differ, with both sides cut at the settle time. |
+| `live_differences` | integer | required | no | minimum 0 | yes | How many keys whose answers differ on everything read, push lag included. |
+| `diff_keys` | array of string | required | no | maxItems 50 |  | The keys that differ, at most 50. |
+| `old_ok` | boolean | required | no |  | yes | Whether the central read of the old side succeeded. |
+| `new_ok` | boolean | required | no |  | yes | Whether the central read of the new side succeeded. |
+| `settle_seconds` | integer | required | no | minimum 0 | yes | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
+| `detail` | string | required | yes | maxLength 500 |  | The first difference as old against new, or null when there is none. |
+
+Example:
+
+```json
+{
+  "reader": "claim-events",
+  "tool": "callum-flow-sweep",
+  "compared": 42,
+  "differences": 0,
+  "live_differences": 0,
+  "diff_keys": [],
+  "old_ok": true,
+  "new_ok": true,
+  "settle_seconds": 120,
+  "detail": null
 }
 ```
 
