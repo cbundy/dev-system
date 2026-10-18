@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "closed.v1.json",
   "title": "closed",
-  "description": "GitHub shows the issue closed, outside the factory's own merge. Written by callum-flow-sweep (actor sweep). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.",
+  "description": "GitHub shows the issue closed, outside the factory's own merge. Written by callum-flow-sweep (actor sweep), and by the factory loop when it closes a split's tracker once every sub-issue is closed (reason completed). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

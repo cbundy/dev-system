@@ -217,6 +217,8 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
+  // a close-tracker check: the split parent found (null: the issue is no split child), whether it was closed, and the sub-issues still open
+  | { kind: 'close-tracker'; parent: number | null; closed: boolean; open: number[] }
   // leftovers: the patch file a prepare or a free saved the slot's leftovers to (10.2): its uncommitted
   // work and its commits not on origin, against the commit the next step starts from; a retry's
   // prompt names it (5.1), and a resumed life finds a free's through rules-agent.ts leftoversOf; null
@@ -228,7 +230,11 @@ export type V2Outcome =
 
 // --- the action kinds (appendix B) ----------------------------------------------------------------
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link'] as const
+// How deep trackers nest: observe reads sub-issues this many levels down, and a close-tracker chain
+// checks this many trackers up (state.ts re-exports it).
+export const TRACKER_DEPTH = 3
+
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker'] as const
 export type V2ActionKind = (typeof V2_ACTION_KINDS)[number]
 
 // What the transition executor re-checks against the live ledger and records before it stores
@@ -309,6 +315,8 @@ export type V2Action =
   // a waiting record's issue linked as blocked by an issue it waits on (blocker): the GitHub dependency
   // link, once per condition; a closed blocker is skipped, a pull request is no blocker (act-split.ts)
   | (ActionBase & { kind: 'link'; blocker: number })
+  // a merged split child's check upward: issue is the one to check from; its split parent is closed when every sub-issue is closed (act-tracker.ts)
+  | (ActionBase & { kind: 'close-tracker' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
