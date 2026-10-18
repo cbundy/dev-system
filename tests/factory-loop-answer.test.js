@@ -34,7 +34,7 @@ const REPO_DIR = "cbundy__dev-system";
 
 let contract;
 let table;
-let exec;
+let steps;
 let scratch;
 let cfg;
 let answers;
@@ -43,7 +43,7 @@ let seq = 0;
 before(async () => {
   contract = await import(pathToFileURL(path.join(PLUGIN, "hooks", "contract.mjs")).href);
   table = await import(pathToFileURL(path.join(PLUGIN, "tests", "answer-cases.mjs")).href);
-  exec = await import(path.join(PLUGIN, "hooks", "exec.ts"));
+  steps = await import(path.join(PLUGIN, "hooks", "v2", "steps.ts"));
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-answer-"));
   cfg = path.join(scratch, "cfg");
   answers = path.join(cfg, "factory-loop", REPO_DIR, "answers");
@@ -55,10 +55,10 @@ after(() => {
 });
 
 // issue: a fresh answer file the loop issued, with its job file written as the loop writes it
-// (exec.ts scriptAnswerPath, contract.mjs jobText); the path, and the job file's.
+// (v2/steps.ts stepAnswerPath, contract.mjs jobText); the path, and the job file's.
 function issue(job, dir = answers) {
   seq += 1;
-  const file = exec.scriptAnswerPath(path.dirname(dir), { key: `adjudicate:R470:review:abc${seq}`, attempts: 1, startedAt: 1760430000000 + seq });
+  const file = steps.stepAnswerPath(path.dirname(dir), `i470/ltbq3k0/s${seq}/review/a1`);
   const jobPath = contract.jobPathOf(file);
   fs.writeFileSync(jobPath, contract.jobText(job));
   return { file, jobPath };
@@ -276,39 +276,30 @@ test("the loop and the script share one folder layout: contract.mjs loopDirOf, a
   assert.equal(run(["--to", file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: `${cfg}/` } }).code, 0);
 });
 
-// The block a prompt shows (prompts.ts scriptAsk), cut out of a rendered prompt as an agent copies
+// The block a prompt shows (v2/prompts-review.ts), cut out of a rendered prompt as an agent copies
 // it and run by bash, records the answer: the command, its example JSON and the closing JSON line.
 // The answer file is issued under contract.mjs loopDirOf, as the loop issues it.
 test("the answer block a rendered prompt shows runs as copied: bash records the example answer", async () => {
-  const prompts = await import(path.join(PLUGIN, "hooks", "prompts.ts"));
+  const prompts = await import(path.join(PLUGIN, "hooks", "v2", "prompts-review.ts"));
   const loopDir = contract.loopDirOf(cfg, "cbundy/dev-system");
-  for (const purpose of ["gate", "weakening", "merge"]) {
-    seq += 1;
-    const key = `adjudicate:R470:review:blk${seq}`;
-    const file = exec.scriptAnswerPath(loopDir, { key, attempts: 1, startedAt: 1760430000000 + seq });
-    fs.writeFileSync(contract.jobPathOf(file), contract.jobText(table.JOBS[purpose]));
-    const action = {
-      reason: "test", kind: "spawn", agent: "adjudicator", purpose, key, class: "drive", rule: "P2", issue: 470,
-      run: "R470", branch: "feat/issue-470-x", step: purpose === "gate" ? "review" : null, head: "3f2a9c1d4e", pr: 512,
-      brief: "https://github.com/cbundy/dev-system/issues/470#issuecomment-9001", model: null,
-      warns: purpose === "weakening" ? ["GUARD test-weakening WARN 3f2a9c1 removed 2 assertions"] : [],
-      handoffHead: purpose === "merge" ? "2e1d0c9b8a" : null, verdicts: [], guard: [],
-    };
-    const prompt = prompts.promptOf(action, { repo: "cbundy/dev-system", modelOverride: null, inFlight: [], channel: "script", script: { bin: SCRIPT, file } });
-    const lines = prompt.split("\n");
-    const at = lines.findIndex((l) => l.trim().startsWith(`${SCRIPT} --to ${file} `));
-    const end = lines.findIndex((l, i) => i > at && l.trim() === "JSON");
-    assert.ok(at !== -1 && end === at + 2, `${purpose}: no answer block in ${prompt}`);
-    const r = spawnSync("bash", ["-c", lines.slice(at, end + 1).join("\n")], {
-      cwd: os.tmpdir(),
-      encoding: "utf8",
-      env: { PATH: process.env.PATH, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
-      timeout: 30_000,
-    });
-    assert.equal(r.status, 0, `${purpose}: ${r.stderr}`);
-    assert.match(r.stdout, /^factory-answer: recorded your verdict answer/);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).answer, JSON.parse(lines[at + 1].trim()), purpose);
-  }
+  seq += 1;
+  const file = steps.stepAnswerPath(loopDir, `i470/ltbq3k0/s${seq}/review/a1`);
+  fs.writeFileSync(contract.jobPathOf(file), contract.jobText({ contract: "review", purpose: null, repo: "cbundy/dev-system", issue: 470, branch: "issue-470", data: { round: 1 } }));
+  const input = { issue: 470, brief: "https://github.com/cbundy/dev-system/issues/470#issuecomment-9001", pr: 512, base: "main", head: "3f2a9c1d4e", patch: "f00dfeed", round: 1, prior: [], notes: [] };
+  const prompt = prompts.adjudicatorPrompt(input, { repo: "cbundy/dev-system", branch: "issue-470", slot: null, scratch: "/tmp/scratch", place: { bin: SCRIPT, file } });
+  const lines = prompt.split("\n");
+  const at = lines.findIndex((l) => l.trim().startsWith(`${SCRIPT} --to ${file} `));
+  const end = lines.findIndex((l, i) => i > at && l.trim() === "JSON");
+  assert.ok(at !== -1 && end === at + 2, `no answer block in ${prompt}`);
+  const r = spawnSync("bash", ["-c", lines.slice(at, end + 1).join("\n")], {
+    cwd: os.tmpdir(),
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
+    timeout: 30_000,
+  });
+  // the script ran, read the example from standard input and checked it against the review contract
+  assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /^factory-answer: recorded your review answer/);
 });
 
 // A v2 split is held to the same contract the loop checks: four reasons and a why for each child.

@@ -12,8 +12,7 @@ is a plugin of its own.
 ## What it does
 
 It acts only on a spawn whose prompt opens with `factory-slot: <absolute slot path>`, which the
-loop gives every agent step under planner v2. Every other agent, the loop's v1 agents included,
-is left alone.
+loop gives every agent step. Every other agent is left alone.
 
 | Hook | What it does |
 |---|---|

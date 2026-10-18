@@ -3,14 +3,13 @@
 // The factory loop's second safety net (docs/factory-loop/SPEC.md 6.1, 11): no string literal in
 // plugins/factory-loop/hooks/*.ts, its shared answer contract (hooks/*.mjs) or its answer script
 // (bin/factory-answer, #561) may carry what no executor may ever do: pass --yes, run
-// `no-mistakes rerun` or `abort`, merge through anything but callum-flow-merge, edit a PR body,
+// `no-mistakes rerun` or `abort`, merge through anything but the queue's one merge, edit a PR body,
 // add a label, run a `coder` command or kill a process by name. The first net,
 // plugins/factory-loop/tests/safety.test.ts, runs every action kind through the dispatcher and
 // checks each argv; this one reads the source, since plugin tests cannot read files, so a
 // template that no test reaches is still caught. The one signal the loop sends is rails.ts's
 // liveness probe, `kill -0` by pid, which delivers nothing; `kill switch` alone is the skip reason
-// act.ts logs (#557), never a command. The one rerun is rule P2a's env-retry (#537): its argv is
-// declared once, on ENV_RETRY's line, and only that line may hold `rerun`.
+// act.ts logs (#557), never a command. The only `rerun` is v2's CI re-run, below.
 //
 // The v2 rule layer (hooks/v2/, docs/factory-loop/v2/SPEC.md appendix B) is scanned too. Its
 // writes are allowed deliberately, one argv each: every v2 command is built in hooks/v2/argv.ts,
@@ -26,7 +25,6 @@ const path = require("node:path");
 const HOOKS = path.join(__dirname, "..", "plugins", "factory-loop", "hooks");
 const PROBE = 'kill -0 "$1" 2>/dev/null';
 const KILL_SWITCH = "kill switch";
-const ENV_RETRY = { file: "act-merge.ts", line: "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun']" };
 const V2_ARGV = "v2/argv.ts";
 // v2's widened argvs (appendix B), each the one line of argv.ts that builds it
 const V2_ALLOWED = [
@@ -175,7 +173,6 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
   const found = [];
   const lits = literals(src);
   const lines = src.split("\n");
-  const envRetry = (lit) => file === ENV_RETRY.file && lit.text === "rerun" && lines[lit.line - 1] === ENV_RETRY.line;
   const v2Allowed = (lit) =>
     (file === V2_ARGV && V2_ALLOWED.includes(lines[lit.line - 1])) || V2_NAMES.some((n) => n.file === file && n.line === lines[lit.line - 1] && lit.text === "kill");
   const flag = (lit, what) => {
@@ -187,7 +184,7 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
     // v2's kind and key family name a re-run; neither is a command
     const named = t.replace(/\bci-rerun\b/g, "").replace(/\/rerun\//g, "/");
     if (/(^|[\s=])--yes\b/.test(t)) flag(lit, "--yes");
-    if ((/\brerun\b/.test(named) && !envRetry(lit)) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
+    if (/\brerun\b/.test(named) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
     if (t === "coder" || /(^|[;&|(]\s*|^\s*)coder\s/.test(t)) flag(lit, "a coder command");
     if (/\b(pkill|killall)\b/.test(t)) flag(lit, "a kill by name");
     if (/(^|[;&|(\s])kill\b/.test(t) && t !== PROBE && t !== KILL_SWITCH) flag(lit, "a kill");
@@ -213,8 +210,7 @@ test("the literal scanner reads the hooks' commands and skips comments and regul
   const cli = literals(fs.readFileSync(path.join(HOOKS, "act-cli.ts"), "utf8")).map((l) => l.text);
   assert.ok(cli.includes("callum-flow-claim") && cli.includes("--heartbeat") && cli.includes("--remove-label"));
   const merge = literals(fs.readFileSync(path.join(HOOKS, "act-merge.ts"), "utf8")).map((l) => l.text);
-  assert.ok(merge.includes("callum-flow-merge"), "act-merge.ts: callum-flow-merge");
-  assert.ok(merge.some((t) => t.startsWith("nohup sh -c")), "act-merge.ts: the respond launch's template");
+  assert.ok(merge.includes("callum-flow-rollout"), "act-merge.ts: callum-flow-rollout");
   const rails = literals(fs.readFileSync(path.join(HOOKS, "rails.ts"), "utf8")).map((l) => l.text);
   assert.ok(rails.includes(PROBE), "rails.ts: the liveness probe");
   // a regular expression full of quotes and slashes is not read as strings
@@ -249,35 +245,14 @@ test("the scanner catches each forbidden form, and passes the loop's own", () =>
     "`agent ${seen}` + ' was killed' + ' (aborted)'",
   ];
   for (const body of good) assert.deepEqual(problems("good.ts", `export const argv = ${body}\n`), [], body);
-  // the env-retry exception is that one line of act-merge.ts, exactly: elsewhere, or with any
-  // change to the argv or its name, `rerun` is caught
-  assert.deepEqual(problems(ENV_RETRY.file, `${ENV_RETRY.line}\n`), []);
-  assert.notDeepEqual(problems("act-cli.ts", `${ENV_RETRY.line}\n`), []);
-  for (const line of [
-    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun', '--yes']",
-    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun', '--intent', i]",
-    "export const OTHER_ARGV: readonly string[] = ['no-mistakes', 'rerun']",
-    "const argv = ['no-mistakes', 'rerun']",
-    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'axi', 'abort']",
-  ]) {
-    assert.notDeepEqual(problems(ENV_RETRY.file, `${line}\n`), [], line);
-  }
+  // no `rerun` of no-mistakes is allowed anywhere, in any hook
+  for (const file of ["act-merge.ts", "act-cli.ts", "act.ts"]) assert.notDeepEqual(problems(file, "const argv = ['no-mistakes', 'rerun']\n"), [], file);
 });
 
-test("the one rerun is env-retry's argv: declared once in act-merge.ts, used only by its executor and argv list; v2's CI re-run is argv.ts's one line", () => {
+test("the only rerun is v2's CI re-run, argv.ts's one line", () => {
   const declared = files.flatMap((f) => fs.readFileSync(path.join(HOOKS, f), "utf8").split("\n").filter((l) => l.includes("'rerun'")).map((l) => `${f}: ${l}`));
-  assert.deepEqual(declared.sort(), [`${ENV_RETRY.file}: ${ENV_RETRY.line}`, `${V2_ARGV}: ${V2_RERUN}`].sort());
-  for (const f of files.filter((x) => x !== ENV_RETRY.file)) {
-    assert.ok(!fs.readFileSync(path.join(HOOKS, f), "utf8").includes("ENV_RETRY_ARGV"), `${f} names ENV_RETRY_ARGV`);
-  }
-  const src = fs.readFileSync(path.join(HOOKS, ENV_RETRY.file), "utf8");
-  const uses = src.split("\n").filter((l) => l.includes("ENV_RETRY_ARGV") && l !== ENV_RETRY.line && !/^\s*\/\//.test(l));
-  assert.equal(uses.length, 2, uses.join("\n"));
-  // argvsOf's case and the executor's launch, each in env-retry's own code
-  const envCase = src.slice(src.indexOf("case 'env-retry': {"), src.indexOf("default:", src.indexOf("case 'env-retry': {")));
-  const executor = src.slice(src.indexOf("const envRetry: Executor"), src.indexOf("\n}\n", src.indexOf("const envRetry: Executor")));
-  assert.ok(envCase.includes("ENV_RETRY_ARGV") && executor.includes("ENV_RETRY_ARGV"), "ENV_RETRY_ARGV outside env-retry's code");
-  assert.ok(executor.includes("action.rule !== 'P2a'"), "the executor refuses any rule but P2a");
+  assert.deepEqual(declared, [`${V2_ARGV}: ${V2_RERUN}`]);
+  for (const f of files) assert.ok(!fs.readFileSync(path.join(HOOKS, f), "utf8").includes("ENV_RETRY_ARGV"), `${f} names ENV_RETRY_ARGV`);
 });
 
 test("v2's widened argvs are exactly argv.ts's allowed lines: each is there, and each is caught anywhere else", () => {
@@ -331,19 +306,15 @@ test("the answer script's only writes are its own temp file and the rename over 
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
 });
 
-// The act step holds GitHub writes for the rest of a pass that met a rate limit, as plan holds
-// them while the backoff lasts (SPEC 10.2): act.ts GITHUB_KINDS must name exactly plan.ts's.
-test("the act step's GitHub kinds are plan's", () => {
+// The act step holds GitHub writes for the rest of a pass that met a rate limit (SPEC 10.2): the
+// kinds foundation.ts GITHUB_V2 names.
+test("the act step's GitHub kinds are the shared kinds that write GitHub, and v2's", () => {
   const list = (file, name) => {
     const src = fs.readFileSync(path.join(HOOKS, file), "utf8");
     const m = new RegExp(`const ${name}: readonly ActionKind\\[\\] = \\[([^\\]]*)\\]`).exec(src);
     assert.ok(m, `${file}: ${name}`);
     return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
   };
-  const plan = list("plan.ts", "GITHUB");
-  assert.ok(plan.length > 10);
-  assert.deepEqual(list("act.ts", "GITHUB_KINDS"), plan);
-  // v2's (act.ts runActions takes it under planner v2): the shared kinds that write GitHub, and v2's
   const v2 = list("foundation.ts", "GITHUB_V2");
   for (const kind of ["claim", "heartbeat", "sweep", "label", "comment", "pr", "split", "ci-rerun", "queue-update", "queue-merge"]) assert.ok(v2.includes(kind), `GITHUB_V2 lacks ${kind}`);
   for (const kind of ["transition", "event", "agent-step", "slot"]) assert.ok(!v2.includes(kind), `GITHUB_V2 holds ${kind}, which writes no GitHub`);

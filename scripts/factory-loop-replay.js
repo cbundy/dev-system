@@ -21,10 +21,9 @@
 //          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
 //                               the live orchestrator instead of replaying: the shadow's
 //                               logged actions stand in for plan()'s
-//          [--planner v1|v2]    the layer that plans, v2 by default (docs/factory-loop/v2/SPEC.md 2.3): v1's
-//                               plan(), or v2's planV2() over the same states with
-//                               v2's fields empty (no v2 records in a v1 history), for its
-//                               claims and titles
+//
+// The loop always plans with v2 (docs/factory-loop/v2/SPEC.md 2.3): planV2() over the states with
+// v2's fields empty (no v2 records in a history from before it), for its claims and titles.
 const { execFileSync } = require("node:child_process");
 const { register } = require("node:module");
 const fs = require("node:fs");
@@ -59,14 +58,17 @@ where repo = :'repo' and device = :'device' and state = 'usage'
 order by ts;
 `;
 
+// The arguments the harness takes (see the usage above).
+const ARGS = ["repo", "device", "from", "to", "stepMinutes", "out", "skipLabels", "control", "decisions"];
+
 function args(argv) {
-  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked", planner: "v2" };
+  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i].replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (!ARGS.includes(key) || !argv[i].startsWith("--")) throw new Error(`unknown argument ${argv[i]}`);
     out[key] = argv[i + 1];
   }
   for (const k of ["repo", "device", "from", "to"]) if (!out[k]) throw new Error(`--${k} is required`);
-  if (out.planner !== "v1" && out.planner !== "v2") throw new Error(`--planner is v1 or v2, not ${out.planner}`);
   return out;
 }
 
@@ -216,17 +218,16 @@ async function main() {
   const from = Date.parse(a.from);
   const to = Date.parse(a.to);
   const step = Number(a.stepMinutes) * MIN;
-  const v1 = (await import(path.join(HOOKS, "plan.ts"))).plan;
   const { planV2 } = await import(path.join(HOOKS, "v2", "plan.ts"));
   const { emptyV2State } = await import(path.join(HOOKS, "v2", "observe.ts"));
   const parse = await import(path.join(HOOKS, "parse.ts"));
   const derive = await import(path.join(HOOKS, "derive.ts"));
   const { buildState } = await import(path.join(HOOKS, "state.ts"));
   const { EMPTY_CONTROL, loadConfig } = await import(path.join(HOOKS, "config.ts"));
-  // the settings the planner runs with, its own defaults included (v2's K is 3, v1's 5)
-  const config = loadConfig({ planner: a.planner, skipLabels: a.skipLabels ? a.skipLabels.split(",") : [] }).config;
-  // the planner the flag picks; v2 plans the state with its own fields empty
-  const plan = a.planner === "v2" ? (state, cfg) => planV2({ ...state, v2: state.v2 ?? emptyV2State(state.now) }, cfg) : v1;
+  // the settings the planner runs with, its own defaults included (K is 3)
+  const config = loadConfig({ skipLabels: a.skipLabels ? a.skipLabels.split(",") : [] }).config;
+  // v2 plans the state with its own fields empty
+  const plan = (state, cfg) => planV2({ ...state, v2: state.v2 ?? emptyV2State(state.now) }, cfg);
 
   const days = Math.ceil((to - from) / 86_400_000) + 3;
   const vars = ["-v", `repo=${a.repo}`, "-v", `at=${iso(to + LOOKBACK)}`, "-v", `days=${days}`, "-v", `device=${a.device}`];

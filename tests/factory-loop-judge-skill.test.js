@@ -2,9 +2,9 @@
 
 // The factory loop's judge skill (plugins/factory-loop/skills/judge/SKILL.md) is what the model
 // answers wakes by, so it must cover every wake the loop sends and every answer the loop
-// accepts (docs/factory-loop/SPEC.md 8, 9.2, 4.3). This reads the skill, the SPEC and the hooks
-// as text, since plugin tests cannot read files; wake.ts's own tests
-// (plugins/factory-loop/tests/wake.test.ts) check the code against the same SPEC table.
+// accepts (docs/factory-loop/v2/SPEC.md 5.4, 11, appendix E; docs/factory-loop/SPEC.md 4.3). This
+// reads the skill, the SPEC and the hooks as text, since plugin tests cannot read files; wake.ts's
+// own tests (plugins/factory-loop/tests/wake.test.ts) check the code.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -21,7 +21,6 @@ const SOURCES = Object.fromEntries(
     .filter((f) => f.endsWith(".ts"))
     .map((f) => [f, fs.readFileSync(path.join(HOOKS, f), "utf8")]),
 );
-const PLAN = SOURCES["plan.ts"];
 const EXEC = SOURCES["exec.ts"];
 // the v2 rule layer (docs/factory-loop/v2/SPEC.md): its sources and its vocabulary
 const V2_SOURCES = Object.fromEntries(
@@ -55,33 +54,7 @@ function bullet(text, name) {
   return next < 0 ? rest : rest.slice(0, next);
 }
 
-// The SPEC 8.2 table: each wake and the decisions it allows (the first ticked word of each
-// `;`-separated choice). A tell row allows none.
-function specDecisions() {
-  const rows = section(SPEC, "### 8.2 Answers")
-    .split("\n")
-    .filter((l) => l.startsWith("| `"));
-  const out = [];
-  for (const row of rows) {
-    const [wakes, choices] = row.split("|").slice(1, 3);
-    const decisions = choices
-      .split(";")
-      .map((c) => ticked(c)[0])
-      .filter((d) => d !== undefined);
-    for (const w of ticked(wakes)) {
-      const [kind, name] = w.split(" ");
-      if (kind !== "tell") out.push({ kind, name, decisions });
-    }
-  }
-  return out;
-}
-
-const V2 = section(SKILL, "## Under planner v2");
-const V2_TASK = section(SKILL, "### TASK under planner v2");
-const V2_TELL = section(SKILL, "### TELL under planner v2");
-const V2_OWNER = section(SKILL, "### Owner chat under planner v2");
-const JUDGE = section(SKILL, "### JUDGE");
-const TASK = section(SKILL, "### TASK");
+const TASK = section(SKILL, "## TASK");
 const TELL = section(SKILL, "## TELL: one line to the owner");
 const OWNER = section(SKILL, "## Owner chat");
 
@@ -89,30 +62,19 @@ test("the judge skill has no em dash", () => {
   assert.equal(SKILL.includes("\u2014"), false, "SKILL.md uses an em dash; use a plain dash");
 });
 
-test("every JUDGE and TASK wake of SPEC 8.2 has its bullet, naming each decision it allows (judge sequence included)", () => {
-  const wakes = specDecisions();
-  const names = wakes.map((w) => `${w.kind} ${w.name}`);
-  for (const expected of ["judge sequence", "judge guard-fail", "judge cancelled", "judge handoff", "judge report"]) {
-    assert.ok(names.includes(expected), `SPEC 8.2 table lost ${expected}`);
-  }
-  for (const expected of ["task redrive", "task run-it", "task release", "task respond-stuck"]) {
-    assert.ok(names.includes(expected), `SPEC 8.2 table lost ${expected}`);
-  }
-  for (const { kind, name, decisions } of wakes) {
-    assert.ok(decisions.length > 0, `SPEC 8.2: no decisions read for ${kind} ${name}`);
-    const where = kind === "judge" ? JUDGE : TASK;
-    const own = bullet(where, name);
-    assert.notEqual(own, null, `SKILL.md ${kind.toUpperCase()} has no bullet for ${name}`);
-    // a judge's decisions are in its own bullet; a task's are shared by the TASK section
-    const scope = kind === "judge" ? own : where;
-    for (const d of decisions) {
-      assert.match(scope, new RegExp(`\`${escape(d)}\``), `SKILL.md: ${kind} ${name} does not name the decision ${d}`);
-    }
-  }
+test("the skill has no JUDGE wake and no planner switch: v2 is the only rule set", () => {
+  assert.doesNotMatch(SKILL, /\bJUDGE\b/, "SKILL.md names a JUDGE wake");
+  assert.doesNotMatch(SKILL, /planner/i, "SKILL.md names a planner");
+  assert.doesNotMatch(SKILL, /\bv1\b/, "SKILL.md names v1");
 });
 
-// wakesOf: every wake a hooks source builds: plan.ts's wake('<kind>', '<name>', ...), an action
-// literal's `kind: '<kind>', wake: '<name>'` (act.ts's pass-error), and rails.ts's notice tells,
+test("the release task names each decision it allows, and TASK is the only answered wake", () => {
+  for (const d of ["done", "hold", "failed"]) assert.match(TASK, new RegExp(`\`${d}\``), `SKILL.md TASK does not name the decision ${d}`);
+  assert.notEqual(bullet(TASK, "release"), null);
+});
+
+// wakesOf: every wake a hooks source builds: wake('<kind>', '<name>', ...), an action literal's
+// `kind: '<kind>', wake: '<name>'` (act.ts's pass-error), and rails.ts's notice tells,
 // tell('<name>', `tell:...`).
 function wakesOf(src) {
   return [
@@ -123,25 +85,15 @@ function wakesOf(src) {
 }
 
 test("every wake the hooks emit is in the skill under its kind", () => {
-  const emitted = Object.values(SOURCES).flatMap(wakesOf);
-  assert.ok(wakesOf(PLAN).length >= 30, `read only ${wakesOf(PLAN).length} wake( calls from plan.ts`);
-  // the wakes built outside plan.ts: failing passes (act.ts) and the rails' notices (rails.ts)
-  for (const name of ["pass-error", "heartbeat-other", "old-watcher", "breaker"]) {
-    assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from the hooks outside plan.ts`);
+  const emitted = [...Object.values(SOURCES), ...Object.values(V2_SOURCES)].flatMap(wakesOf);
+  for (const name of ["parked", "stalled", "waiting", "workspace", "pass-error", "heartbeat-other", "old-watcher", "breaker", "blind", "runaway"]) {
+    assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from the hooks`);
   }
+  assert.ok(emitted.some((w) => w.kind === "task" && w.name === "release"), "no task release read from the hooks");
   for (const { kind, name } of emitted) {
-    if (kind === "judge") assert.notEqual(bullet(JUDGE, name), null, `SKILL.md JUDGE has no bullet for ${name}`);
-    else if (kind === "task") assert.notEqual(bullet(TASK, name), null, `SKILL.md TASK has no bullet for ${name}`);
+    assert.notEqual(kind, "judge", `the hooks send a JUDGE wake (${name}): the loop has none`);
+    if (kind === "task") assert.notEqual(bullet(TASK, name), null, `SKILL.md TASK has no bullet for ${name}`);
     else assert.match(TELL, new RegExp(`^- \`${escape(name)}\``, "m"), `SKILL.md TELL has no item for ${name}`);
-  }
-});
-
-test("every TELL kind of SPEC 9.2 has its item in the skill", () => {
-  const text = section(SPEC, "### 9.2 `tell`");
-  const kinds = ticked(text.slice(text.indexOf("Kinds:"), text.indexOf("Each is sent")));
-  assert.ok(kinds.length >= 22, `read only ${kinds.length} TELL kinds from SPEC 9.2`);
-  for (const kind of kinds) {
-    assert.match(TELL, new RegExp(`^- \`${escape(kind)}\``, "m"), `SKILL.md TELL has no item for ${kind}`);
   }
 });
 
@@ -175,37 +127,28 @@ function listOf(src, name) {
   return [...spread, ...own];
 }
 
-test("under planner v2: every wake the v2 hooks emit, and every TELL kind of v2's vocabulary, is in the skill's v2 section", () => {
-  const emitted = Object.values(V2_SOURCES).flatMap(wakesOf);
-  for (const name of ["parked", "stalled", "waiting"]) assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from hooks/v2/`);
-  assert.ok(emitted.some((w) => w.kind === "task" && w.name === "release"), "no task release read from hooks/v2/");
-  for (const { kind, name } of emitted) {
-    assert.notEqual(kind, "judge", `hooks/v2/ sends a JUDGE wake (${name}): v2 has none`);
-    if (kind === "task") assert.notEqual(bullet(V2_TASK, name), null, `SKILL.md v2 TASK has no bullet for ${name}`);
-    else assert.match(V2_TELL, new RegExp(`^- \`${escape(name)}\``, "m"), `SKILL.md v2 TELL has no item for ${name}`);
-  }
+test("every TELL kind of v2's vocabulary is in the skill, the owner items before the notices", () => {
   const tells = listOf(V2_TYPES, "V2_TELLS");
   assert.ok(tells.length >= 7, `read only ${tells.length} v2 TELL kinds`);
-  for (const kind of tells) assert.match(V2_TELL, new RegExp(`^- \`${escape(kind)}\``, "m"), `SKILL.md v2 TELL has no item for ${kind}`);
-  // the owner items of v2 are listed as owner items, before the notices
-  const notices = V2_TELL.indexOf("Notices:");
-  for (const kind of listOf(V2_TYPES, "V2_OWNER_TELLS")) assert.ok(V2_TELL.indexOf(`- \`${kind}\``) < notices, `${kind} is an owner item`);
+  for (const kind of tells) assert.match(TELL, new RegExp(`^- \`${escape(kind)}\``, "m"), `SKILL.md TELL has no item for ${kind}`);
+  const notices = TELL.indexOf("Notices:");
+  for (const kind of listOf(V2_TYPES, "V2_OWNER_TELLS")) assert.ok(TELL.indexOf(`- \`${kind}\``) < notices, `${kind} is an owner item`);
 });
 
-test("under planner v2: the release task does the Run its and never waits on the owner inside its turn; the ops of v2's appendix E are named", () => {
-  const release = bullet(V2_TASK, "release");
+test("the release task does the Run its and never waits on the owner inside its turn; the ops of v2's appendix E are named", () => {
+  const release = bullet(TASK, "release");
   assert.match(release, /Run it/);
   assert.match(release, /Never wait on the owner inside this turn/);
   for (const d of ["done", "failed"]) assert.match(release, new RegExp(`\`${d}\``));
-  for (const op of ["resume", "drop", "retry", "planner"]) assert.match(V2_OWNER, new RegExp(`\`${op}[ \`]`), `the v2 owner chat does not name ${op}`);
-  assert.match(V2, /factory:\*/);
+  for (const op of ["resume", "drop", "retry"]) assert.match(OWNER, new RegExp(`\`${op}[ \`]`), `the owner chat does not name ${op}`);
+  assert.match(SKILL, /factory:\*/);
 });
 
-test("under planner v2: the judge decides releases by the wake's cadence and starts the release agent, and asks the owner only for the listed cases", () => {
-  const decisions = section(SKILL, "### Release decisions under planner v2");
+test("the judge decides releases by the wake's cadence and starts the release agent, and asks the owner only for the listed cases", () => {
+  const decisions = section(SKILL, "### Release decisions");
   assert.match(decisions, /within the wake's `cadence` of its merge/);
   assert.match(decisions, /\(`oldest`\) is\s+`cadence`\s+old/);
-  for (const [name, text] of [["decisions section", decisions], ["v1 release bullet", bullet(TASK, "release")], ["v2 release bullet", bullet(V2_TASK, "release")]]) {
+  for (const [name, text] of [["decisions section", decisions], ["release bullet", bullet(TASK, "release")]]) {
     assert.doesNotMatch(text, /\b\d+ hours?\b/, `the ${name} fixes a number of hours`);
   }
   assert.match(decisions, /`priority`/);
@@ -214,14 +157,14 @@ test("under planner v2: the judge decides releases by the wake's cadence and sta
   assert.match(decisions, /The loop only logs it/);
   assert.match(decisions, /major version/);
   assert.match(decisions, /None of these is a reason to ask/);
-  assert.match(bullet(V2_TASK, "release"), /You do not do the release steps yourself/);
+  assert.match(bullet(TASK, "release"), /You do not do the release steps yourself/);
 });
 
-test("under planner v2: the release review's `waiting` field is documented, a release wait is a strong reason and the judge's to answer, never the owner's", () => {
-  const release = bullet(V2_TASK, "release");
+test("the release review's `waiting` field is documented, a release wait is a strong reason and the judge's to answer, never the owner's", () => {
+  const release = bullet(TASK, "release");
   assert.match(release, /`waiting`/);
   assert.match(release, /even with open items/);
   assert.match(release, /A release wait is the judge's to answer, never the owner's/);
-  const decisions = section(SKILL, "### Release decisions under planner v2");
+  const decisions = section(SKILL, "### Release decisions");
   assert.match(decisions, /strong: an issue waits on a release \(`waiting`\)/);
 });

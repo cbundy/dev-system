@@ -692,7 +692,7 @@ function checkPass(result, state) {
 }
 
 // --- the run ---------------------------------------------------------------------------------------------------------
-const config = loadConfig({ planner: 'v2', mode: 'act', maxInFlightIssues: K, skipLabels: ['parked'] }).config
+const config = loadConfig({ mode: 'act', maxInFlightIssues: K, skipLabels: ['parked'] }).config
 for (const [n, p] of Object.entries(PROFILE)) {
   if (VARIANT === 'faults') continue
   if (p.conflict) W.conflictsLeft.set(Number(n), p.conflict)

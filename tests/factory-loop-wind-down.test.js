@@ -13,7 +13,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 // The plugin's modules import each other without a file extension; plain Node needs the ".ts"
-// (tests/factory-loop-fast-forward.test.js does the same).
+// (scripts/factory-loop-replay.js does the same).
 register(
   "data:text/javascript," +
     encodeURIComponent(`export async function resolve(specifier, context, next) {
