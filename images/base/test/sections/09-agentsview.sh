@@ -423,9 +423,9 @@ ver_stopped_row() {
     sleep 1
   done
   # the first beat lands while dev-init is still running, before dev-entrypoint has started the command and
-  # installed its stop handling: wait for the command (sleep infinity) so the stop reaches a running entrypoint
+  # installed its stop handling: wait for the command itself (the exact command line `sleep infinity`; heartbeat-loop runs its own sleep) so the stop reaches a running entrypoint
   n=60
-  until docker exec "$RUN_ID-hb-stop" pgrep -x sleep >/dev/null 2>&1; do
+  until docker exec "$RUN_ID-hb-stop" pgrep -fx 'sleep infinity' >/dev/null 2>&1; do
     n=$((n - 1)); [ "$n" -gt 0 ] || { echo "the command never started"; return 1; }
     sleep 1
   done
