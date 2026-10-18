@@ -177,23 +177,29 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   against the BROKEN code before applying your fix. A test that only ever
   passed proves nothing.
 
-## 4. UI evidence on a private repo
+## 4. UI evidence
 - On a private repo, inline images often do not render in PR bodies: GitHub's
   image proxy (camo) cannot authenticate to a private repo, so a raw file
   link (e.g. `raw.githubusercontent.com`) shows broken.
 - Check whether this repo documents an evidence-capture convention for this -
   typically a single script under `scripts/` (see `CLAUDE.md`/`docs/` for the
   exact command) that boots the app, drives a browser to capture a screenshot
-  (and, for interactive changes, a short clip), uploads the result somewhere
-  that returns a readable signed URL, and prints that URL ready to paste
+  (and, for interactive changes, a short clip), uploads the result through
+  `callum-flow-evidence-upload`, and prints the read-signed URL ready to paste
   straight into the PR body as `![description](<url>)`. Use it if present -
   it exists precisely to solve the camo problem above. Only ever kill the
   exact server PID it launched.
-- Fallback only (no such convention documented, or its upload credentials are
-  unavailable): commit screenshots/clips under a docs path scoped to the
-  issue (e.g. `docs/design/issue-<N>-<slug>/screenshots/`) and link them in
-  the PR by blob URL pinned to the commit SHA. Verify the URL actually
-  resolves before handing off.
+- Default upload route (no such command documented): run
+  `callum-flow-evidence-upload pr-<N>/<slug> <file>...` and paste each printed
+  URL into the PR body as `![description](<url>)`.
+- Fallback only (the tool is not on PATH, it exits 78 because the repo has no
+  evidence storage, or its credentials are refused): commit screenshots/clips
+  under a docs path scoped to the issue (e.g.
+  `docs/design/issue-<N>-<slug>/screenshots/`) and link them in the PR by blob
+  URL pinned to the commit SHA. Verify the URL actually resolves before
+  handing off. Commit an image otherwise only when it is a durable reference
+  image the repo keeps.
+- State in the evidence which route you used and why.
 
 ## 5. Quality bar
 Meet all four before calling the work done - each one caught a real bug that
