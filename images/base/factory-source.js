@@ -61,10 +61,12 @@ function diff(a, b, p = "$") {
   return out;
 }
 
-// runShadow({ tool, old, new, normalize, repo, args, eventsDir, now }): runs old then new, resolves to
+// runShadow({ tool, old, new, normalize, repo, args, eventsDir, now, quietMs }): runs old then new, resolves to
 // old's raw answer and appends one record to <events>/factory/.shadow/<tool>.jsonl. A failing new or an
-// unwritable record never fails the tool; a failing old propagates.
-async function runShadow({ tool, old, new: nu, normalize, repo = null, args = null, eventsDir, now = () => Date.now() }) {
+// unwritable record never fails the tool; a failing old propagates. With quietMs set, an agreeing run
+// (differences 0, no new_error) is not appended while the record file was written less than quietMs ago, so a
+// tool that runs every beat leaves one clean record per quiet period; a difference or a new error is always appended.
+async function runShadow({ tool, old, new: nu, normalize, repo = null, args = null, eventsDir, now = () => Date.now(), quietMs = 0 }) {
   const norm = typeof normalize === "function" ? normalize : (x) => x;
   const t0 = now();
   const oldAnswer = await old();
@@ -97,11 +99,17 @@ async function runShadow({ tool, old, new: nu, normalize, repo = null, args = nu
     paths,
     new_error: newError,
   };
-  try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
-  } catch (e) {
-    process.stderr.write(`${tool}: shadow: cannot write ${file}: ${e.message}\n`);
+  let quiet = false;
+  if (quietMs > 0 && differences === 0 && newError === null) {
+    try { quiet = fs.statSync(file).mtimeMs > now() - quietMs; } catch { /* no record file yet */ }
+  }
+  if (!quiet) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
+    } catch (e) {
+      process.stderr.write(`${tool}: shadow: cannot write ${file}: ${e.message}\n`);
+    }
   }
   if (differences) process.stderr.write(`${tool}: shadow: ${differences} difference(s), first at ${paths[0].path} (see ${file})\n`);
   return oldAnswer;

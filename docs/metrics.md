@@ -923,6 +923,22 @@ jq -s --arg since 2026-10-18T00:00:00Z '
   }' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/evaluate.jsonl
 ```
 
+For `heartbeat-state` (it runs on every beat, so its agreeing runs are sampled: a clean record is written at most once per
+`CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600, while every difference and every failed new read is
+written), per day: records, those with differences, those with a new error, the most common differing paths and the
+slowest new read:
+
+```sh
+jq -s --arg since 2026-10-18T00:00:00Z '
+  map(select(.tool == "heartbeat-state" and .ts >= $since)) | group_by(.ts[:10]) | map({
+    day: .[0].ts[:10], records: length,
+    with_differences: map(select((.differences // 0) > 0)) | length,
+    with_new_error: map(select(.new_error != null)) | length,
+    top_paths: ([.[].paths[]?.path] | group_by(.) | map({path: .[0], n: length}) | sort_by(-.n) | .[:5]),
+    max_new_ms: (map(.new_ms) | max)
+  })' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/heartbeat-state.jsonl
+```
+
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]

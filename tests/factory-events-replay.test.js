@@ -21,6 +21,7 @@ const CLI = path.join(ROOT, "scripts", "factory-events-replay.js");
 const READER = path.join(ROOT, "scripts", "factory-events-replay", "self-test-reader.js");
 const CLAIM_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "claim-events.js");
 const EVALUATE_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "evaluate.js");
+const HEARTBEAT_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "heartbeat-state.js");
 const ADMIN = process.env.FACTORY_TEST_PG_ADMIN_URL;
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -214,6 +215,41 @@ test("compare: the claim-events reader reports a claim row missing from the new 
   // no other key is reported
   const keys = new Set([...r.out.matchAll(/\$\["([^"]+)"\]/g)].map((m) => m[1]));
   assert.deepEqual([...keys], [`${repo}#${issue}`]);
+});
+
+test("compare: the heartbeat-state reader matches on the corpus, and is not vacuous inside a lifecycle", opts, (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "h.json")], dest, old).status, 0);
+  const r = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /old and new match/);
+  // inside a lifecycle some device has an issue in flight, so the compare has something to compare
+  const until = "2026-10-16T02:08:00Z";
+  const reader = require(HEARTBEAT_READER);
+  const ctx = { oldUrl: old.url, newUrl: dest.url, since: SINCE, until, psql: (url, sql) => psql(url, sql, { readOnly: true }) };
+  assert.ok(Object.values(reader.old(ctx)).some((a) => a.state === "busy" && a.in_flight.length > 0));
+  const mid = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE, "--until", until], dest, old);
+  assert.equal(mid.status, 0, mid.out + mid.err);
+});
+
+test("compare: the heartbeat-state reader reports a missing merged row under its device", opts, (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "i.json")], dest, old).status, 0);
+  const [id, device] = dest
+    .query(`SELECT event_id, device FROM factory.event_store e WHERE type = 'merged' AND issue IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM factory.event_store o WHERE o.repo = e.repo AND o.issue = e.issue AND o.device = e.device AND o.ts > e.ts AND o.type IN ('claimed', 'ready', 'requeued', 'implementer_routed', 'merged', 'closed', 'abandoned'))
+      AND EXISTS (SELECT 1 FROM factory.event_store c WHERE c.repo = e.repo AND c.issue = e.issue AND c.device = e.device AND c.ts < e.ts AND c.type = 'claimed')
+      ORDER BY ts DESC LIMIT 1`)
+    .split("|");
+  assert.ok(id, "the corpus has a claimed issue whose last row is merged");
+  dest.query(`DELETE FROM factory.event_store WHERE event_id = '${id}'`);
+  const r = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 1, r.out + r.err);
+  assert.ok(r.out.includes(`$["${device}"]`), r.out);
 });
 
 test("diff: paths, missing keys, array lengths and type changes", () => {
