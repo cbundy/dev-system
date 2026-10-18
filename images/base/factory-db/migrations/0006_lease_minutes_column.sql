@@ -1,13 +1,12 @@
--- 0006: lift the fields the rewritten saved queries read into factory.event_log.
+-- 0006: lift lease_minutes into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; CREATE OR REPLACE VIEW keeps the view's existing ones.
 --
--- Adds model (implementer_routed), restored (test_weakened, boolean) and patch (reviewed), the
--- fields marked "x-column": true in those schemas. docs/metrics.md query 8 (the implementer
--- model), 5b (tests weakened) and 9 (a review counts once per (issue, round, patch)) read them.
--- Migration 0005_shadow_read_columns lifted the shadow_read columns, which stay before these. Postgres only adds columns at the end on OR REPLACE, so they come last and every earlier column
+-- Adds lease_minutes, the field marked "x-column": true in claimed.v1.json and
+-- claim_renewed.v1.json, so callum-flow-factory-state can read a claim's lease from the view.
+-- Postgres only adds columns at the end on OR REPLACE, so it comes last and every earlier column
 -- keeps its name, type and order. No @> and no DISTINCT ON.
 
 CREATE OR REPLACE VIEW factory.event_log AS
@@ -58,7 +57,5 @@ SELECT
   (e.data ->> 'settle_seconds')::int AS settle_seconds,
   (e.data ->> 'old_ok')::boolean AS old_ok,
   (e.data ->> 'new_ok')::boolean AS new_ok,
-  e.data ->> 'model' AS model,
-  (e.data ->> 'restored')::boolean AS restored,
-  e.data ->> 'patch' AS patch
+  (e.data ->> 'lease_minutes')::int AS lease_minutes
 FROM factory.event_store e;
