@@ -40,7 +40,7 @@ import { GITHUB_V2, newCtx, tierOf } from '../hooks/foundation'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, Lease, V2Ctx, V2State } from '../hooks/v2/types'
 import { CLEAN, DEVICE, MIN, NOW, OTHER, config, entry, issue, state } from './fixtures'
-import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso } from './host'
+import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
 import type { Seen } from './host'
 
 const HOUR = 60 * MIN
@@ -869,7 +869,7 @@ function driverWorld(ghostIssue: number) {
 }
 
 describe('R1 in the driver', () => {
-  test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', async ($, on) => {
+  test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, run: driverWorld(470) })
     await $.session.start(START)

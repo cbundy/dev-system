@@ -22,7 +22,7 @@ import { V2_EXECUTORS } from '../hooks/v2/registry'
 import { V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, issue, state, withLedger } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
 import type { Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
@@ -380,7 +380,7 @@ function world(over: { queue?: number[]; issues?: Record<string, unknown>[]; run
 const sources = (line: Record<string, unknown>) => line.sources as Record<string, string>
 
 describe('the driver (v2 SPEC 2.3)', () => {
-  test('observe mode with planner v2 from the workspace file: v2 plans and its plan is logged; no runs, no reflogs, nothing kept', async ($, on) => {
+  test('observe mode with planner v2 from the workspace file: v2 plans and its plan is logged; no runs, no reflogs, nothing kept', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, run: world() })
     await $.session.start(START)
@@ -397,7 +397,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect([...h.store.keys()]).toEqual([])
   })
 
-  test('the v2 shadow plans beside v1 on the same state: logged, never executed (v2 SPEC 2.3)', async ($, on) => {
+  test('the v2 shadow plans beside v1 on the same state: logged, never executed (v2 SPEC 2.3)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once (its
     // sweep is not due, so the pass starts nothing else). The factory shows no claim of this
@@ -427,7 +427,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect([...h.store.keys()].filter(k => k.startsWith('records:') || k.startsWith('heads:'))).toEqual([])
   })
 
-  test('the shadow\'s own reads send their events to the sink, as observe mode\'s do; the planner\'s own reads do not', async ($, on) => {
+  test('the shadow\'s own reads send their events to the sink, as observe mode\'s do; the planner\'s own reads do not', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // a parked record whose label a person removed: v2 reads its comments, which v1 never does
     const parked = record({ issue: 80, state: 'parked', step: null, since: NOW - HOUR, question: 'which API?' })
@@ -446,7 +446,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(h.commands().find(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80')?.env.CALLUM_EVENTS_DIR).toBeUndefined()
   })
 
-  test('v2\'s own GitHub reads have budgets of their own: a pass whose issue reads took all 12 still reads an unparked record\'s comments (v2 SPEC 2.4)', async ($, on) => {
+  test('v2\'s own GitHub reads have budgets of their own: a pass whose issue reads took all 12 still reads an unparked record\'s comments (v2 SPEC 2.4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const parked = record({ issue: 80, state: 'parked', step: null, since: NOW - HOUR, question: 'which API?' })
     const issue80 = { issue: { number: 80, title: 'x', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
@@ -466,7 +466,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(h.commands().filter(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80 --comments')).toHaveLength(1)
   })
 
-  test('act mode with planner v2 reads its records from the store, counts them, and keeps the store\'s records as they are', async ($, on) => {
+  test('act mode with planner v2 reads its records from the store, counts them, and keeps the store\'s records as they are', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const stored = recordsToStore([record(), record({ issue: 471, state: 'parked', step: null, question: 'which API?' })], NOW - MIN)
     const h = host(on, {
@@ -482,7 +482,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(h.store.get(`records:${REPO}`)).toEqual(stored)
   })
 
-  test('the workspace file may set any setting, and wins over the repo\'s; its runtime keys are not settings', async ($, on) => {
+  test('the workspace file may set any setting, and wins over the repo\'s; its runtime keys are not settings', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
       config: { repo: REPO, checkout: '/work', runSource: 'local', poolSize: 8, readyLabel: 'ship', queueEvery: '10m' },
@@ -504,7 +504,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     ['origin cannot be read', { exitCode: 128, stderr: "fatal: invalid object name 'origin/main'." }, 'from-tree', [NOT_READ]],
   ]
   for (const [name, show, label, problems] of showCases) {
-    test(`under planner v2 the repo's settings are origin's default branch's: ${name}`, async ($, on) => {
+    test(`under planner v2 the repo's settings are origin's default branch's: ${name}`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const run = world({ run: argv => (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json' ? show : undefined) })
       const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) }, run })
@@ -515,7 +515,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
   }
 
-  test('under planner v2 with no origin/HEAD, origin\'s default branch is taken to be main', async ($, on) => {
+  test('under planner v2 with no origin/HEAD, origin\'s default branch is taken to be main', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const run = world({
       run: argv => {
@@ -546,7 +546,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(v1.config.readyLabel).toBe('from-tree')
   })
 
-  test('act mode with planner v2: a records store that cannot be read is no records known, not none; nothing that releases or starts is planned, and nothing is written over it', async ($, on) => {
+  test('act mode with planner v2: a records store that cannot be read is no records known, not none; nothing that releases or starts is planned, and nothing is written over it', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const stored = recordsToStore([record()], NOW - MIN)
     const h = host(on, {
@@ -572,7 +572,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
   })
 
   for (const planner of ['v2', 'v1'] as const) {
-    test(`an owner op in act mode under planner ${planner} ${planner === 'v2' ? 'is logged as an intervention (act-events.ts, U4)' : 'logs no intervention'}`, async ($, on) => {
+    test(`an owner op in act mode under planner ${planner} ${planner === 'v2' ? 'is logged as an intervention (act-events.ts, U4)' : 'logs no intervention'}`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work', planner }, run: world() })
       await $.session.start(START)
@@ -587,7 +587,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
   }
 
-  test('act mode with planner v2: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', async ($, on) => {
+  test('act mode with planner v2: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', ENGINE_TEST, async ($, on) => {
     const restarts = (h: ReturnType<typeof host>) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention' && (s.argv.at(-1) ?? '').includes('cause=restart'))
     const clock = mock.clock(on, { now: NOW })
     const earlier = { v: 1, savedAt: NOW - 30 * MIN, entries: [entry('sweep:0', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })] }
@@ -601,7 +601,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(logged[0]?.argv.at(-1)).toMatch(/^who=person cause=restart life=none fact=restart\/fleet\/[0-9a-z]+ reason=/)
   })
 
-  test('act mode with planner v2: the first start of a loop with no ledger logs no restart', async ($, on) => {
+  test('act mode with planner v2: the first start of a loop with no ledger logs no restart', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }, run: world() })
     await $.session.start(START)
@@ -610,7 +610,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention')).toEqual([])
   })
 
-  test('an issue a person closes with its PR closes (E2), without parking first: the PR read makes the issue read due, and E4 waits for it (v2 SPEC 4.1; drill run 2, R2-F2)', async ($, on) => {
+  test('an issue a person closes with its PR closes (E2), without parking first: the PR read makes the issue read due, and E4 waits for it (v2 SPEC 4.1; drill run 2, R2-F2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const head = 'a'.repeat(40)
     const mq = record({ state: 'merge-queue', step: 'queue', pr: 900, head, approvedPatch: 'p1' })
@@ -640,7 +640,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect((h.store.get(`records:${REPO}`) as { records: IssueRecord[] }).records.find(r => r.issue === 470)).toMatchObject({ state: 'closed', why: 'closed-on-github', seq: 5 })
   })
 
-  test('/factory planner v2 writes the workspace file; the next pass plans with v2, and status names it', async ($, on) => {
+  test('/factory planner v2 writes the workspace file; the next pass plans with v2, and status names it', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: world() })
     await $.session.start(START)

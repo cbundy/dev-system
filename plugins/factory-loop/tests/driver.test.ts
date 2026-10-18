@@ -15,7 +15,7 @@ import { loopEventArgs } from '../hooks/derive'
 import { answerPath, pruneArgvs, scriptAnswerPath } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
 import { DEVICE, MIN, NOW, OTHER, entry } from './fixtures'
-import { CFG_DIR, CHECKOUT_HEAD, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso } from './host'
+import { CFG_DIR, CHECKOUT_HEAD, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso, ENGINE_TEST } from './host'
 import type { Host, HostOptions, Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
@@ -62,7 +62,7 @@ function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = 
 }
 
 describe('observe mode (SPEC 11.1)', () => {
-  test('one pass reads, plans, logs and titles, and runs only reads, their events to the sink', async ($, on) => {
+  test('one pass reads, plans, logs and titles, and runs only reads, their events to the sink', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // 45 is read open: an issue whose state a failed read leaves unknown gets no agent (#556)
     const issue45 = { issue: { number: 45, title: 'Work', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
@@ -84,7 +84,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
   })
 
-  test('it never keeps a ledger, takes the act lock, spawns or wakes the model', async ($, on) => {
+  test('it never keeps a ledger, takes the act lock, spawns or wakes the model', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
     await $.session.start(START)
@@ -98,7 +98,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.prompts).toEqual([])
   })
 
-  test('the repo-local settings are loaded through the config loader (SPEC 4.2)', async ($, on) => {
+  test('the repo-local settings are loaded through the config loader (SPEC 4.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ readyLabel: 'go', queueEvery: '10m', colour: 'blue' }))
@@ -114,7 +114,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.seen.filter(s => s.argv.includes('--list')).length).toBe(before)
   })
 
-  test('a tracker named in only has its timeline read, then its sub-issues (D-35)', async ($, on) => {
+  test('a tracker named in only has its timeline read, then its sub-issues (D-35)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const issue40 = { issue: { number: 40, title: 'Epic: the loop', state: 'open', labels: [], sub_issues_summary: { total: 2 } }, stripped: 0 }
     const timeline = {
@@ -133,7 +133,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(read()).toContain('--json 42')
   })
 
-  test('binDir goes ahead of PATH and toolsDir places the watchers (a testbed)', async ($, on) => {
+  test('binDir goes ahead of PATH and toolsDir places the watchers (a testbed)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on, {}, { binDir: '/work/images/base', toolsDir: '/work/features/src/callum-tools' })
     await $.session.start(START)
@@ -142,7 +142,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.seen.some(s => s.argv[0] === '/work/features/src/callum-tools/usage-check.sh')).toBe(true)
   })
 
-  test('once a day the loop dir loses its files older than a week (SPEC 11.6)', async ($, on) => {
+  test('once a day the loop dir loses its files older than a week (SPEC 11.6)', ENGINE_TEST, async ($, on) => {
     // two minutes before midnight
     const clock = mock.clock(on, { now: Date.UTC(2026, 9, 13, 23, 58) })
     const h = shadow(on)
@@ -165,7 +165,7 @@ describe('observe mode (SPEC 11.1)', () => {
     message: { type: 'user' as const, role: 'user' as const, content: [{ type: 'text' as const, text }] },
   })
 
-  test('with no session.start (a plugin /reload-plugins adds), the first session.append starts the loop (SPEC 2)', async ($, on) => {
+  test('with no session.start (a plugin /reload-plugins adds), the first session.append starts the loop (SPEC 2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
     mock.session(on)
@@ -174,7 +174,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.passes()).toHaveLength(1)
   })
 
-  test('a session no person reaches (a -p run, such as a pipeline review) never runs the loop, whatever its rows (D-61)', async ($, on) => {
+  test('a session no person reaches (a -p run, such as a pipeline review) never runs the loop, whatever its rows (D-61)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, mode: 'act' } })
     mock.session(on)
@@ -185,7 +185,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.titles).toEqual([])
   })
 
-  test('the note /rename leaves for the model is blanked as it is stored; other rows are kept (SPEC 9.1, FINDINGS check 3)', async ($, on) => {
+  test('the note /rename leaves for the model is blanked as it is stored; other rows are kept (SPEC 9.1, FINDINGS check 3)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     shadow(on)
     const session = mock.session(on)
@@ -200,7 +200,7 @@ describe('observe mode (SPEC 11.1)', () => {
     ])
   })
 
-  test('mode off reads nothing and says so in the title', async ($, on) => {
+  test('mode off reads nothing and says so in the title', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, mode: 'off' } })
     await $.session.start(START)
@@ -262,7 +262,7 @@ async function factoryOp($: Engine, args: string) {
 }
 
 describe('act mode: the pass (SPEC 2, 7, 12)', () => {
-  test('the rails pass, the pass acts in plan order, and the store keeps the ledger', async ($, on) => {
+  test('the rails pass, the pass acts in plan order, and the store keeps the ledger', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
@@ -309,7 +309,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     },
   ]
   for (const r of rails) {
-    test(`a rail refuses act: ${r.name}; the pass runs as observe`, async ($, on) => {
+    test(`a rail refuses act: ${r.name}; the pass runs as observe`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const { run } = factory({ queue: [470], beats: r.beats, run: r.run })
       const h = host(on, { config: ACT, run, files: r.files, env: r.env })
@@ -333,7 +333,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     })
   }
 
-  test('a heartbeat notice keeps its key in the ledger and is logged as a loop event', async ($, on) => {
+  test('a heartbeat notice keeps its key in the ledger and is logged as a loop event', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
     const h = host(on, { config: ACT, run })
@@ -348,7 +348,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.prompts[0]).toContain(`device=${OTHER}`)
   })
 
-  test('the kill switch stops act mode within a pass: nothing read, nothing run', async ($, on) => {
+  test('the kill switch stops act mode within a pass: nothing read, nothing run', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run, files: { [`${CFG_DIR}/factory-loop/OFF`]: '' } })
@@ -363,7 +363,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
   })
 
-  test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (SPEC 11.3, #557)', async ($, on) => {
+  test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (SPEC 11.3, #557)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let h: Host | undefined
     // the owner creates the switch while the sweep runs, before the pass's claim
@@ -389,7 +389,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.at(-1)).toBe('🔄 dev-system · off')
   })
 
-  test('a restart mid-action: running commands are lost, agents are reconciled against the list (SPEC 7.5)', async ($, on) => {
+  test('a restart mid-action: running commands are lost, agents are reconciled against the list (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const started = NOW - 10 * MIN
@@ -413,7 +413,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(loops.some(n => n.includes('key=heartbeat:0'))).toBe(false)
   })
 
-  test('the restart for an update ran: the update is done and the drain ends (rule H4)', async ($, on) => {
+  test('the restart for an update ran: the update is done and the drain ends (rule H4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([entry('restart:777', 'restart-self', { rule: 'H4', status: 'running', startedAt: NOW - MIN, endedAt: null })])
@@ -426,7 +426,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect((h.last().skipped as { rule: string }[]).filter(s => s.rule === 'H4')).toEqual([])
   })
 
-  test('a restart that returned keeps the drain and stops acting until the workspace is replaced (rule H4, D-15)', async ($, on) => {
+  test('a restart that returned keeps the drain and stops acting until the workspace is replaced (rule H4, D-15)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
     const store = ledgerOf([
@@ -455,7 +455,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
   })
 
-  test('the new workspace finds the restart done before it loaded: the update is done (rule H4)', async ($, on) => {
+  test('the new workspace finds the restart done before it loaded: the update is done (rule H4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([entry('restart:777', 'restart-self', { rule: 'H4', status: 'done', startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN })])
@@ -466,7 +466,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
   })
 
-  test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (SPEC 10.2)', async ($, on) => {
+  test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (SPEC 10.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
     const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
@@ -481,7 +481,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.at(-1)).toContain('gh wait')
   })
 
-  test('a rate-cap hold is one loop event per cap per hour (SPEC 11.4, D-24)', async ($, on) => {
+  test('a rate-cap hold is one loop event per cap per hour (SPEC 11.4, D-24)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const claims = Array.from({ length: 30 }, (_, i) => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN }))
@@ -496,7 +496,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.events().filter(e => e.at(-1) === held)).toHaveLength(1)
   })
 
-  test('three passes in a row that throw tell the owner once, and the title shows error (SPEC 10.9)', async ($, on) => {
+  test('three passes in a row that throw tell the owner once, and the title shows error (SPEC 10.9)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -516,7 +516,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.at(-1)).toBe(good)
   })
 
-  test('passes that fail now and then never rename more than once per titleEveryMs (O1)', async ($, on) => {
+  test('passes that fail now and then never rename more than once per titleEveryMs (O1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -530,7 +530,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.length - before).toBeLessThanOrEqual(8) // the error title goes out at once, the plan title waits: two renames per window, not one per pass (was 20)
   })
 
-  test('session.end releases this session\'s act lock, so the next session acts at once', async ($, on) => {
+  test('session.end releases this session\'s act lock, so the next session acts at once', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -549,7 +549,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
   // another session takes the lock while the sweep runs (this one's lease ran out under it); its
   // own lease may still be live, or have run out in turn
   for (const [name, expiresAt] of [['live', NOW + 30 * MIN], ['expired since', NOW + 1_000]] as const) {
-    test(`a session that loses the act lock mid-pass (the other lease ${name}) runs nothing more and never writes the ledger again`, async ($, on) => {
+    test(`a session that loses the act lock mid-pass (the other lease ${name}) runs nothing more and never writes the ledger again`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       let atLoss = ''
       let h: Host | undefined
@@ -587,7 +587,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     })
   }
 
-  test("an agent's answer while another session holds the lock is left to that session: no load, no event, no write", async ($, on) => {
+  test("an agent's answer while another session holds the lock is left to that session: no load, no event, no write", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -604,7 +604,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(JSON.stringify(h.store.get(ledgerKey))).toBe(before)
   })
 
-  test("a lease taken over from another session reloads the store's ledger, which that session kept, before anything acts", async ($, on) => {
+  test("a lease taken over from another session reloads the store's ledger, which that session kept, before anything acts", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
     const h = host(on, { config: ACT, run: f.run })
@@ -629,7 +629,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.last().skipped).toContainEqual({ rule: 'D1', issue: 470, why: 'exhausted: claim:470:new' })
   })
 
-  test('an agent list that cannot be read marks no agent lost and spawns nothing (SPEC 3.3, 10.4)', async ($, on) => {
+  test('an agent list that cannot be read marks no agent lost and spawns nothing (SPEC 3.3, 10.4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
@@ -648,7 +648,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.spawns).toEqual([])
   })
 
-  test('a store that cannot be read is never replaced: nothing acts and nothing is written (SPEC 7.5)', async ($, on) => {
+  test('a store that cannot be read is never replaced: nothing acts and nothing is written (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
@@ -664,7 +664,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.store.has(ledgerKey)).toBe(false)
   })
 
-  test('a ledger the store will not take starts nothing, is reported, and shows error until a save succeeds', async ($, on) => {
+  test('a ledger the store will not take starts nothing, is reported, and shows error until a save succeeds', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
@@ -690,7 +690,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.titles.at(-1)).not.toContain('error')
   })
 
-  test('every attempt is in the store, running, before its command or spawn runs, and its end before its loop event (SPEC 7.5)', async ($, on) => {
+  test('every attempt is in the store, running, before its command or spawn runs, and its end before its loop event (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
@@ -726,7 +726,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(seen.loop).not.toBe('running')
   })
 
-  test('a long step never outlives the lease: a pass renews it on a timer while it runs (SPEC 11.2)', async ($, on) => {
+  test('a long step never outlives the lease: a pass renews it on a timer while it runs (SPEC 11.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
@@ -745,7 +745,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
 })
 
 describe('act mode: a lease taken over during a long step', () => {
-  test("a renewal that finds another session's lease, even expired, never writes this session's ledger over that session's (SPEC 11.2)", async ($, on) => {
+  test("a renewal that finds another session's lease, even expired, never writes this session's ledger over that session's (SPEC 11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
@@ -769,7 +769,7 @@ describe('act mode: a lease taken over during a long step', () => {
 })
 
 describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
-  test("an agent's turn.complete records its answer and pings a pass", async ($, on) => {
+  test("an agent's turn.complete records its answer and pings a pass", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -816,7 +816,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(`delegate:470:${BRIEF}`)).toMatchObject({ status: 'failed', summary: 'callum-flow:implementer: started with no agent id' })
   })
 
-  test("an agent's interim message while its own sub-agent runs leaves its entry running; its final answer is the one recorded (#545)", async ($, on) => {
+  test("an agent's interim message while its own sub-agent runs leaves its entry running; its final answer is the one recorded (#545)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -853,7 +853,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
   })
 
-  test("a stopped agent's answer with no machine line still goes to the model (#545)", async ($, on) => {
+  test("a stopped agent's answer with no machine line still goes to the model (#545)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -899,7 +899,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     return { h, key }
   }
 
-  test('a repair message the engine does not deliver fails the attempt at once, and the decision log says the answer was read as text (#548)', async ($, on) => {
+  test('a repair message the engine does not deliver fails the attempt at once, and the decision log says the answer was read as text (#548)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, () => 'no such agent')
     await $.session.start(START)
@@ -911,7 +911,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed' }))
   })
 
-  test("the repair message reaches an agent of the loop's own type, which the model is never offered: the engine resumes only a type it offers, so the loop offers it while its message is on its way (#559)", async ($, on) => {
+  test("the repair message reaches an agent of the loop's own type, which the model is never offered: the engine resumes only a type it offers, so the loop offers it while its message is on its way (#559)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, undefined, $)
     const offer = () => $.agent.offer({ agent: 'factory-loop:adjudicator', description: 'an agent', source: 'plugin', provider: { plugin: 'factory-loop', tier: 'user' } })
@@ -951,7 +951,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     if (channel === 'script') h.files.set(jobPathOf(GATE_FILE) ?? '', jobText(GATE_JOB))
   }
 
-  test("the script channel by default: the repair message asks again for the answer script, this attempt's answer file named, text as the fallback (#561)", async ($, on) => {
+  test("the script channel by default: the repair message asks again for the answer script, this attempt's answer file named, text as the fallback (#561)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, undefined, undefined)
     spawned(h, key, 'script')
@@ -967,7 +967,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(text.split('\n').pop()).toBe(`If the script cannot record your answer, ${lower(CONTRACT_LINE)}`)
   })
 
-  test('a config dir with a doubled or trailing / gives plain paths: the loop dir is the one under the plain config dir, and the repair names its answer file (#561)', async ($, on) => {
+  test('a config dir with a doubled or trailing / gives plain paths: the loop dir is the one under the plain config dir, and the repair names its answer file (#561)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const key = 'adjudicate:R470:review:abc1234'
     const store = ledgerOf([
@@ -985,7 +985,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect([...h.files.keys()].filter(p => p.includes('//'))).toEqual([])
   })
 
-  test("answerChannel text in the workspace file, over the repo's tool: the repair message asks for the text contract alone; a bad value and the old answerTools are named (#560, #561)", async ($, on) => {
+  test("answerChannel text in the workspace file, over the repo's tool: the repair message asks for the text contract alone; a bad value and the old answerTools are named (#560, #561)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'text', answerTools: true })
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'tool' }))
@@ -998,7 +998,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(text.split('\n').pop()).toBe(CONTRACT_LINE)
   })
 
-  test("answerChannel tool in the workspace file: the repair message asks for the tool again, text as the fallback; a bad value in the repo's file is named (#548)", async ($, on) => {
+  test("answerChannel tool in the workspace file: the repair message asks for the tool again, text as the fallback; a bad value in the repo's file is named (#548)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'tool' })
     spawned(h, key, 'tool')
@@ -1012,7 +1012,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(text.split('\n').pop()).toBe(`If you cannot call it, ${lower(CONTRACT_LINE)}`)
   })
 
-  test('an answer recorded with the answer script is read at the agent\'s turn.complete, from the file issued for its attempt alone: recorded, its verdict logged, the decision log says script, a pass follows (#561)', async ($, on) => {
+  test('an answer recorded with the answer script is read at the agent\'s turn.complete, from the file issued for its attempt alone: recorded, its verdict logged, the decision log says script, a pass follows (#561)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, undefined, undefined)
     await $.session.start(START)
@@ -1036,7 +1036,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.last().trigger).toBe('agent agent-1')
   })
 
-  test('a recorded answer that fails its checks is refused: the text is read, and the decision log names what kept the file out (#561)', async ($, on) => {
+  test('a recorded answer that fails its checks is refused: the text is read, and the decision log names what kept the file out (#561)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, undefined, undefined)
     await $.session.start(START)
@@ -1049,7 +1049,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     )
   })
 
-  test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", async ($, on) => {
+  test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const refusal = `Agent "agent-1" is stopped (completed) and could not be resumed: ${'the transcript could not be read; '.repeat(6)}start a new agent if the work is still needed.`
     const { h, key } = gateAt(on, () => refusal)
@@ -1061,7 +1061,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed', repairRefused: refusal }))
   })
 
-  test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt fails (#548)', async ($, on) => {
+  test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt fails (#548)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = gateAt(on, () => new Promise<string | undefined>(() => undefined))
     await $.session.start(START)
@@ -1080,7 +1080,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)?.summary).toContain('the repair message was not delivered: repair message: no answer within 10 s')
   })
 
-  test('a wake answered through the main loop: turn.start takes the turn, an ANSWER closes it, a silent turn gets one reminder', async ($, on) => {
+  test('a wake answered through the main loop: turn.start takes the turn, an ANSWER closes it, a silent turn gets one reminder', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -1128,7 +1128,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
   const loopStatuses = (h: Host, kind: string) =>
     h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith(`kind=${kind} `)).map(n => /status=(\S+)/.exec(n)?.[1])
 
-  test('each ledger transition logs one loop event: a judge whose turns start inside their submits, its reminder included', async ($, on) => {
+  test('each ledger transition logs one loop event: a judge whose turns start inside their submits, its reminder included', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -1157,7 +1157,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(loopStatuses(h, 'judge')).toEqual(['running', 'done'])
   })
 
-  test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", async ($, on) => {
+  test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
     let turns = 0
@@ -1172,7 +1172,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(loopStatuses(h, 'tell')).toEqual(['running', 'done'])
   })
 
-  test('each ledger transition logs one loop event: a wake a reload left open logs nothing when its turn starts, then its end', async ($, on) => {
+  test('each ledger transition logs one loop event: a wake a reload left open logs nothing when its turn starts, then its end', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const key = 'task:redrive:issue-470-x:abc'
@@ -1190,7 +1190,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(loopStatuses(h, 'task')).toEqual(['done'])
   })
 
-  test('each wake gets its own id, pass after pass (SPEC 8.1)', async ($, on) => {
+  test('each wake gets its own id, pass after pass (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const f = factory({ issue: { stage: 'designing', since } })
@@ -1212,7 +1212,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(second).not.toBe(first)
   })
 
-  test("a rail's notice whose spell ended before a wake let it out is never sent (SPEC 11.2)", async ($, on) => {
+  test("a rail's notice whose spell ended before a wake let it out is never sent (SPEC 11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory({ beats: `device,age_s\n${OTHER},30\n` })
     const store = ledgerOf([
@@ -1231,7 +1231,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toEqual([])
   })
 
-  test('a change of repo loads that repo\'s ledger before anything acts', async ($, on) => {
+  test('a change of repo loads that repo\'s ledger before anything acts', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let origin = REPO
     const other = 'cbundy/other'
@@ -1262,7 +1262,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'D1', issue: 470, why: 'exhausted: claim:470:new' })
   })
 
-  test('the answer tool closes an open wake; from inside an agent it is refused', async ($, on) => {
+  test('the answer tool closes an open wake; from inside an agent it is refused', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1280,7 +1280,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'merge' } })
   })
 
-  test("an agent's answer tool: refused for a caller the loop does not wait on, denied with what to correct, then recorded with a pass after it (#548)", async ($, on) => {
+  test("an agent's answer tool: refused for a caller the loop does not wait on, denied with what to correct, then recorded with a pass after it (#548)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -1349,7 +1349,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
   }
   const DESIGN_CALL = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false, agentId: 'agent-1' } as const
 
-  test('an answer tool call is answered at once while other hook work holds the queue; its input and the ledger are saved at once, its events and decision-log line follow, in hook order (#558)', async ($, on) => {
+  test('an answer tool call is answered at once while other hook work holds the queue; its input and the ledger are saved at once, its events and decision-log line follow, in hook order (#558)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key, task, release } = heldQueue(on)
     await $.session.start(START)
@@ -1393,7 +1393,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(String(h.last().trigger)).toContain('agent agent-1')
   })
 
-  test('an agent whose tool answered ends its turn while the follow-up still waits, with words that say otherwise: they are never read (#558)', async ($, on) => {
+  test('an agent whose tool answered ends its turn while the follow-up still waits, with words that say otherwise: they are never read (#558)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key, release } = heldQueue(on)
     await $.session.start(START)
@@ -1414,7 +1414,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.events().filter(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toHaveLength(1)
   })
 
-  test("the owner's answer and control tools are answered while other hook work holds the queue; a wake's answer is saved at once, the events, lines and pings follow (#558)", async ($, on) => {
+  test("the owner's answer and control tools are answered while other hook work holds the queue; a wake's answer is saved at once, the events, lines and pings follow (#558)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key, task, release } = heldQueue(on, { holding: 'designer' })
     await $.session.start(START)
@@ -1443,7 +1443,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
   })
 
-  test('a tool call right after a load, before the first pass, is refused at once asking for text, and nothing is loaded for it; the text answer is read as before (#558)', async ($, on) => {
+  test('a tool call right after a load, before the first pass, is refused at once asking for text, and nothing is loaded for it; the text answer is read as before (#558)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key } = heldQueue(on)
     await $.session.start(START)
@@ -1460,7 +1460,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF } })
   })
 
-  test("a tool call whose own work outruns 2 s is refused asking for text, and changes nothing when that work ends; the agent's next call is recorded (#558)", async ($, on) => {
+  test("a tool call whose own work outruns 2 s is refused asking for text, and changes nothing when that work ends; the agent's next call is recorded (#558)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // the spawn record's read hangs while the test holds it, as a stalled disk would
     let slow: Promise<void> | null = null
@@ -1488,7 +1488,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done' })
   })
 
-  test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', async ($, on) => {
+  test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 3 * 60 * MIN
     const { run } = factory({ issue: { stage: 'implementing', since } })
@@ -1508,7 +1508,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: handoff })
   })
 
-  test("the loop's own adjudicator and designer types are never offered to the model; the callum-flow ones are (#548)", async ($, on) => {
+  test("the loop's own adjudicator and designer types are never offered to the model; the callum-flow ones are (#548)", ENGINE_TEST, async ($, on) => {
     host(on, { config: ACT })
     const offer = (agent: string) => $.agent.offer({ agent, description: 'an agent', source: 'plugin', provider: { plugin: agent.split(':')[0] ?? '', tier: 'user' } })
     expect(await offer('factory-loop:adjudicator')).toEqual({ isOffered: false })
@@ -1517,7 +1517,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(await offer('callum-flow:designer')).toEqual({ isOffered: true })
   })
 
-  test('outside act mode the agent tools record nothing', async ($, on) => {
+  test('outside act mode the agent tools record nothing', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
     await $.session.start(START)
@@ -1529,7 +1529,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
 })
 
 describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2, 10.7, 11.3, 13)', () => {
-  test('shadowDevice stands in only while nothing executes: act mode plans as this device (SPEC 4.2, 5.4)', async ($, on) => {
+  test('shadowDevice stands in only while nothing executes: act mode plans as this device (SPEC 4.2, 5.4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const head = 'a'.repeat(40)
     const { run } = factory({
@@ -1558,7 +1558,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
   })
 
-  test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (SPEC 8.2, 10.8)', async ($, on) => {
+  test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (SPEC 8.2, 10.8)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ issue: { stage: 'designing', since } })
@@ -1577,7 +1577,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts.filter(p => p.startsWith('TELL agent-failed id=w'))).toHaveLength(1)
   })
 
-  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (SPEC 7.5, D-18)', async ($, on) => {
+  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (SPEC 7.5, D-18)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 60 * MIN
     const designer = entry(`design:470:${since}`, 'spawn', {
@@ -1601,7 +1601,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts).toEqual([])
   })
 
-  test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (SPEC 7.5, O2)', async ($, on) => {
+  test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (SPEC 7.5, O2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 60 * MIN
     // run 1 left a guard-fail judge open and a designer out of attempts; run 2 starts with the store cleared
@@ -1625,7 +1625,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
-  test('usage that crosses Stop all mid-pass skips the next token-spending action, with no attempt counted (SPEC 10.7)', async ($, on) => {
+  test('usage that crosses Stop all mid-pass skips the next token-spending action, with no attempt counted (SPEC 10.7)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let h: Host | undefined
     const { run } = factory({
@@ -1662,7 +1662,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     return { clock, h, key: `design:470:${since}` }
   }
 
-  test('a spawn that never starts fails after a minute, and the loop runs on (SPEC 6.1)', async ($, on) => {
+  test('a spawn that never starts fails after a minute, and the loop runs on (SPEC 6.1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
@@ -1682,14 +1682,14 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.entry(key)?.summary).toContain('no answer within 60 s')
   })
 
-  test('a timed-out agent is stopped with TaskStop on its own id (SPEC A1, 13)', async ($, on) => {
+  test('a timed-out agent is stopped with TaskStop on its own id (SPEC A1, 13)', ENGINE_TEST, async ($, on) => {
     const { h, key } = await stale()($, on)
     expect(h.stops).toEqual(['agent-1'])
     expect(h.entry('stop:agent-1')).toMatchObject({ status: 'done' })
     expect(h.entry(key)).toMatchObject({ status: 'timed-out', summary: 'timed out: stopped' })
   })
 
-  test('a TaskStop that never answers fails after 30 s, and the loop runs on; a refused one fails (SPEC 6.1, 13)', async ($, on) => {
+  test('a TaskStop that never answers fails after 30 s, and the loop runs on; a refused one fails (SPEC 6.1, 13)', ENGINE_TEST, async ($, on) => {
     const { clock, h, key } = await stale(() => new Promise(() => undefined))($, on)
     expect(h.passes()).toHaveLength(0)
     await clock.advance(30_000)
@@ -1701,7 +1701,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.passes()).toHaveLength(2)
   })
 
-  test('a TaskStop the engine refuses is a failed stop with its reason', async ($, on) => {
+  test('a TaskStop the engine refuses is a failed stop with its reason', ENGINE_TEST, async ($, on) => {
     const { h } = await stale(() => ({ deny: 'TaskStop: no such tool' }))($, on)
     expect(h.entry('stop:agent-1')).toMatchObject({ status: 'failed' })
     expect(h.entry('stop:agent-1')?.summary).toContain('TaskStop: no such tool')
@@ -1723,7 +1723,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     return { clock, h, wake: `judge:report:${key}` }
   }
 
-  test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (SPEC 8.1)', async ($, on) => {
+  test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
     let drops = 1
     const { clock, h, wake } = await unparsed(() => (drops-- > 0 ? { drop: 'the session is shutting down' } : undefined))($, on)
     expect(h.entry(wake)).toBeUndefined()
@@ -1735,7 +1735,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
-  test('a busy session never holds a pass: the wake is taken as queued after 5 s, and a later drop asks again', async ($, on) => {
+  test('a busy session never holds a pass: the wake is taken as queued after 5 s, and a later drop asks again', ENGINE_TEST, async ($, on) => {
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
     const { clock, h, wake } = await unparsed(() => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : undefined))($, on)
@@ -1752,7 +1752,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
-  test("a rail's notice the engine drops after the submit goes out again (SPEC 9.2, 11.2)", async ($, on) => {
+  test("a rail's notice the engine drops after the submit goes out again (SPEC 9.2, 11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
@@ -1773,7 +1773,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toHaveLength(2)
   })
 
-  test("a wake another session submitted is lost with its session; one this session's reload left open stays (SPEC 7.5)", async ($, on) => {
+  test("a wake another session submitted is lost with its session; one this session's reload left open stays (SPEC 7.5)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1794,7 +1794,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.ledger().filter(e => e.status === 'running')).toEqual([])
   })
 
-  test("a reload within one session keeps that session's open wake", async ($, on) => {
+  test("a reload within one session keeps that session's open wake", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1808,7 +1808,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
   })
 
   for (const [name, stop] of [['the kill switch', 'OFF'], ['mode observe', 'observe']] as const) {
-    test(`under ${name} an open wake gets no reminder and its turn changes nothing (SPEC 11.1, 11.3)`, async ($, on) => {
+    test(`under ${name} an open wake gets no reminder and its turn changes nothing (SPEC 11.1, 11.3)`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const { run } = factory()
       const judge = 'judge:sequence:512:abc1234'
@@ -1836,7 +1836,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
 })
 
 describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
-  test('/factory ops write control.json, log the change, ping a pass; status reads the last pass', async ($, on) => {
+  test('/factory ops write control.json, log the change, ping a pass; status reads the last pass', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -1862,7 +1862,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(await factoryOp($, 'pause')).toMatchObject({ text: 'pause: takes one issue number. Usage: pause <N>' })
   })
 
-  test('/factory config shows the settings of the last pass, not the files as they are now (#698)', async ($, on) => {
+  test('/factory config shows the settings of the last pass, not the files as they are now (#698)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -1883,7 +1883,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect((await factoryOp($, 'config')).text).toContain('passEvery       5m')
   })
 
-  test('/factory retry clears the issue\'s exhausted entries in the ledger', async ($, on) => {
+  test('/factory retry clears the issue\'s exhausted entries in the ledger', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1900,7 +1900,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(h.entry('claim:470:new')).toMatchObject({ attempts: 0, summary: 'attempts cleared by the owner (/factory retry)' })
   })
 
-  test('passes start at least 5 s apart, and a ping storm falls back to the timer and tells the owner once (D-39)', { timeoutMs: 30_000 }, async ($, on) => {
+  test('passes start at least 5 s apart, and a ping storm falls back to the timer and tells the owner once (D-39)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -1937,7 +1937,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(h.passes().length).toBe(before + 2)
   })
 
-  test('two owner ops at once both land in control.json: they run one at a time', async ($, on) => {
+  test('two owner ops at once both land in control.json: they run one at a time', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -1947,7 +1947,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470], skip: [471] })
   })
 
-  test('an op whose own work outruns 2 s answers within it: refused, writing nothing, before its change; unsure once its write began (#558)', async ($, on) => {
+  test('an op whose own work outruns 2 s answers within it: refused, writing nothing, before its change; unsure once its write began (#558)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const control = `${LOOP_DIR}/control.json`
     let slow: { op: 'read' | 'write'; until: Promise<void> } | null = null
@@ -1986,7 +1986,7 @@ describe('the pass summary event (#680)', () => {
   const passesEvents = (h: Host) => h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes '))
   const field = (argv: string[], name: string) => (argv.at(-1) ?? '').split(' ').find(t => t.startsWith(`${name}=`))?.slice(name.length + 1)
 
-  test('act mode sends one per minute, its count the decision log lines whose time falls in the minute', async ($, on) => {
+  test('act mode sends one per minute, its count the decision log lines whose time falls in the minute', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: { ...ACT, passEveryMs: 20_000 }, run })
@@ -2014,7 +2014,7 @@ describe('the pass summary event (#680)', () => {
     expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes'))).toHaveLength(5)
   })
 
-  test('a minute in which a pass hangs sends passes=0', async ($, on) => {
+  test('a minute in which a pass hangs sends passes=0', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const gate = new Promise<void>(resolve => (release = resolve))
@@ -2046,7 +2046,7 @@ describe('the pass summary event (#680)', () => {
     ['the kill switch', ACT, { [`${CFG_DIR}/factory-loop/OFF`]: '' }],
     ['observe mode', { ...ACT, mode: 'observe' }, {}],
   ] as const) {
-    test(`${name} sends none`, async ($, on) => {
+    test(`${name} sends none`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const { run } = factory()
       const h = host(on, { config, run, files })
@@ -2056,7 +2056,7 @@ describe('the pass summary event (#680)', () => {
     })
   }
 
-  test('the kill switch set after passes ran stops the summaries', async ($, on) => {
+  test('the kill switch set after passes ran stops the summaries', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })

@@ -28,7 +28,7 @@ import { normalize, rowFor, viaOf } from '../hooks/v2/table'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, TableEvent, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
 
 const N = 571
 const LIFE = (Math.floor(NOW / 1000) - 3 * 3600).toString(36)
@@ -828,7 +828,7 @@ describe('the owner\'s files in the pass driver', () => {
   const ACT_V2 = { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }
   const fileIvs = (line: Record<string, unknown>) => (line.actions as { key: string }[]).map(a => a.key).filter(k => /^iv\/(control|config)-file\//.test(k))
 
-  test('the kill switch on for a pass, then off: exactly one control-file intervention, the next acting pass\'s', async ($, on) => {
+  test('the kill switch on for a pass, then off: exactly one control-file intervention, the next acting pass\'s', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: ACT_V2, run: quiet, files: { [OFF]: '' } })
     await $.session.start(START)
@@ -842,7 +842,7 @@ describe('the owner\'s files in the pass driver', () => {
     expect((h.store.get(filesKey(REPO)) as FilesSeen).off).toBe(false)
   })
 
-  test('an op\'s write is no hand edit; a hand edit between passes is one', async ($, on) => {
+  test('an op\'s write is no hand edit; a hand edit between passes is one', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: ACT_V2, run: quiet })
     await $.session.start(START)
@@ -865,7 +865,7 @@ describe('the owner\'s files in the pass driver', () => {
   // fault drill 1 (2026-10-15): the operator's hand edit of config.json, mode off -> act, was not
   // logged: the loop had kept no version of the file, so the first acting read had nothing to
   // compare against
-  test('a hand edit that turns the loop on is one config-file intervention, found by the first acting pass; an op that turns it on is not', async ($, on) => {
+  test('a hand edit that turns the loop on is one config-file intervention, found by the first acting pass; an op that turns it on is not', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const path = `${CFG_DIR}/factory-loop/config.json`
     const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
@@ -901,7 +901,7 @@ describe('the owner\'s files in the pass driver', () => {
   // person's edit of the settings, which no one had changed. What is kept and compared is the
   // repo-local file as written (origin's under planner v2), never the settings this build resolves
   // from it; a pass that cannot read origin's file compares none.
-  test('the settings compared are origin\'s file as written: a kept version without the defaults is no edit, one key changed is one', async ($, on) => {
+  test('the settings compared are origin\'s file as written: a kept version without the defaults is no edit, one key changed is one', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const written = JSON.stringify({ planner: 'v2', readyLabel: 'from-origin' })
     let origin: { exitCode?: number; stdout?: string; stderr?: string } = { stdout: written }
@@ -934,7 +934,7 @@ describe('the owner\'s files in the pass driver', () => {
 
   // drill run 2 (R2-F3, R2-F6): an edit back to a version logged before (mode act -> off -> act, a
   // lowered setting restored) was taken as logged, its fact keyed by the new version's digest
-  test('every hand edit is one config-file intervention, an edit back to an earlier version too', async ($, on) => {
+  test('every hand edit is one config-file intervention, an edit back to an earlier version too', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const path = `${CFG_DIR}/factory-loop/config.json`
     const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
@@ -959,7 +959,7 @@ describe('the owner\'s files in the pass driver', () => {
 
   // drill run 4 (R4-F5, drill 9): the store wiped, #38's guard interventions, still in
   // companion.jsonl, were logged a second time: "logged once" lived in the ledger alone
-  test('after a wiped store, a fact the event log already holds is not logged again; a new one is logged once (drill run 4, R4-F5)', async ($, on) => {
+  test('after a wiped store, a fact the event log already holds is not logged again; a new one is logged once (drill run 4, R4-F5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const line = (ago: number, cause: string, reason: string) => ({ at: NOW - ago, issue: 38, life: 'tmz7hm', seq: 7, cause, reason })
     // logged 4 days ago: past the facts read's 3 days, within the rebuild's week

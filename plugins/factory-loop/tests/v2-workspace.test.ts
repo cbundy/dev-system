@@ -17,6 +17,7 @@ import type { IssueRecord, Lease, V2State } from '../hooks/v2/types'
 import { WORKSPACE_GRACE_MS, handshakePath, processIdOf, withSlotLine } from '../hooks/v2/workspace'
 import type { WorkspaceRead } from '../hooks/v2/workspace'
 import { MIN, NOW, config, entry, state as baseState } from './fixtures'
+import { ENGINE_TEST } from './host'
 
 const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 120 * MIN)
@@ -196,7 +197,7 @@ describe('the workspace rail holds agent steps (v2 SPEC 10.9)', () => {
 })
 
 describe('the Bash timeout (v2 SPEC 10.5)', () => {
-  test('the loop\'s session start gives every agent it starts a 10-minute Bash timeout', async ($, on) => {
+  test('the loop\'s session start gives every agent it starts a 10-minute Bash timeout', ENGINE_TEST, async ($, on) => {
     const set: [string, string | undefined][] = []
     on('env.set', ($$, e) => {
       set.push([e.name, e.value])

@@ -37,7 +37,7 @@ import { SLOT_STATES, STEP_AGENT, unknownResult } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2State } from '../hooks/v2/types'
 import { handshakePath } from '../hooks/v2/workspace'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state as baseState } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, PROCESS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, PROCESS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
 import type { Seen } from './host'
 
 const HOUR = 60 * MIN
@@ -1012,7 +1012,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
   // Fault drill 1 on the testbed (2026-10-15): after the ensure opened the PR, every pass skipped
   // the record with "PR #N was not read this pass" and ran no PR read, so the reviewer never
   // started and the wait went unknown (github-wait), then to the breaker and triage.
-  test('a record that entered reviewing by T5 has its PR opened by the ensure; the next pass reads that PR and starts the reviewer', async ($, on) => {
+  test('a record that entered reviewing by T5 has its PR opened by the ensure; the next pass reads that PR and starts the reviewer', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const n = 4
     const pr = 5
@@ -1088,7 +1088,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
   // already had, so the patch id of its head did not compute. That one failure failed the whole prs
   // source, and from 03:32 every record in reviewing and the queue was held "the PRs were not read",
   // #36 too, with no step and no tell.
-  test('a PR whose read fails holds only its own record: the other record\'s reviewer starts, and the failed one says why', async ($, on) => {
+  test('a PR whose read fails holds only its own record: the other record\'s reviewer starts, and the failed one says why', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const life = lifeOf(NOW - HOUR)
     const prOf = (n: number) => n + 2
@@ -1209,7 +1209,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     return { h, pr, pass, said, ended, checksRead: ARGV.prChecksArgv(REPO, pr).join(' ') }
   }
 
-  test('one failed PR read holds a record long in review; a read that keeps failing ends its step unknown ciStartMs after its first failure', async ($, on) => {
+  test('one failed PR read holds a record long in review; a read that keeps failing ends its step unknown ciStartMs after its first failure', ENGINE_TEST, async ($, on) => {
     const w = oldReview(on, { exitCode: 1, stderr: 'HTTP 502: Bad Gateway' })
     await $.session.start(START)
     await w.pass(6_000)
@@ -1225,7 +1225,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     expect(w.ended()).toMatchObject({ status: 'done', outcome: { kind: 'transition', row: 'U2', via: 'unknown:github-wait' } })
   })
 
-  test('a PR read that meets a GitHub rate limit holds a record long in review with no clock: the backoff starts in that pass', async ($, on) => {
+  test('a PR read that meets a GitHub rate limit holds a record long in review with no clock: the backoff starts in that pass', ENGINE_TEST, async ($, on) => {
     const w = oldReview(on, { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' })
     await $.session.start(START)
     await w.pass(6_000)
