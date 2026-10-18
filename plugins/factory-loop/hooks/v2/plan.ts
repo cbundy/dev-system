@@ -1,5 +1,4 @@
-// The v2 planner (docs/factory-loop/v2/SPEC.md 2.2, 2.5): planV2 has v1's plan signature and is
-// pure. It is a thin composer: it calls the rule modules in a fixed order, then the foundation's
+// The v2 planner (docs/factory-loop/v2/SPEC.md 2.2, 2.5): planV2 is pure. It is a thin composer: it calls the rule modules in a fixed order, then the foundation's
 // admission filters, one wake and the title, and holds no rule of its own. It imports types,
 // hooks/v2/*.ts and hooks/foundation.ts only (tests/factory-loop-plan.test.js).
 //
@@ -32,7 +31,7 @@ export function planV2(state: State, config: Config): PlanResult {
   if (blind) {
     blindPass(base)
   } else if (state.v2 === undefined) {
-    skip(base, 'G2', null, 'v2 sources not read: the planner and the shadow are v1')
+    skip(base, 'G2', null, 'v2 sources not read')
   } else {
     const ctx: V2Ctx = Object.assign(base, { v2: state.v2 })
     // records not read are blind for them: no rule that could release, claim or start runs, since

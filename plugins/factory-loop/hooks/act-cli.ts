@@ -6,10 +6,8 @@
 // read them without the engine.
 import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
-import { parsePool } from './parse'
-import { issueFromBranch, listedLive } from './plan'
 import { splitNote } from './v2/events'
-import type { Action, ActionKind, AgentView, LedgerEntry } from './types'
+import type { Action, ActionKind, LedgerEntry } from './types'
 
 const SEC = 1000
 const SUMMARY_MAX = 200
@@ -21,13 +19,7 @@ export type CliKind =
   | 'claim'
   | 'close-issue'
   | 'release-parent'
-  | 'abandon'
   | 'milestone-later'
-  | 'milestone-expect'
-  | 'pr-reopen'
-  | 'pr-comment'
-  | 'pr-close'
-  | 'release-worktree'
   | 'restart-self'
 
 // Each command's timeout, by its action's kind (SPEC 6.1). A step of a multi-step kind gets
@@ -38,13 +30,7 @@ export const CLI_TIMEOUT_MS: Record<CliKind, number> = {
   claim: 120 * SEC,
   'close-issue': 60 * SEC,
   'release-parent': 60 * SEC,
-  abandon: 60 * SEC,
   'milestone-later': 60 * SEC,
-  'milestone-expect': 60 * SEC,
-  'pr-reopen': 60 * SEC,
-  'pr-comment': 60 * SEC,
-  'pr-close': 60 * SEC,
-  'release-worktree': 120 * SEC,
   'restart-self': 600 * SEC,
 }
 
@@ -64,9 +50,9 @@ export type Step =
 export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[] | string {
   const n = action.issue === null ? null : String(action.issue)
   const noIssue = `${action.kind} names no issue`
-  const unlabel = (issue: string, kind: 'release-parent' | 'abandon'): Step => ({
+  const unlabel = (issue: string): Step => ({
     argv: ['gh', 'issue', 'edit', issue, '--repo', repo, '--remove-label', inDevLabel],
-    timeoutMs: CLI_TIMEOUT_MS[kind],
+    timeoutMs: CLI_TIMEOUT_MS['release-parent'],
   })
   switch (action.kind) {
     case 'heartbeat':
@@ -87,59 +73,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
       // that happened, and a retry after a failed event repeats only the label edit.
       return n === null
         ? noIssue
-        : [unlabel(n, 'release-parent'), { event: 'abandoned', fields: { issue: action.issue, note: splitNote(action.created, action.reasons ?? null, action.childWhys ?? null) } }]
-    case 'abandon': {
-      if (n === null) return noIssue
-      const fields: EventFields = { issue: action.issue, note: action.note }
-      if (action.run !== null) fields.run = action.run
-      if (action.branch !== null) fields.branch = action.branch
-      return [unlabel(n, 'abandon'), { event: 'abandoned', fields }]
-    }
-    case 'milestone-expect':
-      // the CLI takes the reason as one line (exit 2 otherwise)
-      return [{ argv: ['callum-flow-milestone', 'expect', action.bump, oneLine(action.why)], timeoutMs: CLI_TIMEOUT_MS['milestone-expect'] }]
-    case 'pr-reopen': {
-      // a reopen makes GitHub register the PR's checks again (rule P6a)
-      const pr = String(action.pr)
-      return [
-        { argv: ['gh', 'pr', 'close', pr, '--repo', repo], timeoutMs: CLI_TIMEOUT_MS['pr-reopen'] },
-        { argv: ['gh', 'pr', 'reopen', pr, '--repo', repo], timeoutMs: CLI_TIMEOUT_MS['pr-reopen'] },
-      ]
-    }
-    case 'pr-comment':
-      return [
-        {
-          argv: ['gh', 'pr', 'comment', String(action.pr), '--repo', repo, '--body-file', '-'],
-          timeoutMs: CLI_TIMEOUT_MS['pr-comment'],
-          stdin: action.body,
-        },
-      ]
-    case 'pr-close': {
-      // rule M8 (#553): read the PR and the one its work moved to, then close it with a comment
-      // linking that one; the executor runs the close only once both reads say so (prCloseCheck,
-      // byCheck). Never --delete-branch: the old branch keeps its commits.
-      const pr = String(action.pr)
-      const comment = `Superseded by #${action.by}: this work moved to \`${action.newBranch}\`. Closed by the factory loop.`
-      return [
-        { argv: ['gh', 'pr', 'view', pr, '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
-        { argv: ['gh', 'pr', 'view', String(action.by), '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
-        { argv: ['gh', 'pr', 'close', pr, '--repo', repo, '--comment', comment], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
-      ]
-    }
-    case 'release-worktree':
-      // Empty stdin: were the slot dirty after all, treehouse's discard prompt reads end of
-      // input and keeps the work (exit 3). The return is pinned to the lease the plan saw: a slot
-      // leased again since fails the condition with exit 1, and the status read, which proves
-      // the slot is back (SPEC 6.1), tells that apart from a failed return (#563).
-      return [
-        {
-          argv: ['treehouse', 'return', action.path, '--if-lease-id', action.lease],
-          timeoutMs: CLI_TIMEOUT_MS['release-worktree'],
-          stdin: '',
-          ok: [0, 1],
-        },
-        { argv: ['treehouse', 'status', '--json'], timeoutMs: CLI_TIMEOUT_MS['release-worktree'] },
-      ]
+        : [unlabel(n), { event: 'abandoned', fields: { issue: action.issue, note: splitNote(action.created, action.reasons ?? null, action.childWhys ?? null) } }]
     case 'restart-self':
       // only once the drain for an update is complete (rule H4, D-15), or v2's restart without a
       // drain (rule R2, v2 SPEC 14.1)
@@ -186,60 +120,6 @@ export function eventFailure(state: string, err: unknown): Exec {
   return exec
 }
 
-// prView: the state and head of `gh pr view --json state,headRefName`, each unknown when the
-// output does not read.
-function prView(json: string): { state: unknown; head: unknown } {
-  let pr: Record<string, unknown> = {}
-  try {
-    const v: unknown = JSON.parse(json)
-    if (v !== null && typeof v === 'object') pr = v as Record<string, unknown>
-  } catch {
-    // read by the caller as unreadable
-  }
-  return { state: pr.state, head: pr.headRefName }
-}
-
-// prCloseCheck: what `gh pr view --json state,headRefName` says about closing a superseded run's
-// PR: 'close' for an open PR on a branch of its issue other than the one the work moved to; done,
-// left alone, for one already merged or closed; refused for one on any other branch.
-export function prCloseCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
-  const { state, head } = prView(json)
-  if (state === 'MERGED' || state === 'CLOSED') {
-    return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `PR #${action.pr} is already ${state.toLowerCase()}: left alone` }
-  }
-  if (state !== 'OPEN' || typeof head !== 'string') {
-    return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: json.slice(0, 2000) }, summary: `gh pr view: PR #${action.pr} did not read` }
-  }
-  if (head === action.newBranch || issueFromBranch(head) !== action.issue) {
-    return refused(`PR #${action.pr} is on ${head}, not a superseded branch of #${action.issue}`)
-  }
-  return 'close'
-}
-
-// byCheck: the same read of the PR the work moved to. The plan took that PR from a fixer's
-// handoff, the agent's own word, so the old PR is closed only for one that is open or merged
-// on a branch of the same issue; one closed unmerged or on any other branch is refused.
-export function byCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
-  const { state, head } = prView(json)
-  if ((state !== 'OPEN' && state !== 'MERGED' && state !== 'CLOSED') || typeof head !== 'string') {
-    return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: json.slice(0, 2000) }, summary: `gh pr view: PR #${action.by} did not read` }
-  }
-  if (state === 'CLOSED' || issueFromBranch(head) !== action.issue) {
-    return refused(`PR #${action.by} is ${state.toLowerCase()} on ${head}, not a PR of #${action.issue} to supersede #${action.pr}`)
-  }
-  return 'close'
-}
-
-// slotState: the pool's word for the slot at this path in `treehouse status --json`
-// ('available' once returned), or null when the listing is unreadable or lacks the slot.
-export function slotState(json: string, path: string): string | null {
-  return slotAt(json, path)?.state ?? null
-}
-
-function slotAt(json: string, path: string) {
-  return parsePool(json, 0)?.slots.find(s => s.path === path)
-}
-
 // finish: what the steps' output says once every step passed (SPEC 6.1 "Outcome recorded").
 export function finish(action: Action, results: RunResult[]): Exec {
   const last = results[results.length - 1]
@@ -258,30 +138,9 @@ export function finish(action: Action, results: RunResult[]): Exec {
       return ok(`closed #${action.issue}`)
     case 'release-parent':
       return ok(`released #${action.issue}, split into ${action.created.join(',')}`)
-    case 'abandon':
-      return ok(`abandoned #${action.issue}`)
     case 'milestone-later':
-    case 'milestone-expect':
       // the CLI prints what moved or the line it set; a repo not opted in is a no-op note
       return ok(out(last) || action.kind)
-    case 'pr-reopen':
-      return ok(`PR #${action.pr} closed and reopened`)
-    case 'pr-comment': {
-      // gh prints the new comment's URL
-      const url = last === undefined ? '' : firstLine(last.stdout)
-      return ok(`commented on PR #${action.pr}${url === '' ? '' : `: ${url}`}`)
-    }
-    case 'release-worktree': {
-      const slot = last === undefined ? undefined : slotAt(last.stdout, action.path)
-      const state = slot?.state ?? null
-      if (state === 'available') return ok(`returned ${action.path}`)
-      // leased again since the plan: another agent's slot now, left alone (#563)
-      if (slot !== undefined && slot.lease !== action.lease) return ok(`left ${action.path} alone: its lease changed since the plan`)
-      const back = results[0]
-      if (back !== undefined && back.exitCode !== 0) return commandFailure(['treehouse', 'return', action.path], back)
-      const detail = `${action.path} is ${state ?? 'not listed'} after treehouse return`
-      return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail }, summary: clip(detail) }
-    }
     case 'restart-self':
       // the session ends; the loop resumes on load (SPEC 7.5)
       return ok('restart requested')
@@ -335,35 +194,10 @@ function command(kind: CliKind): Executor {
   }
 }
 
-// pr-close (rule M8, #553): the reads, then the close only when prCloseCheck and byCheck allow
-// it, so a PR that merged or closed meanwhile, one on another branch, or one whose replacement
-// is not a live PR of the same issue, is never closed.
-const prClose: Executor = async (ctx, action) => {
-  if (action.kind !== 'pr-close') return refused(`the pr-close executor got a ${action.kind} action`)
-  const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel)
-  const [view, viewBy, close] = typeof steps === 'string' ? [] : steps
-  if (view === undefined || viewBy === undefined || close === undefined) return refused(typeof steps === 'string' ? steps : 'pr-close has no steps')
-  const read = await runSteps(ctx, [view])
-  if ('failed' in read) return read.failed
-  const check = prCloseCheck(action, read.results[0]?.stdout ?? '')
-  if (check !== 'close') return check
-  const readBy = await runSteps(ctx, [viewBy])
-  if ('failed' in readBy) return readBy.failed
-  const checkBy = byCheck(action, readBy.results[0]?.stdout ?? '')
-  if (checkBy !== 'close') return checkBy
-  const closed = await runSteps(ctx, [close])
-  if ('failed' in closed) return closed.failed
-  return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: clip(`closed PR #${action.pr}, superseded by #${action.by}`) }
-}
-
-// ownAgent: the ledger holds this agent id, so the loop spawned it: on an entry still running, or
-// on an agent entry that is done while the list shows the agent at work (an answer through its
-// tool ends the entry before the agent's turn ends, #548; plan.ts answeredLive). An agent the
-// loop did not spawn is never stopped (SPEC 6.1).
-export function ownAgent(ledger: readonly LedgerEntry[], agentId: string, agents: readonly AgentView[]): boolean {
-  return ledger.some(
-    e => e.agentId === agentId && (e.status === 'running' || (e.status === 'done' && (e.kind === 'spawn' || e.kind === 'delegate') && listedLive(agents, agentId))),
-  )
+// ownAgent: the ledger holds this agent id on an entry still running, so the loop spawned it and
+// still waits on it. An agent the loop did not spawn is never stopped (SPEC 6.1).
+export function ownAgent(ledger: readonly LedgerEntry[], agentId: string): boolean {
+  return ledger.some(e => e.agentId === agentId && e.status === 'running')
 }
 
 // stop-agent: TaskStop through ActIo, for one of the loop's own agents (rules A1, A2). A stop
@@ -373,7 +207,7 @@ export function ownAgent(ledger: readonly LedgerEntry[], agentId: string, agents
 // its loop exits. A process that detached from its shell outlives it.
 const stopAgent: Executor = async (ctx, action) => {
   if (action.kind !== 'stop-agent') return refused(`the stop-agent executor got a ${action.kind} action`)
-  if (!ownAgent(ctx.state.ledger, action.agentId, ctx.state.agents)) return refused(`agent ${action.agentId} is not a running agent of the loop`)
+  if (!ownAgent(ctx.state.ledger, action.agentId)) return refused(`agent ${action.agentId} is not a running agent of the loop`)
   let r: { stopped: boolean; error?: string }
   try {
     r = await ctx.io.stopAgent(action.agentId)
@@ -401,13 +235,7 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   claim: command('claim'),
   'close-issue': command('close-issue'),
   'release-parent': command('release-parent'),
-  abandon: command('abandon'),
   'milestone-later': command('milestone-later'),
-  'milestone-expect': command('milestone-expect'),
-  'pr-reopen': command('pr-reopen'),
-  'pr-comment': command('pr-comment'),
-  'pr-close': prClose,
-  'release-worktree': command('release-worktree'),
   'restart-self': command('restart-self'),
   'stop-agent': stopAgent,
   title,
@@ -418,10 +246,6 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
 // label: a command's name for a summary: gh with its noun and verb, others with one argument.
 function label(argv: readonly string[]): string {
   return argv.slice(0, argv[0] === 'gh' ? 3 : 2).join(' ')
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
 }
 
 function firstLine(text: string): string {

@@ -1,9 +1,8 @@
 // buildState: what observe read, assembled into the State plan takes (SPEC 3.1, 3.2). Pure,
-// so the pass driver, the shadow run and the replay harness build state the same way.
+// so the pass driver and the replay harness build state the same way.
 import type { Facts } from './derive'
 import { runsFromEvents } from './derive'
-import type { Factory, IssueFacts, PipelineRun } from './parse'
-import { issueFromBranch } from './plan'
+import type { Factory, IssueFacts } from './parse'
 import type {
   AgentView,
   Brief,
@@ -31,8 +30,7 @@ export type Observed = {
   sources: Record<SourceName, Source>
   factory: Factory | null
   facts: Facts | null
-  // runSource local: the pipeline watcher's runs (runsFromWatch); null for runSource events
-  // (built here from the event log)
+  // null: built here from the event log
   runs: RunView[] | null
   queue: number[] | null
   github: Map<number, GithubIssue>
@@ -74,50 +72,6 @@ export function subIssuesOf(n: number, timelines: Map<number, number[]>, depth =
     for (const m of nested ?? []) if (m !== n) all.add(m)
   }
   return [...all].sort((a, b) => a - b)
-}
-
-// --- runSource local: pipeline-watch.sh --once (SPEC 3.3, 3.4) -----------------------------
-
-// A watcher line with when observe first saw that run in that state, at that head and step.
-export type SeenRun = PipelineRun & { since: number }
-
-// seenRuns: this poll's lines, each keeping the `since` of the same run in the same state, head
-// and step in the last poll, else seen now. A run the poll no longer prints is dropped, so one
-// that comes back starts over. Without a step (the watcher could not read one), `since` is what
-// tells two parks on one head apart (plan's gateOf), so it must hold across passes.
-export function seenRuns(prev: readonly SeenRun[], lines: readonly PipelineRun[], now: number): SeenRun[] {
-  return lines.map(line => {
-    const same = prev.find(
-      p => p.branch === line.branch && p.run === line.run && p.state === line.state && p.head === line.head && p.step === line.step,
-    )
-    return { ...line, since: same?.since ?? now }
-  })
-}
-
-// runsFromWatch: the watcher's runs as plan reads them: the issue from the branch name (issue-<N>),
-// and review rounds, verdicts and supersession from the event log, as runsFromEvents does. A run
-// with no known id has no facts. Sorted by issue, then branch, so the digest does not move with
-// the watcher's order.
-export function runsFromWatch(seen: readonly SeenRun[], facts: Facts | null): RunView[] {
-  return seen
-    .map(s => {
-      const known = s.run !== 'unknown' && facts !== null
-      return {
-        branch: s.branch,
-        issue: issueFromBranch(s.branch),
-        run: s.run,
-        state: s.state,
-        head: s.head,
-        step: s.step,
-        detail: s.detail,
-        pr: s.pr,
-        since: s.since,
-        reviewFixRounds: known ? (facts.reviewFixes.get(s.run) ?? 0) : 0,
-        verdicts: known ? (facts.verdicts.get(s.run) ?? []) : [],
-        superseded: known ? facts.superseded.has(s.run) : false,
-      }
-    })
-    .sort((a, b) => (a.issue ?? 0) - (b.issue ?? 0) || (a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0))
 }
 
 export function buildState(o: Observed): State {

@@ -13,7 +13,7 @@ export type PassRecord = { ms: number; acted: boolean; error: boolean }
 export type PassBook = Map<number, PassRecord[]>
 
 // What the note carries besides the numbers: the last runtime the loop resolved.
-export type PassSettings = { mode: string; planner: string; passEveryMs: number }
+export type PassSettings = { mode: string; passEveryMs: number }
 
 export type PassSummary = {
   from: number
@@ -95,7 +95,8 @@ export function passesNote(s: PassSummary): string {
     `idle_mean_ms=${opt(s.idleMean)}`,
     `errors=${s.errors}`,
     `mode=${s.settings.mode}`,
-    `planner=${s.settings.planner}`,
+    // the event's schema still requires the field: the loop always plans with v2
+    'planner=v2',
     `pass_every_ms=${s.settings.passEveryMs}`,
   ].join(' ')
 }

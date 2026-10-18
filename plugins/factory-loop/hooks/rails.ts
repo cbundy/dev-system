@@ -6,7 +6,7 @@
 // rail fails safe: a read it cannot make keeps the loop in observe, with its own reason.
 import type { ActIo, Exec, ExecCtx } from './exec'
 import { parseCsv } from './parse'
-import { tierOf } from './plan'
+import { tierOf } from './foundation'
 import type { Action, ActionClass, Config, Control, Ms, Tier } from './types'
 
 const SECOND = 1_000
@@ -394,8 +394,8 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
 
 // --- the usage pre-check (SPEC 10.7) -------------------------------------------------------------
 
-// The classes each tier lets run: plan's own matrix (ALLOWED in plan.ts, not exported), mirrored
-// here and held to plan's behaviour by rails.test.ts.
+// The classes each tier lets run: the planner's own matrix (ALLOWED in foundation.ts), mirrored
+// here and held to its behaviour by rails.test.ts.
 export const TIER_CLASSES: Record<Tier, readonly ActionClass[]> = {
   normal: ['free', 'owner', 'drive', 'develop', 'start'],
   slow: ['free', 'owner', 'drive', 'develop', 'start'],

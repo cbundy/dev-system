@@ -29,7 +29,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'planner', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
+  'mode', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
   'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
@@ -49,11 +49,15 @@ describe('configText', () => {
     expect(Math.max(...text.split('\n').map(l => l.length))).toBeLessThanOrEqual(60)
   })
 
-  test('planner: v2 plans and acts for a workspace that sets none; v1 only where it is set (#794)', () => {
-    const unset = configText(view({}), control(), NOW)
-    expect(line(unset, 'planner')).toContain('v2')
-    expect(unset).toContain('v2 plans and acts')
-    expect(configText(view({}, { planner: 'v1' }), control(), NOW)).toContain('v1 plans and acts')
+  test('the planner and shadow keys are retired: a file that sets either still loads, each is ignored and shown as a config problem', () => {
+    const none = configText(view({}), control(), NOW)
+    expect(none).not.toContain('planner')
+    expect(none).toContain('Config problems\n  none')
+    const text = configText(view({ planner: 'v1' }, { shadow: 'v2' }), control(), NOW)
+    expect(text).not.toContain('v1 plans')
+    expect(text).toContain('planner: retired, the loop always plans with v2, and')
+    expect(text).toContain('shadow: retired, the loop always plans with v2, and')
+    expect(line(text, 'maxInFlight')).toContain('3')
   })
 
   test('a long value, problem or gate command is cut to the width', () => {

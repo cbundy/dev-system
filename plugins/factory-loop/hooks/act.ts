@@ -7,24 +7,20 @@
 // that moves gets its `loop` event, once.
 // register.ts holds $, builds the ActIo and keeps the store; everything here works through the
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
-// executor, with a recording fake. The setting `planner` picks the layer that plans (v1's plan.ts,
-// or v2/plan.ts), and with the v2 shadow on, v2 plans beside v1 and is only logged (v2 SPEC 2.3).
+// executor, with a recording fake. The layer that plans is v2/plan.ts (v2 SPEC 2.3).
 import { cliExecutors } from './act-cli'
-import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey, repairAskOf, scriptAnswered } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
-import { GITHUB_V2 } from './foundation'
+import { GITHUB_V2, turnEnded } from './foundation'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
 import type { Runtime } from './observe'
-import { plan, turnEnded } from './plan'
-import { repairPrompt } from './prompts'
 import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
-import type { Action, ActionKind, AgentStatus, AgentType, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
+import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswered, stepAnswers, stepRecorded } from './v2/steps'
-import { STEP_AGENT, V2_ACTION_KINDS } from './v2/types'
+import { V2_ACTION_KINDS } from './v2/types'
 import { answerTool, expireWakes, onTurnComplete, onTurnStart, wakeExecutors } from './wake'
 import type { TurnEnd } from './wake'
 
@@ -33,44 +29,22 @@ const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
 
-// Every kind's executor (SPEC 6.1): v1's, and v2's for its new kinds (v2/registry.ts). act.test.ts
-// checks that no ActionKind lacks one.
+// Every kind's executor (SPEC 6.1): the shared kinds', and v2's for its new kinds (v2/registry.ts).
+// act.test.ts checks that no ActionKind lacks one.
 export const EXECUTORS: Partial<Record<ActionKind, Executor>> = {
   ...cliExecutors,
   ...mergeExecutors,
-  ...agentExecutors,
   ...wakeExecutors,
   ...Object.fromEntries(V2_ACTION_KINDS.map(kind => [kind, V2_EXECUTORS[kind]])),
 }
 
-// The kinds that write to GitHub, held for the rest of a pass once one met a rate limit, as
-// plan holds them while the backoff lasts (plan.ts GITHUB, SPEC 10.2).
-export const GITHUB_KINDS: readonly ActionKind[] = [
-  'claim',
-  'heartbeat',
-  'sweep',
-  'guard',
-  'update-behind',
-  'fix-linkage',
-  'merge',
-  'rollout',
-  'close-issue',
-  'release-parent',
-  'abandon',
-  'milestone-later',
-  'milestone-expect',
-  'pr-reopen',
-  'pr-comment',
-  'pr-close',
-]
-
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 
-// dispatch: the action's executor, run once; under planner v2, v2's own for the kind first (a
-// reused kind may have a v2 behaviour), run again after a GitHub blip (registry.ts). A kind with no
-// executor, or an executor that throws, is a failed attempt; neither is a reason to stop the pass.
+// dispatch: the action's executor, v2's own for the kind first (a reused kind may have a v2
+// behaviour), run again after a GitHub blip (registry.ts). A kind with no executor, or an
+// executor that throws, is a failed attempt; neither is a reason to stop the pass.
 export async function dispatch(ctx: ExecCtx, action: Action): Promise<Exec> {
-  const run = ctx.rt.config.planner === 'v2' ? executorOf(action.kind, EXECUTORS) : EXECUTORS[action.kind]
+  const run = executorOf(action.kind, EXECUTORS)
   if (run === undefined) return { status: 'failed', summary: `no executor for ${action.kind}`, noRetry: true }
   try {
     return await run(ctx, action)
@@ -222,7 +196,6 @@ export type ActReport = {
 // already running finishes, and once the switch is seen every action left is skipped (#557).
 export async function runActions(env: ActEnv, state: State, actions: readonly Action[]): Promise<ActReport> {
   const report: ActReport = { outcomes: [], rateLimited: false, title: null, killed: false }
-  const github = env.rt.config.planner === 'v2' ? GITHUB_V2 : GITHUB_KINDS
   for (const action of actions) {
     if (!report.killed && action.kind !== 'title' && (await env.killed())) report.killed = true
     if (report.killed) {
@@ -233,7 +206,7 @@ export async function runActions(env: ActEnv, state: State, actions: readonly Ac
       report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'held: the act lock is no longer this session\'s' })
       continue
     }
-    if (report.rateLimited && github.includes(action.kind)) {
+    if (report.rateLimited && GITHUB_V2.includes(action.kind)) {
       report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'held: GitHub rate limit met this pass' })
       continue
     }
@@ -367,7 +340,7 @@ export type ListedAgent = { id: string; status: AgentStatus }
 export const REPAIR_GRACE_MS = 5 * 60_000
 
 // reconcilable: the agent list as reconcileAgents should judge it. An agent listed idle has ended
-// its turn as one listed completed has (plan.ts turnEnded, #560), and each rule here reads them
+// its turn as one listed completed has (foundation.ts turnEnded, #560), and each rule here reads them
 // alike. An agent whose answer is being handled counts as running, listed or not, so a pass in
 // between never marks it lost: that covers an agent whose repair message is on its way, since
 // agentAnswered holds it in `answering` until the engine answers the send. So does one whose
@@ -421,24 +394,12 @@ export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; 
 export type Listed = { ok: boolean; agents: ListedAgent[] }
 
 // planned: when plan handed its actions over and how long it took (performance.now()), for the
-// trace (#552); shadow: the v2 shadow's plan, logged and never executed
-export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number }; shadow: Shadowed | null }
+// trace (#552)
+export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number } }
 
-// The v2 shadow's plan, or why it could not plan: a shadow that throws never fails the pass.
-export type Shadowed = PlanResult | { error: string }
-
-// planPass: the planner's plan (v2 SPEC 2.3), and with planner v1 and the shadow on, the v2
-// shadow's beside it, which is logged and never executed. The shadow plans with the settings v2
-// would run with (v2Config: v2's defaults where no file sets a key), in the pass's mode.
-export function planPass(state: State, config: Config, v2Config: Config = config): { result: PlanResult; shadow: Shadowed | null } {
-  if (config.planner === 'v2') return { result: planV2(state, config), shadow: null }
-  const result = plan(state, config)
-  if (config.shadow !== 'v2') return { result, shadow: null }
-  try {
-    return { result, shadow: planV2(state, { ...v2Config, mode: config.mode }) }
-  } catch (err) {
-    return { result, shadow: { error: clip(`the v2 shadow threw: ${message(err)}`) } }
-  }
+// planPass: the planner's plan (v2 SPEC 2.3).
+export function planPass(state: State, config: Config): PlanResult {
+  return planV2(state, config)
 }
 
 // finishAsRead: an answer read for an entry, applied only while the entry still runs as it was
@@ -461,7 +422,7 @@ async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly Li
   const lost = before.filter((e, i) => e.status === 'running' && reconciled[i]?.status === 'lost')
   const moved: LedgerEntry[] = []
   for (const was of lost) {
-    const exec = was.kind === 'agent-step' ? await stepRecorded(ctxOf(env, state, was), was, true) : await scriptAnswered(ctxOf(env, state, was), was)
+    const exec = await stepRecorded(ctxOf(env, state, was), was, true)
     if (exec !== null) moved.push(...finishAsRead(env, was, exec, now))
   }
   return moved
@@ -479,67 +440,54 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
-  // under planner v2 a recorded answer ends its step when read (v2 SPEC 10.8)
-  if (env.rt.config.planner === 'v2') for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e))) moved.push(...finishAsRead(env, r.entry, r.exec, now))
+  // a recorded answer ends its step when read (v2 SPEC 10.8)
+  for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e))) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {
     await env.save()
     await logLoop(env, moved)
   }
   const state = { ...observed, ledger: env.live.ledger }
   const from = performance.now()
-  const { result, shadow } = planPass(state, env.rt.config, env.rt.v2Config)
+  const result = planPass(state, env.rt.config)
   const planned = { ms: performance.now() - from, at: await env.io.now() }
   const report = await runActions(env, state, result.actions)
-  return { state, result, report, planned, shadow }
+  return { state, result, report, planned }
 }
 
 // --- between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4) ----------------------------
 
-// The one repair message to an agent of the loop, of the type it runs as (a v1 agent's, or a v2
-// step's agent type, plugin:name): null once delivered, else why not, in the engine's own words.
-export type Repair = (agentId: string, text: string, type: AgentType | `${string}:${string}`) => Promise<string | null>
+// The one repair message to an agent of the loop, of the type it runs as (a step's agent type,
+// plugin:name): null once delivered, else why not, in the engine's own words.
+export type Repair = (agentId: string, text: string, type: `${string}:${string}`) => Promise<string | null>
 
 // What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
-// out before it), 'repair' (unreadable, so the agent was asked once more), 'waiting' (interim),
-// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry; via: how an
-// applied answer came (the answer script's file, #561, or its text); scriptProblem: what kept a
-// file it recorded out; undelivered: why its repair message was not delivered, whole, for the
-// decision log (the entry's summary keeps a clipped copy, #559).
+// out before it), 'repair' (unreadable, so the agent was asked once more), 'recorded' (its tool
+// already answered), 'dropped' or 'not ours'. key: its entry; undelivered: why its repair message
+// was not delivered, whole, for the decision log (the entry's summary keeps a clipped copy, #559).
 export type Answered = {
-  result: 'applied' | 'repair' | 'waiting' | 'recorded' | 'dropped' | 'not ours'
+  result: 'applied' | 'repair' | 'recorded' | 'dropped' | 'not ours'
   why?: string
   key?: string
   repaired?: boolean
-  via?: 'script' | 'text'
-  scriptProblem?: string
   undelivered?: string
 }
 
-// agentAnswered: an agent of the loop finished (its turn.complete): its answer is read into the
-// outcome (act-agents.ts onAgentAnswer: the file it recorded with the answer script, else its
-// text; it logs the verdict and superseded events) and its entry finished. 'applied' asks for a
-// pass. An agent the ledger never held is 'not ours'; an answer for an entry that no longer runs
-// (an A1 stop timed it out, a retry replaced it) is logged and dropped, never applied, and the
-// closing words of an agent whose tool already answered change nothing. An interim answer (no
-// machine line, #545) from an agent atWork finds still at work leaves its entry running for its
-// next answer, up to its timeout (rule A1); atWork is asked only then. A final answer with no
-// machine line first gets one repair message to the same agent, naming what was wrong and asking
-// again on the channel its spawn was asked on (#548, #561): the entry runs on with its attempt
-// unspent, and only an answer still unreadable after it, or a message that could not be
-// delivered, fails the attempt (or sends the designer's report to the model, rule D3) as before.
-// A tool call is answered outside the hook queue (#558), so it may finish the entry while this
-// answer is read: the entry is checked again just before each change, with no await between, and
-// an entry its tool finished meanwhile is 'recorded', the text never read over it.
+// agentAnswered: an agent step of the loop finished (its turn.complete): its answer is read by
+// steps.ts (the file it recorded with the answer script) and its entry finished. 'applied' asks
+// for a pass. An agent the ledger never held is 'not ours'; an answer for an entry that no longer
+// runs (a stop timed it out, a retry replaced it) is logged and dropped, never applied. An answer
+// that does not read first gets one repair message to the same agent, naming what was wrong and
+// asking again (#548, #561): the entry runs on with its attempt unspent, and only an answer still
+// unreadable after it, or a message that could not be delivered, fails the attempt as before.
 export async function agentAnswered(
   env: ActEnv,
   state: State,
   answer: AgentAnswer,
   between: Between,
-  atWork: (agentId: string) => Promise<boolean> = async () => false,
   repair: Repair = async () => 'the loop sends no messages from here',
 ): Promise<Answered> {
   const id = answer.agentId
-  const entry = env.live.ledger.find(e => e.agentId === id && (e.kind === 'spawn' || e.kind === 'delegate' || e.kind === 'agent-step'))
+  const entry = env.live.ledger.find(e => e.agentId === id && e.kind === 'agent-step')
   if (entry === undefined) return { result: 'not ours' }
   if (entry.status === 'done') return { result: 'recorded', key: entry.key }
   if (entry.status !== 'running') return { result: 'dropped', why: `late answer for ${entry.key} (${entry.status})` }
@@ -547,44 +495,32 @@ export async function agentAnswered(
   between.repairing.delete(id)
   try {
     // a v2 agent step's answer is read by steps.ts, and is never interim (v2 SPEC 10.8)
-    const step = entry.kind === 'agent-step' ? await stepAnswered(ctxOf(env, state, entry), entry, answer) : null
-    const read = step === null ? await onAgentAnswer(ctxOf(env, state, entry), entry, answer) : { exec: step.exec, problem: step.problem, via: 'script' as const, channel: 'script' as const }
-    let exec = read.exec
+    const step = await stepAnswered(ctxOf(env, state, entry), entry, answer)
+    let exec = step.exec
     const ours = (e: LedgerEntry | undefined): e is LedgerEntry => e !== undefined && e.agentId === id && e.startedAt === entry.startedAt
     const still = () => {
       const current = env.live.ledger.find(e => e.key === entry.key)
       return ours(current) && current.status === 'running' ? current : null
     }
-    // the attempt no longer runs: its tool answered meanwhile, or a stop or a retry ended it
+    // the attempt no longer runs: a stop or a retry ended it
     const ended = (): Answered => {
       const current = env.live.ledger.find(e => e.key === entry.key)
       return ours(current) && current.status === 'done' ? { result: 'recorded', key: entry.key } : { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
     }
     if (still() === null) return ended()
-    const unread = step === null ? interim(answer, exec) : step.repair !== null
-    if (step === null && unread && (await atWork(id))) {
-      return { result: 'waiting', why: `interim answer for ${entry.key}: the agent still works, so its final answer is awaited` }
-    }
     const at = await env.io.now()
     const current = still()
     if (current === null) return ended()
     const repaired = current.reminded === true
-    const type = agentOf(entry)
     let refused: string | undefined
-    if (unread && !repaired && (step !== null || type !== null)) {
-      const problem = read.problem ?? 'no machine line'
+    if (step.repair !== null && !repaired) {
+      const problem = step.problem ?? 'no machine line'
       // the repair is on the entry before it goes out, so a reload never sends a second one
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
-      // the channel the spawn's prompt asked for (its record); text when it names none, or the
-      // script's job file is gone. A v2 step's own repair asks for the script again.
-      let ask: { text: string; type: AgentType | `${string}:${string}` } = { text: step?.repair ?? '', type: step?.subagentType ?? STEP_AGENT.build }
-      if (step === null && type !== null) {
-        const { channel, script } = await repairAskOf(env, entry, read.channel)
-        ask = { text: repairPrompt(type, purposeOfKey(entry.key), problem, channel, script), type }
-      }
-      const undelivered = await repair(id, ask.text, ask.type)
+      // a v2 step's own repair asks for the script again
+      const undelivered = await repair(id, step.repair, step.subagentType)
       if (undelivered === null) {
         // listed idle or completed until the message resumes it, which the list may show late: the
         // passes take it as at work for a while, then count that listing afresh
@@ -600,8 +536,7 @@ export async function agentAnswered(
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()
     await logLoop(env, moved)
-    const applied: Answered = { result: 'applied', key: entry.key, repaired, via: read.via }
-    if (read.scriptProblem !== undefined) applied.scriptProblem = read.scriptProblem
+    const applied: Answered = { result: 'applied', key: entry.key, repaired }
     if (refused !== undefined) applied.undelivered = refused
     return applied
   } finally {
@@ -615,54 +550,6 @@ export const TOOL_LATE = 'Not recorded: the factory loop could not check this an
 // Asked just before a tool call changes the ledger: false once the caller has answered the call
 // without it (register.ts bounded), and then nothing changes.
 export type Claim = () => boolean
-
-// What an answer tool's call did: ok and the text the agent reads; key: the entry it answered;
-// after: an accepted call's follow-up, run once the call has its answer (#558): its events, the
-// ledger saved and the entry's loop event, in that order (its input was saved before the call was
-// recorded); notes on what failed, for the decision log.
-export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?: boolean; after?: (env: ActEnv) => Promise<string[]> }
-
-// agentToolAnswered: an agent's answer tool (agent-tools.ts, #548), tied to the entry that
-// spawned it by the call's agentId. Only an agent whose entry still runs may answer: the main
-// conversation, an agent the loop did not start (an implementer's own sub-agents among them) and
-// one whose answer is in are refused. A call the contract refuses changes nothing and tells the
-// agent what to correct; an accepted one finishes the entry at once, as its text would (its
-// turn's closing words are then not read). Both channels share the reading, so a tool answer
-// means exactly what the same answer in text means. The call is answered before the engine gives
-// up on it (#558): the entry is checked and finished in the live ledger with no await between,
-// so the answer is true when given and every hook and pass after it sees the entry done, and
-// what is slow is left to `after`.
-export async function agentToolAnswered(
-  env: ActEnv,
-  state: State,
-  tool: string,
-  input: unknown,
-  agentId: string | undefined,
-  claim: Claim = () => true,
-): Promise<ToolAnswered> {
-  const no = (why: string, key?: string): ToolAnswered => (key === undefined ? { ok: false, text: `Not recorded: ${why}.` } : { ok: false, text: `Not recorded: ${why}.`, key })
-  if (agentId === undefined) return no('this tool takes the answer of an agent the factory loop started, and the main conversation is none')
-  const entry = env.live.ledger.find(e => e.agentId === agentId && (e.kind === 'spawn' || e.kind === 'delegate'))
-  if (entry === undefined) return no('the factory loop is waiting on no answer from this agent')
-  if (entry.status !== 'running') {
-    return no(entry.status === 'done' ? 'your answer is already recorded; end your turn' : `the factory loop no longer waits on this agent (${entry.status})`, entry.key)
-  }
-  const r = await onToolAnswer(ctxOf(env, state, entry), entry, tool, input)
-  if ('refused' in r) return no(r.refused, entry.key)
-  const now = await env.io.now()
-  const current = env.live.ledger.find(e => e.key === entry.key)
-  if (current === undefined || current.agentId !== agentId || current.status !== 'running' || current.startedAt !== entry.startedAt) {
-    return no('the factory loop stopped waiting on this agent meanwhile', entry.key)
-  }
-  if (!claim()) return { ok: false, text: TOOL_LATE, key: entry.key }
-  const moved = transition(env.live, l => finish(l, entry.key, r.exec, now, { config: env.rt.config }))
-  const after = async (later: ActEnv): Promise<string[]> => {
-    const notes = await r.after(ctxOf(later, state, entry))
-    await keep(later, moved)
-    return notes
-  }
-  return { ok: true, text: `Recorded: ${r.exec.summary}. End your turn now; no reply lines are needed.`, key: entry.key, repaired: current.reminded === true, after }
-}
 
 // keep: what follows a transition a hook made at once in the live ledger (#558): the ledger
 // saved, then the moved entries' loop events.
@@ -705,8 +592,8 @@ export async function wakeEnded(env: ActEnv, turn: TurnEnd): Promise<{ moved: bo
 
 // wakeAnswered: mcp__factory-loop__answer, checked as the ANSWER block is (wake.ts answerTool)
 // and recorded in the live ledger at once, with no await between the check and the change, as an
-// agent's tool is (#558); `moved` asks for keep, once the call has its answer. claim: as for
-// agentToolAnswered.
+// agent's tool was (#558); `moved` asks for keep, once the call has its answer. claim: asked
+// just before the ledger changes.
 export async function wakeAnswered(
   env: ActEnv,
   input: unknown,

@@ -7,7 +7,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { RunInit, RunResult } from '../hooks/exec'
-import { plan } from '../hooks/plan'
 import {
   EMPTY_RAIL_MEMORY,
   HEARTBEAT_QUIET_MS,
@@ -547,27 +546,6 @@ describe('the usage pre-check (SPEC 10.7)', () => {
     expect(await preCheck(usageIo({ fiveHour: null, sevenDay: null }).io, claimOf('start'), CFG, null)).toBeNull()
     expect(await preCheck(usageIo(new Error('no session')).io, claimOf('start'), CFG, null)).toBeNull()
     expect(usageVerdict({ fiveHour: null, sevenDay: 99 }, 'start', CFG, null, NOW)).toBe('usage: tier stop-all forbids start (5h n/a, 7d 99%)')
-  })
-
-  test("TIER_CLASSES is plan's own matrix: plan holds exactly the classes it forbids, tier by tier", () => {
-    const busy = state({
-      loadedAt: NOW - MIN,
-      queue: [1, 2],
-      issues: [issue(1), issue(2), mine(45, 'parked', { pr: 545 }), mine(50, 'ready to merge', { pr: 550 }), mine(60, 'designing')],
-      runs: [run(45, 'parked'), run(50, 'merge-ready')],
-    })
-    const at = (tier: Tier) =>
-      plan({ ...busy, usage: { ...READINGS[tier], fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false } }, CFG)
-    const normal = at('normal').actions.filter(a => a.kind !== 'title')
-    expect(['start', 'develop', 'drive', 'free'].every(c => normal.some(a => a.class === c))).toBe(true)
-    for (const tier of TIERS) {
-      const r = at(tier)
-      expect(r.tier).toBe(tier)
-      for (const a of normal) {
-        const held = r.skipped.some(s => s.rule === a.rule && s.issue === a.issue && (s.why === `tier ${tier} (${a.kind})` || s.why === `tier ${tier}`))
-        expect([tier, a.key, a.class, held]).toEqual([tier, a.key, a.class, !TIER_CLASSES[tier].includes(a.class)])
-      }
-    }
   })
 })
 

@@ -296,7 +296,7 @@ async function main() {
       pool: { free: Math.max(0, 16 - held), total: 16, slots: [] },
       agents: [],
       milestone: null,
-      ledger: derive.deriveLedger(upTo, factory, facts, a.device),
+      ledger: derive.deriveLedger(upTo, a.device),
       control: { ...EMPTY_CONTROL, ...(a.control ? JSON.parse(a.control) : {}) },
       lastTitle: null,
       githubBackoffUntil: null,

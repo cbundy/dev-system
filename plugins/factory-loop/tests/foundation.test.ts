@@ -1,113 +1,171 @@
-// The foundation (hooks/foundation.ts; docs/factory-loop/v2/SPEC.md 2.2): its copies of plan.ts's
-// generic code behave as v1's own on v1's fixtures (parity), and what v2 adds to it: the breaker's
-// step-unknown bucket (5.3), a v2 agent step in the rate caps by its step kind (D-24), a key's own
-// attempt cap, and v2's GitHub kinds.
-//
-// Parity: v1's admission is private to plan.ts, so it is compared through plan() itself. For each
-// fixture, v1's plan with no filter in play gives what v1 wants; the same wanted actions through
-// foundation's admit, on the state with a filter in play, keep exactly what v1's own plan of that
-// state keeps, and trip the same caps. With no filter in play they keep all of it.
+// The foundation (hooks/foundation.ts; docs/factory-loop/v2/SPEC.md 2.2): the generic plan code the
+// v2 planner composes its rules with (the class matrix, gate, the admission filters, one wake, the
+// title frame), the helpers the rest of the loop shares (the usage tier, the issue of a branch,
+// the agent list's reading, the release review), and what v2 adds: the breaker's step-unknown
+// bucket (5.3), a v2 agent step in the rate caps by its step kind (D-24), a key's own attempt cap,
+// and v2's GitHub kinds.
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ALLOWED,
   GITHUB_V2,
+  LIVE,
   STEP_BREAKER,
   admit,
   gate,
+  isoOf,
+  issueFromBranch,
+  listedLive,
   newCtx,
   oneWake,
+  releaseDue,
   stepBreaker,
   tierOf,
   titleOf,
+  turnEnded,
   wake,
   want,
 } from '../hooks/foundation'
 import type { PlanCtx } from '../hooks/foundation'
-import { LIVE, checkoutMoved, plan, tierOf as v1TierOf, titleOf as v1TitleOf } from '../hooks/plan'
-import type { TitleNotes } from '../hooks/plan'
+import { shortDuration } from '../hooks/config'
 import { TIER_CLASSES } from '../hooks/rails'
-import type { Action, Config, LedgerEntry, PlanResult, State, Tier, Usage } from '../hooks/types'
+import type { Action, AgentStatus, Config, LedgerEntry, State, Usage } from '../hooks/types'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
-import { MIN, NOW, config, control, entry, issue, mine, state, withLedger } from './fixtures'
+import { MIN, NOW, config, entry, issue, mine, state, withLedger } from './fixtures'
 
 const CFG = config()
 const HOUR = 60 * MIN
-// v1's owner notices and GitHub kinds, private to plan.ts (OWNER_TELLS, GITHUB): as they stand there
-const V1_OWNER = ['decision', 'escalate', 'review-cap', 'merge-refused', 'merge-hold', 'untrusted-pr', 'rollout', 'base', 'no-ci', 'ci-triggers', 'update-behind', 'linkage', 'checkout']
-const V1_GITHUB: Action['kind'][] = ['claim', 'heartbeat', 'sweep', 'guard', 'update-behind', 'fix-linkage', 'merge', 'rollout', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment', 'pr-close']
+// v2's owner notices and GitHub kinds are the planner's; these are the tests' own small sets
+const OWNER = ['decision', 'escalate']
 
-const usage = (pct: number): Usage => ({ fiveHour: pct, sevenDay: pct, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false })
-const wanted = (r: PlanResult) => r.actions.filter(a => a.kind !== 'title' && a.kind !== 'restart-self')
 const keysOf = (actions: readonly Action[]) => actions.map(a => a.key)
 
-function ctxOf(s: State, cfg: Config = CFG, owner: readonly string[] = V1_OWNER, github: readonly Action['kind'][] = V1_GITHUB): PlanCtx {
-  return newCtx(s, cfg, v1TierOf(s.usage, cfg, s.control.usageOverride, s.now), owner, github)
+function ctxOf(s: State, cfg: Config = CFG, owner: readonly string[] = OWNER, github: readonly Action['kind'][] = GITHUB_V2): PlanCtx {
+  return newCtx(s, cfg, tierOf(s.usage, cfg, s.control.usageOverride, s.now), owner, github)
 }
 
-// admitted: foundation's admission of these actions on this state.
-function admitted(s: State, actions: readonly Action[]) {
-  const ctx = ctxOf(s)
-  ctx.out = [...actions]
-  return { kept: admit(ctx), ctx }
-}
+const reading = (fiveHour: number | null, sevenDay: number | null, unavailable = false): Usage => ({ fiveHour, sevenDay, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable })
 
-// v1's fixtures: work of each class an admission filter reads (start, develop, drive, free)
-const SCENARIOS: Record<string, State> = {
-  'two claims': state({ queue: [7, 8], issues: [issue(7), issue(8)] }),
-  'a design': state({ issues: [mine(60, 'designing')] }),
-  'a claim and a design': state({ queue: [9], issues: [issue(9), mine(61, 'designing')] }),
-  'housekeeping due': state({ ledger: [], issues: [mine(62, 'implementing')] }),
-}
-
-// The filters, each on a state where v1's rules want the same actions and only admission differs.
-const FILTERS: Record<string, (s: State) => State> = {
-  'every issue paused': s => ({ ...s, control: control({ paused: [7, 8, 9, 60, 61, 62] }) }),
-  'no new work': s => ({ ...s, control: control({ noNewWork: true }) }),
-  'stop new': s => ({ ...s, usage: usage(91) }),
-  'stop all': s => ({ ...s, usage: usage(96) }),
-  'a GitHub backoff': s => ({ ...s, githubBackoffUntil: NOW + 10 * MIN }),
-  'the start cap': s => withLedger(s, Array.from({ length: 30 }, (_, i) => entry(`claim:${100 + i}:x`, 'claim', { class: 'start', startedAt: NOW - 30 * MIN }))),
-  'the spawn cap on one issue': s =>
-    withLedger(s, Array.from({ length: 6 }, (_, i) => entry(`design:60:old${i}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'lost', startedAt: NOW - 40 * MIN }))),
-  'the claim breaker': s =>
-    withLedger(s, [1, 2, 3].map(i => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, status: 'failed', attempts: 3, startedAt: NOW - (10 + i) * MIN, endedAt: NOW - (5 + i) * MIN }))),
-}
-
-describe('parity with plan.ts (v2 SPEC 2.2)', () => {
-  test('the class matrix is v1\'s, and the act step\'s; the tier is plan.ts\'s own', () => {
+describe('the usage tier (G3)', () => {
+  test('the class matrix is the act step\'s', () => {
     expect(ALLOWED).toEqual(TIER_CLASSES)
-    expect(tierOf).toBe(v1TierOf)
   })
 
-  test('with no filter in play, admission keeps every action v1 keeps', () => {
-    for (const [name, s] of Object.entries(SCENARIOS)) {
-      const r = plan(s, CFG)
-      expect({ name, kept: keysOf(admitted(s, wanted(r)).kept) }).toEqual({ name, kept: keysOf(wanted(r)) })
+  test('the tier comes from the higher window; missing usage is Normal (SKILL:38-45)', () => {
+    expect(tierOf(reading(10, 84), CFG, null, NOW).tier).toBe('normal')
+    expect(tierOf(reading(85, 20), CFG, null, NOW).tier).toBe('slow')
+    expect(tierOf(reading(10, 90), CFG, null, NOW).tier).toBe('stop-new')
+    expect(tierOf(reading(95, 10), CFG, null, NOW).tier).toBe('stop-all')
+    expect(tierOf(reading(null, null, true), CFG, null, NOW).tier).toBe('normal')
+  })
+
+  test('a window whose reset has passed counts as zero until the next read (SKILL:47-48)', () => {
+    const u = { fiveHour: 97, sevenDay: 80, fiveHourResetsAt: NOW - MIN, sevenDayResetsAt: NOW + 3 * 86_400_000, unavailable: false }
+    expect(tierOf(u, CFG, null, NOW).tier).toBe('normal')
+    expect(tierOf({ ...u, sevenDay: 91 }, CFG, null, NOW).tier).toBe('stop-new')
+    expect(tierOf({ ...u, fiveHourResetsAt: NOW + MIN }, CFG, null, NOW).tier).toBe('stop-all')
+  })
+
+  test('an owner override runs past a threshold until it expires (SKILL:49)', () => {
+    const u = reading(60, 92)
+    expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toEqual({ tier: 'normal', overridden: true })
+    expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW - MIN }, NOW).tier).toBe('stop-new')
+    expect(tierOf(u, CFG, { untilPct: 91, expiresAt: NOW + MIN }, NOW).tier).toBe('stop-new')
+  })
+})
+
+describe('the shared helpers', () => {
+  test('the issue comes from the branch convention issue-<N>', () => {
+    expect(issueFromBranch('feat/issue-506-implementer-route-v2')).toBe(506)
+    expect(issueFromBranch('issue-448-dev-statusline')).toBe(448)
+    expect(issueFromBranch('chore/release-1.0')).toBeNull()
+  })
+
+  test('the live stages are the ones before a merge or a close', () => {
+    expect(LIVE).toEqual(['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge'])
+  })
+
+  test('an agent whose turn ended (completed, or idle between turns) is not at work; a failed or killed one is not live either', () => {
+    for (const [status, ended] of [['completed', true], ['idle', true], ['running', false], ['waiting', false], ['pending', false], ['failed', false], ['killed', false]] as [AgentStatus, boolean][]) {
+      expect({ status, ended: turnEnded(status) }).toEqual({ status, ended })
+      expect({ status, live: listedLive([{ id: 'a1', type: 'x', status }], 'a1') }).toEqual({ status, live: status === 'running' || status === 'waiting' || status === 'pending' })
     }
+    expect(listedLive([], 'a1')).toBe(false)
+    expect(listedLive([{ id: 'a2', type: 'x', status: 'running' }], 'a1')).toBe(false)
   })
+})
 
-  test('each generic filter keeps exactly what v1 keeps, trips the same caps, and names why it held each action', () => {
-    for (const [name, s] of Object.entries(SCENARIOS)) {
-      const want0 = wanted(plan(s, CFG))
-      for (const [filter, apply] of Object.entries(FILTERS)) {
-        const held = apply(s)
-        const v1 = plan(held, CFG)
-        const f = admitted(held, want0)
-        const ours = (kept: readonly Action[]) => keysOf(kept.filter(a => a.kind !== 'tell' || (a.wake !== 'runaway' && a.wake !== 'breaker'))).sort()
-        expect({ name, filter, kept: ours(f.kept) }).toEqual({ name, filter, kept: ours(wanted(v1)).filter(k => want0.some(a => a.key === k)) })
-        expect({ name, filter, capped: f.ctx.capped }).toEqual({ name, filter, capped: v1.capped })
-        for (const a of want0.filter(x => !f.kept.some(k => k.key === x.key))) {
-          expect({ name, filter, key: a.key, skipped: f.ctx.skipped.some(sk => sk.rule === a.rule && sk.issue === a.issue) }).toEqual({ name, filter, key: a.key, skipped: true })
-        }
-        // the tripped cap and breaker tell the owner as v1's do
-        const notices = (kept: readonly Action[]) => keysOf(kept.filter(a => a.kind === 'tell' && (a.wake === 'runaway' || a.wake === 'breaker'))).sort()
-        expect({ name, filter, notices: notices(f.kept) }).toEqual({ name, filter, notices: notices(v1.actions) })
-      }
+describe('isoOf: the time as toISOString writes it, from calendar arithmetic (the planner builds no Date)', () => {
+  test('it agrees with Date over the days around every month and year end, and across a spread of times', () => {
+    const times = [0, 951_782_400_000, 951_868_799_999, 1_709_164_799_999, 1_709_164_800_000, 4_102_444_799_999, NOW, NOW + 1, Date.UTC(2026, 11, 31, 23, 59, 59, 999)]
+    for (let i = 0; i < 2000; i++) times.push(Math.floor((i * 2_654_435_761) % 4_000_000_000_000))
+    for (const t of times) expect({ t, iso: isoOf(t) }).toEqual({ t, iso: new Date(t).toISOString() })
+  })
+})
+
+describe('O3: the hourly release review (releaseDue, shared with v2)', () => {
+  const RHOUR = new Date(NOW).toISOString().slice(0, 13)
+  const closed = (over: Partial<State> = {}) => state({ milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' }, ...over })
+  const done = (key: string, at: number, decision = 'hold') =>
+    entry(key, 'task', { wake: 'release', class: 'drive', status: 'done', startedAt: at, endedAt: at + MIN, outcome: { kind: 'wake', decision, reason: null, instructions: null, bump: null, bumpReason: null, fields: {} } })
+
+  test('the key names the last tag and the UTC hour; the fields are closed, expected, tag, oldest, cadence in order', () => {
+    const oldest = Date.UTC(2026, 9, 12, 8, 30)
+    const due = releaseDue(closed({ release: { tag: 'v1.0.0', oldest } }), CFG)
+    expect(due?.key).toBe(`task:release:v1.0.0:${RHOUR}`)
+    expect(Object.entries(due?.fields ?? {})).toEqual([['closed', 5], ['expected', 'minor'], ['tag', 'v1.0.0'], ['oldest', '2026-10-12T08:30:00.000Z'], ['cadence', '6h']])
+    // the cadence is written out as config.ts's shortDuration does
+    for (const ms of [3_600_000, 90 * 60_000, 2 * 3_600_000, 21_600_000, 3_661_000, 3_600_500]) {
+      expect({ ms, cadence: releaseDue(closed({ release: { tag: 'v1.0.0', oldest } }), { ...CFG, minimumReleaseCadenceMs: ms })?.fields.cadence }).toEqual({ ms, cadence: shortDuration(ms) })
     }
+    // no release yet: none; an unknown oldest is dropped
+    const none = releaseDue(closed({ release: { tag: null, oldest: null } }), CFG)
+    expect(none).toMatchObject({ key: `task:release:none:${RHOUR}`, fields: { closed: 5, expected: 'minor', tag: 'none' } })
+    expect(Object.keys(none?.fields ?? {})).toEqual(['closed', 'expected', 'tag', 'oldest', 'cadence'])
   })
 
-  test('a failed key waits out its backoff, runs again, and is used up as v1\'s gate says', () => {
+  test('two milestones at the same count each wake: a new tag, or a later hour', () => {
+    const first = done(`task:release:v1.0.0:${RHOUR}`, NOW)
+    expect(releaseDue(closed({ release: { tag: 'v1.1.0', oldest: null }, ledger: [...state().ledger, { ...first, startedAt: NOW - 2 * 3_600_000 }] }), CFG)?.key).toBe(`task:release:v1.1.0:${RHOUR}`)
+    expect(releaseDue(closed({ now: NOW + 3_600_000, release: { tag: 'v1.0.0', oldest: null }, ledger: [...state().ledger, first] }), CFG)?.key).toBe('task:release:v1.0.0:2026-10-13T04')
+  })
+
+  test('at most one release task per UTC hour, whatever its key; a hold waits for the next hour', () => {
+    const ledger = [...state().ledger, done(`task:release:v1.0.0:${RHOUR}`, NOW)]
+    expect(releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null }, ledger }), CFG)).toBeNull()
+    expect(releaseDue(closed({ release: { tag: 'v1.1.0', oldest: null }, ledger }), CFG)).toBeNull()
+    expect(releaseDue(closed({ now: NOW + 60 * MIN, release: { tag: 'v1.0.0', oldest: null }, ledger }), CFG)?.key).toBe('task:release:v1.0.0:2026-10-13T04')
+  })
+
+  test('the hour boundary: HH:59:59.999 and the next HH:00:00 differ, and the key has no colon', () => {
+    expect(releaseDue(closed({ now: Date.UTC(2026, 9, 13, 3, 59, 59, 999) }), CFG)?.key).toBe('task:release:unknown:2026-10-13T03')
+    expect(releaseDue(closed({ now: Date.UTC(2026, 9, 13, 4, 0, 0) }), CFG)?.key).toBe('task:release:unknown:2026-10-13T04')
+  })
+
+  test('waiting issues (v2): `waiting` joins the fields and the review is due with open items or none closed; one per UTC hour; none given leaves the rule and fields as they were', () => {
+    const open = state({ milestone: { open: 2, closed: 0, openIssues: [], expected: null }, release: { tag: 'v1.0.0', oldest: null } })
+    expect(releaseDue(open, CFG)).toBeNull()
+    expect(releaseDue(open, CFG, [])).toBeNull()
+    expect(releaseDue(open, CFG, [7, 9])).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}`, fields: { waiting: [7, 9] } })
+    const plain = releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG)
+    expect(Object.keys(plain?.fields ?? {})).not.toContain('waiting')
+    expect(Object.keys(releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG, [3])?.fields ?? {})).toEqual(['closed', 'expected', 'tag', 'oldest', 'cadence', 'waiting'])
+    expect(releaseDue({ ...open, ledger: [...open.ledger, done(`task:release:v1.0.0:${RHOUR}`, NOW)] }, CFG, [7])).toBeNull()
+    expect(releaseDue({ ...open, milestone: null }, CFG, [7])).toBeNull()
+    expect(releaseDue({ ...open, sources: { ...open.sources, milestone: { ok: false, at: NOW } } }, CFG, [7])).toBeNull()
+  })
+
+  test('no review with an open item, nothing closed, a milestone source that is not ok, or no milestone', () => {
+    expect(releaseDue(state({ milestone: { open: 1, closed: 5, openIssues: [], expected: null } }), CFG)).toBeNull()
+    expect(releaseDue(state({ milestone: { open: 0, closed: 0, openIssues: [], expected: null } }), CFG)).toBeNull()
+    expect(releaseDue(state({ milestone: null }), CFG)).toBeNull()
+    const s = closed()
+    expect(releaseDue({ ...s, sources: { ...s.sources, milestone: { ok: false, at: NOW } } }, CFG)).toBeNull()
+  })
+})
+
+describe('gate: a failed key waits out its backoff, runs again, and is used up', () => {
+  test('the cases by status, attempts and time since it ended', () => {
     const s = state({ queue: [7], issues: [issue(7)] })
     const key = `claim:7:${NOW - 30 * MIN}`
     const cases: [Partial<LedgerEntry>, string][] = [
@@ -122,48 +180,25 @@ describe('parity with plan.ts (v2 SPEC 2.2)', () => {
     for (const [over, g] of cases) {
       const held = withLedger(s, [entry(key, 'claim', { class: 'start', issue: 7, ...over })])
       expect({ over, gate: gate(ctxOf(held), key, 'claim') }).toEqual({ over, gate: g })
-      // v1 plans the claim exactly when the copy's gate says go
-      expect({ over, planned: keysOf(plan(held, CFG).actions).includes(key) }).toEqual({ over, planned: g === 'go' })
     }
   })
+})
 
-  test('the title frame gives v1\'s titles', () => {
-    const states: State[] = [
-      SCENARIOS['two claims'] as State,
-      state({ issues: [mine(60, 'designing'), mine(61, 'merged', { stageSince: NOW - HOUR }), mine(62, 'parked', { stuck: 'S3 parked' })], queue: [1] }),
-      state({ githubBackoffUntil: NOW + MIN, checkout: { branch: 'x', head: 'h', defaultBranch: 'main', dirty: [] } }),
-    ]
-    const notes: TitleNotes[] = [
-      { owner: 0, blind: false, capped: [], atCap: false },
-      { owner: 2, blind: false, capped: ['start', 'spawn:60'], atCap: true },
-      { owner: 1, blind: true, capped: [], atCap: false },
-    ]
-    for (const s of states) {
-      for (const n of notes) {
-        for (const tier of ['normal', 'slow', 'stop-new', 'stop-all'] as Tier[]) {
-          for (const mode of ['observe', 'act'] as const) {
-            const cfg = config({ mode })
-            const live = s.issues.filter(i => i.open !== false && i.stage !== null && LIVE.includes(i.stage))
-            const merged = s.issues.filter(i => i.stage === 'merged' && i.stageSince !== null && s.now - i.stageSince <= 6 * HOUR).length
-            const stuck = live.filter(i => i.stuck !== null).length
-            const frame = {
-              repo: s.repo,
-              counts: n.blind ? null : `Q:${s.queue.length} - D:${live.length} - M:${merged}`,
-              observe: mode !== 'act',
-              blind: n.blind,
-              before: checkoutMoved(s) === null ? [] : ['checkout'],
-              tier,
-              after: !n.blind && stuck > 0 ? [`stuck ${stuck}`] : [],
-              atCap: n.atCap,
-              capped: n.capped,
-              backoff: s.githubBackoffUntil !== null && s.now < s.githubBackoffUntil,
-              owner: n.owner,
-            }
-            expect(titleOf(frame)).toBe(v1TitleOf(s, cfg, tier, n))
-          }
-        }
-      }
-    }
+describe('the title frame', () => {
+  const frame = { repo: 'cbundy/dev-system', counts: 'Q:2 - D:1 - M:0', observe: false, blind: false, before: [], tier: 'normal' as const, after: [], atCap: false, capped: [], backoff: false, owner: 0 }
+
+  test('the counts, then a word for each thing that needs attention, in order', () => {
+    expect(titleOf(frame)).toBe('🔄 dev-system (Q:2 - D:1 - M:0)')
+    expect(titleOf({ ...frame, observe: true })).toBe('🔄 dev-system (Q:2 - D:1 - M:0) · observe')
+    expect(titleOf({ ...frame, observe: true, tier: 'stop-new' })).toBe('🔄 dev-system (Q:2 - D:1 - M:0) · observe · stop new')
+    expect(titleOf({ ...frame, tier: 'stop-all' })).toBe('🔄 dev-system (Q:2 - D:1 - M:0) · stop all')
+    expect(titleOf({ ...frame, before: ['checkout'], tier: 'stop-new', after: ['stuck 1'], atCap: true, capped: ['start', 'spawn:60'], backoff: true, owner: 2 })).toBe(
+      '🔄 dev-system (Q:2 - D:1 - M:0) · checkout · stop new · stuck 1 · at cap · capped start · capped spawn:60 · gh wait · owner 2',
+    )
+  })
+
+  test('a blind pass has no counts: blind takes their place', () => {
+    expect(titleOf({ ...frame, counts: null, observe: true, blind: true, owner: 1 })).toBe('🔄 dev-system · observe · blind · owner 1')
   })
 })
 

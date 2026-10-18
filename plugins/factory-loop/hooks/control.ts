@@ -3,11 +3,11 @@
 // reads it, applyOp returns the new Control (the old one is never changed) with the effects the
 // driver carries out and the one line the command or tool answers, and runOp makes the round
 // trip over ActIo's readFile and writeFile: `<loop dir>/control.json`, which observe reads each
-// pass, and the workspace config file for `mode`, `trace` and `planner`. Everything but runOp and
+// pass, and the workspace config file for `mode` and `trace`. Everything but runOp and
 // its two file wrappers is pure, so the tests and the replay harness drive it without the engine.
-// Under planner v2 three ops take v2's meaning (v2 SPEC appendix E), which v2/ops.ts holds:
-// `resume <N...> ["note"]` unparks (P1), `drop` closes the current life's record (E1), and an issue
-// that is not parked is not resumed; the caller says which planner is in force.
+// Three ops take v2's meaning (v2 SPEC appendix E), which v2/ops.ts holds: `resume <N...> ["note"]`
+// unparks (P1), `drop` closes the current life's record (E1), and an issue that is not parked is
+// not resumed.
 import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
@@ -21,7 +21,6 @@ import type { ActIo } from './exec'
 import type { Control, Mode, Ms } from './types'
 import { applyDrop, applyUnpark, onlyParked, parseUnpark, stopNow } from './v2/ops'
 import type { Unpark } from './v2/ops'
-import type { Planner } from './v2/types'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -47,31 +46,25 @@ export type Op =
   | { op: 'serial' | 'new' | 'trace'; on: boolean }
   // null: `override off`
   | { op: 'override'; until: { pct: number; hours: number } | null }
-  // 'issue:<N>' or 'run:<id>', as plan's resumes() matches them
-  | { op: 'resume'; subject: string }
   // null: `update off`
   | { op: 'update'; reason: string | null }
   | { op: 'note'; issue: number | null; text: string }
   | { op: 'mode'; mode: Mode }
-  | { op: 'planner'; planner: Planner }
-  // v2's resume (v2/ops.ts)
+  // resume (v2/ops.ts)
   | Unpark
 
 export type Parsed = { ok: true; op: Op } | { ok: false; error: string }
 
 // What the driver carries out besides writing control.json: retryIssue through the ledger's
-// retryIssue (D-38), mode, trace and planner into the workspace config file (runOp does those).
+// retryIssue (D-38), mode and trace into the workspace config file (runOp does those).
 export type Setting = { key: string; fileKey: string; sub: string | null }
-export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean; planner?: Planner; setting?: { k: Setting; value?: unknown } }
+export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean; setting?: { k: Setting; value?: unknown } }
 
 export type Applied = { control: Control; effects: Effects; changed: boolean; text: string }
 
 // --- parsing ---------------------------------------------------------------------------------
 
 const ISSUE = /^#?([1-9]\d{0,8})$/
-// a pipeline run id (a ULID such as 01M4RQ0045AAAA); unprefixed, a number alone reads as an issue
-const RUN_CHARS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
-const RUN_ID = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
 const DECIMAL = /^(\d+(?:\.\d+)?)$/
 
 function issueOf(word: string | undefined): number | null {
@@ -90,9 +83,9 @@ function allUsage(): string {
 // parseOp: one op as the owner types it after `/factory`, or the tool's `op`. The op name and
 // its keywords ignore case, numbers take an optional leading #, and a list may use commas. An
 // empty op is `status`. Anything malformed is an error naming the op and its usage, so a bad
-// op never makes a partial change. Under planner v2, `resume` takes issue numbers and an
-// optional note in double quotes, and no run id.
-export function parseOp(text: string, planner: Planner = 'v2'): Parsed {
+// op never makes a partial change. `resume` takes issue numbers and an optional note in double
+// quotes.
+export function parseOp(text: string): Parsed {
   const words = text.trim().split(/\s+/).filter(w => w !== '')
   // the model may pass the command as typed
   if (words[0]?.toLowerCase() === '/factory') words.shift()
@@ -151,19 +144,8 @@ export function parseOp(text: string, planner: Planner = 'v2'): Parsed {
       return { ok: true, op: { op: 'override', until: { pct: p, hours: h } } }
     }
     case 'resume': {
-      if (planner === 'v2') {
-        const unpark = parseUnpark(rest, issueOf, NOTE_MAX)
-        return typeof unpark === 'string' ? bad(name, unpark) : { ok: true, op: unpark }
-      }
-      // `issue:<N>` and `run:<id>` (formatOp's spelling) are read too
-      const arg = args.length === 1 ? (args[0] ?? '') : ''
-      const prefixed = /^(issue|run):(.+)$/i.exec(arg)
-      const kind = prefixed?.[1]?.toLowerCase()
-      const value = prefixed?.[2] ?? arg
-      const issue = kind === 'run' ? null : issueOf(value)
-      if (issue !== null) return { ok: true, op: { op: 'resume', subject: `issue:${issue}` } }
-      const run = kind === 'run' ? RUN_CHARS.test(value) : kind === undefined && RUN_ID.test(value)
-      return run ? { ok: true, op: { op: 'resume', subject: `run:${value}` } } : bad(name, 'takes one issue number or run id')
+      const unpark = parseUnpark(rest, issueOf, NOTE_MAX)
+      return typeof unpark === 'string' ? bad(name, unpark) : { ok: true, op: unpark }
     }
     case 'update':
       if (args.length === 0) return { ok: true, op: { op: 'update', reason: 'owner' } }
@@ -179,8 +161,6 @@ export function parseOp(text: string, planner: Planner = 'v2'): Parsed {
     }
     case 'mode':
       return word === 'off' || word === 'observe' || word === 'act' ? { ok: true, op: { op: 'mode', mode: word } } : bad(name)
-    case 'planner':
-      return word === 'v1' || word === 'v2' ? { ok: true, op: { op: 'planner', planner: word } } : bad(name)
   }
 }
 
@@ -189,7 +169,6 @@ export function parseOp(text: string, planner: Planner = 'v2'): Parsed {
 export function issuesOf(op: Op): number[] {
   if ('issue' in op) return op.issue === null ? [] : [op.issue]
   if ('issues' in op) return [...op.issues]
-  if (op.op === 'resume' && op.subject.startsWith('issue:')) return [Number(op.subject.slice('issue:'.length))]
   return []
 }
 
@@ -221,16 +200,12 @@ export function formatOp(op: Op): string {
       return `${op.op} ${op.on ? 'on' : 'off'}`
     case 'override':
       return op.until === null ? 'override off' : `override ${op.until.pct} ${op.until.hours}`
-    case 'resume':
-      return `resume ${op.subject}`
     case 'update':
       return op.reason === null ? 'update off' : `update ${op.reason}`
     case 'note':
       return `note ${op.issue === null ? '' : `${op.issue} `}${op.text}`
     case 'mode':
       return `mode ${op.mode}`
-    case 'planner':
-      return `planner ${op.planner}`
     case 'unpark':
       return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${op.note}"`}`
   }
@@ -262,9 +237,9 @@ function applyChange(control: Control, change: { key: string; value?: unknown },
 // applyOp: the op against the control state as it stands. The input is never changed: a change
 // returns a new Control with new arrays for what changed. `changed` says whether control.json
 // needs writing; an op that changes nothing (pausing a paused issue) answers so and writes
-// nothing. `last` is the last pass, for status. Under planner v2 a drop applies to the life it
-// closes, so a drop of an issue claimed again since is recorded again (v2 SPEC 4.1).
-export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v2', view: ConfigView | null = null): Applied {
+// nothing. `last` is the last pass, for status. A drop applies to the life it closes, so a drop of
+// an issue claimed again since is recorded again (v2 SPEC 4.1).
+export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, view: ConfigView | null = null): Applied {
   const keep = (text: string, effects: Effects = {}): Applied => ({ control, effects, changed: false, text })
   const set = (patch: Partial<Control>, text: string): Applied => ({ control: { ...control, ...patch }, effects: {}, changed: true, text })
 
@@ -325,10 +300,6 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
         `Usage override: run past the usage tiers up to ${op.until.pct}% until ${clock(expiresAt, now)}.`,
       )
     }
-    case 'resume': {
-      const what = op.subject.startsWith('issue:') ? `issue #${op.subject.slice('issue:'.length)}` : `run ${op.subject.slice('run:'.length)}`
-      return set({ resumed: [...control.resumed, { subject: op.subject, at: now }] }, `Resumed ${what}: its hold is released.`)
-    }
     case 'retry':
       return keep(`Retry #${op.issue}: its exhausted actions are cleared.`, { retryIssue: op.issue })
     case 'update':
@@ -340,17 +311,8 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
         `Update due (${op.reason}): the loop drains, then restarts this workspace once nothing is in flight.`,
       )
     case 'drop': {
-      if (planner === 'v2') {
-        const v2 = applyDrop(control, op.issue, now)
-        return set(v2.patch, v2.text)
-      }
-      if (control.dropped.some(d => d.issue === op.issue)) return keep(`#${op.issue} is already dropped.`)
-      // a pause holds every action, the abandon too (plan's owner filter)
-      const paused = control.paused.includes(op.issue) ? ` It is paused: unpause it for the abandon to run.` : ''
-      return set(
-        { dropped: [...control.dropped, { issue: op.issue, at: now }] },
-        `Dropped #${op.issue}: the loop abandons it and stops its agents.${paused}`,
-      )
+      const v2 = applyDrop(control, op.issue, now)
+      return set(v2.patch, v2.text)
     }
     case 'note':
       return set(
@@ -359,8 +321,6 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       )
     case 'mode':
       return keep(`Mode ${op.mode} set in the workspace config file; it applies from the next pass.`, { mode: op.mode })
-    case 'planner':
-      return keep(`Planner ${op.planner} set in the workspace config file; it plans and acts from the next pass.`, { planner: op.planner })
     case 'stop-now': return keep('Stop-now is written by runOp.')
     case 'unpark': {
       const v2 = applyUnpark(control, op, now)
@@ -419,8 +379,7 @@ export function statusText(last: PassSummary | null, control: Control, now: Ms):
     lines.push('Factory loop: no pass yet.')
   } else {
     const noun = last.actions === 1 ? 'action' : 'actions'
-    const layer = last.planner === undefined ? '' : `, planner ${last.planner}${last.planner === 'v1' && last.shadow === 'v2' ? ' with the v2 shadow' : ''}`
-    lines.push(`Pass ${last.pass}, ${ago(now - last.at)} ago: ${last.mode}${layer}, tier ${last.tier}, ${last.actions} ${noun}, ${last.owner} for the owner.`)
+    lines.push(`Pass ${last.pass}, ${ago(now - last.at)} ago: ${last.mode}, tier ${last.tier}, ${last.actions} ${noun}, ${last.owner} for the owner.`)
     lines.push(last.title)
   }
   const d = directives(control, now)
@@ -461,12 +420,12 @@ export function controlText(control: Control): string {
 }
 
 // The workspace config file's keys an op writes.
-export type SettingKey = 'mode' | 'trace' | 'planner'
+export type SettingKey = 'mode' | 'trace'
 
-// withSetting: the workspace config file's text with one key set (`mode`, `trace`, `planner`) and
+// withSetting: the workspace config file's text with one key set (`mode`, `trace`) and
 // every other key kept, in place. A file that is not a JSON object is left alone: the owner's
 // settings matter more than the op.
-export function withSetting(text: string | null, key: SettingKey, value: Mode | Planner | boolean): { ok: true; text: string } | { ok: false; error: string } {
+export function withSetting(text: string | null, key: SettingKey, value: Mode | boolean): { ok: true; text: string } | { ok: false; error: string } {
   let raw: unknown = {}
   if (text !== null && text.trim() !== '') {
     try {
@@ -503,7 +462,7 @@ export async function writeKey(io: FileIo, configDir: string, k: Setting, value:
   return { error: null, changed: next.changed }
 }
 
-export async function writeSetting(io: FileIo, configDir: string, key: SettingKey, value: Mode | Planner | boolean): Promise<string | null> {
+export async function writeSetting(io: FileIo, configDir: string, key: SettingKey, value: Mode | boolean): Promise<string | null> {
   const path = configFilePath(configDir)
   const next = withSetting(await io.readFile(path), key, value)
   if (!next.ok) return next.error
@@ -516,9 +475,9 @@ export async function writeSetting(io: FileIo, configDir: string, key: SettingKe
 export type ControlPaths = { loopDir: string; configDir: string }
 
 // The caller: `last` for status; agentId when the tool call came from inside an agent's loop; the
-// planner in force (v1 when not said), and under planner v2 the issues parked now, as the last
-// pass's records say (null: not known), so a resume of one that is not parked changes nothing.
-export type OpFrom = { last?: PassSummary | null; agentId?: string; planner?: Planner; parked?: readonly number[] | null; view?: ConfigView | null }
+// issues parked now, as the last pass's records say (null: not known), so a resume of one that is
+// not parked changes nothing.
+export type OpFrom = { last?: PassSummary | null; agentId?: string; parked?: readonly number[] | null; view?: ConfigView | null }
 
 // What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
 // a retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
@@ -549,8 +508,7 @@ const refused = (text: string, op: Op | null = null): OpReply => ({
 // main conversation changes directives: an agent the loop spawned may read the status, never
 // set an op (SPEC 6.1: the loop's agents act on their own issue only).
 export async function runOp(io: FileIo, paths: ControlPaths, input: string, now: Ms, from: OpFrom = {}): Promise<OpReply> {
-  const planner = from.planner ?? 'v2'
-  const parsed = parseOp(input, planner)
+  const parsed = parseOp(input)
   if (!parsed.ok) return refused(parsed.error)
   // help reads and writes nothing, and an agent may ask for it as it may for the status
   if (parsed.op.op === 'help') return { ok: true, text: helpText(), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null }
@@ -577,7 +535,7 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
     return { ok: true, text: text + warning, op, control: loaded.control, ping: false, retryIssue: null, mode: null, logged: null }
   }
   if (loaded.error !== null) return refused(`Not changed: ${loaded.error}; fix or remove it.`, op)
-  const applied = applyOp(loaded.control, op, now, null, planner, from.view ?? null)
+  const applied = applyOp(loaded.control, op, now, null, from.view ?? null)
   if (op.op === 'config' && applied.effects.setting === undefined) return refused(applied.text, op)
   let text = applied.text
   let nothing = false
@@ -592,7 +550,7 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
       }
     }
     if (applied.changed) await writeControl(io, paths.loopDir, applied.control)
-    for (const key of ['mode', 'trace', 'planner'] as const) {
+    for (const key of ['mode', 'trace'] as const) {
       const value = applied.effects[key]
       const error = value === undefined ? null : await writeSetting(io, paths.configDir, key, value)
       if (error !== null) return refused(`Not changed: ${error}.`, op)
@@ -642,12 +600,12 @@ export const CONTROL_TOOL: ToolSpec = {
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +
-    '(run past the usage tiers up to pct for hours); resume <N...> ["note"]|<run id> (release what waits on you: ' +
-    'under planner v2 unpark issues, the note going to their next step; under v1 a hold on an issue or a run); ' +
+    '(run past the usage tiers up to pct for hours); resume <N...> ["note"] (release what waits on you: ' +
+    'unpark issues, the note going to their next step); ' +
     "retry <N> (clear N's exhausted actions); update [<reason>]|off (drain, then restart this workspace for an " +
     'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
     "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
-    'trace file, for troubleshooting); planner v1|v2 (the layer that plans and acts, only when the owner asks); stop-now (during a wind-down, stop at once without waiting for what runs, only when the owner asks).',
+    'trace file, for troubleshooting); stop-now (during a wind-down, stop at once without waiting for what runs, only when the owner asks).',
   inputSchema: {
     type: 'object',
     properties: {

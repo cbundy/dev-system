@@ -418,8 +418,8 @@ export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
 
 export type V2SourceName = (typeof V2_SOURCES)[number]
 
-// The State fields v2 adds (2.4), as State.v2: observeV2 reads them when the planner is v2 or the
-// v2 shadow is on; absent otherwise.
+// The State fields v2 adds (2.4), as State.v2: observeV2 reads them every pass; absent in a state
+// built outside a pass.
 export type V2State = {
   sources: Record<V2SourceName, Source>
   records: IssueRecord[]
@@ -475,10 +475,6 @@ export type V2Io = {
 
 // --- settings (appendix A) ------------------------------------------------------------------------
 
-export const PLANNERS = ['v1', 'v2'] as const
-export type Planner = (typeof PLANNERS)[number]
-export const SHADOWS = ['off', 'v2'] as const
-export type Shadow = (typeof SHADOWS)[number]
 // the model aliases the agent tool accepts; a setting named *Model takes one of them
 export const MODELS = ['sonnet', 'opus', 'haiku', 'fable'] as const
 export type Model = (typeof MODELS)[number]

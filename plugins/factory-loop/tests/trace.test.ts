@@ -36,8 +36,8 @@ import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentD
 import type { Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
-const OBSERVE = { planner: 'v1', repo: REPO, mode: 'observe', checkout: '/work' }
-const ACT = { planner: 'v1', repo: REPO, mode: 'act', checkout: '/work' }
+const OBSERVE = { repo: REPO, mode: 'observe', checkout: '/work' }
+const ACT = { repo: REPO, mode: 'act', checkout: '/work' }
 const CONFIG_FILE = `${CFG_DIR}/factory-loop/config.json`
 const REPO_FILE = '/work/.claude/factory-loop.json'
 const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'

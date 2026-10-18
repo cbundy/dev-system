@@ -1,8 +1,8 @@
 // The v2 executors (docs/factory-loop/v2/SPEC.md 2.2, appendix B), one map from each module that
-// runs actions. act.ts joins them to EXECUTORS, so every action kind has an executor; under
-// planner v2 its dispatcher takes executorOf, which prefers these, so a module here may also give
-// a reused kind (a claim, a heartbeat) its v2 behaviour without touching v1's. Every new kind of
-// appendix B must have one here (tests/v2-switch.test.ts).
+// runs actions. act.ts joins them to EXECUTORS, so every action kind has an executor; its
+// dispatcher takes executorOf, which prefers these, so a module here may also give a shared kind
+// (a claim, a heartbeat) its own behaviour. Every new kind of appendix B must have one here
+// (tests/v2-switch.test.ts).
 import { rateLimited } from '../exec'
 import type { Exec, Executor } from '../exec'
 import type { ActionKind } from '../types'
@@ -38,14 +38,15 @@ function blip(exec: Exec): boolean {
   return transientGitHub([exec.summary, o?.kind === 'cli' ? o.detail : '', o?.kind === 'queue' ? o.lines.join('\n') : ''].join('\n'))
 }
 
-// executorOf: what a kind runs under planner v2: its own executor here, else v1's, run again after
+// executorOf: what a kind runs: its own executor here, else the shared one's (act-cli.ts,
+// act-merge.ts, wake.ts), run again after
 // each pause of BLIP_PAUSES_S while it fails on a GitHub blip (5.1), so a blip never ends a step
 // unknown or holds an effect. Running one again is safe: each reads what a try before it did (a
 // comment's hidden key, the PR its ensure opened, a child's key, the head an update moved, read
 // back even when GitHub finds it up to date, the PR a merge merged) before it acts or records,
 // as the ledger's own retries need.
-export function executorOf(kind: ActionKind, v1: Partial<Record<ActionKind, Executor>>): Executor | undefined {
-  const run = V2_EXECUTORS[kind] ?? v1[kind]
+export function executorOf(kind: ActionKind, shared: Partial<Record<ActionKind, Executor>>): Executor | undefined {
+  const run = V2_EXECUTORS[kind] ?? shared[kind]
   if (run === undefined) return undefined
   return async (ctx, action) => {
     for (const pause of BLIP_PAUSES_S) {

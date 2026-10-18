@@ -1,13 +1,12 @@
-// The owner ops under planner v2 (docs/factory-loop/v2/SPEC.md appendix E, 7.2, 11): `resume
-// <N...> ["note"]` unparks (P1) and takes no run id, `drop <N>` closes the record of the life it
-// names (E1) and leaves the issue open, a resume of an issue that is not parked changes nothing,
-// and an op that landed with v2 acting before or after it is a person intervention. control.ts delegates to these when
-// planner v2 is in force, and register.ts asks parkedOf and opLanded; v1's meanings stay in
-// control.ts until the delete wave. Pure.
+// The owner ops (docs/factory-loop/v2/SPEC.md appendix E, 7.2, 11): `resume <N...> ["note"]`
+// unparks (P1) and takes no run id, `drop <N>` closes the record of the life it names (E1) and
+// leaves the issue open, a resume of an issue that is not parked changes nothing, and an op that
+// landed with the loop acting before or after it is a person intervention. control.ts delegates to
+// these, and register.ts asks parkedOf and opLanded. Pure.
 import type { FileIo, Op, OpReply } from '../control'
 import type { Control, Mode, Ms } from '../types'
 import type { OpLanded } from './act-events'
-import type { IssueRecord, Planner } from './types'
+import type { IssueRecord } from './types'
 import { windDownPaths } from './wind-down'
 
 // v2's resume: unpark these issues, with the note for their next step (11, P1).
@@ -22,7 +21,7 @@ export function parseUnpark(rest: string, issueOf: (word: string) => number | nu
   const m = /^([^"]*?)\s*(?:"(.*)")?\s*$/s.exec(rest)
   const items = (m?.[1] ?? '').split(/[\s,]+/).filter(w => w !== '')
   const issues = items.map(issueOf)
-  if (m === null || items.length === 0 || issues.some(n => n === null)) return 'under planner v2, takes issue numbers and an optional note in double quotes'
+  if (m === null || items.length === 0 || issues.some(n => n === null)) return 'takes issue numbers and an optional note in double quotes'
   const note = (m[2] ?? '').trim()
   if (note.length > noteMax) return `the note is at most ${noteMax} characters`
   return { op: 'unpark', issues: [...new Set(issues as number[])], note: note === '' ? null : note }
@@ -55,22 +54,22 @@ export function applyDrop(control: Control, issue: number, now: Ms): V2Applied {
   }
 }
 
-// parkedOf: the issues parked or waiting now, as the last pass's records say, under planner v2; null otherwise
-// or when no pass read them.
-export function parkedOf(planner: Planner, records: readonly IssueRecord[] | undefined): number[] | null {
-  return planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked' || r.state === 'waiting').map(r => r.issue) : null
+// parkedOf: the issues parked or waiting now, as the last pass's records say; null when no pass
+// read them.
+export function parkedOf(records: readonly IssueRecord[] | undefined): number[] | null {
+  return records !== undefined ? records.filter(r => r.state === 'parked' || r.state === 'waiting').map(r => r.issue) : null
 }
 
-// The planner and the mode in force.
-export type InForce = { planner: Planner; mode: Mode }
+// The mode in force.
+export type InForce = { mode: Mode }
 
-// opLanded: an op that landed (logged) with planner v2 in act mode in force before it or after it,
+// opLanded: an op that landed (logged) with the loop in act mode in force before it or after it,
 // as the person intervention act-events.ts logs (7.2): its text, its name and the issues it names;
-// null for any other. The op's own effect counts, so the ops that turn the loop on (`mode act`,
-// `planner v2`) and off are logged too.
+// null for any other. The op's own effect counts, so the ops that turn the loop on (`mode act`)
+// and off are logged too.
 export function opLanded(before: InForce, op: Op, logged: string | null, issues: readonly number[], at: Ms): OpLanded | null {
-  const after: InForce = { planner: op.op === 'planner' ? op.planner : before.planner, mode: op.op === 'mode' ? op.mode : before.mode }
-  const acts = (s: InForce) => s.planner === 'v2' && s.mode === 'act'
+  const after: InForce = { mode: op.op === 'mode' ? op.mode : before.mode }
+  const acts = (s: InForce) => s.mode === 'act'
   if (logged === null || !(acts(before) || acts(after))) return null
   return { text: logged, name: logged.split(' ')[0] ?? '', issues: [...issues], at }
 }

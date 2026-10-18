@@ -8,14 +8,13 @@
 // replaces only the entries it changes, so changedEntries() can tell the driver what moved.
 import { ACTION_KINDS, DEFAULT_CONFIG } from './config'
 import { loopEventArgs } from './derive'
-import type { Exec, ExtraEntry } from './exec'
-import { turnEnded } from './plan'
+import type { Exec } from './exec'
+import { maxAttemptsOf, turnEnded } from './foundation'
 import type {
   Action,
   ActionClass,
   ActionKind,
   AgentStatus,
-  AgentType,
   Config,
   LedgerEntry,
   LedgerStatus,
@@ -38,10 +37,9 @@ const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 // Agents and wakes log a `loop` event (owner notices and rate-cap notices are tells); CLI work
 // logs its own events and gets none (D-09, SPEC 7.4). A v2 agent step is an agent entry: its
 // events are for the trail, and a lost store never rebuilds it (derive.ts entryFromLoop).
-const LOOP_KINDS: readonly ActionKind[] = ['spawn', 'delegate', 'judge', 'task', 'tell', 'agent-step']
+const LOOP_KINDS: readonly ActionKind[] = ['judge', 'task', 'tell', 'agent-step']
 const STATUSES: readonly LedgerStatus[] = ['running', 'done', 'failed', 'timed-out', 'lost']
 const CLASSES: readonly ActionClass[] = ['free', 'owner', 'drive', 'develop', 'start']
-const AGENT_TYPES: readonly AgentType[] = ['designer', 'implementer', 'adjudicator', 'fixer']
 
 // --- one attempt: start and finish -------------------------------------------------------
 
@@ -73,10 +71,7 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
     startedAt: now,
     endedAt: null,
   }
-  // a delegate spawns the implementer, so its entry is that agent's (plan reads it so)
-  if (action.kind === 'spawn') entry.agent = action.agent
-  else if (action.kind === 'delegate') entry.agent = 'implementer'
-  else if (action.kind === 'agent-step') entry.step = action.step
+  if (action.kind === 'agent-step') entry.step = action.step
   else if (action.kind === 'transition') {
     entry.outcome = {
       kind: 'transition',
@@ -121,14 +116,10 @@ export type FinishOptions = {
 
 // finish: apply an executor's Exec or a completion to the entry under key: its status, outcome,
 // agent or wake id and summary, and endedAt (none while it runs on). A finished attempt keeps
-// the last outcome when the result carries none (a respond's launch record, say).
+// the last outcome when the result carries none.
 // - skipped: no attempt is counted: the entry goes back to prev, or is dropped when it was new.
 // - failed with noRetry (exit 2, a loop bug): the attempts are used up, so plan never retries
 //   it and tells the owner instead (SPEC 10.1).
-// - extra: each ExtraEntry is recorded as a done entry of its own (a guard FAIL that `merge`
-//   printed is a guard outcome, so rule M2 handles it next pass, SPEC 5.5).
-// - a guard, a refused fast-forward, or an update-checkout that found exactly what the one before
-//   it found replaces that one (foldRecheck).
 // - a stop-agent of rule A1 that ended, stopped or not, marks the agent it stopped timed-out
 //   (SPEC A1; SPEC 13: an agent TaskStop could not stop is left running, marked timed-out).
 // It applies whatever the entry's status; a key the ledger no longer holds (pruned, say) is left
@@ -153,13 +144,9 @@ export function finish(
   if ('reminded' in result && result.reminded !== undefined) next.reminded = result.reminded
   if ('attempts' in result && result.attempts !== undefined) next.attempts = result.attempts
   if (result.status === 'failed' && 'noRetry' in result && result.noRetry === true) {
-    next.attempts = Math.max(next.attempts, next.maxAttempts ?? maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, attemptsKindOf(next)))
+    next.attempts = Math.max(next.attempts, next.maxAttempts ?? maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, next.kind))
   }
-  let out = foldRecheck(put(ledger, next), next)
-  for (const extra of 'extra' in result ? (result.extra ?? []) : []) {
-    const x = extraEntry(extra, next, now)
-    out = foldRecheck(put(out, x), x)
-  }
+  let out = put(ledger, next)
   if (next.kind === 'stop-agent' && next.rule === 'A1' && next.status !== 'running' && key.startsWith('stop:')) {
     const agentId = key.slice('stop:'.length)
     const why = next.status === 'done' ? 'timed out: stopped' : 'timed out: the stop failed, the agent may still run'
@@ -176,56 +163,6 @@ function unstart(ledger: readonly LedgerEntry[], current: LedgerEntry, prev: Led
   return put(ledger, ended({ ...current, attempts: current.attempts - 1 }, 'failed', now, `skipped: ${why}`))
 }
 
-// foldRecheck: a done guard whose outcome is exactly that of the guard before it on the same PR
-// and head replaces that entry, and so does a refused fast-forward after a refused one, and an
-// update-checkout after one that said the same. A PR held on one failure is re-checked every
-// guardTtlMs (#550), a lagging dirty worktree is tried again each time (#551), and the main
-// checkout is updated every checkoutEveryMs (#555); kept one entry per re-check, a week fills
-// the ledger toward fit() (SPEC 7.1). Plan numbers the next guard past the highest key
-// (guardSeq), so a dropped number is never reused, and reads only the newest refused
-// fast-forward and the newest update-checkout.
-function foldRecheck(ledger: LedgerEntry[], e: LedgerEntry): LedgerEntry[] {
-  const refused = (o: LedgerEntry) => o.outcome?.kind === 'fast-forward' && o.outcome.result === 'refused'
-  if (e.status !== 'done' || !(e.outcome?.kind === 'guard' || e.outcome?.kind === 'update-checkout' || refused(e))) return ledger
-  let before: LedgerEntry | undefined
-  for (const o of ledger) {
-    if (o.kind !== e.kind || o.key === e.key || o.pr !== e.pr || o.head !== e.head || o.startedAt > e.startedAt) continue
-    if (before === undefined || o.startedAt >= before.startedAt) before = o
-  }
-  if (before?.status !== 'done' || JSON.stringify(before.outcome) !== JSON.stringify(e.outcome)) return ledger
-  return ledger.filter(o => o !== before)
-}
-
-// extraEntry: an ExtraEntry as the done entry it records, under the rule of the action that
-// printed it, started when that action started.
-function extraEntry(x: ExtraEntry, parent: LedgerEntry, now: Ms): LedgerEntry {
-  return {
-    key: x.key,
-    kind: x.kind,
-    class: classOf(x.kind, parent.class),
-    rule: parent.rule,
-    issue: x.issue,
-    run: x.run,
-    pr: x.pr,
-    head: x.head,
-    status: 'done',
-    attempts: 1,
-    startedAt: parent.startedAt,
-    endedAt: now,
-    outcome: x.outcome,
-  }
-}
-
-// classOf: an action kind's class (SPEC 6.1); a spawn's depends on its agent and a v2 agent
-// step's on its step, so each is the caller's.
-function classOf(kind: ActionKind, spawn: ActionClass): ActionClass {
-  if (kind === 'claim') return 'start'
-  if (kind === 'delegate') return 'develop'
-  if (kind === 'respond' || kind === 'env-retry' || kind === 'judge' || kind === 'task') return 'drive'
-  if (kind === 'tell') return 'owner'
-  return kind === 'spawn' || kind === 'agent-step' ? spawn : 'free'
-}
-
 // --- what a reload and the agent list prove (SPEC 3.3, 7.5, 10.4) -------------------------
 
 // onLoad: on module load, every running CLI entry (no agent id, not a wake) is lost: its process
@@ -239,7 +176,7 @@ export function onLoad(ledger: readonly LedgerEntry[], now: Ms): LedgerEntry[] {
 
 // reconcileAgents: a running agent entry against the session's agent list. An id the list
 // lacks is lost (SPEC 3.3, 7.5); one listed failed or killed is failed (SPEC 10.4); one listed
-// completed or idle (its turn ended, plan.ts turnEnded, #560) while its entry still runs ended
+// completed or idle (its turn ended, foundation.ts turnEnded, #560) while its entry still runs ended
 // with no answer, so it is lost. The list must be a successful read: an empty list marks every
 // running agent lost.
 export function reconcileAgents(
@@ -352,15 +289,13 @@ export async function save(store: StoreIo, repo: string, ledger: readonly Ledger
 export type Retried = { ledger: LedgerEntry[]; cleared: string[]; notices: string[] }
 
 // retryIssue: `/factory retry <N>` clears the attempts of the issue's entries that ran out of
-// them, so their rules try again (D-38, SPEC 7.1). Exhausted is plan's own rule (gate in
-// plan.ts): failed, timed-out or lost with attempts at the kind's maximum. Each such entry stays
-// with its count at 0 rather than going: a rule may need the failed entry to act at all (D4b
-// re-delegates from the last delegate entry), and the next attempt counts from 1. The owner
-// notice each one raised (agent-failed, task-timeout, update-behind) goes, unless it is still
+// them, so their rules try again (D-38, SPEC 7.1). Exhausted is the planner's own rule (gate in
+// foundation.ts): failed, timed-out or lost with attempts at the kind's maximum. Each such entry
+// stays with its count at 0 rather than going: a rule may need the failed entry to act at all, and
+// the next attempt counts from 1. The owner notice each one raised (agent-failed, task-timeout) goes, unless it is still
 // open, so a retry that runs out again is told again.
 export function retryIssue(ledger: readonly LedgerEntry[], issue: number, config: Config): Retried {
-  // an env-retry stays spent: the owner's resume, not a retry, allows the next rerun (#537)
-  const spent = ledger.filter(e => e.issue === issue && e.kind !== 'env-retry' && exhausted(e, config))
+  const spent = ledger.filter(e => e.issue === issue && exhausted(e, config))
   const cleared = spent.map(e => e.key)
   const raised = new Set(spent.flatMap(noticesOf))
   const notices = ledger.filter(e => raised.has(e.key) && e.status !== 'running').map(e => e.key)
@@ -371,35 +306,16 @@ export function retryIssue(ledger: readonly LedgerEntry[], issue: number, config
 }
 
 function noticesOf(entry: LedgerEntry): string[] {
-  const out = [`tell:agent-failed:${entry.key}`, `tell:task-timeout:${entry.key}`]
-  if (entry.kind === 'update-behind') out.push(`tell:${entry.key}`)
-  return out
+  return [`tell:agent-failed:${entry.key}`, `tell:task-timeout:${entry.key}`]
 }
 
-// exhausted: plan's rule exactly (gate in plan.ts, foundation.ts): a failed, timed-out or lost
-// entry whose attempts reached its key's own cap, else the maximum for its kind or agent.
-// Heartbeat and sweep never are: they retry at their cadence (plan.ts cadenceOf, SPEC 6.1).
+// exhausted: the planner's rule exactly (gate in foundation.ts): a failed, timed-out or lost
+// entry whose attempts reached its key's own cap, else the maximum for its kind. Heartbeat and
+// sweep never are: they retry at their cadence (foundation.ts cadenceOf, SPEC 6.1).
 export function exhausted(entry: LedgerEntry, config: Config): boolean {
   if (entry.status === 'running' || entry.status === 'done') return false
   if (entry.kind === 'heartbeat' || entry.kind === 'sweep') return false
-  return entry.attempts >= (entry.maxAttempts ?? maxAttemptsOf(config, attemptsKindOf(entry)))
-}
-
-// attemptsKindOf: what plan counts an entry's attempts against: a spawn's agent, the implementer
-// for a delegate, otherwise its kind.
-export function attemptsKindOf(entry: LedgerEntry): ActionKind | AgentType {
-  if (entry.kind === 'spawn') return entry.agent ?? entry.kind
-  if (entry.kind === 'delegate') return 'implementer'
-  return entry.kind
-}
-
-// maxAttemptsOf: plan's maxAttempts: update-behind runs updateBehindRetries + 1 times (rule
-// M2b); anything else its config.maxAttempts entry, 3 when it has none.
-export function maxAttemptsOf(config: Config, kind: ActionKind | AgentType): number {
-  if (kind === 'update-behind') return config.updateBehindRetries + 1
-  // once per owner resume, whatever the config says (#537)
-  if (kind === 'env-retry') return 1
-  return config.maxAttempts[kind] ?? 3
+  return entry.attempts >= (entry.maxAttempts ?? maxAttemptsOf(config, entry.kind))
 }
 
 // --- the loop's own events (D-09, SPEC 7.4) -------------------------------------------------
@@ -470,8 +386,6 @@ function entryOf(raw: unknown): LedgerEntry | null {
   if (typeof startedAt !== 'number' || !Number.isFinite(startedAt) || !isNumOrNull(endedAt)) return null
   if (!isNumOrNull(issue) || !isNumOrNull(pr) || !isStrOrNull(run) || !isStrOrNull(head)) return null
   const entry: LedgerEntry = { key, kind, class: klass, rule, issue, run, pr, head, status, attempts, startedAt, endedAt }
-  const agent = AGENT_TYPES.find(a => a === o.agent)
-  if (agent !== undefined) entry.agent = agent
   if (typeof o.wake === 'string') entry.wake = o.wake
   if (typeof o.agentId === 'string') entry.agentId = o.agentId
   if (typeof o.wakeId === 'string') entry.wakeId = o.wakeId

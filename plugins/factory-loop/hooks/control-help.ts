@@ -4,7 +4,7 @@
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode', 'trace', 'planner', 'config', 'stop-now',
+  'update', 'drop', 'note', 'mode', 'trace', 'config', 'stop-now',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -22,19 +22,18 @@ export const USAGE: Record<OpName, string> = {
   serial: 'serial on|off',
   new: 'new on|off',
   override: 'override <pct> <hours>|off',
-  resume: 'resume <N...> ["note"]|<run id>',
+  resume: 'resume <N...> ["note"]',
   retry: 'retry <N>',
   update: 'update [<reason>]|off',
   drop: 'drop <N>',
   note: 'note [<N>] <text>',
   mode: 'mode off|observe|act',
   trace: 'trace on|off',
-  planner: 'planner v1|v2',
   'stop-now': 'stop-now',
 }
 
 // The short form of each op in the typeahead placeholder, in the order it shows them. It drops
-// the long forms (resume's note and run id, override's arguments): `/factory help` has them.
+// the long forms (resume's note, override's arguments): `/factory help` has them.
 export const HINT_OPS: readonly [OpName, string][] = [
   ['status', 'status'],
   ['only', 'only <N...>|off'],
@@ -69,14 +68,13 @@ export const MEANING: Record<OpName, string> = {
   serial: 'on: one issue in flight at a time',
   new: 'off: claim and start nothing new (work in flight goes on)',
   override: 'run past a usage tier up to <pct> for <hours>; off ends it',
-  resume: 'release what waits on you: under planner v2, unpark issues N (a note goes to their next step); under v1, a hold on an issue or a run',
+  resume: 'release what waits on you: unpark issues N (a note goes to their next step)',
   retry: "clear issue N's used-up actions, so its rules try again",
   update: 'an update is due: drain, then restart the workspace; off cancels it',
-  drop: 'abandon issue N: its agents stop and its claim is released (under planner v2, for this life only; ready brings it back)',
+  drop: 'abandon issue N: its agents stop and its claim is released (for this life only; ready brings it back)',
   note: "an instruction for issue N's agents (for every issue without N)",
   mode: 'off runs nothing, observe plans and logs only, act does the work',
   trace: "on: each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log",
-  planner: 'the layer that plans and acts, in the workspace config file; v1 may run the v2 shadow beside it',
   'stop-now': 'during a wind-down: tell the stopper not to wait for what still runs (writes wind-down.stop-now)',
 }
 

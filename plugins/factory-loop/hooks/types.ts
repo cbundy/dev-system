@@ -1,10 +1,9 @@
 // The factory loop's data: what observe builds (State), what plan returns (Action), and
 // what the ledger keeps. docs/factory-loop/SPEC.md is the contract; section numbers below
-// point into it. Types only: plan.ts imports nothing else, so it stays pure. The v2 rule layer's
-// vocabulary (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions,
-// outcomes and State fields join the unions here, so the dispatcher, the ledger and the store
-// carry them as they carry v1's.
-import type { AgentStep, Model, Planner, Shadow, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+// point into it. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
+// (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
+// fields join the unions here, so the dispatcher, the ledger and the store carry them.
+import type { AgentStep, Model, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -149,8 +148,6 @@ export type AdjudicatorPurpose = 'gate' | 'weakening' | 'merge'
 export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff' | 'resume'
 export type Rollout = 'merge' | 'run-it' | 'keep-open'
 
-export type GuardFail = { name: string; reason: string }
-
 // An adjudicator's one ACTION line, parsed (SPEC 7.3). `merge` and `hold` answer purpose
 // merge only (rule M4, D-05).
 export type AdjudicatorAction =
@@ -175,23 +172,11 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (SPEC 10.1)
   | { kind: 'cli'; exit: number; detail?: string }
-  // a detached respond or env-retry (SPEC 6.1): the slot it runs in and the log its launch was
-  // read back from
-  | { kind: 'respond'; slot: string; log: string }
   | { kind: 'claim'; result: 'claimed' | 'lost' }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
   | { kind: 'designer'; unparsed: true }
   | { kind: 'adjudicator'; verdicts: string[]; action: AdjudicatorAction; report: MergeReport | null }
   | { kind: 'handoff'; notGated: boolean; run: string | null; head: string | null; newBranch: string | null }
-  | { kind: 'guard'; fails: GuardFail[]; warns: string[] }
-  | { kind: 'update-behind'; result: 'updated' | 'fail' | 'skip'; from: string | null; to: string | null; line: string }
-  // a worktree the pipeline's own commits left behind its branch, fast-forwarded (rule M2,
-  // #551): forwarded, current (nothing lagged) or refused (dirty, diverged, origin moved)
-  | { kind: 'fast-forward'; result: 'forwarded' | 'current' | 'refused'; line: string }
-  // the main checkout brought up to date with origin's default branch (rule H5, #555): updated
-  // (the line names both commits), current, or refused (moved, dirty, or commits origin lacks)
-  | { kind: 'update-checkout'; result: 'updated' | 'current' | 'refused'; line: string }
-  | { kind: 'merge'; result: 'merged' | 'refused'; rollout: Rollout | null; closeIssue: number | null; line: string }
   // callum-flow-rollout for a merge the loop did not make (a hand merge, rule M7, D-29)
   | { kind: 'rollout'; rollout: Rollout | null; closeIssue: number | null }
   | {
@@ -209,25 +194,9 @@ export type ActionKind =
   | 'heartbeat'
   | 'sweep'
   | 'claim'
-  | 'spawn'
-  | 'delegate'
-  | 'respond'
-  | 'env-retry'
-  | 'guard'
-  | 'update-behind'
-  | 'fast-forward'
-  | 'update-checkout'
-  | 'fix-linkage'
-  | 'merge'
   | 'close-issue'
   | 'release-parent'
-  | 'abandon'
   | 'milestone-later'
-  | 'milestone-expect'
-  | 'pr-reopen'
-  | 'pr-comment'
-  | 'pr-close'
-  | 'release-worktree'
   | 'restart-self'
   | 'rollout'
   | 'stop-agent'
@@ -248,7 +217,6 @@ export type LedgerEntry = {
   run: string | null
   pr: number | null
   head: string | null
-  agent?: AgentType
   wake?: string
   status: LedgerStatus
   attempts: number
@@ -294,7 +262,7 @@ export type State = {
   githubBackoffUntil: Ms | null
   // null: not read (the replay harness, a state built outside a pass)
   checkout: Checkout | null
-  // what v2 reads besides (v2 SPEC 2.4): set when the planner is v2 or the v2 shadow is on
+  // what v2 reads besides (v2 SPEC 2.4)
   v2?: V2State
 }
 
@@ -362,10 +330,6 @@ export type Config = {
   // `answerChannel` overrides the repo's
   answerChannel: AnswerChannel
   // --- v2 (v2 SPEC 2.3, appendix A) ---
-  // the layer whose plan the act step executes, and the v2 shadow that plans beside v1 and is
-  // only logged
-  planner: Planner
-  shadow: Shadow
   // the step timeouts and the waiting states' tell periods (v2 SPEC 4.4)
   stateTimeoutMs: StateTimeouts
   // a wait on GitHub: no check started this long after the head was first seen, or one running
@@ -409,74 +373,9 @@ type Base = ActionBase
 // the visible prompt: a mod cannot attach hidden context to its own prompt (SPEC 8.1).
 export type Action =
   | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
-  | (Base & { kind: 'spawn'; agent: 'designer'; model: string | null; notes: string[] })
-  | (Base & {
-      kind: 'spawn'
-      agent: 'adjudicator'
-      purpose: AdjudicatorPurpose
-      run: string
-      branch: string
-      step: string | null
-      head: string | null
-      pr: number | null
-      brief: string | null
-      model: string | null
-      warns: string[]
-      // purpose merge: pointers only, never a diff (D-05). The implementer's handoff head, the
-      // run's verdict lines and the latest guard lines for this head; empty for other purposes.
-      handoffHead: string | null
-      verdicts: string[]
-      guard: string[]
-    })
-  | (Base & {
-      kind: 'spawn'
-      agent: 'fixer'
-      purpose: FixerPurpose
-      run: string | null
-      branch: string
-      head: string | null
-      pr: number | null
-      brief: string | null
-      model: string | null
-      instructions: string
-    })
-  | (Base & { kind: 'delegate'; brief: string })
-  | (Base & {
-      kind: 'respond'
-      run: string
-      branch: string
-      // the gate's step name; null when unknown (a park seen only in the event log, a failed run
-      // the watcher printed no step for): respond then takes the step awaiting approval
-      step: string | null
-      head: string
-      action: 'approve' | 'fix' | 'skip'
-      findings: string | null
-      instructions: string | null
-      addFinding: string | null
-      ignore: string | null
-      approveReason: string | null
-      logReview: boolean
-    })
-  // Only rule P2a may launch this command; SPEC 5.4 owns resume eligibility.
-  | (Base & { kind: 'env-retry'; run: string; branch: string; step: string | null; head: string })
-  | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
-  // the worktrees on the run's branch, moved to the run's head when origin holds it, or the head the loop's own update-behind pushed (#551, #595)
-  | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; origin: string; branch: string })
-  // rule H5: the main checkout, on origin's default branch, fast-forwarded to origin's (#555);
-  // head: its commit as observe read it, so plan knows whether a refusal still stands
-  | (Base & { kind: 'update-checkout'; branch: string; head: string | null })
-  | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
-  | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
-  | // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
-  // null (or absent, for v1's plan) when the life's design answer can no longer be read
+  // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
+  // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
-  | (Base & { kind: 'abandon'; run: string | null; branch: string | null; note: string })
-  | (Base & { kind: 'milestone-expect'; bump: Bump; why: string })
-  | (Base & { kind: 'pr-comment'; pr: number; body: string })
-  // rule M8: the PR of a superseded run, and the PR on the branch its work moved to (#553)
-  | (Base & { kind: 'pr-close'; pr: number; run: string; newBranch: string; by: number })
-  // rule H3: the slot, the branch its lease worked, and the lease the return is pinned to (#563)
-  | (Base & { kind: 'release-worktree'; path: string; branch: string; lease: string })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
   | (Base & { kind: 'restart-self'; why: string; at: Ms })
   // rule M7 for a hand merge: read the merged issue's rollout

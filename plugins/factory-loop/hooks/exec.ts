@@ -1,11 +1,10 @@
 // The act half's contract (SPEC 6, 7, 8): what an executor is given and what it reports.
 // register.ts builds ActIo over $ (the only module that holds $); every executor module
-// (act-cli.ts, act-merge.ts, act-agents.ts, wake.ts) takes an ExecCtx and returns an Exec,
-// and the driver records the result in the ledger (ledger.ts). Executors decide nothing:
-// plan already did. They turn one action into commands, an agent spawn or a wake, and say
-// what happened.
+// (act-cli.ts, act-merge.ts, wake.ts and v2's) takes an ExecCtx and returns an Exec, and the
+// driver records the result in the ledger (ledger.ts). Executors decide nothing: plan already
+// did. They turn one action into commands, an agent spawn or a wake, and say what happened.
 import type { Runtime } from './observe'
-import type { Action, ActionKind, LedgerEntry, Ms, Outcome, State } from './types'
+import type { Action, LedgerEntry, Ms, Outcome, State } from './types'
 import type { V2Io } from './v2/types'
 
 export type RunInit = { cwd?: string; stdin?: string; timeoutMs: number }
@@ -69,30 +68,17 @@ export type EventFields = {
   note?: string | null
 }
 
-// An extra done entry an executor records beside its own: a guard FAIL that `merge` printed
-// is a guard outcome for its PR and head, so rule M2 handles it next pass (SPEC 5.5), while the
-// merge itself counts as a failed attempt that plan retries once the guard is clean.
-export type ExtraEntry = {
-  key: string
-  kind: ActionKind
-  issue: number | null
-  run: string | null
-  pr: number | null
-  head: string | null
-  outcome: Outcome
-}
-
 // What an executor reports:
 // - done / failed: finished within the pass, with the outcome plan reads next pass;
 // - running: continues past the pass. An agent ends in its turn.complete (agentId), a wake
-//   with its answer (wakeId), a detached respond by the run moving (rule P3a);
+//   with its answer (wakeId);
 // - skipped: a pre-check refused it (a usage tier that forbids its class, a rail), so no
 //   attempt is counted and the entry is dropped.
 // noRetry: a usage error (exit 2) is a loop bug, never retried (SPEC 10.1).
 // rateLimited: stderr showed a GitHub rate limit; the driver sets githubBackoffUntil (SPEC 10.2).
 export type Exec =
-  | { status: 'done'; outcome?: Outcome; summary: string; extra?: ExtraEntry[] }
-  | { status: 'failed'; outcome?: Outcome; summary: string; noRetry?: boolean; rateLimited?: boolean; extra?: ExtraEntry[] }
+  | { status: 'done'; outcome?: Outcome; summary: string }
+  | { status: 'failed'; outcome?: Outcome; summary: string; noRetry?: boolean; rateLimited?: boolean }
   | { status: 'running'; agentId?: string; wakeId?: string; outcome?: Outcome; summary: string }
   | { status: 'skipped'; summary: string }
 
@@ -111,35 +97,18 @@ export function detailOf(r: RunResult): string {
   return (r.stderr.trim() || r.stdout.trim()).slice(0, 2000)
 }
 
-// Where an agent's raw answer is kept (act-agents.ts writes it), so a judge(report) or
-// judge(handoff) wake points the model at the file instead of pasting the report (SPEC 7.2).
+// Where a v2 agent step's raw answer is kept (v2/steps.ts writes it).
 export function answerPath(loopDir: string, key: string): string {
   return `${loopDir}/answers/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`
 }
 
-// The answer script under the plugin's root (#561): agents record their answer with it while the
-// registered answer tools cannot be reached (config answerChannel `script`, a workaround).
+// The answer script under the plugin's root (#561): agents record their answer with it.
 export const ANSWER_SCRIPT = 'bin/factory-answer'
-
-// Where an agent records its answer with the answer script: a path unique to the ledger entry and
-// its attempt (the attempt's number and start), so the loop reads only what this attempt's agent
-// wrote, never a stale or another agent's file. The job file beside it (contract.mjs jobPathOf)
-// is the loop's; the name has contract.mjs's ANSWER_NAME shape.
-export function scriptAnswerPath(loopDir: string, entry: Pick<LedgerEntry, 'key' | 'attempts' | 'startedAt'>): string {
-  const key = entry.key.replace(/[^A-Za-z0-9._-]+/g, '_')
-  return `${loopDir}/answers/${key}.a${entry.attempts}.${Math.trunc(entry.startedAt)}.answer.json`
-}
-
-// The detached respond's log (act-merge.ts writes it; task(respond-stuck) names it): one per
-// ledger key and attempt, so a retry or a later gate of the same run never overwrites it.
-export function respondLogPath(loopDir: string, key: string, attempt: number): string {
-  return `${loopDir}/respond/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}-${attempt}.log`
-}
 
 // The last line of every wake prompt (skills/judge/SKILL.md answers by it).
 export const WAKE_POINTER = 'Answer with the factory-loop:judge skill.'
 
-// The loop dir's files that only grow (SPEC 11.6): spawn records, saved answers, respond logs,
+// The loop dir's files that only grow (SPEC 11.6): spawn records, saved answers, old respond logs,
 // recorded states and the decision logs, kept as long as the ledger keeps entries (7 days).
 export const LOOP_FILES_KEEP_DAYS = 7
 

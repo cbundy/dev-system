@@ -158,7 +158,6 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       'Loop',
       [
         ...render({ label: 'mode', value: c.mode, source: view.modeFrom, note: MODE_NOTE[c.mode] }),
-        ...render(row('planner', 'planner', c.planner, c.planner === 'v2' ? 'v2 plans and acts' : 'v1 plans and acts')),
         ...render(ms('passEveryMs')),
         ...render({ label: 'plugin', value: view.pluginVersion }),
         ...render({ label: 'device', value: view.device === '' ? '(none)' : view.device, source: view.deviceFrom }),

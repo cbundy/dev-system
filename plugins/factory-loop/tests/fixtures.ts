@@ -34,8 +34,7 @@ export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd
 const SOURCES: SourceName[] = ['factory', 'facts', 'runs', 'queue', 'github', 'usage', 'pool', 'milestone']
 
 export function config(over: Partial<Config> = {}): Config {
-  // planner v1 explicitly: the non-v2 suites test v1 (until the U10 delete wave); v2 suites pass planner: 'v2'
-  return { ...DEFAULT_CONFIG, planner: 'v1', ...over }
+  return { ...DEFAULT_CONFIG, ...over }
 }
 
 export function control(over: Partial<Control> = {}): Control {

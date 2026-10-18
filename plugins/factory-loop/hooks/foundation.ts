@@ -1,21 +1,15 @@
-// The foundation's generic plan code (docs/factory-loop/v2/SPEC.md 2.2): the usage tier (tierOf,
-// re-exported from plan.ts), the class matrix, gate and want, the generic admission filters
-// (control, tier, GitHub backoff, the breakers, the rate caps), one wake and the title frame. These
-// are copies of private code in plan.ts (`ALLOWED`, `gate`, `want`, `admit`, `oneWake`,
-// `titleOf`, `blindPass`; FM coupling C1), because plan.ts stays untouched until the delete wave;
-// tests/foundation.test.ts holds the copies to v1's behaviour on v1's fixtures. At the delete wave
-// this module becomes the only copy. The v2 planner (v2/plan.ts) composes its rules with them.
+// The foundation's generic plan code (docs/factory-loop/v2/SPEC.md 2.2): the usage tier (tierOf),
+// the class matrix, gate and want, the generic admission filters (control, tier, GitHub backoff,
+// the breakers, the rate caps), one wake and the title frame, and the helpers the rest of the loop
+// shares (the live stages, the issue of a branch, the agent list's reading, the release review).
+// The v2 planner (v2/plan.ts) composes its rules with them.
 //
 // One addition of v2's: the executor breaker gains a bucket for step unknowns across issues
 // (v2 SPEC 5.3), which holds every start, develop and drive action for 30 minutes.
 //
-// Pure: no clock (state.now), no I/O, and nothing imported but types and plan.ts's exported pure
-// helpers.
-import { listedLive, releaseDue } from './plan'
-import type { Action, ActionClass, ActionKind, AgentType, Config, LedgerEntry, Ms, Skip, State, Tier } from './types'
+// Pure: no clock (state.now), no I/O, and nothing imported but types and v2's vocabulary.
+import type { Action, ActionClass, ActionKind, AgentStatus, AgentType, AgentView, Config, LedgerEntry, Ms, Skip, Stage, State, Tier, Usage } from './types'
 import { AGENT_STEPS } from './v2/types'
-
-export { listedLive, tierOf, turnEnded } from './plan'
 
 const MIN = 60_000
 export const HOUR = 60 * MIN
@@ -30,9 +24,8 @@ export const ALLOWED: Readonly<Record<Tier, readonly ActionClass[]>> = {
 
 export const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 
-// The kinds that write to GitHub (or read it heavily) under planner v2: held while GitHub
-// rate-limits us (v1 SPEC 10.2), by plan and, for the rest of a pass that met a limit, by the act
-// step (act.ts runActions). v1's list is plan.ts's GITHUB and act.ts's GITHUB_KINDS.
+// The kinds that write to GitHub (or read it heavily): held while GitHub rate-limits us (v1 SPEC
+// 10.2), by plan and, for the rest of a pass that met a limit, by the act step (act.ts runActions).
 export const GITHUB_V2: readonly ActionKind[] = [
   'claim',
   'heartbeat',
@@ -68,8 +61,8 @@ export const STEP_BREAKER = {
 
 export type Gate = 'go' | 'running' | 'done' | 'wait' | 'exhausted'
 
-// What a plan builds as its rules run, and what the admission filters read (plan.ts Ctx's
-// generic half). ownerTells: the notice kinds that are owner items (they count in the title and go
+// What a plan builds as its rules run, and what the admission filters read.
+// ownerTells: the notice kinds that are owner items (they count in the title and go
 // out first); github: the kinds held during a GitHub backoff.
 export type PlanCtx = {
   state: State
@@ -87,8 +80,7 @@ export type PlanCtx = {
   github: readonly ActionKind[]
 }
 
-// newCtx: an empty plan over this state, its tier read, the ledger by key (the latest start wins,
-// as in plan.ts).
+// newCtx: an empty plan over this state, its tier read, the ledger by key (the latest start wins).
 export function newCtx(state: State, config: Config, tier: { tier: Tier; overridden: boolean }, ownerTells: readonly string[], github: readonly ActionKind[]): PlanCtx {
   const byKey = new Map<string, LedgerEntry>()
   for (const entry of [...state.ledger].sort((a, b) => a.startedAt - b.startedAt)) byKey.set(entry.key, entry)
@@ -113,18 +105,10 @@ export function skip(ctx: PlanCtx, rule: string, issue: number | null, why: stri
   ctx.skipped.push({ rule, issue, why })
 }
 
-// --- gate and want (plan.ts gate, want) ------------------------------------------------------------
-
-// attemptsKindOf: what an action's attempts count against: a spawn's agent, the implementer for a
-// delegate, otherwise its kind (as ledger.ts attemptsKindOf counts an entry's).
-export function attemptsKindOf(action: Action): ActionKind | AgentType {
-  if (action.kind === 'spawn') return action.agent
-  if (action.kind === 'delegate') return 'implementer'
-  return action.kind
-}
+// --- gate and want ------------------------------------------------------------
 
 // maxAttemptsOf: the key's own cap when its action or entry carries one, else the kind's setting,
-// else 3. v1's two special cases (update-behind, env-retry) are v1's alone (plan.ts maxAttempts).
+// else 3.
 export function maxAttemptsOf(config: Config, kind: ActionKind | AgentType, cap?: number): number {
   return cap ?? config.maxAttempts[kind] ?? 3
 }
@@ -161,7 +145,7 @@ export function gate(ctx: PlanCtx, key: string, kind: ActionKind | AgentType, ca
 // its attempts in a row is kept there too, and keeps trying.
 export function want(ctx: PlanCtx, action: Action): Gate {
   if (action.kind === 'tell' && ctx.ownerTells.includes(action.wake)) ctx.owner.add(action.key)
-  const kind = attemptsKindOf(action)
+  const kind = action.kind
   const g = gate(ctx, action.key, kind, action.maxAttempts)
   if (g === 'go') ctx.out.push(action)
   const entry = ctx.byKey.get(action.key)
@@ -256,15 +240,14 @@ export function stepBreaker(ledger: readonly LedgerEntry[], now: Ms): { since: M
   return open !== null && now < open.until ? open : null
 }
 
-// --- admitting actions (plan.ts admit's generic filters) ------------------------------------------
+// --- admitting actions (the generic filters) ------------------------------------------
 
-// Rate-cap buckets per rolling hour; merges have none (D-24). A v2 agent step spawns an agent, as
-// a spawn or a delegate does.
+// Rate-cap buckets per rolling hour (D-24). A v2 agent step spawns an agent.
 export type Bucket = 'start' | 'spawn' | 'wake'
 
 export function bucketOf(kind: ActionKind, klass: ActionClass): Bucket | null {
   if (klass === 'start') return 'start'
-  if (kind === 'spawn' || kind === 'delegate' || kind === 'agent-step') return 'spawn'
+  if (kind === 'agent-step') return 'spawn'
   if (WAKES.includes(kind)) return 'wake'
   return null
 }
@@ -390,8 +373,7 @@ export function oneWake(ctx: PlanCtx, actions: readonly Action[]): Action[] {
 
 // What a title says: the repo's short name, the layer's counts (null on a blind pass, whose counts
 // are not to be trusted), and a word for each thing that needs attention. `before` and `after` are
-// the layer's own words, around the usage tier's: v1's main-checkout word and stuck count, v2's
-// parked count.
+// the layer's own words, around the usage tier's: v2's parked count.
 export type TitleFrame = {
   repo: string
   counts: string | null
@@ -406,13 +388,13 @@ export type TitleFrame = {
   owner: number
 }
 
-// titleDue: O1 is a throttle (v1 plan.ts has the same condition inline): a title goes out when it
+// titleDue: O1 is a throttle: a title goes out when it
 // differs from the last one and either none was set since the module loaded or titleEveryMs has passed.
 export function titleDue(state: State, config: Config, title: string): boolean {
   return title !== state.lastTitle && (state.lastTitleAt === null || state.now - state.lastTitleAt >= config.titleEveryMs)
 }
 
-// titleOf: the session title (plan.ts titleOf's frame). No usage numbers: a usage tier shows only
+// titleOf: the session title's frame. No usage numbers: a usage tier shows only
 // when it holds work.
 export function titleOf(f: TitleFrame): string {
   const name = f.repo.split('/')[1] ?? f.repo
@@ -431,4 +413,82 @@ export function titleOf(f: TitleFrame): string {
   return [head, ...words].join(' · ')
 }
 
-export { releaseDue }
+// --- shared helpers: the usage tier, the live stages, the agent list, the release review ----------
+
+// the live stages; observe reads the GitHub state of every issue in one (#556)
+export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
+
+// tierOf: the usage tier (SPEC rule G3). The higher of the two windows decides; a missing
+// reading is Normal (the skill fails open); an owner override keeps Normal below its pct.
+export function tierOf(
+  usage: Usage,
+  config: Config,
+  override: State['control']['usageOverride'],
+  now: number,
+): { tier: Tier; overridden: boolean } {
+  if (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null)) {
+    return { tier: 'normal', overridden: false }
+  }
+  const live = (pct: number | null, resetsAt: number | null) => (resetsAt !== null && now >= resetsAt ? 0 : (pct ?? 0))
+  const binding = Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
+  const base: Tier =
+    binding >= config.usageStopAllPct
+      ? 'stop-all'
+      : binding >= config.usageStopNewPct
+        ? 'stop-new'
+        : binding >= config.usageSlowPct
+          ? 'slow'
+          : 'normal'
+  if (base !== 'normal' && override !== null && now < override.expiresAt && binding < override.untilPct) {
+    return { tier: 'normal', overridden: true }
+  }
+  return { tier: base, overridden: false }
+}
+
+// issueFromBranch: the issue number of a branch named by the convention issue-<N>-...
+export function issueFromBranch(branch: string): number | null {
+  const m = branch.match(/(?:^|[/_-])issue-(\d+)(?:-|$)/)
+  return m ? Number(m[1]) : null
+}
+
+// listedLive: an agent list shows this agent still at work (the stop-agent executor asks too):
+// listed, not failed or killed, and its turn not ended (turnEnded).
+export function listedLive(agents: readonly AgentView[], agentId: string): boolean {
+  const seen = agents.find(a => a.id === agentId)
+  return seen !== undefined && !turnEnded(seen.status) && seen.status !== 'failed' && seen.status !== 'killed'
+}
+
+// turnEnded: an agent of the loop listed past its turn: `completed`, or `idle`, which the engine
+// documents as between turns, until a message wakes it (AgentStatus). On Claude Code 2.1.299 an
+// agent that ended its turn is listed idle for 20 s or more before completed (#560). Nothing but
+// the loop's own repair message wakes one of its agents, and while that is on its way, or its
+// reply awaited, the entry is running and the reconciling read holds it at work (act.ts
+// reconcilable), so idle reads as ended here exactly as completed does.
+export function turnEnded(status: AgentStatus): boolean {
+  return status === 'completed' || status === 'idle'
+}
+
+// isoOf: a time as toISOString() writes it (UTC, to the millisecond), by calendar arithmetic: this
+// module reads no clock and builds no Date, so the plan stays pure (a year 1000 to 9999 only).
+export function isoOf(ms: Ms): string {
+  const day = Math.floor(ms / 86_400_000)
+  const left = ms - day * 86_400_000
+  const z = day + 719_468
+  const era = Math.floor(z / 146_097)
+  const doe = z - era * 146_097
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36_524) - Math.floor(doe / 146_096)) / 365)
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100))
+  const mp = Math.floor((5 * doy + 2) / 153)
+  const month = mp < 10 ? mp + 3 : mp - 9
+  const year = yoe + era * 400 + (month <= 2 ? 1 : 0)
+  const pad = (n: number, width = 2) => String(n).padStart(width, '0')
+  const date = `${pad(year, 4)}-${pad(month)}-${pad(doy - Math.floor((153 * mp + 2) / 5) + 1)}`
+  return `${date}T${pad(Math.floor(left / 3_600_000))}:${pad(Math.floor(left / 60_000) % 60)}:${pad(Math.floor(left / 1000) % 60)}.${pad(left % 1000, 3)}Z`
+}
+
+// releaseDue: the review's key and fields (one release task per UTC hour, whatever its key). `waiting`: the issues waiting on a release tag: the review is then due while the milestone has open items or none closed, and its fields name them. `short` is config.ts's shortDuration (this module imports types only; foundation.test.ts holds them together)
+export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State, config: Config, waiting: readonly number[] = []) {
+  const hour = (at: number) => isoOf(at).slice(0, 13), tag = r === null ? 'unknown' : (r.tag ?? 'none'), short = (ms: Ms) => ms > 0 && ms % 3_600_000 === 0 ? `${ms / 3_600_000}h` : ms > 0 && ms % 60_000 === 0 ? `${ms / 60_000}m` : ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
+  if (!sources.milestone.ok || m === null || (waiting.length === 0 && (m.open > 0 || m.closed === 0)) || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
+  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : isoOf(r.oldest), cadence: short(config.minimumReleaseCadenceMs), ...(waiting.length > 0 ? { waiting: [...waiting] } : {}) } }
+}
