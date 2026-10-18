@@ -1,4 +1,4 @@
-# factory-loop (draft, not shipped)
+# factory-loop
 
 The issue orchestrator as one deterministic code loop inside its Claude Code session. Every
 minute it reads the factory's whole state, computes what to do with a pure `plan()` function,
@@ -7,10 +7,8 @@ title. The model is woken only for judgment (the hourly release review) and to t
 agents read the code.
 
 - Design: [docs/factory-loop/v2/SPEC.md](../../docs/factory-loop/v2/SPEC.md) (its section 13 is the
-  foundation), with the inventory of
-  what it replaces ([INVENTORY.md](../../docs/factory-loop/INVENTORY.md)), the choices made
-  ([DECISIONS.md](../../docs/factory-loop/DECISIONS.md)) and progress
-  ([STATUS.md](../../docs/factory-loop/STATUS.md)).
+  foundation), and the standing decisions
+  behind it ([DECISIONS.md](../../docs/factory-loop/DECISIONS.md)).
 - Tracking: [cbundy/dev-system#521](https://github.com/cbundy/dev-system/issues/521).
 
 ## State of this build
@@ -19,9 +17,7 @@ Both halves are built. In **observe mode** (the default) every pass reads the fa
 logs its decisions and shows its status in the session title, and executes nothing: every event
 its commands cause goes to a local sink. In **act mode**, once every safety rail passes (v2 SPEC
 13.11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
-through its executor, starts its agents (its own, `agents/`), and wakes the model for judgment. Act
-mode has run only in tests so far; its first real run is on `dev-system-testbed` (PLAN stage
-D). The plugin is not listed in the marketplace (DECISIONS D-02).
+through its executor, starts its agents (its own, `agents/`), and wakes the model for judgment. The plugin is listed in the marketplace.
 
 | Piece | File | State |
 |---|---|---|
@@ -39,7 +35,7 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
 | `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
 | Tests | [tests/](tests/) | scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
-| Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
+| Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; writes only to the `--out` folder it is given |
 
 ## Run it in observe mode
 
