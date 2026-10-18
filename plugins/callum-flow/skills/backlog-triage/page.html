@@ -1,0 +1,513 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Backlog triage sheet (backlog-triage skill). Everything shown comes from the page's db:
+   meta/page, issues/<N> and the owner's decisions/<N>. Copy this file per run, replace __TITLE__. */
+:root {
+  --bg: #f4f5f8; --surface: #ffffff; --sunk: #eef0f4; --fg: #1a1e27; --muted: #5b6372; --line: #dde1e9;
+  --accent: #2c4bd1;
+  --close: #a23b3b; --close-soft: #f8e4e4;
+  --leave: #3f5168; --leave-soft: #e5eaf1;
+  --rewrite: #8a5a00; --rewrite-soft: #fbefd6;
+  --prio: #1d7a4c; --prio-soft: #dff3e8;
+  --queue: #2c4bd1; --queue-soft: #e3e8fb;
+  --c-high: #1d7a4c; --c-med: #8a6a00; --c-low: #a23b3b;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --surface: #1a1e26; --sunk: #161a21; --fg: #e6e9ef; --muted: #9aa2b1; --line: #2c323d;
+    --accent: #8ea4ff;
+    --close: #ec8a8a; --close-soft: #3a1c1f; --leave: #a9b9d0; --leave-soft: #222b38; --rewrite: #e3a84f; --rewrite-soft: #3a2a12;
+    --prio: #5cc58f; --prio-soft: #17321f; --queue: #8ea4ff; --queue-soft: #1f2640;
+    --c-high: #5cc58f; --c-med: #d9b84a; --c-low: #ec8a8a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --surface: #1a1e26; --sunk: #161a21; --fg: #e6e9ef; --muted: #9aa2b1; --line: #2c323d;
+  --accent: #8ea4ff;
+  --close: #ec8a8a; --close-soft: #3a1c1f; --leave: #a9b9d0; --leave-soft: #222b38; --rewrite: #e3a84f; --rewrite-soft: #3a2a12;
+  --prio: #5cc58f; --prio-soft: #17321f; --queue: #8ea4ff; --queue-soft: #1f2640;
+  --c-high: #5cc58f; --c-med: #d9b84a; --c-low: #ec8a8a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.45; }
+.wrap { max-width: 1160px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; display: grid; gap: 24px; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { display: grid; gap: 6px; }
+h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.lede { color: var(--muted); margin: 0; max-width: 72ch; }
+.direction { margin: 0; font-size: 13px; max-width: 72ch; }
+.direction b { font-weight: 500; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tabs button { font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 12px; cursor: pointer; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); font-weight: 600; }
+.tabs .n { font-family: var(--font-data); font-size: 12px; margin-left: 6px; color: var(--muted); }
+
+.strip { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: baseline; padding-block: 4px 14px; border-bottom: 1px solid var(--line); }
+.stat { display: flex; gap: 8px; align-items: baseline; }
+.stat b { font-family: var(--font-data); font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.stat.close b { color: var(--close); } .stat.rewrite b { color: var(--rewrite); } .stat.leave b, .stat.later b { color: var(--leave); }
+.stat.prioritise b { color: var(--prio); } .stat.queue b { color: var(--queue); }
+.strip .spacer { flex: 1; }
+.filter { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.filter button { font: inherit; font-size: 13px; background: var(--surface); color: var(--muted); border: 0; padding: 5px 12px; cursor: pointer; }
+.filter button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+
+.notice { background: var(--rewrite-soft); color: var(--fg); border-radius: 6px; padding: 10px 14px; margin: 0; }
+.panel { display: grid; gap: 28px; }
+
+section.group { display: grid; gap: 10px; }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.group-head h2 { font-size: 16px; font-weight: 600; margin: 0; }
+.group-head .count { font-family: var(--font-data); color: var(--muted); font-size: 13px; }
+.group-head .hint { color: var(--muted); font-size: 13px; flex: 1 1 260px; }
+.bulk { font: inherit; font-size: 12px; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.bulk:hover { border-color: var(--fg); }
+.bulk[disabled] { opacity: 0.4; cursor: default; }
+
+.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.cols, .row { display: grid; grid-template-columns: 60px minmax(0, 1fr) minmax(0, 0.9fr) 92px 236px; gap: 14px; align-items: start; padding: 11px 14px; }
+.cols { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); border-bottom: 1px solid var(--line); padding-block: 7px; align-items: center; }
+.row { border-top: 1px solid var(--line); }
+.cols + .row { border-top: 0; }
+.row.child { padding-left: calc(14px + 18px * var(--depth, 1)); background: var(--sunk); }
+.row.child .num::before { content: "└ "; color: var(--muted); }
+.row.chose-close { box-shadow: inset 3px 0 0 var(--close); }
+.row.chose-rewrite { box-shadow: inset 3px 0 0 var(--rewrite); }
+.row.chose-leave, .row.chose-later { box-shadow: inset 3px 0 0 var(--leave); }
+.row.chose-prioritise { box-shadow: inset 3px 0 0 var(--prio); }
+.row.chose-queue { box-shadow: inset 3px 0 0 var(--queue); }
+.num { font-family: var(--font-data); font-size: 13px; white-space: nowrap; padding-top: 1px; }
+.summary { min-width: 0; display: grid; gap: 3px; }
+.summary .title { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag { display: inline-block; font-size: 11px; font-weight: 500; padding: 0 6px; border-radius: 4px; background: var(--line); color: var(--fg); }
+.tag.flight { background: var(--accent); color: var(--surface); }
+.why { color: var(--muted); font-size: 13px; min-width: 0; display: grid; gap: 4px; }
+.why details { font-size: 12px; }
+.why summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.why .more { display: grid; gap: 6px; padding-top: 6px; }
+.why .more p { margin: 0; overflow-wrap: anywhere; }
+.why .more b { color: var(--fg); font-weight: 500; }
+.rec { display: grid; gap: 2px; font-size: 13px; }
+.rec .act { font-weight: 600; }
+.rec .act.close { color: var(--close); } .rec .act.rewrite { color: var(--rewrite); } .rec .act.leave, .rec .act.later { color: var(--leave); }
+.rec .act.prioritise { color: var(--prio); } .rec .act.queue { color: var(--queue); }
+.rank { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.conf { font-family: var(--font-data); font-size: 12px; font-weight: 500; }
+.conf.high { color: var(--c-high); } .conf.medium { color: var(--c-med); } .conf.low { color: var(--c-low); }
+
+.decide { display: grid; gap: 6px; }
+.seg { display: inline-grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg label { position: relative; text-align: center; font-size: 13px; padding: 5px 6px; cursor: pointer; user-select: none; color: var(--muted); border-left: 1px solid var(--line); }
+.seg label:first-child { border-left: 0; }
+.seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg label.suggested span::after { content: "•"; margin-left: 3px; color: var(--muted); }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.seg label.close:has(input:checked) { background: var(--close-soft); color: var(--close); font-weight: 600; }
+.seg label.rewrite:has(input:checked) { background: var(--rewrite-soft); color: var(--rewrite); font-weight: 600; }
+.seg label.leave:has(input:checked), .seg label.later:has(input:checked) { background: var(--leave-soft); color: var(--leave); font-weight: 600; }
+.seg label.prioritise:has(input:checked) { background: var(--prio-soft); color: var(--prio); font-weight: 600; }
+.seg label.queue:has(input:checked) { background: var(--queue-soft); color: var(--queue); font-weight: 600; }
+.seg label:has(input:disabled) { opacity: 0.5; cursor: default; }
+.decide textarea { font: inherit; font-size: 12px; width: 100%; min-height: 52px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--bg); color: var(--fg); }
+.clear { font: inherit; font-size: 11px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; justify-self: start; }
+.empty { padding: 16px 14px; color: var(--muted); margin: 0; }
+.mlabel { display: none; }
+
+details.unaffected > summary { cursor: pointer; list-style: none; }
+details.unaffected > summary::-webkit-details-marker { display: none; }
+details.unaffected > summary h2::before { content: "▸ "; color: var(--muted); }
+details.unaffected[open] > summary h2::before { content: "▾ "; }
+details.unaffected { display: grid; gap: 10px; }
+
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 14px; max-width: 76ch; }
+footer p { margin: 0 0 6px; }
+
+@media (max-width: 820px) {
+  .cols { display: none; }
+  .row { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "num sum" "why why" "rec rec" "dec dec"; gap: 8px 12px; }
+  .row .num { grid-area: num; }
+  .row .summary { grid-area: sum; }
+  .row .why { grid-area: why; }
+  .row .rec { grid-area: rec; display: flex; gap: 12px; }
+  .row .decide { grid-area: dec; }
+  .row.child { padding-left: calc(14px + 10px * var(--depth, 1)); }
+  .mlabel { display: inline; color: var(--muted); font-weight: 400; font-family: var(--font-ui); }
+}
+@media (prefers-reduced-motion: no-preference) { .row { transition: box-shadow .15s ease; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1 id="h1">Backlog triage</h1>
+    <p class="lede" id="lede">Loading the assessed issues…</p>
+    <p class="direction" id="direction" hidden></p>
+  </header>
+
+  <div class="tabs" role="tablist" id="tabs" hidden></div>
+
+  <div class="strip" aria-live="polite">
+    <div id="stats" style="display:contents"></div>
+    <div class="spacer"></div>
+    <div class="filter" role="group" aria-label="Show">
+      <button type="button" id="f-all" aria-pressed="true">All</button>
+      <button type="button" id="f-open" aria-pressed="false">Undecided only</button>
+    </div>
+  </div>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <div class="panel" id="groups"></div>
+
+  <footer id="footer">
+    <p>Each issue was read by one agent and then challenged by a second. Confidence is how sure they are of the suggestion. "Changed on review" means the second agent overturned the first. A dot marks the suggestion.</p>
+    <p>In the clean-up list, choosing an outcome on an epic applies it to every undecided sub-issue too. You can still change any sub-issue on its own. Add a note to steer a rewrite or a priority.</p>
+    <p>Nothing changes on GitHub from this page. Choices save as you click. When you are done, tell Claude to process your choices.</p>
+  </footer>
+</div>
+
+<script>
+const LISTS = {
+  cleanup: {
+    name: "Clean up",
+    outcomes: [["close", "Close"], ["rewrite", "Rewrite"], ["leave", "Leave"]],
+    groups: [
+      { key: "high", name: "High confidence", hint: "Clear calls. Accept the suggestions unless something looks wrong." },
+      { key: "medium", name: "Medium confidence", hint: "Probably right. Worth a skim of the reason." },
+      { key: "low", name: "Low confidence", hint: "Judgement calls. These need your eye." },
+    ],
+    groupOf: i => i.unaffected ? "unaffected" : (i.confidence || "low"),
+    cols: ["Issue", "What it asks for", "Why", "Suggests", "Outcome"],
+    note: { rewrite: "Optional: how the new version should read", close: "Optional: what the closing comment should say" },
+  },
+  priority: {
+    name: "Prioritise",
+    outcomes: [["prioritise", "Prioritise"], ["queue", "Queue"], ["later", "Not now"]],
+    groups: [
+      { key: "bug", name: "Bugs that hurt the factory", hint: "Problems that already cost runs, merges or owner time." },
+      { key: "observability", name: "Observability", hint: "Work that shows what the factory is doing or why it failed." },
+      { key: "epic", name: "Lingering epics", hint: "Epics a few issues away from done. Prioritising one prioritises its open sub-issues." },
+      { key: "other", name: "Other high-impact work", hint: "Everything else that would move factory success." },
+    ],
+    groupOf: i => i.impact || "other",
+    cols: ["Issue", "What it asks for", "Why it matters", "Suggests", "Outcome"],
+    note: { prioritise: "Optional: anything the builder should know first", queue: "Optional: anything the builder should know first" },
+  },
+};
+const LABEL = { close: "Close", rewrite: "Rewrite", leave: "Leave", prioritise: "Prioritise", queue: "Queue", later: "Not now" };
+
+let meta = {};
+let issues = new Map();
+let decisions = new Map();
+let onlyOpen = false;
+let tab = null;
+let db = null;
+let loaded = false;
+let unaffectedOpen = false;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function showNotice(msg) {
+  const n = document.getElementById("notice");
+  n.textContent = msg || "";
+  n.hidden = !msg;
+}
+function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : "-"; }
+function choiceOf(num) { return decisions.get(String(num))?.choice || null; }
+function issueUrl(num) { return `https://github.com/${meta.repo || ""}/issues/${num}`; }
+function activeLists() {
+  const present = Object.keys(LISTS).filter(k => [...issues.values()].some(i => i.list === k));
+  return meta.lists?.length ? meta.lists.filter(k => LISTS[k]) : present;
+}
+
+async function save(num, data) {
+  if (!db) return;
+  const ref = db.collection("decisions").doc(String(num));
+  try {
+    if (data) await ref.set({ number: num, ...data, at: new Date().toISOString() });
+    else await ref.delete();
+  } catch (e) {
+    showNotice(e && e.code === "invalid_argument"
+      ? "Your choice was not saved: you can view this page but not change it."
+      : "Your choice was not saved. Check your connection and choose again.");
+  }
+}
+async function choose(issue, choice) {
+  const note = decisions.get(String(issue.number))?.note || "";
+  await save(issue.number, choice ? { choice, note } : null);
+  if (!choice || issue.list !== "cleanup") return;
+  for (const { issue: k } of descendantsOf(issue.number)) {
+    if (!choiceOf(k.number)) await save(k.number, { choice, note: "" });
+  }
+}
+
+function childrenOf(num) {
+  return [...issues.values()].filter(i => i.epic === num && i.list === issues.get(String(num))?.list).sort((a, b) => a.number - b.number);
+}
+function descendantsOf(num, depth = 1) {
+  return childrenOf(num).flatMap(k => [{ issue: k, depth }, ...descendantsOf(k.number, depth + 1)]);
+}
+
+function segFor(issue) {
+  const spec = LISTS[issue.list];
+  const wrap = el("div", "decide");
+  const seg = el("div", "seg");
+  seg.setAttribute("role", "radiogroup");
+  seg.setAttribute("aria-label", `Outcome for #${issue.number}`);
+  const current = choiceOf(issue.number);
+  for (const [key, label] of spec.outcomes) {
+    const l = el("label", key + (issue.recommend === key ? " suggested" : ""));
+    if (issue.recommend === key) l.title = "Suggested";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `o-${issue.number}`;
+    input.value = key;
+    input.checked = current === key;
+    input.disabled = !db;
+    input.addEventListener("change", () => choose(issue, key));
+    l.append(input, el("span", null, label));
+    seg.append(l);
+  }
+  wrap.append(seg);
+  if (current && spec.note[current]) {
+    const ta = document.createElement("textarea");
+    ta.placeholder = spec.note[current];
+    ta.setAttribute("aria-label", `Note for #${issue.number}`);
+    ta.value = decisions.get(String(issue.number))?.note || "";
+    ta.addEventListener("change", () => save(issue.number, { choice: current, note: ta.value.trim() }));
+    wrap.append(ta);
+  }
+  if (current) {
+    const clr = el("button", "clear", "Clear choice");
+    clr.type = "button";
+    clr.addEventListener("click", () => save(issue.number, null));
+    wrap.append(clr);
+  }
+  return wrap;
+}
+
+function rowFor(issue, depth) {
+  const choice = choiceOf(issue.number);
+  const row = el("div", "row" + (depth ? " child" : "") + (choice ? " chose-" + choice : ""));
+  if (depth > 1) row.style.setProperty("--depth", depth);
+
+  const num = el("div", "num");
+  const a = el("a", null, "#" + issue.number);
+  a.href = issueUrl(issue.number);
+  a.target = "_blank";
+  a.rel = "noopener";
+  num.append(a);
+
+  const sum = el("div", "summary");
+  const tags = el("div", "tags");
+  const kids = descendantsOf(issue.number);
+  if (kids.length) tags.append(el("span", "tag", `Epic · ${kids.length} sub-issues`));
+  for (const t of issue.tags || []) tags.append(el("span", "tag", t));
+  const flight = (issue.labels || []).find(l => l.startsWith("factory:"));
+  if (flight) tags.append(el("span", "tag flight", flight.replace("factory:", "In flight: ")));
+  if (issue.researchOnly) tags.append(el("span", "tag", "Research"));
+  if (issue.changed) tags.append(el("span", "tag", "Changed on review"));
+  if (tags.childElementCount) sum.append(tags);
+  sum.append(el("span", null, issue.summary || ""));
+  if (issue.title) sum.append(el("span", "title", issue.title));
+
+  const why = el("div", "why");
+  why.append(el("span", null, issue.reason || ""));
+  const extra = [];
+  if (issue.remaining) extra.push(["Still open", issue.remaining]);
+  if (issue.rewriteSketch) extra.push(["Suggested new wording", issue.rewriteSketch]);
+  if (issue.challengeNote) extra.push(["Reviewer", issue.challengeNote]);
+  if (issue.evidence) extra.push(["Evidence", issue.evidence]);
+  if (extra.length) {
+    const d = el("details");
+    d.append(el("summary", null, issue.rewriteSketch ? "New wording and evidence" : "Evidence"));
+    const more = el("div", "more");
+    for (const [k, v] of extra) {
+      const p = el("p");
+      p.append(el("b", null, k + ": "), document.createTextNode(v));
+      more.append(p);
+    }
+    d.append(more);
+    why.append(d);
+  }
+
+  const rec = el("div", "rec");
+  if (issue.list === "priority" && issue.rank) rec.append(el("span", "rank", "Rank " + issue.rank));
+  const act = el("span", "act " + issue.recommend);
+  act.append(el("span", "mlabel", "Suggests "), document.createTextNode(LABEL[issue.recommend] || "-"));
+  const conf = el("span", "conf " + (issue.confidence || ""));
+  conf.append(el("span", "mlabel", "Confidence "), document.createTextNode(cap(issue.confidence)));
+  rec.append(act, conf);
+
+  row.append(num, sum, why, rec, segFor(issue));
+  return row;
+}
+
+function sortFor(list) {
+  return list === "priority"
+    ? (x, y) => (x.rank || 999) - (y.rank || 999) || x.number - y.number
+    : (x, y) => x.number - y.number;
+}
+
+function sheetFor(spec, members, emptyText) {
+  const sheet = el("div", "sheet");
+  const cols = el("div", "cols");
+  spec.cols.forEach(t => cols.append(el("div", null, t)));
+  sheet.append(cols);
+  let shown = 0;
+  for (const i of members) {
+    const kids = descendantsOf(i.number).filter(k => k.issue.group === i.group);
+    const visible = !onlyOpen || !choiceOf(i.number) || kids.some(k => !choiceOf(k.issue.number));
+    if (!visible) continue;
+    sheet.append(rowFor(i, 0));
+    shown++;
+    for (const { issue: k, depth } of kids) {
+      if (onlyOpen && choiceOf(k.number)) continue;
+      sheet.append(rowFor(k, depth));
+    }
+  }
+  if (!shown) sheet.replaceChildren(el("p", "empty", !loaded ? "Loading…" : emptyText(members.length)));
+  return sheet;
+}
+
+function groupSection(spec, g, all, tops) {
+  const members = tops.filter(i => i.group === g.key);
+  const inGroup = all.filter(i => i.group === g.key);
+  const sec = el("section", "group");
+  const head = el("div", "group-head");
+  head.append(el("h2", null, g.name), el("span", "count", String(inGroup.length)), el("span", "hint", g.hint));
+  const undecided = inGroup.filter(i => !choiceOf(i.number));
+  const bulk = el("button", "bulk", `Accept ${undecided.length} suggestions`);
+  bulk.type = "button";
+  bulk.disabled = !db || undecided.length === 0;
+  bulk.addEventListener("click", async () => {
+    bulk.disabled = true;
+    for (const i of undecided) await save(i.number, { choice: i.recommend, note: "" });
+  });
+  head.append(bulk);
+  sec.append(head, sheetFor(spec, members, n => n ? "Every issue here has an outcome." : "Nothing in this group."));
+  return sec;
+}
+
+function renderTabs(lists) {
+  const bar = document.getElementById("tabs");
+  bar.hidden = lists.length < 2;
+  bar.replaceChildren();
+  for (const k of lists) {
+    const b = el("button", null, LISTS[k].name);
+    b.type = "button";
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(k === tab));
+    b.append(el("span", "n", String([...issues.values()].filter(i => i.list === k && (k !== "cleanup" || !i.unaffected)).length)));
+    b.addEventListener("click", () => { tab = k; try { history.replaceState(null, "", "#" + k); } catch (e) {} render(); });
+    bar.append(b);
+  }
+}
+
+function render() {
+  const lists = activeLists();
+  if (!lists.includes(tab)) tab = lists.includes(location.hash.slice(1)) ? location.hash.slice(1) : lists[0];
+  renderTabs(lists);
+  const root = document.getElementById("groups");
+  root.replaceChildren();
+  const stats = document.getElementById("stats");
+  stats.replaceChildren();
+  if (!tab) {
+    if (loaded) root.append(el("p", "empty", "No assessed issues yet."));
+    return;
+  }
+  const spec = LISTS[tab];
+  const all = [...issues.values()].filter(i => i.list === tab);
+  all.forEach(i => { i.group = spec.groupOf(i); });
+  // A sub-issue nests under its parent only when both sit in the same group.
+  const tops = all.filter(i => !i.epic || !issues.has(String(i.epic)) || issues.get(String(i.epic)).group !== i.group
+    || issues.get(String(i.epic)).list !== i.list).sort(sortFor(tab));
+
+  // Confidence bands always show; an impact group shows only when it has issues.
+  for (const g of spec.groups) {
+    if (tab === "priority" && !all.some(i => i.group === g.key)) continue;
+    root.append(groupSection(spec, g, all, tops));
+  }
+
+  if (tab === "cleanup") {
+    const un = tops.filter(i => i.group === "unaffected");
+    const det = el("details", "unaffected group");
+    det.open = unaffectedOpen;
+    det.addEventListener("toggle", () => { unaffectedOpen = det.open; });
+    const s = el("summary");
+    const head = el("div", "group-head");
+    head.append(el("h2", null, "Not affected"), el("span", "count", String(all.filter(i => i.group === "unaffected").length)),
+      el("span", "hint", "Nothing to clean up. Left open unless you say otherwise."));
+    s.append(head);
+    det.append(s, sheetFor(spec, un, () => "Nothing here."));
+    root.append(det);
+  }
+
+  const stat = (cls, n, label) => {
+    const d = el("div", "stat " + cls);
+    d.append(el("b", null, String(n)), el("span", null, label));
+    stats.append(d);
+  };
+  stat("", all.length, "Issues");
+  for (const [k, label] of spec.outcomes) stat(k, all.filter(i => choiceOf(i.number) === k).length, label);
+  stat("", all.filter(i => i.group !== "unaffected" && !choiceOf(i.number)).length, "Undecided");
+}
+
+function renderMeta() {
+  if (meta.title) document.getElementById("h1").textContent = meta.title;
+  document.getElementById("lede").textContent = meta.lede || "Pick an outcome for each issue.";
+  const d = document.getElementById("direction");
+  d.hidden = !meta.direction;
+  d.replaceChildren(el("b", null, "Direction: "), document.createTextNode(meta.direction || ""));
+}
+
+function setFilter(open) {
+  onlyOpen = open;
+  document.getElementById("f-all").setAttribute("aria-pressed", String(!open));
+  document.getElementById("f-open").setAttribute("aria-pressed", String(open));
+  try { localStorage.setItem("triage-filter", open ? "open" : "all"); } catch (e) {}
+  render();
+}
+document.getElementById("f-all").addEventListener("click", () => setFilter(false));
+document.getElementById("f-open").addEventListener("click", () => setFilter(true));
+try { onlyOpen = localStorage.getItem("triage-filter") === "open"; } catch (e) {}
+setFilter(onlyOpen);
+
+(async () => {
+  db = window.claude ? await window.claude.use("db") : null;
+  if (!db) {
+    loaded = true;
+    document.getElementById("lede").textContent = "";
+    showNotice("Sign in to claude.ai to see the assessed issues and record your choices.");
+    render();
+    return;
+  }
+  db.collection("meta").onSnapshot(snap => {
+    meta = snap.docs.find(d => d.id === "page")?.data() || {};
+    renderMeta();
+    render();
+  }, () => showNotice("The page details stopped updating. Reload the page."));
+  db.collection("issues").onSnapshot(snap => {
+    issues = new Map(snap.docs.map(d => [d.id, { ...d.data(), number: Number(d.id) }]));
+    loaded = true;
+    render();
+  }, () => showNotice("The issue list stopped updating. Reload the page."));
+  db.collection("decisions").onSnapshot(snap => {
+    decisions = new Map(snap.docs.map(d => [d.id, d.data()]));
+    render();
+  }, () => showNotice("Your choices stopped updating. Reload the page."));
+})();
+</script>
