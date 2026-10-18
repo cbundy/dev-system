@@ -70,6 +70,9 @@ low | medium | high - one line why
 ## Test plan
 - what proves each criterion, including the regression test for a bug
 
+## Observability
+- each decision the change adds - where it is recorded - the question it answers; or "none - no new decision"
+
 ## Sequencing
 - what must merge first, or "none"
 
@@ -95,7 +98,18 @@ guard parse it to decide whether the PR closes the issue. Pick it:
   `run-it`), or it is research or a proposal, or its own Done-when needs a person (then
   `keep-open`). The epic's Run it lives on the child that runs it.
 
-The answer script checks the heading and the Rollout before it records the brief.
+`## Observability` makes every new decision measurable without the owner asking for it. A
+decision is any point where an agent or a rule chooses: claim or skip, split, park, retry, wait,
+release or hold, merge or send back. For each one the change adds:
+- record the choice, the facts it weighed and the reason, so its outcome can be analysed later;
+- prefer optional fields on an existing event type (transition, abandoned, gate_run, the judge's
+  outcomes) over a new type, which costs a release before anything may write it;
+- name the question the record answers and add its query to `docs/metrics.md`;
+- a new event type ships whole in its first release: schema, `x-column` view fields and migration
+  together, before any producer.
+
+The answer script checks the heading, the Rollout and the Observability section before it records
+the brief.
 
 ## A question
 

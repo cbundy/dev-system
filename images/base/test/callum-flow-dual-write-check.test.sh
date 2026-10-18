@@ -201,6 +201,17 @@ grep -q "^  extra claim_renewed $native\$" "$tmpdir/chk.out" || fail "native ext
 q "$db" "DELETE FROM factory.event_store WHERE event_id = '$native'" > /dev/null
 echo "ok: a native event is an extra"
 
+# -- 8c. H1's backfill (--new-only) writes a via=dual-write transition to the new log only: not an extra
+oldbefore=$(oldrows)
+ev transition --issue 8 --branch issue-8 --new-only --note "row=H1 life=l1 seq=2 from=queued to=building seqAt=1792182907816 since=1792182907816 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 approvedPatch=none prClosedAt=none via=dual-write brief=none question=none notes=none why=none"
+ship
+[ "$(oldrows)" = "$oldbefore" ] || fail "--new-only wrote to the old log"
+nov=$(q "$db" "SELECT count(*) FROM factory.event_store WHERE type = 'transition' AND data::jsonb->>'via' = 'dual-write' AND data::jsonb->>'seq' = '2'")
+[ "$nov" = 1 ] || fail "the new-only transition was not shipped ($nov)"
+check
+grep -q '^extra transition' "$tmpdir/chk.out" && fail "a new-only via=dual-write transition was reported: $(cat "$tmpdir/chk.out")"
+echo "ok: a new-only via=dual-write transition is not an extra"
+
 # -- 9. an old row the translator misses is reported as a miss
 q "$olddb" "INSERT INTO factory.events (device, repo, seq, ts, state, issue, raw, event_id) VALUES ('dev-box', 'acme/widgets', 900, now(), 'claimed', 77, '{\"state\":\"claimed\",\"repo\":\"acme/widgets\",\"device\":\"dev-box\",\"issue\":77,\"event_id\":\"22222222-2222-4222-8222-222222222222\",\"ts\":\"bad\"}', '22222222-2222-4222-8222-222222222222')" > /dev/null
 check
