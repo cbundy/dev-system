@@ -111,6 +111,21 @@ PostgreSQL is started and no sandbox is made. A passing subset run prints
 arguments is unchanged and is the only gate; the raw `node --test`, `claude plugin test` and
 `sh <suite>` commands skip the sandbox and the database tests, so do not use them.
 
+List mode: `npm test -- --list` (`sh scripts/test.sh --list`) prints the ids the run would schedule,
+one per line in scheduled order, after discovery and any shard filter, and exits 0 before any setup
+(no sandbox, no PostgreSQL). Tests use it to check shard coverage cheaply.
+
+Shard mode, for CI: `TEST_SHARD=K/N` (positive integers without leading zeros, 1 <= K <= N) runs only
+shard K of N. The runner builds the full ordered job list as usual (slow-first jobs, discovery order,
+then serial jobs), numbers it from 0, and gives job i to shard `(i mod N) + 1`, so the slow-first jobs
+spread over different shards and a serial job stays serial inside its shard. A shard runs its jobs
+through the same pool with the full sandbox, PostgreSQL setup and isolation checks. Its success line,
+`test: shard 2/3 ok: 0 node tests, 21 shell suites, 1 mods - one shard of the gate ...`, counts only
+its own jobs and is not the gate; an empty shard (N above the job count) passes with zero counts. An
+invalid `TEST_SHARD`, or one combined with ids, prints one error line and exits 2 before any setup.
+`ci.yml` runs one `test (K/N)` matrix leg per shard and a final `ci` job that needs `lint` and every
+leg and fails unless all succeeded; `npm test` with no shard stays the one whole gate.
+
 The per-run results dir, and the `TMPDIR` the jobs see inside it, are made under `/tmp`, never under the inherited `TMPDIR`, so the sandbox is never under `/persist`.
 
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
