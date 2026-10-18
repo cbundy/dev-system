@@ -113,6 +113,52 @@ describe('S1: claims', () => {
     expect(r.title).toContain('at cap')
   })
 
+  test('a priority-labelled issue is claimed after the owner list and before the rest, and the claim names its tier', () => {
+    const issues = [issue(1), issue(2), issue(3, { labels: ['ready', 'priority'] }), issue(4)]
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter(a => a.kind === 'claim')
+    const r = plan(world([], { queue: [1, 2, 3, 4], issues }), cfg)
+    expect(claims(r).map(a => a.issue)).toEqual([3, 1, 2, 4])
+    expect(claims(r).map(a => a.reason)).toEqual([
+      'ready and unblocked (order: label priority)',
+      'ready and unblocked (order: number)',
+      'ready and unblocked (order: number)',
+      'ready and unblocked (order: number)',
+    ])
+    // the owner's priority list goes first, then the label
+    const listed = plan(world([], { queue: [1, 2, 4], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(4)], control: control({ priority: [4] }) }), cfg)
+    expect(claims(listed).map(a => [a.issue, a.reason])).toEqual([
+      [4, 'ready and unblocked (order: owner priority)'],
+      [2, 'ready and unblocked (order: label priority)'],
+      [1, 'ready and unblocked (order: number)'],
+    ])
+    // `only` wins: the label never widens it
+    const only = plan(world([], { queue: [1, 2], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] })], control: control({ only: [1] }) }), cfg)
+    expect(claims(only).map(a => [a.issue, a.reason])).toEqual([[1, 'ready and unblocked (order: owner only)']])
+    expect(said(only, 2)).toEqual(['owner: only #1'])
+    // the case is ignored, and the label is a setting
+    const upper = plan(world([], { queue: [1, 2], issues: [issue(1), issue(2, { labels: ['ready', 'Priority'] })] }), cfg)
+    expect(claims(upper).map(a => a.issue)).toEqual([2, 1])
+    const urgent = world([], { queue: [1, 2, 3], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(3, { labels: ['ready', 'urgent'] })] })
+    expect(claims(plan(urgent, { ...cfg, priorityLabel: 'urgent' })).map(a => a.issue)).toEqual([3, 1, 2])
+  })
+
+  test('the priority label only orders: the capacity, the filters and unread labels apply as to any issue', () => {
+    const cap = plan(world([rec(60), rec(61)], { queue: [5, 9], issues: [issue(5), issue(9, { labels: ['ready', 'priority'] })] }))
+    expect(cap.actions.filter(a => a.kind === 'claim').map(a => a.issue)).toEqual([9])
+    expect(said(cap, 5)).toEqual(['capacity: 3 of 3 queued or in flight'])
+    const issues = [
+      issue(11, { labels: ['ready', 'priority'], blockedBy: 1 }),
+      issue(12, { labels: ['ready', 'priority'], subIssues: 2 }),
+      issue(13, { labels: ['ready', 'priority', 'parked'] }),
+      issue(14, { labels: null }),
+      issue(15),
+    ]
+    const r = plan(world([], { queue: [11, 12, 13, 14, 15], issues }), { ...CFG, skipLabels: ['parked'], maxInFlightIssues: null })
+    expect(r.actions.filter(a => a.kind === 'claim').map(a => a.issue)).toEqual([15])
+    expect([11, 12, 13, 14].map(n => said(r, n)[0])).toEqual(['blocked by 1 open issue', 'tracker (has sub-issues)', 'label parked', 'labels unknown'])
+  })
+
   test('the claim filters: closed, untrusted, not ready, a skip label, blocked, a tracker, another device\'s live work, skipped, paused, or in the factory already', () => {
     const issues = [
       issue(21, { open: false }),

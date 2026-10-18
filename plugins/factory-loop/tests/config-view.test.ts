@@ -27,9 +27,9 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
   }
 }
 
-const GROUPS = ['Loop', 'Capacity', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
+const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
+  'mode', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
   'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
@@ -39,7 +39,7 @@ describe('configText', () => {
   test('every group and key, in order, nothing over the width', () => {
     const text = configText(view({ gateCommands: ['npm run lint', 'npm test'] }), control(), NOW)
     const at = (needle: string) => text.split('\n').findIndex(l => l === needle || l.startsWith(`  ${needle} `))
-    const order = [...GROUPS.slice(0, 5), ...KEYS].map(at)
+    const order = [...GROUPS.slice(0, 6), ...KEYS].map(at)
     expect(order.every(i => i >= 0)).toBe(true)
     expect(at('Config problems')).toBeGreaterThan(at('override'))
     // groups in order, keys in order within them
@@ -47,6 +47,16 @@ describe('configText', () => {
     expect(KEYS.map(at)).toEqual(KEYS.map(at).sort((a, b) => a - b))
     expect(text).toContain('npm run lint')
     expect(Math.max(...text.split('\n').map(l => l.length))).toBeLessThanOrEqual(60)
+  })
+
+  test('the Claims group shows the labels with their sources', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'priorityLabel')).toContain('priority')
+    expect(line(def, 'priorityLabel')).toContain('default')
+    expect(line(def, 'skipLabels')).toContain('default')
+    const set = configText(view({}, { priorityLabel: 'urgent' }), control(), NOW)
+    expect(line(set, 'priorityLabel')).toContain('urgent')
+    expect(line(set, 'priorityLabel')).toContain('workspace')
   })
 
   test('the planner and shadow keys are retired: a file that sets either still loads, each is ignored and shown as a config problem', () => {

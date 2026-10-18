@@ -4,10 +4,11 @@
 // the result and nothing is spawned; an answer ends the step when it is read (a writer's ok only at
 // its turn's end); one repair message, then unknown (bad-answer). The step modules and contracts
 // are a test's own here, since the units that fill them come later; the act step's routing of a
-// v2 agent's turn end (act.ts agentAnswered) runs with the real, unbuilt ones.
+// v2 agent's turn end (act-between.ts agentAnswered) runs with the real, unbuilt ones.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { agentAnswered, ctxOf } from '../hooks/act'
+import { ctxOf } from '../hooks/act'
+import { agentAnswered } from '../hooks/act-between'
 import type { ActEnv, Between } from '../hooks/act'
 import { jobPathOf, parseJob } from '../hooks/contract.mjs'
 import type { V2Contract } from '../hooks/contract.mjs'
@@ -323,7 +324,7 @@ describe('a lost store (v2 SPEC 3.3, 10.8)', () => {
   })
 })
 
-describe('the act step routes a v2 agent\'s turn end to steps.ts (act.ts agentAnswered)', () => {
+describe('the act step routes a v2 agent\'s turn end to steps.ts (act-between.ts agentAnswered)', () => {
   test('no answer: one repair message to the step\'s own agent type, the entry runs on; a second miss is unknown (bad-answer)', async () => {
     const w = world()
     // the real, unbuilt modules: the triage step's record names its contract

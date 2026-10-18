@@ -9,7 +9,6 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   EXECUTORS,
   REPAIR_GRACE_MS,
-  TOOL_LATE,
   actPass,
   capEventArgv,
   capKey,
@@ -24,8 +23,8 @@ import {
   sendNotice,
   transition,
   updateDone,
-  wakeAnswered,
 } from '../hooks/act'
+import { TOOL_LATE, wakeAnswered } from '../hooks/act-between'
 import type { ActEnv, Between, Live } from '../hooks/act'
 import { ACTION_KINDS } from '../hooks/config'
 import { V2_ACTION_KINDS } from '../hooks/v2/types'
