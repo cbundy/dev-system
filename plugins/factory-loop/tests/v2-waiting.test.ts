@@ -11,6 +11,7 @@ import { handshakePath } from '../hooks/v2/workspace'
 import { entryKey, stepKey } from '../hooks/v2/keys'
 import { recordsToStore } from '../hooks/v2/observe'
 import type { IssueRecord, WaitCondition, WaitRead } from '../hooks/v2/types'
+import { renderQuestion } from '../hooks/v2/question.mjs'
 import { MIN, NOW, entry } from './fixtures'
 import { CFG_DIR, NO_EVENTS, PROCESS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso } from './host'
 import type { Seen } from './host'
@@ -181,6 +182,71 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
       expect(h.spawns[0]?.prompt).toContain(c.cleared)
     })
   }
+})
+
+describe('a designer that asks with options, end to end (#856)', () => {
+  test('the pass parks the record and posts a comment that keeps its sections and options at the start of a line; ticking an option and taking the label off unparks it, and the next design prompt carries the choice', SLOW, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const r = designing()
+    const asked = renderQuestion({ question: 'Which API?', context: 'Two shapes exist.', options: [{ key: 'A', title: 'v1', detail: 'old' }, { key: 'B', title: 'v2', detail: null }], recommendation: { key: 'B', reason: 'newer' } })
+    const design = entry(stepKey(r, 'design', 1), 'agent-step', {
+      class: 'develop',
+      rule: 'S2',
+      issue: 470,
+      step: 'design',
+      agentId: 'agent-1',
+      status: 'done',
+      startedAt: NOW - 8 * MIN,
+      endedAt: NOW - 7 * MIN,
+      outcome: { kind: 'step', step: 'design', result: { event: 'not-ok', reason: 'question', why: null, head: null, choice: null, data: { kind: 'question', brief: null, question: asked, conditions: [], reason: null, reasons: null, children: [], text: asked } } },
+    })
+    // GitHub as the pass reads it: the issue carries factory:parked until the test takes it off; the
+    // comments are what the pass posted, with the owner's tick once the test makes it
+    const posted: { body: string; at: number }[] = []
+    let labels = [{ name: 'factory:parked' }]
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [design] } },
+      run: (argv, s) =>
+        world({ issue57: 'open', pr812: 'OPEN' }, (a, seen) => {
+          if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'comment') {
+            posted.push({ body: seen.stdin ?? '', at: Date.now() })
+            return { stdout: `https://github.com/${REPO}/issues/470#issuecomment-1\n` }
+          }
+          if (a[0] === 'callum-flow-issue-read' && a[1] === '--json' && a[2] === '470') {
+            const comments = posted.map((c, i) => ({ body: c.body, created_at: new Date(c.at).toISOString(), html_url: `https://github.com/${REPO}/issues/470#issuecomment-${i + 1}` }))
+            if (a.includes('--comments')) return { stdout: JSON.stringify({ comments, stripped: 0 }) }
+            return { stdout: JSON.stringify({ issue: { number: 470, id: 9470, state: 'open', labels, issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }) }
+          }
+          return undefined
+        })(argv, s),
+    })
+    let at = NOW
+    const pass = async (ms: number) => {
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: iso(at) }))
+      at += ms
+      await clock.advance(ms)
+    }
+    const stored = () => (h.store.get(`records:${REPO}`) as { records: IssueRecord[] }).records.find(x => x.issue === 470) as IssueRecord
+    await $.session.start(START)
+    await pass(6_000)
+    for (let i = 0; i < 6 && h.entry(entryKey(stored(), 'comment'))?.status !== 'done'; i++) await pass(60_000)
+    expect(stored()).toMatchObject({ state: 'parked', question: asked })
+    expect(posted).toHaveLength(1)
+    const body = posted[0]?.body ?? ''
+    for (const line of ['#### Context', '#### Options', '#### Recommendation', '- [ ] **A** - v1', '- [ ] **B** - v2', 'Tick one option, or write your answer as a comment.']) expect(body).toMatch(new RegExp(`^(\\d+\\. )?${line.replace(/[*[\]]/g, '\\$&')}`, 'm'))
+    expect(h.spawns).toEqual([])
+    // the owner ticks B and takes the label off; a later pass reads the comments and unparks
+    posted[0] = { body: body.replace('- [ ] **B**', '- [x] **B**'), at: posted[0]?.at ?? NOW }
+    labels = [{ name: 'enhancement' }]
+    let designer: IssueRecord | null = null
+    for (let i = 0; i < 8 && designer === null; i++) {
+      await pass(6 * 60_000)
+      if (h.spawns.length > 0) designer = stored()
+    }
+    expect(designer?.notes[0]).toMatch(/^Owner chose option B: /)
+    expect(h.spawns[0]?.prompt).toContain('Owner chose option B: ')
+  })
 })
 
 // --- the reads (sources-waits.ts) ------------------------------------------------------------------

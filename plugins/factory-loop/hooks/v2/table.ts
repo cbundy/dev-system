@@ -118,6 +118,21 @@ function clip(text: string, max = NOTE_MAX): string {
   return t.length > max ? `${t.slice(0, max - 3)}...` : t
 }
 
+// the cap of a stored question: question.mjs's QUESTION_CAP, which the planner may not import
+const QUESTION_CAP = 2000
+
+// capQuestion: an agent's question as markdown: its line breaks kept, trimmed, cut by length only.
+function capQuestion(text: string): string {
+  const t = text.trim()
+  return t.length > QUESTION_CAP ? `${t.slice(0, QUESTION_CAP - 3)}...` : t
+}
+
+// questionOf: the question an event gives, as the agent wrote it, else its one-line text.
+function questionOf(e: TableEvent, fallback: string): string {
+  const q = dataOf(e).question
+  return q !== undefined ? capQuestion(q) : clip(textOf(e, fallback), QUESTION_CAP)
+}
+
 // textOf: an event's result in words, for a question or a note.
 function textOf(e: TableEvent, fallback: string): string {
   const d = dataOf(e)
@@ -205,7 +220,7 @@ const ROWS: readonly Row[] = [
     on: 'not-ok',
     when: (r, e) => ownStep(r) && e.reason === 'question',
     next: 'parked',
-    change: (_r, e) => ({ question: clip(dataOf(e).question ?? textOf(e, 'the designer asks the owner'), 2000), resumeTo: 'designing' }),
+    change: (_r, e) => ({ question: questionOf(e, 'the designer asks the owner'), resumeTo: 'designing' }),
     via: 'question',
   },
   { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), via: 'split' },
@@ -339,7 +354,7 @@ const ROWS: readonly Row[] = [
     change: (r, e) => ({
       question:
         e.choice === 'park'
-          ? clip(dataOf(e).question ?? textOf(e, 'the triage asks the owner'), 2000)
+          ? questionOf(e, 'the triage asks the owner')
           : clip(`the triage chose a fixer, which is not possible here (${commits(r, e) ? `the fix cap of ${r.fixes} rounds is reached` : 'the branch has no commits beyond the base'}): ${e.reason ?? ''}`, 2000),
       resumeTo: sameTarget(r),
     }),

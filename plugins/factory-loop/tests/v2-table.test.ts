@@ -6,6 +6,7 @@
 // unknown path, and the edges of an unpark. No test here asserts an exact ledger key.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { renderQuestion } from '../hooks/v2/question.mjs'
 import { recordOf } from '../hooks/v2/observe'
 import { LIVE_STATES, NOT_OK_REASONS, ROW_IDS, STEP_STATES, TABLE, madeRecord, nextRecord, normalize, rowFor, viaOf, tellPeriodic } from '../hooks/v2/table'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP, TRIAGE_CHOICES, labelOf } from '../hooks/v2/types'
@@ -405,6 +406,37 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     expect(rows(triage, false)).toEqual(['U2', 'U4'])
     const parked = nextRecord({ ...triage, attempt: 2 }, rowFor({ ...triage, attempt: 2 }, { kind: 'unknown', why: 'bad-answer' }, CFG), { kind: 'unknown', why: 'bad-answer' }, NOW)
     expect(parked).toMatchObject({ state: 'parked', resumeTo: 'building', question: expect.stringContaining('the triage of building') })
+  })
+
+  describe('a park stores the agent\'s question as markdown (#856)', () => {
+    const asked = renderQuestion({ question: 'Which API?', context: 'Two shapes exist.', options: [{ key: 'A', title: 'v1', detail: 'old\n\nmore' }, { key: 'B', title: 'v2' }], recommendation: { key: 'B', reason: 'newer' } })
+    const designing = { ...base, state: 'designing' as const, step: 'design' as const }
+    const building = { ...base, state: 'building' as const, step: 'triage' as const, triages: 1 }
+    const t3 = (data?: { question?: string; text?: string }, reason = 'question') => next(designing, { kind: 'not-ok', reason, ...(data ? { data } : {}) }) as IssueRecord
+    const x4 = (event: Partial<TableEvent>, r = building) => next(r, { kind: 'triage', ...event } as TableEvent) as IssueRecord
+
+    test('T3 and the triage park of X4 keep the question\'s newlines, blank lines and indentation', () => {
+      expect(t3({ question: `  ${asked}\n` }).question).toBe(asked)
+      expect(asked).toMatch(/^#### Options$/m)
+      expect(asked).toMatch(/^  old$/m)
+      expect(x4({ choice: 'park', reason: 'r', data: { question: asked } }).question).toBe(asked)
+    })
+
+    test('a question over the cap is cut to it by length alone, keeping its newlines, and ends with ...', () => {
+      const long = `Which?\n\n${'line\n'.repeat(600)}`
+      for (const q of [t3({ question: long }).question, x4({ choice: 'park', data: { question: long } }).question]) {
+        expect(q).toHaveLength(2000)
+        expect(q?.endsWith('...')).toBe(true)
+        expect(q).toContain('\nline\n')
+      }
+    })
+
+    test('with no question, the text and the machine reasons stay one clipped line', () => {
+      expect(t3({ text: 'asks\n  about   the\nAPI' }).question).toBe('asks about the API')
+      expect(t3(undefined, 'question').question).toBe('question')
+      expect(x4({ choice: 'park', reason: 'needs\nthe owner' }).question).toBe('needs the owner')
+      expect(x4({ choice: 'fix', reason: 'a\nb' }).question).toBe('the triage chose a fixer, which is not possible here (the branch has no commits beyond the base): a b')
+    })
   })
 
   test('a triage retry gives exactly one more attempt; a fix with no commits or at the cap parks with the triage\'s reason; a drop closes the life', () => {
