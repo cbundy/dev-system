@@ -611,22 +611,24 @@ wait still open. Time is by `seq_at`; a retried write counts once. It takes `-v 
 ```sql
 -- per wait: when it began, how it ended and how long it lasted
 WITH tr AS (       -- one row per (issue, life, seq), with the issue's next transition
-  SELECT repo, issue, life, seq, to_state, via, seq_at,
+  SELECT repo, issue, life, seq, to_state, via, seq_at, data,
          lead(seq_at) OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_at,
          lead(via)    OVER (PARTITION BY repo, issue ORDER BY seq_at, seq) AS next_via
-  FROM (SELECT repo, issue, life, seq, to_state, via, seq_at,
-          row_number() OVER (PARTITION BY repo, issue, life, seq ORDER BY ts, device, device_seq) AS n
-        FROM factory.event_log WHERE type = 'transition' AND issue IS NOT NULL AND repo = :'repo') x
+  FROM (SELECT l.repo, l.issue, l.life, l.seq, l.to_state, l.via, l.seq_at, d.data,
+          row_number() OVER (PARTITION BY l.repo, l.issue, l.life, l.seq ORDER BY l.ts, l.device, l.device_seq) AS n
+        FROM factory.event_log l JOIN factory.event_store d ON d.event_id = l.event_id
+        WHERE l.type = 'transition' AND l.issue IS NOT NULL AND l.repo = :'repo') x
   WHERE n = 1
 )
 SELECT repo, issue, life, seq, seq_at AS waited_at, next_at AS ended_at, next_via AS ended_via,
-  extract(epoch FROM next_at - seq_at) AS wait_seconds
+  extract(epoch FROM next_at - seq_at) AS wait_seconds,
+  EXISTS (SELECT 1 FROM jsonb_array_elements(data -> 'wait') w WHERE w ->> 'repo' IS NOT NULL) AS foreign
 FROM tr
 WHERE to_state = 'waiting' AND seq_at >= :'since'::timestamptz
 ORDER BY seq_at DESC;
 ```
 
-Group by `ended_via` for how waits end, and count the rows with a null `ended_at` older than a day for
+Group by `foreign` and `ended_via` for how waits end (`foreign` is true when a condition names another repo, so waits on another repo's release or issue compare with those on the loop's own), and count the rows with a null `ended_at` older than a day for
 waits that look stuck.
 
 ## 8. Implementer model comparison

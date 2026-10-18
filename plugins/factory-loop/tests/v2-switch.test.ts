@@ -205,6 +205,10 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(tasks(withRecords([waitingOn(7, 'issue-closed')]))).toEqual([])
     const due = tasks(withRecords([waitingOn(9, 'tag-contains'), waitingOn(7, 'tag-contains'), waitingOn(8, 'issue-closed')]))
     expect(due).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { tag: 'v1.0.0', waiting: '7,9' } }])
+    // a record waiting only on another repo's release is not this judge's to answer
+    const foreignTag = record({ issue: 6, state: 'waiting', step: null, resumeTo: 'designing', wait: [{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }] })
+    expect(tasks(withRecords([foreignTag]))).toEqual([])
+    expect(tasks(withRecords([foreignTag, waitingOn(7, 'tag-contains')]))).toMatchObject([{ fields: { waiting: '7' } }])
     // a milestone with none closed is due too
     expect(tasks(withRecords([waitingOn(7, 'tag-contains')], state({ milestone: { open: 0, closed: 0, openIssues: [], expected: null } })))).toHaveLength(1)
     // at most one release task per UTC hour

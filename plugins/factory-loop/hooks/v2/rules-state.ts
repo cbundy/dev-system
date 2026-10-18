@@ -171,18 +171,28 @@ function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
   return (r.wait ?? []).filter(c => ctx.v2.waits?.[waitKey(c)]?.held !== true)
 }
 
-// clearedData: the tag the record's tag-contains reads compared against, for the cleared note.
-function clearedData(ctx: V2Ctx, r: IssueRecord): { tag: string } | undefined {
+// clearedData: the tag each of the record's tag-contains reads compared against, by waitKey, for the
+// cleared note.
+function clearedData(ctx: V2Ctx, r: IssueRecord): { tags: Record<string, string> } | undefined {
+  const tags: Record<string, string> = {}
   for (const c of r.wait ?? []) {
     const tag = c.kind === 'tag-contains' ? ctx.v2.waits?.[waitKey(c)]?.tag : undefined
-    if (tag !== undefined) return { tag }
+    if (tag !== undefined) tags[waitKey(c)] = tag
   }
-  return undefined
+  return Object.keys(tags).length === 0 ? undefined : { tags }
 }
 
 // openText: the open conditions in words, for the skip line and E6's tell.
 function openText(open: readonly WaitCondition[]): string {
-  return open.map(c => (c.kind === 'issue-closed' ? `#${c.issue} (still open)` : c.kind === 'pr-merged' ? `PR #${c.pr} (not merged yet)` : `no release tag contains ${c.sha} yet`)).join(', ')
+  return open
+    .map(c =>
+      c.kind === 'issue-closed'
+        ? `${c.repo ?? ''}#${c.issue} (still open)`
+        : c.kind === 'pr-merged'
+          ? `PR #${c.pr} (not merged yet)`
+          : `no release tag${c.repo === undefined ? '' : ` of ${c.repo}`} contains ${c.sha} yet`,
+    )
+    .join(', ')
 }
 
 // waitingRules: a waiting record's events after the early ones (4.1): C1 when every condition
