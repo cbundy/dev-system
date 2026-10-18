@@ -20,6 +20,8 @@
 //       carries conditions and reason only for a wait
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
+//   A brief has an `## Observability` section (the decisions it adds and where each is recorded,
+//   or "none - no new decision").
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
 //   A keep-open whose reason says the issue is part of something larger is refused: a split child
@@ -152,6 +154,12 @@ export function rolloutOf(brief) {
 
 // rolloutLineOf: the line rolloutOf reads, as written, or null.
 function rolloutLineOf(brief) {
+  return firstLineUnder(brief, 'rollout')
+}
+
+// firstLineUnder: the first non-empty line under the first heading named `name` (lower case)
+// outside fenced code, up to the next heading, as written; null when there is none.
+function firstLineUnder(brief, name) {
   let fence = false
   let on = false
   for (const line of brief.split(/\r?\n/)) {
@@ -162,7 +170,7 @@ function rolloutLineOf(brief) {
     }
     if (!fence && /^#{1,6}[ \t]/.test(line)) {
       if (on) return null
-      if (/^#{1,6}[ \t]+rollout[ \t]*$/.test(line.toLowerCase())) on = true
+      if (line.toLowerCase().replace(/^#{1,6}[ \t]+/, '').trim() === name) on = true
       continue
     }
     if (on && line.trim() !== '') return line
@@ -368,6 +376,7 @@ function checkDesign(input, job) {
   if (kind === 'brief' && brief !== null) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
     problems.push(...rolloutProblems(brief, 'brief'))
+    if (firstLineUnder(brief, 'observability') === null) problems.push('brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"')
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let parts = {}
