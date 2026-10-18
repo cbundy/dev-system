@@ -291,8 +291,9 @@ describe('gate concurrency', () => {
 })
 
 describe('eventsSource (the record rebuild\'s source, v2 SPEC 3.3)', () => {
-  test('shadow by default; old, new and shadow validate in either file; the key applies on the next pass', () => {
-    expect(DEFAULT_CONFIG.eventsSource).toBe('shadow')
+  test('new by default; old, new and shadow validate in either file; the key applies on the next pass', () => {
+    expect(DEFAULT_CONFIG.eventsSource).toBe('new')
+    expect(loadConfig({}).config.eventsSource).toBe('new')
     expect(SETTING_EFFECT.eventsSource).toBe('next-pass')
     for (const source of ['old', 'new', 'shadow'] as const) expect(loadConfig({ eventsSource: source })).toMatchObject({ config: { eventsSource: source }, problems: [] })
     expect(loadConfig({ eventsSource: 'new' }, { eventsSource: 'old' }).config.eventsSource).toBe('old')

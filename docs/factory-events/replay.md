@@ -116,11 +116,11 @@ shadow comparison leaves out is listed in [factory-state.md](../factory-state.md
 deadline, and a shadow record is kept for every difference or error but an agreeing run only once per quiet period).
 
 The factory loop ([#976](https://github.com/cbundy/dev-system/issues/976)) is the other exception: its switch is the
-loop setting `eventsSource` (`old|new|shadow`, default `shadow`, `/factory config set eventsSource old` the way
+loop setting `eventsSource` (`old|new|shadow`, default `new` since [#978](https://github.com/cbundy/dev-system/issues/978), `/factory config set eventsSource old` the way
 back; an invalid value is a config problem and reads old), taken on the next pass. It picks where the record
 rebuild reads (`hooks/v2/record.ts`, `hooks/v2/sources-records.ts`): `old` reads `factory.events`, `new` reads
 `factory.event_store` with `dev-query --factory` and fails the whole read, naming the event_id, on a row it cannot
-read, and `shadow` reads both once per load and then hourly, compares the two rebuilds per issue and field with both
+read, and `shadow` (opt-in) reads both once per load and then hourly, compares the two rebuilds per issue and field with both
 sides cut 600 s back, answers from old, and writes one `shadow_read` event (`reader` `loop-records`, `tool`
 `factory-loop`). A compare with differences also tells the owner once per distinct set of issues.
 
@@ -145,7 +145,7 @@ Switched readers and their known differences from `old` (dropped before comparin
 ## Defaults moved to new
 
 The default source of these tools moved from `shadow` to `new` on 2026-10-18
-([#902](https://github.com/cbundy/dev-system/issues/902)). The owner decided to skip the shadow runs: the evidence is the
+([#902](https://github.com/cbundy/dev-system/issues/902); the factory loop row under [#978](https://github.com/cbundy/dev-system/issues/978)). The owner decided to skip the shadow runs: the evidence is the
 full-history compare ([#650](https://github.com/cbundy/dev-system/issues/650)) and the dual-write check. The way back
 is the same for each: `--source old` or `<VARIABLE>=old`, at once. `--source shadow` still works and still writes its
 records ([metrics.md](../metrics.md#shadow-runs-source-switch)).
@@ -155,6 +155,7 @@ records ([metrics.md](../metrics.md#shadow-runs-source-switch)).
 | `callum-flow-factory-state` | 2026-10-18 | owner's decision to skip shadow runs; corpus compare in `npm test`; full-history compare (see below) | `CALLUM_FLOW_FACTORY_STATE_SOURCE=old` |
 | `callum-flow-evaluate` | 2026-10-18 | the same; evaluate's v1-only metrics read n/a under `new` | `CALLUM_FLOW_EVALUATE_SOURCE=old` |
 | `heartbeat-state` | 2026-10-18 | the same; `new` reads only this device's local new log under a 500 ms deadline, so an issue whose only lifecycle events came before the device's dual write reads idle | `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=old` |
+| the factory loop (`eventsSource`: record rebuild, facts, ledger rebuild, once keys) | 2026-10-18 | the owner decided to skip the `loop-facts` shadow run (it had no compare, since v0.59.0 was not yet run by the loop); the `loop-records` compares of query 6b for cbundy/dev-system: 3 compares on 2026-10-18 between 21:42 and 23:42 UTC, 0 differences, 1 live difference (push lag, not counted), no failed reads | `/factory config set eventsSource old` (next pass) |
 | the factory HUD (via factory-state) | 2026-10-18 | it passes no source when `FACTORY_HUD_SOURCE` is unset, so it follows factory-state | `FACTORY_HUD_SOURCE=old` |
 
 Full-history compare (`load`, then `compare --reader scripts/factory-events-replay/readers/<tool>.js` from

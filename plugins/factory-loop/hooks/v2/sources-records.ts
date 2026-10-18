@@ -1,6 +1,6 @@
 // The record rebuild's read (docs/factory-loop/v2/SPEC.md 3.3) and its source switch `eventsSource`:
 // `old` rebuilds from factory.events (REBUILD_SQL), `new` from factory.event_store (NEW_REBUILD_SQL),
-// and `shadow` (the default) reads both, compares the two rebuilds per issue and field by field, and
+// and `shadow` (opt-in; `new` is the default since #978) reads both, compares the two rebuilds per issue and field by field, and
 // leaves the records to the old read. The compare is written as a `shadow_read` event (reader
 // `loop-records`) and told to the owner by rules-shadow.ts. A failing new read never fails a pass
 // under `shadow`; under `new` it fails the rebuild, and no row is ever skipped.

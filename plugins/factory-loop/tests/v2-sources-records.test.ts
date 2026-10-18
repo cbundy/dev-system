@@ -3,6 +3,7 @@
 // load and then hourly, compares the two rebuilds and leaves the records to the old read.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { DEFAULT_CONFIG } from '../hooks/config'
 import { emptyCache } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, State } from '../hooks/types'
@@ -200,6 +201,16 @@ describe('eventsSource old and new (v2 SPEC 3.3)', () => {
     const held = harness(SAME, { eventsSource: 'old' }, [A])
     await held.pass()
     expect(held.runs.filter(r => r.argv[0] === 'dev-query')).toEqual([])
+  })
+
+  test('the default: an empty store rebuilds from event_store alone', async () => {
+    const h = harness({ old: { exitCode: 9, stdout: 'must not be read' }, new: SAME.new }, { eventsSource: DEFAULT_CONFIG.eventsSource })
+    const o = await h.pass()
+    expect(h.queries(false)).toEqual([])
+    expect(h.queries(true)).toHaveLength(1)
+    expect(h.queries(true)[0]?.stdin).toContain('factory.event_store')
+    expect([o.v2.sources.store.ok, o.v2.recordsFrom, o.v2.records]).toEqual([true, 'events', [A, B]])
+    expect(o.v2.recordsShadow).toBeUndefined()
   })
 
   test('new: with an empty store the records rebuild from event_store alone', async () => {

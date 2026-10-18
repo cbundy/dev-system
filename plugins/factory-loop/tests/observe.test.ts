@@ -1163,6 +1163,14 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
     })
 
+    test('the default reads factory.event_store alone, through the factory database', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(runtime({ mode: 'observe', config: config({ eventsSource: DEFAULT_CONFIG.eventsSource }) }))
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --factory --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+    })
+
     test('new reads factory.event_store alone, through the factory database, and rebuilds the same ledger', async () => {
       const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
       const o = await h.pass(withSource('new'))

@@ -34,7 +34,7 @@ export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd
 
 const SOURCES: SourceName[] = ['factory', 'facts', 'runs', 'queue', 'github', 'usage', 'pool', 'milestone']
 
-// eventsSource is old: the tests exercise the old rebuild, and the shadow compare has its own tests
+// eventsSource is pinned to old (the default is new since #978): the stubs answer the old query, the tests exercise the old rebuild, and the shadow compare has its own tests
 // (v2-sources-records.test.ts), which set it
 export function config(over: Partial<Config> = {}): Config {
   return { ...DEFAULT_CONFIG, eventsSource: 'old', ...over }
