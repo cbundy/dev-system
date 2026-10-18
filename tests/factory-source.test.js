@@ -135,3 +135,31 @@ test("diff: equal, scalar change, one-sided key, array length, quoted key path",
   assert.deepEqual(diff([1], [1, 2]), [{ path: "$[1]", old: undefined, new: 2 }]);
   assert.deepEqual(diff({ "a b": 1 }, { "a b": 2 }), [{ path: '$["a b"]', old: 1, new: 2 }]);
 });
+
+test("runShadow quietMs: an agreeing run is skipped while the file is fresh, appended when stale or absent", async () => {
+  const dir = tmp();
+  const go = (extra = {}) => capture(() => runShadow({ tool: "t", old: () => 1, new: () => 1, eventsDir: dir, quietMs: 60000, ...extra }));
+  await go();
+  assert.equal(records(dir, "t").length, 1); // absent: appended
+  await go();
+  assert.equal(records(dir, "t").length, 1); // fresh: skipped
+  const old = new Date(Date.now() - 120000);
+  fs.utimesSync(path.join(dir, "factory", ".shadow", "t.jsonl"), old, old);
+  await go();
+  assert.equal(records(dir, "t").length, 2); // stale: appended
+});
+
+test("runShadow quietMs: a difference or a new error is always appended", async () => {
+  const dir = tmp();
+  const q = { tool: "t", eventsDir: dir, quietMs: 60000 };
+  await capture(() => runShadow({ ...q, old: () => 1, new: () => 1 }));
+  await capture(() => runShadow({ ...q, old: () => 1, new: () => 2 }));
+  await capture(() => runShadow({ ...q, old: () => 1, new: () => { throw new Error("boom"); } }));
+  assert.deepEqual(records(dir, "t").map((r) => [r.differences, r.new_error]), [[0, null], [1, null], [null, "boom"]]);
+});
+
+test("runShadow without quietMs appends every run", async () => {
+  const dir = tmp();
+  for (let i = 0; i < 3; i++) await capture(() => runShadow({ tool: "t", old: () => 1, new: () => 1, eventsDir: dir }));
+  assert.equal(records(dir, "t").length, 3);
+});
