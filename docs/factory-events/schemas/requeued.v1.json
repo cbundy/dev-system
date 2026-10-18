@@ -10,7 +10,7 @@
   "properties": {
     "reason": { "enum": ["lease-expired", "reconcile"], "description": "Why: lease-expired (no renewal in time) or reconcile (reconcile found no live work behind the claim and requeued it).", "x-column": true },
     "stage": { "type": ["string", "null"], "description": "reconcile: the stage callum-flow-factory-state showed the issue in, in its words (queued, designing, implementing, in pipeline, parked), not a transition state; null otherwise." },
-    "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile: the released life's number among the issue's lives, when known; null otherwise." },
+    "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile: the released life's number among the issue's lives, when known; null otherwise.", "x-column": true },
     "branch": { "type": ["string", "null"], "description": "The released work's branch, when known.", "x-column": true },
     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The released work's open pull request, when there is one.", "x-column": true },
     "detail": { "type": ["string", "null"], "description": "reconcile: what was checked, one line for people; never parse it. null otherwise." }

@@ -9,14 +9,14 @@
   "required": ["reason", "split_into", "stage", "lives", "branch", "pr", "detail"],
   "properties": {
     "reason": { "enum": ["dropped", "split", "triage", "reconcile", "rejected", "other"], "description": "Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other.", "x-column": true },
-    "split_into": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "split: the new issues it was split into; empty otherwise." },
+    "split_into": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "split: the new issues it was split into; empty otherwise.", "x-column": true },
     "why_split": { "type": ["string", "null"], "description": "split: why the designer split the issue (size, areas touched, an owner decision or spike inside it, risk); null for any other abandon and for a split logged before the designer gave reasons." },
     "why_count": { "type": ["string", "null"], "description": "split: why this many parts, not fewer or more; null otherwise." },
     "why_parts": { "type": ["string", "null"], "description": "split: why the boundaries between the parts fall where they do; null otherwise." },
     "why_order": { "type": ["string", "null"], "description": "split: why the blockedBy order is what it is, or that the parts are independent; null otherwise." },
     "child_whys": { "type": ["array", "null"], "items": { "type": "string" }, "description": "split: what makes each new issue a part of its own, in the order of split_into; null otherwise." },
     "stage": { "type": ["string", "null"], "description": "reconcile and rejected: the stage callum-flow-factory-state showed the issue in, in its words, not a transition state; null otherwise." },
-    "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise." },
+    "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise.", "x-column": true },
     "branch": { "type": ["string", "null"], "description": "The abandoned work's branch, when known.", "x-column": true },
     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The abandoned work's pull request, when there is one.", "x-column": true },
     "detail": { "type": ["string", "null"], "description": "One line for people: the owner's note, or what reconcile checked. Never parse it." }
