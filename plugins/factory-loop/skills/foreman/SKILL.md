@@ -33,8 +33,9 @@ make sure the right fix gets made, and keep the owner told.
 4. Cost: GitHub API use (`gh api rate_limit`) and pass time.
 
 ## When you find something
-- Label it a seam bug (two parts disagree: fix at the root, no new rule) or a special case (only a new rule
-  would fix it). Say plainly when it is a special case: the owner treats those as a warning sign.
+- Say in plain words which parts disagree and where to fix it at the root, with no new rule. Say plainly
+  when only a new rule would fix it (a special case): the owner treats those as a warning sign. The
+  owner has banned one label for findings; `npm run lint` refuses it (scripts/lint.sh).
 - Loop bugs go to cbundy/dev-system as sub-issues of the current v2 epic, with evidence (pass numbers, event
   times, file:line) and a suggested root fix. Bugs in the repo's own code or docs go to that repo.
 - Fixing loop code is a normal dev-system PR, never a hand edit in the loop workspace.
