@@ -238,8 +238,14 @@ test("compare: the heartbeat-state reader matches on the corpus, and is not vacu
   const V1 = ["delegated", "fix_requested", "merge_ready"];
   const entries = corpus.filter((r) => r.raw && r.raw.state === "transition" && /to=(building|fixing|merge-queue)\b/.test(r.raw.note || ""));
   const lines = corpus.filter((r) => r.raw && V1.includes(r.raw.state));
+  // an end is in the gap only between a transition and the first v1 line it produces (the first of the
+  // issue at or after the transition); a later line from a later stage does not widen it
   const inGap = (end) =>
-    entries.some((tr) => Date.parse(tr.ts) < end && lines.some((l) => l.raw.issue === tr.raw.issue && Date.parse(l.ts) >= Date.parse(tr.ts) && Date.parse(l.ts) >= end));
+    entries.some((tr) => {
+      const t = Date.parse(tr.ts);
+      const first = Math.min(...lines.filter((l) => l.raw.issue === tr.raw.issue && Date.parse(l.ts) >= t).map((l) => Date.parse(l.ts)));
+      return t < end && end <= first;
+    });
   const ends = new Set();
   for (const row of lines) {
     for (const plus of [1000, 5000]) {
