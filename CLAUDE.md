@@ -84,9 +84,9 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
   to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
   answer and the loop does it.
 - **The manual path**, for a person or an interactive session. Code changes go in a worktree
-  (the mechanism is in "Implementation sub-agents" below). A sub-agent delegated an issue follows
-  the `implement-issue` skill (worktree, build, verify, evidence, /no-mistakes pipeline, handoff),
-  and an interactive orchestrator follows the `issue-orchestrator` skill.
+  (the mechanism is in "Implementation sub-agents" below). Run every canonical command once
+  before the PR opens: they are the same commands CI and `.claude/factory-loop.json`
+  `gateCommands` run.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->

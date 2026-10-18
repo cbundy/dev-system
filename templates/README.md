@@ -2,54 +2,43 @@
 
 Config files a consumer repo copies in, then customizes according to each file's ownership
 rules below. Marker-split files use `synced: do not edit (managed by dev-system)` /
-`repo-owned: edit freely` in their own comment syntax. The PR template, `treehouse.toml`
-and `.claude/settings.json` use the ownership rules documented in their sections instead.
+`repo-owned: edit freely` in their own comment syntax. `treehouse.toml`, `.claude/factory-loop.json`,
+`.github/workflows/ci.yml` and `.claude/settings.json` use the ownership rules documented in their
+sections instead.
 `callum-dev update` merges upstream changes with repo edits and surfaces conflicts.
-
-## `.no-mistakes.yaml` -> `.no-mistakes.yaml`
-
-no-mistakes pipeline config.
-
-- Repo-owned: `commands.lint` / `commands.test` (fill in the `<REPLACE>` placeholders -
-  remember fresh no-mistakes worktrees have no dependencies installed, so install first if
-  your package manager needs it), additions to `ignore_patterns`, and the optional
-  `document.instructions` block.
-- Synced: `auto_fix`, the `pr:` block (below), and the commented-out optional
-  sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
-  block if you want to opt in, rather than uncommenting the synced copy in place.
-- `pr:` (`template`, `publish_intent: false`, `appendix: minimal`) is synced as a whole.
-  `template` needs no-mistakes 1.75.0 or newer and `appendix` 1.85.0 or newer (the base
-  image pins a version that has both). `minimal` keeps test transcripts and round history
-  out of the PR body; they stay in the run log. YAML allows one `pr:` key, so a repo cannot
-  override `template` from a repo-owned block; a repo that wants different wording edits
-  its own `.github/pull_request_template.md` instead (see the next section). A repo that
-  already carries its own `pr:` block (mealplanning) must delete it before its next
-  `callum-dev update`, or the merge leaves a duplicate key to resolve by hand.
-- Not here: the pipeline's agent order (`agent`), the model pin (`agent_config`) and the
-  review roles (`review_agents`). The base image's `dev-init` keeps all three in a
-  managed block of the global no-mistakes config instead, rewritten on every start from
-  `images/base/models.env` as it is on dev-system's `main` branch, with the image's baked
-  copy as the offline fallback (see `images/base/README.md`). The model pin and the review roles are
-  global-only: no-mistakes silently ignores them in a repo file. The agent order is not: a repo that needs
-  its own sets `agent:` in its repo-owned block, which replaces the global order entirely.
-
-## `.github/pull_request_template.md` -> `.github/pull_request_template.md`
-
-The PR body skeleton `pr.template` points at: Why / What this does / Evidence / Linked
-issue. no-mistakes enforces its top-level `#` headings, so the drafting agent cannot drop
-the Linked issue section, and later runs refresh only the generated Validation block and
-keep author edits. `N` comes from the branch's `issue-<N>-` segment.
-
-- Merged 3-way like the other synced files, so a repo can tune the wording in place and
-  still receive upstream changes. Keep the four top-level headings and the stray
-  closing-keyword warning.
-- Not marker-split: the file is Markdown, and the HTML comments are agent instructions,
-  not repo-owned slots.
 
 ## `treehouse.toml` -> `treehouse.toml`
 
 Worktree manager config. No synced structure to preserve - both `max_trees` and `root`
 are repo-owned, tune freely. Shipped as a starting point matching dev-system's own repo.
+
+## `.claude/factory-loop.json` -> `.claude/factory-loop.json`
+
+The factory loop's stop gate: `{"gateCommands": [<lint>, <test>]}`. Init-only and fully
+repo-owned. `callum-dev init` fills the commands from its lint and test prompts; a blank answer
+leaves a `<REPLACE: ...>` string. The commands must match `CLAUDE.md` "Canonical commands" and
+`.github/workflows/ci.yml`. Put the install step in front: the loop's slot has no dependencies
+installed.
+
+## `.github/workflows/ci.yml` -> `.github/workflows/ci.yml`
+
+A one-job CI workflow on `pull_request` and `push` to the default branch: checkout, a
+`<REPLACE:` toolchain-and-install step, then the same lint and test commands as
+`gateCommands` (filled by init from the same answers). Init-only and fully repo-owned. A repo
+with its own CI workflow deletes this one after checking its commands match.
+
+## Retired templates
+
+`.no-mistakes.yaml` and `.github/pull_request_template.md` are no longer templates: onboarded
+repos are set up for the factory loop only (dev-system#795). On `callum-dev update`, a repo
+whose stamp lists them keeps both files byte for byte, gets one `unsynced` line each, and
+loses their baseline copies and stamp entries; the files are repo-owned from then on, so delete
+them if unused. The seven `no-mistakes` entries the settings template used to ship in
+`permissions.allow` are kept in the repo's file the same way (update says so once). Update
+never creates an init-only file that has no baseline (`.claude/factory-loop.json`,
+`.github/workflows/ci.yml` in an older repo): it prints a `new` line naming it, and
+`docs/onboarding.md` says how to add it. An init-only file that has a baseline
+(`treehouse.toml`) is still restored if deleted.
 
 ## `CLAUDE.md` -> `CLAUDE.md`
 
@@ -62,7 +51,7 @@ Global agent instructions.
   evidence requirement, brief PR descriptions, engineering-excellence/lint/flakiness
   standard), the `## Dev container is ephemeral` section and `## Two ways work gets done`,
   which says what a factory loop agent does and leaves to the loop, and what the manual path
-  (implement-issue, /no-mistakes, worktrees, issue-orchestrator) is for. It is the same for every
+  (a worktree plus the gate commands) is for. It is the same for every
   repo, so it is synced and holds for loop agents whatever the repo-owned block says.
 - Repo-owned: `## Canonical commands` and `## Implementation sub-agents (manual path)` - both ship as
   placeholder headings only. Fill in this repo's actual lint/test/typecheck commands (and
@@ -75,8 +64,7 @@ Global agent instructions.
 
 Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
 generic `permissions.allow` and `permissions.deny` lists the implement-issue/orchestrator flow needs
-(`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
-`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
+(`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
 `callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
 `callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
@@ -131,7 +119,7 @@ values are compared whole):
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
   `gh pr merge`, `callum-flow-merge` (the guarded merge; only
   `callum-flow-merge-guard` is synced), `callum-flow-fix-linkage` (the linkage repair; only
-  the read-only `check-pr-linkage.sh` is synced), `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
+  the read-only `check-pr-linkage.sh` is synced), `gh pr edit`, and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
   `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
   rule for these orchestrator-only powers: committed settings apply in the main
@@ -234,19 +222,19 @@ Two things about this file that are easy to get wrong:
   bottom. gitignore precedence is last-match-wins, so a repo-owned block placed first
   would be silently outranked by the synced rules below it, and a `!` un-ignore could
   never work.
-- **Three of this system's files must stay tracked** and are commented as such in the
-  template: `.no-mistakes.yaml` (the pipeline config, which sits right beside the ignored
-  `.no-mistakes/` state directory - hence the trailing slash on that rule), and
-  `.callum-dev.json` plus `.callum-dev/baseline/`, which are what make `callum-dev update`
+- **Some of this system's files must stay tracked** and are commented as such in the
+  template: `.claude/factory-loop.json`, `.no-mistakes.yaml` if the repo still has one (it
+  sits right beside the ignored `.no-mistakes/` state directory - hence the trailing slash
+  on that rule), and `.callum-dev.json` plus `.callum-dev/baseline/`, which are what make `callum-dev update`
   a 3-way merge rather than an overwrite. Ignoring any of them looks tidy and breaks
   things quietly.
 
 ## Validating your copy
 
-- JSON files (`.claude/settings.json`) must parse with a strict JSON parser.
+- JSON files (`.claude/settings.json`, `.claude/factory-loop.json`) must parse with a strict JSON parser.
 - `.devcontainer/devcontainer.json` is JSONC - strip `//` comments before parsing if you
   need to validate it programmatically.
-- `.no-mistakes.yaml` must parse as YAML.
+- `.claude/factory-loop.json` must parse as JSON, with a `gateCommands` array.
 - No `<REPLACE>` placeholders should remain once a repo is wired up.
 - `.gitignore`: check behaviour with `git check-ignore -v <path>`, not by eye. The rules
   that matter most are the directory-vs-file ones, and those are exactly the ones reading

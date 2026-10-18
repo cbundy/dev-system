@@ -166,13 +166,13 @@ steps.
 
 | File | Strategy on `update` | Contents |
 |---|---|---|
-| `.no-mistakes.yaml` | 3-way merge | Pipeline config; see [template ownership rules](../templates/README.md). |
-| `.github/pull_request_template.md` | 3-way merge | Synced: the four-heading PR body skeleton that `pr.template` in `.no-mistakes.yaml` enforces. |
 | `CLAUDE.md` | 3-way merge | Synced: global agent rules, ephemeral-container rules. Repo owns: canonical commands, sub-agent isolation. |
 | `.claude/settings.json` | key-path merge | Claude Code project settings; see the [settings reference](../templates/README.md#claudesettingsjson---claudesettingsjson) for contents, ownership and merge rules. |
 | `.devcontainer/devcontainer.json` | 3-way merge | Repo owns: name, image or build, env, extra mounts. Synced: the five per-repo `/persist` volumes. |
 | `.gitignore` | 3-way merge | Synced block on top, repo-owned block at the bottom (last match wins) |
 | `treehouse.toml` | init only | Fully repo-owned |
+| `.claude/factory-loop.json` | init only | Fully repo-owned: `gateCommands`, the factory loop's stop gate (lint, then test) |
+| `.github/workflows/ci.yml` | init only | Fully repo-owned: the CI workflow, running the same lint and test commands |
 | `.callum-dev.json` | rewritten | Stamp: applied template version, devcontainer kind |
 | `.callum-dev/baseline/` | rewritten | Pristine copy of each template: the base of the 3-way merge |
 | `package.json` devDependency | - | `@callum/dev-system` from `github:cbundy/dev-system#semver:0.x` |
@@ -180,6 +180,10 @@ steps.
 dev-system is itself a consumer: it commits these files too, minus the devDependency. It
 runs its own checkout's CLI (`node bin/callum-dev.js`), and each release's bump PR brings
 its stamp up to date (`RELEASING.md`).
+
+An init-only file is restored by `update` only if it was deleted and has a baseline; a template new
+to a repo is reported, never created. `.no-mistakes.yaml` and `.github/pull_request_template.md`
+are retired templates: `update` stops syncing them and leaves the repo's copies alone.
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the orchestrator
 in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `callum-flow-fix-linkage`, `gh pr edit`,

@@ -37,7 +37,8 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 //   settings-json key-path merge; see `mergeSettingsJson` for ownership and
 //                 permission-array rules
 //   init-only     copied at init as a starting point, then fully repo-owned - update
-//                 never touches it
+//                 never touches it. It restores one only if it was deleted and has a
+//                 baseline; a template new to a repo (no baseline) is reported, never created
 //
 // `src` is the name under templates/ when it differs from the destination path.
 // Only .gitignore needs it, and for a non-obvious reason: npm silently drops any
@@ -49,11 +50,11 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // (see DEVCONTAINER_KINDS). The baseline is kept under the destination name, so a
 // switch merges from the old kind's template to the new one like any update.
 const TEMPLATES = [
-  { file: ".no-mistakes.yaml", strategy: "merge" },
-  // The PR body skeleton `pr.template` in .no-mistakes.yaml points at. `merge`, so a repo's
-  // own wording survives and upstream changes still reach it.
-  { file: ".github/pull_request_template.md", strategy: "merge" },
   { file: "treehouse.toml", strategy: "init-only" },
+  // The factory loop's stop gate and the CI workflow: both repo-owned from init on, and both
+  // carry the repo's lint and test commands (they must match CLAUDE.md).
+  { file: ".claude/factory-loop.json", strategy: "init-only" },
+  { file: ".github/workflows/ci.yml", strategy: "init-only" },
   { file: "CLAUDE.md", strategy: "merge" },
   { file: ".claude/settings.json", strategy: "settings-json" },
   {
@@ -68,6 +69,30 @@ const TEMPLATES = [
   // ignore rules have to reach repos that were scaffolded before those artefacts
   // existed. A repo's own paths live in the file's repo-owned block and survive.
   { file: ".gitignore", src: "gitignore", strategy: "merge" },
+];
+
+// Templates dev-system no longer ships (cbundy/dev-system#795: onboarded repos are set up for
+// the factory loop only). `update` leaves the repo's copy untouched - it is repo-owned from
+// then on - and only drops the baseline copy and the stamp entry.
+const RETIRED_TEMPLATES = [
+  { file: ".no-mistakes.yaml", baseline: path.join(BASELINE_DIR, ".no-mistakes.yaml") },
+  {
+    file: ".github/pull_request_template.md",
+    baseline: path.join(BASELINE_DIR, ".github", "pull_request_template.md"),
+  },
+];
+
+// The permissions.allow entries the template shipped for no-mistakes before #795. A repo's
+// copy keeps them (repo-owned from now on) instead of the usual "template dropped it, so drop
+// it" rule in mergeSettingsJson.
+const RETIRED_ALLOW = [
+  "Bash(no-mistakes axi run *)",
+  "Bash(no-mistakes rerun *)",
+  "Bash(no-mistakes axi abort *)",
+  "Bash(no-mistakes axi sync *)",
+  "Bash(no-mistakes axi status *)",
+  "Bash(no-mistakes runs *)",
+  "Bash(no-mistakes axi logs *)",
 ];
 
 // The devcontainer template kinds, recorded in the stamp as `devcontainer`:
@@ -138,17 +163,18 @@ function countPlaceholders(content) {
 // Fill prompted answers into the copied templates. Baselines stay pristine, so
 // these substitutions read as ordinary repo-owned edits to `update`'s 3-way merge.
 function applyAnswers(file, content, answers) {
-  if (file === ".no-mistakes.yaml") {
-    if (answers.lint) {
+  if (file === ".claude/factory-loop.json") {
+    const config = JSON.parse(content);
+    if (answers.lint) config.gateCommands[0] = answers.lint;
+    if (answers.test) config.gateCommands[1] = answers.test;
+    content = JSON.stringify(config, null, 2) + "\n";
+  }
+  if (file === ".github/workflows/ci.yml") {
+    for (const [name, answer] of [["lint", answers.lint], ["test", answers.test]]) {
+      if (!answer) continue;
       content = content.replace(
-        /^(\s*lint:\s*)"<REPLACE:[^"]*>"$/m,
-        (_, prefix) => prefix + JSON.stringify(answers.lint),
-      );
-    }
-    if (answers.test) {
-      content = content.replace(
-        /^(\s*test:\s*)"<REPLACE:[^"]*>"$/m,
-        (_, prefix) => prefix + JSON.stringify(answers.test),
+        new RegExp(`^(\\s*run:\\s*)"<REPLACE: ${name} command>"$`, "m"),
+        (_, prefix) => prefix + JSON.stringify(answer),
       );
     }
   }
@@ -297,7 +323,10 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   for (const list of MERGED_BY_VALUE) {
     const key = list.split(".")[1];
     const get = (settings) => (settings.permissions && settings.permissions[key]) || [];
-    const baselineEntries = new Set(get(baseline));
+    // A retired entry is no longer the template's, so it counts as repo-added.
+    const baselineEntries = new Set(
+      get(baseline).filter((entry) => list !== "permissions.allow" || !RETIRED_ALLOW.includes(entry)),
+    );
     // Entries the repo added itself: present now but not in the old baseline.
     const repoOwned = get(current).filter((entry) => !baselineEntries.has(entry));
 
@@ -310,6 +339,15 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
     }
   }
   return JSON.stringify(merged, null, 2) + "\n";
+}
+
+// The retired allow entries a settings.json update is keeping for the first time: present in
+// both the repo's file and its baseline (a later update's baseline no longer lists them).
+function keptRetiredAllow(currentContent, baselineContent) {
+  if (!currentContent || !baselineContent) return [];
+  const allow = (content) => JSON.parse(content).permissions?.allow ?? [];
+  const inBaseline = allow(baselineContent);
+  return allow(currentContent).filter((e) => RETIRED_ALLOW.includes(e) && inBaseline.includes(e));
 }
 
 function isPlainObject(value) {
@@ -391,6 +429,7 @@ function update(options) {
 
   const conflicts = [];
   const changed = [];
+  const notCreated = [];
 
   try {
     for (const entry of TEMPLATES) {
@@ -404,7 +443,13 @@ function update(options) {
       const current = readIfExists(file);
 
       if (strategy === "init-only") {
-        // Fully repo-owned: never touched after init. Restore only if deleted.
+        // Fully repo-owned: never touched after init. Restore only if deleted and it has a
+        // baseline; a template new to this repo is reported, not created.
+        if (current === null && baseline === null) {
+          changed.push(`new       ${file} (not created by update; see docs/onboarding.md step 3)`);
+          notCreated.push(file);
+          continue;
+        }
         if (current === null) {
           writeFile(file, newContent);
           changed.push(`restored  ${file}`);
@@ -420,6 +465,11 @@ function update(options) {
           changed.push(`restored  ${file}`);
         } else {
           const merged = mergeSettingsJson(current, baseline, newContent);
+          if (keptRetiredAllow(current, baseline).length > 0) {
+            changed.push(
+              `kept      ${file}: the no-mistakes allow entries are no longer synced by dev-system (now repo-owned)`,
+            );
+          }
           if (merged !== current) {
             writeFile(file, merged);
             changed.push(`merged    ${file}`);
@@ -447,13 +497,31 @@ function update(options) {
         }
       }
 
+      // An init-only file with no baseline stays without one: nothing merges into it, and a
+      // baseline would turn a later deletion into a restore of a template it never asked for.
+      if (strategy === "init-only" && baseline === null) continue;
       writeFile(baselineFile, newContent);
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  writeStamp({ ...stamp, version: PKG_VERSION, devcontainer, files: TEMPLATES.map((t) => t.file) });
+  for (const retired of RETIRED_TEMPLATES) {
+    if (!(stamp.files ?? []).includes(retired.file)) continue;
+    changed.push(
+      `unsynced  ${retired.file} (no longer synced by dev-system; now repo-owned - delete it if unused)`,
+    );
+    fs.rmSync(retired.baseline, { force: true });
+    const dir = path.dirname(retired.baseline);
+    if (dir !== BASELINE_DIR && fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  }
+
+  writeStamp({
+    ...stamp,
+    version: PKG_VERSION,
+    devcontainer,
+    files: TEMPLATES.map((t) => t.file).filter((f) => !notCreated.includes(f)),
+  });
 
   if (devcontainer !== oldDevcontainer) {
     changed.push(`switched  devcontainer: ${oldDevcontainer} -> ${devcontainer}`);

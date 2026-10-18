@@ -42,35 +42,18 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
-// Dependency-free reader for the flat two-level YAML this config uses: returns
-// { key: { child: "value" } } for every top-level mapping. Throws on a duplicate
-// top-level key (which real YAML parsers also reject) so a doubled `pr:` is caught.
-function topLevelSections(text) {
-  const sections = {};
-  let current = null;
-  for (const line of text.split("\n")) {
-    if (/^\s*(#|$)/.test(line)) continue;
-    const top = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (top) {
-      assert.ok(!(top[1] in sections), `duplicate top-level key: ${top[1]}`);
-      current = sections[top[1]] = {};
-      continue;
-    }
-    const child = line.match(/^\s+([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (child && current) current[child[1]] = child[2].replace(/^"(.*)"$/, "$1");
-  }
-  return sections;
-}
-
-function assertConfig(dir, file = ".no-mistakes.yaml") {
-  const config = topLevelSections(read(dir, file));
-  assert.deepEqual(config.pr, {
-    template: ".github/pull_request_template.md",
-    publish_intent: "false",
-    appendix: "minimal",
-  });
-  return config;
-}
+const RETIRED_ALLOW = [
+  "Bash(no-mistakes axi run *)",
+  "Bash(no-mistakes rerun *)",
+  "Bash(no-mistakes axi abort *)",
+  "Bash(no-mistakes axi sync *)",
+  "Bash(no-mistakes axi status *)",
+  "Bash(no-mistakes runs *)",
+  "Bash(no-mistakes axi logs *)",
+];
+const NEW_FILES = [".claude/factory-loop.json", ".github/workflows/ci.yml"];
+const OLD_PIPELINE_FILE = "# old pipeline config\ncommands:\n  lint: \"make lint\"\n";
+const OLD_PR_TEMPLATE = "# Linked issue\n\nmy own wording\n";
 
 function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) {
   const repo = scratchRepo(t);
@@ -79,29 +62,89 @@ function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) 
   return repo;
 }
 
+// A repo scaffolded at the old template set: .no-mistakes.yaml and the PR template with
+// baselines and stamp entries, the seven no-mistakes allow entries in settings.json and its
+// baseline, and neither factory-loop.json nor ci.yml (nor baselines for them).
+function oldRepo(t) {
+  const repo = initRepo(t);
+  const put = (file, content) => {
+    fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+    fs.writeFileSync(path.join(repo, file), content);
+  };
+  put(".no-mistakes.yaml", OLD_PIPELINE_FILE);
+  put(".callum-dev/baseline/.no-mistakes.yaml", "# upstream pipeline config\n");
+  put(".github/pull_request_template.md", OLD_PR_TEMPLATE);
+  put(".callum-dev/baseline/.github/pull_request_template.md", "# upstream template\n");
+  for (const file of NEW_FILES) {
+    fs.rmSync(path.join(repo, file), { force: true });
+    fs.rmSync(path.join(repo, ".callum-dev/baseline", file), { force: true });
+  }
+  for (const file of [".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
+    const settings = JSON.parse(read(repo, file));
+    settings.permissions.allow.unshift(...RETIRED_ALLOW);
+    put(file, JSON.stringify(settings, null, 2) + "\n");
+  }
+  const stamp = JSON.parse(read(repo, ".callum-dev.json"));
+  stamp.files = [".no-mistakes.yaml", ".github/pull_request_template.md", ...stamp.files.filter((f) => !NEW_FILES.includes(f))];
+  put(".callum-dev.json", JSON.stringify(stamp, null, 2) + "\n");
+  return repo;
+}
+
 test("init scaffolds templates, substitutes answers, keeps baseline pristine", (t) => {
   const repo = initRepo(t);
 
-  const nm = assertConfig(repo);
-  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
   assert.equal(parseJsonc(read(repo, DEVCONTAINER)).name, "myrepo");
   assert.ok(fs.existsSync(path.join(repo, "CLAUDE.md")));
-  assert.ok(fs.existsSync(path.join(repo, ".claude/settings.json")));
   assert.ok(fs.existsSync(path.join(repo, "treehouse.toml")));
-
   assert.ok(fs.existsSync(path.join(repo, ".gitignore")));
-  assert.match(read(repo, ".github/pull_request_template.md"), /^# Linked issue$/m);
+
+  // The factory loop's gate and CI carry the answered commands.
+  assert.deepEqual(JSON.parse(read(repo, ".claude/factory-loop.json")), {
+    gateCommands: ["bun run lint", "bun run test"],
+  });
+  const ci = read(repo, ".github/workflows/ci.yml");
+  assert.match(ci, /^\s*run: "bun run lint"$/m);
+  assert.match(ci, /^\s*run: "bun run test"$/m);
+  assert.match(ci, /pull_request:/);
+  assert.match(ci, /<REPLACE:/, "the toolchain-and-install step stays to be filled in");
+  assert.match(ci, /actions\/checkout/);
+
+  // The retired pipeline files are not scaffolded, nor their baselines.
+  for (const file of [".no-mistakes.yaml", ".github/pull_request_template.md"]) {
+    assert.equal(fs.existsSync(path.join(repo, file)), false, file);
+    assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline", file)), false, file);
+  }
+  const allow = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
+  assert.equal(allow.filter((e) => e.includes("no-mistakes")).length, 0);
+  assert.ok(allow.includes("Bash(treehouse get *)"));
+  assert.ok(allow.includes("Bash(gh pr view *)"));
+  assert.ok(allow.includes("Bash(callum-flow-issue-read *)"));
 
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
   assert.equal(stamp.files.length, 7);
+  assert.ok(NEW_FILES.every((f) => stamp.files.includes(f)));
 
-  // Baseline must be the pristine template: the substituted lint/test values
-  // are repo-owned edits from the merge's point of view.
-  assert.deepEqual(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").commands, {
-    lint: "<REPLACE: install deps if needed, then run lint>",
-    test: "<REPLACE: install deps if needed, then run the full test suite>",
-  });
+  // Baseline must be the pristine template: the substituted values are repo-owned edits
+  // from the merge's point of view.
+  assert.equal(
+    read(repo, ".callum-dev/baseline/.claude/factory-loop.json"),
+    read(TEMPLATES, ".claude/factory-loop.json"),
+  );
+});
+
+test("init with blank lint and test answers leaves placeholders that the report counts", (t) => {
+  const repo = scratchRepo(t);
+  const result = run(repo, "init", { input: "myrepo\n\n\n" });
+  assert.equal(result.status, 0, result.stderr);
+  const gate = JSON.parse(read(repo, ".claude/factory-loop.json")).gateCommands;
+  assert.equal(gate.length, 2);
+  for (const command of gate) assert.match(command, /^<REPLACE: /);
+  const ci = read(repo, ".github/workflows/ci.yml");
+  assert.match(ci, /run: "<REPLACE: lint command>"/);
+  assert.match(ci, /run: "<REPLACE: test command>"/);
+  assert.match(result.stdout, /\.claude\/factory-loop\.json: 2 placeholder/);
+  assert.match(result.stdout, /\.github\/workflows\/ci\.yml: 3 placeholder/);
 });
 
 test("init refuses to clobber existing files and refuses to run twice", (t) => {
@@ -117,58 +160,100 @@ test("init refuses to clobber existing files and refuses to run twice", (t) => {
   assert.match(second.stderr, /already exists/);
 });
 
+const EM_DASH_RULE = '- Never use the em dash. Use plain dash "-" instead';
+
 test("update merges an upstream synced change without clobbering repo-owned edits", (t) => {
   const repo = initRepo(t);
+  const claude = path.join(repo, "CLAUDE.md");
+  fs.writeFileSync(claude, read(repo, "CLAUDE.md").replace("## Canonical commands", "## Canonical commands (mine)"));
   const upstream = upstreamCopy(t, (dir) => {
-    const file = path.join(dir, ".no-mistakes.yaml");
-    fs.writeFileSync(file, read(dir, ".no-mistakes.yaml").replace("  lint: 5", "  lint: 4"));
+    const file = path.join(dir, "CLAUDE.md");
+    fs.writeFileSync(file, read(dir, "CLAUDE.md").replace(EM_DASH_RULE, EM_DASH_RULE + " (v2)"));
   });
 
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 0, result.stderr + result.stdout);
 
-  const nm = assertConfig(repo);
-  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
-  assert.equal(nm.auto_fix.lint, "4", "upstream synced change arrived");
+  const merged = read(repo, "CLAUDE.md");
+  assert.match(merged, /## Canonical commands \(mine\)/, "repo-owned edit survived");
+  assert.ok(merged.includes(EM_DASH_RULE + " (v2)"), "upstream synced change arrived");
   // Baseline advanced to the new template so the next update merges from there.
-  assert.equal(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").auto_fix.lint, "4");
-});
-
-test("update gives a repo scaffolded before the PR template the file and the pr block, conflict-free", (t) => {
-  const repo = initRepo(t);
-  // Rewind to an older consumer: no template file, no baseline for it, no pr block.
-  fs.rmSync(path.join(repo, ".github"), { recursive: true });
-  fs.rmSync(path.join(repo, ".callum-dev/baseline/.github"), { recursive: true });
-  const withoutPr = (text) => {
-    const start = text.indexOf("\n# PR description policy");
-    const end = text.indexOf("appendix: minimal\n") + "appendix: minimal\n".length;
-    return text.slice(0, start) + text.slice(end);
-  };
-  for (const file of [".no-mistakes.yaml", ".callum-dev/baseline/.no-mistakes.yaml"]) {
-    fs.writeFileSync(path.join(repo, file), withoutPr(read(repo, file)));
-  }
-
-  const result = run(repo, "update");
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  assert.match(read(repo, ".github/pull_request_template.md"), /^# Evidence$/m);
-  const merged = assertConfig(repo);
-  assert.deepEqual(merged.commands, { lint: "bun run lint", test: "bun run test" });
-  assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml");
+  assert.ok(read(repo, ".callum-dev/baseline/CLAUDE.md").includes(EM_DASH_RULE + " (v2)"));
 });
 
 test("update surfaces a genuine conflict with markers and a non-zero exit", (t) => {
   const repo = initRepo(t);
-  const file = path.join(repo, ".no-mistakes.yaml");
-  fs.writeFileSync(file, read(repo, ".no-mistakes.yaml").replace("  lint: 5", "  lint: 9"));
+  const file = path.join(repo, "CLAUDE.md");
+  fs.writeFileSync(file, read(repo, "CLAUDE.md").replace(EM_DASH_RULE, EM_DASH_RULE + " (mine)"));
   const upstream = upstreamCopy(t, (dir) => {
-    const f = path.join(dir, ".no-mistakes.yaml");
-    fs.writeFileSync(f, read(dir, ".no-mistakes.yaml").replace("  lint: 5", "  lint: 4"));
+    const f = path.join(dir, "CLAUDE.md");
+    fs.writeFileSync(f, read(dir, "CLAUDE.md").replace(EM_DASH_RULE, EM_DASH_RULE + " (theirs)"));
   });
 
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 1);
-  assert.match(read(repo, ".no-mistakes.yaml"), /<<<<<<</);
+  assert.match(read(repo, "CLAUDE.md"), /<<<<<<</);
   assert.match(result.stderr, /conflict resolution/);
+});
+
+test("update stops syncing the retired pipeline files and leaves them byte for byte", (t) => {
+  const repo = oldRepo(t);
+
+  const first = run(repo, "update");
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  assert.equal(read(repo, ".no-mistakes.yaml"), OLD_PIPELINE_FILE);
+  assert.equal(read(repo, ".github/pull_request_template.md"), OLD_PR_TEMPLATE);
+  for (const file of [".no-mistakes.yaml", ".github/pull_request_template.md"]) {
+    assert.ok(
+      first.stdout.includes(
+        `unsynced  ${file} (no longer synced by dev-system; now repo-owned - delete it if unused)`,
+      ),
+      first.stdout,
+    );
+    assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline", file)), false, file);
+  }
+  const stamp = JSON.parse(read(repo, ".callum-dev.json"));
+  assert.equal(stamp.files.includes(".no-mistakes.yaml"), false);
+  assert.equal(stamp.files.includes(".github/pull_request_template.md"), false);
+
+  // The seven allow entries stay, with a notice.
+  const allow = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
+  for (const entry of RETIRED_ALLOW) assert.ok(allow.includes(entry), entry);
+  assert.match(first.stdout, /no-mistakes allow entries are no longer synced/);
+
+  // A second update says nothing about any of it, and still keeps the entries.
+  const second = run(repo, "update");
+  assert.equal(second.status, 0, second.stderr + second.stdout);
+  assert.doesNotMatch(second.stdout, /unsynced|no-mistakes/);
+  assert.equal(read(repo, ".no-mistakes.yaml"), OLD_PIPELINE_FILE);
+  const again = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
+  for (const entry of RETIRED_ALLOW) assert.ok(again.includes(entry), entry);
+});
+
+test("update does not create factory-loop.json or ci.yml in an older repo, and says so every time", (t) => {
+  const repo = oldRepo(t);
+  for (let i = 0; i < 2; i++) {
+    const result = run(repo, "update");
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    for (const file of NEW_FILES) {
+      assert.match(result.stdout, new RegExp(`new\\s+${file.replace(/[./]/g, "\\$&")} \\(not created by update; see docs/onboarding\\.md step 3\\)`));
+      assert.equal(fs.existsSync(path.join(repo, file)), false, file);
+      assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline", file)), false, file);
+    }
+    const stamp = JSON.parse(read(repo, ".callum-dev.json"));
+    assert.ok(NEW_FILES.every((f) => !stamp.files.includes(f)));
+  }
+});
+
+test("update restores a deleted init-only file that has a baseline", (t) => {
+  const repo = initRepo(t);
+  fs.rmSync(path.join(repo, "treehouse.toml"));
+  fs.rmSync(path.join(repo, ".claude/factory-loop.json"));
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /restored\s+treehouse\.toml/);
+  assert.match(result.stdout, /restored\s+\.claude\/factory-loop\.json/);
+  assert.equal(read(repo, "treehouse.toml"), read(TEMPLATES, "treehouse.toml"));
 });
 
 test("settings.json restores every synced key and keeps a repo-added one; init-only leaves treehouse.toml alone", (t) => {
@@ -387,9 +472,10 @@ test("the scaffolded .gitignore ignores this system's state but keeps its config
   // the two .callum-dev paths are what make `update` a 3-way merge, and .no-mistakes.yaml
   // sits right beside the ignored .no-mistakes/ directory.
   for (const target of [
+    ".claude/factory-loop.json",
     ".no-mistakes.yaml",
     ".callum-dev.json",
-    ".callum-dev/baseline/.no-mistakes.yaml",
+    ".callum-dev/baseline/.claude/factory-loop.json",
     ".callum-dev/baseline/gitignore",
     ".gitignore",
     "CLAUDE.md",

@@ -16,13 +16,6 @@
   },
   "permissions": {
     "allow": [
-      "Bash(no-mistakes axi run *)",
-      "Bash(no-mistakes rerun *)",
-      "Bash(no-mistakes axi abort *)",
-      "Bash(no-mistakes axi sync *)",
-      "Bash(no-mistakes axi status *)",
-      "Bash(no-mistakes runs *)",
-      "Bash(no-mistakes axi logs *)",
       "Bash(treehouse get *)",
       "Bash(treehouse return *)",
       "Bash(treehouse status *)",
@@ -49,7 +42,14 @@
       "Bash(callum-flow-evaluate *)",
       "Bash(callum-flow-factory-state)",
       "Bash(callum-flow-factory-state *)",
-      "Bash(callum-flow-issue-read *)"
+      "Bash(callum-flow-issue-read *)",
+      "Bash(no-mistakes axi run *)",
+      "Bash(no-mistakes rerun *)",
+      "Bash(no-mistakes axi abort *)",
+      "Bash(no-mistakes axi sync *)",
+      "Bash(no-mistakes axi status *)",
+      "Bash(no-mistakes runs *)",
+      "Bash(no-mistakes axi logs *)"
     ],
     "deny": [
       "Bash(gh issue view *)",

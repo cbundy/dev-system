@@ -1,0 +1,6 @@
+{
+  "gateCommands": [
+    "<REPLACE: install deps if needed, then run lint>",
+    "<REPLACE: install deps if needed, then run the full test suite>"
+  ]
+}

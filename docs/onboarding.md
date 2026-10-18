@@ -9,9 +9,9 @@ instructions as a skill (generated from this page, never edited by hand).
 
 ## Done when
 
-- `.no-mistakes.yaml`, `.github/pull_request_template.md`, `CLAUDE.md`, `.claude/settings.json`,
+- `CLAUDE.md`, `.claude/settings.json`, `.claude/factory-loop.json`, `.github/workflows/ci.yml`,
   `.devcontainer/devcontainer.json`, `.gitignore`, `treehouse.toml`, `.callum-dev.json`
-  and `.callum-dev/baseline/` are committed, along with `.github/workflows/ci.yml` (step 3f).
+  and `.callum-dev/baseline/` are committed.
 - `package.json` has `@callum/dev-system` as a devDependency, from
   `github:cbundy/dev-system#semver:0.x`.
 - `grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .` prints
@@ -85,14 +85,14 @@ Check: `npx callum-dev --version` prints a version.
 
 ### Settle the commands first
 
-Every agent, every sub-agent and the no-mistakes pipeline run these commands, often many
+Every agent, every sub-agent, the factory loop's gate and CI run these commands, often many
 times per change. Get them right before writing any file. Start from the commands the repo
 really uses (`package.json` scripts, `Makefile`, `pyproject.toml`, CI workflows, the README)
 and run each to confirm it works.
 
 **Why it matters.** Everything a gate prints lands in an agent's context, on every run. A
 suite that prints a line per passing test costs thousands of lines a run, multiplied by
-every sub-agent, every pipeline retry and every agent that reads the pipeline log. An
+every sub-agent, every gate retry and every agent that reads the gate output. An
 ambiguous or multi-step gate makes agents improvise their own commands, run gates piecemeal
 and skip some. A gate that passes with warnings scrolling past teaches agents to ignore
 output, and then they miss the real failure.
@@ -112,22 +112,23 @@ command that:
 - on failure prints only what is needed to act: the failing test names or `file:line`, and
   the assertion or error.
 - has that behaviour built in, in the command itself or the tool's config file (reporter,
-  `addopts`, ...), never in a flag an agent has to remember, so the agent, the pipeline and
+  `addopts`, ...), never in a flag an agent has to remember, so the agent, the loop and
   CI all see the same output.
 - treats warnings as failures, or turns the rule off. A warning that passes is noise.
-- works in a fresh worktree with no dependencies installed, which is what no-mistakes
-  runs. Either the command installs what it needs, or `.no-mistakes.yaml` puts the install
-  step in front, e.g. `npm ci && npm run test`.
+- works in a fresh worktree with no dependencies installed, which is what the factory
+  loop's slot and a CI checkout are. Either the command installs what it needs, or the
+  install step goes in front of it, e.g. `npm ci && npm run test`.
 
 A combined `check` command that runs the fast gates in order and stops at the first
 failure (auto-fixers such as a formatter first) is worth adding: an agent then verifies a
-change in one call before handoff. If e2e is slow, decide which gate runs it (the pipeline
+change in one call before handoff. If e2e is slow, decide which gate runs it (the loop's gate
 or CI) and when an agent should run it locally.
 
-Write exactly these commands into `CLAUDE.md` "Canonical commands" and `.no-mistakes.yaml`
-`commands`, with nothing added in the YAML except the install step. The sub-agent brief and
-the pipeline then cannot drift. If a gate has no command yet, say so to the user rather
-than inventing one.
+Write exactly these commands into the three places that carry them, with nothing added
+except the install step: `.claude/factory-loop.json` `gateCommands` (the factory loop's stop
+gate, `[<lint>, <test>]`), `CLAUDE.md` "Canonical commands" and the lint and test steps of
+`.github/workflows/ci.yml`. The agent's brief, the loop's gate and CI then cannot drift. If a
+gate has no command yet, say so to the user rather than inventing one.
 
 Examples only; adapt them to the repo and check the options against the installed version:
 
@@ -188,11 +189,10 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .
 
 | File | Placeholder | Fill with |
 |---|---|---|
-| `.no-mistakes.yaml` | `commands.lint`, `commands.test` | The commands from "Settle the commands first", working in a **fresh worktree with no dependencies installed**: include the install step, e.g. `npm ci && npm run lint`. With no tests yet, use a command that exits 0 and say so to the user. |
-| `.no-mistakes.yaml` | the commented ignore-glob example | Delete the line, or replace it with real globs |
-| `.no-mistakes.yaml` | `document.instructions` | Which paths own which docs. If there is no rule, delete the whole `document:` block. |
+| `.claude/factory-loop.json` | `gateCommands` (lint, then test) | The commands from "Settle the commands first", working in a **fresh worktree with no dependencies installed**: include the install step, e.g. `npm ci && npm run lint`. With no tests yet, use a command that exits 0 and say so to the user. Init fills them from its prompts. |
+| `.github/workflows/ci.yml` | toolchain-and-install step, lint and test `run:` lines | The toolchain setup and install the commands need, and the same lint and test commands as `gateCommands` (step 3f) |
 | `CLAUDE.md` | e2e visual verification doc path | The repo's UI screenshot doc. For a repo with no UI, replace it with `n/a - no UI`. |
-| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `.no-mistakes.yaml` minus the install step, and which CI job calls each (the real job names from `ci.yml`, step 3f) |
+| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `gateCommands` minus the install step, and which CI job calls each (the real job names from `ci.yml`, step 3f) |
 | `CLAUDE.md` | worktree mechanism | `a treehouse worktree` unless the user says otherwise |
 | `CLAUDE.md` | repo-specific variations | Extra build or boot steps before the app can run, or delete the line |
 | `.devcontainer/devcontainer.json` | `remoteEnv` example | Delete the comment line, or add real env vars, e.g. `"DEV_LOGIN_TOOLS": "claude,gh"` for a repo that never uses codex |
@@ -244,29 +244,38 @@ install anything under `/persist`, or set a `devcontainer.metadata` label. See
 
 ### 3f. CI workflow
 
-Do this after the `.no-mistakes.yaml` commands are final. Without a workflow, a PR gets no
-checks and the no-mistakes CI step waits on "no CI checks reported yet".
+Do this after the `gateCommands` are final. Without a workflow, a PR gets no checks.
 
-1. If `no-mistakes ci-workflow` says the repo is not registered, run `no-mistakes init`.
-2. If `.github/workflows/` already has a CI workflow, keep it: check that it runs the same
-   lint and test commands as `.no-mistakes.yaml` and fix it if not. Otherwise run
-   `no-mistakes ci-workflow` (never `--force`).
-3. Review the generated `.github/workflows/ci.yml`:
-   - Delete toolchain setup steps for languages the repo does not use. The known case is
-     `actions/setup-go` with `go-version-file: go.mod` in a repo with no `go.mod` (it fails
-     every run; reported upstream at kunchenguid/no-mistakes#1378).
-   - Add the setup or install step the gate commands need (for example `actions/setup-node`
-     and `npm ci`, or `astral-sh/setup-uv`).
-   - Confirm the jobs run exactly the `.no-mistakes.yaml` lint and test commands.
-4. Put the real job name(s) from `ci.yml` in the `CLAUDE.md` "Canonical commands" note on
+1. If `.github/workflows/` already has a CI workflow, keep it and delete the scaffolded
+   `ci.yml`, after checking that it runs the same lint and test commands as `gateCommands`
+   (fix it if not). Otherwise fill the scaffolded `.github/workflows/ci.yml`.
+2. In the scaffolded `ci.yml`:
+   - Replace the toolchain-and-install step with what the gate commands need (for example
+     `actions/setup-node` and `npm ci`, or `astral-sh/setup-uv`), or delete it if none.
+   - Confirm the lint and test steps run exactly the `gateCommands` (init filled them from
+     its prompts).
+3. Put the real job name(s) from `ci.yml` in the `CLAUDE.md` "Canonical commands" note on
    which CI job runs each gate.
 
 Pushing a workflow file needs a gh token with the `workflow` scope. If a push is refused
 for that, `dev-doctor` shows a WARN with the fix: `gh auth refresh -h github.com -s workflow`.
 
 A PR opened before `ci.yml` reaches the default branch gets no checks until a new
-`pull_request` event (push a commit, or close and reopen it). A no-mistakes run stuck on
-"no CI checks reported yet" usually means there is no workflow.
+`pull_request` event (push a commit, or close and reopen it).
+
+### Existing consumers
+
+A repo onboarded before the factory-loop-only setup keeps its files. `npx callum-dev update`
+now:
+
+- prints `unsynced` for `.no-mistakes.yaml` and `.github/pull_request_template.md`, leaves both
+  untouched and stops syncing them (they are repo-owned; delete them if unused);
+- keeps the `no-mistakes` entries in `.claude/settings.json` `permissions.allow` and says they
+  are no longer synced;
+- prints `new` for `.claude/factory-loop.json` and `.github/workflows/ci.yml` when the repo has
+  neither, and does not create them (a placeholder CI workflow would fail the repo's PRs). To
+  adopt them, copy the template from `node_modules/@callum/dev-system/templates/` and fill it in
+  as in steps 3c and 3f.
 
 ## 4. Commit (and GitHub, if the user said yes)
 
@@ -292,17 +301,18 @@ Run all of these and report each result.
 ```bash
 npx callum-dev check
 node -e 'JSON.parse(require("fs").readFileSync(".claude/settings.json","utf8"))'
+node -e 'const c=JSON.parse(require("fs").readFileSync(".claude/factory-loop.json","utf8")); if(!Array.isArray(c.gateCommands)||c.gateCommands.length<1) throw new Error("no gateCommands")'
 grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev . || echo "no placeholders"
 test -f .github/workflows/ci.yml && echo "ci.yml present" || echo "BAD: no ci.yml (step 3f)"
-git check-ignore -v .no-mistakes.yaml .callum-dev.json .callum-dev/baseline/CLAUDE.md && echo "BAD: tracked file ignored" || echo ok
+git check-ignore -v .claude/factory-loop.json .callum-dev.json .callum-dev/baseline/CLAUDE.md && echo "BAD: tracked file ignored" || echo ok
 ```
 
-Once committed, run the `.no-mistakes.yaml` lint and test commands in a fresh worktree, the
-way the pipeline does, then remove it:
+Once committed, run the `gateCommands` in a fresh worktree, the way the loop's slot does,
+then remove it:
 
 ```bash
 git worktree add --detach ../gatecheck-tmp
-(cd ../gatecheck-tmp && <commands.lint> && <commands.test>)
+(cd ../gatecheck-tmp && <gateCommands[0]> && <gateCommands[1]>)
 git worktree remove --force ../gatecheck-tmp
 ```
 
@@ -310,8 +320,8 @@ If the agent is running inside a dev-system container, also run `dev-init --repo
 then `dev-doctor`. Login failures are expected until the user logs in. Report any other
 `FAIL`.
 
-Also check that `.github/workflows/ci.yml` runs the same lint and test commands as
-`.no-mistakes.yaml`. After the first push (step 4), confirm the CI job shows up: `gh pr checks`
+Also check that the lint and test commands match across the three places: `gateCommands` in
+`.claude/factory-loop.json`, `CLAUDE.md` "Canonical commands" and `.github/workflows/ci.yml`. After the first push (step 4), confirm the CI job shows up: `gh pr checks`
 on the PR, or `gh run list --branch <default branch>`.
 
 ## 6. Run it on Coder (if the user said yes)
