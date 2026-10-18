@@ -1,9 +1,9 @@
 name: CI
 
 # The always-on gate (cbundy/dev-system#137): `npm run lint` and `npm test` on
-# every pull request and every push to main. No `paths` filter: branch
-# protection requires this check, and a required check that does not run on a
-# PR would block it forever.
+# every pull request and every push to main, as two parallel jobs, `lint` and
+# `test`. No `paths` filter: branch protection requires the `ci` check, and a
+# required check that does not run on a PR would block it forever.
 #
 # The job id and name `ci` is the status check name branch protection requires (and
 # release.yml reads).
@@ -16,18 +16,17 @@ name: CI
 # shard legs are not, so a shard that never ran still turns `ci` red. N is the matrix list below,
 # the only place it is written: TEST_SHARD derives from the matrix value.
 #
-# What it covers:
-# - `npm run lint` (scripts/lint.sh): shellcheck over the repo's shell scripts,
-#   node --check, the generated-skill drift check against docs/, and terraform
-#   fmt -check, init and validate on coder/dev-system. LINT_REQUIRE_TERRAFORM=1
-#   makes a missing terraform fail instead of skipping.
-# - `npm test`: runs the callum-dev bin end-to-end (init, update
+# What they cover:
+# - `lint`: `npm run lint` (scripts/lint.sh): shellcheck over the repo's shell
+#   scripts, node --check, the generated-skill drift check against docs/, and
+#   terraform fmt -check, init and validate on coder/dev-system.
+#   LINT_REQUIRE_TERRAFORM=1 makes a missing terraform fail instead of skipping.
+# - `test`: `npm test`: runs the callum-dev bin end-to-end (init, update
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
-#   (dev-system#52), the callum-tools script tests and every mod's validation and
-#   tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
-# The heavy, path-filtered image and feature workflows stay separate and
-# optional.
+#   (dev-system#52), the callum-tools script tests and every mod's validation
+#   and tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
+# The heavy, path-filtered image and feature workflows stay separate.
 on:
   pull_request:
   push:
@@ -130,17 +129,17 @@ jobs:
           FACTORY_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm test
 
-  # The required check. Fails closed: it runs even when a needed job failed, was cancelled or
-  # was skipped, and passes only when every one succeeded.
+  # The check branch protection requires. always() so a failed, skipped or cancelled
+  # job fails it instead of leaving it skipped (a skipped required check passes).
   ci:
     name: ci
-    runs-on: ubuntu-latest
     needs: [lint, test]
     if: always()
+    runs-on: ubuntu-latest
     steps:
-      - name: Require every job to have succeeded
+      - name: Require every job to have passed
         env:
-          NEEDS: ${{ toJSON(needs) }}
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "$NEEDS"
-          echo "$NEEDS" | jq -e 'all(to_entries[]; .value.result == "success")' > /dev/null
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(to_entries[]; .value.result == "success")' > /dev/null

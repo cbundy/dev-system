@@ -1183,7 +1183,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(1)
   })
 
-  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (v2 SPEC 13.7.5, D-18)', ENGINE_TEST, async ($, on) => {
+  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const told = entry('tell:stalled:i470/claim/old:1', 'tell', { wake: 'stalled', class: 'owner', rule: 'S1', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
     const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`

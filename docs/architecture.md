@@ -51,7 +51,9 @@ templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (ci.yml)
-scripts/lint.sh                   lint entrypoint (npm run lint)
+scripts/lint.sh                   lint entrypoint (npm run lint); per-file checks run through the test pool (TEST_JOBS)
+scripts/lint-files.sh             classifies a list of files and checks them through scripts/test-pool.sh
+scripts/lint-file.sh              checks one file (shellcheck, sh/bash -n or node --check) for lint-files.sh
 scripts/test.sh                   test entrypoint (npm test); see Test runner below
 scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)

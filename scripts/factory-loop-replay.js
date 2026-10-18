@@ -12,10 +12,11 @@
 //   the ledger     derived from the device's own events up to <t> (derive.ts, v2 SPEC 13.7.5)
 //
 // Samples are every --step-minutes and one second before each live decision. It writes
-// <out>/replay.json (every sample's plan) and <out>/comparison.json, and prints a summary.
+// <out>/replay.json (every sample's plan) and <out>/comparison.json, and prints a summary. --out is
+// required, so a run never writes into the repo by default.
 //
 // usage: node scripts/factory-loop-replay.js --repo owner/name --device <device>
-//          --from <ISO> --to <ISO> [--step-minutes 2] [--out <dir>] [--skip-labels a,b]
+//          --from <ISO> --to <ISO> --out <dir> [--step-minutes 2] [--skip-labels a,b]
 //          [--control <JSON>]   owner directives in force over the window (v2 SPEC 13.4.3), e.g.
 //                               '{"noNewWork":true}' for a drain the memory file records
 //          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
@@ -62,13 +63,13 @@ order by ts;
 const ARGS = ["repo", "device", "from", "to", "stepMinutes", "out", "skipLabels", "control", "decisions"];
 
 function args(argv) {
-  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked" };
+  const out = { stepMinutes: 2, skipLabels: "parked" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i].replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (!ARGS.includes(key) || !argv[i].startsWith("--")) throw new Error(`unknown argument ${argv[i]}`);
     out[key] = argv[i + 1];
   }
-  for (const k of ["repo", "device", "from", "to"]) if (!out[k]) throw new Error(`--${k} is required`);
+  for (const k of ["repo", "device", "from", "to", "out"]) if (!out[k]) throw new Error(`--${k} is required`);
   return out;
 }
 
