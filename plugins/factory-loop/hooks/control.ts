@@ -92,7 +92,7 @@ function allUsage(): string {
 // empty op is `status`. Anything malformed is an error naming the op and its usage, so a bad
 // op never makes a partial change. Under planner v2, `resume` takes issue numbers and an
 // optional note in double quotes, and no run id.
-export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
+export function parseOp(text: string, planner: Planner = 'v2'): Parsed {
   const words = text.trim().split(/\s+/).filter(w => w !== '')
   // the model may pass the command as typed
   if (words[0]?.toLowerCase() === '/factory') words.shift()
@@ -264,7 +264,7 @@ function applyChange(control: Control, change: { key: string; value?: unknown },
 // needs writing; an op that changes nothing (pausing a paused issue) answers so and writes
 // nothing. `last` is the last pass, for status. Under planner v2 a drop applies to the life it
 // closes, so a drop of an issue claimed again since is recorded again (v2 SPEC 4.1).
-export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1', view: ConfigView | null = null): Applied {
+export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v2', view: ConfigView | null = null): Applied {
   const keep = (text: string, effects: Effects = {}): Applied => ({ control, effects, changed: false, text })
   const set = (patch: Partial<Control>, text: string): Applied => ({ control: { ...control, ...patch }, effects: {}, changed: true, text })
 
@@ -549,7 +549,7 @@ const refused = (text: string, op: Op | null = null): OpReply => ({
 // main conversation changes directives: an agent the loop spawned may read the status, never
 // set an op (SPEC 6.1: the loop's agents act on their own issue only).
 export async function runOp(io: FileIo, paths: ControlPaths, input: string, now: Ms, from: OpFrom = {}): Promise<OpReply> {
-  const planner = from.planner ?? 'v1'
+  const planner = from.planner ?? 'v2'
   const parsed = parseOp(input, planner)
   if (!parsed.ok) return refused(parsed.error)
   // help reads and writes nothing, and an agent may ask for it as it may for the status

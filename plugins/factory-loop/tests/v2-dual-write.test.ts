@@ -49,6 +49,20 @@ describe('dualWriteRules (H1)', () => {
     expect(acts.find(x => x.issue === 8)).toMatchObject({ event: { record: b, row: 'H1', from: null, via: 'dual-write' } })
   })
 
+  test('every action writes the new log only (target new), and nothing else sets a target', () => {
+    const acts = dwActions(world([rec(7), closedRec(8)], on()))
+    expect(acts).toHaveLength(2)
+    for (const a of acts) expect(a.target).toBe('new')
+    const others = planV2(world([rec(7)], on()), CFG).actions.filter(a => a.kind === 'event' && !a.key.startsWith('dual-write:'))
+    for (const a of others) expect((a as { target?: string }).target).toBeUndefined()
+  })
+
+  test('the second load: the record in seen plans nothing', () => {
+    const first = dwActions(world([rec(7)], on()))
+    expect(first).toHaveLength(1)
+    expect(dwActions(world([rec(7)], on([`7:${LIFE}:3`])))).toEqual([])
+  })
+
   test('a closed record alone (no live record) is still wanted', () => {
     expect(dwActions(world([closedRec(8)], on()))).toHaveLength(1)
   })
@@ -123,12 +137,19 @@ describe('observeV2 dual write (2.4)', () => {
   test('act mode, planner v2: the probe runs once, the log is read once, and seen holds only the matching transition', async () => {
     const h = harness({ exitCode: 0, stdout: `${NEW_LOG}\n` })
     const r = await h.pass(runtime('act'))
-    expect(probes(h.runs)).toEqual([['callum-flow-event', '--new-path', '--repo', REPO]])
+    expect(probes(h.runs)).toEqual([['callum-flow-event', '--new-only', '--new-path', '--repo', REPO]])
     expect(r.v2.dualWrite).toEqual({ readAt: NOW, seen: new Set([`7:${LIFE}:3`]) })
     expect(r.v2.sources.dualWrite.ok).toBe(true)
     await h.pass(runtime('act'))
     expect(probes(h.runs)).toHaveLength(1)
     expect(h.reads).toEqual([NEW_LOG])
+  })
+
+  test('an image that dual-writes but lacks --new-only answers the probe with exit 2: off, so H1 plans nothing', async () => {
+    const h = harness({ exitCode: 2, stdout: '' })
+    const r = await h.pass(runtime('act'))
+    expect(r.v2.dualWrite).toBeNull()
+    expect(dwActions(world([rec(7)], r.v2.dualWrite))).toEqual([])
   })
 
   test('an older image (exit 2): off, the source ok, no read', async () => {

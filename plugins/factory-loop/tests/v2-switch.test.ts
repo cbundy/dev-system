@@ -17,6 +17,7 @@ import { plan } from '../hooks/plan'
 import type { Action, LedgerEntry, State } from '../hooks/types'
 import { emptyV2State, recordsToStore } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
+import { newSettingsCache, repoLoaded } from '../hooks/v2/settings'
 import { V2_EXECUTORS } from '../hooks/v2/registry'
 import { V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
@@ -59,9 +60,9 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
 }
 
 describe('the settings (v2 SPEC appendix A)', () => {
-  test('v1 plans until cutover, with the shadow off; the timeouts and limits are the spec\'s', () => {
+  test('v2 plans by default (v1 is an explicit opt-in until U10), with the shadow off; the timeouts and limits are the spec\'s', () => {
     expect(DEFAULT_CONFIG).toMatchObject({
-      planner: 'v1',
+      planner: 'v2',
       shadow: 'off',
       stateTimeoutMs: { design: 45 * MIN, build: 90 * MIN, review: 30 * MIN, fix: 60 * MIN, triage: 15 * MIN, queued: 6 * HOUR, queueWait: 2 * HOUR, parked: 24 * HOUR },
       ciStartMs: 10 * MIN,
@@ -118,7 +119,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
       'stateTimeout.review: "soon" is not a duration (like 60s, 5m, 2h)',
       'stateTimeout.merge: unknown',
     ])
-    expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
+    expect(bad.config).toMatchObject({ planner: 'v2', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
   test('minimumReleaseCadence: 6h by default, a duration or ms of at least 1h, the workspace wins, anything else is one problem (#772)', () => {
@@ -143,13 +144,24 @@ describe('the settings (v2 SPEC appendix A)', () => {
     expect(bad.config).toMatchObject({ reviewerModel: 'opus', triageModel: 'opus' })
   })
 
+  test('no planner set anywhere (a new workspace): v2, K 3 and no problems; planner v1 is an explicit opt-in with K 5 and keeps the shadow (#794)', () => {
+    for (const loaded of [loadConfig(), loadConfig({}), loadConfig({}, {})]) {
+      expect(loaded.config).toMatchObject({ planner: 'v2', shadow: 'off', maxInFlightIssues: 3 })
+      expect(loaded.problems).toEqual([])
+    }
+    expect(loadConfig({ planner: 'v1' }).config).toMatchObject({ planner: 'v1', maxInFlightIssues: 5 })
+    expect(loadConfig({}, { planner: 'v1' }).config).toMatchObject({ planner: 'v1', maxInFlightIssues: 5 })
+    expect(loadConfig({ planner: 'v1', shadow: 'v2' }).config).toMatchObject({ planner: 'v1', shadow: 'v2' })
+    expect(loadConfig({ planner: 'v3' })).toMatchObject({ problems: ['planner: "v3" is not v1 or v2'], config: { planner: 'v2', maxInFlightIssues: 3 } })
+  })
+
   test('under planner v2, K is 3 unless a settings file sets it (v2 SPEC section 15); v1 keeps 5', () => {
     expect(V2_DEFAULTS).toEqual({ maxInFlightIssues: 3 })
     expect(loadConfig({ planner: 'v2' }).config.maxInFlightIssues).toBe(3)
     expect(loadConfig({ planner: 'v2', maxInFlightIssues: 2 }).config.maxInFlightIssues).toBe(2)
     expect(loadConfig({ maxInFlightIssues: 5 }, { planner: 'v2' }).config.maxInFlightIssues).toBe(5)
     expect(loadConfig({ planner: 'v2', maxInFlightIssues: 'two' }).config.maxInFlightIssues).toBe(3)
-    expect(loadConfig({}).config.maxInFlightIssues).toBe(5)
+    expect(loadConfig({ planner: 'v1' }).config.maxInFlightIssues).toBe(5)
   })
 })
 
@@ -166,6 +178,11 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     expect(shadowed.shadow).toEqual(planV2(s(), config({ shadow: 'v2' })))
   })
 
+  test('a config no layer set a planner for plans with v2 (#794)', () => {
+    const cfg = loadConfig({}, {}).config
+    expect(planPass(s(), cfg)).toEqual({ result: planV2(s(), cfg), shadow: null })
+  })
+
   test('planner v2: v2\'s plan, and no shadow of v1 (v2 SPEC 2.3)', () => {
     const cfg = config({ planner: 'v2', shadow: 'v2' })
     expect(planPass(s(), cfg)).toEqual({ result: planV2(s(), cfg), shadow: null })
@@ -179,10 +196,10 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
   })
 
   test('the v2 shadow plans with the settings v2 runs with: K 3 where no file sets it, the file\'s K where one does', () => {
-    const loaded = loadConfig({ shadow: 'v2' })
+    const loaded = loadConfig({ planner: 'v1', shadow: 'v2' })
     expect(loaded.config.maxInFlightIssues).toBe(5)
     expect(loaded.v2.maxInFlightIssues).toBe(3)
-    expect(loadConfig({ shadow: 'v2' }, { maxInFlightIssues: 2 }).v2.maxInFlightIssues).toBe(2)
+    expect(loadConfig({ planner: 'v1', shadow: 'v2' }, { maxInFlightIssues: 2 }).v2.maxInFlightIssues).toBe(2)
     expect(loadConfig({ planner: 'v2' }).v2).toEqual(loadConfig({ planner: 'v2' }).config)
     const r = planPass(s(), loaded.config, loaded.v2)
     expect(r.result).toEqual(plan(s(), loaded.config))
@@ -490,7 +507,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     test(`under planner v2 the repo's settings are origin's default branch's: ${name}`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const run = world({ run: argv => (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json' ? show : undefined) })
-      const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) }, run })
+      const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) }, run })
       await $.session.start(START)
       await clock.advance(6_000)
       expect(h.seen.some(s => s.argv.join(' ') === `callum-flow-issue-read --json --list --label ${label}`)).toBe(true)
@@ -507,10 +524,26 @@ describe('the driver (v2 SPEC 2.3)', () => {
         return line === 'git show origin/main:.claude/factory-loop.json' ? { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'from-main' }) } : undefined
       },
     })
-    const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2' }) }, run })
+    const h = host(on, { config: { repo: REPO, checkout: '/work', planner: 'v2' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2' }) }, run })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label from-main')).toBe(true)
+  })
+
+  test('repoLoaded: with no planner in the tree or the workspace file, the repo settings are origin\'s (#794)', async () => {
+    const asked: string[] = []
+    const io = {
+      run: async (argv: string[]) => {
+        asked.push(argv.join(' '))
+        return argv[1] === 'show' ? { exitCode: 0, stdout: JSON.stringify({ readyLabel: 'from-origin' }), stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }
+      },
+      now: async () => NOW,
+    }
+    const r = await repoLoaded(io, newSettingsCache(), '/work', { readyLabel: 'from-tree' }, {})
+    expect(asked).toContain('git show origin/main:.claude/factory-loop.json')
+    expect(r.config).toMatchObject({ planner: 'v2', readyLabel: 'from-origin' })
+    const v1 = await repoLoaded(io, newSettingsCache(), '/work', { readyLabel: 'from-tree' }, { planner: 'v1' })
+    expect(v1.config.readyLabel).toBe('from-tree')
   })
 
   test('act mode with planner v2: a records store that cannot be read is no records known, not none; nothing that releases or starts is planned, and nothing is written over it', async ($, on) => {

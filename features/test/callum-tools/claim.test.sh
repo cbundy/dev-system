@@ -145,7 +145,7 @@ arr() { jq -s '.'; }
 reset() {
   rm -rf "$d"
   mkdir -p "$d" "$tmpdir/events"
-  rm -f "$tmpdir/events"/*
+  rm -rf "$tmpdir/events"/*
   : > "$d/calls"
   echo "$NOW" > "$d/now-iso"
   echo 'Thu, 08 Oct 2026 12:00:00 GMT' > "$d/date"
@@ -577,6 +577,42 @@ for fin in closed abandoned; do
   expect_rc 0 "sweep final $fin"
   [ "$(events | wc -l)" = "$n" ] || fail "final $fin: $(events)"
 done
+
+# H1's backfill of a closed issue's last stage (cbundy/dev-system#825): written with --new-only it
+# leaves the old log alone, so the sweep still sees `closed` as the newest lifecycle event and logs
+# nothing. Written to both logs (the bug) the old log's newest line is a transition and the sweep
+# logs `closed` a second time.
+# h1_event ARGS...: the real writer with node on PATH too (this suite's toolbin has none), so the
+# translator runs
+mkdir -p "$tmpdir/nodebin"
+ln -sf "$(command -v node)" "$tmpdir/nodebin/node"
+h1_event() {
+  set +e
+  PATH="$toolbin:$tmpdir/nodebin" CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA "$SH" "$EVENT" "$@" >"$tmpdir/out" 2>"$tmpdir/err"
+  rc=$?
+  set -e
+}
+H1NOTE='row=H1 life=x seq=3 from=merge-queue to=closed seqAt=1792182907816 since=1792182907816 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 approvedPatch=none prClosedAt=none via=dual-write brief=none question=none notes=none why=none'
+reset
+closed_issue 7 completed
+seed claimed 7
+seed closed 7
+n=$(events | wc -l)
+h1_event transition --issue 7 --branch issue-7 --note "$H1NOTE" --new-only
+expect_rc 0 "H1 backfill new-only"; [ ! -s "$tmpdir/err" ] || fail "H1 backfill stderr: $(cat "$tmpdir/err")"
+[ "$(events | wc -l)" = "$n" ] || fail "new-only wrote to the old log: $(events)"
+[ "$(cat "$tmpdir/events"/factory/*.jsonl | grep -c '"type":"transition"')" -ge 1 ] || fail "new-only wrote no new event"
+rc_of "$SWEEP"
+expect_rc 0 "sweep after H1 backfill"
+[ "$(events | wc -l)" = "$n" ] || fail "the sweep logged after a new-only backfill: $(events)"
+reset
+closed_issue 7 completed
+seed claimed 7
+seed closed 7
+h1_event transition --issue 7 --branch issue-7 --note "$H1NOTE"
+n=$(events | wc -l)
+rc_of "$SWEEP"
+[ "$(events | wc -l)" = $((n + 1)) ] || fail "control: a both-logs backfill should make the sweep log closed again: $(events)"
 
 # the companion's prompt_denied and prompt_waiting are no lifecycle event: after closed they do not
 # make the issue a candidate for a second closed

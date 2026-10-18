@@ -92,8 +92,9 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
-  // v2 (v2 SPEC appendix A): v1 plans until cutover; the shadow is off
-  planner: 'v1',
+  // v2 (v2 SPEC appendix A): v2 plans by default; v1 is an explicit opt-in (`planner: "v1"`) until
+  // the U10 delete wave; the shadow is off
+  planner: 'v2',
   shadow: 'off',
   stateTimeoutMs: {
     design: 45 * MIN,

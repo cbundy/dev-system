@@ -114,7 +114,11 @@ SQL
   event right after the old line (`callum-flow-event --new-path` prints the path; `factory/` is made
   0700). The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
   [--issue N] [--repo O/N] [--actor NAME]`, writes a new event straight to that file and nothing to
-  the old log. The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
+  the old log. `callum-flow-event <state> ... --new-only` does the same for an old-state call: it builds and
+  translates the line as dual write does and appends only the new event (never the old line, so
+  `--if-changed` with it is a usage error); the factory loop's backfill (H1) uses it. `callum-flow-event
+  --new-only --new-path` is its capability probe: it prints the new path with exit 0, and an older image exits 2.
+  The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
   `callum-flow-sweep`, `--if-changed` (which keeps comparing old lines only) or the old shipper's
   `$DIR/*.jsonl` glob (`images/base/event-push-loop:202`).
 - **Shipping.** `factory-event-push-loop` (as the writer role, with `FACTORY_DB_WRITER_URL` or the
@@ -129,6 +133,8 @@ SQL
   device (`DEV_MACHINE_NAME`, `hostname`, `/etc/hostname`), `--repo` to every repo, and `--since` to the device's earliest new
   event; both sides cut at the second. Exit 0 only when missing, misses and extras are all zero, 1 when any is not, and 2 on a
   usage error, an unconfigured or unreachable store, or no new rows for the device and no `--since`.
+  A `transition` with `via=dual-write` and no old row is not an extra: the backfill writes it to the new log
+  only, by design.
   Events written by the native mode (`callum-flow-event --type`) have no old row and show as extras under their
   type, so the check proves dual write only on a device where no producer writes natively yet.
 - **Store.** `factory.event_store`: the envelope fields and `device_seq` as columns, `data` as
