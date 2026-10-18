@@ -181,6 +181,12 @@ Owner items (the title counts them until resolved):
   issues, so the new store is not yet safe to read. Nothing is blocked: the loop still uses the old
   one. Lead with the issues and the first difference, and say that the owner may set
   `/factory config set eventsSource old` to stop the compare reading the new store.
+- `facts-shadow` (keys, differences; detail: the keys, the first difference and the way back): the
+  loop read its facts (the newest reclaim per issue), rebuilt its ledger and listed its logged keys
+  from the old and the new event store and they differ for those keys (`reclaimed:#N`, `ledger:<key>`,
+  `once:<key>`), so the new store is not yet safe to read. Nothing is blocked: the loop still uses
+  the old one. Lead with the first difference, and say that the owner may set
+  `/factory config set eventsSource old` to stop the compare reading the new store.
 
 Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop

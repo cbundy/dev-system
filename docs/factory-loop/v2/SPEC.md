@@ -111,7 +111,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | Source | Command | Cadence | Notes |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses. `nomistakes.runs` is optional in that tool, so no-mistakes data can never blind the loop |
-| `facts` | `dev-query` with `EVENTS_SQL` | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
+| `facts` | `dev-query` with `EVENTS_SQL` (`eventsSource` `new`: `dev-query --factory` with `NEW_EVENTS_SQL`, 3.3) | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
 | `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
@@ -320,6 +320,28 @@ type IssueRecord = {
   read never fails the pass. A compare with differences tells the owner once per distinct set of issues
   (`tell(records-shadow)`, key `tell:records-shadow:<issues>`; it names the issues, the first difference
   and the way back, `/factory config set eventsSource old`).
+- **The same switch for the facts and the ledger rebuild.** `eventsSource` also picks where the `facts`
+  source (every pass, 3 days) and the ledger rebuild of a lost store (7 days, 13.7.5) read
+  (`hooks/v2/sources-facts.ts`), and with them the events v2's `logged` once keys come from (7.2). `old`
+  is `EVENTS_SQL` through `dev-query --csv`, as above. `new` is `NEW_EVENTS_SQL` through
+  `dev-query --factory --csv`: the types `requeued`, `claimed`, `claim_renewed`, `merged`, `loop_entry`,
+  `intervention` and `reviewed`, and `closed` written by the sweep, over all devices. Each row goes through
+  the shared reader and becomes the `FactoryEvent` that `factsOf`, `deriveLedger` and `onceKey` read, with
+  the old state name (`requeued` as `reclaimed`, `claim_renewed` as `renewed`, `loop_entry` as `loop`), the
+  time cut to whole seconds as the old log stores it, and a note built with the writer's own encoders
+  (`eventNote`, `loopNote`). A row of an unknown type or version, or one the reader refuses, fails the
+  whole read (the `facts` source is not ok, its error names the event_id and the source `new`), a missing
+  factory URL too, and no row is skipped. Under `new` the facts no v2 path reads (`briefs`, `reviewFixes`,
+  `verdicts`, `superseded`, `answered`, `pipeline`: only `runsFromEvents` reads them, and only the plan
+  replay and the state digest read its runs) are empty. `shadow` decides on the old read and, once per load
+  and then at most hourly, also reads the new one and compares, with both sides cut 600 s back, the newest
+  `reclaimed` per issue, this device's derived ledger (the entries the loop logged lose their outcome and
+  their run, PR and head columns on both sides, which the new `loop_entry` does not carry) and the set of
+  once keys. It writes one `shadow_read` event (`reader` `loop-facts`, `tool` `factory-loop`; rule H1, key
+  `facts-shadow:<time>`; `diff_keys` are `reclaimed:#N`, `ledger:<key>` and `once:<key>`); a failing new read
+  never fails the pass and is a compare with `new_ok` false. A compare with differences tells the owner once
+  per distinct set of keys (`tell(facts-shadow)`, key `tell:facts-shadow:<keys>`, with the first difference
+  and the way back).
 
 ### 3.4 Labels
 
@@ -1192,7 +1214,8 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
   (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`. Under
   `eventsSource` `new` it reads them from the new store instead, as `transition.v1` data through the
-  shared reader, and under `shadow` (the default) it reads both and writes a `shadow_read` (3.3).
+  shared reader, and under `shadow` (the default) it reads both and writes a `shadow_read` (3.3). The facts and the ledger rebuild
+  follow the same switch (3.3).
 
 ## 8. Design briefs and review
 
@@ -2227,7 +2250,7 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 | Source | Command | Cadence | Required for |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
-| `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1) | every pass | v2's facts (2.4) |
+| `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1); from the new store under `eventsSource` `new` (`NEW_EVENTS_SQL`, 3.3) | every pass | v2's facts (2.4) |
 | `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
 | `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
 | `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
@@ -2808,7 +2831,8 @@ so the rollout is not read again. The rebuilt ledger becomes the one the module 
 decision log names its source (`store`, `events` or `none`). A rebuild that found nothing is not
 read again every pass. A wake rebuilt from events has no wake id and no session. Once the
 rebuilt ledger is adopted, it is `lost` as in step 2, because it was open before this load. The
-records rebuild the same way, from `transition` events (3.3).
+records rebuild the same way, from `transition` events (3.3). The 7 days are read from the store
+`eventsSource` picks, as the facts are (3.3).
 
 ### 13.8 Waking the model
 
@@ -2928,7 +2952,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened` and `records-shadow`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow` and `facts-shadow`) go out before any other
 wake, and the title counts the open ones.
 
 Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act
