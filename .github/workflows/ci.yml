@@ -1,8 +1,8 @@
 name: CI
 
 # The always-on gate (cbundy/dev-system#137): `npm run lint` and `npm test` on
-# every pull request and every push to main, as two parallel jobs, `lint` and
-# `test`. No `paths` filter: branch protection requires the `ci` check, and a
+# every pull request and every push to main, as parallel jobs (`lint` and a sharded
+# `test` matrix, described below). No `paths` filter: branch protection requires the `ci` check, and a
 # required check that does not run on a PR would block it forever.
 #
 # The job id and name `ci` is the status check name branch protection requires (and
