@@ -58,3 +58,40 @@ A reader that moves to the new store ([#651](https://github.com/cbundy/dev-syste
    runs `compare` over it; and
 2. matches once on the full history, `load` then `compare` over the development database from
    2026-10-16T02:00Z, before the reader's shadow starts. Drop the database afterwards.
+
+## Source switch
+
+A read tool that moves from the old store to the new one carries a source switch
+([#897](https://github.com/cbundy/dev-system/issues/897)). The helper is `images/base/factory-source.js`
+(CommonJS, node built-ins only); a node tool in `images/base` requires it from beside itself, else from
+`$DEV_SYSTEM_SHARE` (the image copies it to `/usr/local/share/dev-system/`).
+
+The source is chosen by the `--source old|new|shadow` flag (or `--source=X`), else by
+`CALLUM_FLOW_<TOOL>_SOURCE` (the tool name upper-cased, `-` becoming `_`, so `factory-state` reads
+`CALLUM_FLOW_FACTORY_STATE_SOURCE`), else by the tool's own default. Anything else is a usage error
+(`resolveSource` throws an Error with `code: "USAGE"`).
+
+- `old`: the tool reads the old store only.
+- `new`: the tool reads the new store only. `dev-query --factory` is the new store's read path (the
+  `factory.event_log` view, as the reader role).
+- `shadow`: the tool reads both through `runShadow`, answers from old, and records how new differed. A
+  failing new read or an unwritable record never fails the tool; a failing old read does.
+
+Each shadow run appends one JSON line to `${CALLUM_EVENTS_DIR:-/persist/events}/factory/.shadow/<tool>.jsonl`
+(directory mode 0700, file mode 0600). The push loop's `factory/*.jsonl` glob does not reach `.shadow/`, so
+these records stay on the device. Fields:
+
+| Field | Meaning |
+|---|---|
+| `ts`, `tool`, `device`, `repo` | when, which tool, which machine (`DEV_MACHINE_NAME`, else the hostname), the caller's repo or null |
+| `args` | the caller's summary of its arguments; it must hold no secrets |
+| `old_ms`, `new_ms` | how long each read took |
+| `differences` | the number of differing paths, or null when new failed |
+| `paths` | up to the first 5 `{ path, old, new }`, each value JSON-stringified and clipped to 200 characters |
+| `new_error` | null, or the new read's error message (clipped to 200 characters) |
+
+A run with differences also prints `<tool>: shadow: N difference(s), first at <path> (see <file>)` on stderr.
+
+To move a tool's default to `new`: its shadow runs must be clean, judged with the query in
+[docs/metrics.md](../metrics.md#shadow-runs-source-switch). The threshold is set in
+[#902](https://github.com/cbundy/dev-system/issues/902).

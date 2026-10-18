@@ -105,6 +105,16 @@ done < "$(NEW)"
 [ "$(cat "$EVDIR/factory/.pushed/acme__widgets.jsonl")" = 3 ] || fail "cursor should be 3"
 echo "ok: lines land with equal columns"
 
+# -- 1b. a shadow record (factory/.shadow/<tool>.jsonl) is never pushed
+mkdir -p "$EVDIR/factory/.shadow"
+head -n 1 "$(NEW)" > "$EVDIR/factory/.shadow/x.jsonl"
+before=$(rows)
+loop --once
+[ "$rc" = 0 ] || fail "--once with a shadow file should succeed: $(cat "$tmpdir/loop.out")"
+[ "$(rows)" = "$before" ] || fail "a .shadow line was pushed"
+[ ! -e "$EVDIR/factory/.pushed/x.jsonl" ] || fail "a .shadow file got a cursor"
+echo "ok: .shadow records are not pushed"
+
 # -- 2. a second run adds nothing
 before=$(cat "$EVDIR/factory/.pushed/acme__widgets.jsonl")
 loop --once
