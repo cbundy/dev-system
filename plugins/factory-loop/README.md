@@ -6,7 +6,8 @@ and does it: claims, heartbeats, sweeps, agents, gate responses, guards, merges 
 title. The model is woken only for judgment (the hourly release review) and to talk to the owner;
 agents read the code.
 
-- Design: [docs/factory-loop/SPEC.md](../../docs/factory-loop/SPEC.md), with the inventory of
+- Design: [docs/factory-loop/v2/SPEC.md](../../docs/factory-loop/v2/SPEC.md) (its section 13 is the
+  foundation), with the inventory of
   what it replaces ([INVENTORY.md](../../docs/factory-loop/INVENTORY.md)), the choices made
   ([DECISIONS.md](../../docs/factory-loop/DECISIONS.md)) and progress
   ([STATUS.md](../../docs/factory-loop/STATUS.md)).
@@ -16,8 +17,8 @@ agents read the code.
 
 Both halves are built. In **observe mode** (the default) every pass reads the factory, plans,
 logs its decisions and shows its status in the session title, and executes nothing: every event
-its commands cause goes to a local sink. In **act mode**, once every safety rail passes (SPEC
-11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
+its commands cause goes to a local sink. In **act mode**, once every safety rail passes (v2 SPEC
+13.11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
 through its executor, starts its agents (its own, `agents/`), and wakes the model for judgment. Act
 mode has run only in tests so far; its first real run is on `dev-system-testbed` (PLAN stage
 D). The plugin is not listed in the marketplace (DECISIONS D-02).
@@ -101,8 +102,8 @@ Each change is logged and asks for a pass at once. The ops:
 - `resume <N|run id>`: release a hold on an issue (a pending decision) or a run (an escalation,
   a merge hold, the review cap). For an escalated gate, follow the notice's explanation of what
   a plain resume will do. To request a change, record `note <N> <change>` after the escalation,
-  then `resume <run id>`; see [the gate rules](../../docs/factory-loop/SPEC.md#54-pipeline-gates-p)
-  for resume-note eligibility and routing;
+  then `resume <run id>`; see [the owner ops](../../docs/factory-loop/v2/SPEC.md#appendix-e-owner-ops)
+  for what each op does under v2;
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
 - `drop <N>`: abandon N and stop its agents;
@@ -121,17 +122,17 @@ then writes one record to `trace-YYYY-MM-DD.jsonl` beside the decision log: each
 every command with its time, exit and bytes, which sources came from the cache, each action's
 times, the wakes' latencies, and what each issue waits on and since when. The trace files are
 kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
-fills the cap is cut short. SPEC 12.1 explains each field, with `jq` examples.
+fills the cap is cut short. [v2 SPEC 13.12.1](../../docs/factory-loop/v2/SPEC.md#13121-trace-mode) explains each field, with `jq` examples.
 
 ## How agents answer
 
 The intended design is that the loop's agents answer through validated tools
 (`mcp__factory-loop__verdict`, `design` and `handoff`). But on Claude Code 2.1.296 and 2.1.299
-an agent the loop spawns from its timer never reaches them (SPEC 13). So, as a **temporary
+an agent the loop spawns from its timer never reaches them ([v2 SPEC 13.13](../../docs/factory-loop/v2/SPEC.md#1313-known-gaps-and-risks)). So, as a **temporary
 workaround**, agents record their answer with a checked script, `bin/factory-answer`: each
 prompt names the script and an answer file for that one attempt, the script checks the JSON
 against the same contract the tools use (`hooks/contract.mjs`) and names every problem, and the
-loop reads the file when the agent's turn ends (SPEC 7.3a, DECISIONS D-74). Text stays the
+loop reads the file when the agent's turn ends (v2 SPEC 13.7.3a, DECISIONS D-74). Text stays the
 fallback, and the decision log says which way each answer came (`script`, `tool`, `text`,
 `repair`).
 

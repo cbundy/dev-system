@@ -1,9 +1,9 @@
 // The pass driver (register.ts) end to end, in the engine's own test host (tests/host.ts):
 // files, the store, commands, agents, prompts and /rename are answered by the test's hooks. In
 // observe mode a pass reads, plans, logs and titles, and every command's event writes go to the
-// sink (SPEC 11.1). In act mode the rails come first (SPEC 11.2), the ledger lives in $.store,
+// sink (v2 SPEC 13.11.1). In act mode the rails come first (v2 SPEC 13.11.2), the ledger lives in $.store,
 // the hooks feed it between passes (an agent's answer, a wake's turn), and the owner's controls
-// ping the loop (SPEC 2, 4.3, 7, 8, 10). The engine's test host never hands a plugin's
+// ping the loop (v2 SPEC 13.2, 13.4.3, 13.7, 13.8, 13.10). The engine's test host never hands a plugin's
 // $.agent.spawn an agent id, so agents that start are seeded in the store here; act.test.ts runs
 // whole spawns through act.ts.
 import { describe, expect, mock, test } from 'claude-code/testing'
@@ -79,7 +79,7 @@ function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = 
   })
 }
 
-describe('observe mode (SPEC 11.1)', () => {
+describe('observe mode (v2 SPEC 13.11.1)', () => {
   test('one pass reads, plans, logs and titles, and runs only reads, their events to the sink', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // 45 is read open: an issue whose state a failed read leaves unknown gets no agent (#556)
@@ -117,7 +117,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.prompts).toEqual([])
   })
 
-  test('the repo-local settings are loaded through the config loader (SPEC 4.2)', ENGINE_TEST, async ($, on) => {
+  test('the repo-local settings are loaded through the config loader (v2 SPEC 13.4.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on, {}, {}, () => h.files.get('/work/.claude/factory-loop.json'))
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ readyLabel: 'go', queueEvery: '10m', colour: 'blue' }))
@@ -160,7 +160,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.seen.some(s => s.argv[0] === '/work/features/src/callum-tools/usage-check.sh')).toBe(true)
   })
 
-  test('once a day the loop dir loses its files older than a week (SPEC 11.6)', ENGINE_TEST, async ($, on) => {
+  test('once a day the loop dir loses its files older than a week (v2 SPEC 13.11.6)', ENGINE_TEST, async ($, on) => {
     // two minutes before midnight
     const clock = mock.clock(on, { now: Date.UTC(2026, 9, 13, 23, 58) })
     const h = shadow(on)
@@ -183,7 +183,7 @@ describe('observe mode (SPEC 11.1)', () => {
     message: { type: 'user' as const, role: 'user' as const, content: [{ type: 'text' as const, text }] },
   })
 
-  test('with no session.start (a plugin /reload-plugins adds), the first session.append starts the loop (SPEC 2)', ENGINE_TEST, async ($, on) => {
+  test('with no session.start (a plugin /reload-plugins adds), the first session.append starts the loop (v2 SPEC 13.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
     mock.session(on)
@@ -203,7 +203,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.titles).toEqual([])
   })
 
-  test('the note /rename leaves for the model is blanked as it is stored; other rows are kept (SPEC 9.1, FINDINGS check 3)', ENGINE_TEST, async ($, on) => {
+  test('the note /rename leaves for the model is blanked as it is stored; other rows are kept (v2 SPEC 13.9.1, FINDINGS check 3)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     shadow(on)
     const session = mock.session(on)
@@ -286,7 +286,7 @@ async function factoryOp($: Engine, args: string) {
   return $.command.run({ command: 'factory', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 }
 
-describe('act mode: the pass (SPEC 2, 7, 12)', () => {
+describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
   test('the rails pass, the pass acts in plan order, and the store keeps the ledger', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
@@ -390,7 +390,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
   })
 
-  test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (SPEC 11.3, #557)', ENGINE_TEST, async ($, on) => {
+  test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (v2 SPEC 13.11.3, #557)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let h: Host | undefined
     // the owner creates the switch while the claim runs, before the pass's sweep
@@ -415,7 +415,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.at(-1)).toBe('🔄 dev-system · off')
   })
 
-  test('a restart mid-action: running commands are lost, agents are reconciled against the list (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
+  test('a restart mid-action: running commands are lost, agents are reconciled against the list (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const started = NOW - 10 * MIN
@@ -485,7 +485,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
   })
 
-  test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (SPEC 10.2)', ENGINE_TEST, async ($, on) => {
+  test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (v2 SPEC 13.10 item 2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
     const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
@@ -500,7 +500,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.titles.at(-1)).toContain('gh wait')
   })
 
-  test('a rate-cap hold is one loop event per cap per hour (SPEC 11.4, D-24)', ENGINE_TEST, async ($, on) => {
+  test('a rate-cap hold is one loop event per cap per hour (v2 SPEC 13.11.4, D-24)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const claims = Array.from({ length: 30 }, (_, i) => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN }))
@@ -515,7 +515,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.events().filter(e => e.at(-1) === held)).toHaveLength(1)
   })
 
-  test('three passes in a row that throw tell the owner once, and the title shows error (SPEC 10.9)', ENGINE_TEST, async ($, on) => {
+  test('three passes in a row that throw tell the owner once, and the title shows error (v2 SPEC 13.10 item 9)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const h = host(on, { config: ACT, run })
@@ -561,7 +561,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
   })
 })
 
-describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', () => {
+describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5, 13.11.2)', () => {
   const ledgerKey = `ledger:${REPO}`
   const otherLease = (expiresAt: number) => JSON.stringify({ session: 'session-other', renewedAt: NOW - MIN, expiresAt })
 
@@ -648,7 +648,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.last().skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
-  test('an agent list that cannot be read marks no agent lost and spawns nothing (SPEC 3.3, 10.4)', ENGINE_TEST, async ($, on) => {
+  test('an agent list that cannot be read marks no agent lost and spawns nothing (v2 SPEC 13.3.3, 13.10 item 4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
@@ -667,7 +667,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.spawns).toEqual([])
   })
 
-  test('a store that cannot be read is never replaced: nothing acts and nothing is written (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
+  test('a store that cannot be read is never replaced: nothing acts and nothing is written (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
@@ -708,7 +708,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.titles.at(-1)).not.toContain('error')
   })
 
-  test('every attempt is in the store, running, before its command runs (SPEC 7.5)', ENGINE_TEST, async ($, on) => {
+  test('every attempt is in the store, running, before its command runs (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const seen: Record<string, string | undefined> = {}
     let h: Host | undefined
@@ -728,7 +728,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     expect(h.entry('sweep:0')?.status).toBe('done')
   })
 
-  test('a long step never outlives the lease: a pass renews it on a timer while it runs (SPEC 11.2)', ENGINE_TEST, async ($, on) => {
+  test('a long step never outlives the lease: a pass renews it on a timer while it runs (v2 SPEC 13.11.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
@@ -747,7 +747,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
 })
 
 describe('act mode: a lease taken over during a long step', () => {
-  test("a renewal that finds another session's lease, even expired, never writes this session's ledger over that session's (SPEC 11.2)", ENGINE_TEST, async ($, on) => {
+  test("a renewal that finds another session's lease, even expired, never writes this session's ledger over that session's (v2 SPEC 13.11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
@@ -770,7 +770,7 @@ describe('act mode: a lease taken over during a long step', () => {
   })
 })
 
-describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
+describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => {
   // a triage step at work on 470 (v2 SPEC 10.8): its entry, and the record its spawn wrote, naming
   // the file it answers in with the answer script. With the test's engine, a repair message resumes
   // the agent as the engine does.
@@ -923,7 +923,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} done`, reason: 'answer', durationMs: 900, isAborted: false })
     expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
     // the turns' loop event (the wake's end; its turn taking its id and its reminder change nothing
-    // an event says) is a real one in act mode: none goes to the sink (SPEC 7.4, D-09)
+    // an event says) is a real one in act mode: none goes to the sink (v2 SPEC 13.7.4, D-09)
     const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
     expect(hooked.length).toBeGreaterThan(0)
     expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
@@ -991,7 +991,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(loopStatuses(h, 'task')).toEqual(['done'])
   })
 
-  test('each wake gets its own id, pass after pass (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
+  test('each wake gets its own id, pass after pass (v2 SPEC 13.8.1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory({ release: true })
     const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
@@ -1008,7 +1008,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(second).not.toBe(first)
   })
 
-  test("a rail's notice whose spell ended before a wake let it out is never sent (SPEC 11.2)", ENGINE_TEST, async ($, on) => {
+  test("a rail's notice whose spell ended before a wake let it out is never sent (v2 SPEC 13.11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory({ beats: `device,age_s\n${OTHER},30\n` })
     const store = ledgerOf([
@@ -1133,8 +1133,8 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
 
 })
 
-describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2, 10.7, 11.3, 13)', () => {
-  test('shadowDevice stands in only while nothing executes: act mode plans as this device (SPEC 4.2, 5.4)', ENGINE_TEST, async ($, on) => {
+describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.6.1, 13.8.2, 13.10 item 7, 13.11.3, 13.13)', () => {
+  test('shadowDevice stands in only while nothing executes: act mode plans as this device (v2 SPEC 13.4.2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const head = 'a'.repeat(40)
     const { run } = factory({
@@ -1163,7 +1163,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
   })
 
-  test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (SPEC 8.2, 10.8)', ENGINE_TEST, async ($, on) => {
+  test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (v2 SPEC 13.8.2, 13.10 item 8)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const { run } = factory({ queue: [470] })
@@ -1183,7 +1183,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(1)
   })
 
-  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (SPEC 7.5, D-18)', ENGINE_TEST, async ($, on) => {
+  test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (v2 SPEC 13.7.5, D-18)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const told = entry('tell:stalled:i470/claim/old:1', 'tell', { wake: 'stalled', class: 'owner', rule: 'S1', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
     const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
@@ -1198,7 +1198,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts).toEqual([])
   })
 
-  test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (SPEC 7.5, O2)', ENGINE_TEST, async ($, on) => {
+  test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (v2 SPEC 13.7.5, O2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // run 1 left a judge open; run 2 starts with the store cleared
     const judge = 'judge:sequence:512:abc1234'
@@ -1216,7 +1216,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
-  test('usage past Stop all skips the token-spending action, with no attempt counted (SPEC 10.7)', ENGINE_TEST, async ($, on) => {
+  test('usage past Stop all skips the token-spending action, with no attempt counted (v2 SPEC 13.10 item 7)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
@@ -1244,7 +1244,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     return { clock, h, wake: `tell:stalled:${CLAIM_KEY}:${NOW - 2 * MIN}` }
   }
 
-  test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (SPEC 8.1)', ENGINE_TEST, async ($, on) => {
+  test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (v2 SPEC 13.8.1)', ENGINE_TEST, async ($, on) => {
     let drops = 1
     const { clock, h, wake } = await stalled(() => (drops-- > 0 ? { drop: 'the session is shutting down' } : undefined))($, on)
     expect(h.entry(wake)).toBeUndefined()
@@ -1273,7 +1273,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
-  test("a rail's notice the engine drops after the submit goes out again (SPEC 9.2, 11.2)", ENGINE_TEST, async ($, on) => {
+  test("a rail's notice the engine drops after the submit goes out again (v2 SPEC 13.9.2, 13.11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
@@ -1294,7 +1294,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toHaveLength(2)
   })
 
-  test("a wake another session submitted is lost with its session; one this session's reload left open stays (SPEC 7.5)", ENGINE_TEST, async ($, on) => {
+  test("a wake another session submitted is lost with its session; one this session's reload left open stays (v2 SPEC 13.7.5)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1329,7 +1329,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
   })
 
   for (const [name, stop] of [['the kill switch', 'OFF'], ['mode observe', 'observe']] as const) {
-    test(`under ${name} an open wake gets no reminder and its turn changes nothing (SPEC 11.1, 11.3)`, ENGINE_TEST, async ($, on) => {
+    test(`under ${name} an open wake gets no reminder and its turn changes nothing (v2 SPEC 13.11.1, 13.11.3)`, ENGINE_TEST, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
       const { run } = factory()
       const judge = 'judge:sequence:512:abc1234'
@@ -1356,7 +1356,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
   }
 })
 
-describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
+describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
   test('/factory ops write control.json, log the change, ping a pass; status reads the last pass', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()

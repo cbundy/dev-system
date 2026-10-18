@@ -419,7 +419,7 @@ coder create <repo>-loop --template orchestrator-loop \
 ```
 
 - **Skip permissions.** The loop's agents run unattended, so a tool call that would ask for
-  approval is refused instead (SPEC 10.10). Every loop workspace in use runs with
+  approval is refused instead (v2 SPEC 10.10). Every loop workspace in use runs with
   `remote_control_skip_permissions=true`. It is the user's call: confirm it with them.
 - **CPUs.** The stop gate runs one full gate per 8 CPUs at once (`gateConcurrency` `auto`), and
   the template's default of 2 also has to carry the agents. 8 or more keeps several issues

@@ -383,7 +383,7 @@ test("lapsed claim (#465): a claim only counts as designing while its lease is l
   assert.equal(all.filter((s) => s === "designing").length, 3);
 });
 
-test("factory loop v2 (SPEC 3.6, 7.3): the newest transition of the current life places the issue, above the mirror's runs", () => {
+test("factory loop v2 (v2 SPEC 3.6, 7.3): the newest transition of the current life places the issue, above the mirror's runs", () => {
   const r = derive(input("v2"));
   const st = (n) => issue(r, A, n);
   assert.deepEqual([st(100).stage, st(100).source, st(100).run, st(100).detail], ["implementing", "event", null, "v2 building, step build, attempt 1"], "a running v1 run no longer sets the stage");

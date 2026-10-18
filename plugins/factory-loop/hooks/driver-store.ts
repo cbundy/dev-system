@@ -1,4 +1,4 @@
-// The driver's store: the ledger (SPEC 7) loaded from and saved to $.store, the backoff, the queue's
+// The driver's store: the ledger (v2 SPEC 13.7) loaded from and saved to $.store, the backoff, the queue's
 // known list, rail memory and notices, and the environment an act step runs in outside a pass.
 import type { EngineInterface } from 'claude-code'
 
@@ -25,7 +25,7 @@ export const keysOf = (repo: string) => ({
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
-// is then fresh. The act lock is the one writer's lease (SPEC 11.2).
+// is then fresh. The act lock is the one writer's lease (v2 SPEC 13.11.2).
 export async function mayLoad($: EngineInterface, rt: Runtime): Promise<{ ok: boolean; basis: string | null }> {
   try {
     const basis = await text($, actLockPath(rt.loopDir))
@@ -37,7 +37,7 @@ export async function mayLoad($: EngineInterface, rt: Runtime): Promise<{ ok: bo
 
 // ensureLedger: the ledger in memory, loaded from the store once per module load (and again
 // when this session takes the act lock over from another), with every running command entry
-// marked lost (SPEC 7.5). A store that cannot be read leaves it unloaded: falling back to the
+// marked lost (v2 SPEC 13.7.5). A store that cannot be read leaves it unloaded: falling back to the
 // event log would overwrite the real ledger at the next save.
 export async function ensureLedger($: EngineInterface, rt: Runtime, problems: string[]): Promise<boolean> {
   if (live.loaded && live.repo === rt.repo) return true
@@ -77,7 +77,7 @@ export async function loadLedger($: EngineInterface, rt: Runtime, problems: stri
 }
 
 // closeOrphans: the live ledger's wakes no one can answer any more lost at once (wake.ts
-// orphanedWakes, SPEC 7.5); the entries it moved, for the loop events.
+// orphanedWakes, v2 SPEC 13.7.5); the entries it moved, for the loop events.
 export function closeOrphans(session: string, now: Ms): LedgerEntry[] {
   const moved: LedgerEntry[] = []
   for (const u of orphanedWakes(live.ledger, session, S.loadedAt)) moved.push(...transition(live, l => finish(l, u.key, u, now)))

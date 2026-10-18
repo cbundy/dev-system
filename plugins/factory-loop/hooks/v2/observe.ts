@@ -31,7 +31,7 @@ import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead } from './types'
 
 const DAY = 86_400_000
-// a closed record goes this long after it closed, as ledger entries do (3.3, v1 SPEC 7.1)
+// a closed record goes this long after it closed, as ledger entries do (3.3, v2 SPEC 13.7.1)
 export const RECORD_KEEP_MS = 7 * DAY
 
 // What a source module gets (sources-*.ts): the pass's time and runtime, observe's read (its

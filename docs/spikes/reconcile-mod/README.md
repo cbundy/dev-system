@@ -4,7 +4,7 @@ Results: [FINDINGS.md](FINDINGS.md), with the raw log in [evidence/log.jsonl](ev
 Next step, as a brief for an autonomous agent: [CONVERSION-BRIEF.md](CONVERSION-BRIEF.md).
 
 Moved here on 2026-10-16 from the `spike/reconcile-mod` branch, where it ran. Paths in these notes are
-as they were on that branch. The conclusions went into [the v1 loop spec](../../factory-loop/SPEC.md)
+as they were on that branch. The conclusions went into [the loop spec](../../factory-loop/v2/SPEC.md#13-the-foundation)
 and [its decisions](../../factory-loop/DECISIONS.md).
 
 Answers one question before any real work: can a Claude Code mod (a hooks module plugin) drive

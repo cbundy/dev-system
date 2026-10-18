@@ -1,4 +1,4 @@
-// The loop's last pass, for `/factory status` and other plugins to read (SPEC 12). The pass
+// The loop's last pass, for `/factory status` and other plugins to read (v2 SPEC 13.12). The pass
 // driver writes it at the end of every pass that ran.
 export type PassSummary = {
   pass: number

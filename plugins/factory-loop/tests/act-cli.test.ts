@@ -118,7 +118,7 @@ const A = {
   title: (text = '🔄 dev-system (Q:1 - D:2 - M:0)'): Action => ({ ...base, kind: 'title', key: 'title', rule: 'O1', issue: null, text }),
 }
 
-describe('stepsOf: the argv templates (SPEC 6.1)', () => {
+describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
   const argv = (a: Action) => {
     const steps = stepsOf(a, REPO, IN_DEV)
     if (typeof steps === 'string') throw new Error(steps)
@@ -141,7 +141,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
     expect(stepsOf(A.title(), REPO, IN_DEV)).toBe('title runs no command')
   })
 
-  test('no template can pass a forbidden flag or command (SPEC 6.1)', () => {
+  test('no template can pass a forbidden flag or command (v2 SPEC 13.6.1)', () => {
     const all = [A.heartbeat(), A.sweep(), A.claim(), A.close(), A.releaseParent(), A.later(), A.restart()]
     for (const a of all) {
       for (const words of argv(a)) {
@@ -369,7 +369,7 @@ describe('stop-agent: only the loop\'s own running agents', () => {
     expect(ownAgent([{ ...running('a1'), status: 'done', endedAt: NOW }], 'a1')).toBe(false)
   })
 
-  test('a stop that is not supported, or throws, is failed with the reason (SPEC 13)', async () => {
+  test('a stop that is not supported, or throws, is failed with the reason (v2 SPEC 13.13)', async () => {
     const unsupported = await exec(A.stop('a1'), [], { ledger: [running('a1')], stop: async () => ({ stopped: false, error: 'TaskStop is not available to mods' }) })
     expect(unsupported.result).toEqual({ status: 'failed', summary: 'not stopped a1: TaskStop is not available to mods' })
     const threw = await exec(A.stop('a1'), [], { ledger: [running('a1')], stop: async () => Promise.reject(new Error('tool call failed')) })

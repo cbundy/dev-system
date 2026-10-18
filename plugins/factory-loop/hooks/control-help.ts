@@ -1,4 +1,4 @@
-// The text of the owner controls (SPEC 4.3): the op table, each op's usage and meaning, the
+// The text of the owner controls (v2 SPEC 13.4.3): the op table, each op's usage and meaning, the
 // `/factory help` page and the typeahead hint. control.ts parses and applies the ops; this module
 // holds only what the owner reads, so the two files stay under the size guard.
 
@@ -8,7 +8,7 @@ export const OPS = [
 ] as const
 export type OpName = (typeof OPS)[number]
 
-// Each op's form, for the usage errors and the tool's description (SPEC 4.3). `priority off`
+// Each op's form, for the usage errors and the tool's description (v2 SPEC 13.4.3). `priority off`
 // and `override off` are the only way to lift those two, as `only off` and `update off` are.
 export const USAGE: Record<OpName, string> = {
   status: 'status',
@@ -53,7 +53,7 @@ export function hintText(): string {
   return `[${[...HINT_OPS.map(([, form]) => form), 'help'].join(' | ')}]`
 }
 
-// What each op does, one line each, for `/factory help` (SPEC 4.3).
+// What each op does, one line each, for `/factory help` (v2 SPEC 13.4.3).
 export const MEANING: Record<OpName, string> = {
   status: "show the loop's last pass and the owner directives in force",
   config:

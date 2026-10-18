@@ -1,9 +1,9 @@
-// observe: run the read-only commands of SPEC 3.3 and assemble the State plan takes. Thin on
+// observe: run the read-only commands of v2 SPEC 13.3.3 and assemble the State plan takes. Thin on
 // purpose: every output goes straight to a pure parser (parse.ts, derive.ts) and buildState.
 // Cadences (config queueEveryMs, githubEveryMs, usageEveryMs, milestoneEveryMs) keep GitHub
 // reads well under the rate limit; a failed source keeps its last value with its old time, so
 // plan can see how stale it is. Every command runs from the main checkout with the runtime's
-// environment (rt.env), which in observe mode sends its event writes to the sink (SPEC 11.1).
+// environment (rt.env), which in observe mode sends its event writes to the sink (v2 SPEC 13.11.1).
 // v2/observe.ts reads what v2 adds (v2 SPEC 2.4); the loop reads no pipeline runs and infers no
 // slot's issue from its reflog.
 import { EMPTY_CONTROL, controlFrom } from './config'
@@ -39,10 +39,10 @@ const EVENT_DAYS = 3
 // a ledger rebuilt after a lost store reads a week of events: holds older than the facts
 // window (a pending decision, an escalation) must survive it, and entries are kept 7 days
 export const REBUILD_DAYS = 7
-// how long GitHub reads wait after a rate limit (SPEC 10.2)
+// how long GitHub reads wait after a rate limit (v2 SPEC 13.10 item 2)
 export const GITHUB_BACKOFF_MS = 15 * 60_000
 
-// Runtime: what one pass runs as, from the plugin options and both settings files (SPEC 4.1).
+// Runtime: what one pass runs as, from the plugin options and both settings files (v2 SPEC 13.4.1).
 export type Runtime = {
   mode: 'off' | 'observe' | 'act'
   repo: string
@@ -53,7 +53,7 @@ export type Runtime = {
   loopDir: string
   // this session and process, as v2's workspace rail checks the companion's handshake (v2 SPEC 10.9)
   workspace?: { session: string; process?: string }
-  // the observe-mode event sink (SPEC 11.1), null when acting; env carries it
+  // the observe-mode event sink (v2 SPEC 13.11.1), null when acting; env carries it
   sink: string | null
   // the base environment of every command the loop runs, observe and act alike:
   // CALLUM_FLOW_REPO, CALLUM_EVENTS_DIR=<sink> when not acting, and PATH with the workspace
@@ -80,9 +80,9 @@ export type Runtime = {
 export type Stored = {
   // null: the store holds no ledger (a new device, a wiped config), so it is rebuilt from the log
   ledger: LedgerEntry[] | null
-  // GitHub reads wait until then after a rate limit (SPEC 10.2)
+  // GitHub reads wait until then after a rate limit (v2 SPEC 13.10 item 2)
   githubBackoffUntil: number | null
-  // the queue's last now= list, handed back to queue-watch.sh as --known (SPEC 3.4)
+  // the queue's last now= list, handed back to queue-watch.sh as --known (v2 SPEC 13.3.4)
   queueKnown: number[] | null
 }
 
@@ -139,7 +139,7 @@ export type Observation = {
   queueKnown: number[] | null
   // where the ledger came from, for the decision log: the store, the event log, or neither
   ledgerSource: LedgerSource
-  // a command's stderr showed a GitHub rate limit: register sets the backoff (SPEC 10.2)
+  // a command's stderr showed a GitHub rate limit: register sets the backoff (v2 SPEC 13.10 item 2)
   rateLimited: boolean
   // the PR heads v2 has seen (v2 SPEC 2.4), for act mode to keep; null when v2 read nothing
   v2Heads: Record<string, HeadSeen> | null
@@ -184,7 +184,7 @@ export async function observe(
   const tool = (name: string) => `${rt.toolsDir}/${name}`
   const fail = (r: { exitCode: number; stderr: string }) => `exit ${r.exitCode}: ${r.stderr.trim().split('\n').pop()?.slice(0, 200) ?? ''}`
   const eventsSince = (days: number) => ['dev-query', '--csv', '-v', `repo=${rt.repo}`, '-v', `at=${new Date(now).toISOString()}`, '-v', `days=${days}`]
-  // act mode: GitHub reads wait out a rate limit (SPEC 10.2); old values stay, with their age
+  // act mode: GitHub reads wait out a rate limit (v2 SPEC 13.10 item 2); old values stay, with their age
   const until = stored?.githubBackoffUntil ?? null
   const backoffUntil = until !== null && until > now ? until : null
   const waiting = backoffUntil === null ? '' : `GitHub rate limit: waiting until ${new Date(backoffUntil).toISOString()}`
@@ -216,7 +216,7 @@ export async function observe(
   if (rt.runSource === 'events') mark('runs', sources.facts.ok, sources.facts.at)
   else mark('runs', false, null, 'not read: the loop has no pipeline runs')
 
-  // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
+  // The ledger. Observe mode: what the device's own events prove (v2 SPEC 13.7.5). Act mode: the
   // store's whenever it holds one; else it is rebuilt from a `week` of events (the facts window
   // would lose older holds), where v2 reads its logged facts too (7.2). A rebuild that found nothing
   // leaves it empty, and the week is not read every pass. Read before the queue and GitHub: a read
@@ -260,7 +260,7 @@ export async function observe(
 
   // queue: every queueEveryMs, and the pass after a label write. Act mode reads it through
   // queue-watch.sh --once, which logs a `ready` event for each member the stored list lacks
-  // (SPEC 3.4); observe mode keeps the plain reader, so the shadow logs no ready events of its own.
+  // (v2 SPEC 13.3.4); observe mode keeps the plain reader, so the shadow logs no ready events of its own.
   let queueKnown: number[] | null = null
   if (backoffUntil !== null) {
     mark('queue', false, cache.queue?.at ?? null, waiting)
@@ -381,7 +381,7 @@ export async function observe(
       // unavailable: plan fails open as the skill says
     }
   }
-  // a reading older than usageStaleMs counts as unavailable (SPEC 3.1)
+  // a reading older than usageStaleMs counts as unavailable (v2 SPEC 13.3.1)
   const reading = cache.usage !== undefined && now - cache.usage.at < cfg.usageStaleMs ? cache.usage.value : null
   const usage = withSession(reading, await io.sessionLimits())
   mark('usage', usage !== null && !usage.unavailable, cache.usage?.at ?? null)

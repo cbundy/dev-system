@@ -3,7 +3,7 @@
 The v2 workspace design ([SPEC](../../v2/SPEC.md) section 10) rests on engine behaviour that the
 spikes ([SPIKES.md](../../v2/SPIKES.md)) showed on Claude Code 2.1.300. Two points were shown only
 in nearby shapes, so build unit U9 re-probed them before building the companion
-(SPEC 10.9): a long `$.process.run` inside a second plugin's `classic.SubagentStop` for an agent
+(v2 SPEC 10.9): a long `$.process.run` inside a second plugin's `classic.SubagentStop` for an agent
 spawned from a frameless timer, and `$.env.set` with no hook frame open. The probe also re-runs
 the folder and guard checks, and runs the real companion plugin beside a stand-in loop.
 
@@ -34,7 +34,7 @@ The `companion` case writes the handshake under the real `CLAUDE_CONFIG_DIR`
 
 ## Results on Claude Code 2.1.300 (2026-10-15)
 
-Every point passed, so U9 built the design as specified and no fallback of SPEC 10.9. Each case's
+Every point passed, so U9 built the design as specified and no fallback of v2 SPEC 10.9. Each case's
 `log.jsonl` is kept in [`evidence/`](evidence/) as `runs-<n>-<case>.jsonl` (the engine's own text
 quoted there with its dashes made plain); the sessions' streams and debug logs stayed in
 `/persist/claude/factory-loop-v2-build/w3/u9-probe/`.
@@ -57,7 +57,7 @@ take the unknown path.
 
 ## What changes if a point fails
 
-SPEC 10.9 states the fallbacks: a classic command hook in the companion's `hooks/hooks.json` for
+v2 SPEC 10.9 states the fallbacks: a classic command hook in the companion's `hooks/hooks.json` for
 the gate (`timeout` 900, the gate's own budget 600 s, keyed by agent id through a map file), the
 companion's per-call timeout alone for `$.env.set`, a `claude -p` process per agent if a `cwd` set
 by a hook stops applying, and the owner's fallback (the loop runs the gates after the answer) if no
