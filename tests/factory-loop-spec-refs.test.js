@@ -8,6 +8,10 @@
 // `10.3 to 10.6, 10.9` or `5.4, 11, appendix E` is read item by item; a letter range such as
 // `appendices B to D` expands; a ref to a numbered item (`13.10 item 9`) resolves to its section.
 //
+// It also keeps every `D-NN` cite true: each one names a `### D-NN ` heading that
+// docs/factory-loop/DECISIONS.md has, so a retired decision cannot be cited (the log keeps its
+// numbers, and a retired number is gone).
+//
 // Dated evidence is left as written: release notes, changelogs, docs/spikes/ and the v2 verify
 // results. So are the first loop's build records, which later children delete: each is named in
 // PENDING_DELETE, must still exist (a stale entry fails, so the child that deletes the file drops
@@ -22,19 +26,10 @@ const ROOT = path.join(__dirname, "..");
 const SPEC_PATH = "docs/factory-loop/v2/SPEC.md";
 const OLD_SPEC_PATH = "docs/factory-loop/SPEC.md";
 const SELF = "tests/factory-loop-spec-refs.test.js";
+const DECISIONS_PATH = "docs/factory-loop/DECISIONS.md";
 
-// The first loop's build records. #944 deletes the first group, #945 the second.
+// The first loop's build records, which #945 deletes.
 const PENDING_DELETE = [
-  "docs/factory-loop/STATUS.md",
-  "docs/factory-loop/PLAN.md",
-  "docs/factory-loop/INVENTORY.md",
-  "docs/factory-loop/REPLAY-REPORT.md",
-  "docs/factory-loop/SHADOW-REPORT.md",
-  "docs/factory-loop/TESTBED-RUN2.md",
-  "docs/factory-loop/TESTBED-RUN3.md",
-  "docs/factory-loop/TESTBED-RUN5.md",
-  "docs/factory-loop/TESTBED-RUN6.md",
-  "docs/factory-loop/replay/",
   "docs/factory-loop/v2/FOUNDATION-MAP.md",
   "docs/factory-loop/v2/BUILD-NOTES-W1.md",
 ];
@@ -135,6 +130,20 @@ function violationsOf(text, file, headings) {
   return out;
 }
 
+// decisionsOf: the numbers of the `### D-NN ` headings in a DECISIONS.md text.
+const decisionsOf = (text) => new Set([...text.matchAll(/^### D-(\d{2}) /gm)].map((m) => m[1]));
+
+// decisionProblemsOf: every `D-NN` cite in `text` that names no heading in `decisions`.
+function decisionProblemsOf(text, file, decisions) {
+  const out = [];
+  text.split("\n").forEach((line, i) => {
+    for (const m of line.matchAll(/\bD-(\d{2})\b/g)) {
+      if (!decisions.has(m[1])) out.push(`${file}:${i + 1}: cites D-${m[1]}, which ${DECISIONS_PATH} has no heading for`);
+    }
+  });
+  return out;
+}
+
 // ---- the scan ----------------------------------------------------------------------------------
 
 const pending = (file) => PENDING_DELETE.some((p) => (p.endsWith("/") ? file.startsWith(p) : file === p));
@@ -170,6 +179,19 @@ test("the old specification is deleted, and no tracked file cites it or a missin
     problems.push(...violationsOf(buf.toString("utf8"), file, headings));
   }
   assert.deepEqual(problems, [], `${problems.length} cite(s) of the specification do not hold:\n${problems.join("\n")}`);
+});
+
+test("every D-NN cite in a tracked file names a heading in DECISIONS.md", () => {
+  const decisions = decisionsOf(fs.readFileSync(path.join(ROOT, DECISIONS_PATH), "utf8"));
+  assert.ok(decisions.size > 0, `${DECISIONS_PATH} has no \`### D-NN \` headings`);
+  const problems = [];
+  for (const file of trackedFiles()) {
+    if (excluded(file)) continue;
+    const buf = fs.readFileSync(path.join(ROOT, file));
+    if (buf.includes(0)) continue;
+    problems.push(...decisionProblemsOf(buf.toString("utf8"), file, decisions));
+  }
+  assert.deepEqual(problems, [], `${problems.length} D-NN cite(s) name no decision:\n${problems.join("\n")}`);
 });
 
 // ---- the parser and the rules, on inline fixtures ------------------------------------------------
@@ -223,8 +245,19 @@ test("a stale PENDING_DELETE entry is caught, and only a listed file is left uns
     "docs/factory-loop/no-such-dir/",
   ]);
   assert.equal(pending("docs/factory-loop/no-such-record.md"), false, "an entry the list lacks is scanned");
-  assert.equal(pending("docs/factory-loop/replay/states.json"), true);
+  assert.equal(pending("docs/factory-loop/v2/FOUNDATION-MAP.md"), true);
   assert.equal(excluded("docs/spikes/reconcile-mod/README.md"), true);
   assert.equal(excluded("plugins/factory-loop/CHANGELOG.md"), true);
   assert.equal(excluded("plugins/factory-loop/README.md"), false);
+});
+
+test("the D-NN check catches a missing number and accepts a present one", () => {
+  const decisions = decisionsOf("# Log\n\n### D-24 Rate caps\n\ntext D-99 inside a body is no heading\n\n### D-74 Answers (owner call)\n");
+  assert.deepEqual([...decisions].sort(), ["24", "74"]);
+  assert.deepEqual(decisionProblemsOf("// see D-24 and D-74", "plugins/x.ts", decisions), []);
+  assert.deepEqual(decisionProblemsOf("a\n// see D-99", "plugins/x.ts", decisions), [
+    "plugins/x.ts:2: cites D-99, which docs/factory-loop/DECISIONS.md has no heading for",
+  ]);
+  assert.equal(decisionProblemsOf("D-24, D-13 and D-02", "x.md", decisions).length, 2);
+  assert.deepEqual(decisionProblemsOf("D-240 and AD-24x and D-5", "x.md", decisions), [], "only a whole two-digit D-NN is a cite");
 });

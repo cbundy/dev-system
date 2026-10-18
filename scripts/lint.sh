@@ -20,6 +20,9 @@
 # with its allowlist below), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
 #
+# The per-file checks run in parallel through the test pool (scripts/lint-files.sh), sized by
+# TEST_JOBS or the CPU count; failures print in file order whatever the size.
+#
 # Quiet on success: one summary line, which also names any check skipped on this host.
 set -u
 
@@ -42,72 +45,32 @@ fail() {
   failures=$((failures + 1))
 }
 
-# Print the shell a file declares on its first line (sh or bash), `node` for an extensionless
-# node script, or nothing.
-shell_of() {
-  first=$(head -n 1 "$1")
-  case "$first" in
-    '#!/bin/sh' | '#!/bin/sh '* | '#!/usr/bin/env sh' | '#!/usr/bin/env sh '*) echo sh ;;
-    '#!/bin/bash' | '#!/bin/bash '* | '#!/usr/bin/env bash' | '#!/usr/bin/env bash '*) echo bash ;;
-    '#!/usr/bin/env node' | '#!/usr/bin/env node '*) echo node ;;
-    '# shellcheck shell=sh') echo sh ;;
-    '# shellcheck shell=bash') echo bash ;;
-    # A shell script with a shebang this does not know must not slip through unchecked.
-    '#!'*sh | '#!'*sh' '*) echo unknown ;;
-  esac
-}
-
-if command -v shellcheck >/dev/null 2>&1; then
-  have_shellcheck=1
-else
-  have_shellcheck=0
+if ! command -v shellcheck >/dev/null 2>&1; then
   skip "shellcheck not on PATH, syntax checks only; CI runs shellcheck"
 fi
 
-# A temp file, not a pipe, so the loops run in this shell and can count failures.
+# Files are checked in parallel through the test pool (scripts/lint-files.sh, scripts/lint-file.sh),
+# TEST_JOBS or the CPU count at once; failures print in file order whatever the pool's size.
 list=$(mktemp) || exit 1
-trap 'rm -f "$list"' EXIT
+results=$(mktemp -d) || exit 1
+tf_tmp=""
+cleanup() {
+  rm -rf "$list" "$results" ${tf_tmp:+"$tf_tmp"}
+}
+trap cleanup EXIT
 
+# The same two passes as ever: shell scripts by shebang, then .js/.mjs by extension.
 # shellcheck disable=SC2086 # word-splitting the directory lists is intended
 find $SHELL_DIRS -type f | sort > "$list"
-while IFS= read -r file; do
-  sh_name=$(shell_of "$file")
-  case "$sh_name" in
-    "") continue ;;
-    node)
-      checked=$((checked + 1))
-      if ! out=$(node --check "$file" 2>&1); then
-        fail "$file (node --check)"
-        printf '%s\n' "$out" >&2
-      fi
-      continue
-      ;;
-    unknown)
-      fail "$file: unrecognised shebang '$(head -n 1 "$file")'"
-      continue
-      ;;
-  esac
-  checked=$((checked + 1))
-  if [ "$have_shellcheck" = 1 ]; then
-    if ! out=$(shellcheck -x -s "$sh_name" "$file" 2>&1); then
-      fail "$file (shellcheck -s $sh_name)"
-      printf '%s\n' "$out" >&2
-    fi
-  elif ! out=$("$sh_name" -n "$file" 2>&1); then
-    fail "$file ($sh_name -n)"
-    printf '%s\n' "$out" >&2
-  fi
-done < "$list"
+counts=$(sh scripts/lint-files.sh "$list" "$results/shell") || exit $?
+checked=$((checked + ${counts% *}))
+failures=$((failures + ${counts#* }))
 
 # shellcheck disable=SC2086 # word-splitting the directory list is intended
 find $JS_DIRS -type f \( -name '*.js' -o -name '*.mjs' \) | sort > "$list"
-while IFS= read -r file; do
-  checked=$((checked + 1))
-  if ! out=$(node --check "$file" 2>&1); then
-    fail "$file (node --check)"
-    printf '%s\n' "$out" >&2
-  fi
-done < "$list"
+counts=$(sh scripts/lint-files.sh "$list" "$results/js" --js) || exit $?
+checked=$((checked + ${counts% *}))
+failures=$((failures + ${counts#* }))
 
 # Generated skills (scripts/build-skills.js) must match their source doc.
 checked=$((checked + 1))
@@ -168,7 +131,6 @@ if command -v terraform >/dev/null 2>&1; then
   # network once for the providers; the plugin cache saves the download on later runs.
   checked=$((checked + 1))
   tf_tmp=$(mktemp -d) || exit 1
-  trap 'rm -f "$list"; rm -rf "$tf_tmp"' EXIT
   cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$TF_DIR"/wind-down.sh "$tf_tmp"/
   TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
   export TF_PLUGIN_CACHE_DIR

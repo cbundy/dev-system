@@ -46,7 +46,7 @@ function run(args, env = {}) {
       CLAUDE_CONFIG_DIR: path.join(FIX, "claude"),
       CALLUM_EVENTS_DIR: path.join(FIX, "events"),
       NO_MISTAKES_HOME: nmHome,
-      CALLUM_FLOW_EVALUATE_SOURCE: "old", // the shadow default would write into the fixture's events folder
+      CALLUM_FLOW_EVALUATE_SOURCE: "old", // an explicit shadow would write into the fixture's events folder
       ...env,
     },
   });
@@ -1017,6 +1017,34 @@ test("new source: the mapping drops what a guard needs to drop (a transition twi
   }
 });
 
+test("default source is new: unset or empty reads the new log, writes no shadow record; --source old and the old variable switch back", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-default-"));
+  try {
+    const f = writeLife(dir);
+    const evDir = path.join(dir, "ev");
+    fs.mkdirSync(path.join(evDir, "factory"), { recursive: true });
+    fs.copyFileSync(f.local, path.join(evDir, "factory", "acme__widgets.jsonl"));
+    fs.copyFileSync(f.old, path.join(evDir, "acme__widgets.jsonl"));
+    const base = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: evDir, DEV_MACHINE_NAME: "m" };
+    const kinds = (r) => r.sources.map((s) => s.kind);
+    for (const v of [undefined, ""]) {
+      const env = { ...base, ...(v === undefined ? { CALLUM_FLOW_EVALUATE_SOURCE: undefined } : { CALLUM_FLOW_EVALUATE_SOURCE: v }) };
+      const r = json([...NEW_WINDOW], env);
+      assert.ok(r.sources.some((s) => s.kind === "source" && s.path === "new"), `variable ${JSON.stringify(v)} reads new`);
+      assert.ok(kinds(r).includes("new-events-n/a"));
+    }
+    assert.equal(fs.existsSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl")), false, "no shadow record");
+    const viaFlag = json([...NEW_WINDOW, "--source", "old"], { ...base, CALLUM_FLOW_EVALUATE_SOURCE: "" });
+    const viaVar = json([...NEW_WINDOW], { ...base, CALLUM_FLOW_EVALUATE_SOURCE: "old" });
+    for (const r of [viaFlag, viaVar]) {
+      assert.ok(!kinds(r).includes("new-events-n/a") && !r.sources.some((s) => s.kind === "source" && s.path === "new"), "old report");
+    }
+    assert.equal(fs.existsSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl")), false, "old writes no shadow record");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("shadow: prints the old report, records one agreeing run; a broken or skipped new side never fails the tool", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-shadow-"));
   try {
@@ -1025,10 +1053,10 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
     fs.mkdirSync(path.join(evDir, "factory"), { recursive: true });
     fs.copyFileSync(f.local, path.join(evDir, "factory", "acme__widgets.jsonl"));
     fs.copyFileSync(f.old, path.join(evDir, "acme__widgets.jsonl"));
-    const env = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: evDir, CALLUM_FLOW_EVALUATE_SOURCE: "", DEV_MACHINE_NAME: "m" };
+    const env = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: evDir, CALLUM_FLOW_EVALUATE_SOURCE: "shadow", DEV_MACHINE_NAME: "m" };
     const record = () => fs.readFileSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const oldOut = run([...NEW_WINDOW], { ...env, CALLUM_FLOW_EVALUATE_SOURCE: "old" });
-    const shadow = run([...NEW_WINDOW], env); // the default is shadow
+    const shadow = run([...NEW_WINDOW], env); // shadow is opt-in
     assert.equal(shadow.status, 0, shadow.err);
     assert.equal(shadow.out, oldOut.out);
     assert.equal(shadow.err, "", "no difference, nothing on stderr");

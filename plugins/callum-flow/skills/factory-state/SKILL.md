@@ -27,7 +27,7 @@ callum-flow-factory-state --format json
 
 Add `--repo <owner/name>` (repeatable) to narrow it, `--at <ISO time>` to look at a past moment
 (pipeline facts are then marked approximate, and GitHub facts are still read now), and
-`--rule S1=<minutes>` to try another stuck threshold. `--source old|new|shadow` picks the event store; the default `shadow` prints the old answer while it records how the new store differs, so leave it alone. Exit 2 is a bad argument. Exit 1 means the
+`--rule S1=<minutes>` to try another stuck threshold. `--source old|new|shadow` picks the event store; the default `new` reads the new store; `--source old` switches back (`shadow` is opt-in and records how the stores differ). Exit 2 is a bad argument. Exit 1 means the
 fleet database cannot be read: say so and stop, never guess a state. This skill only reads. It
 never queries tables itself, never edits labels, issues or runs, and never "fixes" a stuck item.
 

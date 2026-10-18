@@ -975,7 +975,7 @@ ORDER BY device, hour;
 
 ## Shadow runs (source switch)
 
-Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
+Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
 kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
@@ -1058,7 +1058,7 @@ export is passed (see the skill).
   merged issue its review and fix rounds and its time in flight less the time parked. Each counts a
   retried event once, as section 9 does. A merged issue's lead-time row takes its pipeline start from
   its first `transition` to reviewing when it has no linked run (`run_source` `transition`).
-- `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `shadow`) picks the event store
+- `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store
   ([source switch](factory-events/replay.md#source-switch)). `old` is the behaviour above. `new` reads the
   new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<name>.jsonl`, or with
   `--new-events <file>` from a file of `factory.event_log` rows (`--events` is ignored under `new`).

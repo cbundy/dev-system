@@ -59,7 +59,7 @@
 # with that event. An issue that joins after the first poll is always logged.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 #
-# --once (docs/factory-loop/v2/SPEC.md 13.3.4, DECISIONS D-20) is one read for the
+# --once (docs/factory-loop/v2/SPEC.md 13.3.4) is one read for the
 # factory loop, not a watch: the same listing and trust filtering, no
 # debounce, then one line and exit 0, whether or not the queue changed:
 #
