@@ -374,12 +374,12 @@ tool the loop calls writes or reads the label:
   issues this device holds, not the label list and not `callum-flow-factory-state` (a `merged` issue
   stays in its list with this device as holder). "Holds" is one rule, shared by the heartbeat, the
   sweep and `callum-flow-claim <N>` (`images/base/claim-events.sh`): this device's event log plus the
-  newest claim event per issue in `factory.events`, ordered by ts; the issue is held when its last
+  newest claim event per issue in the event store (`factory.events` with the `old` source), ordered by ts; the issue is held when its last
   claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`) is a `claimed` by this
   device. A failed or unconfigured central read falls back to this device's log. The store the rule
-  reads is `CALLUM_FLOW_CLAIM_EVENTS_SOURCE`: `old` (as above), `new` (`factory.event_log` through
-  `dev-query --factory` and the new log, where `reclaimed` is `requeued`) or `shadow`, the default, which
-  decides on old and records a `shadow_read` event of how new differs. v2's H1 passes
+  reads is `CALLUM_FLOW_CLAIM_EVENTS_SOURCE`: `new`, the default (`factory.event_log` through
+  `dev-query --factory` and the new log, where `reclaimed` is `requeued`), `old` (as above; the way back) or
+  `shadow`, set to re-measure, which decides on old and records a `shadow_read` event of how new differs. v2's H1 passes
   numbers, as now (14.1).
 - **`callum-flow-sweep`.** Its candidates are the issues the event log and factory-state list as
   live, the list its closed-issue pass already reads (`callum-flow-sweep:224-236`), not the label

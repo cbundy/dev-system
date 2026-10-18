@@ -394,7 +394,7 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producer is the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
-event per run in their default `shadow` source (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`), with
+event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
 (lifecycle class, latest claim type, claim device) differs, over the last 7 days cut 10 minutes
 before now; the query groups by reader and tool.
