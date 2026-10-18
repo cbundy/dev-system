@@ -28,6 +28,12 @@
 // module (no require, no import statement, no top-level await), so it runs however node takes an
 // extensionless file, and it loads node's modules and the contract by dynamic import, the
 // contract relative to this file.
+//
+// A design-v2 wait is also read on GitHub before it is written (hooks/v2/wait-check.mjs, #980):
+// the sha a tag-contains names must be a commit of the job's repo, which must have a release, and
+// the issue or PR must exist and a PR not be closed unmerged; a definite no refuses like any
+// other problem. A read that decides nothing (gh missing, network, rate limit, timeout) records
+// the answer and names the unchecked conditions on stderr. The loop's own re-check stays shape-only.
 'use strict'
 
 const NAME = 'factory-answer'
@@ -177,6 +183,32 @@ async function writeAtomically(mods, dir, name, body) {
   }
 }
 
+// ghRunner: runs `gh <argv>` without a shell, each call limited to the read timeout; a finished
+// call (any exit code) gives its result, a call that could not run or timed out rejects.
+function ghRunner(execFile, timeout) {
+  return argv =>
+    new Promise((resolve, reject) => {
+      execFile('gh', argv, { timeout, encoding: 'utf8', maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+        if (err === null) resolve({ code: 0, stdout, stderr })
+        else if (typeof err.code === 'number' && !err.killed) resolve({ code: err.code, stdout, stderr })
+        else reject(new Error(err.killed ? `gh timed out after ${timeout / 1000} s` : err.code === 'ENOENT' ? 'gh is not installed' : err.message))
+      })
+    })
+}
+
+// checkWaitOnGitHub: a wait's conditions read on GitHub (hooks/v2/wait-check.mjs, #980). A definite
+// negative refuses; a read that decided nothing is named on stderr and the answer is still recorded.
+async function checkWaitOnGitHub(mods, self, repo, conditions) {
+  const { path } = mods
+  const [cp, url] = await Promise.all([import('node:child_process'), import('node:url')])
+  const check = await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', 'wait-check.mjs')).href)
+  const override = Number(process.env.FACTORY_ANSWER_GH_TIMEOUT_MS)
+  const timeout = Number.isInteger(override) && override > 0 ? override : check.READ_TIMEOUT_MS
+  const { problems, unchecked } = await check.checkWait(conditions, repo, ghRunner(cp.execFile, timeout))
+  if (problems.length > 0) throw new Refused(problems)
+  if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking on GitHub: ${unchecked.join('; ')}. The loop checks every condition itself.\n`)
+}
+
 async function main(argv) {
   const args = argsOf(argv)
   if (args.help) {
@@ -199,6 +231,7 @@ async function main(argv) {
   }
   const body = contract.answerText(place.job, input)
   if (!body.ok) throw new Refused(body.problems)
+  if (place.job.contract === 'design-v2' && input.kind === 'wait') await checkWaitOnGitHub(mods, self, place.job.repo, input.conditions)
   await writeAtomically(mods, place.dir, place.name, body.outcome)
   process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${contract.answerSummary(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
   return 0

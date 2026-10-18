@@ -39,6 +39,45 @@ let scratch;
 let cfg;
 let answers;
 let seq = 0;
+let stubDir;
+let ghLog;
+
+// A stub `gh` first on every run's PATH, so no case reaches GitHub. By default it answers "exists"
+// for each read; STUB_COMMIT, STUB_RELEASE, STUB_ISSUE and STUB_PR change one answer, and each
+// call's argv is appended to STUB_LOG.
+const GH_STUB = `#!/bin/sh
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+  "api repos/"*)
+    case "$2" in
+      */commits/*) mode="\${STUB_COMMIT:-ok}" ;;
+      *) mode="\${STUB_ISSUE:-ok}" ;;
+    esac
+    case "$mode" in
+      ok) echo 123; exit 0 ;;
+      404) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+      422) echo "gh: No commit found for SHA: abc (HTTP 422)" >&2; exit 1 ;;
+      ratelimit) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;
+      neterr) echo "error connecting to api.github.com" >&2; exit 1 ;;
+      hang) exec sleep 5 ;;
+    esac ;;
+  "release view")
+    case "\${STUB_RELEASE:-ok}" in
+      ok) echo '{"tagName":"v1.0.0"}'; exit 0 ;;
+      none) echo "release not found" >&2; exit 1 ;;
+      neterr) echo "error connecting to api.github.com" >&2; exit 1 ;;
+    esac ;;
+  "pr view")
+    case "\${STUB_PR:-ok}" in
+      ok) echo '{"state":"OPEN","mergedAt":null}'; exit 0 ;;
+      merged) echo '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}'; exit 0 ;;
+      closed) echo '{"state":"CLOSED","mergedAt":null}'; exit 0 ;;
+      none) echo "GraphQL: Could not resolve to a PullRequest with the number of 812. (repository.pullRequest)" >&2; exit 1 ;;
+    esac ;;
+esac
+echo "unexpected: $*" >&2
+exit 1
+`;
 
 before(async () => {
   contract = await import(pathToFileURL(path.join(PLUGIN, "hooks", "contract.mjs")).href);
@@ -46,6 +85,10 @@ before(async () => {
   steps = await import(path.join(PLUGIN, "hooks", "v2", "steps.ts"));
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-answer-"));
   cfg = path.join(scratch, "cfg");
+  stubDir = path.join(scratch, "stub-bin");
+  fs.mkdirSync(stubDir);
+  fs.writeFileSync(path.join(stubDir, "gh"), GH_STUB, { mode: 0o755 });
+  ghLog = path.join(scratch, "gh.log");
   answers = path.join(cfg, "factory-loop", REPO_DIR, "answers");
   fs.mkdirSync(answers, { recursive: true });
 });
@@ -71,7 +114,7 @@ function run(args, { input, env = {}, cwd = os.tmpdir(), bin = SCRIPT } = {}) {
     cwd,
     input: input ?? "",
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg, ...env },
+    env: { PATH: `${stubDir}:${process.env.PATH}`, STUB_LOG: ghLog, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg, ...env },
     timeout: 30_000,
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
@@ -341,4 +384,148 @@ test("a v2 wait is recorded with its conditions; a tag-contains wait is accepted
   assert.equal(bad.code, 1, bad.out);
   assert.match(problemsOf(bad.err).join("\n"), /conditions\[0\]\.sha "xyz" must be 7 to 40 hex/);
   assert.equal(fs.existsSync(refused.file), false);
+});
+
+// A design wait is read on GitHub for the job's repo before it is written (hooks/v2/wait-check.mjs, #980).
+const WAIT_JOB = { contract: "design-v2", purpose: null, repo: "cbundy/dev-system", issue: 837, branch: null };
+const waitOf = (...conditions) => ({ kind: "wait", conditions, reason: "Needs the others first", brief: null });
+const TAG = { kind: "tag-contains", sha: "bd2fee14" };
+const ISSUE = { kind: "issue-closed", issue: 57 };
+const PR = { kind: "pr-merged", pr: 812 };
+const ghCalls = () => (fs.existsSync(ghLog) ? fs.readFileSync(ghLog, "utf8").split("\n").filter(Boolean) : []);
+
+// answerWait: the wait answered with the stub set by env; the result, the answer file and gh's calls.
+function answerWait(answer, env = {}, opts = {}) {
+  fs.rmSync(ghLog, { force: true });
+  const { file } = issue(WAIT_JOB);
+  const r = run(["--to", file], { input: JSON.stringify(answer), env, ...opts });
+  return { ...r, file, calls: ghCalls() };
+}
+
+test("a wait on a sha that is no commit of the repo is refused, naming the repo; nothing is written", () => {
+  for (const STUB_COMMIT of ["404", "422"]) {
+    const r = answerWait(waitOf(TAG), { STUB_COMMIT });
+    assert.equal(r.code, 1, r.out);
+    assert.deepEqual(problemsOf(r.err), ["conditions[0]: bd2fee14 is not a commit of cbundy/dev-system; a wait on another repo's release names that repo"]);
+    assert.equal(fs.existsSync(r.file), false);
+    assert.ok(r.calls.includes("api repos/cbundy/dev-system/commits/bd2fee14 --jq .sha"), r.calls.join("|"));
+  }
+});
+
+test("a wait on a release of a repo with no release is refused", () => {
+  const r = answerWait(waitOf(TAG), { STUB_RELEASE: "none" });
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(problemsOf(r.err), ["conditions[0]: cbundy/dev-system has no release yet, so no release tag can ever carry bd2fee14"]);
+  assert.equal(fs.existsSync(r.file), false);
+});
+
+test("a wait on an unknown issue, an unknown PR or a PR closed unmerged is refused", () => {
+  const issueRefused = answerWait(waitOf(ISSUE), { STUB_ISSUE: "404" });
+  assert.equal(issueRefused.code, 1, issueRefused.out);
+  assert.match(problemsOf(issueRefused.err)[0], /^conditions\[0\]: issue #57 does not exist in cbundy\/dev-system/);
+  const none = answerWait(waitOf(PR), { STUB_PR: "none" });
+  assert.equal(none.code, 1, none.out);
+  assert.match(problemsOf(none.err)[0], /^conditions\[0\]: PR #812 does not exist in cbundy\/dev-system/);
+  const closed = answerWait(waitOf(PR), { STUB_PR: "closed" });
+  assert.equal(closed.code, 1, closed.out);
+  assert.match(problemsOf(closed.err)[0], /^conditions\[0\]: PR #812 of cbundy\/dev-system is closed without being merged/);
+  for (const r of [issueRefused, none, closed]) assert.equal(fs.existsSync(r.file), false);
+});
+
+test("two bad conditions give two problems, in order", () => {
+  const r = answerWait(waitOf(ISSUE, PR), { STUB_ISSUE: "404", STUB_PR: "none" });
+  assert.equal(r.code, 1, r.out);
+  const problems = problemsOf(r.err);
+  assert.equal(problems.length, 2);
+  assert.match(problems[0], /^conditions\[0\]: issue #57/);
+  assert.match(problems[1], /^conditions\[1\]: PR #812/);
+});
+
+test("a wait whose facts hold is recorded; the release is read once for several tag conditions", () => {
+  const r = answerWait(waitOf(TAG, { kind: "tag-contains", sha: "35bb655" }, ISSUE, PR));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.err, "");
+  assert.deepEqual(JSON.parse(fs.readFileSync(r.file, "utf8")).answer.conditions.length, 4);
+  assert.equal(r.calls.filter((c) => c.startsWith("release view")).length, 1);
+  assert.equal(r.calls.length, 5);
+  const merged = answerWait(waitOf(PR), { STUB_PR: "merged" });
+  assert.equal(merged.code, 0, merged.err);
+});
+
+test("a gh that cannot decide records the wait and names the unchecked conditions on stderr", () => {
+  for (const env of [{ STUB_ISSUE: "neterr" }, { STUB_ISSUE: "ratelimit" }, { STUB_ISSUE: "404x" }]) {
+    const r = answerWait(waitOf(ISSUE), env);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(fs.existsSync(r.file), true);
+    assert.equal(r.err.trim().split("\n").length, 1, r.err);
+    assert.match(r.err, /^factory-answer: recorded without checking on GitHub: conditions\[0\] \(/);
+  }
+  const mixed = answerWait(waitOf(ISSUE, PR), { STUB_ISSUE: "neterr", STUB_PR: "none" });
+  assert.equal(mixed.code, 1, "a definite negative still refuses beside an unchecked condition");
+});
+
+test("a gh that hangs past the timeout records the wait with the unchecked line", () => {
+  const r = answerWait(waitOf(ISSUE), { STUB_ISSUE: "hang", FACTORY_ANSWER_GH_TIMEOUT_MS: "300" });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.err, /^factory-answer: recorded without checking on GitHub: conditions\[0\] \(gh timed out/);
+  assert.equal(fs.existsSync(r.file), true);
+});
+
+test("with no gh on PATH the wait is recorded with the unchecked line", () => {
+  const bare = path.join(scratch, "node-only");
+  fs.mkdirSync(bare, { recursive: true });
+  const node = path.join(bare, "node");
+  if (!fs.existsSync(node)) fs.symlinkSync(process.execPath, node);
+  const { file } = issue(WAIT_JOB);
+  const r = spawnSync(SCRIPT, ["--to", file], {
+    input: JSON.stringify(waitOf(ISSUE)),
+    encoding: "utf8",
+    env: { PATH: bare, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
+    timeout: 30_000,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /recorded without checking on GitHub: conditions\[0\] \(gh is not installed\)/);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test("a brief, a question, a split and any other contract make no gh call", () => {
+  const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n";
+  for (const answer of [{ kind: "brief", brief }, { kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }]) {
+    const r = answerWait(answer);
+    assert.deepEqual(r.calls, [], JSON.stringify(answer));
+  }
+  fs.rmSync(ghLog, { force: true });
+  const g = issue(gate());
+  assert.equal(run(["--to", g.file], { input: JSON.stringify(VALID) }).code, 0);
+  // a wait the contract refuses is not read on GitHub either
+  const bad = answerWait({ kind: "wait", conditions: [{ kind: "tag-contains", sha: "xyz" }], reason: "r", brief: null });
+  assert.equal(bad.code, 1);
+  assert.deepEqual(ghCalls(), []);
+});
+
+test("wait-check's declaration file names exactly the module's exports", async () => {
+  const mod = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "wait-check.mjs")).href);
+  const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", "wait-check.d.mts"), "utf8");
+  const declared = [...dts.matchAll(/^export (?:const|function) (\w+)/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(declared, Object.keys(mod).sort());
+});
+
+test("wait-check maps a finished gh read to yes, no or unknown", async () => {
+  const { statusOf, checkWait } = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "wait-check.mjs")).href);
+  const r = (code, stderr = "", stdout = "") => ({ code, stdout, stderr });
+  assert.equal(statusOf(r(0, "", "1")), "yes");
+  assert.equal(statusOf(r(1, "gh: Not Found (HTTP 404)")), "no");
+  assert.equal(statusOf(r(1, "gh: No commit found for SHA: abc (HTTP 422)")), "no");
+  assert.equal(statusOf(r(1, "release not found")), "no");
+  assert.equal(statusOf(r(1, "GraphQL: Could not resolve to a PullRequest with the number of 9.")), "no");
+  assert.equal(statusOf(r(1, "gh: API rate limit exceeded (HTTP 403)")), "unknown");
+  assert.equal(statusOf(r(1, "gh: Too Many Requests (HTTP 429)")), "unknown");
+  assert.equal(statusOf(r(1, "gh: Bad credentials (HTTP 401)")), "unknown");
+  assert.equal(statusOf(r(1, "something odd")), "unknown");
+  assert.equal(statusOf(null), "unknown");
+  // a runner that throws leaves the condition unchecked, never a problem
+  const out = await checkWait([{ kind: "issue-closed", issue: 5 }], "o/r", async () => {
+    throw new Error("spawn gh ENOENT");
+  });
+  assert.deepEqual(out, { problems: [], unchecked: ["conditions[0] (spawn gh ENOENT)"] });
 });
