@@ -23,6 +23,12 @@ check "dev-doctor WARNs, naming both files and docs/factory-db.md, when no facto
   echo "$out" | grep -q "WARN factory database (reader) is not configured" &&
   echo "$out" | grep -q "fix: put the writer URL in .*factory-db-writer-url.*factory-db-reader-url.*docs/factory-db.md" &&
   ! echo "$out" | grep -q "FAIL factory database"' --entrypoint ""
+check "dev-doctor WARNs, naming docs/evidence-storage.md, when evidence storage is not configured" in_image '
+  d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
+  out=$(cd "$d" && env -u ARTIFACT_SAS DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "WARN evidence storage is not configured" &&
+  echo "$out" | grep -q "fix: see docs/evidence-storage.md" &&
+  ! echo "$out" | grep -q "FAIL evidence storage"' --entrypoint ""
 check "dev-doctor warns, without failing, for each /persist dir with no volume behind it" bash -c "
   vol=\$(docker volume create --label '$RUN_ID')
   out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
