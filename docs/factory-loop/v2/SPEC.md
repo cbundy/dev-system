@@ -1090,6 +1090,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op (a landed `config set` or `config unset` is also logged with this cause, its detail the op text): capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
+| `hold` | `hold:dont-merge` when a merge-queue record is first held by the `don't-merge` label (on its issue or PR; the reason says which), and `hold:released` when the label is gone from both. One event for each toggle within a life, keyed `hold/i<N>/l<life>/k<n>` with `n` the count of the life's earlier hold events. A failed label read (`labels not read`) writes none (9.1) | the issue |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
 | `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --note 'who=person cause=rescue reason=<what, spaces as %20>'` (the encoding of 7.1), which the operator playbook adds to each rescue recipe | the issue, when given |
 
@@ -1445,6 +1446,18 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 - The queue is the records in merge-queue whose step is `queue`, oldest `seqAt` first (ties by
   issue number). Paused issues are skipped. A record whose step is triage is not in the queue.
+- **The don't-merge hold.** A record is held when its issue or its PR carries the label
+  `don't-merge`, matched by its exact name, ignoring case. The owner sets it; the loop never makes,
+  adds or removes it. A held record is left out of the queue as a paused one is, so the next
+  record is the head and can be updated and merged in the same pass, and it gets no Q1 and no Q2.
+  Its step is `held` (never `waiting`: no E6 timeout and no tell), its skip line saying
+  `merge queue: held by the don't-merge label on the issue` (or `on PR #<p>`). It keeps its
+  `seqAt`, so once the label is gone from both, it is back at its old place on the next pass. The
+  hold fails closed: an issue read that is missing or has no labels, or a PR view whose labels are
+  null or malformed, holds the record with `merge queue: labels not read, held until they are`. A
+  record with no PR view yet is held by the issue alone. The status title counts held records
+  (`held <n>`). The hold is a hold, not a state: no record transition is made for it, and a
+  hold and its release are interventions (7.2).
 - Every transition sets `seqAt`. So a head whose step ends other than ok (an unknown, a retry, a
   triage's retry) goes to the back, and the next PR becomes the head (`failures/F4`,
   `totality/T-10`; OB:62-63).
@@ -1475,7 +1488,7 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 ### 9.3 Q2: merge the head
 
-- **When:** the head shows `clean`, every check on its head passed or was skipped (after re-runs,
+- **When:** the head is not held (9.1), shows `clean`, every check on its head passed or was skipped (after re-runs,
   8.5), its patch equals `approvedPatch`, and no queue action of the head is running.
 - **Action** `queue-merge`: `callum-flow-merge <p> --patch <approvedPatch> --issue <N>`, keyed
   `i<N>/l<L>/queue/merge/<head7>`. The guard runs inside it, and the merge uses
@@ -4059,6 +4072,8 @@ as one argv.
 | `factory:parked` | `b60205` | Factory loop: waits on the owner; remove this label to resume |
 | `factory:waiting` | `fef2c0` | Factory loop: waits on a condition the loop checks; it resumes by itself |
 | `factory:rejected` | `6a737d` | Factory loop: its last life ended without a merge; remove this label and add ready to try again. Not a state (3.4, 6.4) |
+
+The owner's `don't-merge` label is not in this table: the loop never makes it. The owner sets it on an issue or its PR, and the loop reads it and never changes it (9.1). It is a hold on a merge-queue record, not a state.
 
 Notices (TELL kinds), owner items first:
 

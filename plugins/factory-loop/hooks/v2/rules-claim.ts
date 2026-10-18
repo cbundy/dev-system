@@ -27,7 +27,7 @@ import { lifeEntries } from './rules-agent'
 import { livesBefore } from './lives'
 import { ROW_S0, madeRecord } from './table'
 import type { Claimed } from './table'
-import { REJECTED_LABEL } from './types'
+import { REJECTED_LABEL, sameLabel } from './types'
 import type { IssueRecord, V2Ctx } from './types'
 
 const FIRST = /^i([1-9]\d*)\/claim\/([0-9a-z]+)$/
@@ -163,7 +163,6 @@ function finishClaims(ctx: V2Ctx): Set<number> {
 
 // --- S1: new claims ------------------------------------------------------------------------------------
 
-const sameLabel = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 // The stages of another device's live work.
 const LIVE_STAGES: readonly string[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']

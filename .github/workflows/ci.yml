@@ -1,26 +1,32 @@
 name: CI
 
 # The always-on gate (cbundy/dev-system#137): `npm run lint` and `npm test` on
-# every pull request and every push to main. No `paths` filter: branch
-# protection requires this check, and a required check that does not run on a
-# PR would block it forever.
+# every pull request and every push to main, as parallel jobs (`lint` and a sharded
+# `test` matrix, described below). No `paths` filter: branch protection requires the `ci` check, and a
+# required check that does not run on a PR would block it forever.
 #
-# The job id and name `ci` is the status check name branch protection requires.
+# The job id and name `ci` is the status check name branch protection requires (and
+# release.yml reads).
 # Keep it stable; renaming it silently drops the requirement until the branch
 # protection setting is updated to match.
 #
-# What it covers:
-# - `npm run lint` (scripts/lint.sh): shellcheck over the repo's shell scripts,
-#   node --check, the generated-skill drift check against docs/, and terraform
-#   fmt -check, init and validate on coder/dev-system. LINT_REQUIRE_TERRAFORM=1
-#   makes a missing terraform fail instead of skipping.
-# - `npm test`: runs the callum-dev bin end-to-end (init, update
+# Three kinds of job run in parallel: `lint`, `test (K/N)` (one matrix leg per shard of
+# `npm test`, TEST_SHARD=K/N; see docs/architecture.md#test-runner) and a final `ci` job that
+# needs them all and fails unless every one succeeded. `ci` is the one required check; the
+# shard legs are not, so a shard that never ran still turns `ci` red. N is the matrix list below,
+# the only place it is written: TEST_SHARD derives from the matrix value.
+#
+# What they cover:
+# - `lint`: `npm run lint` (scripts/lint.sh): shellcheck over the repo's shell
+#   scripts, node --check, the generated-skill drift check against docs/, and
+#   terraform fmt -check, init and validate on coder/dev-system.
+#   LINT_REQUIRE_TERRAFORM=1 makes a missing terraform fail instead of skipping.
+# - `test`: `npm test`: runs the callum-dev bin end-to-end (init, update
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
-#   (dev-system#52), the callum-tools script tests and every mod's validation and
-#   tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
-# The heavy, path-filtered image and feature workflows stay separate and
-# optional.
+#   (dev-system#52), the callum-tools script tests and every mod's validation
+#   and tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
+# The heavy, path-filtered image and feature workflows stay separate.
 on:
   pull_request:
   push:
@@ -36,23 +42,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  ci:
-    name: ci
+  lint:
+    name: lint
     runs-on: ubuntu-latest
-    # A real PostgreSQL for the database tests (scripts/test-pg.sh, cbundy/dev-system#646): they
-    # make and drop their own databases on this shared server, and npm test fails on a leftover.
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -90,6 +82,38 @@ jobs:
           LINT_REQUIRE_TERRAFORM: "1"
         run: npm run lint
 
+  test:
+    name: test (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The one place the shard count is written: 1..N.
+        shard: [1, 2, 3]
+    # A real PostgreSQL for the database tests (scripts/test-pg.sh, cbundy/dev-system#646): they
+    # make and drop their own databases on this shared server, and npm test fails on a leftover.
+    # Each matrix leg has its own service container.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       # Claude Code validates and tests the mods (plugins/*/ with a hooks module); it
       # needs no login for that. Latest, as the image installs it, so a release that
       # breaks a mod fails here. TEST_REQUIRE_CLAUDE=1 makes a missing claude fail
@@ -99,7 +123,23 @@ jobs:
 
       - name: Test
         env:
+          TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           TEST_REQUIRE_CLAUDE: "1"
           TEST_REQUIRE_POSTGRES: "1"
           FACTORY_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm test
+
+  # The check branch protection requires. always() so a failed, skipped or cancelled
+  # job fails it instead of leaving it skipped (a skipped required check passes).
+  ci:
+    name: ci
+    needs: [lint, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(to_entries[]; .value.result == "success")' > /dev/null
