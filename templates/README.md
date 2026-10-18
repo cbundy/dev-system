@@ -59,6 +59,8 @@ Global agent instructions.
   manual path. A loop agent works in the loop's slot instead.
 - One placeholder inside the synced screenshot-evidence bullet: the path to this repo's
   e2e visual verification doc. Fill that in even though the surrounding bullet is synced.
+  The bullet tells agents to upload captures with `callum-flow-evidence-upload` and to commit
+  only durable reference images.
 
 ## `.claude/settings.json` -> `.claude/settings.json`
 
@@ -66,7 +68,7 @@ Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships th
 generic `permissions.allow` and `permissions.deny` lists the implement-issue/orchestrator flow needs
 (`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
 `callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
-`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, the read-only
+`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, `callum-flow-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
 `check-pr-linkage.sh`) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a

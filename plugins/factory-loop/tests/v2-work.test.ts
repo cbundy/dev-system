@@ -378,7 +378,10 @@ describe('the work prompts (prompts-work.ts)', () => {
   test('writers are told how an image reaches the PR body the loop writes: by a URL, the repo\'s route, a commit-pinned blob URL', () => {
     for (const p of [buildPrompt(input()), fixPrompt(fixInput())]) {
       expect(p).toContain(`https://github.com/${REPO}/blob/<sha>/<path>?raw=true`)
-      expect(p).toContain('the repo\'s documented evidence route')
+      expect(p).toMatch(/callum-flow-evidence-upload pr-\d+\/<slug> <file>\.\.\./)
+      expect(p).toContain('exits 78')
+      expect(p).toContain('never retrying in a loop')
+      expect(p).toContain('Say in the evidence which route you used and why.')
     }
     expect(fixPrompt(fixInput())).toContain('"evidence"')
     // a repo's own screenshot command starts its server and stops it: the command rule lets it run
