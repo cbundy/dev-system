@@ -263,12 +263,13 @@ describe('parse', () => {
   })
 
   test('milestone: counts and Expected; nothing printed means not opted in', () => {
-    expect(parseMilestone('== Next release\nExpected: minor - new modes\n#506 closed issue x\n#507 open issue y\n#512 closed pr z\n')).toEqual({
-      open: 1,
+    expect(parseMilestone('== Next release\nExpected: minor - new modes\n#506 closed issue x\n#507 open issue y\n#512 closed pr z\n#513 open pr w\n')).toEqual({
+      open: 2,
       closed: 2,
+      openIssues: [507],
       expected: 'minor',
     })
-    expect(parseMilestone('== Next release\nExpected: (not set)\n')).toEqual({ open: 0, closed: 0, expected: null })
+    expect(parseMilestone('== Next release\nExpected: (not set)\n')).toEqual({ open: 0, closed: 0, openIssues: [], expected: null })
     expect(parseMilestone('')).toBeNull()
   })
 

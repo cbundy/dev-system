@@ -8,7 +8,7 @@
 import { gate, releaseDue, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
-import { entryDone, entryItems } from './rules-entry'
+import { entryDone, entryItems, reopenedOffNext } from './rules-entry'
 import type { EntryItem } from './rules-entry'
 import type { V2Ctx } from './types'
 import { windDownOf } from './wind-down'
@@ -38,6 +38,7 @@ export function fleetRules(ctx: V2Ctx): void {
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
   // an issue that waits on a release tag makes the review due too: the judge answers that wait
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains')).map(r => r.issue).sort((a, b) => a - b)
+  for (const a of reopenedOffNext(ctx)) want(ctx, a)
   const due = releaseDue(state, config, waiting)
   if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
 }

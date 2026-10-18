@@ -121,6 +121,38 @@ function keepOpenTell(ctx: V2Ctx, r: IssueRecord): Action | null {
   return wake('tell', 'keep-open-blocks', key, RULE, r.issue, { issue: r.issue, blocking: count }, lines)
 }
 
+// reopenedOffNext (O3): a merged issue the Next milestone lists open again (a revert, a hand
+// reopen) holds the release review for good: its record is closed and absorbing, and it has no
+// `ready` label so the loop never rebuilds it. Once per merged life it moves to Later and the owner
+// hears once. Only a plain `merge` rollout counts (run-it and keep-open were moved already, D-29, and
+// stay open by design), and only a milestone reading taken after the record closed.
+export function reopenedOffNext(ctx: V2Ctx): Action[] {
+  const { state } = ctx
+  const out: Action[] = []
+  if (!state.sources.milestone.ok || state.milestone === null) return out
+  const readAt = state.sources.milestone.at
+  for (const r of ctx.v2.records) {
+    if (r.state !== 'closed' || (r.why !== 'merged' && r.why !== 'merged-by-hand')) continue
+    if (!state.milestone.openIssues.includes(r.issue)) continue
+    if (readAt === null || readAt <= r.since) continue
+    if (ctx.v2.records.some(x => x.issue === r.issue && x.state !== 'closed')) continue
+    const read = ctx.byKey.get(followKey(r, 'rollout'))
+    const o = read?.status === 'done' && read.outcome?.kind === 'rollout' ? read.outcome : null
+    if (o === null || o.rollout === 'run-it' || o.rollout === 'keep-open') continue
+    if (o.closeIssue !== null && ctx.byKey.get(followKey(r, 'close-issue'))?.status !== 'done') continue
+    out.push({ key: followKey(r, 'reopened/milestone-later'), class: 'free', rule: 'O3', reason: 'reopened after its merge: off Next so releases are not held', issue: r.issue, kind: 'milestone-later' })
+    const lines = [
+      `issue: https://github.com/${state.repo}/issues/${r.issue}`,
+      `reopened: it reopened after its merge (PR #${r.pr ?? 'unknown'})`,
+      'moved: it moved to the Later milestone so releases are not held',
+      'open: it is open with no ready label, so the loop will not rebuild it; only you can add ready again',
+      'next: it rejoins Next when it merges again',
+    ]
+    out.push(wake('tell', 'reopened', followKey(r, 'reopened/tell'), 'O3', r.issue, { issue: r.issue, pr: r.pr }, lines))
+  }
+  return out
+}
+
 // entryItems: the entry actions of the record's current seq, in their order (4.5).
 export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): EntryItem[] {
   const t = transitionOf(ctx, r)

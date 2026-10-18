@@ -358,7 +358,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(r, 78)).toEqual(['event transition'])
     // the rollout read run-it, and the factory holds the merge: the later milestone, no merged event
     const read = withLedger(
-      { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, expected: null } },
+      { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } },
       [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } }), ivLogged(merged)],
     )
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
@@ -368,7 +368,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })
     const at = (rollout: 'merge' | 'run-it' | 'keep-open', blocking: number | null, extra: LedgerEntry[] = []) =>
-      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
+      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
     const tells = (s: State) => of(plan(s), 76).filter(a => a.kind === 'tell')
     const out = tells(at('keep-open', 2))
     expect(out).toHaveLength(1)
@@ -377,6 +377,39 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     // told once: with the tell done, none is planned, even when the view still shows the blockers
     expect(tells(at('keep-open', 2, [done(followKey(merged, 'blocked-tell'), 'tell', { issue: 76 })]))).toEqual([])
     for (const [rollout, blocking] of [['keep-open', 0], ['keep-open', null], ['merge', 2], ['run-it', 2]] as const) expect(tells(at(rollout, blocking))).toEqual([])
+  })
+
+  test('O3: a merged issue the Next milestone lists open again moves to Later and tells the owner once per life; guards keep every other open item where it is', () => {
+    const merged = rec(543, { state: 'closed', step: null, why: 'merged', pr: 900, seq: 8, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
+    const rolloutOf = (rollout: 'merge' | 'run-it' | 'keep-open', status: 'done' | 'running' = 'done') => {
+      const e = done(followKey(merged, 'rollout'), 'rollout', { issue: 543, outcome: { kind: 'rollout', rollout, closeIssue: null } })
+      return status === 'done' ? e : { ...e, status, endedAt: null, outcome: undefined }
+    }
+    const reopened = { open: 1, closed: 3, openIssues: [543], expected: null }
+    const at = (over: Partial<State> = {}, extra: LedgerEntry[] = [], rollout: LedgerEntry = rolloutOf('merge'), records = [merged]) =>
+      withLedger(world(records, { milestone: reopened, ...over }), [transitioned(merged, 'T13', 'merge-queue', 'merged'), rollout, ...extra])
+    const moves = (s: State) => plan(s).actions.filter(a => a.key.includes('/reopened/'))
+    const first = moves(at())
+    expect(first.map(a => `${a.kind} ${a.rule}`)).toEqual(['milestone-later O3', 'tell O3'])
+    expect(first[0]).toMatchObject({ issue: 543, key: followKey(merged, 'reopened/milestone-later') })
+    expect(first[1]).toMatchObject({ wake: 'reopened', key: followKey(merged, 'reopened/tell'), fields: { issue: '543', pr: '900' } })
+    expect(JSON.stringify(first[1])).toContain('issues/543')
+    // once only: with both done, neither is planned again
+    const both = [done(followKey(merged, 'reopened/milestone-later'), 'milestone-later', { issue: 543 }), done(followKey(merged, 'reopened/tell'), 'tell', { issue: 543 })]
+    expect(moves(at({}, both))).toEqual([])
+    // a milestone reading without the issue open: O3 starts the release review
+    const taskKinds = (s: State) => plan(s).actions.filter(a => a.kind === 'task').map(a => a.rule)
+    expect(taskKinds(at({ milestone: { open: 0, closed: 3, openIssues: [], expected: null } }, both))).toEqual(['O3'])
+    // guards
+    expect(moves(at({}, [], rolloutOf('keep-open')))).toEqual([])
+    expect(moves(at({}, [], rolloutOf('run-it')))).toEqual([])
+    expect(moves(at({}, [], rolloutOf('merge', 'running')))).toEqual([])
+    expect(moves(at({ sources: { ...baseState().sources, milestone: { ok: true, at: NOW - 10 * MIN } } }))).toEqual([])
+    expect(moves(at({ sources: { ...baseState().sources, milestone: { ok: false, at: NOW, error: 'x' } } }))).toEqual([])
+    expect(moves(at({ milestone: null }))).toEqual([])
+    expect(moves(at({ milestone: { ...reopened, openIssues: [544] } }))).toEqual([])
+    const live = rec(543, { state: 'queued', step: null, life: merged.life + 1, seq: 1, seqAt: NOW, since: NOW })
+    expect(moves(at({}, [], rolloutOf('merge'), [merged, live]))).toEqual([])
   })
 
   test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
