@@ -18,6 +18,8 @@ instructions as a skill (generated from this page, never edited by hand).
   nothing.
 - `npx callum-dev check` exits 0.
 - The checks in [Verify](#5-verify) pass.
+- If the user asked for the factory loop (step 7): a loop workspace runs in act mode, and the
+  loop has claimed one issue labelled `ready` and merged its PR after CI passed.
 
 ## Rules
 
@@ -32,8 +34,8 @@ instructions as a skill (generated from this page, never edited by hand).
   runtime.
 - Do not delete or gitignore `.callum-dev.json` or `.callum-dev/baseline/`. Without them,
   `update` cannot merge.
-- Ask the user before any outward-facing step: creating a GitHub repo, pushing, or creating
-  a Coder workspace.
+- Ask the user before any outward-facing step: creating a GitHub repo, pushing, creating
+  a Coder workspace, changing branch protection, or switching the factory loop to act mode.
 
 ## 0. Ask the user first
 
@@ -47,6 +49,7 @@ Get these before running anything. Do not guess them.
 | GitHub owner and visibility; create the repo now? | step 4 |
 | Extra system tools the repo needs (Terraform, a DB client, ...)? Python alone needs none: the base image has uv | step 3e |
 | Run it on Coder? With which per-repo image, if any? | step 6 |
+| Put it on the factory loop? As the user's own GitHub account or another one? Who else may file work for it (their GitHub logins)? | step 7 |
 
 ## 1. Prerequisites
 
@@ -269,10 +272,10 @@ A PR opened before `ci.yml` reaches the default branch gets no checks until a ne
 A repo onboarded before the factory-loop-only setup keeps its files. `npx callum-dev update`
 now:
 
-- prints `unsynced` for `.no-mistakes.yaml` and `.github/pull_request_template.md`, leaves both
-  untouched and stops syncing them (they are repo-owned; delete them if unused);
-- keeps the `no-mistakes` entries in `.claude/settings.json` `permissions.allow` and says they
-  are no longer synced;
+- prints `unsynced` for each file of a retired template, leaves it untouched and stops syncing
+  it, and keeps the retired template's entries in `.claude/settings.json` `permissions.allow`
+  (they are repo-owned from then on; delete them if unused). Which files and entries these are is
+  in [the templates README, "Retired templates"](../templates/README.md#retired-templates);
 - prints `new` for `.claude/factory-loop.json` and `.github/workflows/ci.yml` when the repo has
   neither, and does not create them (a placeholder CI workflow would fail the repo's PRs). To
   adopt them, copy the template from `node_modules/@callum/dev-system/templates/` and fill it in
@@ -348,19 +351,186 @@ Then the user opens the workspace in the Coder dashboard, clicks **Log in** and 
 to Claude (and codex and gh). Within 30s the workspace shows up in claude.ai. Check with
 `coder ssh <name> -- dev-login status`, and `coder ssh <name> -- dev-doctor` once logged in.
 
-## 7. Tell the user
+## 7. Put the repo on the factory loop (if the user said yes)
+
+The factory loop is how factory work gets done: a plugin in its own Coder workspace that claims
+issues labelled `ready`, has agents design, build, review and fix each one in its own worktree,
+and merges the PR once CI passes. It wakes Claude only for judgment calls and to speak to the
+owner. This workspace is separate from the step 6 one, which stays for hand-driven sessions. The
+workspace itself is documented in the Coder README,
+[Loop orchestrator workspace](../coder/dev-system/README.md#loop-orchestrator-workspace).
+
+Needs steps 3 to 5 done and pushed, the `coder` CLI logged in, and the `orchestrator-loop`
+template on the Coder server.
+
+### What the loop needs from the repo
+
+- **Gate commands** in `.claude/factory-loop.json` `gateCommands` (step 3). When a builder or a
+  fixer finishes, the loop's stop gate runs them in that agent's worktree and refuses the finish
+  while one fails
+  ([factory-loop-workspace](../plugins/factory-loop-workspace/README.md), "What it does"). The loop
+  reads this file from the default branch on GitHub, not from the checkout, so a change applies
+  once it is merged.
+- **The same commands in a GitHub CI workflow** (step 3f). The merge queue merges a PR only when
+  it has at least one check and every check on its head passed or was skipped. GitHub CI is the
+  only test gate before merge; there is no local pipeline.
+- **Branch protection** on the default branch that requires the CI check, as a backstop, with
+  "Require branches to be up to date" on. Do not require approving reviews: the loop's reviewer
+  is an agent, not a GitHub review, and the loop's account cannot approve its own PRs. With the
+  user's go-ahead (job `ci` from the scaffolded workflow; use the real job name):
+
+  ```bash
+  gh api -X PUT repos/<owner>/<repo>/branches/<default branch>/protection --input - <<'EOF'
+  {"required_status_checks":{"strict":true,"contexts":["ci"]},"enforce_admins":false,
+   "required_pull_request_reviews":null,"restrictions":null}
+  EOF
+  ```
+
+  GitHub refuses this on a private repo of a free plan. The merge queue's own check rule then
+  stands alone; say so to the user.
+- **A `ready` label**, which is how the user hands the loop an issue. The loop creates its own
+  `factory:*` labels; `ready` it does not:
+  `gh label create ready --repo <owner>/<repo> --description "Ready for the factory loop" --force`.
+
+### Settings
+
+The settings a repo usually sets in `.claude/factory-loop.json`:
+
+| Setting | Default | What it means |
+|---|---|---|
+| `gateCommands` | none | The stop gate's commands, run in order in the agent's worktree (lint, then test). Empty means no gate. |
+| `gateTimeoutMs` | 10 minutes | The budget for all of the gate commands together, in milliseconds (or `gateTimeout` as a duration, like `"15m"`). A gate that runs out is recorded as unknown, never as a pass, and CI decides. |
+| `maxInFlightIssues` | 3 | How many issues the loop works on at once. Parked and waiting issues do not count. |
+| `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
+| `minimumReleaseCadence` | `"6h"` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
+
+The rest are in [the v2 SPEC, appendix A](factory-loop/v2/SPEC.md#appendix-a-settings). The
+workspace file, `${CLAUDE_CONFIG_DIR}/factory-loop/config.json` (`/persist/claude/factory-loop/config.json`
+in a Coder workspace), can set any key and wins over the repo's file. `/factory config` shows
+every setting the loop runs with and where each came from.
+
+### Create the loop workspace
+
+```bash
+coder create <repo>-loop --template orchestrator-loop \
+  --parameter repo_url=<https clone url> \
+  --parameter remote_control_skip_permissions=true \
+  --parameter cpus=8
+```
+
+- **Skip permissions.** The loop's agents run unattended, so a tool call that would ask for
+  approval is refused instead (SPEC 10.10). Every loop workspace in use runs with
+  `remote_control_skip_permissions=true`. It is the user's call: confirm it with them.
+- **CPUs.** The stop gate runs one full gate per 8 CPUs at once (`gateConcurrency` `auto`), and
+  the template's default of 2 also has to carry the agents. 8 or more keeps several issues
+  moving.
+- **Logins, private repos and per-repo images** are as in step 6: **Log in** in the dashboard,
+  a GitHub credential for a private repo, and `--parameter image=<image>` for a per-repo image.
+- **Another GitHub account.** To run the loop as someone else's account (a loop for their repo),
+  follow the Coder README,
+  [Working a repo as another GitHub account](../coder/dev-system/README.md#working-a-repo-as-another-github-account).
+
+Once logged in, the workspace shows up in claude.ai as `🏭 <repo> loop`: that session is the
+loop's judge, and where the user talks to the factory.
+
+### Trusted authors
+
+The loop claims only issues opened by a trusted author, and reads only trusted authors' comments,
+so an answer to a parked issue counts only from one. The list is the template's
+`trusted_authors`, plus the workspace's `extra_trusted_authors` parameter for the repo owner and
+collaborators, as `login:id` entries (look an id up with `gh api users/<login> --jq .id`). In
+token mode the token's own account is trusted too. `coder ssh <repo>-loop -- dev-doctor` shows the
+effective list.
+
+### Observe first, then act
+
+The loop starts in observe mode: every minute it reads the repo, plans and logs what it would do,
+and does nothing. In the loop's session:
+
+1. `/factory status` shows the last pass and what it would do. Check that it names the right repo
+   and sees the `ready` queue.
+2. With the user's go-ahead, `/factory mode act` switches it on from the next pass.
+3. Confirm it acts. Every pass writes one line to the decision log, which says whether it acted
+   (`executed`) and, while a safety rail fails, why not (`rails`). Inside the workspace
+   (`coder ssh <repo>-loop`):
+
+   ```bash
+   tail -n 1 "$(ls -t /persist/claude/factory-loop/<owner>__<repo>/decisions-*.jsonl | head -n 1)" \
+     | jq '{mode, executed, rails}'
+   ```
+
+   `"executed": true` with no `rails` means it acts. While any rail fails it keeps observing
+   (see Troubleshooting below).
+
+### Feeding it
+
+- **Label an issue `ready`.** The loop claims it and moves it through its labels:
+  `factory:queued`, `factory:designing`, `factory:building`, `factory:reviewing`,
+  `factory:fixing` and `factory:merge-queue`, then closes it when its PR merges.
+- **`factory:parked`** means it waits on the owner. Answer the question on the issue, then
+  remove the label to resume (or `/factory resume <N> "<note>"`).
+- **`factory:waiting`** means it waits on something the loop checks itself, such as another
+  issue closing. It resumes by itself.
+- **`factory:rejected`** means its last life ended without a merge: after 3 tries the loop
+  gives up on it. Remove the label and add `ready` to try again.
+
+### Steering it
+
+`/factory <op>` from the loop's session (or ask in chat):
+
+| Op | What it does |
+|---|---|
+| `status` | the last pass and the directives in force |
+| `config` | every setting the loop runs with, and its source |
+| `priority <N...>` / `only <N...>` | claim these first / claim only these (`off` clears either) |
+| `skip <N>` / `pause <N>` | never claim N / take no action on N (`noskip`, `unpause` undo them) |
+| `new off` | claim and start nothing new; work in flight goes on (`new on` undoes it) |
+| `note [<N>] <text>` | an instruction for N's next agent, or for every issue's |
+| `resume <N> ["<note>"]` | unpark N |
+| `drop <N>` | abandon N for this life; its agents stop and its claim is released |
+| `mode off\|observe\|act` | stop, watch only, or work |
+
+`/factory help` lists every op, and [the v2 SPEC, appendix E](factory-loop/v2/SPEC.md#appendix-e-owner-ops)
+says what each does. To stop the loop within a minute whatever its mode, create the `OFF` file
+in the workspace: `touch /persist/claude/factory-loop/OFF`, and delete it to start again.
+
+### The first run
+
+Label one small, well-described issue `ready` and watch it go from claimed to designed (a brief
+comment on the issue), built, PR opened, CI, reviewed and merged. The labels show where it is,
+`/factory status` shows what the loop is doing, and the `factory-state` skill
+(`/callum-flow:factory-state`) shows the factory as a whole, stuck issues included.
+
+### Troubleshooting
+
+| Symptom | What shows it | Fix |
+|---|---|---|
+| Act mode does nothing: the role | `rails`: `role: DEV_ROLE is dev, act needs orchestrator` | The workspace is not from the `orchestrator-loop` template. Create one from it. |
+| Act mode does nothing: another orchestrator | `rails`: `heartbeat: another orchestrator on this repo is up (<device> ...)` | Another orchestrator workspace runs on the repo. Stop it: one loop per repo. |
+| Act mode does nothing: the act lock | `rails`: `act lock: session <id> holds it until <time>` | Another session in this workspace holds the loop. Close it; the lock frees itself when its lease runs out. |
+| Act mode does nothing: the factory database | `rails`: `heartbeat: query failed (...)` | The workspace cannot query the factory database. `coder ssh <repo>-loop -- dev-doctor` shows its database checks, with the fix for each. |
+| Act mode does nothing: the repo | `rails`: `repo: the checkout ... is ..., not <owner>/<repo>` | The checkout's `origin` is another repo. Fix `repo_url`, or `repo` in the workspace file. |
+| Issues are claimed but no agent starts | a `workspace` notice in the session; skipped lines `workspace: ...; agent steps are held` in the decision log | The companion plugin `factory-loop-workspace` is not loaded. Bring the workspace up to date with the template (it installs it), or install it, then restart the session. |
+| Builders finish without running the gates | `/factory config` shows `gateCommands none`; no `gate-pass` or `gate-fail` lines in `/persist/claude/factory-loop/<owner>__<repo>/companion.jsonl` | Set `gateCommands` in `.claude/factory-loop.json` and merge it to the default branch. |
+| A PR stays in `factory:reviewing`, then goes to triage or parks | the PR has no checks on GitHub | CI does not run on pull requests. Fix the workflow (step 3f) and merge it to the default branch. The loop waits 10 minutes (`ciStartMs`) for a check to start before it counts the step as failed, and never merges a PR with no checks. |
+
+## 8. Tell the user
 
 Report:
 
 - what was created and what was merged,
 - the commands you chose, their clean and deliberately broken output, and any command you
   could not determine,
+- if step 7 ran: the loop workspace's name, its mode, and the first issue it merged (or where
+  that issue is now),
 - what the user still has to do, with the commands:
 
 | Next step | How |
 |---|---|
 | Open it on the desktop | Reopen in Container (VS Code) or `devcontainer up --workspace-folder .`. Then log in once: `dev-login start`. |
 | Run it in Coder | Step 6, if not done: `coder create <name> --template dev-system --parameter repo_url=<https clone url>`, then **Log in** in the dashboard. |
+| Put it on the factory loop | Step 7, if not done: the repo's branch protection and `ready` label, a workspace from the `orchestrator-loop` template ("Create the loop workspace"), **Log in**, `/factory mode act` in its session, and one issue labelled `ready`. |
+| Hand the loop work | Label an issue `ready`. Answer a `factory:parked` issue on the issue, then remove the label. `/factory help` in the loop's session lists the controls. |
 | Enable the workflow plugin | The base image's `dev-init` installs `callum-flow@callum` by default on every container start, on the desktop and in Coder. See [Claude plugins](../images/base/README.md#workspace-and-repo) for opt-outs and recovery when an install fails. |
 | Session history (agentsview) | Nothing per repo. The URL is set once per host (`images/base/README.md`, "Central session history"). |
 | Keep in sync later | `npm update @callum/dev-system && npx callum-dev update`, then commit. Optionally add `npx callum-dev check` to the `ci.yml` from step 3f. |

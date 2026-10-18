@@ -49,9 +49,15 @@ your turn ends only with your answer.
 - Make only the changes the findings, checks or instructions call for.
 - For a visible change, or a finding on the evidence, give the evidence a reviewer needs in your
   answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it
-  whole; null keeps the PR's current evidence. An image there needs a URL: follow the repo's documented evidence route, and link a
-  capture committed on the branch by its commit-pinned blob URL
-  (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
+  whole; null keeps the PR's current evidence. An image there needs a URL. A repo's documented
+  capture command comes first (it should upload through the tool). Otherwise upload each capture
+  with `callum-flow-evidence-upload pr-<N>/<slug> <file>...` and put each printed URL in the
+  evidence as `![description](<url>)`. When the tool is not on PATH or exits 78 (no evidence
+  storage for the repo), fall back to a capture committed on the branch, linked by its
+  commit-pinned blob URL (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`). On
+  exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the
+  evidence which route you used and why. Commit an image only when it is a durable reference
+  image the repo keeps.
 - Run the repo's own lint and test commands in the foreground and let them finish. When you end
   your turn the loop runs the repo's gate commands, when the repo sets them, in your slot; while
   they fail it hands you the failures. CI on the PR is the final gate.
