@@ -1422,7 +1422,10 @@ function evaluate(opts, env = process.env) {
     }
   }
 
-  const ev = useNew ? newMod.loadNewEvents(newFile) : loadEvents(eventsFile);
+  let ev;
+  if (useNew) {
+    try { ev = newMod.loadNewEvents(newFile); } catch (e) { throw new InputError(`cannot read ${newFile}: ${e.code || e.message}`); }
+  } else ev = loadEvents(eventsFile);
   sources.push({
     kind: useNew ? 'events-new' : 'events', path: useNew ? newFile : eventsFile, found: ev.events !== null,
     rows: ev.events ? ev.events.length : null, ...(ev.reason ? { 'n/a': ev.reason } : {}),
@@ -1672,6 +1675,8 @@ async function main(argv, env = process.env) {
         old: () => evaluate({ ...opts, source: 'old' }, env),
         new: () => {
           if (opts.events && !opts.newEvents) throw new Error('skipped: no new input (--events given without --new-events)');
+          const nf = opts.newEvents || newMod.localLog(env.CALLUM_EVENTS_DIR, opts.repo);
+          if (!fs.existsSync(nf)) throw new Error(`skipped: no new log (${nf})`);
           return evaluate({ ...opts, source: 'new' }, env);
         },
         normalize: newMod.normalize,

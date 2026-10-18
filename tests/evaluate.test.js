@@ -1056,6 +1056,18 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
     assert.equal(differs.out, oldOut.out);
     assert.ok(record()[3].differences > 0);
     assert.match(differs.err, /shadow: \d+ difference/);
+    // no new log at all: skipped, not a pile of differences
+    fs.rmSync(path.join(evDir, "factory", "acme__widgets.jsonl"));
+    const missing = run([...NEW_WINDOW], env);
+    assert.equal(missing.status, 0, missing.err);
+    rec = record();
+    assert.equal(rec.length, 5);
+    assert.equal(rec[4].differences, null);
+    assert.match(rec[4].new_error, /skipped: no new log/);
+    // --source new with a directory for --new-events: the tool's input error, exit 1
+    const dirNew = run([...NEW_WINDOW, "--source", "new", "--new-events", dir], env);
+    assert.equal(dirNew.status, 1);
+    assert.match(dirNew.err, /callum-flow-evaluate: cannot read .*EISDIR/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
