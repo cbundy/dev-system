@@ -713,6 +713,10 @@ on every failure:
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
   version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
   role and version. See [docs/factory-db.md](../../docs/factory-db.md);
+- evidence storage, from `callum-flow-evidence-upload --check` in the workspace checkout: `OK` with the
+  credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
+  `FAIL` with the tool's message when the setup breaks the per-repo boundary (account SAS, wrong scope,
+  a missing file). One `INFO` line when there is no checkout with an origin remote;
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
   counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);
@@ -1494,7 +1498,7 @@ secrets volumes, which the devcontainer CLI and VS Code merge into your config:
 | Named volume | Target | Scope |
 |---|---|---|
 | `dev-system-gh` | `/persist/gh` | every repo on the Docker host (image metadata) |
-| `dev-system-secrets` | `/run/secrets/dev-system`, read-only | every repo on the Docker host (image metadata) |
+| `dev-system-secrets` | `/run/secrets/dev-system`, read-only | every repo on the Docker host (image metadata); per-repo evidence storage lives in its `evidence/<owner>/<repo>/` folder ([setup](../../docs/evidence-storage.md)) |
 | `dev-system-<devcontainerId>-claude` | `/persist/claude` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-no-mistakes` | `/persist/no-mistakes` | this repo (your `devcontainer.json`) |
@@ -2128,6 +2132,42 @@ The SQL comes from `-c` or from stdin, not both. Accepted flags: `-A`, `-t` (or 
 | 77 | the secret file `agentsview-pg-url` (with `--factory`, `factory-db-reader-url`) exists but is unreadable or empty |
 | 78 | no URL configured (no secret file and no `AGENTSVIEW_PG_URL`); with `--factory`, no `factory-db-reader-url` and no `FACTORY_DB_READER_URL` |
 | 1, 2, 3 | `psql`'s own status (SQL error, connection failure, ...), passed through |
+
+## callum-flow-evidence-upload
+
+`callum-flow-evidence-upload` uploads evidence files (screenshots, videos, reports) to the repo's
+own private Azure blob container and prints one read-signed URL per file. Fleet setup:
+[docs/evidence-storage.md](../../docs/evidence-storage.md).
+
+```sh
+callum-flow-evidence-upload [--repo owner/name] [--check|--dry-run] <dest> <file>...
+callum-flow-evidence-upload pr-12/screens shot.png demo.webm   # one URL per file, in input order
+callum-flow-evidence-upload --check                            # validate credentials, upload nothing
+```
+
+- **Blob path.** `<owner>/<repo>/<workspace>/<dest>/<basename>` in the repo's container. The repo is
+  `--repo`, else `GITHUB_REPOSITORY`, else the `origin` remote (https or ssh), lower-cased. The workspace is
+  `DEV_CODER_WORKSPACE`, else `CODER_WORKSPACE_NAME`, else `ci-<GITHUB_RUN_ID>` under GitHub Actions, else the
+  hostname; lower-cased, anything outside `[a-z0-9-]` becomes `-`.
+- **Credentials, per repo, first match wins.** (1) `ARTIFACT_CONTAINER_URL`, `ARTIFACT_SAS` and
+  `ARTIFACT_READ_SAS` in the environment (CI); (2) the folder `evidence/<owner>/<repo>/` in
+  `DEV_WORKSPACE_SECRETS_DIR` (`/run/secrets/dev-system-workspace`), which wins whole when it exists; (3) the same
+  folder in `DEV_SECRETS_DIR` (`/run/secrets/dev-system`). The folder holds `container-url`, `write-sas` and
+  `read-sas`. Values are trimmed and a leading `?` dropped. File values are never exported and the write SAS is
+  never printed; curl gets it through `-K -` on stdin, so it is not in the process list.
+- **Refused credentials (exit 1).** An account SAS, a SAS whose `sr` is not `c`, a read SAS whose `sp` is not
+  exactly `r`, a write SAS without `c` and `w`, and a container URL that is not `https://<host>/<container>`
+  with no query string.
+- **`--dry-run`** prints the blob path (stderr) and the read URL per file, never the write SAS.
+- **Content type** from the extension, case-insensitive: png, jpg/jpeg, gif, webp, mp4, webm, zip, html, else
+  `application/octet-stream`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok (`--check`: credentials valid) |
+| 1 | refused credentials, or an upload that did not return HTTP 201 (the message names the file and status) |
+| 2 | bad usage, a bad `<dest>` (empty, leading `/`, a `..` segment, whitespace), or a missing or unreadable file; nothing is uploaded |
+| 78 | no credentials for the repo; fall back to a committed capture |
 
 ## Central session history (agentsview)
 
