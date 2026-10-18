@@ -61,7 +61,7 @@ The foundation is the base the loop runs on. Section 13 describes it, and the lo
 | Owner controls | 13.4.3; `control.ts`, `control.json` | the ops are in appendix E |
 | Wakes and one wake at a time | 13.8; `wake.ts` | `tell` and `task release` only |
 | Answer channel and repair message | 13.7.3a; `contract.mjs`, `bin/factory-answer` | the `script` channel only; new contracts |
-| Event emitter | 13.7.4; `act.ts` `ctx.event` | three states beyond the first loop's (7.1) |
+| Event emitter | 13.7.4; `act.ts` `ctx.event` | three states of its own (7.1) |
 | Decision log, trace, daily prune | 13.12, 13.11.6; `trace.ts`, `exec.ts` | the `planner` field is always `v2` |
 | Store | 13.7.1; `$.store` | new keys `records:<repo>` (3.3) and `heads:<repo>` (2.4) |
 | Settings layers | 13.4; `config.ts` | new keys (appendix A) |
@@ -79,7 +79,7 @@ The foundation is the base the loop runs on. Section 13 describes it, and the lo
 - **Act.** The loop's executors live in `hooks/v2/act-*.ts` and join `EXECUTORS` (`act.ts`) through
   `hooks/v2/registry.ts`.
 - **Events.** Every event is built by one module, `hooks/v2/events.ts`, and written through
-  `ctx.event` (`act.ts`). `callum-flow-event` has three states beyond the first loop's (7.1).
+  `ctx.event` (`act.ts`). `callum-flow-event` has three states of its own (7.1).
 - **Wakes.** `tell` and `task release` through `wake.ts`. Triage is a spawned agent, not a wake
   (section 15).
 - **Store.** `records:<repo>` (3.3) and `heads:<repo>` (2.4).
@@ -111,7 +111,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | Source | Command | Cadence | Notes |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses. `nomistakes.runs` is optional in that tool, so no-mistakes data can never blind the loop |
-| `facts` | `dev-query` with `EVENTS_SQL` | every pass | the facts include the three states beyond the first loop's (7.1); which facts are logged is in 7.2 |
+| `facts` | `dev-query` with `EVENTS_SQL` | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
 | `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
@@ -2014,7 +2014,7 @@ with no rule of its own. "Environment": a one-time fix outside the loop's rules.
 | 11 | Usage tier stop-all for 42 and 197 minutes | kept, and generic | The foundation's tiers. A step killed by the window is a free re-run (U1), held until the tier allows it, so it costs the issue nothing. Merges are class `free` and go on in stop-all |
 | 12 | Strict protection put every PR behind on every merge: 27 update-behinds for 4 merges | avoided | Only the head is updated: once per merge, plus once per outside merge during its CI wait (9.2) |
 | E9 | #613's implementer stopped with no commit and no rule moved it for 549 minutes; #591's run died on a 429 and was answered as live | generic | No commit is `not-ok` (T6), so triage runs at once. Every record has a running step, a planned action or a named wait (property 3). A step killed by a 429 is a free re-run after the window (U1) |
-| E10 | 282 passes from 02:41 at cap 7 of 7 with 4 queued and nothing moving | avoided | The seven were two merge holds (the loop has no such thing), an owner decision and a limbo (both parked, freeing capacity) and three no-mistakes refusals (no no-mistakes). Parked issues do not count, so the queued issues would have started (C3:244). No wait on the owner holds capacity: there is no main-red hold and no reconcile hold |
+| E10 | 282 passes from 02:41 at cap 7 of 7 with 4 queued and nothing moving | avoided | The seven were two merge holds (the loop has no such thing), an owner decision and a limbo (both parked, freeing capacity) and three no-mistakes refusals (no no-mistakes). Parked issues do not count, so the queued issues would have started. No wait on the owner holds capacity: there is no main-red hold and no reconcile hold |
 | E20 | A gap in release authority held two green PRs for 583 issue-minutes | avoided | Merges never wait for releases, and the judge has standing release authority (11) |
 | E21 | The usage window cost 1,119 issue-minutes | kept, and generic | The foundation's tiers. Steps killed by the window re-run free when it resets (U1). The step-unknown breaker stops an outage from spending every issue's budget (5.3). |
 
@@ -2185,7 +2185,7 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 | `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
 | `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1) | every pass | v2's facts (2.4) |
 | `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
-| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so a shadow logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
+| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
 | `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
 | `pool` | `treehouse status --json` from the main checkout: the slots and who holds them. It does no reflog or status read of a slot (2.4 `leases`) | every pass | slot capacity (10.1) |
@@ -2276,7 +2276,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `checkoutEveryMs` | `5m` | how often the main-checkout tripwire reads the checkout (10.7) |
 | `slowGapMs` | `10m` | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; 3 since v2, section 15). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
 | `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
 | `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
