@@ -23,6 +23,48 @@ check "as root the entrypoint skips dev-init, leaving nothing root-owned in /per
   echo \"\$out\"
   echo \"\$out\" | grep -q 'dev-init skipped' && ! echo \"\$out\" | grep -q '^/persist'"
 
+# Stop path: the command is a child of dev-entrypoint, which forwards the signal and passes its status through.
+# stop_status <container>: docker stop (30s allowed), then "<exit code> <ms>"
+stop_status() {
+  local start
+  start=$(date +%s%N)
+  docker stop -t 30 "$1" >/dev/null
+  echo "$(docker inspect -f '{{.State.ExitCode}}' "$1") $((($(date +%s%N) - start) / 1000000))"
+}
+c=$(run_bg "$IMAGE" bash -c 'sleep infinity')
+check "a command killed by the stop signal exits 143 and docker stop is quick" bash -c "
+  for _ in \$(seq 60); do docker exec '$c' pgrep -x sleep >/dev/null 2>&1 && break; sleep 1; done
+  $(declare -f stop_status)
+  read -r rc ms < <(stop_status '$c')
+  echo \"rc=\$rc ms=\$ms\"
+  [ \$rc = 143 ] && [ \$ms -lt 10000 ]"
+docker rm -f "$c" >/dev/null
+c=$(run_bg "$IMAGE" bash -c 'trap "exit 0" TERM; sleep infinity & wait')
+check "a command that traps TERM and exits 0 gives exit 0, not the cut-short wait's status" bash -c "
+  for _ in \$(seq 60); do docker exec '$c' pgrep -x sleep >/dev/null 2>&1 && break; sleep 1; done
+  $(declare -f stop_status)
+  read -r rc ms < <(stop_status '$c')
+  echo \"rc=\$rc ms=\$ms\"
+  [ \$rc = 0 ] && [ \$ms -lt 10000 ]"
+docker rm -f "$c" >/dev/null
+check "piped stdin reaches the command" bash -c "
+  out=\$(echo 'echo hi' | docker run -i --rm '$IMAGE' bash 2>/dev/null)
+  echo \"stdout=\$out\"
+  [ \"\$out\" = hi ]"
+# A --final that hangs is cut off after 10s, and its stdout never reaches the container's stdout.
+WORKDIR=${WORKDIR:-$(mktemp -d)} # section 7 sets it only when it runs; lib.sh's cleanup removes it
+printf '#!/bin/sh\necho STUB-FINAL-OUTPUT\nsleep 60\n' > "$WORKDIR/hang-final"
+chmod 755 "$WORKDIR/hang-final"
+c=$(run_bg -v "$WORKDIR/hang-final:/usr/local/share/dev-system/heartbeat-loop:ro" "$IMAGE" bash -c 'sleep infinity')
+check "a hanging heartbeat-loop --final is cut off: docker stop under 13s, its stdout kept off the command's" bash -c "
+  for _ in \$(seq 60); do docker exec '$c' pgrep -x sleep >/dev/null 2>&1 && break; sleep 1; done
+  $(declare -f stop_status)
+  read -r rc ms < <(stop_status '$c')
+  echo \"rc=\$rc ms=\$ms\"
+  ! docker logs '$c' 2>/dev/null | grep -q STUB-FINAL-OUTPUT &&
+  [ \$ms -lt 13000 ]"
+docker rm -f "$c" >/dev/null
+
 # No login, no command: waits for a login without starting Claude. A 1s poll
 # shows the reminder rate limit (one hint per 10 polls) in a few seconds.
 # Tests on the real CLIs log in only Claude (DEV_LOGIN_TOOLS=claude), whose

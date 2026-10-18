@@ -23,7 +23,8 @@ ARG CACHE_BUST=static
 
 # OS packages: security updates on top of the base image, the GitHub CLI from
 # its official apt repo, the few utilities the agent flow uses, and tini as
-# PID 1 (signal forwarding and zombie reaping for dev-entrypoint).
+# PID 1 (signal forwarding to dev-entrypoint, which forwards to the command,
+# and zombie reaping).
 RUN echo "cache bust: ${CACHE_BUST}" \
   && install -d -m 0755 /etc/apt/keyrings \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -331,7 +332,9 @@ ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system${DEV_PLUGIN_REF:+#$
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which
 # defaults to dev-remote-control. tini is PID 1, so docker stop / pod deletion
-# reaches the running command at once and orphans are reaped. A command
+# reaches dev-entrypoint at once and orphans are reaped; dev-entrypoint runs the
+# command as a child, forwards the signal to it and sends the heartbeat's final
+# beat once it has exited. A command
 # (docker run IMAGE bash, k8s args:) replaces only the CMD.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/dev-entrypoint"]
 CMD ["dev-remote-control"]
