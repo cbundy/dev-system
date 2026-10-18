@@ -383,6 +383,12 @@ describe('person interventions', () => {
     expect(ivs4[1]?.event.reason).toContain('PR #621 was closed by hand')
   })
 
+  test('a park of a multi-line question gives one line: the decision sentence alone (#856)', () => {
+    const question = 'Which API?\n\n#### Context\n\nTwo shapes.\n\n#### Options\n\n- [ ] **A** - v1\n- [ ] **B** - v2'
+    const ivs3 = ivs({ ledger: [t(2, { row: 'T3', event: 'not-ok', from: 'designing', to: 'parked', via: 'question' }, 10)], records: [record({ seq: 2, state: 'parked', question })] })
+    expect(ivs3.find(p => p.event.cause === 'park')?.event.reason).toBe('parked from designing (T3): Which API?')
+  })
+
   test('a restart is a module load after an earlier run, with no restart of the loop\'s own around it, logged while it is recent', () => {
     // an earlier run: the ledger the load found holds an entry from before it
     const earlier = entry('sweep:before', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })

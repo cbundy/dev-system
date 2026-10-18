@@ -22,6 +22,8 @@ import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
 import type { TriageInput } from '../hooks/v2/prompts-triage'
 import { resultsOf, stepFiles, triageInput, triageResult } from '../hooks/v2/steps-triage'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
+import { parkText } from '../hooks/v2/park-text'
+import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
 import { FACTORY_LABELS, SLOT_STATES } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2Io, V2State } from '../hooks/v2/types'
@@ -358,7 +360,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(r, 78)).toEqual(['event transition'])
     // the rollout read run-it, and the factory holds the merge: the later milestone, no merged event
     const read = withLedger(
-      { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, expected: null } },
+      { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } },
       [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } }), ivLogged(merged)],
     )
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
@@ -368,7 +370,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })
     const at = (rollout: 'merge' | 'run-it' | 'keep-open', blocking: number | null, extra: LedgerEntry[] = []) =>
-      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
+      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
     const tells = (s: State) => of(plan(s), 76).filter(a => a.kind === 'tell')
     const out = tells(at('keep-open', 2))
     expect(out).toHaveLength(1)
@@ -377,6 +379,39 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     // told once: with the tell done, none is planned, even when the view still shows the blockers
     expect(tells(at('keep-open', 2, [done(followKey(merged, 'blocked-tell'), 'tell', { issue: 76 })]))).toEqual([])
     for (const [rollout, blocking] of [['keep-open', 0], ['keep-open', null], ['merge', 2], ['run-it', 2]] as const) expect(tells(at(rollout, blocking))).toEqual([])
+  })
+
+  test('O3: a merged issue the Next milestone lists open again moves to Later and tells the owner once per life; guards keep every other open item where it is', () => {
+    const merged = rec(543, { state: 'closed', step: null, why: 'merged', pr: 900, seq: 8, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
+    const rolloutOf = (rollout: 'merge' | 'run-it' | 'keep-open', status: 'done' | 'running' = 'done') => {
+      const e = done(followKey(merged, 'rollout'), 'rollout', { issue: 543, outcome: { kind: 'rollout', rollout, closeIssue: null } })
+      return status === 'done' ? e : { ...e, status, endedAt: null, outcome: undefined }
+    }
+    const reopened = { open: 1, closed: 3, openIssues: [543], expected: null }
+    const at = (over: Partial<State> = {}, extra: LedgerEntry[] = [], rollout: LedgerEntry = rolloutOf('merge'), records = [merged]) =>
+      withLedger(world(records, { milestone: reopened, ...over }), [transitioned(merged, 'T13', 'merge-queue', 'merged'), rollout, ...extra])
+    const moves = (s: State) => plan(s).actions.filter(a => a.key.includes('/reopened/'))
+    const first = moves(at())
+    expect(first.map(a => `${a.kind} ${a.rule}`)).toEqual(['milestone-later O3', 'tell O3'])
+    expect(first[0]).toMatchObject({ issue: 543, key: followKey(merged, 'reopened/milestone-later') })
+    expect(first[1]).toMatchObject({ wake: 'reopened', key: followKey(merged, 'reopened/tell'), fields: { issue: '543', pr: '900' } })
+    expect(JSON.stringify(first[1])).toContain('issues/543')
+    // once only: with both done, neither is planned again
+    const both = [done(followKey(merged, 'reopened/milestone-later'), 'milestone-later', { issue: 543 }), done(followKey(merged, 'reopened/tell'), 'tell', { issue: 543 })]
+    expect(moves(at({}, both))).toEqual([])
+    // a milestone reading without the issue open: O3 starts the release review
+    const taskKinds = (s: State) => plan(s).actions.filter(a => a.kind === 'task').map(a => a.rule)
+    expect(taskKinds(at({ milestone: { open: 0, closed: 3, openIssues: [], expected: null } }, both))).toEqual(['O3'])
+    // guards
+    expect(moves(at({}, [], rolloutOf('keep-open')))).toEqual([])
+    expect(moves(at({}, [], rolloutOf('run-it')))).toEqual([])
+    expect(moves(at({}, [], rolloutOf('merge', 'running')))).toEqual([])
+    expect(moves(at({ sources: { ...baseState().sources, milestone: { ok: true, at: NOW - 10 * MIN } } }))).toEqual([])
+    expect(moves(at({ sources: { ...baseState().sources, milestone: { ok: false, at: NOW, error: 'x' } } }))).toEqual([])
+    expect(moves(at({ milestone: null }))).toEqual([])
+    expect(moves(at({ milestone: { ...reopened, openIssues: [544] } }))).toEqual([])
+    const live = rec(543, { state: 'queued', step: null, life: merged.life + 1, seq: 1, seqAt: NOW, since: NOW })
+    expect(moves(at({}, [], rolloutOf('merge'), [merged, live]))).toEqual([])
   })
 
   test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
@@ -671,6 +706,19 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     expect(noteOf([park(['A'], { ...p, seq: p.seq - 1 }), answer])).toEqual(['Go with it.'])
     // a comment of the owner quoting the template is no park comment
     expect(noteOf([{ body: '- [x] **A** - option A', at: NOW - 20 * MIN, url: null }, answer])).toEqual(['- [x] **A** - option A Go with it.'])
+  })
+
+  test('a designer\'s question with options, stored by T3 and worded by parkText, is a park comment whose tick the label-off unpark reads back (#856)', () => {
+    const designing = rec(110, { state: 'designing', step: 'design', seq: 5 })
+    const asked = renderQuestion({ question: 'Which API?', context: 'Two shapes exist.', options: [{ key: 'A', title: 'v1', detail: 'old' }, { key: 'B', title: 'v2' }], recommendation: { key: 'B', reason: 'newer' } })
+    const event = { kind: 'not-ok' as const, reason: 'question', data: { question: asked } }
+    const parked = { ...(nextRecord(designing, rowFor(designing, event, config({ planner: 'v2' })), event, NOW) as IssueRecord), seq: p.seq, seqAt: parkAt, since: parkAt }
+    expect(parked).toMatchObject({ state: 'parked', question: asked })
+    const body = parkText(parked, 'designing', 'question')
+    for (const line of ['#### Context', '#### Options', '#### Recommendation', '- [ ] **A** - v1', '- [ ] **B** - v2', 'Tick one option, or write your answer as a comment.']) expect(body).toMatch(new RegExp(`^(\\d+\\. )?${line.replace(/[*[\]]/g, '\\$&')}`, 'm'))
+    const comment = { body: `${body.replace('- [ ] **B**', '- [x] **B**')}\n\n${hiddenKey(entryKey(p, 'comment'))}`, at: parkAt + 2 * MIN, url: null }
+    const r = plan(withLedger(world([p], {}, { reads: { 110: { at: NOW - 5 * MIN, open: true, labels: ['enhancement'] } }, comments: { 110: [comment] } }), settledPark))
+    expect(((transitionOf(r, 110)?.next) as IssueRecord).notes[0]).toMatch(/^Owner chose option B: /)
   })
 
   test('the resume note reaches the step the resume leads to: P1 puts it on queued, T1 carries it into designing, fixing or reviewing, and that step\'s prompt says it (R5-F2)', async () => {
