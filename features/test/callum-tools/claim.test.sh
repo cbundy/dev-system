@@ -311,10 +311,18 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 1 "heartbeat patch failure"
 no_events "heartbeat patch failure"
 
-# stub dev-query: prints $STUB_DIR/central (the DISTINCT ON rows: ts|issue|state|device), or fails with $STUB_DIR/central-rc
+# stub dev-query: prints $STUB_DIR/central (the DISTINCT ON rows: ts|issue|state|device), or fails with $STUB_DIR/central-rc.
+# A --factory call is the new store: it prints central-new (empty by default), fails with central-new-rc and is
+# logged to dq-calls-new, not dq-calls.
 cat > "$tmpdir/dev-query" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
+if [ "$1" = --factory ]; then
+  echo "dev-query $*" >> "$d/dq-calls-new"
+  [ ! -f "$d/central-new-rc" ] || { echo "dev-query: boom" >&2; exit "$(cat "$d/central-new-rc")"; }
+  [ ! -f "$d/central-new" ] || cat "$d/central-new"
+  exit 0
+fi
 echo "dev-query $*" >> "$d/dq-calls"
 [ ! -f "$d/central-rc" ] || { echo "dev-query: boom" >&2; exit "$(cat "$d/central-rc")"; }
 [ ! -f "$d/central" ] || cat "$d/central"

@@ -356,8 +356,12 @@ sides cut at the settle time, `live_differences` the same on everything read (pu
 and `old_ok` / `new_ok` say whether that side's central read succeeded. A retried write can repeat
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
-`factory.event_store`. It takes `-v repo=... -v since=...`. There are no rows until the producer
-(#905) ships.
+`factory.event_store`. It takes `-v repo=... -v since=...`. The producer is the claim tools'
+held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
+event per run in their default `shadow` source (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`), with
+`reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
+(lifecycle class, latest claim type, claim device) differs, over the last 7 days cut 10 minutes
+before now; the query groups by reader and tool.
 
 ```sql
 -- per reader, tool, device and day: compares, differences, failed reads, newest difference detail
