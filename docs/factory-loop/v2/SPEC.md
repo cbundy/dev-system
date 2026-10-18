@@ -2268,7 +2268,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
 | R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1). See wind-down (10.11) |
-| S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
+| S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then issues labelled `priorityLabel`, then ascending; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
 | S4 | unknown | an unknown result, a running step's timeout, or a GitHub wait past its bound | U1 to U4 |
@@ -2945,6 +2945,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 
 | Key | Default | Meaning |
 |---|---|---|
+| `priorityLabel` | `priority` | 3.3: S1 claims issues with this label after the owner's `only`/`priority` list and before the rest, ignoring case; order only, never a filter |
 | `planner` | `v2`; `v1` is an explicit opt-in until the U10 delete wave | 2.3 |
 | `shadow` | `off` | 2.3 |
 | `stateTimeoutMs` | design 45m, build 90m, review 30m, fix 60m, triage 15m, queued 6h, queueWait 2h, parked 24h, waiting 24h | 4.4 |

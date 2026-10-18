@@ -175,6 +175,14 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       ],
     ],
     [
+      'Claims',
+      [
+        ...render(row('readyLabel', 'readyLabel', c.readyLabel)),
+        ...render(row('priorityLabel', 'priorityLabel', c.priorityLabel)),
+        ...render(row('skipLabels', 'skipLabels', c.skipLabels.length === 0 ? 'none' : c.skipLabels.join(', '))),
+      ],
+    ],
+    [
       'Limits',
       [
         ...render(row('reviewFixCap', 'reviewFixCap', String(c.reviewFixCap))),

@@ -93,7 +93,7 @@ Each change is logged and asks for a pass at once. The ops:
   plugin or directive), read-only; "what is this factory's config?" is answered with it;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order;
+- `priority <N...>|off`: claim these first, in order, then issues labelled `priorityLabel` (default `priority`), then the rest;
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;

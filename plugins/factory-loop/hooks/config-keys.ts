@@ -21,6 +21,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   mode: 'next-pass',
   shadowDevice: 'next-pass',
   readyLabel: 'next-pass',
+  priorityLabel: 'next-pass',
   inDevLabel: 'next-pass',
   skipLabels: 'next-pass',
   trackerTitle: 'next-pass',
