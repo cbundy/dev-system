@@ -70,12 +70,12 @@ export const register: Register = (on, opts) => {
   }).catch(($, e, next) => next(e))
 
   // /factory <op>: the owner's controls from any client (v2 SPEC 13.4.3)
-  on('command.run', { command: 'factory' }, async ($, e) => ({ text: (await ownerOp($, e.args, undefined)).text })).catch(() => ({
+  on('command.run', { command: 'factory' }, async ($, e) => ({ text: (await ownerOp($, e.args, undefined, 'person')).text })).catch(() => ({
     text: 'factory-loop: the op could not run; nothing was changed.',
   }))
 
   on('tool.call', { tool: 'mcp__factory-loop__control' }, async ($, e) => {
-    const r = await ownerOp($, toolInput(e), e.agentId)
+    const r = await ownerOp($, toolInput(e), e.agentId, 'judge')
     return r.ok ? { result: r.text } : { deny: r.text }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'factory-loop: the op could not run; nothing was changed.' }))
 

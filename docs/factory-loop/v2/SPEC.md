@@ -3146,7 +3146,7 @@ One JSON line per pass in the decision log:
 asked for the pass: `first` (the first pass after the module loaded: a session start or a
 reload), `timer`, `agent <id>` (an agent of the loop answered, through the script or its answer
 tool), `wake <id>` (a wake was answered, by the answer tool or by its own turn; `turn <id>` when
-the answering turn was no wake's own), or `owner <op>` (a `/factory` op or the control tool).
+the answering turn was no wake's own), or `owner <op>` (a `/factory` op) or `judge <op>` (the control tool).
 Requests that arrive while a pass runs, or waits out its gap, join the next pass's trigger,
 separated by commas. A ping the breaker ignores is left out. `ms` is the pass's time from its
 start to this line. The error line of a pass that threw carries both. `executed` says
@@ -3156,7 +3156,7 @@ act mode was held back), `capped` and `atCap`, `breaker` (the ping breaker opene
 notices from outside plan sent this pass), `config` (what the repo-local settings got wrong) and
 `problems` (a loop event not logged, a store write refused, the act lease lost mid-pass).
 `commands` lists every command the pass ran, observe's and the executors'. Other lines share the
-file: an owner op (`control`, with its answer), a turn's or an agent's answer problems, an
+file: an owner op (`control`, with its answer and `by`: `person` for `/factory`, `judge` for the control tool), a turn's or an agent's answer problems, an
 agent's answer at its turn's end (`{ agent, key, answer: "script" | "text", status, summary,
 scriptRefused?, afterRepair? }`: `script` when read from the file it recorded with the answer
 script, `scriptRefused` what kept a recorded file out;

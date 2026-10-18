@@ -144,7 +144,7 @@ export const between: Between = { answering: new Set(), completedSeen: new Map()
 export const resuming = new Map<string, number>()
 
 // ping: an agent of the loop finished (`agent <id>`), a wake was answered (`wake <id>`), an owner
-// control arrived (`owner <op>`).
+// control arrived (`owner <op>` for /factory, `judge <op>` for the control tool).
 export function ping(why: string) {
   S.ask?.('ping', why)
 }

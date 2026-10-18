@@ -517,8 +517,29 @@ describe('the driver (v2 SPEC 2.3)', () => {
     await clock.advance(1_000)
     const control = h.lines().find(l => l.control === 'pause 12')
     expect(control?.problems).toBeUndefined()
+    expect(control?.by).toBe('person')
     const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
     expect(logged).toEqual([['--issue', '12', 'who=person', 'cause=op:pause']])
+  })
+
+  test('the control tool\'s ops are the judge\'s interventions: who=judge, the control line\'s by', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work' }, run: world() })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    for (const op of ['pause 12', 'unpause 12', 'config set maxInFlightIssues 3']) {
+      const r = await $.tool.call({ tool: 'mcp__factory-loop__control', op })
+      expect(r).toMatchObject({ result: expect.any(String) })
+      await clock.advance(1_000)
+    }
+    const lines = h.lines()
+    for (const op of ['pause 12', 'unpause 12', 'config set maxInFlightIssues 3']) expect(lines.find(l => l.control === op)).toMatchObject({ by: 'judge' })
+    const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
+    expect(logged).toEqual([
+      ['--issue', '12', 'who=judge', 'cause=op:pause'],
+      ['--issue', '12', 'who=judge', 'cause=op:unpause'],
+      ['--note', expect.stringMatching(/^who=judge cause=config-file /), 'who=judge', 'cause=config-file'],
+    ])
   })
 
   test('act mode: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', ENGINE_TEST, async ($, on) => {

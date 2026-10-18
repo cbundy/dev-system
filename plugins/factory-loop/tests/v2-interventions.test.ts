@@ -435,33 +435,46 @@ describe('person interventions', () => {
   })
 
   test('the owner\'s ops: one intervention per issue named, else one for the fleet; status and help are none', () => {
-    const resume = opInterventions({ text: 'resume 571 572 "go on"', name: 'resume', issues: [571, 572], at: NOW })
+    const resume = opInterventions({ text: 'resume 571 572 "go on"', name: 'resume', issues: [571, 572], at: NOW, by: 'person' })
     expect(resume.map(e => [e.who, e.cause, e.issue, e.reason])).toEqual([
       ['person', 'op:resume', 571, 'resume 571 572 "go on"'],
       ['person', 'op:resume', 572, 'resume 571 572 "go on"'],
     ])
     expect(resume[0]?.fact).toBe(factKey('op:resume', 'i571', NOW.toString(36)))
-    expect(opInterventions({ text: 'mode act', name: 'mode', issues: [], at: NOW }).map(e => [e.cause, e.issue])).toEqual([['op:mode', null]])
+    expect(opInterventions({ text: 'mode act', name: 'mode', issues: [], at: NOW, by: 'person' }).map(e => [e.cause, e.issue])).toEqual([['op:mode', null]])
     // a landed `config set|unset` is the settings file changed through the loop
-    const cfg = opInterventions({ text: 'config set maxInFlightIssues 3', name: 'config', issues: [], at: NOW })
+    const cfg = opInterventions({ text: 'config set maxInFlightIssues 3', name: 'config', issues: [], at: NOW, by: 'person' })
     expect(cfg.map(e => [e.who, e.cause, e.issue, e.reason])).toEqual([['person', 'config-file', null, 'config set maxInFlightIssues 3']])
-    for (const name of ['status', 'help']) expect(opInterventions({ text: name, name, issues: [], at: NOW })).toEqual([])
+    for (const name of ['status', 'help']) expect(opInterventions({ text: name, name, issues: [], at: NOW, by: 'person' })).toEqual([])
     // two ops a millisecond apart are two facts
-    expect(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW + 1 })[0]?.fact).not.toBe(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW })[0]?.fact)
+    expect(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW + 1, by: 'person' })[0]?.fact).not.toBe(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW, by: 'person' })[0]?.fact)
+  })
+
+  test('the op\'s origin is the intervention\'s who: a judge op differs from an owner op in who alone', () => {
+    const op = { text: 'pause 12', name: 'pause', issues: [12], at: NOW }
+    const person = opInterventions({ ...op, by: 'person' })
+    const judge = opInterventions({ ...op, by: 'judge' })
+    expect(person.map(e => e.who)).toEqual(['person'])
+    expect(judge.map(e => e.who)).toEqual(['judge'])
+    expect(judge.map(e => ({ ...e, who: 'person' }))).toEqual(person)
+    const cfg = opInterventions({ text: 'config set maxInFlightIssues 3', name: 'config', issues: [], at: NOW, by: 'judge' })
+    expect(cfg.map(e => [e.who, e.cause])).toEqual([['judge', 'config-file']])
+    const landed = opLanded({ mode: 'act' }, { op: 'pause', issues: [12] } as never, 'pause 12', [12], NOW, 'judge')
+    expect(landed?.by).toBe('judge')
   })
 
   test('an op is an intervention when v2 acts before it or after it: the ops that turn the loop on and off are logged, those far from it are not', () => {
     const landed = (mode: 'off' | 'observe' | 'act', text: string) => {
       const [name, word] = text.split(' ')
       const op = (name === 'mode' ? { op: 'mode', mode: word } : { op: 'pause', issues: [] }) as never
-      return opLanded({ mode }, op, text, [], NOW)?.name ?? null
+      return opLanded({ mode }, op, text, [], NOW, 'person')?.name ?? null
     }
     expect(landed('observe', 'mode act')).toBe('mode')
     expect(landed('act', 'mode observe')).toBe('mode')
     expect(landed('act', 'pause')).toBe('pause')
     expect(landed('observe', 'pause')).toBeNull()
     expect(landed('off', 'mode observe')).toBeNull()
-    expect(opLanded({ mode: 'act' }, { op: 'status' } as never, null, [], NOW)).toBeNull()
+    expect(opLanded({ mode: 'act' }, { op: 'status' } as never, null, [], NOW, 'person')).toBeNull()
   })
 })
 
@@ -1002,13 +1015,13 @@ describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
     const rt = { cwd: '/work', env: { CALLUM_FLOW_REPO: REPO } } as unknown as Runtime
     const commands: string[] = []
     const env = { io: io as never, rt, commands }
-    expect(await logOwnerOp(env, { text: 'drop 571', name: 'drop', issues: [571], at: NOW })).toEqual([])
+    expect(await logOwnerOp(env, { text: 'drop 571', name: 'drop', issues: [571], at: NOW, by: 'person' })).toEqual([])
     expect(runs.map(r => r.argv.slice(0, 4))).toEqual([['callum-flow-event', 'intervention', '--issue', '571']])
     expect(runs[0]?.argv.at(-1)).toBe(`who=person cause=op:drop life=none fact=op:drop/i571/${NOW.toString(36)} reason=drop%20571`)
     expect(runs[0]?.env).toEqual({ CALLUM_FLOW_REPO: REPO })
     expect(commands.length).toBe(1)
     exit = 2
-    const notes = await logOwnerOp(env, { text: 'mode act', name: 'mode', issues: [], at: NOW })
+    const notes = await logOwnerOp(env, { text: 'mode act', name: 'mode', issues: [], at: NOW, by: 'person' })
     expect(notes).toEqual(['intervention op:mode not logged: callum-flow-event intervention: exit 2: callum-flow-event: bad note'])
     // the shared writer throws as ExecCtx.event does, with the exit, so an executor never retries a usage error
     const cmd = (argv: string[]) => io.run(argv, { env: {} })
