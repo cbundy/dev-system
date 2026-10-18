@@ -88,7 +88,7 @@ drive() {
   rm -rf "$tmpdir/out" "$S/calls-old" "$S/calls-new"
   set +e
   env -i PATH="$toolbin" HOME="$tmpdir" TMP="$tmpdir" SHARE="$SHARE" REAL_EVENT="$REAL_EVENT" OUT="$tmpdir/out" STUB_DIR="$S" \
-    CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA CLAUDE_SESSION_ID= "$@" "$SH" "$tmpdir/drv.sh" > "$tmpdir/stdout" 2> "$tmpdir/stderr"
+    CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA CLAUDE_SESSION_ID= CLAUDE_CODE_SESSION_ID= "$@" "$SH" "$tmpdir/drv.sh" > "$tmpdir/stdout" 2> "$tmpdir/stderr"
   set -e
 }
 now=$(date -u +%s)

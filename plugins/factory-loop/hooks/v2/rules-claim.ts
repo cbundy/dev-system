@@ -8,7 +8,7 @@
 //   i<N>/claim/<life>, and a retry of a failed one keeps that key; a re-claim is keyed under the
 //   life, i<N>/l<life>/claim/<at>.
 // - The claim filters are v1's D1 filters (open, trusted, `ready`, no skip label, not blocked, not
-//   a tracker, not skipped or paused, `only` and `priority` order), but a drop applies to the life
+//   a tracker, not skipped or paused, `only` or else `priority` list first, then issues labelled `priorityLabel`, then ascending), but a drop applies to the life
 //   it closed (4.1), so re-adding `ready` brings a dropped issue back, and only another device's
 //   live work keeps an issue from a claim; the claim tool is the arbiter. An issue carrying
 //   factory:rejected is never claimed (6.4): the owner removes that label to try again.
@@ -220,7 +220,15 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const only = onlyIssues(ctx, issues)
   for (const n of only) if (!state.queue.includes(n)) skip(ctx, 'S1', n, 'owner: only names it, but it is not in the ready queue')
   const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
-  const order = [...listed, ...[...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)]
+  const rest = [...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)
+  const labelled = (n: number) => issues.get(n)?.labels?.some(l => sameLabel(l, config.priorityLabel)) === true
+  const listedTier = control.only.length > 0 ? 'owner only' : 'owner priority'
+  // the label only changes the order: every filter and limit below applies to a labelled issue as to any
+  const order: Array<[number, string]> = [
+    ...listed.map((n): [number, string] => [n, listedTier]),
+    ...rest.filter(labelled).map((n): [number, string] => [n, `label ${config.priorityLabel}`]),
+    ...rest.filter(n => !labelled(n)).map((n): [number, string] => [n, 'number']),
+  ]
   const live = ctx.v2.records.filter(r => r.state !== 'closed')
   const firsts = firstClaims(ctx)
   const inFlight = inFlightClaims(ctx)
@@ -228,7 +236,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const cap = config.maxInFlightIssues
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
   let started = 0
-  for (const n of order) {
+  for (const [n, orderTier] of order) {
     const record = live.find(r => r.issue === n)
     if (record !== undefined) {
       skip(ctx, 'S1', n, `in the factory as ${record.state}`)
@@ -268,7 +276,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
       skip(ctx, 'S1', n, limit)
       continue
     }
-    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: 'ready and unblocked', issue: n }) === 'go') started += 1
+    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderTier})`, issue: n }) === 'go') started += 1
   }
 }
 

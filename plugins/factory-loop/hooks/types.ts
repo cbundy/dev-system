@@ -273,6 +273,8 @@ export type Config = {
   // observe mode only: plan as this device (the live orchestrator's) to shadow its work
   shadowDevice: string | null
   readyLabel: string
+  // S1 claims issues with this label after the owner's list, before the rest: order only, never a filter
+  priorityLabel: string
   inDevLabel: string
   skipLabels: string[]
   // a title matching this pattern marks a tracker, like sub-issues do (MEM: trackers are never claimed)

@@ -32,7 +32,7 @@
 # ${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}) and appends the new event as one JSON line to
 # <events dir>/factory/<same file name>. The factory/ dir is made 0700. The clock is read once, with
 # milliseconds: the old ts is that value cut to the second. session_id of the new event is
-# CLAUDE_SESSION_ID or null (never the transcript guess). A line the translator skips by name writes
+# CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, or null (never the transcript guess). A line the translator skips by name writes
 # nothing. A miss, a missing node or translator, or a crashing translator keeps the old line, writes
 # no new event, prints one `callum-flow-event: warning:` line and still exits 0. --if-changed
 # suppression writes neither line.
@@ -105,7 +105,7 @@
 #
 # No network, one jq call, one O_APPEND write of a single short line (atomic
 # between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
-# the hostname), session_id (CLAUDE_SESSION_ID, else the newest transcript of
+# the hostname), session_id (CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, else the newest transcript of
 # the working directory's Claude project, else null), actor
 # (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (2), the running versions
 # base_image, dev_image, template_version and plugin_version (read from the
@@ -121,10 +121,13 @@
 # no network here).
 #
 # Environment: CALLUM_EVENTS_DIR (default /persist/events), DEV_VERSIONS_FILE,
-# CALLUM_FLOW_REPO
+# CALLUM_FLOW_REPO, CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID
 # (owner/name, default from the origin remote), CALLUM_EVENT_UUID_SOURCE (test
 # override of /proc/sys/kernel/random/uuid).
 set -u
+
+# The Claude session: CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (Claude Code sets it), else empty.
+env_session=${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}
 
 STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention prompt_denied prompt_waiting"
 
@@ -229,7 +232,7 @@ if [ "$1" = --type ]; then
   set -- --type "$n_type" --data "$n_data" --repo "$repo" --device "$device" --actor "$n_actor" --event-id "$event_id" --snapshot "$snap"
   [ -z "$n_has_ver" ] || set -- "$@" --type-version "$n_ver"
   [ -z "$n_has_issue" ] || set -- "$@" --issue "$n_issue"
-  [ -z "${CLAUDE_SESSION_ID:-}" ] || set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+  [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
   wr_rc=0
   new=$(node "$wr_js" "$@") || wr_rc=$?
   [ "$wr_rc" -ne 2 ] || exit 2
@@ -327,7 +330,7 @@ repo_file
 
 read_device
 
-session=${CLAUDE_SESSION_ID:-}
+session=$env_session
 if [ -z "$session" ]; then
   pdir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')
   if [ -d "$pdir" ]; then
@@ -377,7 +380,7 @@ dual_write() {
   [ -r "$tr_js" ] || tr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-translate.js
   [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - new event not recorded"; return 0; }
   set -- --quiet --ts "$ts_ms"
-  [ -z "${CLAUDE_SESSION_ID:-}" ] || set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+  [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
   tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - new event not recorded"; return 0; }
   tr_rc=0
   new=$(printf '%s\n' "$line" | node "$tr_js" "$@" 2>"$tr_err") || tr_rc=$?

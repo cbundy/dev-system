@@ -370,6 +370,19 @@ FROM factory.event_log
 GROUP BY device;
 ```
 
+### Claim order
+
+S1 names the tier a claim came from in its reason (`ready and unblocked (order: label priority)`).
+How many claims each tier gave per day, and which issues the label promoted, from the decision log
+(`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device):
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "S1" and (.reason | test("order:")))
+  | {day: ($d.at | tostring | .[0:10]), tier: (.reason | capture("order: (?<t>[^)]*)").t), issue}]
+  | group_by([.day, .tier])[] | "\(.[0].day) \(.[0].tier): \(length) \(map(.issue) | @json)"' \
+  /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two
