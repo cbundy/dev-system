@@ -529,10 +529,10 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-60 The claim-to-merge test runs beside the engine's test host
 
-- **Decision**: `tests/act.test.ts` drives the real observe and act-step functions through ten
-  passes, from claim to merge and the run-it follow-ups, with a recording fake;
-  `tests/driver.test.ts` tests the driver's own wiring in the engine's test host, with agents
-  seeded in the store.
+- **Decision**: `tests/act.test.ts` drives the real act-step functions (the dispatcher and
+  `runActions`) with a recording fake; `tests/driver.test.ts` tests the driver's own wiring in the
+  engine's test host, with agents seeded in the store. No test walks one issue from claim to merge
+  in the host: the path is covered stage by stage in the module tests.
 - **Alternatives**: one end-to-end test inside the host.
 - **Why**: the host never returns an agent id from `$.agent.spawn` (probed: the subagent type
   arrives empty too), so a spawn there always fails. Only the testbed closes that gap (v2 SPEC 13.13).
