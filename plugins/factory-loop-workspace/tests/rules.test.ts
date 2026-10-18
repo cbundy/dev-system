@@ -339,7 +339,8 @@ describe('the stop gate\'s waiting', () => {
 function manual() {
   let now = 0
   const timers: { at: number; fn: () => void; live: boolean }[] = []
-  const io = (maxWaitMs: number): TurnIo => ({
+  const io = (maxWaitMs: number, idle?: () => Promise<unknown>): TurnIo => ({
+    idle,
     now: () => now,
     after: (ms, fn) => {
       const t = { at: now + ms, fn, live: true }
@@ -441,6 +442,66 @@ describe('the stop gate\'s turns', () => {
     b.release()
     expect(turns.state()).toEqual({ held: 0, waiting: 0 })
     c.advance(10_000_000)
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+  })
+
+  test('with an idle slice pending, a grant admits at once; the slice is called again as each ends', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    const ends: (() => void)[] = []
+    let calls = 0
+    const idle = () => new Promise<void>(resolve => {
+      calls++
+      ends.push(resolve)
+    })
+    const w = turns.acquire(1, c.io(1_000_000, idle))
+    await tick()
+    expect(calls).toBe(1)
+    ends.shift()?.()
+    await tick()
+    expect(calls).toBe(2)
+    // the second slice is still pending when the turn is freed
+    a.release()
+    const b = held(await w)
+    expect(turns.state()).toEqual({ held: 1, waiting: 0 })
+    b.release()
+  })
+
+  test('the cap still leaves the queue while an idle slice is pending', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    const late = turns.acquire(1, c.io(30_000, () => new Promise<void>(() => undefined)))
+    await tick()
+    c.advance(30_000)
+    expect(await late).toEqual({ ok: false, waitMs: 30_000, queuedBehind: 1 })
+    expect(turns.state()).toEqual({ held: 1, waiting: 0 })
+    a.release()
+  })
+
+  test('a rejecting idle slice is not called again: the wait goes on with the grant alone', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    let calls = 0
+    const w = turns.acquire(1, c.io(1_000_000, () => (calls++, Promise.reject(new Error('no sleep')))))
+    await tick()
+    await tick()
+    expect(calls).toBe(1)
+    a.release()
+    held(await w).release()
+    expect(calls).toBe(1)
+  })
+
+  test('with no idle slice the wait is as before: nothing is called', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    const w = turns.acquire(1, c.io(1_000_000))
+    await tick()
+    a.release()
+    held(await w).release()
     expect(turns.state()).toEqual({ held: 0, waiting: 0 })
   })
 

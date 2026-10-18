@@ -49,8 +49,33 @@ const HANDSHAKE_PRUNE_DAYS = 7
 // the longest a finished writer waits for its gate's turn when its marker does not say (config.ts
 // gateWaitTimeoutMs)
 const GATE_WAIT_TIMEOUT_MS = 30 * 60_000
+// a queued gate always has a host call in flight, a sleep of this many seconds started again as each
+// ends: the engine gives a hook handler 10 s of budget, which host calls pause and clock ops do not
+const IDLE_S = 5
 // the stop gates' turns, one set for the whole process: every slot's writer shares it
 const turns = createTurns()
+
+// invocations the .catch has seen fail, by event: a handler the engine cut off still gets its turn later
+const cut = new WeakSet<object>()
+// cutOff: the engine's budget for this handler ran out (its signal aborted or no budget left), or the catch marked it
+function cutOff(e: object, next: unknown): boolean {
+  const n = next as { signal?: { aborted?: boolean }; budget?: { remainingMs?: number } } | undefined
+  return cut.has(e) || n?.signal?.aborted === true || n?.budget?.remainingMs === 0
+}
+
+// the catch's reason: the error's one line when one reached it
+function failedReason(err: unknown): string {
+  const m = typeof err === 'string' ? err : (err as { message?: unknown } | null | undefined)?.message
+  let text = typeof m === 'string' ? m : ''
+  if (text === '' && err !== undefined && err !== null) {
+    try {
+      text = JSON.stringify(err) ?? ''
+    } catch {
+      text = ''
+    }
+  }
+  return text === '' ? 'the stop gate hook failed' : `the stop gate hook failed (${oneLine(text)})`
+}
 
 // --- small helpers over $ ---------------------------------------------------------------------------
 
@@ -398,6 +423,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('classic.SubagentStop', async ($, e, next) => {
+    cut.delete(e)
     const a = await agentOf($, e.agent_id)
     if (a === null || a.root !== e.agent_id || a.role !== 'writer' || a.gateCommands.length === 0) return next(e)
     // a turn first (10.6): at most gateConcurrency gates run at once in this process; a marker with no
@@ -410,7 +436,12 @@ export const register: Register = on => {
     const startedAt = new Date(await $.clock.now()).toISOString()
     if (limit !== undefined) {
       const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
-      const got = await turns.acquire(limit, { now: () => $.clock.now(), after: (ms, fn) => $.clock.after(ms, fn), maxWaitMs: cap })
+      const got = await turns.acquire(limit, {
+        now: () => $.clock.now(),
+        after: (ms, fn) => $.clock.after(ms, fn),
+        maxWaitMs: cap,
+        idle: () => run($, ['sleep', String(IDLE_S)], { timeoutMs: IDLE_S * 1000 + QUICK_MS }),
+      })
       waitMs = got.waitMs
       queuedBehind = got.queuedBehind
       if (!got.ok) {
@@ -422,6 +453,11 @@ export const register: Register = on => {
         return next(e)
       }
       turn = got
+    }
+    // the engine cut this handler off while it waited: the loop has moved on, so it runs no gate
+    if (cutOff(e, next)) {
+      turn?.release()
+      return next(e)
     }
     // whatever happens from here, the turn goes back, so a stuck or crashed gate never blocks the others
     try {
@@ -438,10 +474,13 @@ export const register: Register = on => {
       turn?.release()
     }
   }).catch(async ($, e, next) => {
+    cut.add(e)
+    // the engine hands the catch the error on its next
+    const err = (next as unknown as { error?: unknown }).error
     // a gate that could not run is never passed silently
     try {
       const a = await agentOf($, e.agent_id)
-      if (a !== null && a.root === e.agent_id && a.role === 'writer' && a.gateCommands.length > 0) await logLine($, a, 'gate-unknown', 'the stop gate hook failed')
+      if (a !== null && a.root === e.agent_id && a.role === 'writer' && a.gateCommands.length > 0) await logLine($, a, 'gate-unknown', failedReason(err))
     } catch {
       // nothing more can be said
     }

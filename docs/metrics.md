@@ -177,6 +177,29 @@ GROUP BY repo, issue, life, seq, started_at
 ORDER BY started_at DESC;
 ```
 
+How often the stop gate hook itself failed or was cut off (the engine gives a hook 10 s of budget
+that host calls pause, SPEC 10.6). Every `gate-unknown` line is an `intervention` with cause
+`gate-unknown`; a cap wait or a gate that could not run also gives a `gate_run` with result
+`unknown`, but the hook's own `.catch` line has no `waitMs` and gives none. So per day, the excess
+of the first count over the second is the hook failures and cut-offs; its reason (the
+intervention's detail) reads `the stop gate hook failed (...)`, with the engine's error.
+
+```sql
+SELECT repo, day, sum(unknowns) AS gate_unknown_interventions, sum(runs) AS gate_run_unknown,
+  sum(unknowns) - sum(runs) AS hook_failures
+FROM (
+  SELECT repo, ts::date AS day, count(*) AS unknowns, 0 AS runs
+  FROM factory.event_log WHERE type = 'intervention' AND cause = 'gate-unknown'
+  GROUP BY repo, ts::date
+  UNION ALL
+  SELECT repo, ts::date, 0, count(DISTINCT (issue, life, seq, started_at))
+  FROM factory.event_log WHERE type = 'gate_run' AND result = 'unknown'
+  GROUP BY repo, ts::date
+) x
+GROUP BY repo, day
+ORDER BY repo, day DESC;
+```
+
 ## 2c. Wind-downs
 
 How long a stop of the loop waited for running steps, and what the cap cost. The loop writes one

@@ -1754,7 +1754,16 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   full gate is assumed to use; `cpus` is `os.availableParallelism()` (cgroup-aware), read once
   per loop process through `node -e`. The slot executor writes the resolved number into the step
   marker as `gateConcurrency` (with `gateWaitTimeoutMs`); a marker without it takes no turn.
-  A writer that finishes while every turn is taken waits in FIFO order. The `gateTimeoutMs`
+  A writer that finishes while every turn is taken waits in FIFO order. The engine gives every
+  hook handler a budget of 10 000 ms that host calls pause and clock operations do not, so a
+  bare wait for a turn would be cut off at 10 s (`exceeded 10000ms budget`), and the handler,
+  which the engine does not cancel, would run its gate later in a slot the loop has left. A queued
+  waiter therefore always has a host call in flight: a `sleep` of a few seconds through
+  `$.process.run`, started again as each ends and raced against the grant, so a granted turn starts
+  its gate at once; a slice that fails ends the slices and the wait goes on with the grant alone.
+  The wait stays bounded by `gateWaitTimeoutMs`. A handler the engine has cut off runs no gate when
+  its turn comes: it gives the turn back and writes nothing. The `.catch`'s `gate-unknown` reason
+  names the error: `the stop gate hook failed (<error>)`. The `gateTimeoutMs`
   budget starts when the gate holds its turn. The turn is given back in a `finally`, whether the
   gate passes, fails, is unknown or the hook throws. A wait past `gateWaitTimeoutMs` (30 minutes)
   leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;
