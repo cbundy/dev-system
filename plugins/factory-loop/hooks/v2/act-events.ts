@@ -1,5 +1,5 @@
 // The events the loop writes outside a plan's actions (docs/factory-loop/v2/SPEC.md 7.2): an owner
-// op's person intervention, which register.ts ownerOp logs here once the op has landed (every op
+// op's intervention of its origin (person or judge), which register.ts ownerOp logs here once the op has landed (every op
 // but status and help, with planner v2 in act mode before or after it; opLanded in ops.ts says
 // which). One event per issue the op names, each attached to its issue; an op that names none
 // (mode, pause of the whole loop, serial) is fleet-level and attached to none. Every event goes
@@ -20,12 +20,12 @@ const EVENT_TIMEOUT_MS = 60_000
 
 // What an op that landed was: its canonical text (control.ts formatOp), its name and the issues
 // it names.
-export type OpLanded = { text: string; name: string; issues: number[]; at: number }
+export type OpLanded = { text: string; name: string; issues: number[]; at: number; by: 'person' | 'judge' }
 
 // The ops that change nothing and are no intervention (7.2, appendix E).
 const NOT_INTERVENTIONS = ['status', 'help']
 
-// opInterventions: the person interventions one op is: one per issue it names, else one with no
+// opInterventions: the interventions of the op's origin (person or judge) one op is: one per issue it names, else one with no
 // issue. The fact is the op at its time, `op:<name>/<i<N>|fleet>/<ms, base 36>`.
 export function opInterventions(op: OpLanded): InterventionEvent[] {
   if (op.name === '' || NOT_INTERVENTIONS.includes(op.name)) return []
@@ -33,7 +33,7 @@ export function opInterventions(op: OpLanded): InterventionEvent[] {
   // a landed `config set|unset` is the settings file changed by the owner through the loop
   const cause = op.name === 'config' ? 'config-file' : `op:${op.name}`
   const issues: (number | null)[] = op.issues.length === 0 ? [null] : [...new Set(op.issues)]
-  return issues.map(issue => intervention('person', cause, factKey(cause, issue === null ? 'fleet' : `i${issue}`, at), op.text, { issue, life: null, pr: null }))
+  return issues.map(issue => intervention(op.by, cause, factKey(cause, issue === null ? 'fleet' : `i${issue}`, at), op.text, { issue, life: null, pr: null }))
 }
 
 // logEvent: one v2 event through callum-flow-event, as events.ts builds it (its actor included,

@@ -34,9 +34,9 @@ export const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was 
 // written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
 // writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
 // decision-log line once it has its answer; retry clears the issue's exhausted entries in the
-// live ledger at once. An op that landed with the loop acting before or after it is a person
-// intervention (act-events.ts), and its writes the loop's (7.2).
-export function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
+// live ledger at once. An op that landed with the loop acting before or after it is an intervention of the
+// op's origin, person or judge (act-events.ts), and its writes the loop's (7.2).
+export function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined, by: 'person' | 'judge'): Promise<OpAnswer> {
   const work = (claim: Claim) => {
     const run = S.ops.then(async (): Promise<OpAnswer> => {
       const rt = S.lastRt ?? (await runtime($))
@@ -50,10 +50,10 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      const landed = reply.op === null ? null : opLanded({ mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now)
+      const landed = reply.op === null ? null : opLanded({ mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now, by)
       const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
-      const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
-      if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })
+      const line = (problems: string[]) => ({ control: reply.logged, by, text: said, problems: problems.length > 0 ? problems : undefined })
+      if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `${by === 'judge' ? 'judge' : 'owner'} ${reply.logged ?? ''}` })
       return { ok: reply.ok, text: said }
     })
     S.ops = run.catch(() => undefined)
