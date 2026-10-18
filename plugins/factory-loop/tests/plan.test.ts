@@ -937,7 +937,7 @@ describe('M: merge', () => {
         head: 'head50',
         outcome: { kind: 'merge', result: 'merged', rollout, closeIssue, line: 'merged' },
       })
-    const milestone = { open: 2, closed: 1, expected: 'patch' as const }
+    const milestone = { open: 2, closed: 1, openIssues: [] as number[], expected: 'patch' as const }
     const base = (e: LedgerEntry, extra: LedgerEntry[] = []) => {
       const s = state({ milestone })
       return { ...s, ledger: [...s.ledger, e, ...extra] }
@@ -1434,13 +1434,13 @@ describe('O: owner and report', () => {
   })
 
   test('Next release with no open items: the model runs the release (SKILL:166-167)', () => {
-    const s = state({ milestone: { open: 0, closed: 2, expected: 'minor' } })
+    const s = state({ milestone: { open: 0, closed: 2, openIssues: [], expected: 'minor' } })
     expect(keys(plan(s, CFG))).toEqual([`task:release:unknown:${RHOUR}`])
-    expect(keys(plan(state({ milestone: { open: 1, closed: 2, expected: 'minor' } }), CFG))).toEqual([])
+    expect(keys(plan(state({ milestone: { open: 1, closed: 2, openIssues: [], expected: 'minor' } }), CFG))).toEqual([])
   })
 
   describe('O3: the hourly release review (shared with v2 through releaseDue)', () => {
-    const closed = (over: Partial<State> = {}) => state({ milestone: { open: 0, closed: 5, expected: 'minor' }, ...over })
+    const closed = (over: Partial<State> = {}) => state({ milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' }, ...over })
     const done = (key: string, at: number, decision = 'hold') =>
       entry(key, 'task', { wake: 'release', class: 'drive', status: 'done', startedAt: at, endedAt: at + MIN, outcome: wakeAnswer(decision) })
     const wanted = (s: State) => keys(plan(s, CFG)).filter(k => k.startsWith('task:release:'))
@@ -1487,7 +1487,7 @@ describe('O: owner and report', () => {
     })
 
     test('waiting issues (v2): `waiting` joins the fields and the review is due with open items or none closed; one per UTC hour; none given leaves the rule and fields as they were', () => {
-      const open = state({ milestone: { open: 2, closed: 0, expected: null }, release: { tag: 'v1.0.0', oldest: null } })
+      const open = state({ milestone: { open: 2, closed: 0, openIssues: [], expected: null }, release: { tag: 'v1.0.0', oldest: null } })
       expect(releaseDue(open, CFG)).toBeNull()
       expect(releaseDue(open, CFG, [])).toBeNull()
       const due = releaseDue(open, CFG, [7, 9])
@@ -1501,8 +1501,8 @@ describe('O: owner and report', () => {
     })
 
     test('no wake with an open item, nothing closed, a milestone source that is not ok, or no milestone', () => {
-      expect(wanted(state({ milestone: { open: 1, closed: 5, expected: null } }))).toEqual([])
-      expect(wanted(state({ milestone: { open: 0, closed: 0, expected: null } }))).toEqual([])
+      expect(wanted(state({ milestone: { open: 1, closed: 5, openIssues: [], expected: null } }))).toEqual([])
+      expect(wanted(state({ milestone: { open: 0, closed: 0, openIssues: [], expected: null } }))).toEqual([])
       expect(wanted(state({ milestone: null }))).toEqual([])
       const s = closed()
       expect(wanted({ ...s, sources: { ...s.sources, milestone: { ok: false, at: NOW } } })).toEqual([])
@@ -1801,7 +1801,7 @@ describe('M7: follow-ups for hand merges (D-29)', () => {
   test('the rollout outcome gives the same follow-ups as a merge (SPEC M7)', () => {
     const read = (rollout: 'merge' | 'run-it' | 'keep-open', closeIssue: number | null = null) =>
       entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout, closeIssue } })
-    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, expected: 'patch' } })
+    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, openIssues: [], expected: 'patch' } })
     expect(keys(plan(withLedger(s, [read('merge', 70)]), CFG))).toEqual(['close:70'])
     expect(keys(plan(withLedger(s, [read('run-it')]), CFG))).toEqual(['milestone-later:70', 'task:run-it:70'])
     expect(keys(plan(withLedger(s, [read('keep-open')]), CFG))).toEqual(['milestone-later:70'])
@@ -1839,7 +1839,7 @@ describe('M7: follow-ups for hand merges (D-29)', () => {
       endedAt: NOW - 5 * MIN,
       outcome: { kind: 'merge', result: 'merged', rollout: null, closeIssue: null, line: 'merged' },
     })
-    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, expected: 'patch' } })
+    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, openIssues: [], expected: 'patch' } })
     expect(keys(plan(withLedger(s, [unread]), CFG))).toEqual(['rollout:70'])
     const read = entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } })
     expect(keys(plan(withLedger(s, [unread, read]), CFG))).toEqual(['milestone-later:70', 'task:run-it:70'])
@@ -2077,7 +2077,7 @@ describe('G5: the main checkout (#544)', () => {
         queue: [7],
         issues: [issue(7), mine(61, 'designing'), mine(45, 'parked', { pr: 545 })],
         runs: [run(45, 'parked')],
-        milestone: { open: 0, closed: 2, expected: null },
+        milestone: { open: 0, closed: 2, openIssues: [], expected: null },
         checkout: moved,
       }),
       key,
@@ -2186,7 +2186,7 @@ describe('H5: the main checkout kept up to date with origin (#555)', () => {
       state({
         issues: [...issues, mine(61, 'designing', { stageSince: LIFE }), mine(45, 'parked', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
         runs: [run(45, 'parked')],
-        milestone: { open: 0, closed: 2, expected: null },
+        milestone: { open: 0, closed: 2, openIssues: [], expected: null },
         agents,
       })
     const s = busy([mine(60, 'designing', { stageSince: LIFE })], [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'running' }])
@@ -2394,7 +2394,7 @@ const SCENARIOS: [string, State][] = [
     queue: [1, 2],
     issues: [issue(1), issue(2), mine(45, 'parked', { pr: 545 }), mine(50, 'ready to merge', { pr: 550 }), mine(60, 'designing')],
     runs: [run(45, 'parked'), run(50, 'merge-ready'), run(48, 'ci-stalled', { detail: 'reason=no-checks' })],
-    milestone: { open: 0, closed: 3, expected: null },
+    milestone: { open: 0, closed: 3, openIssues: [], expected: null },
   })],
   // six claimable issues: four claims, the rest wait for the next pass
   ['queue-six', state({ queue: [1, 2, 3, 4, 5, 6], issues: [1, 2, 3, 4, 5, 6].map(n => issue(n)), pool: { free: 16, total: 16, slots: [] } })],
@@ -2402,7 +2402,7 @@ const SCENARIOS: [string, State][] = [
   ['wakes', state({
     issues: [mine(45, 'parked', { pr: 545 }), mine(46, 'in pipeline', { pr: 546 })],
     runs: [run(45, 'parked', { reviewFixRounds: 3 }), run(46, 'cancelled')],
-    milestone: { open: 0, closed: 3, expected: null },
+    milestone: { open: 0, closed: 3, openIssues: [], expected: null },
   })],
   // a busy hour: 30 claims and 40 spawns already, so claims and spawns wait for it to clear
   ['busy-hour', withLedger(state({ queue: [1], issues: [issue(1), mine(60, 'designing')] }), [
@@ -2817,7 +2817,7 @@ describe('an issue closed on GitHub is finished (#556)', () => {
     const after = (e: LedgerEntry) =>
       mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { bump: 'minor', bumpReason: 'new mode' }), e], {
         issues: [mine(50, 'ready to merge', { open: false, pr: 550 })],
-        milestone: { open: 2, closed: 1, expected: 'patch' },
+        milestone: { open: 2, closed: 1, openIssues: [], expected: 'patch' },
       })
     expect(keys(plan(after(merged('run-it')), CFG))).toEqual(['milestone-later:50', 'task:run-it:50', 'expect:minor:550'])
     expect(keys(plan(after(merged('keep-open')), CFG))).toEqual(['milestone-later:50', 'expect:minor:550'])

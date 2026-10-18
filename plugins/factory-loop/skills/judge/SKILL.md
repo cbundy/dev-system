@@ -371,6 +371,11 @@ Owner items (the title counts them until resolved):
   rollout is keep-open, so it stays open, and `blocking` open issues wait on it and stay
   unclaimable until it is closed. Lead with `[DECISION]`: name the issue and the count and ask
   the owner to close it, or to say what it still needs.
+- `reopened` (issue, pr; detail: the issue link and the lines below): a merged issue came back
+  open on the Next milestone (a revert or a hand reopen), which would hold the release review. The
+  loop moved it to the Later milestone; it is open with no `ready` label, so the loop will not
+  rebuild it, and it rejoins Next when it merges again. Lead with `[DECISION]`: name the issue and
+  the PR and ask the owner to re-`ready` it, or to close it if the revert is final.
 
 Notices:
 - `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's
