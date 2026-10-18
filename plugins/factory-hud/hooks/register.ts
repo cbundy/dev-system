@@ -4,7 +4,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { counts, dueAlerts, repoSlug, statusText, versionsText } from './format'
+import { counts, dueAlerts, hudSource, repoSlug, statusText, versionsText } from './format'
 import type { Readout } from './format'
 
 // Hidden in this conversation (/hud): kept across a reload, not into a new conversation.
@@ -15,7 +15,7 @@ const alerted = atom({ plugin: 'factory-hud', key: 'alerted' } as const, [] as s
 const CLOCK_EVERY_MS = 30_000
 const FACTORY_EVERY_MS = 60_000
 
-type Hud = Readout & { repo?: string; zone?: string }
+type Hud = Readout & { repo?: string; zone?: string; source?: string }
 
 // The module's own state; a reload starts it over and session.start fills it again.
 const hud: Hud = { limits: [], isFactoryShown: false, isFactoryLoading: false, versions: '' }
@@ -36,9 +36,9 @@ async function alert($: EngineInterface) {
 }
 
 // output: a command's stdout, or undefined when it cannot run or fails.
-async function output($: EngineInterface, argv: string[], cwd: string) {
+async function output($: EngineInterface, argv: string[], cwd: string, env?: Record<string, string>) {
   try {
-    const { exitCode, stdout } = await $.process.run(argv, { cwd, timeoutMs: 30_000 })
+    const { exitCode, stdout } = await $.process.run(argv, { cwd, timeoutMs: 30_000, ...(env ? { env } : {}) })
     return exitCode === 0 ? stdout : undefined
   } catch {
     return undefined
@@ -51,6 +51,7 @@ async function refreshFactory($: EngineInterface, cwd: string) {
     $,
     ['callum-flow-factory-state', '--repo', hud.repo, '--github', 'off', '--format', 'json'],
     cwd,
+    hud.source ? { CALLUM_FLOW_FACTORY_STATE_SOURCE: hud.source } : undefined,
   )
   // A failed read keeps the last counts, which then show their age.
   const next = json === undefined ? undefined : counts(json, await $.clock.now())
@@ -95,6 +96,7 @@ export const register: Register = (on, options) => {
     // A new session starts from nothing: no counts or repo carried over from the last.
     hud.factory = undefined
     hud.repo = undefined
+    hud.source = undefined
     hud.isFactoryLoading = false
     hud.isFactoryShown = options.factory === 'on' || (options.factory !== 'off' && role === 'orchestrator')
     hud.zone = (await $.env.get('TZ')) || undefined
@@ -104,6 +106,9 @@ export const register: Register = (on, options) => {
     hud.versions = versionsText((await $.session.version()).version, await snapshot($))
     await recordWindow($)
     if (hud.isFactoryShown) {
+      const picked = hudSource(await $.env.get('FACTORY_HUD_SOURCE'))
+      hud.source = picked.source
+      if (picked.warning) $.ui.log(picked.warning)
       const url = await output($, ['git', 'remote', 'get-url', 'origin'], e.cwd)
       hud.repo = url === undefined ? undefined : repoSlug(url)
       hud.isFactoryLoading = hud.repo !== undefined

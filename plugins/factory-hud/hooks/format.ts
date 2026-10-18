@@ -128,3 +128,11 @@ export function dueAlerts(
   }
   return due.filter(([key]) => !shown.includes(key))
 }
+
+// hudSource: the store the factory counts read, from FACTORY_HUD_SOURCE. Empty or unset
+// leaves factory-state's own default; a value that is not a store gives a warning.
+export function hudSource(raw: string | undefined): { source?: 'old' | 'new' | 'shadow'; warning?: string } {
+  if (raw === undefined || raw === '') return {}
+  if (raw === 'old' || raw === 'new' || raw === 'shadow') return { source: raw }
+  return { warning: `FACTORY_HUD_SOURCE=${raw} is not old, new or shadow; ignored` }
+}

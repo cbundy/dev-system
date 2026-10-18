@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { CommandRunInput, On, SessionStartInput } from 'claude-code'
 
-import { counts, dueAlerts, repoSlug, statusText, versionsText } from '../hooks/format'
+import { counts, dueAlerts, hudSource, repoSlug, statusText, versionsText } from '../hooks/format'
 
 const FACTORY = JSON.stringify({
   repos: [
@@ -81,6 +81,13 @@ describe('format', () => {
     expect(versionsText('2.1.296', 'garbage')).toBe('cc 2.1.296')
   })
 
+  test('hudSource accepts the three stores, ignores empty, warns on the rest', () => {
+    expect(hudSource(undefined)).toEqual({})
+    expect(hudSource('')).toEqual({})
+    for (const source of ['old', 'new', 'shadow'] as const) expect(hudSource(source)).toEqual({ source })
+    expect(hudSource('nope').warning).toContain('nope')
+  })
+
   test('alerts at context 85% and usage 90%, each once', () => {
     const limits = [
       { kind: 'five_hour', percentUsed: 91 },
@@ -102,6 +109,8 @@ function world(on: On, factory: string | null = FACTORY) {
     status: [] as (string | undefined)[],
     toasts: [] as string[],
     runs: [] as string[],
+    envs: [] as (Record<string, string> | undefined)[],
+    logs: [] as string[],
     writes: [] as string[],
     clock,
   }
@@ -117,6 +126,10 @@ function world(on: On, factory: string | null = FACTORY) {
   })
   on('ui.toast', ($, e) => {
     drawn.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.log', ($, e) => {
+    drawn.logs.push(e.text)
     return { value: undefined }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -136,6 +149,7 @@ function world(on: On, factory: string | null = FACTORY) {
   on('session.id', () => ({ value: 's1' }))
   on('process.run', ($, e) => {
     drawn.runs.push(e.argv.join(' '))
+    drawn.envs.push(e.init?.env)
     if (e.argv[0] === 'git') return ran('git@github.com:cbundy/dev-system.git\n')
     return factory === null ? ran('', 1) : ran(factory)
   })
@@ -233,5 +247,49 @@ describe('in a session', () => {
     await $.session.measure(measured(200_000))
     await $.session.measure(measured(1_000_000))
     expect(drawn.writes).toEqual(['/w/s1 200000\n', '/w/s1 1000000\n'])
+  })
+
+  const STATE = 'callum-flow-factory-state --repo cbundy/dev-system --github off --format json'
+
+  test('FACTORY_HUD_SOURCE reaches only the factory-state runs', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC', FACTORY_HUD_SOURCE: 'new' })
+    const drawn = world(on)
+    await $.session.start(START)
+    await drawn.clock.settle()
+    await drawn.clock.advance(60_000)
+    const state = drawn.runs.flatMap((run, i) => (run === STATE ? [drawn.envs[i]] : []))
+    expect(state.length).toBeGreaterThanOrEqual(2)
+    for (const env of state) expect(env).toEqual({ CALLUM_FLOW_FACTORY_STATE_SOURCE: 'new' })
+    expect(drawn.envs[drawn.runs.indexOf('git remote get-url origin')]).toBeUndefined()
+    expect(drawn.logs).toEqual([])
+  })
+
+  test('an unset FACTORY_HUD_SOURCE passes no env and logs nothing', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC' })
+    const drawn = world(on)
+    await $.session.start(START)
+    await drawn.clock.settle()
+    expect(drawn.runs).toContain(STATE)
+    expect(drawn.envs.every(env => env === undefined)).toBe(true)
+    expect(drawn.logs).toEqual([])
+  })
+
+  test('a bad FACTORY_HUD_SOURCE is ignored with one log line', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC', FACTORY_HUD_SOURCE: 'nope' })
+    const drawn = world(on)
+    await $.session.start(START)
+    await drawn.clock.settle()
+    await drawn.clock.advance(60_000)
+    expect(drawn.runs.filter(run => run === STATE).length).toBeGreaterThanOrEqual(2)
+    expect(drawn.envs.every(env => env === undefined)).toBe(true)
+    expect(drawn.logs).toEqual(['FACTORY_HUD_SOURCE=nope is not old, new or shadow; ignored'])
+  })
+
+  test('a dev session ignores FACTORY_HUD_SOURCE', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'dev', TZ: 'UTC', FACTORY_HUD_SOURCE: 'nope' })
+    const drawn = world(on)
+    await $.session.start(START)
+    expect(drawn.logs).toEqual([])
+    expect(drawn.runs).toEqual([])
   })
 })

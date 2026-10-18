@@ -64,6 +64,10 @@ it too. (`/plugin` does not work inside the desktop app.)
 - The `factory` option picks when the counts show: `auto` (the default: when `DEV_ROLE` is
   `orchestrator`), `on` or `off`. Change it in `/config`, or from the phone with
   `/config factory-hud.factory=on`.
+- `FACTORY_HUD_SOURCE` picks the store the counts read: `old`, `new` or `shadow`. The HUD
+  reads it once at session start and sets `CALLUM_FLOW_FACTORY_STATE_SOURCE` to it for each
+  `callum-flow-factory-state` run. Unset or empty leaves factory-state's own default
+  (`shadow`). Any other value is ignored, with one log line at session start.
 - Uninstall with `claude plugin uninstall factory-hud@callum`.
 
 ## How it works
@@ -72,7 +76,7 @@ it too. (`/plugin` does not work inside the desktop app.)
   `session.measure` event each time they move), so they cost nothing.
 - The counts come from `callum-flow-factory-state --repo <owner/name> --github off --format json`,
   using the session repo's GitHub `origin`, run once a minute in the background, so the line
-  never waits on the database. A failed read keeps the last counts.
+  never waits on the database. The store it reads follows `FACTORY_HUD_SOURCE`. A failed read keeps the last counts.
 - The versions come from `dev-version`'s snapshot (`DEV_VERSIONS_FILE`, default
   `/tmp/dev-versions.json`); outside a dev-system image it shows Claude Code's alone.
 
