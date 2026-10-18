@@ -37,6 +37,9 @@ check "nm-push-loop and nm-export are installed and executable, and nm-export re
 check "dev-query is on PATH, prints usage, and exits 78 with no URL configured" in_image '
   [ -x "$(command -v dev-query)" ] && dev-query --help >/dev/null &&
   env -u AGENTSVIEW_PG_URL DEV_SECRETS_DIR=$(mktemp -d) dev-query -c "select 1" 2>/dev/null; [ $? = 78 ]'
+check "callum-flow-evidence-upload is on PATH, prints usage, and exits 78 with no credentials configured" in_image '
+  [ -x "$(command -v callum-flow-evidence-upload)" ] && callum-flow-evidence-upload --help >/dev/null &&
+  env -u ARTIFACT_SAS DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) callum-flow-evidence-upload --repo o/r --check 2>/dev/null; [ $? = 78 ]'
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'

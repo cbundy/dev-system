@@ -214,7 +214,7 @@ Where to look inside a running container. Full detail is in
 |---|---|
 | `/persist/{claude,claude-auth,codex,gh,no-mistakes,agentsview,events,dev-restart-self}` | Tool state, logins (a shared Claude login in `claude-auth`, where a runtime opts in), the factory event log and dev-restart-self's saved state. Directories added later reach existing volumes through `dev-init`. Mount layout depends on the runtime; see the [image persistence contract](../images/base/README.md#how-runtimes-should-mount-it). |
 | `/workspaces/<repo>` | The checkout (`DEV_WORKSPACE`). Cloned from `DEV_REPO_URL` on the first start. |
-| `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url` |
+| `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url`, and per-repo evidence storage under `evidence/<owner>/<repo>/` ([setup](evidence-storage.md)) |
 | `/shared` | Optional NAS share for files exchanged with the PC. Not for checkouts or state. |
 | `/usr/local/bin/dev-*` | `dev-entrypoint`, `dev-init`, `dev-doctor`, `dev-login`, `dev-remote-control` |
 | `/usr/local/share/callum-tools/` | Watcher and usage-check scripts used by the orchestrator skill |
