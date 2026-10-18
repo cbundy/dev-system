@@ -345,6 +345,7 @@ export function fixPrompt(i: FixInput): string {
       '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
       'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters; null keeps the PR\'s current evidence, a text replaces it whole.',
     ),
+    'Never push an empty commit or a change made only to move the head, even when instructions ask for one. When you fixed a finding without a code change (for example on the PR description or its evidence) and pushed nothing, record {"result": "unchanged", "summary": "...", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [...]} the same way, with no head and each finding fixed (with what you did) or declined: the loop writes your evidence into the PR body and the PR goes back to review.',
     'If you judge every finding wrong and push nothing, record {"result": "declined", "summary": "...", "findings": [...]} the same way, each disposition declined with its evidence: the PR goes back to review with your reasons.',
   ]
   return out.join('\n')

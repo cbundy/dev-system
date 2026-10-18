@@ -83,7 +83,7 @@ function menu(i: TriageInput): string[] {
   return [
     `- retry: ${step} runs once more in ${i.state}, with your instructions as a note for it. Always valid.`,
     i.fixValid
-      ? `- fix: a fixer works on ${i.branch} with your instructions, then the PR goes back to review. Valid here (fix round ${i.fixes + 1} of ${i.fixCap}).`
+      ? `- fix: a fixer works on ${i.branch} with your instructions (a fixer can fix a finding without a new head, such as on the PR description; never instruct an empty commit), then the PR goes back to review. Valid here (fix round ${i.fixes + 1} of ${i.fixCap}).`
       : `- fix: not valid here (${i.head === null && i.pr === null ? 'the branch has no commits beyond the base' : `the fix cap of ${i.fixCap} rounds is reached`}): choosing it parks the issue with your reason.`,
     `- redesign: the designer designs the issue again with your instructions; the branch and its commits are kept. Always valid.`,
     `- park: the issue waits on the owner with your question, and frees its slot; the loop's park comment tells the owner how to resume: ${resumeStep(i.issue)}. Always valid.`,

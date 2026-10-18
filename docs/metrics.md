@@ -301,6 +301,18 @@ WHERE type = 'finding_handled'
 GROUP BY repo;
 ```
 
+### Fix rounds with no new head
+
+A fix round can end with no new head because a finding was fixed outside the branch (transition row
+T17, via `unchanged`). This counts them per repo and week.
+
+```sql
+SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS unchanged_fixes
+FROM factory.event_log
+WHERE type = 'transition' AND table_row = 'T17'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ## 4. Merges per device
 
 ```sql

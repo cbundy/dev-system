@@ -41,7 +41,8 @@
           "kind": { "enum": ["issue-closed", "pr-merged", "tag-contains"], "description": "The condition: issue-closed (the issue is closed), pr-merged (the pull request is merged) or tag-contains (a release tag contains the commit)." },
           "issue": { "type": ["integer", "null"], "minimum": 1, "description": "issue-closed: the issue number; absent or null otherwise." },
           "pr": { "type": ["integer", "null"], "minimum": 1, "description": "pr-merged: the pull request number; absent or null otherwise." },
-          "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "tag-contains: the commit; absent or null otherwise." }
+          "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "tag-contains: the commit; absent or null otherwise." },
+          "repo": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", "description": "issue-closed and tag-contains only: the repository (owner/name, lower-case) the condition is about; absent or null means the loop's own repo." }
         }
       },
       "description": "waiting: the conditions the loop re-checks each pass; null otherwise"
@@ -53,6 +54,6 @@
   },
   "examples": [
     { "life": "tn0brb", "seq": 6, "table_row": "T11", "from_state": "fixing", "to_state": "reviewing", "via": "fix", "seq_at": "2026-10-16T15:59:06.252Z", "state_since": "2026-10-16T15:59:06.252Z", "resume_to": null, "branch": "issue-92-tunnel-token", "pr": 143, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": "review", "attempt": 1, "cut": false, "triages": 0, "fixes": 1, "round": 2, "question": null, "why": null, "notes": [], "pr_closed_at": null, "lives": 1 },
-    { "life": "tn0brb", "seq": 3, "table_row": "W1", "from_state": "building", "to_state": "waiting", "via": "wait", "seq_at": "2026-10-16T16:20:00.000Z", "state_since": "2026-10-16T16:20:00.000Z", "resume_to": "building", "branch": "issue-92-tunnel-token", "pr": null, "head": null, "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": null, "attempt": 1, "cut": false, "triages": 0, "fixes": 0, "round": 0, "question": null, "wait": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "tag-contains", "sha": "35bb655" }], "why": null, "notes": [], "pr_closed_at": null, "lives": 1 }
+    { "life": "tn0brb", "seq": 3, "table_row": "W1", "from_state": "building", "to_state": "waiting", "via": "wait", "seq_at": "2026-10-16T16:20:00.000Z", "state_since": "2026-10-16T16:20:00.000Z", "resume_to": "building", "branch": "issue-92-tunnel-token", "pr": null, "head": null, "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": null, "attempt": 1, "cut": false, "triages": 0, "fixes": 0, "round": 0, "question": null, "wait": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "tag-contains", "sha": "35bb655" }, { "kind": "issue-closed", "issue": 12, "repo": "cbundy/dev-system" }], "why": null, "notes": [], "pr_closed_at": null, "lives": 1 }
   ]
 }
