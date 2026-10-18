@@ -2,7 +2,7 @@
 #
 # nm-push-loop: mirrors the no-mistakes pipeline database (state.sqlite) into
 # the nomistakes schema of the agentsview PostgreSQL, next to factory.events
-# (cbundy/dev-system#273). docs/metrics.md has the schema and the column rules.
+# (cbundy/dev-system#273). images/base/README.md (nm-push-loop) has the column rules.
 #
 # dev-init starts this in the background, under a container-local flock, when
 # a PostgreSQL URL is configured (agentsview.sh) and psql is on PATH, exactly

@@ -23,7 +23,7 @@ for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
 const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes"]);
-const BOOLS = new Set(["old_ok", "new_ok"]);
+const BOOLS = new Set(["old_ok", "new_ok", "restored"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at"]);
 const JSONS = new Set(["cut_at_stop_keys"]);
 
