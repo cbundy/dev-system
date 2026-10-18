@@ -29,11 +29,12 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
+import { NEW_EVENTS_SQL } from '../hooks/v2/sources-facts'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
-import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
+import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, eventRow, eventsCsv, review, run, state, wakeAnswer } from './fixtures'
 import { issuesRead } from './host'
 
 const REPO = 'cbundy/dev-system'
@@ -885,6 +886,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     factory: Record<string, unknown>[]
     recent: FactoryEvent[]
     week: FactoryEvent[] | null
+    // the new store's rows for the facts (NEW_EVENTS_SQL), as dev-query prints them; undefined: exit 78
+    newEvents?: Reply
     pipeline: Reply
     queue: Reply
     issues: Record<string, Reply>
@@ -916,12 +919,14 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     }
     let now = NOW
     const calls: Call[] = []
-    const answer = (argv: string[]): Reply => {
+    const answer = (argv: string[], stdin?: string): Reply => {
       const [cmd, ...args] = argv
       switch (cmd) {
         case 'callum-flow-factory-state':
           return { stdout: factoryJson(world.factory) }
         case 'dev-query':
+          // the facts' read of the new store (v2/sources-facts.ts); no factory URL when the test gives none
+          if (stdin === NEW_EVENTS_SQL) return world.newEvents ?? { exitCode: 78 }
           if (!args.includes('days=7')) return { stdout: csv(world.recent) }
           return world.week === null ? { exitCode: 1, stderr: 'psql: connection refused' } : { stdout: csv(world.week) }
         case `${TOOLS}/pipeline-watch.sh`:
@@ -950,7 +955,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       now: async () => now,
       run: async (argv, init) => {
         calls.push({ argv: [...argv], cwd: init.cwd, env: init.env, stdin: init.stdin })
-        const r = argv.includes('--issues') && world.batch !== undefined ? world.batch : ((await issuesRead(argv, answer)) ?? answer(argv))
+        const r = argv.includes('--issues') && world.batch !== undefined ? world.batch : ((await issuesRead(argv, answer)) ?? answer(argv, init.stdin))
         return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
       },
       readFile: async path => world.files[path] ?? null,
@@ -1138,6 +1143,87 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     down.world.week = []
     await down.pass(runtime(), stored({ ledger: null }), NOW + MIN)
     expect(down.commands().filter(c => c.includes('days=7'))).toHaveLength(1)
+  })
+
+  describe('the facts and the ledger rebuild follow eventsSource (v2/sources-facts.ts)', () => {
+    // RECENT's heartbeat (a renewal) and the sweep's close, as the new store holds them
+    const NEW_RECENT = [
+      eventRow('claim_renewed', { lease_minutes: 120 }, NOW - 5 * MIN, { issue: '45' }),
+      eventRow('closed', { reason: 'completed' }, NOW - 5 * MIN, { issue: '3', actor: 'sweep' }),
+    ]
+    const withSource = (eventsSource: 'old' | 'new' | 'shadow') => runtime({ mode: 'observe', config: config({ eventsSource }) })
+    const calls = (h: ReturnType<typeof host>, sql: string) => h.calls.filter(c => c.argv[0] === 'dev-query' && c.stdin === sql)
+    const keys = (o: Observation) => o.state.ledger.map(e => e.key)
+
+    test('old reads factory.events alone, as before', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(withSource('old'))
+      expect(calls(h, NEW_EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+    })
+
+    test('new reads factory.event_store alone, through the factory database, and rebuilds the same ledger', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(withSource('new'))
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --factory --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+      // the facts nothing in v2 reads come out empty: the old rows hold a verdict, a review fix and a supersede
+      expect(factsOf(h.cache.events?.value ?? []).verdicts.size).toBe(0)
+    })
+
+    test('new: a row the reader refuses, or no factory URL, leaves the facts not ok and names the event and the source', async () => {
+      const bad = eventRow('claim_renewed', { lease_minutes: 120 }, NOW - 5 * MIN, { issue: '45', type_version: '9' })
+      const h = host({ newEvents: { stdout: eventsCsv([...NEW_RECENT, bad]) } })
+      const o = await h.pass(withSource('new'))
+      expect(o.state.sources.facts.ok).toBe(false)
+      expect(o.state.sources.facts.error).toContain(`event ${bad.event_id}`)
+      expect(o.state.sources.facts.error).toContain('source new')
+      const noUrl = await host().pass(withSource('new'))
+      expect(noUrl.state.sources.facts.ok).toBe(false)
+      expect(noUrl.state.sources.facts.error).toContain('source new')
+    })
+
+    test('shadow decides on old, reads both on the first pass of a load and only old within the hour, and a failing new read never fails the pass', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const first = await h.pass(withSource('shadow'))
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 1])
+      expect([first.state.sources.facts.ok, keys(first)]).toEqual([true, ['heartbeat:derived', 'sweep:derived']])
+      expect(first.state.v2?.factsShadow?.data).toMatchObject({ reader: 'loop-facts', tool: 'factory-loop', compared: 2, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true })
+      await h.pass(withSource('shadow'), undefined, NOW + 30 * MIN)
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 0])
+      expect(h.cache.factsShadow?.at).toBe(NOW)
+      await h.pass(withSource('shadow'), undefined, NOW + 61 * MIN)
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 1])
+      expect(h.cache.factsShadow?.at).toBe(NOW + 61 * MIN)
+
+      // the new store without a renewal made half an hour ago: the compare counts it, and the pass still uses old
+      const old = ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 30 * MIN })
+      const short = host({ recent: [old], newEvents: { stdout: eventsCsv([]) } })
+      const differing = await short.pass(withSource('shadow'))
+      expect(keys(differing)).toEqual(['heartbeat:derived'])
+      expect(differing.state.v2?.factsShadow?.data).toMatchObject({ differences: 1, live_differences: 1, diff_keys: ['ledger:heartbeat:derived'] })
+
+      // the new read fails (no factory URL): new_ok false, the facts stay ok
+      const down = host()
+      const failed = await down.pass(withSource('shadow'))
+      expect(failed.state.sources.facts.ok).toBe(true)
+      expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
+      expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+    })
+
+    test('the ledger rebuild of a lost store reads the week from the source eventsSource picks', async () => {
+      const tell = entry('tell:parked:50', 'tell', { class: 'owner', rule: 'H1', issue: 50, wake: 'parked', startedAt: NOW - 5 * DAY, endedAt: NOW - 5 * DAY + MIN })
+      const row = eventRow('loop_entry', { kind: 'tell', key: tell.key, status: 'done', attempts: 1, class: 'owner', rule: 'H1', started_at: iso(NOW - 5 * DAY), ended_at: iso(NOW - 5 * DAY + MIN), agent_id: null, wake: 'parked' }, NOW - 5 * DAY + MIN, { issue: '50' })
+      const h = host({ week: [], newEvents: { stdout: eventsCsv([row]) } })
+      const act = runtime({ config: config({ eventsSource: 'new' }) })
+      const o = await h.pass(act, stored({ ledger: null }))
+      expect(o.ledgerSource).toBe('events')
+      expect(o.state.ledger.find(e => e.key === tell.key)).toEqual({ ...tell, run: null, pr: null, head: null })
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.find(a => a.startsWith('days=')))).toEqual(['days=3', 'days=7'])
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+    })
   })
 
   test('a GitHub backoff skips the queue and issue reads, their old values kept with their age', async () => {
