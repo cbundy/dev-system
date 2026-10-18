@@ -60,6 +60,8 @@ if [ -n "${TEST_SHARD:-}" ]; then
     exit 2
   fi
   shard=$TEST_SHARD
+  # Jobs must not inherit it: a node test that runs test.sh with ids would hit the ids check.
+  unset TEST_SHARD
 fi
 
 # Jobs that run first, in this order, so the longest ones start at once and set the wall time.
@@ -251,7 +253,7 @@ if [ -n "$shard" ]; then
   ids=$(cat "$results/jobs" "$results/serial" | sed 's/^sh scripts\/test-job\.sh //')
   s_suites=$(printf '%s\n' "$ids" | grep -c '\.test\.sh$')
   s_mods=$(printf '%s\n' "$ids" | grep -c '^plugins/')
-  echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods$mod_note$TEST_PG_NOTE - one shard of the gate; run npm test for the whole gate"
+  echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods - one shard of the gate; run npm test for the whole gate$mod_note$TEST_PG_NOTE"
   exit 0
 fi
 echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE"
