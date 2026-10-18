@@ -18,6 +18,7 @@ const { diff } = require("../scripts/factory-events-replay/compare.js");
 const ROOT = path.join(__dirname, "..");
 const CLI = path.join(ROOT, "scripts", "factory-events-replay.js");
 const READER = path.join(ROOT, "scripts", "factory-events-replay", "self-test-reader.js");
+const EVALUATE_READER = path.join(ROOT, "scripts", "factory-events-replay", "readers", "evaluate.js");
 const ADMIN = process.env.FACTORY_TEST_PG_ADMIN_URL;
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -138,6 +139,22 @@ test("compare: the self-test reader matches on the corpus", opts, (t) => {
   const r = cli(["compare", "--reader", READER, "--db", dest.name, "--since", SINCE], dest, old);
   assert.equal(r.status, 0, r.out + r.err);
   assert.match(r.out, /old and new match/);
+});
+
+test("compare: the evaluate reader matches on the corpus, apart from the documented n/a metrics", opts, (t) => {
+  const old = oldStore(t, corpus);
+  const dest = createDb(t);
+  const dir = tmp(t);
+  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "e.json")], dest, old).status, 0);
+  const r = cli(["compare", "--reader", EVALUATE_READER, "--db", dest.name, "--since", SINCE], dest, old);
+  assert.equal(r.status, 0, r.out + r.err);
+  assert.match(r.out, /old and new match/);
+  // the reader is not empty: the corpus holds four merged-and-claimed lifecycles
+  const reader = require(EVALUATE_READER);
+  const ctx = { oldUrl: old.url, newUrl: dest.url, since: SINCE, until: null, psql: (url, sql) => psql(url, sql, { readOnly: true }) };
+  const report = reader.old(ctx)["cbundy/dev-system-scratch"];
+  assert.ok(report.claim_completion.claims > 0);
+  assert.ok(report.rounds.merged_issues > 0);
 });
 
 test("compare: a seeded difference is reported by path with old and new values, exit 1", opts, (t) => {

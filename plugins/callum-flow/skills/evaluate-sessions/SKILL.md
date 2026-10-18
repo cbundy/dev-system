@@ -63,6 +63,15 @@ dev-query -At -c \
    FROM factory.events WHERE repo = '<owner/name>' ORDER BY ts) e" > /tmp/events.jsonl
 ```
 
+The new event store has its own export, whole rows of the `factory.event_log` view (no column list, so it
+keeps working when the view grows), which feeds `--new-events` (with `--source new`; the default `shadow`
+also compares it with the old report when both are given):
+
+```
+dev-query --factory -At -v repo='<owner/name>' -v since='<ISO>' -c \
+  "SELECT row_to_json(e) FROM factory.event_log e WHERE repo = :'repo' AND ts >= :'since' ORDER BY ts" > /tmp/events-new.jsonl
+```
+
 Do not filter by `device`: `per_device`, `claims` and `waiting` need every device's
 events, and a device that logged nothing but `usage` still counts as alive. Check
 that `per_device` lists every device that ran; a missing one means its events were

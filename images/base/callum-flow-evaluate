@@ -9,6 +9,14 @@
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
 //          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
 //          [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
+//          [--source old|new|shadow] [--new-events <file>]
+//
+// --source picks the event store (cbundy/dev-system#899; docs/factory-events/replay.md, "Source switch"),
+// else CALLUM_FLOW_EVALUATE_SOURCE, else shadow. old reads the old log (--events, or the default
+// file); new reads the new events: the local log ${CALLUM_EVENTS_DIR}/factory/<owner>__<name>.jsonl,
+// or with --new-events a file of factory.event_log rows (docs/metrics.md has the export). shadow
+// prints the old report and records how the new one differed in factory/.shadow/evaluate.jsonl.
+// A metric that needs a v1-only event reads n/a under new, named in `sources`.
 //
 // Exit codes: 0 success, 2 bad arguments, 1 a source that exists but cannot be read.
 // A source that is missing, or a sqlite schema without the expected tables or columns, is
@@ -108,6 +116,7 @@ function parseArgs(argv) {
     else if (a === '--nm-state') o.nmState = need(i++, a);
     else if (a === '--nm-export') o.nmExport = need(i++, a);
     else if (a === '--ready-times') o.readyTimes = need(i++, a);
+    else if (a === '--new-events') o.newEvents = need(i++, a);
     else if (a === '-h' || a === '--help') o.help = true;
     else throw new UsageError(`unknown option '${a}'`);
   }
@@ -125,7 +134,8 @@ function parseArgs(argv) {
 }
 
 const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
-  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]';
+  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>] ' +
+  '[--source old|new|shadow] [--new-events <file>]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -1358,11 +1368,22 @@ function gitToplevel() {
   } catch { return null; }
 }
 
+// loadShared(name): a helper module of the image, from beside this tool, else from $DEV_SYSTEM_SHARE.
+function loadShared(name, env = process.env) {
+  const places = [path.join(__dirname, name), path.join(env.DEV_SYSTEM_SHARE || '/usr/local/share/dev-system', name)];
+  const found = places.find((p) => fs.existsSync(p));
+  if (!found) throw new InputError(`${name} not found beside the tool or in $DEV_SYSTEM_SHARE`);
+  return require(found);
+}
+
 function evaluate(opts, env = process.env) {
   const win = opts.win;
   const home = env.HOME || os.homedir();
   const [owner, name] = opts.repo.split('/');
+  const useNew = opts.source === 'new';
   const eventsFile = opts.events || path.join(env.CALLUM_EVENTS_DIR || '/persist/events', `${owner}__${name}.jsonl`);
+  const newMod = useNew ? loadShared('evaluate-new-events.js', env) : null;
+  const newFile = useNew ? opts.newEvents || newMod.localLog(env.CALLUM_EVENTS_DIR, opts.repo) : null;
   const nmFile = opts.nmState || path.join(env.NO_MISTAKES_HOME || path.join(home, '.no-mistakes'), 'state.sqlite');
   const projectsRoot = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
   const sources = [];
@@ -1401,11 +1422,16 @@ function evaluate(opts, env = process.env) {
     }
   }
 
-  const ev = loadEvents(eventsFile);
+  const ev = useNew ? newMod.loadNewEvents(newFile) : loadEvents(eventsFile);
   sources.push({
-    kind: 'events', path: eventsFile, found: ev.events !== null, rows: ev.events ? ev.events.length : null,
-    ...(ev.reason ? { 'n/a': ev.reason } : {}),
+    kind: useNew ? 'events-new' : 'events', path: useNew ? newFile : eventsFile, found: ev.events !== null,
+    rows: ev.events ? ev.events.length : null, ...(ev.reason ? { 'n/a': ev.reason } : {}),
   });
+  if (useNew) {
+    sources.push({ kind: 'source', path: 'new', found: true, rows: null, note: 'computed from the new events (docs/metrics.md, Reading the new events)' });
+    for (const [k, why] of Object.entries(newMod.NA_METRICS)) sources.push({ kind: 'new-events-n/a', path: k, found: false, rows: null, 'n/a': why });
+    for (const [k, why] of Object.entries(newMod.NOTES)) sources.push({ kind: 'new-events-note', path: k, found: true, rows: null, note: why });
+  }
 
   const checkouts = [];
   const top = gitToplevel();
@@ -1446,6 +1472,7 @@ function evaluate(opts, env = process.env) {
   const leaseMinutes = Number(env.CALLUM_FLOW_LEASE_MINUTES) > 0 ? Number(env.CALLUM_FLOW_LEASE_MINUTES) : 120;
   const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
     { readyTimes: rt.times, leaseMinutes, runLinks: links ? links.byIssue : null });
+  if (em && useNew) for (const [k, why] of Object.entries(newMod.NA_METRICS)) em[k] = na(why);
 
   const mains = parsed.filter((f) => f.kind === 'main');
   const subs = parsed.filter((f) => f.kind === 'sub');
@@ -1458,7 +1485,7 @@ function evaluate(opts, env = process.env) {
       pipeline_runs: nm.reason ? 'n/a' : pl.pipeline.runs,
       scope: {
         pipeline: opts.nmExport ? 'fleet' : 'workspace',
-        events: opts.events ? 'fleet' : 'workspace',
+        events: (useNew ? opts.newEvents : opts.events) ? 'fleet' : 'workspace',
         transcripts: 'workspace',
       },
     },
@@ -1616,12 +1643,18 @@ function toMarkdown(r) {
 
 // ---------------------------------------------------------------- main
 
-function main(argv) {
+async function main(argv, env = process.env) {
   let opts;
   try {
-    opts = parseArgs(argv);
+    const rs = loadShared('factory-source.js', env).resolveSource('evaluate', argv, env, 'shadow');
+    opts = parseArgs(rs.argv);
+    opts.source = rs.source;
   } catch (e) {
-    if (!(e instanceof UsageError)) throw e;
+    if (e instanceof InputError) {
+      process.stderr.write(`callum-flow-evaluate: ${e.message}\n`);
+      return 1;
+    }
+    if (!(e instanceof UsageError) && e.code !== 'USAGE') throw e;
     process.stderr.write(`callum-flow-evaluate: ${e.message}\n${USAGE}\n`);
     return 2;
   }
@@ -1631,7 +1664,22 @@ function main(argv) {
   }
   let report;
   try {
-    report = evaluate(opts);
+    if (opts.source === 'shadow') {
+      const shadow = loadShared('factory-source.js', env);
+      const newMod = loadShared('evaluate-new-events.js', env);
+      report = await shadow.runShadow({
+        tool: 'evaluate',
+        old: () => evaluate({ ...opts, source: 'old' }, env),
+        new: () => {
+          if (opts.events && !opts.newEvents) throw new Error('skipped: no new input (--events given without --new-events)');
+          return evaluate({ ...opts, source: 'new' }, env);
+        },
+        normalize: newMod.normalize,
+        repo: opts.repo,
+        args: { since: opts.since, until: opts.until || null, format: opts.format, events: Boolean(opts.events), new_events: Boolean(opts.newEvents) },
+        eventsDir: env.CALLUM_EVENTS_DIR,
+      });
+    } else report = evaluate(opts, env);
   } catch (e) {
     if (!(e instanceof InputError)) throw e;
     process.stderr.write(`callum-flow-evaluate: ${e.message}\n`);
@@ -1646,4 +1694,6 @@ module.exports = {
   modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
 };
 
-if (require.main === module) process.exitCode = main(process.argv.slice(2));
+if (require.main === module) {
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`${e && e.stack || e}\n`); process.exitCode = 1; });
+}

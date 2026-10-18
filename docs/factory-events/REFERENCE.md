@@ -115,11 +115,13 @@ Example:
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
+| `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
+| `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
@@ -597,7 +599,7 @@ One review of the issue's pull request finished. Written by the loop from the re
 | `head` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The commit that was reviewed. |
 | `verdict` | enum | required | no | one of "approve", "changes", "unknown" | yes | approve, changes (findings to fix), or unknown (no valid answer). |
 | `round` | integer | required | no | minimum 1 | yes | The review round in this life, from 1. |
-| `patch` | string | required | no | minLength 1 |  | The patch id reviewed: an approval holds for exactly this patch. |
+| `patch` | string | required | no | minLength 1 | yes | The patch id reviewed: an approval holds for exactly this patch. |
 | `errors` | integer | required | no | minimum 0 |  | Findings of severity error. |
 | `warnings` | integer | required | no | minimum 0 |  | Findings of severity warning. |
 | `infos` | integer | required | no | minimum 0 |  | Findings of severity info. |
@@ -678,7 +680,7 @@ A commit on a merged pull request deleted or weakened a test (removed an asserti
 | `pr` | integer | required | no | minimum 1 | yes | The merged pull request. |
 | `head` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The merged head. |
 | `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` |  | The flagged commit (short sha). |
-| `restored` | boolean | required | no |  |  | true when a later commit on the branch put the test back. |
+| `restored` | boolean | required | no |  | yes | true when a later commit on the branch put the test back. |
 | `kinds` | array of string | required | no | minItems 1 |  | What the commit did to the tests, one code each, for example removed-assertion. |
 | `files` | array of string | required | no | minItems 1 |  | The test files it touched, repo-relative. |
 

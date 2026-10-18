@@ -46,6 +46,7 @@ function run(args, env = {}) {
       CLAUDE_CONFIG_DIR: path.join(FIX, "claude"),
       CALLUM_EVENTS_DIR: path.join(FIX, "events"),
       NO_MISTAKES_HOME: nmHome,
+      CALLUM_FLOW_EVALUATE_SOURCE: "old", // the shadow default would write into the fixture's events folder
       ...env,
     },
   });
@@ -849,4 +850,213 @@ test("v2 sections read n/a with the reason when the events are missing, and show
   assert.match(md, /\| triage \| park \| 1 \| 1 \|/);
   assert.match(md, /\| abandoned:dropped \| 1 \|/);
   assert.match(md, /\| 11 \| 2 \| 1 \| 9600 \| 2400 \|/);
+});
+
+// ---------------------------------------------------------------- the source switch (#899)
+// One issue's life in three shapes: the old log (hand-written notes), the new local log (`data`) and
+// the same events as factory.event_log rows (the x-column fields only, no `data`). Window 2026-10-16
+// 00:00 to 12:00. Issue 20 is merged at 03:10; its transition into fixing is logged twice with the same
+// seq_at (a retry), and counts once. Issue 21 is claimed and requeued.
+const NEW_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-16T00:00:00Z", "--until", "2026-10-16T12:00:00Z"];
+const SCHEMA_DIR = path.join(__dirname, "..", "docs", "factory-events", "schemas");
+const VIEW_FIELDS = new Set();
+for (const f of fs.readdirSync(SCHEMA_DIR).filter((x) => x.endsWith(".v1.json") && x !== "envelope.v1.json")) {
+  for (const [k, def] of Object.entries(JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, f), "utf8")).properties)) if (def["x-column"] === true) VIEW_FIELDS.add(k);
+}
+
+function lifeFixture() {
+  const T = (hm) => `2026-10-16T${hm}:00.000Z`;
+  const rows = []; // { ts, issue, actor, type, data, old: [{ state, note }] }
+  const add = (hm, issue, actor, type, data, ...old) => rows.push({ ts: T(hm), issue, actor, type, data, old });
+  let seq = 0;
+  const tr = (hm, from, to, row, extra, ...old) => {
+    seq += 1;
+    return add(hm, 20, "agent", "transition", { life: "l1", seq, table_row: row, from_state: from, to_state: to, via: "x", seq_at: T(hm), state_since: T(hm), step: null, round: 0, ...extra },
+      { state: "transition", note: `row=${row} life=l1 seq=${seq} from=${from || "none"} to=${to} seqAt=1 since=1 step=none round=0 via=x` }, ...old);
+  };
+  add("01:00", 20, "agent", "ready", {}, { state: "ready", note: null });
+  add("01:10", 20, "agent", "claimed", { lease_minutes: 120 }, { state: "claimed", note: "lease: 120" });
+  add("01:20", 20, "agent", "claim_renewed", { lease_minutes: 120 }, { state: "renewed", note: "lease: 120" });
+  tr("01:30", null, "queued", "S0", {});
+  tr("01:40", "queued", "designing", "T1", {});
+  tr("01:50", "designing", "building", "T2", {}, { state: "delegated", note: "brief https://x/20" });
+  tr("02:00", "building", "reviewing", "T5", { round: 1 });
+  add("02:05", 20, "agent", "reviewed", { branch: "issue-20", pr: 9, head: "abc1234", verdict: "changes", round: 1, patch: "p1", errors: 1, warnings: 0, infos: 0, reviewer: "r", answer_path: "/a/1" },
+    { state: "reviewed", note: "verdict=changes round=1 patch=p1 errors=1 warnings=0 infos=0 reviewer=r answer=/a/1" });
+  add("02:10", 20, "fixer", "finding_handled", { branch: "issue-20", pr: 9, head: "abc1234", finding: "r1-1", outcome: "fixed", detail: "ok" }, { state: "verdict", note: "CORRECT: r1-1 ok" });
+  add("02:10", 20, "fixer", "finding_handled", { branch: "issue-20", pr: 9, head: "abc1234", finding: "r1-2", outcome: "declined", detail: "no" }, { state: "verdict", note: "WRONG: r1-2 no" });
+  tr("02:15", "reviewing", "fixing", "T7", {}, { state: "fix_requested", note: "fix:review" });
+  rows.push({ ...rows[rows.length - 1], ts: T("02:16"), old: [rows[rows.length - 1].old[0]] }); // the same transition logged again, seq_at unchanged
+  tr("02:40", "fixing", "reviewing", "T11", { round: 2 });
+  add("02:45", 20, "agent", "reviewed", { branch: "issue-20", pr: 9, head: "def5678", verdict: "approve", round: 2, patch: "p2", errors: 0, warnings: 0, infos: 0, reviewer: "r", answer_path: "/a/2" },
+    { state: "reviewed", note: "verdict=approve round=2 patch=p2 errors=0 warnings=0 infos=0 reviewer=r answer=/a/2" });
+  add("02:50", 20, "agent", "test_weakened", { branch: "issue-20", pr: 9, head: "def5678", commit: "1234567", restored: true, kinds: ["skip"], files: ["t.js"] }, { state: "test_weakened", note: "commit=1234567 restored=yes step=none kinds=skip files=t.js" });
+  add("02:51", 20, "agent", "test_weakened", { branch: "issue-20", pr: 9, head: "def5678", commit: "7654321", restored: false, kinds: ["skip"], files: ["t.js"] }, { state: "test_weakened", note: "commit=7654321 restored=no step=none kinds=skip files=t.js" });
+  add("02:55", 20, "loop", "intervention", { who: "loop", cause: "triage", life: "l1", fact: "i20/l1/t1", pr: null, detail: "t" }, { state: "intervention", note: "who=loop cause=triage life=l1 fact=i20/l1/t1 reason=t" });
+  add("02:56", 20, "person", "intervention", { who: "person", cause: "op:note", life: null, fact: "op:note/i20/q1", pr: null, detail: "n" }, { state: "intervention", note: "who=person cause=op:note life=none fact=op:note/i20/q1 reason=n" });
+  tr("03:00", "reviewing", "merge-queue", "T13", {}, { state: "merge_ready", note: "round 2" });
+  add("03:10", 20, "agent", "merged", { pr: 9, branch: "issue-20", head: "def5678", by: "factory", recovered: false }, { state: "merged", note: "merged by the factory loop" });
+  add("01:55", null, "agent", "loop_passes", { from_at: T("01:54"), to_at: T("01:55"), passes: 1 }, { state: "loop", note: "kind=passes key=passes:1 status=done" });
+  add("04:00", 21, "agent", "claimed", { lease_minutes: 120 }, { state: "claimed", note: "lease: 120" });
+  add("04:30", 21, "agent", "requeued", { reason: "lease-expired", stage: null, lives: null, branch: null, pr: null, detail: null }, { state: "reclaimed", note: "lease expired" });
+  rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return rows;
+}
+
+function writeLife(dir) {
+  const rows = lifeFixture();
+  const env = (r, i) => ({ envelope: 1, event_id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, ts: r.ts, type: r.type, type_version: 1, repo: "acme/widgets", device: "L", actor: r.actor, session_id: null, issue: r.issue, base_image: null, dev_image: null, template_version: null, plugin_version: null });
+  const pgTime = (x) => (typeof x === "string" && /Z$/.test(x) ? x.replace("Z", "+00:00") : x);
+  const files = { old: path.join(dir, "old.jsonl"), local: path.join(dir, "new-local.jsonl"), view: path.join(dir, "new-view.jsonl") };
+  const lines = { old: [], local: [], view: [] };
+  rows.forEach((r, i) => {
+    for (const o of r.old) lines.old.push(JSON.stringify({ v: 2, ts: r.ts.replace(".000Z", "Z"), repo: "acme/widgets", device: "L", session_id: null, actor: r.actor, state: o.state, issue: r.issue, run_id: null, branch: null, pr: null, head: null, note: o.note }));
+    lines.local.push(JSON.stringify({ ...env(r, i), data: r.data }));
+    const flat = Object.fromEntries(Object.entries(r.data).filter(([k]) => VIEW_FIELDS.has(k)).map(([k, v]) => [k, k === "seq_at" || k === "state_since" ? pgTime(v) : v]));
+    lines.view.push(JSON.stringify({ ...env(r, i), ts: pgTime(r.ts), ...flat }));
+  });
+  for (const k of Object.keys(files)) fs.writeFileSync(files[k], lines[k].join("\n") + "\n");
+  return files;
+}
+
+const NO_NM = () => path.join(tmp, "no-nm");
+const sectionsFrom = (r) => {
+  // the sources block names the input; the two n/a metrics have no new value; scope.events says which file
+  const { sources, waiting, adjudicator_agreement, window, ...rest } = r;
+  const { events, ...scope } = window.scope;
+  return { ...rest, window: { ...window, scope } };
+};
+
+test("source switch: --source old and no flag (env old) print byte-identical json and markdown", () => {
+  for (const fmt of ["json", "markdown"]) {
+    const a = run([...WINDOW, "--format", fmt]);
+    const b = run([...WINDOW, "--format", fmt, "--source", "old"], { CALLUM_FLOW_EVALUATE_SOURCE: "" });
+    assert.equal(a.status, 0, a.err);
+    assert.equal(b.out, a.out, fmt);
+  }
+});
+
+test("source switch: a bad value exits 2 with the usage text; the flag wins over the env", () => {
+  for (const args of [["--source", "bogus"], ["--source=bogus"]]) {
+    const r = run([...WINDOW, ...args]);
+    assert.equal(r.status, 2);
+    assert.match(r.err, /invalid source 'bogus'/);
+    assert.match(r.err, /--source old\|new\|shadow/);
+  }
+  const bad = run(WINDOW, { CALLUM_FLOW_EVALUATE_SOURCE: "nope" });
+  assert.equal(bad.status, 2);
+  assert.match(bad.err, /CALLUM_FLOW_EVALUATE_SOURCE/);
+  const r = json([...WINDOW, "--source", "old"], { CALLUM_FLOW_EVALUATE_SOURCE: "new" });
+  assert.ok(r.sources.some((s) => s.kind === "events"), "old won");
+  assert.ok(!r.sources.some((s) => s.kind === "events-new"));
+  assert.match(run(["--help"]).out, /--source old\|new\|shadow\] \[--new-events <file>\]/);
+});
+
+test("new source: the local log and a view export give the same report, and it matches old", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-new-"));
+  try {
+    const f = writeLife(dir);
+    const env = { NO_MISTAKES_HOME: NO_NM() };
+    const old = json([...NEW_WINDOW, "--events", f.old], env);
+    const evDir = path.join(dir, "ev");
+    fs.mkdirSync(path.join(evDir, "factory"), { recursive: true });
+    fs.copyFileSync(f.local, path.join(evDir, "factory", "acme__widgets.jsonl"));
+    const local = json([...NEW_WINDOW, "--source", "new"], { ...env, CALLUM_EVENTS_DIR: evDir });
+    const view = json([...NEW_WINDOW, "--source", "new", "--new-events", f.view], env);
+    assert.deepEqual(sectionsFrom(local), sectionsFrom(view), "both new shapes");
+    assert.deepEqual(sectionsFrom(local), sectionsFrom(old), "new matches old on every section it can");
+    // spot-check the numbers so a pair of empty reports cannot pass
+    assert.equal(local.throughput.merged_issues, 1);
+    assert.deepEqual([local.throughput.issues[0].total, local.throughput.issues[0].design, local.throughput.issues[0].waiting_for_merge], [7800, 2400, 600]);
+    assert.deepEqual(local.first_pass, { reached_green: 1, first_pass: 0, first_pass_pct: 0, setback_issues: [20] });
+    assert.deepEqual(local.review.by_prefix, { CORRECT: 1, WRONG: 1, NIT: 0, ENV: 0, DUP: 0 });
+    assert.equal(local.rounds.issues[0].fix_rounds, 1, "the retried transition into fixing counts once");
+    assert.equal(local.rounds.issues[0].review_rounds, 2);
+    assert.deepEqual([local.test_weakened.total, local.test_weakened.restored, local.test_weakened.unrestored], [2, 1, 1]);
+    assert.deepEqual([local.interventions.person, local.interventions.loop], [1, 1]);
+    assert.equal(local.claims.reclaimed, 1);
+    assert.deepEqual(local.judgement_calls.by_kind.map((k) => `${k.kind}:${k.outcome}:${k.count}`), ["fix:declined:1", "fix:fixed:1", "review:approve:1", "review:changes:1", "triage:pending:1"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("new source: metrics that need a v1-only event read n/a, named in sources, never 0", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-new-"));
+  try {
+    const f = writeLife(dir);
+    const r = json([...NEW_WINDOW, "--source", "new", "--new-events", f.view], { NO_MISTAKES_HOME: NO_NM() });
+    assert.match(r.waiting["n/a"], /run_started and parked/);
+    assert.match(r.adjudicator_agreement["n/a"], /run_id/);
+    const named = r.sources.filter((s) => s.kind === "new-events-n/a").map((s) => s.path);
+    assert.deepEqual(named, ["adjudicator_agreement", "waiting"]);
+    assert.ok(r.sources.some((s) => s.kind === "new-events-note" && s.path === "first_pass" && /failed/.test(s.note)));
+    assert.ok(r.sources.some((s) => s.kind === "source" && s.path === "new"));
+    const md = run([...NEW_WINDOW, "--source", "new", "--new-events", f.view, "--format", "markdown"], { NO_MISTAKES_HOME: NO_NM() }).out;
+    assert.match(md, /n\/a: needs the v1-only run_started and parked events/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("new source: the mapping drops what a guard needs to drop (a transition twice, a missing file, junk lines)", () => {
+  const { mapEvent, loadNewEvents } = require("../images/base/evaluate-new-events.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-new-"));
+  try {
+    const tr = (id, seq, to) => ({ event_id: id, ts: "2026-10-16T01:00:00.000Z", type: "transition", repo: "o/r", device: "d", actor: "a", issue: 1, data: { life: "l", seq, table_row: "T2", from_state: "queued", to_state: to, via: "x", seq_at: "2026-10-16T01:00:05.000Z" } });
+    const file = path.join(dir, "e.jsonl");
+    fs.writeFileSync(file, [JSON.stringify(tr("a", 1, "building")), "not json", JSON.stringify(tr("b", 1, "building")), JSON.stringify({ type: "mystery", ts: "2026-10-16T01:00:00Z" }), JSON.stringify(tr("c", 2, "fixing"))].join("\n"));
+    const got = loadNewEvents(file).events.map((e) => `${e.state}@${e.ts}`);
+    assert.deepEqual(got, ["transition@2026-10-16T01:00:05.000Z", "delegated@2026-10-16T01:00:05.000Z", "transition@2026-10-16T01:00:05.000Z", "fix_requested@2026-10-16T01:00:05.000Z"]);
+    assert.match(loadNewEvents(path.join(dir, "absent.jsonl")).reason, /file not found/);
+    // a transition that stays in its state (a new attempt) is not a new delegation
+    assert.deepEqual(mapEvent({ ...tr("d", 3, "building"), data: { ...tr("d", 3, "building").data, from_state: "building" } }).map((e) => e.state), ["transition"]);
+    assert.deepEqual(mapEvent({ type: "finding_handled", ts: "2026-10-16T01:00:00Z", issue: 1, data: { outcome: "fixed", finding: "r1-1" } }).map((e) => e.note), ["CORRECT: r1-1"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shadow: prints the old report, records one agreeing run; a broken or skipped new side never fails the tool", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-shadow-"));
+  try {
+    const f = writeLife(dir);
+    const evDir = path.join(dir, "ev");
+    fs.mkdirSync(path.join(evDir, "factory"), { recursive: true });
+    fs.copyFileSync(f.local, path.join(evDir, "factory", "acme__widgets.jsonl"));
+    fs.copyFileSync(f.old, path.join(evDir, "acme__widgets.jsonl"));
+    const env = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: evDir, CALLUM_FLOW_EVALUATE_SOURCE: "", DEV_MACHINE_NAME: "m" };
+    const record = () => fs.readFileSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const oldOut = run([...NEW_WINDOW], { ...env, CALLUM_FLOW_EVALUATE_SOURCE: "old" });
+    const shadow = run([...NEW_WINDOW], env); // the default is shadow
+    assert.equal(shadow.status, 0, shadow.err);
+    assert.equal(shadow.out, oldOut.out);
+    assert.equal(shadow.err, "", "no difference, nothing on stderr");
+    let rec = record();
+    assert.equal(rec.length, 1);
+    assert.deepEqual([rec[0].tool, rec[0].repo, rec[0].differences, rec[0].new_error], ["evaluate", "acme/widgets", 0, null]);
+    // the new side broken (a directory, not a file): exit 0, same stdout, the error recorded
+    const broken = run([...NEW_WINDOW, "--new-events", dir], env);
+    assert.equal(broken.status, 0, broken.err);
+    assert.equal(broken.out, oldOut.out);
+    rec = record();
+    assert.equal(rec.length, 2);
+    assert.equal(rec[1].differences, null);
+    assert.match(rec[1].new_error, /EISDIR/);
+    // --events without --new-events: the new side is skipped, and the record says so
+    const skipped = run([...NEW_WINDOW, "--events", f.old], env);
+    assert.equal(skipped.status, 0, skipped.err);
+    rec = record();
+    assert.equal(rec.length, 3);
+    assert.match(rec[2].new_error, /skipped: no new input/);
+    // a new log that disagrees is recorded as differences, still exit 0
+    fs.writeFileSync(path.join(evDir, "factory", "acme__widgets.jsonl"), "");
+    const differs = run([...NEW_WINDOW], env);
+    assert.equal(differs.status, 0, differs.err);
+    assert.equal(differs.out, oldOut.out);
+    assert.ok(record()[3].differences > 0);
+    assert.match(differs.err, /shadow: \d+ difference/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
