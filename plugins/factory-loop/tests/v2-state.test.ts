@@ -1421,6 +1421,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(p).not.toMatch(/\baxi\b|no-mistakes|implement-issue/)
     const valid = triagePrompt(input({ head: HEAD, fixValid: true, state: 'reviewing', step: 'review', pr: 750, checks: [{ name: 'ci', bucket: 'fail', link: 'https://github.com/o/r/actions/runs/1/job/2' }], mergeable: 'clean', guard: ['GUARD checks FAIL ci failed class=checks'] }))
     expect(valid).toContain('- fix: a fixer works on issue-150 with your instructions')
+    expect(valid).toContain('a fixer can fix a finding without a new head')
     expect(valid).toContain('mergeable state: clean')
     expect(valid).toContain('- ci: fail https://github.com/o/r/actions/runs/1/job/2')
     expect(valid).toContain('GUARD checks FAIL ci failed class=checks')

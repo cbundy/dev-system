@@ -38,7 +38,7 @@ Choose the least drastic move that will work, and say why in one line.
   command) or the step can succeed with a sharper instruction. Give the instructions the next
   attempt needs, never the brief's content.
 - `fix`: the branch has work and a concrete defect to correct (a failing check, a conflict, a
-  review finding). Only when the menu says a fixer is valid here; otherwise the loop parks the
+  review finding; a fixer can fix a finding without a new head, such as on the PR description, but never instruct an empty commit). Only when the menu says a fixer is valid here; otherwise the loop parks the
   issue with your reason.
 - `redesign`: the brief is wrong or incomplete for what the issue asks. Say what the designer
   must settle.

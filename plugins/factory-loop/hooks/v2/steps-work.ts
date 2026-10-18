@@ -15,7 +15,9 @@
 //   at; a fix that says it pushed while origin did not move is unknown. Every finding declined is
 //   not-ok (declined) from the answer alone, whatever origin did, the reasons going to the notes
 //   of the next round (T12): the next round's review and CI see anything pushed anyway. So a
-//   declined answer is never ok, and `says` and the result always agree.
+//   declined answer is never ok, and `says` and the result always agree. A fix with nothing pushed
+//   that fixed a finding outside the branch (the PR's description or evidence) answers unchanged:
+//   not-ok (unchanged) the same way, its notes naming each finding fixed and each declined (T17).
 // build and fix give `says` (steps.ts StepModule), so a writer's not-ok ends its step when read
 // while its ok waits for the turn's end and the stop gate (10.8).
 import type { ExecCtx } from '../exec'
@@ -293,20 +295,26 @@ export function declines(a: FixAnswer): string[] {
   return a.findings.filter(f => f.disposition === 'declined').map(f => `the fixer declined ${f.id}: ${f.reason}`)
 }
 
-// fixResult: a fix answer's meaning. Declined is not-ok from the answer alone, as `says` reads it
-// before the turn ends; fixed is ok only with a new head on origin that holds the answered one
+// resolutions: a fix answer's findings fixed without a code change, as notes for the next round (T17).
+export function resolutions(a: FixAnswer): string[] {
+  return a.findings.filter(f => f.disposition === 'fixed').map(f => `the fixer fixed ${f.id} without a code change: ${f.reason}`)
+}
+
+// fixResult: a fix answer's meaning. Declined and unchanged are not-ok from the answer alone, as
+// `says` reads it before the turn ends; fixed is ok only with a new head on origin that holds the answered one
 // (10.8).
 export async function fixResult(ctx: ExecCtx, record: StepRecord, answer: unknown): Promise<StepResult> {
   const a = answer as FixAnswer
   if (a.result === 'declined') return notOk('declined', { ...a, notes: declines(a), text: a.summary })
-  if (a.result !== 'fixed' || a.head === null) return unknownResult('bad-answer', 'the fix answer is neither fixed with a head nor declined')
+  if (a.result === 'unchanged') return notOk('unchanged', { ...a, notes: [...resolutions(a), ...declines(a)], text: a.summary })
+  if (a.result !== 'fixed' || a.head === null) return unknownResult('bad-answer', 'the fix answer is neither fixed with a head, declined nor unchanged')
   if (record.slot === null) return unknownResult('cli', 'the fix step has no slot to read origin from')
   const read = await originHead(ctx, record.branch, record.slot)
   if ('failed' in read) return unknownResult('cli', `origin's ${record.branch} did not read: ${read.failed}`)
   if (read.sha === null) return unknownResult('cli', `origin has no branch ${record.branch}`)
   const before = startedAt(ctx.state, record)
   if (before !== null && sameSha(read.sha, before)) {
-    return unknownResult('bad-answer', `the fixer says it pushed ${a.head.slice(0, 12)}, but origin's ${record.branch} is still at ${read.sha.slice(0, 12)}`)
+    return unknownResult('bad-answer', `the fixer says it pushed ${a.head.slice(0, 12)}, but origin's ${record.branch} is still at ${read.sha.slice(0, 12)}: a finding fixed without a code change is answered with result unchanged`)
   }
   const held = await holds(ctx, record.slot, a.head, read.sha)
   if ('failed' in held) return unknownResult('cli', `origin's ${record.branch} did not read: ${held.failed}`)
@@ -379,7 +387,7 @@ const fix: StepModule = {
     return { prompt: fixPrompt(input), model: model(modelLabelOf(ctx.state, r.issue)), data: input.findings.length === 0 ? null : { findings: input.findings } }
   },
   result: fixResult,
-  says: says('result', ['declined']),
+  says: says('result', ['declined', 'unchanged']),
 }
 
 export const STEPS: Partial<Record<AgentStep, StepModule>> = { design, build, fix }
