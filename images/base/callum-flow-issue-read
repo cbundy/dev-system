@@ -281,7 +281,10 @@ case "$mode" in
       rest=$*
       q="query { repository(owner: \"$owner\", name: \"$rname\") {$al } } $FRAG"
       # gh exits non-zero when the answer carries errors but still prints it: judge the body
-      _o=$("$GH" api graphql -f query="$q" 2>/dev/null) && grc=0 || grc=$?
+      # gh's stderr is kept and passed on when the answer is unusable, as single mode does,
+      # so a rate limit reaches the caller's detection
+      _e="${TMPDIR:-/tmp}/$ME.$$.err"
+      _o=$("$GH" api graphql -f query="$q" 2>"$_e") && grc=0 || grc=$?
       part=$(printf '%s' "$_o" | jq -c --argjson T "$trusted" --argjson grc "$grc" '
         def bad: error("unexpected response");
         if type != "object" or (.data | type) != "object" or (.data.repository | type) != "object" then bad else . end
@@ -314,7 +317,8 @@ case "$mode" in
                         total_blocked_by: $v.issueDependenciesSummary.totalBlockedBy, total_blocking: $v.issueDependenciesSummary.totalBlocking},
                       sub_issues_summary: {total: $v.subIssuesSummary.total, completed: $v.subIssuesSummary.completed}}]
                   else .refused += [$num] end
-              end)') || die "cannot read the issues (unexpected GraphQL response)"
+              end)') || { cat "$_e" >&2; rm -f "$_e"; die "cannot read the issues (unexpected GraphQL response)"; }
+      rm -f "$_e"
       parts="$parts$part
 "
     done

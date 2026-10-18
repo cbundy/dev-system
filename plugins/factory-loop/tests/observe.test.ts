@@ -1526,9 +1526,17 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(calls.filter(c => !c.includes('--issues') && !c.includes('--timeline') && !c.includes('--comments'))).toEqual([])
     expect(issueReads(h).length).toBeLessThanOrEqual(12)
     expect(obs.state.sources.github.ok).toBe(true)
-    // the cached facts are those the single read gives
+    // the cached facts are those the single read gives: compare with a pass of single reads
     const read = issueReads(h).map(Number)
-    expect(obs.state.issues.filter(i => read.includes(i.number)).every(i => i.open)).toBe(true)
+    const batched = obs.state.issues.filter(i => read.includes(i.number))
+    expect(batched).toHaveLength(read.length)
+    const single = host({ queue: { stdout: `queue known=none now=${queue.join(',')}\n` }, issues })
+    single.world.batch = { exitCode: 2, stderr: 'usage' }
+    const ref = await single.pass(runtime(), stored({ queueKnown: null }))
+    for (const i of batched) {
+      expect(i.open).toBe(true)
+      expect(i).toEqual(ref.state.issues.find(j => j.number === i.number))
+    }
   })
 
   test('a failed batched call keeps every last value and marks github not ok; an exit-2 reader falls back to single reads; a refused number is untrusted (#922)', async () => {

@@ -48,6 +48,7 @@ if [ "$1" = graphql ]; then
   [ -f "$f" ] || f="$d/graphql.json"
   [ -f "$f" ] || { echo "no graphql fixture" >&2; exit 1; }
   cat "$f"
+  [ ! -f "$d/graphql.err" ] || cat "$d/graphql.err" >&2
   [ ! -f "$d/graphql.rc" ] || exit "$(cat "$d/graphql.rc")"
   exit 0
 fi
@@ -584,6 +585,14 @@ echo 1 > "$d/graphql.rc"
 rc_of "$READ" --json --issues 1
 expect_rc 1 "--issues gh failed without errors"; no_out "--issues gh failed without errors"
 rm -f "$d/graphql.rc"
+# a rate limit: gh's stderr reaches the caller, so it can tell the limit from a bad answer
+gresp "$(jq -n '{i1: null}')" '[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1234."}]'
+echo 'gh: API rate limit exceeded for user ID 1234.' > "$d/graphql.err"
+echo 1 > "$d/graphql.rc"
+rc_of "$READ" --json --issues 1
+expect_rc 1 "--issues rate limit"; no_out "--issues rate limit"
+grep -q "API rate limit exceeded" "$tmpdir/err" || fail "--issues rate limit: gh stderr not passed on: $(cat "$tmpdir/err")"
+rm -f "$d/graphql.rc" "$d/graphql.err"
 # more labels than the page returned
 gresp "$(jq -n --argjson a "$(gq 1 cbundy 13131067 OPEN 'One' | jq '.labels.totalCount = 101')" '{i1: $a}')"
 rc_of "$READ" --json --issues 1
