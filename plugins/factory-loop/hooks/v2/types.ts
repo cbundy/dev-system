@@ -401,7 +401,7 @@ export type V2Rule = (typeof V2_RULES)[number]
 
 // --- interventions (v2 SPEC 7.2) ---------------------------------------------------------------------
 
-export type InterventionWho = 'person' | 'loop'
+export type InterventionWho = 'person' | 'loop' | 'judge'
 
 // The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
 // and `guard:<what>` take their suffix from the lists above or the op's name.

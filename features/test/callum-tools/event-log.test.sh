@@ -123,6 +123,8 @@ ev transition --issue 571 --branch issue-571 --note "row=T5 life=lss1x2k seq=7 f
 ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patch=f00d errors=1" || fail "reviewed should be accepted"
 ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
 [ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .note]')" = '["intervention",null,"who=person cause=op:mode reason=mode%20act"]' ] || fail "intervention line wrong: $(tail -n 1 "$log")"
+ev intervention --note "who=judge cause=op:pause" || fail "a judge intervention should be accepted"
+[ "$(tail -n 1 "$log" | jq -r .note)" = "who=judge cause=op:pause" ] || fail "judge line wrong: $(tail -n 1 "$log")"
 ev intervention --issue 571 --note "who=person cause=rescue reason=patched%20the%20trust%20file" || fail "a hand-recorded rescue should be accepted"
 # the companion's two (v2 SPEC 10.10): --issue is required, no note token is
 ev prompt_denied --issue 571 --branch issue-571 --pr 621 --note "life=l seq=7 tool=Bash input=rm%20-f%20\$D/*" || fail "prompt_denied should be accepted"
@@ -137,7 +139,7 @@ for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   "reviewed|1|round=1 verdict=|verdict= and round=" \
   "intervention||cause=x|who= and cause=" \
   "intervention||who=loop|who= and cause=" \
-  "intervention||who=robot cause=x|who=person or who=loop" \
+  "intervention||who=robot cause=x|who=person, who=loop or who=judge" \
   "prompt_denied||life=l|--issue is required" \
   "prompt_waiting||life=l|--issue is required"; do
   state=${bad%%|*} rest=${bad#*|}

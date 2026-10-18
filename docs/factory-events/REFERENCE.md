@@ -16,7 +16,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
 | [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
-| [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
+| [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
 | [`loop_passes`](#loop_passes) | v1 | none | Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
@@ -183,7 +183,7 @@ Example:
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
-| `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover. |
+| `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
 | `why` | enum | `transition` | closed: why the life ended; null otherwise. |
 
 ## abandoned
@@ -422,7 +422,7 @@ Example:
 
 ## intervention
 
-Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.
+Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -432,7 +432,7 @@ Someone had to step in where the plan did not foresee it: a person (an owner op,
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `who` | enum | required | no | one of "person", "loop" | yes | person: a person did something; loop: the loop had to judge or recover. |
+| `who` | enum | required | no | one of "person", "loop", "judge" | yes | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
 | `cause` | string | required | no | pattern `^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$` | yes | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | The issue's life it happened in, as in transition; null when none applies. |
 | `fact` | string | required | yes |  | yes | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |

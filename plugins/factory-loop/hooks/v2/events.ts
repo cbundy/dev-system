@@ -50,7 +50,7 @@ export type ReviewedEvent = {
   answer: string
 }
 
-export const INTERVENTION_WHO = ['person', 'loop'] as const
+export const INTERVENTION_WHO = ['person', 'loop', 'judge'] as const
 
 // One intervention (7.2): who, the cause code, a one-line reason, and the key of the fact it
 // records (its ledger key is iv/<fact>), so readers count it once.
