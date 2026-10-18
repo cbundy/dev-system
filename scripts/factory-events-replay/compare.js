@@ -10,23 +10,7 @@
 // and psql(url, sql) is a read-only psql returning the rows unaligned. Both functions may be async.
 
 const { psql } = require("./pg.js");
-
-const here = (p, k) => (typeof k === "number" ? `${p}[${k}]` : /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) ? `${p}.${k}` : `${p}[${JSON.stringify(k)}]`);
-
-// diff(a, b, path): [{ path, old, new }] for every leaf where a and b differ. A key or index on one
-// side only has the other side undefined.
-function diff(a, b, p = "$") {
-  if (Object.is(a, b)) return [];
-  const isObj = (v) => v !== null && typeof v === "object";
-  if (!isObj(a) || !isObj(b) || Array.isArray(a) !== Array.isArray(b)) return [{ path: p, old: a, new: b }];
-  const out = [];
-  if (Array.isArray(a)) {
-    for (let i = 0; i < Math.max(a.length, b.length); i++) out.push(...diff(a[i], b[i], here(p, i)));
-  } else {
-    for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) out.push(...diff(a[k], b[k], here(p, k)));
-  }
-  return out;
-}
+const { diff } = require("../../images/base/factory-source.js");
 
 const show = (v) => (v === undefined ? "<missing>" : JSON.stringify(v));
 

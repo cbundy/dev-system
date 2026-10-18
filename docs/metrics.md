@@ -973,6 +973,25 @@ GROUP BY device, hour
 ORDER BY device, hour;
 ```
 
+## Shadow runs (source switch)
+
+Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
+kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. Per tool since a given time:
+runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
+and the most frequent differing paths:
+
+```sh
+jq -s --arg since 2026-10-18T00:00:00Z '
+  map(select(.ts >= $since)) | group_by(.tool) | map({
+    tool: .[0].tool,
+    runs: length,
+    clean: map(select(.differences == 0 and .new_error == null)) | length,
+    with_differences: map(select((.differences // 0) > 0)) | length,
+    with_new_error: map(select(.new_error != null)) | length,
+    top_paths: ([.[].paths[]?.path] | group_by(.) | map({path: .[0], n: length}) | sort_by(-.n) | .[:5])
+  })' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/*.jsonl
+```
+
 ## Linking pipeline runs to issues
 
 `run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have

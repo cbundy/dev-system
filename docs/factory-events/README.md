@@ -35,11 +35,11 @@ versioned payload, stored in the factory database and read through one view. Des
 - Fields whose description starts "Loop state, for the record rebuild" (and all of `loop_entry`)
   exist so the loop can rebuild itself. Most consumers can ignore them.
 
-Example queries, through `dev-query` and the view (percentiles and medians go in code):
+Example queries, through `dev-query --factory` and the view (`factory.event_log` lives in the factory database) (percentiles and medians go in code):
 
 ```sh
 # each issue's current state
-dev-query -v repo=cbundy/plant-console <<'SQL'
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select issue, to_state, seq_at from (
   select issue, to_state, seq_at,
          row_number() over (partition by issue order by seq_at desc, seq desc) as n
@@ -47,7 +47,7 @@ select issue, to_state, seq_at from (
 where n = 1;
 SQL
 # lead time: first ready to merge, per merged issue
-dev-query -v repo=cbundy/plant-console <<'SQL'
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select m.issue, min(r.ts) as ready_at, m.ts as merged_at
 from factory.event_log m
 join factory.event_log r on r.repo = m.repo and r.issue = m.issue and r.type = 'ready' and r.ts <= m.ts
@@ -55,7 +55,7 @@ where m.repo = :'repo' and m.type = 'merged'
 group by m.issue, m.ts;
 SQL
 # review false positives: declined findings over all handled ones
-dev-query -v repo=cbundy/plant-console <<'SQL'
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select outcome, count(*) from factory.event_log
 where repo = :'repo' and type = 'finding_handled' group by outcome;
 SQL
