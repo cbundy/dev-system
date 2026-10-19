@@ -159,6 +159,18 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
 })
 
 describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
+  test('a split child\'s claim carries its park into the outcome; a lost claim (exit 3) stays lost and carries none', async () => {
+    const park = { question: 'Which API shape?', parent: 300 }
+    const f = fake([])
+    const report = await runActions(f.env, state(), [{ ...claim, park }])
+    expect(report.outcomes).toEqual([expect.objectContaining({ kind: 'claim', status: 'done', summary: 'claimed #470 to park it on its open decision' })])
+    expect(f.env.live.ledger).toMatchObject([{ status: 'done', outcome: { kind: 'claim', result: 'claimed', park } }])
+    const lost = fake([], () => ({ exitCode: 3, stderr: 'callum-flow-claim: held by another device' }))
+    await runActions(lost.env, state(), [{ ...claim, park }])
+    const outcome = lost.env.live.ledger[0]?.outcome
+    expect(outcome).toEqual({ kind: 'claim', result: 'lost' })
+  })
+
   test('start, executor, finish: a claim is done in the ledger, saved, with its outcome', async () => {
     const f = fake([])
     const report = await runActions(f.env, state(), [claim])

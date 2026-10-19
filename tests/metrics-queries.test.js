@@ -104,10 +104,11 @@ const RUN_ONLY = [
   "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2",
   "6b. Reader shadow compares #0",
   "7a. How waits end #0",
-  "Split trackers closed by the loop #0",
+  "Split trackers closed by the loop #0", "Split children parked on their open decision #0",
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
+  "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
   "Startup schema migrates #0",
 ];

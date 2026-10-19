@@ -372,6 +372,36 @@ WHERE type = 'transition' AND table_row = 'T17'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
+### Split children parked on their open decision
+
+A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).
+Per such park this gives how long it waited for the owner and whether the next transition (the owner's
+resume, P1) was followed by the designer's step (T1 to designing). `waited_seconds` is null while the
+child still waits; `resumed_via` is the resume route (`unpark:label` or `unpark:op`). Take the count of rows
+for how many children park, the median of `waited_seconds` for how long, and the share with `designing_at`
+set for how many reach designing. It takes `-v repo=... -v since=...`.
+
+```sql
+WITH tr AS (
+  SELECT repo, issue, life, seq, table_row, to_state, via, seq_at,
+         lead(seq_at) OVER w AS next_at, lead(via) OVER w AS next_via,
+         lead(table_row) OVER w AS next_row, lead(to_state, 2) OVER w AS then_state,
+         lead(seq_at, 2) OVER w AS then_at
+  FROM (SELECT l.repo, l.issue, l.life, l.seq, l.table_row, l.to_state, l.via, l.seq_at,
+          row_number() OVER (PARTITION BY l.repo, l.issue, l.life, l.seq ORDER BY l.ts, l.device, l.device_seq) AS n
+        FROM factory.event_log l
+        WHERE l.type = 'transition' AND l.issue IS NOT NULL AND l.repo = :'repo') x
+  WHERE n = 1
+  WINDOW w AS (PARTITION BY repo, issue ORDER BY seq_at, seq)
+)
+SELECT repo, issue, seq_at AS parked_at, next_via AS resumed_via,
+       extract(epoch FROM next_at - seq_at) AS waited_seconds,
+       CASE WHEN then_state = 'designing' THEN then_at END AS designing_at
+FROM tr
+WHERE table_row = 'S7' AND via = 'split-decision' AND seq_at >= :'since'::timestamptz
+ORDER BY seq_at DESC;
+```
+
 ## 4. Merges per device
 
 ```sql
@@ -1165,6 +1195,68 @@ SELECT date_trunc('week', ts)::date AS week,
   round(100.0 * count(*) FILTER (WHERE cause = 'hold:release-timeout') / count(*), 1) AS timeout_pct
 FROM ends
 GROUP BY 1
+ORDER BY 1 DESC;
+```
+
+## 10. Releases
+
+Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
+writes them yet, so the queries return no rows until a producer does. Count a release once by
+`(repo, tag)`.
+
+Releases per week and the pull requests each carried:
+
+```sql
+SELECT date_trunc('week', ts)::date AS week, repo, tag, previous_tag,
+  jsonb_array_length(prs) AS pr_count, prs
+FROM factory.event_log
+WHERE type = 'released'
+ORDER BY week DESC, ts DESC;
+```
+
+How long Next sat full before each release (from the first milestone with closed work after the
+previous release to the release):
+
+```sql
+WITH rel AS (
+  SELECT repo, tag, min(ts) AS ts,
+    lag(min(ts)) OVER (PARTITION BY repo ORDER BY min(ts)) AS prev_ts
+  FROM factory.event_log
+  WHERE type = 'released'
+  GROUP BY repo, tag
+)
+SELECT r.repo, r.tag, r.ts AS released_at,
+  r.ts - (
+    SELECT min(m.ts) FROM factory.event_log m
+    WHERE m.type = 'milestone_state' AND m.repo = r.repo AND m.milestone_closed > 0
+      AND (r.prev_ts IS NULL OR m.ts > r.prev_ts) AND m.ts <= r.ts
+  ) AS sat_full
+FROM rel r
+ORDER BY r.ts DESC;
+```
+
+How often the judge held, per week (wakes that decided hold, and the milestone states where holding
+turned true):
+
+```sql
+WITH judged AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS wakes_held
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'release' AND decision = 'hold'
+  GROUP BY 1
+), states AS (
+  SELECT ts, holding, lag(holding) OVER (PARTITION BY repo ORDER BY ts) AS was_holding
+  FROM factory.event_log
+  WHERE type = 'milestone_state'
+), turned AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS holds_started
+  FROM states
+  WHERE holding AND coalesce(was_holding, false) = false
+  GROUP BY 1
+)
+SELECT coalesce(j.week, t.week) AS week,
+  coalesce(j.wakes_held, 0) AS wakes_held, coalesce(t.holds_started, 0) AS holds_started
+FROM judged j FULL JOIN turned t ON j.week = t.week
 ORDER BY 1 DESC;
 ```
 

@@ -137,6 +137,8 @@ const ACTIONS: Action[] = [
   { ...base, issue: null, kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1' },
   { ...base, issue: null, kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2' },
   { ...base, kind: 'claim', key: 'claim:470:new', class: 'start', rule: 'D1' },
+  // a split's not-ready child, claimed to park on its decision (v2 SPEC 8.7): the same claim argv
+  { ...base, kind: 'claim', key: 'i471/claim/tbq3k0', class: 'free', rule: 'S2', park: { question: 'Which API?', parent: 469 } },
   { ...base, kind: 'close-issue', key: 'close:470', class: 'free', rule: 'M7' },
   { ...base, kind: 'milestone-later', key: 'milestone-later:470', class: 'free', rule: 'M7' },
   { ...base, kind: 'release-parent', key: 'release-parent:470', class: 'free', rule: 'D3', created: [471, 472] },
@@ -194,7 +196,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'event', key: `${at}/event/transition`, class: 'free', rule: 'S3', event: { state: 'transition', record: RECORD, row: 'T2', from: 'designing', via: 'ok' } },
   { ...base, kind: 'pr', key: `${at}/pr/ensure`, class: 'free', rule: 'S2', op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 'The work', summary: 'Fixes #999 by --yes', evidence: null, brief: BRIEF },
   { ...base, kind: 'pr', key: `${at}/pr/body/a1`, class: 'free', rule: 'Q2', op: 'body', branch: 'issue-470', base: 'main', pr: 512, title: 'The work', summary: 'x', evidence: 'npm test', brief: BRIEF },
-  { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
+  { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true, decision: null }, blockedBy: [] },
+  { ...base, kind: 'split', key: `${at}/child/b`, class: 'free', rule: 'S3', parent: 470, child: { key: 'b', title: 'Part two', body: 'Do it', blockedBy: [], ready: false, decision: 'Which API?' }, blockedBy: [] },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },
