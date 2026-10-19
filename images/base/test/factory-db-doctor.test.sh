@@ -238,10 +238,10 @@ if printf '%s\n' "$out" | grep -q 'admin URL'; then
   fail "the behind fix must not offer the admin URL: $out"
 fi
 echo "ok: schema behind fails with the migrate fix"
-q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (13, 'future', 'x')" > /dev/null
+q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (14, 'future', 'x')" > /dev/null
 check writer
 expect 2 "FAIL" "ahead" "pull a newer image"
-q "$db" "DELETE FROM factory.schema_migrations WHERE version = 13" > /dev/null
+q "$db" "DELETE FROM factory.schema_migrations WHERE version = 14" > /dev/null
 echo "ok: schema ahead fails"
 echo "-- only a lower version" > "$tmpdir/mig-ahead/0000_none.sql"
 rc=0
