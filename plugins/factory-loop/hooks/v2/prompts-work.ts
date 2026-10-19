@@ -201,10 +201,11 @@ function answerBlock(place: ScriptPlace, lead: string, example: string, fields: 
 export function gateRule(i: WorkInput): string {
   const lead = "Run the repo's own lint and test commands (CLAUDE.md, canonical commands) in the foreground and let them finish"
   const debugging = "While debugging, run only the suite you are changing, as the repo's CLAUDE.md names, then the full commands once."
+  const subsets = "Run only the suites you are changing, as the repo's CLAUDE.md names, and not the full commands: the loop runs them at the end of your turn."
   const commands = i.gateCommands.map(c => c.replace(/\s+/g, ' ').trim()).filter(c => c !== '')
   if (commands.length === 0) return `${lead}: they must pass before you answer. ${debugging} CI on the PR is the final gate.`
   const list = commands.map(c => `\`${c.replace(/`/g, "'")}\``).join(', then ')
-  return `${lead}. When you end your turn the loop runs ${list} in this slot; while they fail it hands you the failures, and you fix them and end your turn again. ${debugging} CI on the PR is the final gate.`
+  return `${lead}. When you end your turn the loop runs ${list} in this slot; while they fail it hands you the failures, and you fix them and end your turn again. ${subsets} CI on the PR is the final gate.`
 }
 
 const QUALITY =
