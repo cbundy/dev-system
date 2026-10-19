@@ -1150,7 +1150,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `free:<cause>` | every free re-run (the free re-run): `load` (after a restart), `usage` (a usage-limit kill), `slot` (a lost slot) or `breaker` | the issue |
 | `park` | every entry to parked: a question to the owner | the issue |
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
-| `ci-rerun` | a failed or cancelled check re-run (8.5) | the issue |
+| `ci-rerun` | a failed or cancelled check re-run (8.5); once the run settles, a second row for the same fact says whether it was a flake (`flaky`, `head`, `failed_jobs`, `failed_tests`) | the issue |
 | `queue:patch`, `queue:linkage` | the queue's head went back to review because its patch changed (T14), or its body was re-rendered after a `linkage` FAIL (9.3) | the issue |
 | `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, a command, or a call in the background (10.4). An agent did something strange | the issue |
 | `gate-unknown` | a stop gate that could not run (10.6) | the issue |
@@ -1401,6 +1401,23 @@ is a new `Reviewer` implementation and a setting, nothing more.
   errors holds the record as a stalled effect (4.5). At the merge queue's head it makes the step
   `unknown`, never `ci-red`, as any queue action that used up its attempts does, so the queue
   moves past a head that cannot move (9.1).
+- **The log read.** Before the re-run, the executor reads the run's failed jobs' log
+  (`gh run view <run id> --log-failed --repo R`, `flake-names.ts`, at most the first 4 MB). Each line is
+  `<job>\t<step>\t<timestamp> <text>`: the distinct jobs are `failedJobs`; `FAIL <name>`,
+  `FAIL test isolation: <what>` and `(fail) <name>` lines give `failedTests` (the `FAIL <id> (claude
+  plugin validate / test)` wrapper is dropped), at most 20 names of 200 characters each. The names
+  ride the done outcome. A read that throws, times out or exits non-zero gives null names and never
+  changes the re-run, its status, summary or retry class. A ledger rebuilt from the event log keeps
+  the exit only, so its names are null.
+- **The flake row.** `rules-flakes.ts` writes the second `ci-rerun` `intervention` row for the
+  re-run's fact once the run has settled: no check of the run pending, at least one ended since the
+  re-run started, and no failed or cancelled check still showing its result from before it (a re-run
+  of the failed jobs only leaves the passed checks their old end time, so not every check can be
+  required to have ended since). `flaky` is true when no check of the run is failed or cancelled, false
+  otherwise; the row carries the head and the names. Its ledger key is `iv/<rerun key>/flake`, and
+  `onceKey` adds `flake` for a note with a `flaky=` token, so it is logged once and never mistaken for
+  the first row of the same fact. A push of a new head shows a new run, so nothing is written for the
+  old re-run.
 - **A conflict.** GitHub does not run `pull_request` workflows for a PR with a merge conflict, and
   `ci.yml` triggers on `pull_request` and on pushes to main (`.github/workflows/ci.yml`). So a
   `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.

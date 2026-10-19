@@ -211,6 +211,11 @@ export function runRerunArgv(repo: string, runId: string): string[] {
   return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]
 }
 
+// The failed jobs' log of a run (flake-names.ts reads the job and test names from it), read before the re-run.
+export function runViewLogFailedArgv(repo: string, runId: string): string[] {
+  return ['gh', 'run', 'view', runId, '--log-failed', '--repo', repo]
+}
+
 // --- the merge queue (9) ---------------------------------------------------------------------------------
 
 // GitHub merges main into the head's branch; no history is rewritten.

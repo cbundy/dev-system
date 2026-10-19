@@ -130,6 +130,9 @@ const events = () => [
   { state: "transition", record: record({ question: "which API, at 100%? ".repeat(100), notes: Array.from({ length: 8 }, (_, i) => `check-${i}, red at 100% `.repeat(50).slice(0, 1000)) }), row: "U4", from: "building", via: "unknown" },
   { state: "reviewed", issue: 571, branch: "issue-571", pr: 621, head: "abc1234", verdict: "changes", round: 2, patch: "3fa2c1d0e9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4", errors: 1, warnings: 2, infos: 0, reviewer: "adjudicator", answer: "/home/x/.claude/factory-loop/o__r/answers/i571_review.json" },
   ev.intervention("loop", "unknown:timeout", "i571/lss1x2k/s7/t", "the build ran past 90 minutes", { issue: 571, life: "ss1x2k", pr: null }),
+  // a ci-rerun's second row, the flake verdict (rules-flakes.ts): it shares the first row's fact
+  { ...ev.intervention("loop", "ci-rerun", "i571/lss1x2k/rerun/r1/18342299123", "ci flake: run 18342299123 passed on its re-run on 0821e6a", { issue: 571, life: "ss1x2k", pr: 621 }), flaky: true, head: HEAD, failed_jobs: ["ci"], failed_tests: ["tests/a.test.js", "a, b"] },
+  { ...ev.intervention("loop", "ci-rerun", "i571/lss1x2k/rerun/r1/18342299123", "not a flake: ci failed again", { issue: 571, life: "ss1x2k", pr: 621 }), flaky: false, head: HEAD, failed_jobs: null, failed_tests: null },
   ev.intervention("person", "op:mode", "op/fleet/mode-act", "mode act", { issue: null, life: null, pr: null }),
   ev.intervention("person", "control-file", "control-file/fleet/lss2", "control.json changed with no op: paused #571", { issue: 571, life: null, pr: null }),
   { state: "reclaimed", issue: 533, branch: "issue-533", pr: null, stage: "queued", checked: "no live step: no slot, no run, no PR activity in 6 h", reason: "reconcile", outcome: "requeue", lives: 2 },
@@ -287,6 +290,22 @@ test("a shadow_read goes through the real writer's native mode: no issue, no war
     assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
     assert.deepEqual(reader.validateStrict("shadow_read", 1, got.data), []);
   }
+});
+
+test("a flake row goes through the real writer and translator; its once-key differs from the first row's, which is unchanged", () => {
+  const at = { issue: 571, life: "ss1x2k", pr: 621 };
+  const fact = "i571/lss1x2k/rerun/r1/18342299123";
+  const first = ev.intervention("loop", "ci-rerun", fact, "a failed check re-run (r1/18342299123)", at);
+  const flake = { ...ev.intervention("loop", "ci-rerun", fact, "ci flake", at), flaky: true, head: HEAD, failed_jobs: ["ci"], failed_tests: ["a,b"] };
+  assert.ok(!ev.eventNote(first).includes("flaky="), "the first row's note is as it was");
+  const firstLine = log(ev.eventArgv(first));
+  assert.equal(ev.onceKey(firstLine), `intervention 571 ci-rerun ${fact}`);
+  const line = log(ev.eventArgv(flake));
+  assert.equal(ev.onceKey(line), `intervention 571 ci-rerun ${fact} flake`);
+  const lines = fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+  const read = reader.readEvent(JSON.parse(lines[lines.length - 1]));
+  assert.equal(read.type, "intervention");
+  assert.deepEqual([read.data.flaky, read.data.head, read.data.failed_jobs, read.data.failed_tests], [true, HEAD, ["ci"], ["a,b"]]);
 });
 
 test("the operator's hand-recorded rescue, as the playbook writes it, reads as a person intervention", () => {

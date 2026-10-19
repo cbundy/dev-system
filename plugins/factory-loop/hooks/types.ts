@@ -181,7 +181,8 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 // model as `judge(report)` and is recorded as { unparsed: true }.
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (v2 SPEC 13.10 item 1)
-  | { kind: 'cli'; exit: number; detail?: string }
+  // a done ci-rerun also carries the job and test names its failed jobs' log named, null when none were read (v2 SPEC 8.5)
+  | { kind: 'cli'; exit: number; detail?: string; failedJobs?: string[] | null; failedTests?: string[] | null }
   // park: the question a not-ready split child parks on and the parent that was split (v2 SPEC 8.7); only on a claimed result
   | { kind: 'claim'; result: 'claimed' | 'lost'; park?: { question: string; parent: number } }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }

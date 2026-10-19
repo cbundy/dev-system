@@ -34,7 +34,7 @@ export type InterventionEvent = {
   life: string | null
   pr: number | null
   fact: string
-  // a ci-rerun row's result (docs/factory-events/schemas/intervention.v1.json); types only, no producer yet
+  // a ci-rerun row's result (docs/factory-events/schemas/intervention.v1.json); written by rules-flakes.ts on the second row
   flaky?: boolean | null
   failed_tests?: string[] | null
   failed_jobs?: string[] | null

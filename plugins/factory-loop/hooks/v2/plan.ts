@@ -3,7 +3,7 @@
 // hooks/v2/*.ts and hooks/foundation.ts only (tests/factory-loop-plan.test.js).
 //
 // The order is the order the act step runs the actions in: R1 first (6.2), then the record's
-// rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions, the gate runs, M1 (the default branch's state, whatever the store's state), and
+// rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions (the flake rows after them), the gate runs, M1 (the default branch's state, whatever the store's state), and
 // the fleet's (H2, O3); what used up its attempts is told, and a missing companion plugin (the
 // workspace rail, 10.9: its hold is in the record's rules); G4 admits; R2's restart goes last of
 // all, after the title, and only on a pass that admitted nothing else. When the records could not
@@ -12,6 +12,7 @@ import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } 
 import type { Config, PlanResult, State } from '../types'
 import { reconcile } from './reconcile'
 import { fleetRules, fleetTells, restartOf, restartTells } from './rules-fleet'
+import { flakeRules } from './rules-flakes'
 import { gateRunRules } from './rules-gates'
 import { interventionRules } from './rules-interventions'
 import { mainRules } from './rules-main'
@@ -51,6 +52,7 @@ export function planV2(state: State, config: Config): PlanResult {
       skip(ctx, 'G2', null, `v2 records not read: ${store.error ?? 'the store failed'}; nothing is released, claimed or started`)
     }
     interventionRules(ctx)
+    flakeRules(ctx)
     gateRunRules(ctx)
     mainRules(ctx)
     fleetRules(ctx)
