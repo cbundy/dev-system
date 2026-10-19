@@ -26,5 +26,6 @@ test('template and root CLAUDE.md say what a loop agent leaves to the loop, in t
     assert.match(synced, /## Two ways work gets done/, p);
     assert.match(synced, /never run no-mistakes/, p);
     assert.match(synced, /\*\*The manual path\*\*/, p);
+    assert.match(synced, /runs only the subsets it changes and leaves the full gate commands to that stop gate/, p);
   }
 });
