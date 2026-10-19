@@ -48,7 +48,8 @@ Load the folder with `claude --plugin-dir plugins/factory-loop`, or name it in
 ```
 
 Decisions go to `${CLAUDE_CONFIG_DIR}/factory-loop/<owner>__<repo>/decisions-YYYY-MM-DD.jsonl`.
-Owner directives go in `control.json` beside them, best set with `/factory` (below). Create
+Each pass also rewrites `settings.json` beside them: the settings in force and where each came from.
+Owner directives go in `control.json`, best set with `/factory` (below). Create
 `${CLAUDE_CONFIG_DIR}/factory-loop/OFF` to stop it within a minute.
 
 ## Run it in act mode
