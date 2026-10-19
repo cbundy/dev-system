@@ -14,6 +14,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`claimed`](#claimed) | v1 | required | This device took the claim on the issue: no other device works on it while the lease holds. |
 | [`closed`](#closed) | v1 | required | GitHub shows the issue closed, outside the factory's own merge. |
 | [`comment_posted`](#comment_posted) | v1 | required | The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. |
+| [`designer_routed`](#designer_routed) | v1 | required | The model for the issue's design step was chosen. |
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
 | [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
@@ -115,7 +116,7 @@ Example:
 | `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
 | `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
-| `bucket` | integer | `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
+| `bucket` | integer | `designer_routed`, `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (sonnet, the treatment, when below sonnet_pct); null otherwise. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
@@ -164,7 +165,7 @@ Example:
 | `milestone_closed` | integer | `milestone_state` | Closed issues in the milestone. |
 | `milestone_open` | integer | `milestone_state` | Open issues in the milestone. |
 | `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
-| `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
+| `model` | string | `designer_routed`, `implementer_routed` | The model alias chosen. The control is the designer's frontmatter model (opus); the treatment is sonnet. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `new_value` | any | `settings_changed` | The value after the change, any JSON; null when it is now unset. |
 | `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
@@ -186,7 +187,7 @@ Example:
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
-| `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
@@ -199,6 +200,7 @@ Example:
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
 | `seven_day_resets_at` | string | `usage` | When that seven-day window resets. |
+| `sonnet_pct` | integer | `designer_routed` | The configured share of issues routed to Sonnet (the treatment; the control is opus), in percent. Null only when the route tool could not run and logged a fallback. |
 | `split_into` | array of integer | `abandoned` | split: the new issues it was split into; empty otherwise. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
@@ -390,6 +392,34 @@ Example:
   "seq": 7,
   "to_state": "parked",
   "comment_url": "https://github.com/cbundy/plant-console/issues/42#issuecomment-6259542165"
+}
+```
+
+## designer_routed
+
+The model for the issue's design step was chosen. Written by callum-flow-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: not stated
+
+### designer_routed v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `model` | string | required | no | minLength 1 | yes | The model alias chosen. The control is the designer's frontmatter model (opus); the treatment is sonnet. |
+| `reason` | enum | required | no | one of "label", "default", "hash", "fallback" | yes | label: a model:<alias> label on the issue; default: no Sonnet share is set; hash: the issue's bucket against the Sonnet share; fallback: the repo or the labels could not be read. |
+| `bucket` | integer | required | yes | minimum 0; maximum 99 | yes | hash: the issue's stable bucket, 0 to 99 (sonnet, the treatment, when below sonnet_pct); null otherwise. |
+| `sonnet_pct` | integer | required | yes | minimum 0; maximum 100 | yes | The configured share of issues routed to Sonnet (the treatment; the control is opus), in percent. Null only when the route tool could not run and logged a fallback. |
+
+Example:
+
+```json
+{
+  "model": "opus",
+  "reason": "default",
+  "bucket": null,
+  "sonnet_pct": 0
 }
 ```
 

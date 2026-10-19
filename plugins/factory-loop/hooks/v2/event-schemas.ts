@@ -29,6 +29,7 @@ export const CURRENT: Record<string, number> = {
   "claimed": 1,
   "closed": 1,
   "comment_posted": 1,
+  "designer_routed": 1,
   "finding_handled": 1,
   "gate_run": 1,
   "implementer_routed": 1,
@@ -128,6 +129,18 @@ export const SCHEMAS: Record<string, Shape> = {
       "life": {"pattern":"^[0-9a-z]+$","type":"string"},
       "seq": {"minimum":0,"type":"integer"},
       "to_state": {"enum":["parked","waiting"]},
+    },
+  },
+  "designer_routed.v1": {
+    "additionalProperties": false,
+    "required": ["bucket","model","reason","sonnet_pct"],
+    "type": "object",
+    "x-issue": "required",
+    "properties": {
+      "bucket": {"maximum":99,"minimum":0,"type":["integer","null"]},
+      "model": {"minLength":1,"type":"string"},
+      "reason": {"enum":["default","fallback","hash","label"]},
+      "sonnet_pct": {"maximum":100,"minimum":0,"type":["integer","null"]},
     },
   },
   "envelope.v1": {
