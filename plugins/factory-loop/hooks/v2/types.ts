@@ -24,7 +24,7 @@ export type IssueState = (typeof ISSUE_STATES)[number]
 export const STEP_KINDS = ['lease', 'design', 'build', 'review', 'fix', 'queue', 'triage'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 
-export const CLOSED_WHYS = ['merged', 'merged-by-hand', 'dropped', 'split', 'closed-on-github', 'claim-lost'] as const
+export const CLOSED_WHYS = ['merged', 'merged-by-hand', 'dropped', 'split', 'closed-on-github', 'claim-lost', 'done'] as const
 export type ClosedWhy = (typeof CLOSED_WHYS)[number]
 
 // The states that hold a slot and count in flight (3.1): designing to merge-queue.

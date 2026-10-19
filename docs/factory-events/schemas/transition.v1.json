@@ -47,7 +47,7 @@
       },
       "description": "waiting: the conditions the loop re-checks each pass; null otherwise"
     },
-    "why": { "enum": ["merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null], "description": "closed: why the life ended; null otherwise.", "x-column": true },
+    "why": { "enum": ["merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null], "description": "closed: why the life ended (done: its work had already merged); null otherwise.", "x-column": true },
     "notes": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 1000 }, "description": "Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them.", "x-column": true },
     "pr_closed_at": { "type": ["string", "null"], "format": "date-time", "description": "Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none." },
     "lives": { "type": "integer", "minimum": 1, "description": "This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum.", "x-column": true }
