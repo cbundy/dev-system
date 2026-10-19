@@ -434,3 +434,56 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   const bad = ["foo:1", "issue:x", "issue:0", "tag:XYZ", "tag:abc", "issue:1,,pr:2", "", "issue", ...[Array.from({ length: 9 }, (_, i) => `issue:${i + 1}`).join(",")]];
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
 });
+
+test("--data extras (dev-system#870): ready and claimed events carry title, labels and parent, strictly valid", () => {
+  const facts = { title: "T", labels: ["ready", "bug"], parent: 3 };
+  const opts = { ts: "2026-10-17T01:02:03.456Z", sessionId: null, data: facts };
+  for (const state of ["ready", "claimed"]) {
+    const line = oldLines.find((l) => l.state === state && l.note === (state === "claimed" ? "lease: 120" : null));
+    const base = translate(line).event.data;
+    const r = translate(line, opts);
+    assert.deepEqual(r.event.data, { ...base, ...facts }, state);
+    assert.deepEqual(reader.validateStrict(state, 1, r.event.data), [], state);
+    assert.deepEqual(reader.validateStrict("envelope", 1, r.event), [], state);
+    const nulls = translate(line, { ...opts, data: { title: null, labels: null, parent: null } });
+    assert.deepEqual(reader.validateStrict(state, 1, nulls.event.data), [], state);
+    // replay and a dual write without data give exactly today's payload
+    assert.deepEqual(translate(line, { ts: opts.ts }).event.data, base);
+    assert.deepEqual(translate(line).event.data, base);
+  }
+});
+
+test("--data extras: an unknown key, a key the line already set and a wrong shape are misses naming the field", () => {
+  const ready = oldLines.find((l) => l.state === "ready");
+  const claimed = oldLines.find((l) => l.state === "claimed" && l.note === "lease: 120");
+  const miss = (line, data) => translate(line, { ts: "2026-10-17T01:02:03.456Z", data }).miss;
+  assert.match(miss(ready, { nope: 1 }), /^ready: internal: unexpected field nope/);
+  assert.match(miss(claimed, { lease_minutes: 5 }), /^claimed: internal: unexpected field lease_minutes/);
+  assert.match(miss(ready, { title: 5 }), /^ready: title is not valid/);
+  assert.match(miss(ready, { title: "x".repeat(257) }), /^ready: title is not valid/);
+  assert.match(miss(ready, { labels: "a" }), /^ready: labels is not valid/);
+  assert.match(miss(ready, { labels: [1] }), /^ready: labels is not valid/);
+  assert.match(miss(ready, { parent: 0 }), /^ready: parent is not valid/);
+  assert.match(miss(ready, { parent: "3" }), /^ready: parent is not valid/);
+  assert.match(miss(ready, [1]), /^ready: --data is not an object/);
+  // a type that takes none of them
+  const closed = oldLines.find((l) => l.state === "closed");
+  assert.match(miss(closed, { title: "T" }), /^closed: internal: unexpected field title/);
+});
+
+test("CLI: --data makes it dual write and gives the same event; a foreign key is a miss, not JSON is usage", () => {
+  const line = JSON.stringify(oldLines.find((l) => l.state === "ready"));
+  const facts = { title: "T", labels: ["ready"], parent: null };
+  const r = cli(["--ts", "2026-10-17T01:02:03.456Z", "--data", JSON.stringify(facts)], `${line}\n`);
+  assert.equal(r.code, 0, r.err);
+  const direct = translate(line, { ts: "2026-10-17T01:02:03.456Z", data: facts }).event;
+  assert.deepEqual(JSON.parse(r.out), direct);
+  assert.equal(JSON.parse(r.out).data.title, "T");
+  const alone = cli(["--data", JSON.stringify(facts)], `${line}\n`);
+  assert.equal(alone.code, 0, alone.err);
+  assert.equal(JSON.parse(alone.out).data.title, "T");
+  const foreign = cli(["--data", '{"nope":1}'], `${line}\n`);
+  assert.equal(foreign.code, 1);
+  assert.match(foreign.err, /miss: ready: internal: unexpected field nope/);
+  assert.equal(cli(["--data", "x"], `${line}\n`).code, 2);
+});

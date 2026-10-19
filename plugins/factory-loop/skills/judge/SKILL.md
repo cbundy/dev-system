@@ -193,6 +193,14 @@ Owner items (the title counts them until resolved):
   name the issue and why it waits. For a "no release tag of <repo>" line, that repo must cut a
   release, or the owner resumes or drops the issue; for "its read has failed", the owner checks
   access to the repo or the number of the issue or PR the condition names.
+- `starved` (since, minutes, period, queue, blocked, roots, why; detail: one line per root blocker, most
+  blocking first, then one line per queue issue held by something other than a blocker): the ready queue
+  has been unclaimable with nothing in flight for the whole spell, so the factory is idle. Each root line
+  says what blocks how many ready issues and why the root is not moving. Lead with `[DECISION]`: name the
+  roots, and what the owner can do for each: answer a parked root, run a Run it, make a root `ready`, cut
+  the release a merged change waits on, or close a kept-open issue. A `roots=unread` tell means the
+  blockers could not be read; the lines then give each ready issue's blocker count. It comes again at most
+  once a day while the spell lasts.
 
 Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop

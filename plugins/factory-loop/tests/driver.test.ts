@@ -536,6 +536,42 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.titles.at(-1)).toContain('gh wait')
   })
 
+  test('a starved queue keeps its spell in the store from the first pass, the pass line carries it, and a pass that claims ends it (S1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let blocked = 1
+    let queueDown = false
+    const { run } = factory({
+      queue: [470],
+      run: argv => {
+        if (queueDown && argv[0] === `${TOOLS}/queue-watch.sh`) return { exitCode: 1, stderr: 'boom' }
+        if (argv[0] !== 'callum-flow-issue-read' || argv.slice(1).join(' ') !== '--json 470') return undefined
+        const issue = { number: 470, title: 'The loop acts', state: 'open', labels: [{ name: 'ready' }], issue_dependencies_summary: { blocked_by: blocked }, sub_issues_summary: { total: 0 } }
+        return { stdout: JSON.stringify({ issue, blocked_by: [], blocking: [], stripped: 0 }) }
+      },
+    })
+    const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const since = h.store.get(`starved:${REPO}`)
+    expect(since).toBe(NOW + 5_000)
+    expect(h.last().starved).toEqual({ since: new Date(NOW + 5_000).toISOString(), minutes: 0 })
+    // a second starved pass keeps the spell's start
+    await clock.advance(10 * MIN)
+    expect(h.store.get(`starved:${REPO}`)).toBe(since)
+    expect((h.last().starved as { minutes: number }).minutes).toBeGreaterThanOrEqual(9)
+    // a pass that cannot read the queue knows nothing: the spell stands
+    queueDown = true
+    await clock.advance(2 * MIN)
+    expect(h.last().starved).toBeUndefined()
+    expect(h.store.get(`starved:${REPO}`)).toBe(since)
+    queueDown = false
+    // the blocker clears: the pass claims, and the spell ends
+    blocked = 0
+    await clock.advance(10 * MIN)
+    expect(h.store.has(`starved:${REPO}`)).toBe(false)
+    expect(h.last().starved).toBeUndefined()
+  })
+
   test('a rate-cap hold is one loop event per cap per hour (v2 SPEC 13.11.4, D-24)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })

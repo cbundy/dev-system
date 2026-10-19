@@ -662,6 +662,25 @@ jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key
   | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+### Starved queue
+
+A ready queue the factory cannot touch while nothing is in flight raises the owner item `starved` once the
+spell is `starvedNoticeAfterMs` (default 60 min) old, and again once per 24 h period of it, keyed
+`tell:starved:<since>:<k>`. What each notice named, from the decision log:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:starved:")))
+  | {since: .fields.since, minutes: (.fields.minutes | tonumber), roots: .fields.roots, why: .fields.why}]
+  | unique_by(.since + .roots) | .[] | "\(.since) \(.minutes) min: \(.why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+The pass line carries `starved: {since, minutes}` while a pass is starved, so a spell's start, end and length
+show without the tell:
+
+```sh
+jq -rs 'map(select(.starved != null)) | group_by(.starved.since)[] | "\(.[0].starved.since): \((map(.starved.minutes) | max)) min"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ## 8. Implementer model comparison
 
 Sonnet against Opus as the implementer, from the split `callum-flow-implementer-route` makes (see the
