@@ -567,6 +567,33 @@ test("a subset run, a nested run, --list and bad arguments never wait for the lo
   }
 });
 
+test("a full run and a shard run without flock on PATH run unlocked and say so", () => {
+  const repo = fakeRepo({});
+  // A PATH holding every tool the current one does, except flock.
+  const bin = path.join(repo.root, "noflock-bin");
+  fs.mkdirSync(bin);
+  for (const dir of (process.env.PATH || "").split(":").filter(Boolean)) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      if (n === "flock") continue;
+      try { fs.symlinkSync(path.join(dir, n), path.join(bin, n)); } catch { /* first one on PATH wins */ }
+    }
+  }
+  const sh = path.join(repo.root, "scripts", "test.sh");
+  try {
+    for (const shard of [undefined, "1/2"]) {
+      const env = { ...repo.env, PATH: bin };
+      if (shard) env.TEST_SHARD = shard;
+      const r = spawnSync("sh", [sh], { encoding: "utf8", env, timeout: 60000 });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.match(r.stdout, /\(runs unlocked: flock not on PATH\)\s*$/, `shard ${shard}: ${r.stdout}`);
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("SIGTERM to a run waiting for the lock exits 143 at once and leaves no temp dir", async () => {
   const repo = fakeRepo({});
   fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "quick.test.sh"), "exit 0\n");

@@ -275,7 +275,7 @@ if [ -n "$shard" ]; then
   ids=$(cat "$results/jobs" "$results/serial" | sed 's/^sh scripts\/test-job\.sh //')
   s_suites=$(printf '%s\n' "$ids" | grep -c '\.test\.sh$')
   s_mods=$(printf '%s\n' "$ids" | grep -c '^plugins/')
-  echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods - one shard of the gate; run npm test for the whole gate$mod_note$TEST_PG_NOTE"
+  echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods - one shard of the gate; run npm test for the whole gate$mod_note$TEST_PG_NOTE$TEST_LOCK_NOTE"
   exit 0
 fi
 echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE$TEST_LOCK_NOTE"
