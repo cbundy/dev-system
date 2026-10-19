@@ -1,7 +1,7 @@
 // Per-test factory database for node tests (cbundy/dev-system#646): the node twin of
 // factory_test_db_new / factory_test_db_drop in scripts/test-pg.sh. It makes a unique
 // factory_test_<pid>_<random> database with the real images/base/factory-db-bootstrap, over
-// psql through child_process, and registers the drop (the database WITH (FORCE), then its three
+// psql through child_process, and registers the drop (the database WITH (FORCE), then its four
 // roles) in t.after, so a failing test still cleans up. `npm test` fails when one is left.
 "use strict";
 
@@ -39,6 +39,7 @@ function createDb(t) {
   const drop = () => {
     for (const sql of [
       `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`,
+      `DROP ROLE IF EXISTS "${name}_migrator"`,
       `DROP ROLE IF EXISTS "${name}_owner"`,
       `DROP ROLE IF EXISTS "${name}_writer"`,
       `DROP ROLE IF EXISTS "${name}_reader"`,

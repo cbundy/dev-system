@@ -88,6 +88,14 @@ run "default_has_no_wind_down" {
     condition     = docker_container.workspace[0].destroy_grace_seconds == null
     error_message = "no extra stop grace while wind_down_minutes is 0"
   }
+  assert {
+    condition     = strcontains(coder_agent.main.startup_script, "wind-down: cleared a request from before this start")
+    error_message = "the startup script must clear a leftover wind-down request"
+  }
+  assert {
+    condition     = length(split("wind-down: cleared a request from before this start", coder_agent.main.startup_script)[0]) < length(split("dev-remote-control --post-start", coder_agent.main.startup_script)[0])
+    error_message = "the wind-down cleanup must come before dev-remote-control --post-start"
+  }
 }
 
 run "ten_minutes" {
@@ -116,6 +124,14 @@ run "ten_minutes" {
   assert {
     condition     = docker_container.workspace[0].destroy_grace_seconds == 660
     error_message = "the container stop grace must be the cap plus 60 s"
+  }
+  assert {
+    condition     = strcontains(coder_agent.main.startup_script, "wind-down: cleared a request from before this start")
+    error_message = "the startup script must clear a leftover wind-down request"
+  }
+  assert {
+    condition     = length(split("wind-down: cleared a request from before this start", coder_agent.main.startup_script)[0]) < length(split("dev-remote-control --post-start", coder_agent.main.startup_script)[0])
+    error_message = "the wind-down cleanup must come before dev-remote-control --post-start"
   }
 }
 

@@ -2072,12 +2072,12 @@ the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metr
 ### factory-db-bootstrap
 
 `factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
-server. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops still use the agentsview
+server, and with `--secrets-dir` / `--migrator-dir` generates the roles' passwords and writes their URL files. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops still use the agentsview
 database, and `dev-query` reads it only with `--factory`. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
 the agentsview database by accident. Running it again changes nothing. The full procedure (provision
-the server, run the bootstrap, place each role's URL as the secret `factory-db-writer-url` or
+the server, run the one bootstrap command, the secret `factory-db-writer-url` or
 `factory-db-reader-url` in `DEV_SECRETS_DIR` (or a workspace's own `DEV_WORKSPACE_SECRETS_DIR`), or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
 password, upgrade the schema) is in [docs/factory-db.md](../../docs/factory-db.md); `dev-doctor` checks
 both URLs (see [`dev-doctor`](#dev-doctor)).
@@ -2087,19 +2087,41 @@ both URLs (see [`dev-doctor`](#dev-doctor)).
 | `NAME_owner` | no | owns the database, the `factory` schema and every object the migrations create; only the bootstrap uses it, through `SET ROLE` |
 | `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
 | `NAME_reader` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT` on every table and view |
+| `NAME_migrator` | yes | `CONNECT` and membership of `NAME_owner` with `SET` but not `INHERIT`; no grant on any factory object. Only `--migrate` uses it |
 
 The roles are named after the database, so several databases (and parallel test databases) share one
 server. Default privileges give later migrations' objects the same grants, and every run re-applies them.
 `CONNECT` and `TEMP` on the database and `CREATE` on schema `public` are revoked from `PUBLIC`.
-`FACTORY_DB_WRITER_PASSWORD` and `FACTORY_DB_READER_PASSWORD`, when set, become the roles' passwords
-(through psql variables); otherwise passwords are left alone.
+Every login role is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. A role that already
+exists is adopted: only the attributes that differ are altered, the migrator's membership options in
+`NAME_owner` are corrected and its memberships in other roles are revoked.
 
+**Passwords and files.** A login role gets a new password in a run when its `FACTORY_DB_WRITER_PASSWORD`,
+`FACTORY_DB_READER_PASSWORD` or `FACTORY_DB_MIGRATOR_PASSWORD` is set (the explicit value wins), or when its
+directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator) and the
+role was created in this run, its URL file is missing there, or the admin is a superuser and the role has no
+password. A generated password is 32 random bytes from `/dev/urandom` in hex. Passwords reach psql only
+through psql variables, and without a directory none is generated. For each role whose password changed and
+whose directory was given, the command writes `factory-db-writer-url` / `factory-db-reader-url` /
+`factory-db-migrator-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
+with the admin URL's host, port and ssl settings. It checks before connecting that it can write there (run
+it with `docker run --user root --entrypoint factory-db-bootstrap` to give files to another UID), touches no
+other file, and a run that changes nothing rewrites nothing. The summary line lists the roles created, the
+new passwords and the files written.
+
+**`--migrate`.** `factory-db-bootstrap --db NAME --migrate` upgrades the schema connected as
+`NAME_migrator`, with the URL from `FACTORY_DB_MIGRATOR_URL` or `--migrator-url-file PATH` (never the admin
+URL). It refuses any other role, a database without `factory.schema_migrations`, and `--admin-url-file`,
+`--secrets-dir` and `--migrator-dir`; it creates no role or database. It runs the same pending migrations and
+grants under the same lock and prints `database NAME migrated as NAME_migrator from schema version A to B`.
+
+Migrations are expand-only, enforced by `npm run lint` ([rules](../../docs/factory-db.md#schema-compatibility)).
 The migrations are `NNNN_<name>.sql` files in `/usr/local/share/dev-system/factory-db/migrations/` (or
 `factory-db/migrations` beside the command in a checkout; `FACTORY_DB_MIGRATIONS_DIR` overrides). Each pending
 one runs in one transaction with its `factory.schema_migrations` row (`version`, `name`, `sha256`,
 `applied_at`), as `NAME_owner`, under a session advisory lock, so two concurrent runs serialise. An applied
 file whose sha256 changed, or a recorded version with no file, is refused by name and version with a
-non-zero exit. On success it prints one line with the database, the three roles and the schema version; on
+non-zero exit. On success it prints one line with the database, the four roles and the schema version; on
 failure one error line naming the step (or the migration file and psql's error). `0001_events_and_workers`
 creates `factory.event_store`, the view `factory.event_log` ([event design](../../docs/factory-events/README.md)),
 and `factory.workers` with its view and notify triggers.

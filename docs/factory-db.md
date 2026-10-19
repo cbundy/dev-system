@@ -34,53 +34,56 @@ environment variable, no image.
 
 ## 3. Run the bootstrap
 
-Choose a database name (`^[a-z][a-z0-9_]{0,47}$`; there is no default) and one password for each
-login role. Run, from any container with the base image and a route to the server:
+Choose a database name (`^[a-z][a-z0-9_]{0,47}$`; there is no default). One command creates the
+roles, the database and the schema, generates each login role's password and writes each role's
+URL file into the secrets directories. Run it from any container with the base image and a route
+to the server, as root (the files go to the host, owned by UID 1000):
 
 ```sh
 export FACTORY_DB_ADMIN_URL='postgresql://factory_admin:<admin password>@db.example.com:5432/postgres?sslmode=require'
-export FACTORY_DB_WRITER_PASSWORD='<writer password>'
-export FACTORY_DB_READER_PASSWORD='<reader password>'
-factory-db-bootstrap --db factory
+docker run --rm --user root --entrypoint factory-db-bootstrap -e FACTORY_DB_ADMIN_URL \
+  -v /etc/dev-system:/etc/dev-system ghcr.io/cbundy/dev-system/base:2 \
+  --db factory --secrets-dir /etc/dev-system/secrets --migrator-dir /etc/dev-system/migrator
 ```
 
-`--admin-url-file PATH` reads the admin URL from a file instead of `FACTORY_DB_ADMIN_URL`. The
-command creates `factory_owner` (no login), `factory_writer` and `factory_reader`, the database,
-the `factory` schema and the tables, and prints one summary line. Running it again changes nothing.
-A database of that name that already exists, such as a server's default `POSTGRES_DB` database, is
-taken over: its owner becomes `factory_owner`. For that the admin must be a superuser or the
-database's current owner.
-The roles are named after the database, so several databases share one server.
+It creates `factory_owner` (no login), `factory_writer`, `factory_reader` and `factory_migrator`,
+the database, the `factory` schema and the tables, then prints one summary line naming the roles it
+created, the new passwords and the files it wrote. Running it again changes nothing and rewrites no
+file. Notes:
 
-## 4. Build each role's URL
+- The admin URL's host must be the one the workspaces reach (it is copied into every role URL).
+  When the server is a container on a Docker network, add `--network <that network>`.
+- The admin URL never goes into a workspace. `--admin-url-file PATH` reads it from a file instead
+  of `FACTORY_DB_ADMIN_URL`.
+- The files are `factory-db-writer-url` and `factory-db-reader-url` in `--secrets-dir`, and
+  `factory-db-migrator-url` in `--migrator-dir`, each mode 0600 and owned by
+  `FACTORY_DB_SECRET_OWNER` (default `1000:1000`). A missing directory is created (mode 0700). Put
+  the migrator file where only the host that upgrades the schema reads it, never in the
+  workspaces' secrets directory.
+- A role whose file is missing gets a new password and a new file, so deleting a file rotates that
+  role. A role with no password (superuser admin only), or created by the run, does too. Set
+  `FACTORY_DB_WRITER_PASSWORD`, `FACTORY_DB_READER_PASSWORD` or `FACTORY_DB_MIGRATOR_PASSWORD` to
+  choose a password yourself; it wins and its file is rewritten.
+- A database of that name that already exists, such as a server's default `POSTGRES_DB` database,
+  is taken over: its owner becomes `factory_owner`. For that the admin must be a superuser or the
+  database's current owner. Roles that already exist are adopted: attributes that differ are
+  corrected, and the migrator's other memberships are revoked.
+- The roles are named after the database, so several databases share one server.
 
-```
-postgresql://factory_writer:<writer password>@db.example.com:5432/factory?sslmode=require
-postgresql://factory_reader:<reader password>@db.example.com:5432/factory?sslmode=require
-```
-
-Percent-encode characters in a password that a URL reserves (`@`, `:`, `/`, `?`, `#`, `%`).
-
-## 5. Place the secrets
+## 4. The secrets
 
 Each role has its own secret, separate from the agentsview secret (`agentsview-pg-url`):
 
-| Secret file in the secrets directory | Environment variable (wins over the file) | Holds |
+| Secret file | Environment variable (wins over the file) | Holds |
 |---|---|---|
 | `factory-db-writer-url` | `FACTORY_DB_WRITER_URL` | the writer URL |
 | `factory-db-reader-url` | `FACTORY_DB_READER_URL` | the reader URL |
+| `factory-db-migrator-url` (migrator directory only) | `FACTORY_DB_MIGRATOR_URL` | the migrator URL, for `--migrate` |
 
 The secrets directory is `DEV_SECRETS_DIR`, `/run/secrets/dev-system` in the image. On Docker it is
-the `dev-system-secrets` volume; on Coder it is the host's `secrets_dir` (default
-`/etc/dev-system/secrets`), mounted read-only into every workspace. Put the files on the host once
-and every workspace has them. Each file is owned by UID 1000, mode 0600:
-
-```sh
-cd /etc/dev-system/secrets
-(umask 077 && read -rsp 'writer URL: ' url && printf '%s\n' "$url" > factory-db-writer-url)
-(umask 077 && read -rsp 'reader URL: ' url && printf '%s\n' "$url" > factory-db-reader-url)
-chown 1000:1000 factory-db-writer-url factory-db-reader-url
-```
+the `dev-system-secrets` volume; on
+Coder it is the host's `secrets_dir` (default `/etc/dev-system/secrets`), mounted read-only into
+every workspace. The command above writes the files there once and every workspace has them.
 
 A workspace never falls back to `agentsview-pg-url` for these.
 
@@ -102,7 +105,7 @@ naming that file, and the workspace never falls back to the shared database unse
 folder is empty and changes nothing. Check it with `dev-doctor`, which names the file the URL
 came from.
 
-## 6. Check
+## 5. Check
 
 Restart the workspace or run `dev-doctor`. Expect, for each role:
 
@@ -125,14 +128,47 @@ It never prints a URL or password. Each failure names its fix:
 
 ## Rotate a password
 
-Run the bootstrap again with the new password in `FACTORY_DB_WRITER_PASSWORD` or
-`FACTORY_DB_READER_PASSWORD` (a password that is not set is left alone), then replace the URL in the
-secrets directory and restart the workspaces.
+Delete the role's file (`factory-db-writer-url` or `factory-db-reader-url` in the secrets
+directory, `factory-db-migrator-url` in the migrator directory) and run the command in step 3
+again: the role gets a new password and the file is rewritten. Or set the role's
+`FACTORY_DB_<WRITER|READER|MIGRATOR>_PASSWORD` to choose one. Restart the workspaces afterwards.
 
 ## Upgrade the schema
 
-A newer base image can ship new migrations. `dev-doctor` fails with "behind" until you run
-`factory-db-bootstrap --db <name>` with the admin URL from a container on the newer image; it applies
-only the migrations not yet recorded.
+A newer base image can ship new migrations. `dev-doctor` fails with "behind" until you run them.
+The migrator URL is enough, no admin URL needed:
+
+```sh
+docker run --rm --user root --entrypoint factory-db-bootstrap \
+  -v /etc/dev-system/migrator:/etc/dev-system/migrator:ro ghcr.io/cbundy/dev-system/base:2 \
+  --db factory --migrate --migrator-url-file /etc/dev-system/migrator/factory-db-migrator-url
+```
+
+`--migrate` connects as `factory_migrator` only (it refuses any other role, the admin URL
+included), applies only the migrations not yet recorded and prints the schema version before and
+after. Running the full command of step 3 with the admin URL works too.
 
 Then run `dev-doctor` and expect the factory database line OK for both roles.
+
+## Schema compatibility
+
+The schema at any release works for the writers and readers of the last 10 minor releases, so a
+workspace on an older image keeps working against a database a newer image has upgraded. Migrations are
+therefore expand-only.
+
+Allowed: new tables, new nullable or defaulted columns, new view columns (`CREATE OR REPLACE VIEW`, or a
+`DROP VIEW` that the same file re-creates with `CREATE VIEW`), new indexes, new functions and triggers,
+and `DROP NOT NULL`.
+
+Forbidden, and refused by `npm run lint` (`scripts/migration-lint.js`, which prints `<file>:<line>` for each hit):
+
+- any `DROP`, except `ALTER COLUMN ... DROP NOT NULL` and a `DROP VIEW` re-created in the same file;
+- any `RENAME`;
+- a column type change (`ALTER COLUMN ... TYPE`);
+- `ADD COLUMN ... NOT NULL` with no `DEFAULT`, and `ALTER COLUMN ... SET NOT NULL`;
+- a narrowed check: `ADD CHECK`, `UNIQUE`, `PRIMARY KEY`, `FOREIGN KEY` or `EXCLUDE` on an existing table,
+  `ALTER DOMAIN ... ADD CONSTRAINT`, and `CREATE UNIQUE INDEX` on a table not created in the same file;
+- any `REVOKE`.
+
+An applied migration is immutable: the bootstrap refuses a file whose sha256 changed. Removing dead
+fields is out of scope here; the epic that introduced this window owns it.

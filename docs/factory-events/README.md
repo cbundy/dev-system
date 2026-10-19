@@ -96,6 +96,9 @@ SQL
 - **Bumps roll out in two releases.** The new schema file, the shared reader's upgrade step and
   any view change ship one release before any producer writes the new version. The same holds for
   a new type, so every reader knows it before it appears.
+- **The database keeps a ten-minor-release window.** The schema at any release works for the writers and
+  readers of the last 10 minor releases; migrations are expand-only, enforced by `npm run lint`
+  ([Schema compatibility](../factory-db.md#schema-compatibility)).
 - **Old versions stay readable for good.** The store keeps every version.
 - **The envelope follows the same rules;** a change to it is also a database migration.
 
