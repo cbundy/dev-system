@@ -16,10 +16,13 @@
     "main_state": 1,
     "merged": 1,
     "milestone_state": 1,
+    "prompt_denied": 1,
+    "prompt_waiting": 1,
     "ready": 1,
     "released": 1,
     "requeued": 1,
     "reviewed": 1,
+    "settings_changed": 1,
     "shadow_read": 1,
     "test_weakened": 1,
     "transition": 1,
@@ -1142,6 +1145,223 @@
       "type": "object",
       "x-issue": "none"
     },
+    "prompt_denied.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "agent_type": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "ask_reason": {
+          "maxLength": 500,
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "attempt": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "life": {
+          "pattern": "^[0-9a-z]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "pr": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seq": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "slot": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "step": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "tool_input": {
+          "maxLength": 2000,
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "transcript": {
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "agent_type",
+        "ask_reason",
+        "attempt",
+        "branch",
+        "life",
+        "pr",
+        "seq",
+        "session",
+        "slot",
+        "step",
+        "tool_input",
+        "tool_name",
+        "transcript"
+      ],
+      "type": "object",
+      "x-issue": "required"
+    },
+    "prompt_waiting.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "agent_type": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "attempt": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "life": {
+          "pattern": "^[0-9a-z]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "pr": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seq": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "slot": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "step": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "tool_input": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "transcript": {
+          "type": [
+            "null",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "agent_type",
+        "attempt",
+        "branch",
+        "life",
+        "pr",
+        "seq",
+        "session",
+        "slot",
+        "step",
+        "tool_input",
+        "tool_name",
+        "transcript"
+      ],
+      "type": "object",
+      "x-issue": "required"
+    },
     "ready.v1": {
       "additionalProperties": false,
       "properties": {
@@ -1361,6 +1581,56 @@
       ],
       "type": "object",
       "x-issue": "required"
+    },
+    "settings_changed.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 500,
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "fact": {
+          "type": "string"
+        },
+        "key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "layer": {
+          "enum": [
+            "default",
+            "directive",
+            "env",
+            "plugin",
+            "repo",
+            "workspace",
+            null
+          ]
+        },
+        "new_value": {},
+        "old_value": {},
+        "who": {
+          "enum": [
+            "judge",
+            "person",
+            "plugin",
+            "repo"
+          ]
+        }
+      },
+      "required": [
+        "fact",
+        "key",
+        "layer",
+        "new_value",
+        "old_value",
+        "who"
+      ],
+      "type": "object",
+      "x-issue": "none"
     },
     "shadow_read.v1": {
       "additionalProperties": false,

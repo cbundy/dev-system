@@ -433,7 +433,8 @@ describe('the work prompts (prompts-work.ts)', () => {
       expect(p).toContain('push only with `git push origin issue-300`')
       expect(p).toContain(TEST_POLICY)
       expect(p).toContain('When you end your turn the loop runs `npm run lint`, then `npm test` in this slot')
-      expect(p).toContain("While debugging, run only the suite you are changing, as the repo's CLAUDE.md names, then the full commands once.")
+      expect(p).toContain("Run only the suites you are changing, as the repo's CLAUDE.md names, and not the full commands: the loop runs them at the end of your turn. CI on the PR is the final gate.")
+      expect(p).not.toContain('then the full commands once')
     }
     // a repo that sets no gate commands has no stop gate: the writer is not told one backs it
     for (const p of [buildPrompt(input({ gateCommands: [] })), fixPrompt({ ...fixInput(), gateCommands: [' ', ''] })]) {

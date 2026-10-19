@@ -109,9 +109,11 @@ const RUN_ONLY = [
   "2d. Flaky tests #0", "2d. Flaky tests #1",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
+  "9b. Permission prompts #0",
   "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
+  "Settings #0", "Settings #1",
   "Startup schema migrates #0",
 ];
 

@@ -1622,3 +1622,48 @@ describe('the title is a throttle (O1, titleEveryMs)', () => {
     expect(renames).toBeLessThanOrEqual(12)
   })
 })
+
+// --- comment_posted (v2 SPEC 4.5, comment_posted.v1) ---------------------------------------------------------
+
+describe('a park or wait comment logs where it is (comment_posted)', () => {
+  const URL = 'https://github.com/o/r/issues/61#issuecomment-1'
+  const at = NOW - 5 * MIN
+  const parked = rec(61, { state: 'parked', step: null, question: 'Which API shape?', resumeTo: 'designing', seq: 3, seqAt: at, since: at })
+  const waiting = rec(62, { state: 'waiting', step: null, wait: [{ kind: 'issue-closed' as const, issue: 57 }], resumeTo: 'designing', notes: ['x'], seq: 3, seqAt: at, since: at })
+  const entered = (r: IssueRecord) => [transitioned(r, 'T16', 'designing', 'wait')]
+  const comment = (r: IssueRecord, detail?: string, status: 'done' | 'failed' = 'done') =>
+    status === 'done' ? done(entryKey(r, 'comment'), 'comment', { issue: r.issue, outcome: detail === undefined ? { kind: 'cli', exit: 0 } : { kind: 'cli', exit: 0, detail } }) : { ...done(entryKey(r, 'comment'), 'comment', { issue: r.issue }), status: 'failed' as const }
+  const run = (r: IssueRecord, ...more: LedgerEntry[]) => plan(withLedger(world([r]), [...entered(r), ...more]))
+  const posted = (r: IssueRecord, p: PlanResult) => of(p, r.issue).filter(a => a.kind === 'event' && a.event.state === 'comment_posted')
+
+  test('a parked record plans it after the comment, before the tell', () => {
+    const p = run(parked, comment(parked, URL))
+    expect(posted(parked, p)).toEqual([expect.objectContaining({ key: entryKey(parked, 'event/comment-posted'), class: 'free', rule: 'S3', issue: 61, event: { state: 'comment_posted', issue: 61, data: { life: parked.life, seq: 3, to_state: 'parked', comment_url: URL } } })])
+    const k = kinds(p, 61).filter(x => x === 'event comment_posted' || x === 'comment' || x === 'tell')
+    expect(k).toEqual(['event comment_posted', 'tell'])
+  })
+
+  test('a waiting record plans it after the comment, before the links', () => {
+    const p = run(waiting, comment(waiting, URL))
+    expect(posted(waiting, p)).toEqual([expect.objectContaining({ event: expect.objectContaining({ data: { life: waiting.life, seq: 3, to_state: 'waiting', comment_url: URL } }) })])
+    const k = kinds(p, 62).filter(x => x === 'event comment_posted' || x === 'comment' || x === 'link')
+    expect(k).toEqual(['event comment_posted', 'link'])
+  })
+
+  test('nothing while the comment is not done, has no URL, or has one the schema refuses', () => {
+    expect(posted(parked, run(parked))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, URL, 'failed')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, '')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked)))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, 'http://github.com/o/r/issues/61#issuecomment-1')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, 'https://x/ y')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, `https://${'a'.repeat(493)}`)))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, `https://${'a'.repeat(492)}`)))).toHaveLength(1)
+  })
+
+  test('once the event entry is done it is planned no more; a seq with no transition entry plans nothing', () => {
+    const p = run(parked, comment(parked, URL), done(entryKey(parked, 'event/comment-posted'), 'event', { issue: 61 }))
+    expect(posted(parked, p)).toEqual([])
+    expect(posted(parked, plan(withLedger(world([parked]), [comment(parked, URL)])))).toEqual([])
+  })
+})

@@ -1306,6 +1306,35 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+## 9b. Permission prompts
+
+Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):
+an agent's tool use that the companion denied, and an agent that stopped on a permission prompt nobody
+answers. Neither is a stage or progress. The companion never retries the write, so each row is one
+prompt (one per `event_id`). Nothing writes them yet, so the query returns no rows until a producer does.
+`tool_name`, `tool_input` and `agent_type` are the columns migration 0014 lifted; a `prompt_waiting` has
+no `tool_name` (its notification names none), and its `tool_input` is the notification's message.
+
+One block, two kinds of row told apart by `part`: `daily` is the prompts per repo and day (denied by
+`tool_name` and `agent_type`, and waiting), and `blocked` is the issues with a `prompt_waiting` in the last
+24 hours (issue, `agent_type`, `tool_input`, `ts`). It takes `-v repo=... -v since=...` (the daily part
+only; `blocked` is always the last 24 hours).
+
+```sql
+SELECT 'daily' AS part, repo, date_trunc('day', ts)::date AS day, NULL::int AS issue,
+  tool_name, agent_type, NULL::text AS tool_input, NULL::timestamptz AS ts,
+  count(*) FILTER (WHERE type = 'prompt_denied') AS denied,
+  count(*) FILTER (WHERE type = 'prompt_waiting') AS waiting
+FROM factory.event_log
+WHERE type IN ('prompt_denied', 'prompt_waiting') AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, date_trunc('day', ts)::date, tool_name, agent_type
+UNION ALL
+SELECT 'blocked', repo, NULL::date, issue, NULL::text, agent_type, tool_input, ts, NULL::bigint, NULL::bigint
+FROM factory.event_log
+WHERE type = 'prompt_waiting' AND repo = :'repo' AND ts >= now() - interval '24 hours'
+ORDER BY 1, 3 DESC, 2, 4, 5, 6;
+```
+
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
@@ -1452,6 +1481,34 @@ FROM factory.worker_samples
 WHERE sampled_at > now() - interval '1 day'
 GROUP BY device, hour
 ORDER BY device, hour;
+```
+
+## Settings
+
+Settings the loop runs on. A `settings_changed` event records one change of one setting (see
+[REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
+settings snapshot. No producer writes either yet, so both queries return no rows until it does.
+
+Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
+devices counts once):
+
+```sql
+SELECT ts, repo, device, key, layer, who, old_value, new_value
+FROM (
+  SELECT e.*, row_number() OVER (PARTITION BY e.fact ORDER BY e.ts, e.device) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'settings_changed') c
+WHERE n = 1
+ORDER BY ts DESC, key;
+```
+
+Settings in force per worker. `config` is null until a worker's heartbeat writes the loop's settings
+snapshot (cbundy/dev-system#1016):
+
+```sql
+SELECT device, repo, config->>'at' AS settings_at, config->'settings' AS settings
+FROM factory.workers_status
+ORDER BY device;
 ```
 
 ## Shadow runs (source switch)
