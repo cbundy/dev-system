@@ -339,6 +339,7 @@ test("compare: the loop-facts reader matches on the corpus, is not vacuous, and 
   const seen = await reader.old(ctx);
   const view = seen[repo];
   assert.deepEqual(Object.keys(view.reclaimed), ["48"]);
+  assert.ok(Object.keys(view.ready).length > 0, "the newest ready per issue");
   const mine = view.devices[device];
   assert.ok(mine.ledger.some((e) => e.kind === "claim"), "a derived claim");
   assert.ok(mine.ledger.some((e) => e.key === "heartbeat:derived" || e.key === "sweep:derived"), "a derived heartbeat or sweep");

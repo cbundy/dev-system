@@ -86,6 +86,7 @@ export async function railEnv($: EngineInterface): Promise<RailEnv> {
     ORCHESTRATOR_WATCH_LOCK_DIR: await $.env.get('ORCHESTRATOR_WATCH_LOCK_DIR'),
     XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR'),
     TMPDIR: await $.env.get('TMPDIR'),
+    DEV_FACTORY_DB_MIGRATE_STATUS: await $.env.get('DEV_FACTORY_DB_MIGRATE_STATUS'),
   }
 }
 

@@ -387,7 +387,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 }
 
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
-// wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
+// wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, schema-behind, pass-error) stay.
 export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]

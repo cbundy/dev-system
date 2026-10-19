@@ -103,12 +103,17 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     blockedBy: 0,
     blocking: 0,
     subIssues: 0,
+    blockingList: null,
+    blockersClosedAt: null,
+    parent: null,
+    siblings: null,
     epic: false,
     subIssueList: null,
     brief: null,
     delegatedBrief: null,
     claimLapsedAt: null,
     reclaimedAt: null,
+    readyAt: null,
     ...over,
   }
 }

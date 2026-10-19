@@ -139,7 +139,9 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 - **Read order.** GitHub reads are taken in this order until the pass's budget is spent: the merge
   queue's head, the other records in reviewing and merge-queue, parked and waiting records, the other
   records, then the queue and the rest. The PR reads are bounded by K records; the issue reads
-  are capped at 12 per pass (`GITHUB_READS_PER_PASS` in `observe.ts`). All are skipped during a
+  are capped at 12 per pass (`GITHUB_READS_PER_PASS` in `observe.ts`); the open issues that the
+  read issues block (`blockingList`) join the read set after every other reason, so a chain never
+  starves the issues the loop acts on. All are skipped during a
   GitHub backoff (13.10 item 2).
 - **The companion's log** (`<loop dir>/companion.jsonl`, 7.2) is read each pass with the loop
   dir's answer files (10.8), not as a source of its own. Its gate lines also give the `gate_run`
@@ -326,7 +328,7 @@ type IssueRecord = {
   (`hooks/v2/sources-facts.ts`), and with them the events v2's `logged` once keys come from (7.2). `old`
   is `EVENTS_SQL` through `dev-query --csv`, as above. `new` is `NEW_EVENTS_SQL` through
   `dev-query --factory --csv`: the types `requeued`, `claimed`, `claim_renewed`, `merged`, `loop_entry`,
-  `intervention` and `reviewed`, and `closed` written by the sweep, over all devices. Each row goes through
+  `intervention`, `reviewed` and `ready`, and `closed` written by the sweep, over all devices. Each row goes through
   the shared reader and becomes the `FactoryEvent` that `factsOf`, `deriveLedger` and `onceKey` read, with
   the old state name (`requeued` as `reclaimed`, `claim_renewed` as `renewed`, `loop_entry` as `loop`), the
   time cut to whole seconds as the old log stores it, and a note built with the writer's own encoders
@@ -336,10 +338,10 @@ type IssueRecord = {
   `verdicts`, `superseded`, `answered`, `pipeline`: only `runsFromEvents` reads them, and only the plan
   replay and the state digest read its runs) are empty. `shadow` decides on the old read and, once per load
   and then at most hourly, also reads the new one and compares, with both sides cut 600 s back, the newest
-  `reclaimed` per issue, this device's derived ledger (the entries the loop logged lose their outcome and
+  `reclaimed` and the newest `ready` per issue, this device's derived ledger (the entries the loop logged lose their outcome and
   their run, PR and head columns on both sides, which the new `loop_entry` does not carry) and the set of
   once keys. It writes one `shadow_read` event (`reader` `loop-facts`, `tool` `factory-loop`; rule H1, key
-  `facts-shadow:<time>`; `diff_keys` are `reclaimed:#N`, `ledger:<key>` and `once:<key>`); a failing new read
+  `facts-shadow:<time>`; `diff_keys` are `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`); a failing new read
   never fails the pass and is a compare with `new_ok` false. A compare with differences tells the owner once
   per distinct set of keys (`tell(facts-shadow)`, key `tell:facts-shadow:<keys>`, with the first difference
   and the way back). Before comparing, the shadow reads each device's first new-store time for the repo
@@ -2256,6 +2258,10 @@ type IssueView = {
   blockedBy: number | null        // issue_dependencies_summary.blocked_by: open blockers
   blocking: number | null         // the open issues waiting on this one
   subIssues: number | null        // sub_issues_summary.total: more than 0 is a tracker
+  blockingList: number[] | null   // the open issues of this repo it blocks (the reader's `blocking`); null: not read
+  blockersClosedAt: Ms | null     // the newest closed_at among its listed closed blockers; null: none or not read
+  parent: number | null           // the parent's number when the parent is in this repo
+  siblings: { number: number; open: boolean }[] | null // the parent's other sub-issues in this repo; null: not read
   epic: boolean | null            // the title matches trackerTitle ("Epic: ..."): also a tracker
   subIssueList: number[] | null   // a tracker named in `only`: its open sub-issues, nested ones
                                   //   included (3 levels), from its timeline; null when not read
@@ -2264,6 +2270,7 @@ type IssueView = {
   delegatedBrief: string | null   // the latest 'delegated' event's 'brief <url>' note
   claimLapsedAt: Ms | null        // the holder's claim lapsed: its lease ended then, with no renewal (H1)
   reclaimedAt: Ms | null          // the newest `reclaimed` event: a sweep or a release gave the claim back (H1)
+  readyAt: Ms | null              // the newest `ready` event of the issue
 }
 
 
@@ -2301,7 +2308,7 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 | `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1); from the new store under `eventsSource` `new` (`NEW_EVENTS_SQL`, 3.3) | every pass | v2's facts (2.4) |
 | `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
 | `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
-| `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
+| `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues, and last the open issues the read issues block (`blockingList`) (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
 | `pool` | `treehouse status --json` from the main checkout: the slots and who holds them. It does no reflog or status read of a slot (2.4 `leases`) | every pass | slot capacity (10.1) |
 | `checkout` | `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, then `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no`, from the main checkout (it takes no index lock and ignores untracked files). A missing origin/HEAD or a failed status is `{ error }`, whose text points at `git remote set-head origin --auto` | `checkoutEveryMs` | the main-checkout tripwire (10.7) |
@@ -2999,13 +3006,13 @@ model (FINDINGS check 3).
 A `tell` is a wake whose turn writes one line to the owner in the conversation, which the phone
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
-`breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
+`breaker`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
 `checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable` and `starved`) go out before any other
 wake, and the title counts the open ones.
 
-Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act
-mode back, 13.11.2), `breaker kind=ping` (the ping storm, 13.11.4) and `pass-error` (three passes in a
+Five notices come from outside plan: `heartbeat-other`, `old-watcher` and `schema-behind` (a rail
+holding act mode back, 13.11.2; `schema-behind` carries `to` and `error`), `breaker kind=ping` (the ping storm, 13.11.4) and `pass-error` (three passes in a
 row that threw, 13.10 item 9). Each is keyed by when its spell began, so it goes out once per
 spell, through the wake executor, and only while no wake is open. A rail or breaker notice waits
 in the store meanwhile; it is dropped once its spell ended before it could go out, and sent again
@@ -3097,6 +3104,15 @@ refused plans and records exactly as observe mode does (13.11.1).
   query blocks, and so does a device with no name (`DEV_MACHINE_NAME`), which cannot tell its
   own heartbeat from another's. It covers two workspaces on one repo, which the per-workspace
   act lock cannot see.
+- **The schema is current.** `dev-init` runs `factory-db-migrate` before the loop starts
+  (cbundy/dev-system#888); it writes its outcome to `DEV_FACTORY_DB_MIGRATE_STATUS` (default
+  `/tmp/dev-factory-db-migrate.json`). A missing file passes (no migrator is set up), as do
+  `migrated` and `current`. `failed` and `timed-out` keep the loop in observe with the reason
+  `schema: migrate to <v> failed: <error>` and tell the owner once per startup
+  (`tell(schema-behind)`, keyed by the status's `at`). `running` keeps it in observe without a
+  tell for 10 minutes; a `running` record older than that, or a file that cannot be parsed,
+  keeps it in observe and tells (fail safe). The next pass after a success acts with no other
+  step. The check runs after the heartbeat guard and before the act lock.
 - **The act lock**, `<loop dir>/act.lock`, a JSON lease (`session`, `renewedAt`, `expiresAt`)
   taken only when every rail above passes. A lease lasts the longer of 5 passes and 15 minutes,
   longer than any single step (a queue merge, then its rollout read), and an acting
@@ -4021,7 +4037,7 @@ Notices (TELL kinds), owner items first:
 | `starved` | yes | S1: the ready queue was starved (all of it unclaimable, nothing queued or in flight, no owner hold) for `starvedNoticeAfterMs`; names each root blocker and why it is not moving; once per spell and 24 h period of it |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
-| `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `pass-error` | no | foundation, unchanged |
+| `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
 10 kinds of the loop's own, 8 of them owner items, plus the foundation's.
 

@@ -81,7 +81,8 @@ const BANNED = [
 // 6b reads `detail`, and the split query `split_into`, fields no event_log column lifts, from factory.event_store; 6b has its own test
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
 // 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0"]);
+// The startup migrates read the loop_entry's migrate fields (database, versions, outcome) from event_store: no event_log column lifts them.
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0"]);
 
 function problems(sql, id) {
   const text = strip(sql);
@@ -108,6 +109,7 @@ const RUN_ONLY = [
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
+  "Startup schema migrates #0",
 ];
 
 test("every sql block of docs/metrics.md reads only the factory database's views", () => {

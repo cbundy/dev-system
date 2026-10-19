@@ -545,7 +545,7 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
 loop setting `eventsSource` `shadow`, the default, once per load and then at most hourly; `differences` counts issues whose
-rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
+rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` and the newest `ready` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
@@ -1478,3 +1478,31 @@ either source. A key is `n/a` on its own when its columns are missing.
 
 The 10-minute window and the action list are constants in the script; tune them after real use.
 Idle, re-arm and stale wakes overlap (a re-arm is idle, a stale wake can be idle).
+
+### Startup schema migrates
+
+`factory-db-migrate` (run by `dev-init` before the loop starts, cbundy/dev-system#888) writes one
+`loop_entry` per run that found the migrator secret: a `task` with key `task:migrate:<to_version>`,
+wake `migrate`, status `done`, `failed` or `timed-out`, and the payload fields `database`,
+`from_version`, `to_version`, `duration_ms`, `outcome` (`migrated`, `current`, `failed`,
+`timed-out`) and `error`. They are not columns of `factory.event_log`, so the query reads
+`factory.event_store.data`. It answers when each database moved to each version, how long a migrate
+takes, how often it fails, and how long a database sat behind the newest image: the first attempt,
+the first success, the failed attempts and the time between them, per `database` and `to_version`.
+Take the time a migrate takes (p50, p95) in code from `duration_ms`. A join with
+`factory.schema_migrations.applied_at` (a query against that one database) confirms when the version landed. While a status is
+`failed` or `timed-out` the loop stays in observe and tells the owner once (`TELL schema-behind`).
+
+```sql
+SELECT s.data->>'database' AS database, (s.data->>'to_version')::int AS to_version,
+  min(l.ts) AS first_attempt,
+  min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) AS first_done,
+  count(*) FILTER (WHERE s.data->>'outcome' IN ('failed', 'timed-out')) AS failed_attempts,
+  round(extract(epoch FROM
+    min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) - min(l.ts)) / 60) AS minutes_behind
+FROM factory.event_log l
+JOIN factory.event_store s ON s.event_id = l.event_id
+WHERE l.type = 'loop_entry' AND l.kind = 'task' AND s.data->>'wake' = 'migrate'
+GROUP BY 1, 2
+ORDER BY first_attempt DESC;
+```

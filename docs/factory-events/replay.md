@@ -137,10 +137,10 @@ sides cut 600 s back, answers from old, and writes one `shadow_read` event (`rea
 The same setting also picks where the loop reads its facts every pass and the 7-day ledger rebuild of a lost store
 ([#977](https://github.com/cbundy/dev-system/issues/977), `hooks/v2/sources-facts.ts`), and with them the events
 behind v2's once keys. `new` reads the types `requeued`, `claimed`, `claim_renewed`, `merged`, `loop_entry`,
-`intervention` and `reviewed`, and `closed` by the sweep, maps each row to the event the facts code reads and fails the
-whole read, naming the event_id, on a row it cannot read. `shadow` decides on old and compares three things hourly,
-cut 600 s back: the newest `reclaimed` per issue, this device's derived ledger and the once keys (`shadow_read` with
-`reader` `loop-facts`, `diff_keys` `reclaimed:#N`, `ledger:<key>` or `once:<key>`; the owner is told once per distinct
+`intervention`, `reviewed` and `ready`, and `closed` by the sweep, maps each row to the event the facts code reads and fails the
+whole read, naming the event_id, on a row it cannot read. `shadow` decides on old and compares four things hourly,
+cut 600 s back: the newest `reclaimed` and the newest `ready` per issue, this device's derived ledger and the once keys (`shadow_read` with
+`reader` `loop-facts`, `diff_keys` `reclaimed:#N`, `ready:#N`, `ledger:<key>` or `once:<key>`; the owner is told once per distinct
 set, `tell(facts-shadow)`). Before comparing, `shadow` reads each device's first new-store time for the repo (one
 `dev-query --factory` read, `NEW_FLOORS_SQL`, only on the compare pass) and drops from both sides every event of a
 device older than that floor. The production new store holds only dual-written events and is not backfilled, so the

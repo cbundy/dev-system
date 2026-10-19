@@ -297,6 +297,8 @@ This device took the claim on the issue: no other device works on it while the l
 | `title` | string | optional | yes | maxLength 256 | yes | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `labels` | array of string | optional | yes |  | yes | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `parent` | integer | optional | yes | minimum 1 | yes | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
+| `score` | integer | optional | yes |  |  | The claim rule's score for this issue when it was claimed; null or absent when the claim was not scored. |
+| `factors` | array of object | optional | yes |  |  | Each factor that added to the score, with its points, in the rule's order. |
 
 Example:
 
@@ -480,6 +482,12 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `ended_at` | string | required | yes | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When it ended; null while running. |
 | `agent_id` | string | required | yes |  | yes | The agent's id, for an agent step; null otherwise. |
 | `wake` | string | required | yes |  |  | The wake's name, for a tell or task, for example parked; null otherwise. |
+| `database` | string | optional | yes |  |  | A schema migrate (task:migrate:<to_version>, wake migrate, written by factory-db-migrate at start-up): the factory database that was migrated. |
+| `from_version` | integer | optional | yes | minimum 0 |  | A schema migrate: the schema version before it; null when unknown (the migrate failed before it was read). |
+| `to_version` | integer | optional | yes | minimum 0 |  | A schema migrate: the highest migration number the image ships. |
+| `duration_ms` | integer | optional | yes | minimum 0 |  | A schema migrate: how long it took, in milliseconds. |
+| `outcome` | enum | optional | yes | one of "migrated", "current", "failed", "timed-out", null |  | A schema migrate: migrated (versions applied), current (nothing to apply), failed or timed-out. |
+| `error` | string | optional | yes |  |  | A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded. |
 
 Example:
 

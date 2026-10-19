@@ -288,6 +288,12 @@ dw "$dd1" ready --issue 7 --data "$FACTS" || fail "ready --data must exit 0"
 dd2="$tmpdir/dd2"
 dw "$dd2" claimed --issue 7 --note 'lease: 120' --data "$FACTS" || fail "claimed --data"
 [ "$(jq -c '.data' "$dd2/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"title":"T","labels":["ready"],"parent":3}' ] || fail "claimed --data: $(cat "$dd2/factory/cbundy__dev-system.jsonl")"
+# score and factors (claim rule) ride --data the same way and keep the old line's note
+SC='{"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}'
+dds="$tmpdir/dds"
+dw "$dds" claimed --issue 7 --note 'lease: 120' --data "$SC" || fail "claimed --data score"
+[ "$(jq -c '.data | {lease_minutes, score, factors}' "$dds/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "claimed score: $(cat "$dds/factory/cbundy__dev-system.jsonl")"
+jq -e '.note == "lease: 120" and (has("score") | not) and (has("factors") | not)' "$dds/cbundy__dev-system.jsonl" >/dev/null || fail "claimed score: old line: $(cat "$dds/cbundy__dev-system.jsonl")"
 # not JSON, or not an object: exit 2, nothing written
 for bad in '[1]' 'x' '"s"' '3'; do
   ddb="$tmpdir/ddb"

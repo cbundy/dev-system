@@ -37,6 +37,12 @@ template_tester_secrets_dir = "/etc/dev-system/template-tester"
 # (opt-in)" in README.md).
 coder_login_secrets_dir = "/etc/dev-system/coder-login"
 
+# The factory database migrator URL (factory-db-migrator-url), mounted read-only for
+# factory-db-migrate. push.sh clears it for dev-system and orchestrator, so only
+# orchestrator-loop workspaces get it; push-next.sh clears it too (see "Factory
+# database migrator" in README.md).
+migrator_secrets_dir = "/etc/dev-system/migrator"
+
 # Credentials for private per-repo images (see "Private images" in README.md). The
 # dev-system and Orchestrator templates were pushed with this path by hand; setting it here
 # keeps every push, orchestrator-loop included, able to pull a private image.
