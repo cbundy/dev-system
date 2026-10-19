@@ -1886,6 +1886,18 @@ writes nothing to stderr, exits 0 and logs no event, even when `CALLUM_FLOW_IMPL
 Help is handled before percentage validation. Usage errors (a missing, empty or nonnumeric issue, an invalid
 percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
 
+`callum-flow-designer-route <issue>` prints the model the designer sub-agent runs on for that issue, `opus` (its frontmatter
+model, the control) or `sonnet` (the treatment), so the two can be compared on real numbers (#1040). It is distinct from
+`callum-flow-design-route` above, which picks whether an issue is designed in a session or by a sub-agent; this one picks the
+sub-agent's model. A trusted `model:<alias>` label wins (the owner's pick, left out of the comparison), else
+`CALLUM_FLOW_DESIGNER_SONNET_PCT` (default `0`, a number from 0 to 100; anything else exits 2) sends that percentage of issues
+to `sonnet` by a stable hash (`cksum` of `designer:<owner/repo>#<issue>`, repo lower-cased, mod 100). An unknown repo or
+unreadable labels print `opus` with a warning. Each decision logs a `designer_routed` event (`model`, `reason`
+label|default|hash|fallback, `bucket`, `sonnet_pct`), and the tool is in the synced allow list. Set the share by adding
+`"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }` to the repo's `.claude/settings.json` (the template defines no `env`, so
+`callum-dev update` keeps it). With exactly one argument, `-h` or `--help` prints the usage line on stdout and exits 0 with no
+event, even when the percentage is invalid; usage errors print to stderr, exit 2 and log no event.
+
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its

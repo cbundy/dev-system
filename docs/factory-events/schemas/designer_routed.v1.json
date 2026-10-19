@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "designer_routed.v1.json",
+  "title": "designer_routed",
+  "description": "The model for the issue's design step was chosen. Written by callum-flow-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model", "reason", "bucket", "sonnet_pct"],
+  "properties": {
+    "model": { "type": "string", "minLength": 1, "description": "The model alias chosen. The control is the designer's frontmatter model (opus); the treatment is sonnet.", "x-column": true },
+    "reason": { "enum": ["label", "default", "hash", "fallback"], "description": "label: a model:<alias> label on the issue; default: no Sonnet share is set; hash: the issue's bucket against the Sonnet share; fallback: the repo or the labels could not be read.", "x-column": true },
+    "bucket": { "type": ["integer", "null"], "minimum": 0, "maximum": 99, "description": "hash: the issue's stable bucket, 0 to 99 (sonnet, the treatment, when below sonnet_pct); null otherwise.", "x-column": true },
+    "sonnet_pct": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "The configured share of issues routed to Sonnet (the treatment; the control is opus), in percent. Null only when the route tool could not run and logged a fallback.", "x-column": true }
+  },
+  "examples": [
+    { "model": "opus", "reason": "default", "bucket": null, "sonnet_pct": 0 }
+  ]
+}
