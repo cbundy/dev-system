@@ -62,4 +62,8 @@ test("Main after merge: newest state per repo, and first and settled green per m
   assert.deepEqual([by["11"][3], by["11"][4]], ["f", "t"]);
   assert.deepEqual([by["12"][3], by["12"][4]], ["t", "t"]);
   assert.deepEqual([by["13"][3], by["13"][4]], ["", ""]);
+  assert.deepEqual(
+    [by["11"][5], by["12"][5], by["13"][5]],
+    ["2026-10-19 09:00:00+00", "2026-10-19 10:00:00+00", ""],
+  );
 });

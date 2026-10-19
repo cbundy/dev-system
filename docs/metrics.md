@@ -1279,7 +1279,7 @@ ORDER BY s.repo;
 ```
 
 Did main stay green after each merge? `first_green` is the first state observed at or after the
-merge; `settled_green` is the newest state of that pull request, before main's head moved on. Both
+merge and `first_observed_at` is when it was observed; `settled_green` is the newest state of that pull request, before main's head moved on. Both
 are null when no state was observed. The join is on `pr`, not `head`: a squash merge's commit on
 main is not the head that `merged` records.
 
@@ -1290,7 +1290,10 @@ SELECT m.repo, m.pr, m.ts AS merged_at,
     ORDER BY f.observed_at ASC LIMIT 1) AS first_green,
   (SELECT l.green FROM factory.event_log l
     WHERE l.type = 'main_state' AND l.repo = m.repo AND l.pr = m.pr
-    ORDER BY l.observed_at DESC LIMIT 1) AS settled_green
+    ORDER BY l.observed_at DESC LIMIT 1) AS settled_green,
+  (SELECT f.observed_at FROM factory.event_log f
+    WHERE f.type = 'main_state' AND f.repo = m.repo AND f.pr = m.pr AND f.ts >= m.ts
+    ORDER BY f.observed_at ASC LIMIT 1) AS first_observed_at
 FROM factory.event_log m
 WHERE m.type = 'merged' AND m.pr IS NOT NULL
 ORDER BY m.ts DESC;
