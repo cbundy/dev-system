@@ -2,7 +2,8 @@
 // source switch `eventsSource`, the same switch as the record rebuild's (sources-records.ts): `old` reads
 // factory.events (EVENTS_SQL), `new` reads factory.event_store (NEW_EVENTS_SQL), and `shadow` (the
 // default) decides on the old read and compares it with the new one, once per load and then at most
-// hourly. Three things are compared: the newest `reclaimed` per issue (facts.reclaimed), the ledger
+// hourly. Four things are compared: the newest `reclaimed` and the newest `ready` per issue
+// (facts.reclaimed, facts.readyAt), the ledger
 // deriveLedger rebuilds for this device, and the once keys v2's `logged` reads. The compare is written
 // as a `shadow_read` event (reader `loop-facts`) and told to the owner by rules-shadow.ts.
 //
@@ -33,7 +34,7 @@ const MAX_KEYS = 50
 // The new types the facts read, each under the old state name the facts code reads: requeued as
 // `reclaimed`, claim_renewed as `renewed`, loop_entry as `loop`. A `closed` event counts only from
 // the sweep, whose actor deriveLedger reads.
-export const FACTS_TYPES = ['requeued', 'claimed', 'claim_renewed', 'merged', 'loop_entry', 'intervention', 'reviewed'] as const
+export const FACTS_TYPES = ['requeued', 'claimed', 'claim_renewed', 'merged', 'loop_entry', 'intervention', 'reviewed', 'ready'] as const
 
 // The dev-query SQL that reads the new store's events for the facts and the ledger rebuild, with the
 // variables repo, at and days (EVENTS_SQL's), over all devices, oldest first, in the columns
@@ -120,6 +121,8 @@ function eventOfRow(row: Record<string, string>): FactoryEvent {
       return { ...event, state: 'renewed' }
     case 'closed':
       return { ...event, state: 'closed' }
+    case 'ready':
+      return { ...event, state: 'ready' }
     case 'merged':
       return { ...event, state: 'merged', branch: d.branch as string | null, pr: d.pr as number | null, head: d.head as string | null }
     case 'loop_entry': {
@@ -176,9 +179,9 @@ function eventOfRow(row: Record<string, string>): FactoryEvent {
 
 // --- the compare (pure) ---------------------------------------------------------------------------
 
-// What the three compared things hold: the newest `reclaimed` time per issue, the ledger by key, and
-// the once keys.
-export type View = { reclaimed: Map<number, number>; ledger: Map<string, LedgerEntry>; once: Set<string> }
+// What the compared things hold: the newest `reclaimed` and `ready` times per issue, the ledger by key,
+// and the once keys.
+export type View = { reclaimed: Map<number, number>; readyAt: Map<number, number>; ledger: Map<string, LedgerEntry>; once: Set<string> }
 
 // viewOf: the compared things of one side's events. The ledger entries the loop logged lose what the
 // new `loop_entry` does not carry: the outcome and the run, PR and head columns (v2 reads those only
@@ -194,7 +197,8 @@ export function viewOf(events: readonly FactoryEvent[], device: string): View {
     else ledger.set(entry.key, { ...entry, run: null, pr: null, head: null, outcome: undefined })
   }
   const once = new Set(list.flatMap(e => (e.device === null || e.device === device ? (onceKey(e) ?? []) : [])))
-  return { reclaimed: factsOf(list).reclaimed, ledger, once }
+  const facts = factsOf(list)
+  return { reclaimed: facts.reclaimed, readyAt: facts.readyAt, ledger, once }
 }
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
@@ -204,6 +208,9 @@ function diffViews(a: View, b: View): { key: string; text: string }[] {
   const out: { key: string; text: string }[] = []
   for (const issue of [...new Set([...a.reclaimed.keys(), ...b.reclaimed.keys()])].sort((x, y) => x - y)) {
     if (a.reclaimed.get(issue) !== b.reclaimed.get(issue)) out.push({ key: `reclaimed:#${issue}`, text: `#${issue} reclaimed: old ${iso(a.reclaimed.get(issue))}, new ${iso(b.reclaimed.get(issue))}` })
+  }
+  for (const issue of [...new Set([...a.readyAt.keys(), ...b.readyAt.keys()])].sort((x, y) => x - y)) {
+    if (a.readyAt.get(issue) !== b.readyAt.get(issue)) out.push({ key: `ready:#${issue}`, text: `#${issue} ready: old ${iso(a.readyAt.get(issue))}, new ${iso(b.readyAt.get(issue))}` })
   }
   for (const key of [...new Set([...a.ledger.keys(), ...b.ledger.keys()])].sort()) {
     const x = a.ledger.get(key)
@@ -239,7 +246,7 @@ export function compareFacts(oldEvents: readonly FactoryEvent[], newEvents: read
   const b = viewOf(newEvents, device)
   const live = diffViews(a, b)
   const settled = diffViews(viewOf(oldEvents.filter(e => e.ts <= cut), device), viewOf(newEvents.filter(e => e.ts <= cut), device))
-  const compared = new Set([...a.reclaimed.keys()].map(n => `r${n}`).concat([...b.reclaimed.keys()].map(n => `r${n}`), [...a.ledger.keys(), ...b.ledger.keys()].map(k => `l${k}`), [...a.once, ...b.once].map(k => `o${k}`))).size
+  const compared = new Set([...a.reclaimed.keys()].map(n => `r${n}`).concat([...b.reclaimed.keys()].map(n => `r${n}`), [...a.readyAt.keys(), ...b.readyAt.keys()].map(n => `y${n}`), [...a.ledger.keys(), ...b.ledger.keys()].map(k => `l${k}`), [...a.once, ...b.once].map(k => `o${k}`))).size
   const data: ShadowReadData = {
     reader: FACTS_SHADOW_READER,
     tool: 'factory-loop',

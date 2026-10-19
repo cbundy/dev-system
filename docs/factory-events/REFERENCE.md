@@ -297,6 +297,8 @@ This device took the claim on the issue: no other device works on it while the l
 | `title` | string | optional | yes | maxLength 256 | yes | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `labels` | array of string | optional | yes |  | yes | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `parent` | integer | optional | yes | minimum 1 | yes | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
+| `score` | integer | optional | yes |  |  | The claim rule's score for this issue when it was claimed; null or absent when the claim was not scored. |
+| `factors` | array of object | optional | yes |  |  | Each factor that added to the score, with its points, in the rule's order. |
 
 Example:
 

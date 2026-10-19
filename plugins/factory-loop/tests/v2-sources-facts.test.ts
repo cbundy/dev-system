@@ -36,6 +36,7 @@ const reclaimed = (o: Opts = {}) => pair('reclaimed', 'requeued', { reason: 'lea
 const claimed = (o: Opts = {}) => pair('claimed', 'claimed', { lease_minutes: 120 }, { note: 'lease: 120', ...o })
 const renewed = (o: Opts = {}) => pair('renewed', 'claim_renewed', { lease_minutes: 120 }, { note: 'lease: 120', ...o })
 const merged = (o: Opts = {}) => pair('merged', 'merged', { pr: 47, branch: 'issue-48', head: SHA, by: 'factory', recovered: false }, { col: { pr: 47, branch: 'issue-48', head: SHA }, ...o })
+const readied = (o: Opts = {}) => pair('ready', 'ready', { title: null, labels: null, parent: null }, { actor: 'queue-watch', ...o })
 const swept = (o: Opts = {}) => pair('closed', 'closed', { reason: 'completed' }, { actor: 'sweep', note: 'completed', ...o })
 const tell = (status: 'done' | 'failed', o: Opts = {}) =>
   pair('loop', 'loop_entry', { kind: 'tell', key: 'tell:parked:48', status, attempts: 1, class: 'owner', rule: 'H1', started_at: iso(1792117900000), ended_at: iso(1792117901000), agent_id: null, wake: 'parked' }, {
@@ -70,6 +71,10 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
     ['claimed', claimed(), v => expect([...v.ledger.keys()]).toEqual([`claim:48:derived:${Math.floor(T / 1000) * 1000}`])],
     ['claim_renewed is renewed', renewed(), v => expect([...v.ledger.keys()]).toEqual(['heartbeat:derived'])],
     ['merged', merged(), v => expect([...v.ledger.values()]).toMatchObject([{ key: 'rollout:48', pr: 47 }])],
+    ['ready', readied(), v => {
+      expect([...v.readyAt]).toEqual([[48, Math.floor(T / 1000) * 1000]])
+      expect([...v.ledger.keys()]).toEqual([])
+    }],
     ['closed by the sweep', swept(), v => expect([...v.ledger.keys()]).toEqual(['sweep:derived'])],
     ['loop_entry is a loop event', tell('done'), v => {
       expect(v.ledger.get('tell:parked:48')).toMatchObject({ kind: 'tell', status: 'done', wake: 'parked', startedAt: 1792117900000, endedAt: 1792117901000, issue: 48 })
@@ -82,6 +87,7 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
       check(viewOf(newOf([l]), DEVICE))
       expect(viewOf(newOf([l]), DEVICE)).toEqual(viewOf(oldOf([l]), DEVICE))
       expect(factsOf(newOf([l])).reclaimed).toEqual(factsOf(oldOf([l])).reclaimed)
+      expect(factsOf(newOf([l])).readyAt).toEqual(factsOf(oldOf([l])).readyAt)
       expect(newOf([l]).map(e => onceKey(e))).toEqual(oldOf([l]).map(e => onceKey(e)))
     })
   }
@@ -135,6 +141,19 @@ describe('compareFacts', () => {
     expect(c.data).toEqual({ reader: 'loop-facts', tool: 'factory-loop', compared: 1 + 3 + 1, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null, out_of_scope: 0 })
     expect(validateStrict('shadow_read', 1, c.data)).toEqual([])
     expect(c.diffs).toEqual([])
+  })
+
+  test('the newest ready per issue is compared: equal history gives equal readyAt, a ready on one side is the key ready:#N', () => {
+    const history = [readied({ ts: T - MIN }), readied({ ts: T }), readied({ issue: 49, ts: T - 5 * MIN })]
+    expect(factsOf(newOf(history)).readyAt).toEqual(factsOf(oldOf(history)).readyAt)
+    expect(factsOf(newOf(history)).readyAt.get(48)).toBe(Math.floor(T / 1000) * 1000)
+    const equal = compareFacts(oldOf(history), newOf(history), DEVICE, NOW, NOW)
+    expect(equal.data).toMatchObject({ compared: 2, differences: 0 })
+    const c = compareFacts(oldOf(history), newOf(history.slice(0, 2)), DEVICE, NOW, NOW)
+    expect(c.data).toMatchObject({ differences: 1, diff_keys: ['ready:#49'], compared: 2 })
+    // the newest one differs: also a difference
+    const d = compareFacts(oldOf(history), newOf([history[0], history[2]]), DEVICE, NOW, NOW)
+    expect(d.data.diff_keys).toEqual(['ready:#48'])
   })
 
   test('a reclaimed, a ledger and a once-key difference each count, by key', () => {

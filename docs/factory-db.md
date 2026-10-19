@@ -194,3 +194,12 @@ Forbidden, and refused by `npm run lint` (`scripts/migration-lint.js`, which pri
 
 An applied migration is immutable: the bootstrap refuses a file whose sha256 changed. Removing dead
 fields is out of scope here; the epic that introduced this window owns it.
+
+The window is proved by `tests/schema-compat.test.js` (in `npm test`, which needs the release tags: CI checks
+out with `fetch-depth: 0`). For the newest patch of each of the last 10 minors it takes the tag's files
+from git, builds one database with the tag's own bootstrap and one with head's, writes the same events and
+a heartbeat through the tag's own `callum-flow-event`, `factory-event-push-loop` and `heartbeat-loop`, and
+runs the tag's reads on both (the sql blocks of its `docs/metrics.md`, the loop's `*SQL` exports and
+`callum-flow-factory-state`) as the reader role. Head must answer as the tag's own schema does. A failure
+prints `<tag> <reader or writer>: <what differed or the psql error>`, for example
+`v0.60.0 docs/metrics.md "Wind-down #2": head schema: ERROR: column "issue" does not exist`.

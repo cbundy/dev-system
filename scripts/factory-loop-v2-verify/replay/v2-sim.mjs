@@ -220,12 +220,17 @@ function stateNow() {
         labels,
         blockedBy: blockers,
         subIssues: W.subIssues.get(n) ?? 0,
+        blockingList: null,
+        blockersClosedAt: null,
+        parent: null,
+        siblings: null,
         epic: false,
         subIssueList: null,
         brief: null,
         delegatedBrief: null,
         claimLapsedAt: null,
         reclaimedAt: null,
+        readyAt: null,
       }
     })
   const queue = issues.filter(i => i.open && i.labels.includes('ready') && !openRecord(i.number) && !W.claimedBy.has(i.number)).map(i => i.number)

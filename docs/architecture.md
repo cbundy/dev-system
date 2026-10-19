@@ -98,7 +98,7 @@ removes it on exit. Each test makes its own `factory_test_*` database with the r
 `images/base/factory-db-bootstrap` (`factory_test_db_new` in shell, `tests/lib/factory-db.js` in node) and
 drops it afterwards; a leftover database or role prints `FAIL test isolation: database|role <name>` and fails
 the run. With no server and no binaries the database tests skip and the summary line says so, unless
-`TEST_REQUIRE_POSTGRES=1` (CI), where the run fails.
+`TEST_REQUIRE_POSTGRES=1` (CI), where the run fails. `tests/schema-compat.test.js` also needs the release tags (a full clone, not a shallow one); without them it skips, and `TEST_REQUIRE_TAGS=1` (CI checks out with `fetch-depth: 0`) makes a shallow clone or no tags a failure.
 
 Subset mode, for debugging: `npm test -- <id>...` (that is, `sh scripts/test.sh <id>...`) runs only
 the named jobs, with the same sandbox, PostgreSQL setup, `TEST_JOBS` pool, failure output and

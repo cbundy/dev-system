@@ -334,8 +334,11 @@ export async function observe(
     const held = mine.map(i => i.number)
     // v2's records go first, in v2's read order (v2 SPEC 2.4); then the oldest reads
     const first = readOrder(v2Stored?.records ?? [])
-    const wanted = [...new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
-    const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : 0)
+    // the open issues the read issues block: read last, so a chain never starves the issues the loop acts on
+    const chain = [...cache.github.values()].flatMap(c => c.value.facts?.blockingList ?? [])
+    const named = new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])
+    const wanted = [...new Set([...named, ...chain])]
+    const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : named.has(n) ? 0 : 1)
     const due = wanted
       .filter(n => {
         const c = cache.github.get(n)
@@ -345,7 +348,7 @@ export async function observe(
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
     const designing = new Set(mine.filter(i => i.stage === 'designing').map(i => i.number))
-    let githubOk = await readIssues(run, due, { cache: cache.github, now, designing, limited: () => limited })
+    let githubOk = await readIssues(run, due, { repo: rt.repo, cache: cache.github, now, designing, limited: () => limited })
     // tracker timelines, in the reads left this pass, walked again so a tracker read just now counts
     const timelinesDue = walkTrackers()
       .trackers.filter(n => {

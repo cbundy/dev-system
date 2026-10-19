@@ -108,12 +108,17 @@ export function buildState(o: Observed): State {
         blockedBy: g?.facts?.blockedBy ?? null,
         blocking: g?.facts?.blocking ?? null,
         subIssues: g?.facts?.subIssues ?? null,
+        blockingList: g?.facts?.blockingList ?? null,
+        blockersClosedAt: g?.facts?.blockersClosedAt ?? null,
+        parent: g?.facts?.parent ?? null,
+        siblings: g?.facts?.siblings ?? null,
         epic: g?.facts ? tracker.test(g.facts.title) : null,
         subIssueList: subIssuesOf(n, timelines),
         brief: g?.brief ?? null,
         delegatedBrief: o.facts?.briefs.get(n) ?? null,
         claimLapsedAt: f !== undefined && !f.ended ? f.lapsedAt : null,
         reclaimedAt: o.facts?.reclaimed.get(n) ?? null,
+        readyAt: o.facts?.readyAt.get(n) ?? null,
       }
     })
 

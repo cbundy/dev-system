@@ -79,6 +79,7 @@ const B = (v) => typeof v === "boolean";
 const RX = (re) => (v) => typeof v === "string" && re.test(v);
 const L = (k) => (v) => Array.isArray(v) && v.every(k);
 const L1 = (k) => (v) => L(k)(v) && v.length > 0;
+const FACTOR = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 2 && NE(v.name) && Number.isInteger(v.points);
 const opt = (k) => Object.assign((v) => k(v), { optional: true });
 // A condition: kind and its argument, plus an optional lower-case repo on issue-closed and tag-contains.
 const REPO = RX(/^[a-z0-9._-]+\/[a-z0-9._-]+$/);
@@ -100,7 +101,7 @@ const TITLE = (v) => S(v) && v.length <= 256;
 
 const SPECS = {
   ready: { title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))) },
-  claimed: { lease_minutes: I(1), title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))) },
+  claimed: { lease_minutes: I(1), title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))), score: opt(nul(Number.isInteger)), factors: opt(nul(L(FACTOR))) },
   claim_renewed: { lease_minutes: I(1) },
   claim_lost: { holder: nul(S), holder_since: nul(S), race: B },
   requeued: { reason: E("lease-expired", "reconcile"), stage: nul(S), lives: nul(I(1)), branch: nul(S), pr: nul(I(1)), detail: nul(S) },
