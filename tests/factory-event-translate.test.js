@@ -455,6 +455,37 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
 });
 
+test("transition question parts: decision, context, options, recommended, recommendation (dev-system#1064)", () => {
+  const base = sample("transition");
+  const opts3 = [{ key: "A", title: "One", detail: null }, { key: "B", title: "Two", detail: "More" }, { key: "C", title: "Three", detail: "Even more" }];
+  const enc = (v) => encodeURIComponent(JSON.stringify(v));
+  const data = (extra) => {
+    const r = translate(withNote(base, `${base.note} ${extra}`));
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+    return r.event.data;
+  };
+  const d = data(`decision=Pick%20one context=Why%20now options=${enc(opts3)} recommended=B recommendation=It%20is%20simple`);
+  assert.equal(d.decision, "Pick one");
+  assert.equal(d.context, "Why now");
+  assert.deepEqual(d.options, opts3);
+  assert.equal(d.recommended, "B");
+  assert.equal(d.recommendation, "It is simple");
+  const n = data("decision=none context=none options=none recommended=none recommendation=none");
+  for (const k of ["decision", "context", "options", "recommended", "recommendation"]) assert.equal(n[k], null, k);
+  const plain = translate(withNote(base, base.note)).event.data;
+  for (const k of ["decision", "context", "options", "recommended", "recommendation"]) assert.equal(k in plain, false, k);
+  const item = (key, title = "T") => ({ key, title });
+  const badOptions = [
+    "%7Bnot", enc("x"), enc({ A: 1 }), enc([item("A")]), enc(["A", "B", "C", "D", "E", "F", "G"].map((k) => item(k))), enc([item("A"), item("G")]), enc([item("A"), item("A")]),
+    enc([item("A"), item("B", "x".repeat(121))]), enc([item("A"), { ...item("B"), detail: "x".repeat(301) }]), enc([item("A"), { ...item("B"), extra: 1 }]), enc([item("A"), { key: "B" }]),
+  ];
+  for (const o of badOptions) assert.match(missOf(withNote(base, `${base.note} options=${o}`)), /options=/, o);
+  assert.match(missOf(withNote(base, `${base.note} options=${enc([item("A"), item("B")])} recommended=C`)), /recommended=/);
+  assert.match(missOf(withNote(base, `${base.note} options=none recommended=A`)), /recommended=/);
+  assert.match(missOf(withNote(base, `${base.note} recommended=A`)), /recommended=/);
+});
+
 test("--data extras (dev-system#870): ready and claimed events carry title, labels and parent, strictly valid", () => {
   const facts = { title: "T", labels: ["ready", "bug"], parent: 3 };
   const opts = { ts: "2026-10-17T01:02:03.456Z", sessionId: null, data: facts };

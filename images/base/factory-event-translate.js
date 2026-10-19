@@ -94,6 +94,16 @@ const COND = (v) => {
 };
 const WAIT = (v) => Array.isArray(v) && v.length >= 1 && v.length <= 8 && v.every(COND);
 const HEX = RX(/^[0-9a-f]{7,40}$/);
+// A question option: key A-F, a title of up to 120 characters and an optional detail of up to 300.
+const KEY = E("A", "B", "C", "D", "E", "F");
+const OPTION = (v) => {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const n = Object.keys(v).length - ("detail" in v ? 1 : 0);
+  if (n !== 2 || !KEY(v.key) || !S(v.title) || v.title.length > 120) return false;
+  return !("detail" in v) || v.detail === null || (S(v.detail) && v.detail.length <= 300);
+};
+const OPTIONS = (v) => Array.isArray(v) && v.length >= 2 && v.length <= 6 && v.every(OPTION) && new Set(v.map((o) => o.key)).size === v.length;
+const MAXS = (n) => (v) => S(v) && v.length <= n;
 const ISO = RX(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
 const STATES = ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"];
 
@@ -143,6 +153,11 @@ const SPECS = {
     fixes: I(0),
     round: I(0),
     question: nul(S),
+    decision: opt(nul(MAXS(2000))),
+    context: opt(nul(MAXS(800))),
+    options: opt(nul(OPTIONS)),
+    recommended: opt(nul(KEY)),
+    recommendation: opt(nul(MAXS(200))),
     wait: opt(nul(WAIT)),
     why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done")),
     notes: L(S),
@@ -343,6 +358,21 @@ function tWait(t) {
   });
 }
 
+// The question options: percent-encoded compact JSON of the option list; `none` is null; absent is undefined.
+function tOptions(t) {
+  const v = t.get("options");
+  if (v === undefined) return undefined;
+  if (v === "none") return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(decodeURIComponent(v));
+  } catch {
+    return miss("bad options=: not percent-encoded JSON");
+  }
+  if (!OPTIONS(parsed)) miss("bad options=: not 2 to 6 closed options with distinct keys A-F and bounded text");
+  return parsed;
+}
+
 // --- the columns ----------------------------------------------------------------------------------
 
 function colStr(line, k) {
@@ -462,12 +492,15 @@ function merged(line) {
   return { pr: colInt(line, "pr"), branch: colStr(line, "branch"), head: colStr(line, "head"), by, recovered };
 }
 
-const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait"];
+const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
 
 function transition(line) {
-  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => k !== "lives" && k !== "wait") });
+  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
   const lives = t.has("lives") ? tInt(t, "lives") : 1;
   const wait = tWait(t);
+  const options = tOptions(t);
+  const recommended = tStr(t, "recommended");
+  if (recommended !== undefined && recommended !== null && !(options ?? []).some((o) => o.key === recommended)) miss(`bad recommended=${recommended}: not one of the options`);
   const ev = {
     life: tStr(t, "life"),
     seq: tInt(t, "seq"),
@@ -496,6 +529,8 @@ function transition(line) {
     lives,
   };
   if (wait !== undefined) ev.wait = wait;
+  const parts = { decision: tStr(t, "decision"), context: tStr(t, "context"), options, recommended, recommendation: tStr(t, "recommendation") };
+  for (const [k, v] of Object.entries(parts)) if (v !== undefined) ev[k] = v;
   return ev;
 }
 
