@@ -30,7 +30,8 @@ export function decisionOf(question: string): string {
 export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via: string | null): string {
   const question = r.question ?? 'none given'
   const options = OPTIONS_HEADING.test(question)
-  const where = from === null ? 'It parked' : `It parked from ${from}${via === null ? '' : ` (${via})`}`
+  const splitFrom = from === null && via === 'split-decision' ? /^Split from #([1-9]\d*)/.exec(r.notes[0] ?? '')?.[1] : undefined
+  const where = splitFrom !== undefined ? `It parked when #${splitFrom} was split` : from === null ? 'It parked' : `It parked from ${from}${via === null ? '' : ` (${via})`}`
   const resumes = r.resumeTo === null ? '' : `, and a resume goes on with ${r.resumeTo}`
   return [
     '### Waiting on the owner',

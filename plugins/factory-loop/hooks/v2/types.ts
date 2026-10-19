@@ -277,7 +277,7 @@ export type StepMarker = {
 export type SplitReasons = { why_split: string; why_count: string; why_parts: string; why_order: string }
 
 // A child a designer's split asks for (8.7).
-export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
+export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean; decision: string | null }
 
 export type V2Action =
   // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;

@@ -25,7 +25,7 @@ import type { IssueView, LedgerEntry, Ms } from '../types'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
 import { livesBefore } from './lives'
-import { ROW_S0, madeRecord } from './table'
+import { ROW_S0, ROW_S7, madeRecord } from './table'
 import type { Claimed } from './table'
 import { REJECTED_LABEL, sameLabel } from './types'
 import type { IssueRecord, StarvedVerdict, V2Ctx } from './types'
@@ -47,7 +47,7 @@ export function claimedOf(e: LedgerEntry): Claimed | 'lost' | null {
   if (c === null) return null
   const { issue, life } = c
   const o = e.outcome
-  if (o?.kind === 'claim') return o.result === 'lost' ? 'lost' : { issue, life, branch: `issue-${issue}`, pr: null, others: [] }
+  if (o?.kind === 'claim') return o.result === 'lost' ? 'lost' : { issue, life, branch: `issue-${issue}`, pr: null, others: [], ...(o.park === undefined ? {} : { park: o.park }) }
   if (o?.kind === 'adopt') return { issue, life, branch: o.branch, pr: o.pr, others: [...o.others] }
   return null
 }
@@ -127,15 +127,15 @@ function makeRecords(ctx: V2Ctx): void {
       key: transitionKey(next),
       class: 'free',
       rule: 'S1',
-      reason: `S0: claimed${got.pr === null ? '' : `, PR #${got.pr} adopted`}, life ${next.lives}${back}`,
+      reason: `${next.state === 'parked' ? 'S7: parked on its split decision' : 'S0: claimed'}${got.pr === null ? '' : `, PR #${got.pr} adopted`}, life ${next.lives}${back}`,
       issue: got.issue,
-      row: ROW_S0.id,
+      row: next.state === 'parked' ? ROW_S7.id : ROW_S0.id,
       event: 'ok',
       from: null,
       next,
       trigger: { kind: 'claim', key: e.key },
       cause: null,
-      via: before.afterReject ? 'unreject' : got.pr === null ? 'claim' : 'adopt',
+      via: next.state === 'parked' ? 'split-decision' : before.afterReject ? 'unreject' : got.pr === null ? 'claim' : 'adopt',
     })
   }
 }

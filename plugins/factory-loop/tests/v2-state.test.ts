@@ -281,6 +281,48 @@ describe('S0: the record a done claim makes', () => {
   })
 })
 
+// --- S7: a split child parked on its open decision (8.7) ----------------------------------------------------
+
+describe('S7: a done claim that carries a park makes the parked record', () => {
+  const park = { question: 'Which API shape?\n\n#### Options\n\n- [ ] **A** - One call\n- [ ] **B** - Two calls', parent: 300 }
+  const key = claimKey(61, LIFE)
+  const claimed = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'claimed', park } })
+
+  test('the record is parked at once with the question and resumeTo designing; the entry items post the park comment, set the label and tell the owner', () => {
+    const t = transitionOf(plan(withLedger(world([]), [claimed])), 61)
+    expect(t).toMatchObject({ rule: 'S1', row: 'S7', event: 'ok', from: null, trigger: { kind: 'claim', key }, via: 'split-decision' })
+    expect(t?.next).toMatchObject({ issue: 61, life: LIFE, seq: 1, state: 'parked', step: null, resumeTo: 'designing', question: park.question, notes: [expect.stringContaining('#300')] })
+    if (t === undefined) return
+    const entered = plan(withLedger(world([t.next]), [claimed, transitioned(t.next, 'S7', null, 'split-decision')]))
+    const items = of(entered, 61)
+    const comment = items.find(a => a.kind === 'comment')
+    expect(comment).toMatchObject({ on: 'issue', number: 61, body: expect.stringContaining('**Decision needed:** Which API shape?') })
+    expect(comment?.kind === 'comment' ? comment.body : '').toContain('It parked when #300 was split, and a resume goes on with designing.')
+    expect(items.find(a => a.kind === 'label' && a.op === 'set')).toMatchObject({ label: 'factory:parked' })
+    expect(items.find(a => a.kind === 'tell')).toMatchObject({ wake: 'parked', class: 'owner', fields: { issue: '61', from: 'designing' } })
+  })
+
+  test('a resume (the label off, or /factory resume) takes it to queued then designing, the owner\'s answer a note', () => {
+    const t = transitionOf(plan(withLedger(world([]), [claimed])), 61)
+    if (t === undefined) throw new Error('no S7 transition')
+    const parked = { ...t.next, seq: 1, seqAt: NOW - 2 * HOUR, since: NOW - 2 * HOUR }
+    const settled = [claimed, transitioned(parked, 'S7', null, 'split-decision'), done(entryKey(parked, 'event/transition'), 'event', { issue: 61 }), done(entryKey(parked, 'label'), 'label', { issue: 61, endedAt: NOW - 2 * HOUR + MIN }), done(entryKey(parked, 'comment'), 'comment', { issue: 61, endedAt: NOW - 2 * HOUR + 2 * MIN }), done(entryKey(parked, 'tell'), 'tell', { issue: 61, class: 'owner', wake: 'parked' })]
+    const r = plan(withLedger(world([parked], { control: control({ resumed: [{ subject: 'issue:61', at: NOW - MIN, note: 'B, two calls' }] }) }), settled))
+    const queued = transitionOf(r, 61)
+    expect(queued).toMatchObject({ row: 'P1', via: 'unpark:op', next: { state: 'queued', step: 'lease', resumeTo: 'designing', question: null, notes: ['B, two calls'] } })
+    const lease = queued === undefined ? null : rowFor(queued.next, { kind: 'ok' }, CFG)
+    expect(lease).toMatchObject({ id: 'T1', next: 'resumeTo' })
+  })
+
+  test('a lost claim makes no record; a claim without a park still makes S0\'s queued record', () => {
+    const lost = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'lost' } })
+    expect(transitionOf(plan(withLedger(world([]), [lost])), 61)).toBeUndefined()
+    const plain = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'claimed' } })
+    const t = transitionOf(plan(withLedger(world([]), [plain])), 61)
+    expect(t).toMatchObject({ row: 'S0', via: 'claim', next: { state: 'queued', step: 'lease', resumeTo: null, question: null } })
+  })
+})
+
 // --- entry actions (4.5) ------------------------------------------------------------------------------------
 
 describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {

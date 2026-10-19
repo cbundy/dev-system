@@ -535,7 +535,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
 and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`). `maxTriages` is 2. "Step
-states" are designing, building, reviewing, fixing and the merge-queue head. 36 rows. The Events
+states" are designing, building, reviewing, fixing and the merge-queue head. 37 rows. The Events
 column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
 `merge_ready`) is logged by every row that enters the state, T1 included (4.5).
 
@@ -544,6 +544,7 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | Id | From | Event | Next | Record |
 |---|---|---|---|---|
 | S0 | no record | the life's `claim` entry is done | queued | life, branch, `pr` and `resumeTo` from the claim's result (3.5); step `lease` |
+| S7 | no record | the life's `claim` entry is done and its outcome carries a `park` (a split's not-ready child, 8.7) | parked | life and branch as S0; step null, `resumeTo` designing, `question` the park's question; notes = one line naming the split parent (`Split from #P: ...`). Via `split-decision`; its entry items are the park's (comment, `factory:parked`, owner tell) |
 
 **Step results (S3).**
 
@@ -1419,7 +1420,7 @@ The designer is a reader: it writes nothing to GitHub.
   ([#851](https://github.com/cbundy/dev-system/issues/851)).
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
-  children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
+  children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean, decision?: { question, context?, options?, recommendation? } }],
   conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason? }`.
 - **Observable by default.** A brief has an `## Observability` section, and the contract refuses
   one without it: each decision the change adds (a point where an agent or a rule chooses), where
@@ -1437,8 +1438,16 @@ The designer is a reader: it writes nothing to GitHub.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
   (`i<N>/l<L>/s<seq>/child/<key>`). Each child's body carries the hidden key, so a retry finds it
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
-  links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
-  every child exists, and T4 closes the record, keeping the parent open as the tracking epic
+  links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. A child whose `ready` is false carries an open
+  owner decision, in a `decision` object checked as a question answer is (11; refused on a ready child; without one, the
+  body's `## Open decisions` text, at most 2 000 characters, else a fixed sentence naming the parent). It is not left silent:
+  once the child exists, plan claims it at once (a first claim keyed `i<child>/claim/<life>`, free, outside the capacity
+  limit) carrying `park: { question, parent }`, and the done claim makes the child's record through row S7: parked, resuming
+  to designing, so the park comment with its tick boxes, `factory:parked`, the owner tell and the title's owner count come
+  from the park machinery, and the owner's label removal or `/factory resume` takes it through P1 and T1 to its design with
+  the answer as a note. Every not-ready child is claimed before the plan comment is posted and T4 closes the parent. A lost
+  claim (a ledger rebuild) leaves the child to S0's queued record on its next claim, and the designer asks the question itself. The step is not-ok(split) once
+  every child exists and is claimed, and T4 closes the record, keeping the parent open as the tracking epic
   until every sub-issue is closed, whatever its close reason: then the loop closes it
   (action `close-tracker`, planned by the closed row when a split child's merge is done; the child is
   found by its hidden key, so a merged issue without one, such as a child the owner made under an epic by hand,
@@ -3429,7 +3438,7 @@ The first entries are the owner's own decisions; they are settled.
 - **Decision:** R1's release re-adds `ready` (`reclaimed`), unless the owner dropped the issue or
   the issue is closed, when it leaves; and unless the lives cap is reached (below). The seven
   state labels go and `ready` comes back in one call (`label` op `requeue`), the one place the
-  loop adds `ready` but a split's ready child (6.4, appendix B).
+  loop adds `ready` but a split's ready child (6.4, appendix B); a split's not-ready child gets no label from the split, its claim parks it (8.7).
 - **Alternatives:** "still labelled `ready` goes back to the queue, otherwise it leaves".
 - **Why:** that rule never fired, because claiming removes `ready`; a ghost of the loop's own is a loop
   bug, not the owner's judgement that the issue is unwanted.
@@ -3946,7 +3955,7 @@ still accepts them in a settings file, and they have no effect.
 | `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -`; also R1's rejection comment (6.4) | 3 |
 | `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
-| `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
+| `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child; a not-ready child gets none: plan claims it with a `park` and row S7 parks it (8.7) | 3 |
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |

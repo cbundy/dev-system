@@ -8,7 +8,8 @@
 //    unless already; a blocker that is closed is skipped (nothing to wait for), one that is a pull
 //    request is refused;
 // 4. it is labelled ready when the designer asked, once every link exists, so S1 claims it only
-//    when its blockers are closed.
+//    when its blockers are closed. A not-ready child gets no label here: plan claims it (rules-work.ts
+//    parkClaim) and the claim parks it on its open decision.
 // The outcome names the child, which the parent's release follow-up lists (rules-entry.ts).
 // Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
@@ -198,7 +199,7 @@ const split: Executor = async (ctx, action) => {
   const how = child.made ? 'made' : 'found'
   const linkedTo = action.blockedBy.filter(n => !skipped.includes(n))
   const after = (linkedTo.length === 0 ? '' : `, blocked by ${linkedTo.map(n => `#${n}`).join(' ')}`) + skipped.map(n => `, #${n} is closed, not linked`).join('')
-  return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ''}`) }
+  return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ', parks on the owner'}`) }
 }
 
 // link: a waiting record's issue linked as blocked by one it waits on (row T16's entry action):

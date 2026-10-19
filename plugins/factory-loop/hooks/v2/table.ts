@@ -216,6 +216,8 @@ function leased(r: IssueRecord): Partial<IssueRecord> {
 // E7 is the fallback, one row per event kind (E7_ROWS).
 const ROWS: readonly Row[] = [
   { id: 'S0', states: [], on: 'ok', next: 'queued', change: none, via: 'claim' },
+  // a split's not-ready child, claimed at once: parked on its open decision (8.7), made by madeRecord too
+  { id: 'S7', states: [], on: 'ok', next: 'parked', change: none, via: 'split-decision' },
   // step results (S3)
   { id: 'T1', states: ['queued'], on: 'ok', when: r => ownStep(r), next: 'resumeTo', change: leased, via: 'lease' },
   { id: 'T2', states: ['designing'], on: 'ok', when: r => ownStep(r), next: 'building', change: (r, e) => ({ brief: dataOf(e).brief ?? r.brief }), via: 'brief' },
@@ -444,7 +446,7 @@ export function normalize(r: IssueRecord, e: TableEvent): TableEvent {
 // Throws when two rows match: the guards are exclusive, so that is a bug the totality test finds.
 export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row {
   const ev = normalize(r, e)
-  const hits = ROWS.filter(row => row.id !== 'S0' && row.on === ev.kind && row.states.includes(r.state) && (row.when === undefined || row.when(r, ev, c)))
+  const hits = ROWS.filter(row => row.id !== 'S0' && row.id !== 'S7' && row.on === ev.kind && row.states.includes(r.state) && (row.when === undefined || row.when(r, ev, c)))
   if (hits.length > 1) throw new Error(`rowFor: ${hits.map(h => h.id).join(', ')} all match ${r.state}/${r.step ?? 'none'} on ${ev.kind}`)
   const hit = hits[0] ?? E7_ROWS.find(row => row.on === ev.kind)
   if (hit === undefined) throw new Error(`rowFor: no row for ${ev.kind}`)
@@ -499,12 +501,23 @@ export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): Is
 
 // The claim a record is made from (S0, 3.5): the life (the claim's time in base-36 seconds), the
 // branch (an adopted PR's head branch, else issue-<N>), the adopted PR and the others left alone.
-export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[] }
+// park: a split's not-ready child, claimed to park on its open decision (row S7, 8.7).
+export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[]; park?: { question: string; parent: number } }
+
+// The first note of a split child's parked record: park-text.ts reads the parent back from it.
+export const splitParkNote = (parent: number) => `Split from #${parent}: it parked on its open decision.`
 
 // madeRecord: row S0's queued record: a lease leads to designing, or to reviewing for an adopted
 // PR, whose whole diff the review reads (3.5). lives: its life's number since the issue's count
 // last started (lives.ts).
 export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
+  const base = madeQueued(claim, now, lives)
+  if (claim.park === undefined) return base
+  // row S7: parked at once, the designer's step still to come (a resume goes on with designing)
+  return { ...base, state: 'parked', resumeTo: 'designing', step: null, question: claim.park.question, notes: [splitParkNote(claim.park.parent)] }
+}
+
+function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
   const others = claim.others.length === 0 ? [] : [`other open PRs on this issue's branches, left alone: ${claim.others.map(p => `#${p}`).join(', ')}`]
   return {
     issue: claim.issue,
@@ -536,3 +549,4 @@ export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
 
 // S0's row, for the transition that makes a record.
 export const ROW_S0: Row = ROWS[0] as Row
+export const ROW_S7: Row = ROWS[1] as Row

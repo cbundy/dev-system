@@ -172,7 +172,8 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (v2 SPEC 13.10 item 1)
   | { kind: 'cli'; exit: number; detail?: string }
-  | { kind: 'claim'; result: 'claimed' | 'lost' }
+  // park: the question a not-ready split child parks on and the parent that was split (v2 SPEC 8.7); only on a claimed result
+  | { kind: 'claim'; result: 'claimed' | 'lost'; park?: { question: string; parent: number } }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
   | { kind: 'designer'; unparsed: true }
   | { kind: 'adjudicator'; verdicts: string[]; action: AdjudicatorAction; report: MergeReport | null }
@@ -383,7 +384,9 @@ type Base = ActionBase
 // second this wake name, then key=value fields with no spaces. Context lines follow it in
 // the visible prompt: a mod cannot attach hidden context to its own prompt (v2 SPEC 13.8.1).
 export type Action =
-  | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
+  | (Base & { kind: 'heartbeat' | 'sweep' | 'close-issue' | 'milestone-later' })
+  // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
+  | (Base & { kind: 'claim'; park?: { question: string; parent: number } })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })

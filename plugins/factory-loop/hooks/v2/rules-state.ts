@@ -70,7 +70,7 @@ const fact = (f: string): Trigger => ({ kind: 'fact', fact: f })
 
 // ruleOf: the rule id a row's transition is planned under (14.1).
 function ruleOf(row: Row): string {
-  if (row.id === 'S0') return 'S1'
+  if (row.id === 'S0' || row.id === 'S7') return 'S1'
   if (row.id.startsWith('U')) return 'S4'
   if (row.id.startsWith('X')) return 'S5'
   return row.id.startsWith('T') ? 'S3' : 'S6'
