@@ -233,8 +233,11 @@ next=$((EXPECTED + 1)) # one migration more than the image ships
 echo "SELECT 1;" > "$tmpdir/mig-behind/$(printf '%04d' "$next")_extra.sql"
 rc=0
 out=$(FACTORY_DB_MIGRATIONS_DIR="$tmpdir/mig-behind" bash -c '. "$1"; factory_db_check writer' _ "$ROOT/images/base/factory-db.sh" 2>&1) || rc=$?
-expect 2 "FAIL" "behind" "factory-db-bootstrap --db $db" "migrations $next..$next"
-echo "ok: schema behind fails with the bootstrap fix"
+expect 2 "FAIL" "behind" "factory-db-migrate" "--migrate" "migrations $next..$next"
+if printf '%s\n' "$out" | grep -q 'admin URL'; then
+  fail "the behind fix must not offer the admin URL: $out"
+fi
+echo "ok: schema behind fails with the migrate fix"
 q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (10, 'future', 'x')" > /dev/null
 check writer
 expect 2 "FAIL" "ahead" "pull a newer image"
