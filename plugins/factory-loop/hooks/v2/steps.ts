@@ -225,6 +225,12 @@ async function gateRule(ctx: ExecCtx, entry: LedgerEntry, record: StepRecord, an
     hold.delete(id)
     return { take: true, note: gateNote(settled) }
   }
+  // a re-run's fail: no agent is left to refuse, so the hold ends and the answer is not taken; the
+  // entry, held from before this load, is then lost and re-run free (10.8)
+  if ((settled as { rerun?: boolean }).rerun === true) {
+    hold.delete(id)
+    return { take: false }
+  }
   const now = await ctx.io.now()
   const since = hold.get(id) ?? now
   hold.set(id, since)

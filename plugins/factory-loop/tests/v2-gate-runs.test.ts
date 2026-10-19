@@ -209,6 +209,26 @@ describe('gate lines and interventions', () => {
   })
 })
 
+describe('the recovery\'s lines (10.6)', () => {
+  test('gate-rerun and gate-cut are interventions of the loop, gate-start is neither an intervention nor a gate line; rerun is read, false when absent', () => {
+    const companion = text(
+      line({ cause: 'gate-start' }),
+      line({ cause: 'gate-rerun', reason: 'the gate cut at 13:21 runs again' }),
+      line({ cause: 'gate-cut', reason: 'the marker moved on' }),
+      line({ rerun: true }),
+      line({ cause: 'gate-fail', rerun: true, startedAt: new Date(NOW - 30 * MIN).toISOString() }),
+    )
+    expect(companionLines(companion, NOW).map(l => l.cause)).toEqual(['gate-rerun', 'gate-cut'])
+    expect(gateLines(companion, NOW).map(l => [l.cause, l.rerun])).toEqual([['gate-pass', true], ['gate-fail', true]])
+    expect(gateLines(text(line()), NOW).map(l => l.rerun)).toEqual([false])
+  })
+
+  test('a re-run\'s settling line is one gate_run, as any run is', () => {
+    const rerun = line({ rerun: true })
+    expect(dataOf(text(line({ cause: 'gate-start' }), rerun)).map(d => d?.result)).toEqual(['pass'])
+  })
+})
+
 describe('flakes: a pass after a fail on the same head, in a clean slot', () => {
   const HEAD2 = '5d3e9bb0000000000000000000000000000000ee'
   const iso = (ms: number) => new Date(ms).toISOString()
