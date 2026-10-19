@@ -28,6 +28,8 @@ const HANDSHAKE = { [handshakePath(`${CFG_DIR}/factory-loop`, SESSION)]: JSON.st
 const host: typeof engineHost = (on, opts = {}) => engineHost(on, { ...opts, files: { ...HANDSHAKE, ...opts.files } })
 
 const settingsRead = (s: Seen) => s.argv[0] === 'git' && (s.argv[1] === 'show' || s.argv[1] === 'symbolic-ref')
+// the pass's own settings.json write (settings-snapshot.ts): not a read of the factory, and it carries no repo env
+const snapshotWrite = (s: Seen) => s.argv[0] === 'sh' && s.argv[3] === 'settings-snapshot'
 
 // the claim of 470 at this clock, under v2's key (v2/keys.ts)
 const CLAIM_KEY = 'i470/claim/tmtsc5'
@@ -97,10 +99,25 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink
-    expect(h.commands().filter(s => !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
-    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !snapshotWrite(s) && !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // the state was recorded for the replay tools
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
+  })
+
+  test('every pass leaves the settings in force in settings.json; a failed write is a problem line, not a failed pass', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/settings.json`) ?? '{}')).toMatchObject({ v: 1, repo: REPO, settings: { mode: 'observe' }, layers: { mode: 'plugin' } })
+    // the file is gone and the write fails the next time: the pass still completes
+    h.files.delete(`${LOOP_DIR}/settings.json`)
+    h.failWrite = path => path.endsWith('/settings.json')
+    await clock.advance(60_000)
+    expect(h.passes()).toHaveLength(2)
+    expect(h.files.has(`${LOOP_DIR}/settings.json`)).toBe(false)
+    expect(JSON.stringify(h.last())).toContain('settings snapshot: write failed')
   })
 
   test('it never keeps a ledger, takes the act lock, spawns or wakes the model', ENGINE_TEST, async ($, on) => {
@@ -308,7 +325,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
     // act mode's commands write real events: no sink
     // (the reads of the repo's settings from origin run before the environment is built, and carry none)
-    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     expect(h.titles).toEqual(['🔄 dev-system (Q:1 - D:0 - M:0)'])
     // no full states in act mode
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(false)

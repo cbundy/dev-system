@@ -82,7 +82,7 @@ export function sourceOf(
   return 'default'
 }
 
-function originOf(file: Record<string, unknown>, key: string): Source {
+export function originOf(file: Record<string, unknown>, key: string): Source {
   return typeof file[key] === 'string' && file[key] !== '' ? 'workspace' : 'plugin'
 }
 

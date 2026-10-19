@@ -11,6 +11,7 @@ import { holdsLock, recordPass } from './pass-summary'
 import { LOCK_CAS_SCRIPT, actLockPath, checkRails, holdActLock, leaseMsOf, nextPass, noticeTell, parseLease, passEnded, pingsIgnored, requestPass, waitOver } from './rails'
 import type { BreakerNotice, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { keepTitles } from './report'
+import { agentModelsOf, snapshotOf, writeSnapshot } from './settings-snapshot'
 import { digestOf } from './state'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
@@ -204,6 +205,19 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
   let state = observed.state
+  // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
+  try {
+    const snap = snapshotOf(
+      rt,
+      state.control,
+      await agentModelsOf(path => text($, path), rt.pluginRoot),
+      { implementerOpusPct: await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT'), designSessionPct: await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT') },
+      state.now,
+    )
+    problems.push(...(await writeSnapshot({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, snap)))
+  } catch (e) {
+    problems.push(`settings snapshot: ${e instanceof Error ? e.message : String(e)}`)
+  }
   if (act) await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
