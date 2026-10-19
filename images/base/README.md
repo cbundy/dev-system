@@ -2094,6 +2094,7 @@ server. Default privileges give later migrations' objects the same grants, and e
 `FACTORY_DB_WRITER_PASSWORD` and `FACTORY_DB_READER_PASSWORD`, when set, become the roles' passwords
 (through psql variables); otherwise passwords are left alone.
 
+Migrations are expand-only, enforced by `npm run lint` ([rules](../../docs/factory-db.md#schema-compatibility)).
 The migrations are `NNNN_<name>.sql` files in `/usr/local/share/dev-system/factory-db/migrations/` (or
 `factory-db/migrations` beside the command in a checkout; `FACTORY_DB_MIGRATIONS_DIR` overrides). Each pending
 one runs in one transaction with its `factory.schema_migrations` row (`version`, `name`, `sha256`,

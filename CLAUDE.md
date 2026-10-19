@@ -114,7 +114,8 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
   JavaScript under `bin/`, `plugins/` and `scripts/`, and fails if a generated skill is
   out of date (`scripts/build-skills.js --check`) or the factory event docs, version lock and
   shapes are stale or a schema breaks its rules (`scripts/build-event-docs.js --check`; fix with
-  `npm run build:events`) (`scripts/lint.sh`). The base image
+  `npm run build:events`) or a factory database migration is not expand-only
+  (`scripts/migration-lint.js`; docs/factory-db.md "Schema compatibility") (`scripts/lint.sh`). The base image
   ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
   syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
