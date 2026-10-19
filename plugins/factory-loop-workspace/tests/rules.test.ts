@@ -3,7 +3,7 @@
 // stop gate's results.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { blockText, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
+import { blockText, failedTests, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
@@ -308,6 +308,14 @@ describe('the stop gate', () => {
     expect(text).toContain('line 200')
   })
 
+  test('runGates finds a failure past the 150-line tail', async () => {
+    const output = `FAIL early one\n${Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n')}`
+    const r = await runGates(io([{ exitCode: 1, output }]).io, ['npm test'], 600_000)
+    if (r.result !== 'fail') throw new Error('expected a failure')
+    expect(r.failedTests).toEqual(['early one'])
+    expect(r.tail).not.toContain('early one')
+  })
+
   test('a command that cannot finish, or a budget spent, is unknown and never a pass', async () => {
     const timedOut = await runGates(io([{ error: 'the child was killed after 600000 ms' }]).io, ['npm test'], 600_000)
     expect(timedOut.result).toBe('unknown')
@@ -317,10 +325,41 @@ describe('the stop gate', () => {
   })
 
   test('its record carries the result and the head', () => {
-    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0 })
+    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0, clean: null })
     expect(gateRecord({ result: 'unknown', ms: 5, why: 'x' }, null, 0, [])).toMatchObject({ result: 'unknown', why: 'x', head: null })
     expect(tail('a\nb\nc\n\n', 2)).toBe('b\nc')
   })
+})
+
+describe('failedTests', () => {
+  test('reads the reporter\'s FAIL blocks, not their at and message lines', () => {
+    const out = 'ok 1 - fine\nFAIL parses the marker\n  at tests/a.test.ts:3\n  expected 1 to be 2\nFAIL second one\n  at b\n  FAIL not a test line? \n'
+    expect(failedTests(out)).toEqual(['parses the marker', 'second one', 'not a test line?'])
+  })
+
+  test('reads (fail) lines under the job wrapper, without the wrapper or the duration', () => {
+    const out = 'FAIL plugins/factory-loop (claude plugin validate / test)\n    (pass) x > y [1.68ms]\n    (fail) group > fails here [0.43ms]\n    (fail) slow > one [1.5s]\n'
+    expect(failedTests(out)).toEqual(['group > fails here', 'slow > one'])
+  })
+
+  test('drops the job wrapper of a shell suite and the setup failures, keeps an isolation failure', () => {
+    expect(failedTests('FAIL scripts/x.test.sh\n')).toBeNull()
+    expect(failedTests('FAIL test setup: no postgres\n')).toBeNull()
+    expect(failedTests('FAIL test isolation: database factory_test_x\n')).toEqual(['test isolation: database factory_test_x'])
+  })
+
+  test('strips ANSI codes, drops duplicates, cuts names to 200 and the list to 20', () => {
+    expect(failedTests('\u001b[31mFAIL red one\u001b[0m\nFAIL red one\n')).toEqual(['red one'])
+    expect(failedTests(`FAIL ${'n'.repeat(300)}\n`)).toEqual(['n'.repeat(200)])
+    const many = Array.from({ length: 25 }, (_, i) => `FAIL t${i}`).join('\n')
+    expect(failedTests(many)?.length).toBe(20)
+    expect(failedTests(many)?.[19]).toBe('t19')
+  })
+
+  test('is null when nothing failed', () => {
+    expect(failedTests('all good\n(pass) a [1ms]\n')).toBeNull()
+  })
+
 })
 
 describe('the stop gate\'s waiting', () => {
@@ -330,8 +369,11 @@ describe('the stop gate\'s waiting', () => {
     if (r.result !== 'unknown') throw new Error('expected unknown')
     expect(r.why).toContain('waited 1800 s for a turn')
     expect(gateRecord(r, null, 0, ['npm test'], 1_800_000)).toMatchObject({ result: 'unknown', waitMs: 1_800_000 })
-    expect(gateLine(r, null, 1_800_000, 2, '2026-10-17T10:00:00.000Z', 3)).toMatchObject({ cause: 'gate-unknown', fields: { waitMs: 1_800_000, concurrency: 2, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 3 } })
-    expect(gateLine({ result: 'pass', ms: 1 }, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0).fields).toEqual({ head: 'abc', ms: 1, waitMs: 0, concurrency: null, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 0 })
+    expect(gateLine(r, null, 1_800_000, 2, '2026-10-17T10:00:00.000Z', 3, null)).toMatchObject({ cause: 'gate-unknown', fields: { waitMs: 1_800_000, concurrency: 2, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 3, clean: null } })
+    expect(gateLine({ result: 'pass', ms: 1 }, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0, true).fields).toEqual({ head: 'abc', ms: 1, waitMs: 0, concurrency: null, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 0, clean: true })
+    const fail = { result: 'fail' as const, ms: 1, command: 'npm test', exitCode: 1, tail: '', failedTests: ['a'] }
+    expect(gateLine(fail, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0, true).fields).toMatchObject({ clean: true, failedTests: ['a'] })
+    expect(gateRecord(fail, 'abc', 0, [], 0, false)).toMatchObject({ clean: false, failedTests: ['a'] })
   })
 })
 

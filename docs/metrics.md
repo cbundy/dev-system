@@ -161,6 +161,9 @@ repeat an event, so each run counts once per (issue, life, seq, started_at). The
 columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
 rows before a loop with this rule has run.
 
+A pass row can carry `flaky` (and, when true, `failed_tests` and `failed_at` of the fail it followed)
+and a fail row `failed_tests`; section 2d reads them.
+
 Take the p50 and p95 of `wait_ms` and `run_ms` per `day` in code (docs/factory-events/README.md:
 percentiles and medians are not SQL); a count and a mean per day are safe in SQL.
 

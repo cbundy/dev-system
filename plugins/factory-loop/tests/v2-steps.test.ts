@@ -382,7 +382,7 @@ function gateLine(w: ReturnType<typeof world>, over: Record<string, unknown>) {
   const line = { at: NOW + 5000, cause: 'gate-pass', issue: 470, life: 'tbq3k0', seq: 3, ms: 1000, waitMs: 0, head: null, concurrency: null, ...over }
   w.files.set(path, `${w.files.get(path) ?? ''}${JSON.stringify(line)}\n`)
 }
-const line = (over: Partial<GateLine>): GateLine => ({ at: NOW + 1000, issue: 470, life: 'tbq3k0', seq: 3, cause: 'gate-pass', head: null, ms: 1, waitMs: 0, concurrency: null, startedAt: null, startedMs: null, derived: null, queuedBehind: null, ...over })
+const line = (over: Partial<GateLine>): GateLine => ({ at: NOW + 1000, issue: 470, life: 'tbq3k0', seq: 3, cause: 'gate-pass', head: null, ms: 1, waitMs: 0, concurrency: null, startedAt: null, startedMs: null, derived: null, queuedBehind: null, clean: null, hasClean: false, failedTests: null, ...over })
 const AT = { issue: 470, life: 'tbq3k0', seq: 3, since: NOW }
 
 describe('gateSettled', () => {

@@ -209,6 +209,80 @@ describe('gate lines and interventions', () => {
   })
 })
 
+describe('flakes: a pass after a fail on the same head, in a clean slot', () => {
+  const HEAD2 = '5d3e9bb0000000000000000000000000000000ee'
+  const iso = (ms: number) => new Date(ms).toISOString()
+  // a run of the current companion, started at NOW - startMin minutes and 12 s long
+  const run = (startMin: number, over: Record<string, unknown> = {}) =>
+    line({ at: NOW - startMin * MIN + 12_000, startedAt: iso(NOW - startMin * MIN), waitMs: 0, queuedBehind: 0, clean: true, ...over })
+  const fail = (over: Record<string, unknown> = {}) => run(30, { cause: 'gate-fail', failedTests: ['a > b', 'c'], ...over })
+  const pass = (over: Record<string, unknown> = {}) => run(20, over)
+  const passData = (...lines: Record<string, unknown>[]) => dataOf(text(...lines)).find(d => d?.result === 'pass')
+  const reasons = (...lines: Record<string, unknown>[]) => runs(plan(stateOf(text(...lines)))).map(a => a.reason)
+
+  test('a fail then a pass on one head, both clean, is a flake with the names and the fail\'s start', () => {
+    const d = passData(fail(), pass())
+    expect(d).toMatchObject({ flaky: true, failed_tests: ['a > b', 'c'], failed_at: iso(NOW - 30 * MIN) })
+    expect(reasons(fail(), pass()).join('\n')).toContain(`pass in 12000 ms after 0 ms, flaky after the fail at ${iso(NOW - 30 * MIN)} on 4c2d8aa`)
+  })
+
+  test('a fail row carries its own names and no flake fields', () => {
+    const d = dataOf(text(fail(), pass())).find(x => x?.result === 'fail')
+    expect(d).toMatchObject({ failed_tests: ['a > b', 'c'] })
+    expect(d).not.toHaveProperty('flaky')
+  })
+
+  test('a flake whose fail parsed no names has failed_tests null', () => {
+    expect(passData(fail({ failedTests: undefined }), pass())).toMatchObject({ flaky: true, failed_tests: null })
+  })
+
+  const cases: [string, Record<string, unknown>[], string][] = [
+    ['a new head', [fail({ head: HEAD2 }), pass()], 'the head moved'],
+    ['a null head on the fail', [fail({ head: null }), pass()], 'the head is unknown'],
+    ['a dirty slot on the pass', [fail(), pass({ clean: false })], 'the slot was dirty'],
+    ['a dirty slot on the fail', [fail({ clean: false }), pass()], 'the slot was dirty'],
+    ['an unknown slot on the fail', [fail({ clean: null }), pass()], 'the slot was dirty'],
+    ['a pass as the run before', [run(30), pass()], 'the run before was a pass'],
+    ['an unknown run between', [fail(), run(25, { cause: 'gate-unknown' }), pass()], 'the run before did not finish'],
+    ['no run before', [pass()], 'no run before it in this life'],
+    ['a fail in another life', [fail({ life: 'zzz' }), pass()], 'no run before it in this life'],
+    ['a fail of another issue', [fail({ issue: N + 1 }), pass()], 'no run before it in this life'],
+  ]
+  for (const [name, lines, why] of cases) {
+    test(`${name} is not a flake`, () => {
+      expect(passData(...lines)).toMatchObject({ flaky: false })
+      expect(passData(...lines)).not.toHaveProperty('failed_tests')
+      expect(reasons(...lines).join('\n')).toContain(`not a flake: ${why}`)
+    })
+  }
+
+  test('a bare gate-unknown of the hook\'s catch between the two refuses', () => {
+    const bare = { at: NOW - 25 * MIN, issue: N, life: LIFE, seq: 7, cause: 'gate-unknown', reason: 'the stop gate hook failed (x)' }
+    expect(passData(fail(), bare, pass())).toMatchObject({ flaky: false })
+    // outside the two runs it does not matter
+    expect(passData(fail(), { ...bare, at: NOW - 40 * MIN }, pass())).toMatchObject({ flaky: true })
+  })
+
+  test('the run before is the latest start before the pass, whatever the order of the lines', () => {
+    expect(passData(pass(), fail(), run(40, { cause: 'gate-fail', head: HEAD2 }))).toMatchObject({ flaky: true })
+  })
+
+  test('a pass from a companion before clean has no flaky key; one with a null clean has flaky false', () => {
+    expect(passData(fail(), pass({ clean: undefined }))).not.toHaveProperty('flaky')
+    expect(passData(fail(), pass({ clean: null }))).toMatchObject({ flaky: false })
+  })
+
+  test('names the schema refuses write nothing', () => {
+    expect(dataOf(text(fail({ failedTests: ['x'.repeat(201)] })))).toEqual([])
+    expect(dataOf(text(fail({ failedTests: Array.from({ length: 21 }, (_, i) => `t${i}`) })))).toEqual([])
+    expect(dataOf(text(fail({ failedTests: [1] })))[0]).not.toHaveProperty('failed_tests')
+  })
+
+  test('the same lines read twice give one event each', () => {
+    expect(runs(plan(stateOf(text(fail(), pass(), fail(), pass()))))).toHaveLength(2)
+  })
+})
+
 describe('a pass reads companion.jsonl and writes the gate_run once', () => {
   const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
   const quiet = (argv: string[], s: { stdin?: string }) => {
@@ -250,5 +324,28 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     await clock.advance(60_000)
     expect(writes()).toHaveLength(2)
     expect(h.entry(`i${N}/l${LIFE}/s7/gate/${(NOW - 20 * MIN).toString(36)}`)).toMatchObject({ status: 'done' })
+  })
+
+  const verdicts: [string, Record<string, unknown>[], boolean][] = [
+    ['a fail then a pass on one head, both clean', [{ head: HEAD }, { head: HEAD }], true],
+    ['a fail, a new commit, then a pass', [{ head: HEAD }, { head: '5d3e9bb0000000000000000000000000000000ee' }], false],
+    ['a fail then a pass in a dirty slot', [{ head: HEAD }, { head: HEAD, clean: false }], false],
+  ]
+  for (const [name, [f, p], flaky] of verdicts) test(`${name} writes the flake verdict once`, ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const failLine = line({ at: NOW - 30 * MIN + 12_000, cause: 'gate-fail', startedAt: new Date(NOW - 30 * MIN).toISOString(), waitMs: 0, queuedBehind: 0, clean: true, failedTests: ['a > b'], ...f })
+    const passLine = line({ at: NOW - 20 * MIN + 12_000, startedAt: new Date(NOW - 20 * MIN).toISOString(), waitMs: 0, queuedBehind: 0, clean: true, ...p })
+    const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work' }, run: quiet, files: { [`${LOOP_DIR}/companion.jsonl`]: text(failLine, passLine) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    await clock.advance(60_000)
+    await clock.advance(60_000)
+    const writes = h.events().filter(e => e[1] === '--type').map(e => JSON.parse(e[4] ?? '{}') as Record<string, unknown>)
+    expect(writes).toHaveLength(2)
+    const got = writes.find(d => d.result === 'pass')
+    expect(got?.flaky).toBe(flaky)
+    if (flaky) expect(got).toMatchObject({ failed_tests: ['a > b'], failed_at: new Date(NOW - 30 * MIN).toISOString() })
+    expect(writes.find(d => d.result === 'fail')).toMatchObject({ failed_tests: ['a > b'] })
   })
 })
