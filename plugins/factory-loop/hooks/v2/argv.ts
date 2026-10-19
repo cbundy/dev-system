@@ -281,6 +281,26 @@ export function implementerRouteArgv(issue: number): string[] {
   return ['callum-flow-implementer-route', String(issue)]
 }
 
+// --- the designer's model (7.1) ---------------------------------------------------------------------
+
+// The model the designer runs on; the tool logs `designer_routed` itself.
+export function designerRouteArgv(issue: number): string[] {
+  return ['callum-flow-designer-route', String(issue)]
+}
+
+// The loop's own `designer_routed`, written when the route could not run.
+export function designerFallbackArgv(issue: number, model: string): string[] {
+  return [
+    'callum-flow-event',
+    '--type',
+    'designer_routed',
+    '--issue',
+    String(issue),
+    '--data',
+    JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null }),
+  ]
+}
+
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------
 
 export function claimArgv(issue: number): string[] {

@@ -2,7 +2,10 @@
 // (docs/factory-loop/v2/SPEC.md 4.2, 5.1, 7.1, 8.7, 9.7, 10.8): their prompts (prompts-work.ts),
 // their contracts (contracts-work.mjs: design-v2, build, fix) and what an answer means.
 //
-// - design: a brief is ok, a question or a split is not-ok; the plan side (rules-work.ts) posts the
+// - design: runs on the model `callum-flow-designer-route` picks (which logs `designer_routed`),
+//   falling back to the issue's model label or the agent's model when the route fails (the loop
+//   then logs `designer_routed` with reason fallback). A brief is ok, a question or a split is
+//   not-ok; the plan side (rules-work.ts) posts the
 //   brief and makes the split's children before the result counts. A reader: nothing is read on
 //   origin.
 // - build: the builder runs on the model `callum-flow-implementer-route` picks, which also logs
@@ -403,26 +406,39 @@ const design: StepModule = {
     if (typeof r === 'string') return r
     // a reader applies no leftovers patch: it changes nothing in its slot
     const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
-    return { prompt, model: model(modelLabelOf(ctx.state, r.issue)), data: null }
+    const routedTo = await runRoute(ctx, ARGV.designerRouteArgv(r.issue), 'callum-flow-designer-route ' + r.issue)
+    if (typeof routedTo === 'string' && routedTo.startsWith('ok:')) return { prompt, model: routedTo.slice(3), data: null }
+    const fallback = model(modelLabelOf(ctx.state, r.issue))
+    try {
+      await ctx.cmd(ARGV.designerFallbackArgv(r.issue, fallback ?? 'opus'), { timeoutMs: ROUTE_MS })
+    } catch {
+      // best effort: the design runs either way
+    }
+    return { prompt, model: fallback, data: null }
   },
   result: async (ctx, record, answer) => (asDesign(answer)?.kind === 'done' ? doneResult(ctx, record, answer) : designResult(answer)),
 }
 
-// The builder's model: the route's answer (an issue's model label first, then the comparison's
-// split); the route logs implementer_routed (7.1). A route that fails is the attempt's failure.
-async function routed(ctx: ExecCtx, issue: number): Promise<string> {
-  const argv = ARGV.implementerRouteArgv(issue)
+// Runs a route tool: 'ok:<alias>' for one plain alias, else the failure text.
+async function runRoute(ctx: ExecCtx, argv: string[], name: string): Promise<string> {
   let out: string
   try {
     const r = await ctx.cmd(argv, { timeoutMs: ROUTE_MS })
     if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}: ${(r.stderr.trim() || r.stdout.trim()).split('\n').pop() ?? ''}`)
     out = r.stdout
   } catch (err) {
-    throw new Error(`callum-flow-implementer-route ${issue}: ${err instanceof Error ? err.message : String(err)}`)
+    return `${name}: ${err instanceof Error ? err.message : String(err)}`
   }
   const m = routedModel(out)
-  if (m === null) throw new Error(`callum-flow-implementer-route ${issue} printed no model`)
-  return m
+  return m === null ? `${name} printed no model` : `ok:${m}`
+}
+
+// The builder's model: the route's answer (an issue's model label first, then the comparison's
+// split); the route logs implementer_routed (7.1). A route that fails is the attempt's failure.
+async function routed(ctx: ExecCtx, issue: number): Promise<string> {
+  const r = await runRoute(ctx, ARGV.implementerRouteArgv(issue), `callum-flow-implementer-route ${issue}`)
+  if (!r.startsWith('ok:')) throw new Error(r)
+  return r.slice(3)
 }
 
 const build: StepModule = {

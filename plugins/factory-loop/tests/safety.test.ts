@@ -74,6 +74,8 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return { stdout: 'ROLLOUT run-it source=brief\n' }
     case 'callum-flow-implementer-route':
       return { stdout: 'sonnet\n' }
+    case 'callum-flow-designer-route':
+      return { stdout: 'opus\n' }
     case 'treehouse':
       if (args[0] === 'get') return { stdout: `${LEASED}\n` }
       if (args[0] === 'status') return { stdout: JSON.stringify([{ path: SLOT, branch: 'issue-470-x', status: 'available', processes: [] }]) }

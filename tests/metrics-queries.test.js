@@ -107,6 +107,7 @@ const RUN_ONLY = [
   "Split trackers closed by the loop #0", "Split children parked on their open decision #0",
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
   "2d. Flaky tests #0", "2d. Flaky tests #1", "2d. Flaky tests #2", "2d. Flaky tests #3", "2d. Flaky tests #4",
+  "8b. Designer model comparison #0",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
   "9b. Permission prompts #0",
