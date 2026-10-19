@@ -63,9 +63,11 @@ your turn ends only with your answer.
   exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the
   evidence which route you used and why. Commit an image only when it is a durable reference
   image the repo keeps.
-- Run the repo's own lint and test commands in the foreground and let them finish. When you end
-  your turn the loop runs the repo's gate commands, when the repo sets them, in your slot; while
-  they fail it hands you the failures. CI on the PR is the final gate.
+- Run the repo's own lint and test commands in the foreground and let them finish. When the repo
+  sets gate commands, run only the suites you are changing (as its `CLAUDE.md` names) and not the
+  full commands: when you end your turn the loop runs the gate commands in your slot, and while
+  they fail it hands you the failures. With no gate commands, run the full commands once before
+  you answer. CI on the PR is the final gate.
 - Never delete, skip or weaken an existing test or assertion to make a gate pass; fix the code or
   the environment instead. Remove a test only if it is clearly and absolutely not required, and
   then say why in your answer's summary.

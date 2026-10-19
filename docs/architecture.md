@@ -106,6 +106,28 @@ drops it afterwards; a leftover database or role prints `FAIL test isolation: da
 the run. With no server and no binaries the database tests skip and the summary line says so, unless
 `TEST_REQUIRE_POSTGRES=1` (CI), where the run fails. `tests/schema-compat.test.js` also needs the release tags (a full clone, not a shallow one); without them it skips, and `TEST_REQUIRE_TAGS=1` (CI checks out with `fetch-depth: 0`) makes a shallow clone or no tags a failure.
 
+One full run per machine: a full run (no ids, a `TEST_SHARD` run included) takes an exclusive
+`flock` on `<lock dir>/lock` (`scripts/test-lock.sh`) after `--list` and the id, `TEST_SHARD` and
+`TEST_JOBS` checks and before the sandbox and PostgreSQL setup. The lock dir is
+`TEST_LOCK_DIR`, default `/tmp/callum-dev-system-test`. A second full run prints one line,
+`test: waiting for another full run (pid <P>, <checkout dir>) to finish`, and waits (the holder
+writes its pid and checkout dir into the lock file). The wait is a background `flock` the script
+`wait`s on, so SIGINT and SIGTERM exit at once (130, 143). flock releases the lock when the holder
+exits however it exits, and the job pool and the PostgreSQL server run with the descriptor closed,
+so a process a test leaves behind cannot keep it. A run started from inside another run
+(`TEST_LOCK_HELD=<lock dir>`, exported by the outer run) neither locks nor registers, so the
+gate's own tests that run `test.sh` cannot deadlock on it. Without `flock` on PATH a full run runs
+unlocked and its summary line says so. On a machine where the factory's `gateConcurrency` auto is 2
+or more (16 or more CPUs), a second stop gate in this repo waits inside `test.sh`, and that wait counts in its
+`gate_run` `run_ms` and the gate timeout.
+
+Every non-nested run (subsets included) also registers as `<lock dir>/<pid>`, removed on exit;
+entries of dead pids are ignored and removed. With `TEST_JOBS` unset, the pool size is
+`max(1, floor(cpus / live runs))` counting itself, computed once at start (`cpus` is
+`scripts/test-pool.sh --cpus`), and when that is below `cpus` the node job also gets
+`--test-concurrency=<share>` (`TEST_NODE_CONCURRENCY`, read by `scripts/test-job.sh`). An explicit
+`TEST_JOBS` wins. A full run alone behaves as before.
+
 Subset mode, for debugging: `npm test -- <id>...` (that is, `sh scripts/test.sh <id>...`) runs only
 the named jobs, with the same sandbox, PostgreSQL setup, `TEST_JOBS` pool, failure output and
 isolation checks. An id is `node` (the whole node step), a `tests/<name>.test.js` file (all named

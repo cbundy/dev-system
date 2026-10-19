@@ -77,7 +77,9 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
 - **The factory loop.** You are a loop agent when the factory loop started you (your prompt's
   first line is `factory-slot: <path>`) or a loop agent started you. The loop prepared your slot,
   a worktree on the issue's branch, and does the rest: when a builder or fixer ends its turn it
-  runs the repo's gate commands in the slot and hands back any failure; it opens the PR and writes
+  runs the repo's gate commands in the slot and hands back any failure, so a loop agent runs only
+  the subsets it changes and leaves the full gate commands to that stop gate when the repo sets
+  them; it opens the PR and writes
   its title, body, issue link and evidence from your answer; it runs review, waits on CI and
   merges through its own queue. Follow your agent definition and your prompt. Work only in your
   slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
@@ -104,8 +106,10 @@ has passed.
 While debugging, run only what you are changing with `npm test -- <id>...`, where an id is
 `node`, a `tests/<name>.test.js` file, a `*.test.sh` suite path or a mod directory (for example
 `npm test -- plugins/factory-loop` or `npm test -- tests/cli.test.js`); it keeps the sandbox,
-PostgreSQL and isolation checks and says it is a subset, not the gate. Then run the gates once at
-the end. Do not run `node --test`, `claude plugin test` or a suite's `sh` directly: they skip the
+PostgreSQL and isolation checks and says it is a subset, not the gate. On the manual path, then run
+the gates once at the end; a loop agent leaves them to the stop gate. A full run (no ids) takes a
+machine-wide lock and waits for any other full run on the machine; subset runs never wait but share
+the CPUs with the runs alive. Do not run `node --test`, `claude plugin test` or a suite's `sh` directly: they skip the
 sandbox and the database tests. `TEST_JOBS` sizes a run.
 
 - `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script

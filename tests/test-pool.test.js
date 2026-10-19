@@ -243,7 +243,7 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
   const scripts = path.join(root, "scripts");
   fs.mkdirSync(scripts);
-  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh", "test-pg.sh", "test-db-guard"]) {
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh", "test-pg.sh", "test-lock.sh", "test-db-guard"]) {
     fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
   }
   fs.mkdirSync(path.join(root, "tests"));
@@ -261,6 +261,13 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   delete env.FACTORY_TEST_PG_ADMIN_URL;
   delete env.TEST_REQUIRE_POSTGRES;
   env.TEST_PG_BIN_ROOT = path.join(root, "no-postgres");
+  // Its own lock dir, and no marker from the run this test sits in: each fixture is a top-level run.
+  delete env.TEST_LOCK_HELD;
+  // A fixture run that exits before its own sandbox setup (a signal while waiting for the lock, a
+  // bad argument) would otherwise remove the sandbox of the run this test sits in.
+  delete env.TEST_SANDBOX;
+  delete env.TEST_NODE_CONCURRENCY;
+  env.TEST_LOCK_DIR = path.join(root, "lock");
   return { root, tmp, env, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -446,4 +453,232 @@ test("test.sh fails when a suite connects psql to a real configured database hos
     fs.rmSync(secrets, { recursive: true, force: true });
     fs.rmSync(fakeBin, { recursive: true, force: true });
   }
+});
+
+// scripts/test-lock.sh: one full run per machine, nested runs exempt, CPUs shared by live runs.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(cond, what, tries = 400) {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await sleep(25);
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+const isAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// A suite that records that it started, then blocks until `release` exists.
+function blockingSuite(repo, name) {
+  const started = path.join(repo.root, `${name}.started`);
+  const release = path.join(repo.root, "release");
+  fs.writeFileSync(
+    path.join(repo.root, "features", "test", "callum-tools", `${name}.test.sh`),
+    `echo $$ > ${started}\nwhile [ ! -e ${release} ]; do sleep 0.05; done\n`,
+  );
+  return { started, release };
+}
+
+function startRun(repo, args = [], env = {}) {
+  const child = spawn("sh", [path.join(repo.root, "scripts", "test.sh"), ...args], {
+    env: { ...repo.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  const run = { child, stdout: "", stderr: "" };
+  child.stdout.on("data", (d) => (run.stdout += d));
+  child.stderr.on("data", (d) => (run.stderr += d));
+  run.exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  return run;
+}
+
+test("a second full run waits for the first and names the holder once", async () => {
+  const repo = fakeRepo({});
+  const a = blockingSuite(repo, "a");
+  const second = path.join(repo.root, "features", "test", "callum-tools", "b.test.sh");
+  const bStarted = path.join(repo.root, "b.started");
+  const runs = [];
+  // b runs only in the second run: it checks the first one is gone by the time it starts.
+  fs.writeFileSync(second, `[ -e ${a.release} ] || exit 1\ntouch ${bStarted}\n`);
+  try {
+    const first = startRun(repo, [], { TEST_JOBS: "1" });
+    runs.push(first);
+    await until(() => fs.existsSync(a.started), "the first run's suite");
+    assert.match(fs.readFileSync(path.join(repo.root, "lock", "lock"), "utf8"), new RegExp(`^${first.child.pid} ${repo.root}\\n$`));
+    const next = startRun(repo, [], { TEST_JOBS: "1" });
+    runs.push(next);
+    await until(() => next.stderr.includes("waiting"), "the waiting line");
+    assert.strictEqual(
+      next.stderr,
+      `test: waiting for another full run (pid ${first.child.pid}, ${repo.root}) to finish\n`,
+    );
+    await sleep(300);
+    assert.ok(!fs.existsSync(bStarted), "the second run started its suites while the first held the lock");
+    fs.writeFileSync(a.release, "");
+    assert.strictEqual(await first.exited, 0, first.stderr);
+    assert.strictEqual(await next.exited, 0, next.stderr);
+    assert.ok(fs.existsSync(bStarted));
+    assert.strictEqual(next.stderr.split("\n").filter((l) => l.includes("waiting")).length, 1);
+  } finally {
+    fs.writeFileSync(path.join(repo.root, "release"), "");
+    await Promise.all(runs.map((r) => r.exited));
+    repo.cleanup();
+  }
+});
+
+// Holds the lock the way a full run does (flock on <lock dir>/lock) from a separate process.
+async function holdLock(repo) {
+  fs.mkdirSync(repo.env.TEST_LOCK_DIR, { recursive: true });
+  const lock = path.join(repo.env.TEST_LOCK_DIR, "lock");
+  const held = path.join(repo.root, "held");
+  const holder = spawn("flock", [lock, "sh", "-c", `touch ${held}; sleep 60`], { stdio: "ignore", detached: true });
+  await until(() => fs.existsSync(held), "the test's own lock holder");
+  return () => process.kill(-holder.pid, "SIGKILL");
+}
+
+test("a subset run, a nested run, --list and bad arguments never wait for the lock", async () => {
+  const repo = fakeRepo({});
+  fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "quick.test.sh"), "exit 0\n");
+  const release = await holdLock(repo);
+  const sh = path.join(repo.root, "scripts", "test.sh");
+  const run = (args, env = {}) => spawnSync("sh", [sh, ...args], { encoding: "utf8", env: { ...repo.env, ...env }, timeout: 30000 });
+  try {
+    const subset = run(["features/test/callum-tools/quick.test.sh"]);
+    assert.strictEqual(subset.status, 0, subset.stderr);
+    const nested = run([], { TEST_LOCK_HELD: repo.env.TEST_LOCK_DIR });
+    assert.strictEqual(nested.status, 0, nested.stderr);
+    assert.strictEqual(nested.stderr, "");
+    const list = run(["--list"]);
+    assert.strictEqual(list.status, 0, list.stderr);
+    assert.strictEqual(run(["no/such.test.sh"]).status, 2);
+    assert.strictEqual(run([], { TEST_JOBS: "x" }).status, 2);
+    assert.strictEqual(run([], { TEST_SHARD: "3/2" }).status, 2);
+    for (const r of [subset, nested, list]) assert.doesNotMatch(r.stderr, /waiting/);
+    // Nested and subset runs left no registration behind except dead ones are ignored.
+    assert.deepStrictEqual(fs.readdirSync(repo.env.TEST_LOCK_DIR).filter((f) => /^\d+$/.test(f)), []);
+  } finally {
+    release();
+    repo.cleanup();
+  }
+});
+
+test("SIGTERM to a run waiting for the lock exits 143 at once and leaves no temp dir", async () => {
+  const repo = fakeRepo({});
+  fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "quick.test.sh"), "exit 0\n");
+  const release = await holdLock(repo);
+  try {
+    const waiting = startRun(repo);
+    await until(() => waiting.stderr.includes("waiting"), "the waiting line");
+    const start = Date.now();
+    process.kill(waiting.child.pid, "SIGTERM");
+    assert.strictEqual(await waiting.exited, 143);
+    assert.ok(Date.now() - start < 5000);
+    assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
+  } finally {
+    release();
+    repo.cleanup();
+  }
+});
+
+test("the lock is free once its holder is SIGKILLed, though a job it started still runs", async () => {
+  const repo = fakeRepo({});
+  const pidfile = path.join(repo.root, "jobpid");
+  fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "a.test.sh"), `echo $$ > ${pidfile}\nsleep 60\n`);
+  let jobPid = 0;
+  try {
+    const holder = startRun(repo);
+    await until(() => fs.existsSync(pidfile) && fs.readFileSync(pidfile, "utf8").trim() !== "", "the holder's job");
+    jobPid = Number(fs.readFileSync(pidfile, "utf8"));
+    process.kill(holder.child.pid, "SIGKILL");
+    await holder.exited;
+    assert.ok(isAlive(jobPid), "the job should outlive its killed parent for this test to mean anything");
+    const r = spawnSync("flock", ["-n", path.join(repo.env.TEST_LOCK_DIR, "lock"), "true"], { encoding: "utf8" });
+    assert.strictEqual(r.status, 0, "the lock is still held by a process the killed run left behind");
+  } finally {
+    if (jobPid) {
+      try {
+        process.kill(jobPid, "SIGKILL");
+      } catch {}
+    }
+    repo.cleanup();
+  }
+});
+
+// Peak concurrency of `n` sleeping suites in a fakeRepo run with the given env.
+async function peakSuites(repo, n, env, setup) {
+  const log = path.join(repo.root, "conc");
+  for (let i = 0; i < n; i++) {
+    fs.writeFileSync(
+      path.join(repo.root, "features", "test", "callum-tools", `s${i}.test.sh`),
+      `echo + >> ${log}\nsleep 0.5\necho - >> ${log}\n`,
+    );
+  }
+  if (setup) setup();
+  const e = { ...repo.env, ...env };
+  if (!("TEST_JOBS" in env)) delete e.TEST_JOBS;
+  const r = spawnSync("sh", [path.join(repo.root, "scripts", "test.sh")], { encoding: "utf8", env: e, timeout: 120000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  let cur = 0;
+  let peak = 0;
+  for (const l of fs.readFileSync(log, "utf8").trim().split("\n")) {
+    cur += l === "+" ? 1 : -1;
+    peak = Math.max(peak, cur);
+  }
+  return peak;
+}
+
+test("with another live run registered, the pool gets its share of the CPUs; dead entries and TEST_JOBS are respected", async () => {
+  const cpus = os.availableParallelism();
+  const n = cpus * 2 + 2;
+  const register = (repo, pid) => {
+    fs.mkdirSync(repo.env.TEST_LOCK_DIR, { recursive: true });
+    fs.writeFileSync(path.join(repo.env.TEST_LOCK_DIR, String(pid)), "/elsewhere\n");
+  };
+  const sleeper = spawn("sleep", ["120"], { stdio: "ignore" });
+  const dead = spawnSync("sh", ["-c", "echo $$"], { encoding: "utf8" }).stdout.trim();
+  try {
+    // Alone: the whole CPU count (node itself adds no suite jobs here, only the shell suites count).
+    let repo = fakeRepo({});
+    try {
+      const alone = await peakSuites(repo, n, {});
+      assert.ok(alone <= cpus);
+    } finally {
+      repo.cleanup();
+    }
+    repo = fakeRepo({});
+    try {
+      const shared = await peakSuites(repo, n, {}, () => register(repo, sleeper.pid));
+      assert.ok(shared <= Math.max(1, Math.floor(cpus / 2)), `peak ${shared}`);
+    } finally {
+      repo.cleanup();
+    }
+    repo = fakeRepo({});
+    try {
+      const ignoreDead = await peakSuites(repo, n, {}, () => register(repo, dead));
+      assert.ok(ignoreDead <= cpus);
+      assert.ok(!fs.existsSync(path.join(repo.env.TEST_LOCK_DIR, dead)), "a dead run's entry is removed");
+    } finally {
+      repo.cleanup();
+    }
+    repo = fakeRepo({});
+    try {
+      const explicit = await peakSuites(repo, 4, { TEST_JOBS: "3" }, () => register(repo, sleeper.pid));
+      assert.strictEqual(explicit, 3);
+    } finally {
+      repo.cleanup();
+    }
+  } finally {
+    sleeper.kill("SIGKILL");
+  }
+});
+
+test("test-pool.sh --cpus prints the CPU count the default pool size uses", () => {
+  const r = spawnSync("sh", [POOL, "--cpus"], { encoding: "utf8", env: { ...process.env, TEST_JOBS: "oops" } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(Number(r.stdout.trim()), os.availableParallelism());
 });

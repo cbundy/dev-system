@@ -30,6 +30,13 @@
 #
 # List mode: `npm test -- --list` prints the ids the run would schedule (after the subset or shard
 # filter), one per line in scheduled order, and exits 0 before any setup.
+#
+# One full run per machine (scripts/test-lock.sh): a full run (no ids, a TEST_SHARD run included)
+# takes an exclusive flock in $TEST_LOCK_DIR (default /tmp/callum-dev-system-test) after the checks
+# above and before any setup, and while another full run holds it prints one line naming the holder
+# and waits. Subset runs never lock. A run started from inside another run (TEST_LOCK_HELD) neither
+# locks nor registers. Every other run registers there; with TEST_JOBS unset the pool gets
+# floor(cpus / live runs) workers (at least 1), and node gets the same --test-concurrency.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -81,7 +88,8 @@ SERIAL=""
 results=$(mktemp -d /tmp/npm-test.XXXXXX) || exit 1
 . ./scripts/test-sandbox.sh
 . ./scripts/test-pg.sh
-trap 'test_pg_clean; test_sandbox_clean; rm -rf "$results"' EXIT
+. ./scripts/test-lock.sh
+trap 'test_pg_clean; test_sandbox_clean; rm -rf "$results"; test_lock_clean' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -202,6 +210,15 @@ if [ "$list" -eq 1 ]; then
   exit 0
 fi
 
+# One full run per machine: wait for any other, then register for the CPU share. The lock is fd 9;
+# the pool and the PostgreSQL server below close it, so only this shell holds it.
+[ "$#" -eq 0 ] && { test_lock_take || exit 1; }
+test_runs_register || exit 1
+if [ -n "$TEST_LOCK_SHARE" ]; then
+  TEST_NODE_CONCURRENCY=$TEST_LOCK_SHARE
+  export TEST_NODE_CONCURRENCY
+fi
+
 # Shared per-run environment: anything exported here reaches every job. This is the one place
 # for it, including the per-run sandbox for the jobs' event and state dirs
 # (scripts/test-sandbox.sh), which also redirects the secrets folders, unsets the database URLs and
@@ -217,11 +234,15 @@ test_sandbox_setup || exit 1
 # a private cluster (scripts/test-pg.sh). Each test makes and drops its own database.
 TEST_REPO_ROOT=$(pwd)
 export TEST_REPO_ROOT
-test_pg_setup || exit 1
+test_pg_setup 9>&- || exit 1
 
 # Run the pool in the background so a signal reaches it while we wait. A backgrounded pool
 # ignores SIGINT, so Ctrl-C is forwarded as SIGTERM.
-sh scripts/test-pool.sh "$results" "$results/jobs" "$results/serial" &
+if [ -n "$TEST_LOCK_SHARE" ]; then
+  TEST_JOBS=$TEST_LOCK_SHARE sh scripts/test-pool.sh "$results" "$results/jobs" "$results/serial" 9>&- &
+else
+  sh scripts/test-pool.sh "$results" "$results/jobs" "$results/serial" 9>&- &
+fi
 pool=$!
 trap 'kill -TERM "$pool" 2>/dev/null; wait "$pool"; exit 143' TERM
 trap 'kill -TERM "$pool" 2>/dev/null; wait "$pool"; exit 130' INT
@@ -257,4 +278,4 @@ if [ -n "$shard" ]; then
   echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods - one shard of the gate; run npm test for the whole gate$mod_note$TEST_PG_NOTE"
   exit 0
 fi
-echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE"
+echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE$TEST_LOCK_NOTE"

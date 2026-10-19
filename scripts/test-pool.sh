@@ -3,6 +3,7 @@
 #
 # Usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]
 #        test-pool.sh --check-jobs (validate TEST_JOBS without starting jobs)
+#        test-pool.sh --cpus (print the CPU count the default pool size uses)
 #
 # Each line of <jobs-file> is a shell command: one job. At most $TEST_JOBS run at once
 # (default: the container-aware CPU count from
@@ -39,6 +40,8 @@ cpu_count() {
   done
   echo 1
 }
+
+[ "${1:-}" = --cpus ] && { cpu_count; exit 0; }
 
 if [ "${TEST_JOBS+set}" = set ]; then
   workers=$TEST_JOBS
