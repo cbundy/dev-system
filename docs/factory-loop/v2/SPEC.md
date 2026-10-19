@@ -2293,7 +2293,7 @@ queue known=<n1,n2|none> now=<n1,n2|none>
 ```
 
 `--known` is the last line's `now=` (`none`, empty or left out is the empty set). Every member
-of `now` that is not in `known` logs a `ready` event with `--if-changed`; an untrusted issue
+of `now` that is not in `known` logs a `ready` event with `--if-changed`, which carries the issue's title, labels and parent as the listing showed them (`--data`); an untrusted issue
 never appears in `now`. A failed read (or `gh` or the reader missing) exits 1 with nothing on
 stdout and no `watcher_error` event: a failed source, never an empty queue. A missing `--repo`
 or `--label`, or any option but these three, is a usage error (exit 2).

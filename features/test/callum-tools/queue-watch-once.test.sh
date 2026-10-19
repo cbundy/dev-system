@@ -46,8 +46,8 @@ res=$(once --known 305) || fail "changed queue: did not exit 0"
 [ "$(line_count "$fakebin/gh-calls")" = 1 ] || fail "changed queue: want one read, got $(line_count "$fakebin/gh-calls")"
 # (the reader logs its own untrusted_stripped event for #400)
 grep '^ready ' "$calls" > "$calls.ready" || :
-expect_lines "$calls.ready" "ready --issue 307 --if-changed --actor watcher
-ready --issue 310 --if-changed --actor watcher"
+expect_lines "$calls.ready" 'ready --issue 307 --if-changed --data {"title":"title 307","labels":["ready","bug"],"parent":1307} --actor watcher
+ready --issue 310 --if-changed --data {"title":"title 310","labels":["ready","bug"],"parent":1310} --actor watcher'
 ok # one read, the line, ready events for new members only
 
 # 2. An unchanged queue still prints its line and logs nothing; --known in any order is the same set.
@@ -69,7 +69,7 @@ queue_seq 9
 : > "$calls"
 res=$(once --known none) || fail "none baseline: did not exit 0"
 [ "$res" = "queue known=none now=9" ] || fail "none baseline: $res"
-expect_lines "$calls" "ready --issue 9 --if-changed --actor watcher"
+expect_lines "$calls" 'ready --issue 9 --if-changed --data {"title":"title 9","labels":["ready","bug"],"parent":null} --actor watcher'
 ok # none, empty and absent baselines are the empty set
 
 # 4. A failed read exits 1 with the reason and no line: a failed source, never an empty queue.
@@ -120,6 +120,38 @@ for i in 1 2 3; do
 done
 [ "$(ev_count '"state":"ready"')" = 1 ] || fail "replay: want one ready line: $(cat "$evlog")"
 ok # repeated --once reads do not replay ready events
+
+# 5b. The facts: a parent in another repo is null; a writer that exits 2 on --data (an older
+# callum-flow-event) is called again without it.
+cat > "$fakebin/callum-flow-event" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/event-calls"
+STUB
+queue_seq 8
+: > "$calls"
+res=$(once --known none) || fail "cross-repo parent: did not exit 0"
+expect_lines "$calls" 'ready --issue 8 --if-changed --data {"title":"title 8","labels":["ready","bug"],"parent":null} --actor watcher'
+cat > "$fakebin/callum-flow-event" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/event-calls"
+case "$*" in *--data*) exit 2 ;; esac
+STUB
+: > "$calls"
+res=$(once --known none) || fail "older writer: did not exit 0"
+[ "$res" = "queue known=none now=8" ] || fail "older writer: $res"
+expect_lines "$calls" 'ready --issue 8 --if-changed --data {"title":"title 8","labels":["ready","bug"],"parent":null} --actor watcher
+ready --issue 8 --if-changed --actor watcher'
+ok # the facts ride along, and an older writer still gets the ready event
+
+# 5c. The real writer puts the facts in the new event only; the old line is as before.
+real_event_log
+queue_seq 307
+res=$(once --known none) || fail "real facts: did not exit 0"
+[ "$(jq -c 'select(.state == "ready" and .issue == 307) | [has("title"), has("data"), .note]' "$evlog")" = '[false,false,null]' ] ||
+  fail "the old ready line changed: $(cat "$evlog")"
+[ "$(jq -c 'select(.type == "ready" and .issue == 307) | .data' "$evdir/factory/o__r.jsonl")" = '{"title":"title 307","labels":["ready","bug"],"parent":1307}' ] ||
+  fail "the new ready event lacks the facts: $(cat "$evdir/factory/o__r.jsonl")"
+ok # the real writer carries the facts only in the new event
 
 # 6. --once takes no option except --repo, --label and --known. (With --stream named, the usage
 # error is also reported as stream mode reports one: a watcher-error line on stdout.)

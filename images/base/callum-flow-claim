@@ -19,7 +19,9 @@
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
 # 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
 # The winner removes `ready`, assigns @me and logs `callum-flow-event claimed`
-# with the note `lease: <minutes>`. It adds no label: the claim is the comment
+# with the note `lease: <minutes>` and, as --data, the issue's title, labels (without `ready`) and
+# parent from the comments read (an older callum-flow-event that answers exit 2 gets the call again
+# without it). It adds no label: the claim is the comment
 # and its events, and the factory loop's `factory:*` labels show the state
 # (docs/factory-loop/v2/SPEC.md 3.6).
 # --heartbeat: edits this device's live claim comment in place (a `renewed:` line,
@@ -118,6 +120,8 @@ iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 # code: 3 means the issue itself is untrusted, anything else non-zero is a failure.
 comments() {
   _cj=$("$READ" --json "$1" --comments) || return $?
+  # the same read also holds the issue's facts: kept for the claimed event (no new API call)
+  printf '%s' "$_cj" | jq -c '.issue // empty' > "$tmp/issue.json" 2>/dev/null || : > "$tmp/issue.json"
   printf '%s' "$_cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'
 }
 
@@ -251,5 +255,22 @@ if ! set_labels; then
   err "cannot update the labels of #$n - claim withdrawn"
   exit 1
 fi
-"$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || err "warning: could not log the claimed event"
+# The claimed event also carries the issue's title, labels (the ready label the claim just removed
+# left out) and parent, from the comments read above (callum-flow-event --data, cbundy/dev-system#870).
+# A writer that does not know --data answers exit 2: the event is then logged again without it.
+facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
+  {title: (if (.title | type) == "string" then .title[0:256] else null end),
+   labels: (if (.labels | type) == "array" then [.labels[] | .name | strings | select(. != $ready)] else null end),
+   parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
+     | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' "$tmp/issue.json" 2>/dev/null) || facts=
+claimed_rc=2
+if [ -n "$facts" ]; then
+  claimed_rc=0
+  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" --data "$facts" >/dev/null 2>&1 || claimed_rc=$?
+fi
+if [ "$claimed_rc" -eq 2 ]; then
+  claimed_rc=0
+  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || claimed_rc=$?
+fi
+[ "$claimed_rc" -eq 0 ] || err "warning: could not log the claimed event"
 exit 0
