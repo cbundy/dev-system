@@ -362,7 +362,7 @@ Example:
 
 ## comment_posted
 
-The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. No producer writes it yet.
+The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. The loop's park and wait entry actions write it (rules-entry.ts).
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)

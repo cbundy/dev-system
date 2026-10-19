@@ -175,6 +175,8 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
     case 'gate_run':
       return { issue: e.issue, branch: null, pr: null, head: e.data.head }
+    case 'comment_posted':
+      return { issue: e.issue, branch: null, pr: null, head: null }
     case 'shadow_read':
       return { issue: null, branch: null, pr: null, head: null }
     default:
@@ -281,6 +283,7 @@ export function eventNote(e: V2Event): string {
       return releaseNote(e)
     case 'shadow_read':
     case 'gate_run':
+    case 'comment_posted':
       // no old-format note: the payload is its own JSON (eventArgv)
       return JSON.stringify(e.data)
     case 'abandoned':
@@ -296,6 +299,7 @@ export function eventNote(e: V2Event): string {
 export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   // a gate run is a new-format event: its payload is the schema's data, not an old note
   if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
+  if (e.state === 'comment_posted') return ['callum-flow-event', '--type', 'comment_posted', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]

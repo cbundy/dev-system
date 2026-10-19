@@ -109,4 +109,9 @@ export type ShadowReadData = {
 }
 export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent
+// One park or wait comment's place (comment_posted.v1): written in the new format alone, by
+// `callum-flow-event --type comment_posted --data <json> --issue N`; rules-entry.ts builds it.
+export type CommentPostedData = { life: string; seq: number; to_state: 'parked' | 'waiting'; comment_url: string }
+export type CommentPostedEvent = { state: 'comment_posted'; issue: number; data: CommentPostedData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | CommentPostedEvent

@@ -1,7 +1,7 @@
 // The entry actions of a record's seq (docs/factory-loop/v2/SPEC.md 4.5), which S3 plans until
 // each is done: the seq's `transition` event first (after a close's `merged`); the old step
 // stopped and the slot's processes killed when the old seq's step still ran, both best effort;
-// the new state's label; the event the state logs on entry; a park's comment and tell; a close's
+// the new state's label; the event the state logs on entry; a park's comment, its comment_posted event and tell; a close's
 // label clear and its follow-ups by why. The ledger is the outbox (3.3): each is a keyed
 // action of the new seq, so a crash after the record's store write leaves them planned on the next
 // pass.
@@ -186,16 +186,36 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   if (entered !== undefined) add(emitted(ctx, r, entered))
   if (changed && r.state === 'parked') {
     add({ ...base(r, entryKey(r, 'comment'), 'the park\'s question on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: parkText(r, t.from, t.via) })
+    items.push(...postedItem(ctx, r))
     add(parkedTell(r, 0), false, true)
   }
   // a wait: one comment that lists the conditions, and a blocked_by link for each issue condition (no
   // owner tell: the owner has nothing to answer)
   if (changed && r.state === 'waiting') {
     add({ ...base(r, entryKey(r, 'comment'), 'the wait\'s conditions on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: waitText(r) })
+    items.push(...postedItem(ctx, r))
     for (const c of r.wait ?? []) if (c.kind === 'issue-closed' && c.repo === undefined) add({ ...base(r, entryKey(r, `link/${c.issue}`), `link #${r.issue} as blocked by #${c.issue}`), kind: 'link', blocker: c.issue })
   }
   if (changed && r.state === 'closed') items.push(...closedItems(ctx, r))
   return items
+}
+
+// postedOf: the URL of the seq's park or wait comment once that entry is done with one that fits
+// comment_posted.v1 (docs/factory-events/schemas/comment_posted.v1.json: https, no space, at most
+// 500 characters), else null. The planner's twin of the schema, as rules-gates.ts `fits` is for gate_run.
+function postedOf(ctx: V2Ctx, r: IssueRecord): string | null {
+  const e = ctx.byKey.get(entryKey(r, 'comment'))
+  if (e?.status !== 'done' || e.outcome?.kind !== 'cli') return null
+  const url = e.outcome.detail
+  return typeof url === 'string' && url.length <= 500 && /^https:\/\/\S+$/.test(url) ? url : null
+}
+
+// postedItem: the free `comment_posted` event once the comment is done with a URL (nothing before, or
+// for a comment found with none).
+function postedItem(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
+  const url = postedOf(ctx, r)
+  if (url === null || (r.state !== 'parked' && r.state !== 'waiting')) return []
+  return [{ action: { ...base(r, entryKey(r, 'event/comment-posted'), 'where the comment is'), kind: 'event', event: { state: 'comment_posted', issue: r.issue, data: { life: r.life, seq: r.seq, to_state: r.state, comment_url: url } } }, soft: false, tell: false }]
 }
 
 // mergedItem: a merge's `merged` event when the factory had none at the close (a merge whose log
