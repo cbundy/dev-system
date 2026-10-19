@@ -20,6 +20,7 @@ import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms,
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswers, stepRecorded } from './v2/steps'
+import { gateHoldMs } from './v2/steps-gate'
 import { V2_ACTION_KINDS } from './v2/types'
 import { expireWakes, wakeExecutors } from './wake'
 
@@ -347,24 +348,29 @@ export const REPAIR_GRACE_MS = 5 * 60_000
 // went out, until its next turn.complete), for the loop awaits its reply; an agent first listed
 // with its turn ended counts as running for that pass, since its turn.complete may still be on
 // its way (seen: when each id was first so listed, idle then completed being one sighting). seen
-// and repairing are updated in place.
+// and repairing are updated in place. So does a gated writer whose answer is held for its stop
+// gate line (gateHeld: since when), within holdMs, listed or not: the hold, not the list, says
+// when its step ends.
 export function reconcilable(
   agents: readonly ListedAgent[],
   answering: ReadonlySet<string>,
   seen: Map<string, Ms>,
   now: Ms,
   repairing: Map<string, Ms>,
+  gateHeld: Map<string, Ms> = new Map(),
+  holdMs: Ms = 0,
 ): ListedAgent[] {
   for (const [id, at] of [...repairing]) if (now - at > REPAIR_GRACE_MS) repairing.delete(id)
+  for (const [id, at] of [...gateHeld]) if (now - at > holdMs) gateHeld.delete(id)
   const out = agents.map(a => {
-    if (answering.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
+    if (answering.has(a.id) || gateHeld.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     if (!turnEnded(a.status)) return a
     if (repairing.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     const first = seen.get(a.id)
     if (first === undefined) seen.set(a.id, now)
     return first === undefined || first === now ? { id: a.id, status: 'running' as AgentStatus } : a
   })
-  for (const id of answering) if (!agents.some(a => a.id === id)) out.push({ id, status: 'running' })
+  for (const id of [...answering, ...gateHeld.keys()]) if (!agents.some(a => a.id === id) && !out.some(a => a.id === id)) out.push({ id, status: 'running' })
   for (const id of [...seen.keys()]) if (!agents.some(a => a.id === id && turnEnded(a.status))) seen.delete(id)
   return out
 }
@@ -386,8 +392,9 @@ export function updateDone(ledger: readonly LedgerEntry[], control: Control, loa
 
 // What the hooks between passes share with the pass: the agents whose answer is being handled,
 // when each agent was first listed with its turn ended (idle or completed), and when each was
-// sent its repair message (reconcilable).
-export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; repairing: Map<string, Ms> }
+// sent its repair message (reconcilable), and since when each gated writer's answer has waited for
+// its stop gate line (steps-gate.ts).
+export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; repairing: Map<string, Ms>; gateHeld: Map<string, Ms> }
 
 // The pass's agent list: only a read that worked may mark agents lost.
 export type Listed = { ok: boolean; agents: ListedAgent[] }
@@ -414,14 +421,15 @@ function finishAsRead(env: ActEnv, was: LedgerEntry, exec: Exec, now: Ms): Ledge
 // checks (#561): each is finished with that answer, as its turn.complete would have finished it
 // (act-agents.ts scriptAnswered). An entry its turn.complete finished during the read is left
 // alone.
-async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly ListedAgent[], now: Ms): Promise<LedgerEntry[]> {
+async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly ListedAgent[], now: Ms, between: Between): Promise<LedgerEntry[]> {
   const before = env.live.ledger
   // reconcileAgents keeps the ledger's order, entry for entry
   const reconciled = reconcileAgents(before, agents, now)
   const lost = before.filter((e, i) => e.status === 'running' && reconciled[i]?.status === 'lost')
   const moved: LedgerEntry[] = []
   for (const was of lost) {
-    const exec = await stepRecorded(ctxOf(env, state, was), was, true)
+    // a gated writer with no settling gate line is held (gateHeld), not lost: reconcilable then counts it
+    const exec = await stepRecorded(ctxOf(env, state, was), was, true, undefined, between.gateHeld)
     if (exec !== null) moved.push(...finishAsRead(env, was, exec, now))
   }
   return moved
@@ -434,13 +442,17 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
   const now = observed.now
   const moved: LedgerEntry[] = []
   if (listed.ok) {
-    const agents = reconcilable(listed.agents, between.answering, between.completedSeen, now, between.repairing)
-    moved.push(...(await answeredBeforeLost(env, observed, agents, now)))
+    const holdMs = gateHoldMs(env.rt.config)
+    const of = () => reconcilable(listed.agents, between.answering, between.completedSeen, now, between.repairing, between.gateHeld, holdMs)
+    moved.push(...(await answeredBeforeLost(env, observed, of(), now, between)))
+    // an entry that ended, or whose agent is gone from the ledger, holds nothing
+    for (const id of [...between.gateHeld.keys()]) if (!env.live.ledger.some(e => e.agentId === id && e.status === 'running')) between.gateHeld.delete(id)
+    const agents = of()
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
   // a recorded answer ends its step when read (v2 SPEC 10.8)
-  for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e))) moved.push(...finishAsRead(env, r.entry, r.exec, now))
+  for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e), undefined, between.gateHeld)) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {
     await env.save()
     await logLoop(env, moved)

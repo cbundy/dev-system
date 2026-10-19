@@ -140,7 +140,7 @@ export const delivered = new Map<string, Ms>()
 export const reportedWakes = new Set<string>()
 // agents whose answer is being handled, when each was first listed with its turn ended (idle or
 // completed), and when each was sent its repair message (act.ts)
-export const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+export const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
 // the loop's own agent types with a repair message of the loop's on its way, and how many: the
 // engine resumes an agent only as a type it offers the model, so the loop offers its hidden types
 // for just that long (repairTo, #559)
