@@ -721,7 +721,7 @@ on every failure:
   agentsview URL): a `WARN` naming both files when none is configured; a `FAIL` when a file is empty or
   unreadable, the server cannot be reached (psql's last line, masked), the role is not the `_writer` /
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
-  version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
+  version is behind (the loop migrates at its next start, or run `factory-db-migrate --strict` / `factory-db-bootstrap --migrate` with the migrator URL; no admin URL) or ahead of the image's; otherwise `OK` with the database,
   role and version. See [docs/factory-db.md](../../docs/factory-db.md);
 - evidence storage, from `callum-flow-evidence-upload --check` in the workspace checkout: `OK` with the
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a

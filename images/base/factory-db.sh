@@ -168,7 +168,7 @@ factory_db_check() {
   recorded=${recorded:-0}
   if [ "$recorded" -lt "$expected" ]; then
     echo "FAIL $label: schema version $recorded in database $db is behind this image's $expected"
-    echo "fix: run factory-db-bootstrap --db $db with the admin URL to apply migrations $((recorded + 1))..$expected"
+    echo "fix: run factory-db-migrate --strict (the migrator URL), or factory-db-bootstrap --db $db --migrate, to apply migrations $((recorded + 1))..$expected (docs/factory-db.md)"
     return 2
   elif [ "$recorded" -gt "$expected" ]; then
     echo "FAIL $label: schema version $recorded in database $db is ahead of this image's $expected"
