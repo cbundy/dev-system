@@ -207,6 +207,12 @@ describe('compareFacts', () => {
     expect(compareFacts(oldOf([...base, recent]), newOf(base), DEVICE, NOW + 2 * SETTLE_MS, NOW).data).toMatchObject({ differences: 1, live_differences: 1 })
   })
 
+  test("the start-up migrate's native-only task:migrate entry is no difference", () => {
+    const migrate = pair('loop', 'loop_entry', { kind: 'task', key: 'task:migrate:12', status: 'done', attempts: 1, class: 'free', rule: 'dev-init', started_at: iso(T), ended_at: iso(T), agent_id: DEVICE, wake: 'migrate', database: 'factory', from_version: 11, to_version: 12, duration_ms: 5, outcome: 'migrated', error: null }, { issue: null })
+    const c = compareFacts(oldOf(base), newOf([...base, migrate]), DEVICE, NOW, NOW)
+    expect(c.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [] })
+  })
+
   test("other devices' events prove nothing of this device's ledger or once keys", () => {
     const other = claimed({ device: 'someone-else' })
     expect(compareFacts(oldOf([...base, other]), newOf(base), DEVICE, NOW, NOW).data.differences).toBe(0)
