@@ -21,7 +21,9 @@
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief has an `## Observability` section (the decisions it adds and where each is recorded,
-//   or "none - no new decision").
+//   or "none - no new decision"), and a `## Compatibility` section (what changes in a migration,
+//   event schema, the event writer or a factory-database reader and why the last 10 minor
+//   versions keep working, or "none - no schema, event or reader change").
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
 //   A keep-open whose reason says the issue is part of something larger is refused: a split child
@@ -393,6 +395,7 @@ function checkDesign(input, job) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
     problems.push(...rolloutProblems(brief, 'brief'))
     if (firstLineUnder(brief, 'observability') === null) problems.push('brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"')
+    if (firstLineUnder(brief, 'compatibility') === null) problems.push('brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"')
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let parts = {}

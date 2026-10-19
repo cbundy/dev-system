@@ -240,7 +240,7 @@ export function designPrompt(i: DesignInput): string {
     '',
     `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
     `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
-    'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open.',
+    'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open and a `## Compatibility` section.',
     '',
     ...answerBlock(
       i.place,
