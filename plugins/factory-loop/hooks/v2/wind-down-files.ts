@@ -28,8 +28,8 @@ export function requestOf(text: string, mtime: Ms): NonNullable<WindDownRead['re
 }
 
 // withRemembered: the state with the request this session wrote for its own restart (R2), when the
-// read found none: the stop script may have removed the file (#931) while the container still
-// runs, and nothing may start in those seconds. A request read from the file wins.
+// read found none: the file may be lost (the stop script leaves it in place, #931) while the
+// container still runs, and nothing may start in those seconds. A request read from the file wins.
 export function withRemembered(state: State, requestedAt: Ms | null): State {
   if (requestedAt === null || state.v2 === undefined || state.v2.windDown?.request != null) return state
   const request = { requestedAt, iso: new Date(requestedAt).toISOString(), trigger: 'restart-self', problem: null, remembered: true as const }

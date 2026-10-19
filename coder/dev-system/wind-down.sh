@@ -2,7 +2,8 @@
 #
 # The Coder stop script of the loop template (run_on_stop): asks each factory loop on this
 # workspace to wind down (finish what runs, start nothing), waits for it, writes one wind_down
-# event per loop, and gives the heartbeat its final beat. Spec: docs/factory-loop/v2/SPEC.md 10.11.
+# event per loop, and gives the heartbeat its final beat. It leaves the request and status files in
+# place (the next workspace start clears them, wind-down-start.sh). Spec: docs/factory-loop/v2/SPEC.md 10.11.
 #
 # A stop script that fails must never hold or break a stop: this uses `set -u`, never `-e`, and
 # always exits 0. main.tf puts WIND_DOWN_CAP_MS (the template's wind_down_minutes in ms) in front
@@ -169,10 +170,10 @@ EOF2
   else
     echo "wind-down: could not build the event for $name" >&2
   fi
-  # one shot, and a request left behind would wind the next start down again
+  # The stop-now file is one shot, consumed by this stop. The request and status stay: the
+  # container still runs until Coder stops it, and the loop must start nothing in those seconds
+  # (#931). The workspace's next start clears them (wind-down-start.sh, v2 SPEC 10.11).
   rm -f "$dir/wind-down.stop-now"
-  rm -f "$dir/wind-down.request"
-  rm -f "$dir/wind-down.status.json"
 }
 
 pids=

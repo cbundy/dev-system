@@ -131,7 +131,7 @@ if command -v terraform >/dev/null 2>&1; then
   # network once for the providers; the plugin cache saves the download on later runs.
   checked=$((checked + 1))
   tf_tmp=$(mktemp -d) || exit 1
-  cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$TF_DIR"/wind-down.sh "$tf_tmp"/
+  cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$TF_DIR"/wind-down.sh "$TF_DIR"/wind-down-start.sh "$tf_tmp"/
   TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
   export TF_PLUGIN_CACHE_DIR
   mkdir -p "$TF_PLUGIN_CACHE_DIR"
