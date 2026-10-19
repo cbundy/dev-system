@@ -269,8 +269,8 @@ facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
 # enforces so a bad value can never turn the claimed event into a translator miss.
 score=
 if [ -n "${CALLUM_FLOW_CLAIM_SCORE-}" ]; then
-  score=$(printf '%s' "$CALLUM_FLOW_CLAIM_SCORE" | jq -c '
-    select(type == "object" and (keys | sort) == ["factors", "score"]
+  score=$(printf '%s' "$CALLUM_FLOW_CLAIM_SCORE" | jq -cs '
+    select(length == 1) | .[0] | select(type == "object" and (keys | sort) == ["factors", "score"]
       and (.score | type) == "number" and (.score | floor) == .score
       and (.factors | type) == "array"
       and all(.factors[]; type == "object" and (keys | sort) == ["name", "points"]

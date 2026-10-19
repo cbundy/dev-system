@@ -164,7 +164,7 @@ issue() {
 }
 
 run() {
-  PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-old}" \
+  PATH="$toolbin${EXTRA_PATH:+:$EXTRA_PATH}" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-old}" \
     CALLUM_FLOW_EVENT_BIN="${CLAIM_EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
     CALLUM_FLOW_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
@@ -275,7 +275,7 @@ for v in unset empty; do
   [ ! -s "$tmpdir/err" ] || fail "score $v: stderr: $(cat "$tmpdir/err")"
 done
 # invalid values: today's call, exit 0, one warning
-for bad in 'not json' '{"score":"3","factors":[]}' '{"score":3,"factors":[{"name":"a"}]}' '{"score":3,"factors":[{"name":"a","points":1,"x":1}]}' '{"score":3,"factors":[],"x":1}' '{"score":1.5,"factors":[]}' '{"score":3,"factors":[{"name":"","points":1}]}' '[1]'; do
+for bad in 'not json' '{"score":"3","factors":[]}' '{"score":3,"factors":[{"name":"a"}]}' '{"score":3,"factors":[{"name":"a","points":1,"x":1}]}' '{"score":3,"factors":[],"x":1}' '{"score":1.5,"factors":[]}' '{"score":3,"factors":[{"name":"","points":1}]}' '[1]' '{"score":1,"factors":[]} {"score":2,"factors":[]}' '{"score":1,"factors":[]} 5'; do
   score_issue
   CALLUM_FLOW_CLAIM_SCORE=$bad CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
   expect_rc 0 "bad score $bad"
@@ -283,6 +283,14 @@ for bad in 'not json' '{"score":"3","factors":[]}' '{"score":3,"factors":[{"name
   [ "$(cat "$tmpdir/err")" = 'callum-flow-claim: warning: CALLUM_FLOW_CLAIM_SCORE is not valid - the claim is logged without a score' ] || fail "bad score $bad: stderr: $(cat "$tmpdir/err")"
   jq -e '.[-1].body | startswith("claimed-by: devA")' "$d/comments-7.json" >/dev/null || fail "bad score $bad: comment"
 done
+# when the issue facts fail to read, --data carries only score and factors
+score_issue
+printf '#!/bin/sh\n"%s" "$@" | jq -c "del(.issue)"\n' "$READER" > "$tmpdir/reader-noissue"
+chmod +x "$tmpdir/reader-noissue"
+READ_BIN="$tmpdir/reader-noissue" CALLUM_FLOW_CLAIM_SCORE=$SCORE CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+unset READ_BIN
+expect_rc 0 "score, no facts"
+[ "$(cat "$d/event-calls")" = 'claimed --issue 7 --note lease: 120 --data {"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "score, no facts: $(cat "$d/event-calls")"
 # an old writer gets the call again without --data
 score_issue
 touch "$d/old-writer"
@@ -298,8 +306,12 @@ grep -q '^claimed' "$d/event-calls" 2>/dev/null && fail "score, loser: claimed l
 grep -q 'CALLUM_FLOW_CLAIM_SCORE' "$tmpdir/err" && fail "score, loser: warned"
 # end to end through the real callum-flow-event (dual write)
 score_issue
-CALLUM_FLOW_CLAIM_SCORE=$SCORE rc_of "$CLAIM" 7
+mkdir -p "$tmpdir/nodebin"
+ln -sf "$(command -v node)" "$tmpdir/nodebin/node"
+rm -rf "$tmpdir/events/factory"
+EXTRA_PATH="$tmpdir/nodebin" CALLUM_FLOW_CLAIM_SCORE=$SCORE rc_of "$CLAIM" 7
 expect_rc 0 "score, real writer"
+cat "$tmpdir"/events/factory/*.jsonl 2>/dev/null | jq -e 'select(.type == "claimed") | .data.score == 42 and (.data.factors | length) == 2' >/dev/null || fail "score e2e: new log: $(cat "$tmpdir"/events/factory/*.jsonl 2>&1)"
 events | jq -e '.state == "claimed" and .note == "lease: 120" and (has("score") | not) and (has("factors") | not)' >/dev/null || fail "score e2e: old line: $(events)"
 
 # --- pre-check: a live foreign claim blocks, even with stale labels -------------
