@@ -177,6 +177,7 @@ const RECORD: IssueRecord = {
   fixes: 0,
   round: 0,
   question: null,
+  parts: null,
   why: null,
   notes: ['use --yes nowhere'],
   prClosedAt: null,

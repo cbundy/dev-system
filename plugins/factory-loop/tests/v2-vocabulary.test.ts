@@ -85,6 +85,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     fixes: 1,
     round: 2,
     question: null,
+    parts: null,
     why: null,
     notes: ['the owner: keep it small'],
     prClosedAt: null,

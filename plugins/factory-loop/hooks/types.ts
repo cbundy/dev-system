@@ -3,7 +3,7 @@
 // are its. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
-import type { AgentStep, Model, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -184,7 +184,7 @@ export type Outcome =
   // a done ci-rerun also carries the job and test names its failed jobs' log named, null when none were read (v2 SPEC 8.5)
   | { kind: 'cli'; exit: number; detail?: string; failedJobs?: string[] | null; failedTests?: string[] | null }
   // park: the question a not-ready split child parks on and the parent that was split (v2 SPEC 8.7); only on a claimed result
-  | { kind: 'claim'; result: 'claimed' | 'lost'; park?: { question: string; parent: number } }
+  | { kind: 'claim'; result: 'claimed' | 'lost'; park?: { question: string; parent: number; parts?: ParkParts | null } }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
   | { kind: 'designer'; unparsed: true }
   | { kind: 'adjudicator'; verdicts: string[]; action: AdjudicatorAction; report: MergeReport | null }
@@ -414,7 +414,7 @@ export type Action =
   // a done close's branch on origin, deleted only while it still reads sha (a leased delete)
   | (Base & { kind: 'delete-branch'; branch: string; sha: string })
   // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
-  | (Base & { kind: 'claim'; park?: { question: string; parent: number } })
+  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null } })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })

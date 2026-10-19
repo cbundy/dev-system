@@ -62,7 +62,7 @@
 
 import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
 import { checkDone } from './done-answer.mjs'
-import { childDecisionOf } from './split-decision.mjs'
+import { childDecisionWithParts } from './split-decision.mjs'
 
 export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait', 'done'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
@@ -288,9 +288,9 @@ function childrenOf(v, problems, parent) {
       }
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
-    const decision = childDecisionOf(c, `children[${i}]${key === null ? '' : ` (${key})`}.`, c.ready, body, parent, problems)
+    const { decision, parts: decisionParts } = childDecisionWithParts(c, `children[${i}]${key === null ? '' : ` (${key})`}.`, c.ready, body, parent, problems)
     if (body !== null) problems.push(...rolloutProblems(body, `children[${i}]${key === null ? '' : ` (${key})`} body`))
-    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true, decision })
+    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true, decision, ...(decisionParts === null ? {} : { decisionParts }) })
   })
   if (out.length === v.length) {
     const cycle = cycleOf(out)

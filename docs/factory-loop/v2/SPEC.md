@@ -254,6 +254,7 @@ type IssueRecord = {
   fixes: number                // entries to fixing in this life, at most fixCap
   round: number                // entries to reviewing in this life
   question: string | null      // parked: the question for the owner
+  parts: ParkParts | null      // parked: the parts of that question when an agent structured it (below); null in any other state
   wait: WaitCondition[] | null // waiting: 1 to 8 conditions (issue-closed and tag-contains may carry an optional repo), every one of which must hold; null in any other state
   why: ClosedWhy | null        // closed: why
   notes: string[]              // owner, triage and decline notes for the step of this seq
@@ -280,6 +281,23 @@ type IssueRecord = {
   form `issue:<owner>/<name>#<n>` or `tag:<owner>/<name>@<sha>`, repo lower-case) and
   `wait=none` in any other state; `parseTransition` rebuilds `wait` from it, and a note without the
   token (from before it) reads as null.
+- `parts` is set only on the parks whose question an agent structured, and only while parked: T3
+  (the designer's question), X4 when the triage chose `park`, and S7 for a not-ready split child with
+  a checked `decision` object (a legacy child, or one whose question came from `## Open decisions`,
+  has none). Every other park, and every other state, has `parts: null`; a row that sets `question`
+  without `parts` clears it, so `parts` never outlives its question. `ParkParts` is
+  `{ decision, context, options, recommended, recommendation }`: `decision` is the agent's own
+  one-sentence question (`question` is the rendering of the whole, unchanged), `context` text or
+  null, `options` null or 2 to 6 `{ key A-F, title, detail | null }` with distinct keys,
+  `recommended` the key of the recommendation (only one of the options) and `recommendation` its
+  reason. The transition note carries them as five tokens right after `question=`:
+  `decision=`, `context=`, `recommended=` and `recommendation=` in the text encoding
+  (a literal `none` is written `%6Eone`), and `options=` as the percent-encoded compact JSON of the
+  list; all five are `none` when `parts` is null. `parseTransition` rebuilds `parts` from them: a note
+  without `decision=` (from before) or with `decision=none` reads as null, and an `options=` that is
+  not a valid list makes the note not read. The new log's transition payload carries the same five
+  fields (`decision`, `context`, `options`, `recommended`, `recommendation`), and a stored record
+  carries `parts`; a record or row without them reads as null.
 
 ### 3.3 Where it lives, and how it changes
 
@@ -1048,7 +1066,7 @@ notes use (`loopNote` and its inverse `entryFromLoop` in `derive.ts`;
 - Tokens are separated by single spaces. A value holds no spaces: `%` and whitespace are
   percent-encoded (`enc` in `derive.ts`). A missing value is `none`, a list is comma-joined, a
   flag is `yes` or `no`.
-- The identifying tokens come first and free text (a reason, a question, notes) last. Nothing is
+- The identifying tokens come first and free text (a reason, a question, a park's parts, notes) last. Nothing is
   clipped: each field is bounded where it is made (the table keeps a question to 2000
   characters and at most 8 notes of 1000; a reason is one line of 200), and `callum-flow-event`
   and `factory.events` put no bound on a note. So a note carries every field whole.
@@ -1506,7 +1524,7 @@ The designer is a reader: it writes nothing to GitHub.
   owner decision, in a `decision` object checked as a question answer is (11; refused on a ready child; without one, the
   body's `## Open decisions` text, at most 2 000 characters, else a fixed sentence naming the parent). It is not left silent:
   once the child exists, plan claims it at once (a first claim keyed `i<child>/claim/<life>`, free, outside the capacity
-  limit) carrying `park: { question, parent }`, and the done claim makes the child's record through row S7: parked, resuming
+  limit) carrying `park: { question, parent, parts? }` (`parts` the checked `decision` object's parts, 3.2), and the done claim makes the child's record through row S7: parked, resuming
   to designing, so the park comment with its tick boxes, `factory:parked`, the owner tell and the title's owner count come
   from the park machinery, and the owner's label removal or `/factory resume` takes it through P1 and T1 to its design with
   the answer as a note. Every not-ready child is claimed before the plan comment is posted and T4 closes the parent. A lost
@@ -2177,6 +2195,10 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 - **The release task never waits on the owner inside its wake.** A Run it that needs the owner
   (a workspace restart still needs asking) becomes an owner item, a comment and a tell, and the
   task ends. A wake held for the owner would hold every tell behind it (D-26, D-44).
+- **The parts of a structured park travel on its transition.** The record's `parts` (3.2) and the
+  transition's five note tokens carry the decision, context, options, recommended key and
+  recommendation of a designer's, a triage's or a split child's structured question, so a reader of
+  the event log has them without parsing the rendered `question`.
 - **Parking frees capacity.** A parked (or waiting) issue leaves the in-flight count at once, and W2 frees its
   slot. Its claim stays live (H1 renews it), so no other device takes it.
 - **Waiting is not parking.** A designer that is blocked only on a checkable fact waits (8.7): the

@@ -256,7 +256,7 @@ export function designResult(answer: unknown): StepResult {
   // a question's structured parts become the one canonical text the record stores as its question
   if (a.kind === 'question' && a.question !== null) {
     const question = renderQuestion({ ...a, question: a.question })
-    return notOk(a.kind, { ...a, question, text: question })
+    return notOk(a.kind, { ...a, question, decision: a.question, text: question })
   }
   if (a.kind === 'wait') return notOk(a.kind, { ...a, text: a.reason ?? 'the designer waits on a condition' })
   if (a.kind === 'done') return notOk(a.kind, { ...a, text: doneText(a, null) })

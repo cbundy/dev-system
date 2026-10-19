@@ -109,6 +109,9 @@ describe('the design-v2 contract (8.7)', () => {
     expect(out.outcome.children[0]?.decision).toBeNull()
     expect(out.outcome.children[1]?.decision).toBe(renderQuestion({ question: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call', detail: null }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommendation: { key: 'A', reason: 'Simpler.' } }))
     expect(out.outcome.children[1]?.decision).toContain('- [ ] **B** - Two calls')
+    // the checked parts ride with the child: the sentence as given, absent details null
+    expect(out.outcome.children[0]).not.toHaveProperty('decisionParts')
+    expect(out.outcome.children[1]?.decisionParts).toEqual({ decision: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call', detail: null }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommended: 'A', recommendation: 'Simpler.' })
     // a bare question is the decision alone
     const bare = check('design-v2', split(ready, waits({ question: 'Which API shape?' })))
     if (bare.ok) expect(bare.outcome.children[1]?.decision).toBe('Which API shape?')
@@ -1054,6 +1057,22 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     // the design entry gone from the ledger: the release still happens, with null reasons
     const gone = plan(withLedger(world([t.next]), [child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
     expect(of(gone, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: null, childWhys: null })
+  })
+
+  test('a not-ready child\'s checked decision parts ride on its claim\'s park, and a child without them parks with the text alone', () => {
+    const parts = { decision: 'Which API shape?', context: null, options: [{ key: 'A' as const, title: 'One', detail: null }, { key: 'B' as const, title: 'Two', detail: 'More.' }], recommended: 'A' as const, recommendation: 'Simpler.' }
+    const children = [
+      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true, decision: null },
+      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: [], ready: false, decision: 'Which API shape?', decisionParts: parts },
+      { key: 'c', title: 'Part three', why: 'Waits too', body: 'three', blockedBy: [], ready: false, decision: 'Old text' },
+    ]
+    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children } })
+    const child = (key: string, n: number) => done(childKey(r, key), 'split', { issue: 330, outcome: { kind: 'split', child: n } })
+    const p = plan(withLedger(world([r]), [split, child('a', 601), child('b', 602), child('c', 603)]))
+    expect(p.actions.filter(a => a.kind === 'claim').map(a => (a.kind === 'claim' ? [a.issue, a.park] : null))).toEqual([
+      [602, { question: 'Which API shape?', parent: 330, parts }],
+      [603, { question: 'Old text', parent: 330 }],
+    ])
   })
 
   test('an older design answer with no reasons or whys still plans: the comment lists the children as before, the release carries null', () => {

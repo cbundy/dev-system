@@ -11,6 +11,7 @@ import type { FactoryEvent } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import type { LedgerEntry, Ms, Source, State } from '../types'
 import { onceKey } from './events'
+import { partsOfStored } from './park-parts'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { readDualWrite } from './sources-dualwrite'
@@ -148,6 +149,8 @@ export function recordOf(raw: unknown): IssueRecord | null {
   if (!isInt(o.attempt, 0) || typeof o.cut !== 'boolean' || !isInt(o.triages, 0) || !isInt(o.fixes, 0) || !isInt(o.round, 0)) return null
   const wait = waitOf(o.wait)
   if (wait === undefined) return null
+  const parts = partsOfStored(o.parts)
+  if (parts === undefined) return null
   if (!strOrNull(o.question) || !Array.isArray(o.notes) || !o.notes.every(isStr) || !strOrNull(o.prClosedAt)) return null
   // a record stored before the field carries no count: its life is read as a first one
   const lives = o.lives === undefined ? 1 : o.lives
@@ -172,6 +175,7 @@ export function recordOf(raw: unknown): IssueRecord | null {
     fixes: o.fixes,
     round: o.round,
     question: o.question,
+    parts,
     wait,
     why,
     notes: [...o.notes],

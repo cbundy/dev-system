@@ -47,16 +47,25 @@ export function decisionFallback(body, parent) {
 // problem goes on `problems`, named under `where` (for example "children[1] (b)."); `ready` and
 // `body` are the child's, `parent` the issue being split.
 export function childDecisionOf(c, where, ready, body, parent, problems) {
+  return childDecisionWithParts(c, where, ready, body, parent, problems).decision
+}
+
+// childDecisionWithParts: childDecisionOf's text and, for a not-ready child with a checked
+// `decision` object, its parts (ParkParts, types.ts: the decision sentence and the checked optional
+// fields); null for a ready child, a fallback or a problem.
+export function childDecisionWithParts(c, where, ready, body, parent, problems) {
+  const none = { decision: null, parts: null }
+  const fallback = text => ({ decision: text, parts: null })
   const given = c.decision !== undefined && c.decision !== null
   if (ready === true) {
     if (given) problems.push(`${where}decision must be absent or null on a child that is ready: only a child with ready false carries an open owner decision`)
-    return null
+    return none
   }
-  if (!given) return body === null ? null : decisionFallback(body, parent)
+  if (!given) return body === null ? none : fallback(decisionFallback(body, parent))
   const d = record(c.decision)
   if (d === null) {
     problems.push(`${where}decision must be an object { question, context, options, recommendation }`)
-    return null
+    return none
   }
   for (const k of Object.keys(d)) if (k !== 'question' && !QUESTION_FIELDS.includes(k)) problems.push(`${where}decision.${k} is not a field of a decision (only question, ${QUESTION_FIELDS.join(', ')})`)
   let question = null
@@ -68,7 +77,16 @@ export function childDecisionOf(c, where, ready, body, parent, problems) {
   const before = problems.length
   const parts = checkQuestionParts(d, question, problems)
   for (let i = before; i < problems.length; i++) problems[i] = `${where}decision.${problems[i]}`
-  if (question === null || problems.length > before) return null
-  return renderQuestion({ question, ...parts })
+  if (question === null || problems.length > before) return none
+  return {
+    decision: renderQuestion({ question, ...parts }),
+    parts: {
+      decision: question,
+      context: parts.context,
+      options: parts.options === null ? null : parts.options.map(o => ({ key: o.key, title: o.title, detail: o.detail ?? null })),
+      recommended: parts.recommendation === null ? null : parts.recommendation.key,
+      recommendation: parts.recommendation === null ? null : parts.recommendation.reason,
+    },
+  }
 }
 
