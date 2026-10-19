@@ -204,7 +204,8 @@ fi
 
 # Shared per-run environment: anything exported here reaches every job. This is the one place
 # for it, including the per-run sandbox for the jobs' event and state dirs
-# (scripts/test-sandbox.sh). TMPDIR points inside the results dir (made under /tmp, whatever TMPDIR was inherited), so temp files created there
+# (scripts/test-sandbox.sh), which also redirects the secrets folders, unsets the database URLs and
+# puts a psql guard on PATH against the workspace's real databases. TMPDIR points inside the results dir (made under /tmp, whatever TMPDIR was inherited), so temp files created there
 # by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
 # with it.
 mkdir "$results/tmp" || exit 1

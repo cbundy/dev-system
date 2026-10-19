@@ -3167,6 +3167,15 @@ directives.
 with no doubled or trailing `/` (`contract.mjs` `loopDirOf`):
 
 - the decision logs (`decisions-YYYY-MM-DD.jsonl`) and `control.json`;
+- `settings.json`, the settings in force: every pass that observes rewrites it atomically (temp file,
+  then `mv -f`), and the prune never touches it. It is `{v: 1, repo, at, plugin_version, settings,
+  layers, derived, problems}`. `settings` holds every config key, `poolSize`, `device` and the
+  directives `serial`, `noNewWork` and `usageOverride` (`{untilPct, expiresAt}` while live, else
+  null); `layers` gives the source of each leaf key (`default`, `repo`, `workspace`, `plugin`,
+  `env` or `directive`; an object-valued key such as `stateTimeoutMs` is one `parent.sub` key per
+  entry); `derived` holds `gateConcurrency`, `cpus`, the agents' `models` and the two experiment
+  shares (null when unset or unreadable); `problems` is what the loader left out. No secret is
+  written. A failed write is a `settings snapshot:` problem in the decision line, never a failed pass;
 - the trace files (`trace-YYYY-MM-DD.jsonl`), in trace mode only, kept under `traceMaxBytes` in
   all (13.12.1);
 - recorded states (`states/YYYY-MM-DD/<pass>.json`): observe mode only, one per changed digest,
