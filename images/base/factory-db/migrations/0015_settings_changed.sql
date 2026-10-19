@@ -1,11 +1,11 @@
--- 0014: lift settings_changed from the event data into factory.event_log, and add the settings
+-- 0015: lift settings_changed from the event data into factory.event_log, and add the settings
 -- snapshot column to factory.workers.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; the view replace keeps the view's existing ones.
 --
--- Builds on 0013 (changed and the flake columns keep its place). Adds the fields marked "x-column": true in the
+-- Builds on 0014 (changed, the flake columns and the prompt columns keep their place). Adds the fields marked "x-column": true in the
 -- settings_changed schema that are not columns yet: layer, old_value and new_value (key, who and
 -- fact already are). Postgres only adds columns at the end on OR REPLACE, so they come last and
 -- every earlier column keeps its name, type and order. Null for older rows and for other types.
@@ -127,6 +127,9 @@ SELECT
   e.data -> 'failed_tests' AS failed_tests,
   e.data -> 'failed_jobs' AS failed_jobs,
   (e.data ->> 'failed_at')::timestamptz AS failed_at,
+  e.data ->> 'tool_name' AS tool_name,
+  e.data ->> 'tool_input' AS tool_input,
+  e.data ->> 'agent_type' AS agent_type,
   e.data ->> 'layer' AS layer,
   e.data -> 'old_value' AS old_value,
   e.data -> 'new_value' AS new_value

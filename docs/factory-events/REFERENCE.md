@@ -23,6 +23,8 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`main_state`](#main_state) | v1 | none | One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
 | [`milestone_state`](#milestone_state) | v1 | none | The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. |
+| [`prompt_denied`](#prompt_denied) | v1 | required | An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). |
+| [`prompt_waiting`](#prompt_waiting) | v1 | required | An agent stopped on a permission prompt and is waiting for an answer nobody gives (the companion saw Claude Code's notification). |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
 | [`released`](#released) | v1 | none | A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
@@ -105,12 +107,13 @@ Example:
 | `acting` | integer | `loop_passes` | Of those passes, how many acted (did something rather than finding nothing to do). |
 | `acting_mean_ms` | integer | `loop_passes` | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
 | `additions` | integer | `merged` | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
-| `agent_id` | string | `loop_entry` | The agent's id, for an agent step; null otherwise. |
+| `agent_id` | string | `loop_entry`, `prompt_denied`, `prompt_waiting` | The agent's id, for an agent step; null otherwise. |
+| `agent_type` | string | `prompt_denied`, `prompt_waiting` | The agent's type, for example Explore or general-purpose; null when unknown. |
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
-| `attempt` | integer | `transition` | The attempt of that step, from 1. |
+| `attempt` | integer | `prompt_denied`, `prompt_waiting`, `transition` | The attempt of that step; null when unknown. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
 | `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
-| `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
+| `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
 | `bucket` | integer | `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
@@ -149,7 +152,7 @@ Example:
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `layer` | enum | `settings_changed` | The source of the new value; null for a derived value. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
-| `life` | string | `comment_posted`, `gate_run`, `intervention`, `transition` | The life the comment belongs to. |
+| `life` | string | `comment_posted`, `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | The life the comment belongs to. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
@@ -173,7 +176,7 @@ Example:
 | `passes` | integer | `loop_passes` | Passes that ended in the minute. 0 when none did; then every duration below is null. |
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
 | `planner` | enum | `loop_passes` | Which planner the loop ran. |
-| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `previous_tag` | string | `released` | The release tag before this one; null for a first release. |
 | `prs` | array of integer | `released` | The pull requests the release carried. |
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
@@ -187,7 +190,7 @@ Example:
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
-| `seq` | integer | `comment_posted`, `gate_run`, `transition` | The seq of the transition whose entry action posted the comment. |
+| `seq` | integer | `comment_posted`, `gate_run`, `prompt_denied`, `prompt_waiting`, `transition` | The seq of the transition whose entry action posted the comment. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
@@ -196,7 +199,7 @@ Example:
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `status` | enum | `loop_entry` | The status it changed to. |
-| `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
+| `step` | string or enum | `prompt_denied`, `prompt_waiting`, `transition` | The step the agent was running, for example build; null when unknown. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
@@ -204,6 +207,8 @@ Example:
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
+| `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
+| `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
@@ -752,6 +757,100 @@ Example:
   "expected": "minor",
   "holding": true,
   "hold_reason": "an open issue changes the same schema"
+}
+```
+
+## prompt_denied
+
+An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). Written by the loop's companion. Not a stage and not progress. The companion never retries the write, so count one per event_id.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: event_id
+
+### prompt_denied v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | Which life of the issue the prompt came in; null when unknown. |
+| `seq` | integer | required | yes | minimum 0 | yes | The record's sequence in this life; null when unknown. |
+| `step` | string | required | yes |  | yes | The step the agent was running, for example build; null when unknown. |
+| `attempt` | integer | required | yes | minimum 1 | yes | The attempt of that step; null when unknown. |
+| `agent_id` | string | required | yes |  | yes | The agent's id; null when the prompt came from no sub-agent. |
+| `agent_type` | string | required | yes |  | yes | The agent's type, for example Explore or general-purpose; null when unknown. |
+| `tool_name` | string | required | yes |  | yes | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
+| `tool_input` | string | required | yes | maxLength 2000 | yes | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
+| `ask_reason` | string | required | yes | maxLength 500 |  | Claude Code's reason, rule and decider for asking, cut at 500 characters; null when unknown. |
+| `slot` | string | required | yes |  |  | The writer's slot (worktree path) the prompt came from; null when unknown. |
+| `session` | string | required | yes |  |  | The Claude Code session id; null when unknown. |
+| `transcript` | string | required | yes |  |  | The path of the session's transcript; null when unknown. |
+| `branch` | string | required | yes |  | yes | The issue's branch; null when unknown. |
+| `pr` | integer | required | yes | minimum 1 | yes | The issue's PR number; null when it has none yet. |
+
+Example:
+
+```json
+{
+  "life": "ltn0brb",
+  "seq": 12,
+  "step": "build",
+  "attempt": 1,
+  "agent_id": "a20142b8cd21d3b2b",
+  "agent_type": "general-purpose",
+  "tool_name": "Bash",
+  "tool_input": "git push origin main",
+  "ask_reason": "permission rule: ask Bash(git push:*), decided by the user's settings",
+  "slot": "/work/slots/3/repo",
+  "session": "01MR3Be83yxy3baM8zGwY7jA",
+  "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
+  "branch": "issue-92",
+  "pr": 101
+}
+```
+
+## prompt_waiting
+
+An agent stopped on a permission prompt and is waiting for an answer nobody gives (the companion saw Claude Code's notification). Written by the loop's companion. Not a stage and not progress. The companion never retries the write, so count one per event_id.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: event_id
+
+### prompt_waiting v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | Which life of the issue the prompt came in; null when unknown. |
+| `seq` | integer | required | yes | minimum 0 | yes | The record's sequence in this life; null when unknown. |
+| `step` | string | required | yes |  | yes | The step the agent was running, for example build; null when unknown. |
+| `attempt` | integer | required | yes | minimum 1 | yes | The attempt of that step; null when unknown. |
+| `agent_id` | string | required | yes |  | yes | The agent's id; null when the prompt came from no sub-agent. |
+| `agent_type` | string | required | yes |  | yes | The agent's type, for example Explore or general-purpose; null when unknown. |
+| `tool_name` | string | required | yes |  | yes | Always null: the notification names no tool. |
+| `tool_input` | string | required | yes |  | yes | The notification's message, which says what the agent waits for; not clipped; null when unknown. |
+| `slot` | string | required | yes |  |  | The writer's slot (worktree path) the prompt came from; null when unknown. |
+| `session` | string | required | yes |  |  | The Claude Code session id; null when unknown. |
+| `transcript` | string | required | yes |  |  | The path of the session's transcript; null when unknown. |
+| `branch` | string | required | yes |  | yes | The issue's branch; null when unknown. |
+| `pr` | integer | required | yes | minimum 1 | yes | The issue's PR number; null when it has none yet. |
+
+Example:
+
+```json
+{
+  "life": "ltn0brb",
+  "seq": 12,
+  "step": "build",
+  "attempt": 1,
+  "agent_id": null,
+  "agent_type": null,
+  "tool_name": null,
+  "tool_input": "Claude needs your permission to use Bash",
+  "slot": "/work/slots/3/repo",
+  "session": "01MR3Be83yxy3baM8zGwY7jA",
+  "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
+  "branch": "issue-92",
+  "pr": null
 }
 ```
 
