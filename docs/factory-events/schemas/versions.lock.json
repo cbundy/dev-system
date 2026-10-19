@@ -747,6 +747,152 @@
     "type": "object",
     "x-issue": "none"
   },
+  "main_state.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "branch": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "changed": {
+        "pattern": "^[a-z_]+$",
+        "type": "string"
+      },
+      "conclusions": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "deploy_environments": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "deploy_ids": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "deploy_states": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "green": {
+        "type": "boolean"
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{40}$",
+        "type": "string"
+      },
+      "observed_at": {
+        "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+        "type": "string"
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "run_attempts": {
+        "items": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": "array"
+      },
+      "run_events": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "run_heads": {
+        "items": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "run_ids": {
+        "items": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": "array"
+      },
+      "running": {
+        "items": {
+          "type": "boolean"
+        },
+        "type": "array"
+      },
+      "workflow_ids": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "workflows": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "branch",
+      "changed",
+      "conclusions",
+      "deploy_environments",
+      "deploy_ids",
+      "deploy_states",
+      "green",
+      "head",
+      "observed_at",
+      "pr",
+      "run_attempts",
+      "run_events",
+      "run_heads",
+      "run_ids",
+      "running",
+      "workflow_ids",
+      "workflows"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "merged.v1": {
     "additionalProperties": false,
     "properties": {

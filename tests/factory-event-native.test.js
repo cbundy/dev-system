@@ -167,6 +167,18 @@ test("wind_down: a full event is written with no warning and validates; bad ones
   assert.deepEqual(missing.lines, []);
 });
 
+test("main_state: a full event is written and validates; one without green is refused with exit 2", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "main_state.v1.json"), "utf8")).examples[1];
+  const { r, lines } = native(["--type", "main_state", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("main_state", 1, JSON.parse(lines[0]).data), []);
+  const { green: _omit, ...noGreen } = good;
+  const missing = native(["--type", "main_state", "--data", JSON.stringify(noGreen)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /main_state v1: field green is missing/);
+  assert.deepEqual(missing.lines, []);
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });
