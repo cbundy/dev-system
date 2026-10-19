@@ -164,7 +164,7 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
       ])
     }
     expect(V2_ACTION_KINDS).toHaveLength(13)
-    expect(V2_RULES).toHaveLength(21)
+    expect(V2_RULES).toHaveLength(22)
     expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved'])
   })
 
@@ -332,7 +332,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const budgets: number[] = []
     const run = async (argv: string[]) => {
       // the dual-write probe is not a GitHub read (v2-dual-write.test.ts), so this order leaves it out
-      if (argv[0] !== 'callum-flow-event') log.push(argv.join(' '))
+      // nor is the default branch's state, read in act mode on its own cadence (v2-main.test.ts)
+      if (argv[0] !== 'callum-flow-event' && !(argv[0] === 'gh' && argv[1] === 'api')) log.push(argv.join(' '))
       return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: '' }
     }
     const readers: V2Readers = {

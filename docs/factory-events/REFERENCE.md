@@ -614,7 +614,7 @@ Example:
 
 ## main_state
 
-One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. No producer writes it yet. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.
+One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. The factory loop writes it (rule M1), reading the branch every mainEveryMs. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)

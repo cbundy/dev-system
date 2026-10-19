@@ -109,4 +109,28 @@ export type ShadowReadData = {
 }
 export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent
+// One change in the state of the default branch (main_state.v1): written in the new format alone, for
+// no issue, by `callum-flow-event --type main_state --data <json>`; rules-main.ts builds the data
+// from the main source's reading. The arrays line up index by index (workflows, then deployments).
+export type MainStateData = {
+  observed_at: string
+  branch: string
+  head: string
+  pr: number | null
+  workflows: string[]
+  workflow_ids: number[]
+  run_ids: (number | null)[]
+  run_attempts: (number | null)[]
+  run_heads: (string | null)[]
+  run_events: (string | null)[]
+  conclusions: (string | null)[]
+  running: boolean[]
+  green: boolean
+  deploy_environments: string[]
+  deploy_ids: number[]
+  deploy_states: (string | null)[]
+  changed: 'first' | 'head' | 'workflow' | 'deploy'
+}
+export type MainStateEvent = { state: 'main_state'; data: MainStateData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | MainStateEvent

@@ -67,6 +67,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   ciStartMs: 'next-pass',
   ciRunMs: 'next-pass',
   prEveryMs: 'next-pass',
+  mainEveryMs: 'next-pass',
   maxTriages: 'next-pass',
   windDownMinutes: 'next-pass',
   minimumReleaseCadenceMs: 'next-pass',
