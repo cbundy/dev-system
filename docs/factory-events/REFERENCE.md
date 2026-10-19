@@ -129,14 +129,18 @@ Example:
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
 | `errors` | integer | `loop_passes`, `reviewed` | Of those passes, how many threw. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
+| `failed_at` | string | `gate_run` | On a flaky pass row, when the failed run started. Null otherwise. |
+| `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
+| `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
 | `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
 | `five_hour_pct` | integer | `usage` | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | `usage` | When the five-hour window resets. |
 | `fixes` | integer | `transition` | Loop state, for the record rebuild: entries to fixing so far in this life. |
+| `flaky` | boolean | `gate_run`, `intervention` | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `green` | boolean | `main_state` | true when the newest completed run of every workflow concluded success, skipped or neutral. |
-| `head` | string | `finding_handled`, `gate_run`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `head` | string | `finding_handled`, `gate_run`, `intervention`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
@@ -409,7 +413,7 @@ Example:
 
 ## gate_run
 
-One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at).
+One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at). A pass row can carry flaky once the loop has checked it: flaky is true when the run just before it, in the same issue and life, failed on the same head and both slots were clean (so the same code passed after failing).
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -428,6 +432,9 @@ One run of the stop gate in a writer's slot finished: the repo's gate commands r
 | `concurrency` | integer | required | yes | minimum 1 | yes | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `queued_behind` | integer | required | no | minimum 0 | yes | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `started_at` | string | required | no | format date-time | yes | When the gate asked for its turn (before any wait). |
+| `flaky` | boolean | optional | yes |  | yes | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
+| `failed_tests` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
+| `failed_at` | string | optional | yes | format date-time | yes | On a flaky pass row, when the failed run started. Null otherwise. |
 
 Example:
 
@@ -475,7 +482,7 @@ Example:
 
 ## intervention
 
-Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.
+Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts. A ci-rerun row carrying flaky records the re-run's result as a second row for the same fact, so it still counts once as an intervention under that key.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -490,6 +497,10 @@ Someone had to step in where the plan did not foresee it: a person (an owner op,
 | `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | The issue's life it happened in, as in transition; null when none applies. |
 | `fact` | string | required | yes |  | yes | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `pr` | integer | required | yes | minimum 1 | yes | The pull request involved, when there is one. |
+| `flaky` | boolean | optional | yes |  | yes | On a ci-rerun row recording the re-run's result: true when the re-run passed on the same head as the failure; false when it failed again. Null otherwise. |
+| `failed_tests` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The names of the tests that failed in the CI run. Null when none were recorded. |
+| `failed_jobs` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The names of the CI jobs that failed. Null when none were recorded. |
+| `head` | string | optional | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit the CI run was on, when known. |
 | `detail` | string | required | no |  |  | One line for people saying what happened; empty when none was given. Never parse it. |
 
 Example:
