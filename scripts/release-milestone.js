@@ -15,13 +15,16 @@
 //       from the git range, and its open items. Always exits 0.
 //
 // The milestone contract (titles, expected-bump line) is in RELEASING.md "Milestones".
-// The range and PR parsing come from release-notes.js, so the milestone and the technical
-// list cannot disagree. Node built-ins only; GitHub is reached through `gh api`.
+// The range and PR parsing come from release-notes.js, and the rule for which issues a release
+// carried lives in images/base/release-contents.js (contents()), so the milestone, the technical
+// list and the `released` event cannot disagree. The milestone keeps its own placement rule on top:
+// only a CLOSED issue goes in. Node built-ins only; GitHub is reached through `gh api`.
 "use strict";
 
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { rangeCommits } = require("./release-notes.js");
+const { contents } = require("../images/base/release-contents.js");
 
 const NEXT = "Next release";
 const LATER = "Later";
@@ -126,7 +129,9 @@ async function reconcile(gh, out, target, version, opts, root, movable) {
     if (!c.pr) continue;
     const n = Number(c.pr);
     await place(n, "pr");
-    for (const iss of await gh.closing(n)) if (iss.state === "CLOSED") await place(iss.number, "issue", iss.title);
+    const closed = (await gh.closing(n)).filter((i) => i.state === "CLOSED");
+    const titles = new Map(closed.map((i) => [i.number, i.title]));
+    for (const num of contents([{ number: n, body: "", closing: closed.map((i) => i.number) }]).issues_closed) await place(num, "issue", titles.get(num));
   }
 }
 
@@ -182,8 +187,9 @@ async function plan(gh, out, version, opts, root) {
   for (const it of items) out(`  #${it.number} ${it.state} ${it.pull_request ? "pr" : "issue"}: ${it.title}`);
   const inMs = new Set(items.map((i) => i.number));
   const prs = [...new Set(rangeCommits(version, opts, root).filter((c) => c.pr).map((c) => Number(c.pr)))];
-  const expected = new Set(prs);
-  for (const n of prs) for (const i of await gh.closing(n)) if (i.state === "CLOSED") expected.add(i.number);
+  const carried = [];
+  for (const n of prs) carried.push({ number: n, body: "", closing: (await gh.closing(n)).filter((i) => i.state === "CLOSED").map((i) => i.number) });
+  const expected = new Set([...prs, ...contents(carried).issues_closed]);
   const missing = [...expected].filter((n) => !inMs.has(n));
   const extra = items.filter((i) => !expected.has(i.number));
   const open = items.filter((i) => i.state === "open");

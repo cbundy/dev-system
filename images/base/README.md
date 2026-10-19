@@ -1741,6 +1741,16 @@ because the merge has already happened; a missed item can be moved by hand with 
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
 `callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
+
+`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]` writes the `released`
+factory event for one release tag. It reads GitHub only through `gh api` (the tag's commit, the `v*` tags,
+the compare with the previous final tag, each PR's body and closing issues, and the GitHub Release for the
+headlines; no Release gives empty headlines), builds the payload with `release-contents.js` (the one rule
+for what a release carried, shipped in `/usr/local/share/dev-system/`) and writes it with
+`callum-flow-event --type released` (override: `CALLUM_FLOW_EVENT_BIN`). A tag whose `released` event is
+already in the factory log is skipped on stderr with its event id (exit 0). `--dry-run` prints the payload
+and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
+2 usage error.
 For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gate_run.v1.json",
   "title": "gate_run",
-  "description": "One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at).",
+  "description": "One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at). A pass row can carry flaky once the loop has checked it: flaky is true when the run just before it, in the same issue and life, failed on the same head and both slots were clean (so the same code passed after failing).",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,
@@ -16,9 +16,13 @@
     "run_ms": { "type": "integer", "minimum": 0, "description": "How long the gate ran once it held a turn, in milliseconds; 0 when it never ran.", "x-column": true },
     "concurrency": { "type": ["integer", "null"], "minimum": 1, "description": "How many gates could run at once when this one asked for a turn; null when there was no limit.", "x-column": true },
     "queued_behind": { "type": "integer", "minimum": 0, "description": "How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once.", "x-column": true },
-    "started_at": { "type": "string", "format": "date-time", "description": "When the gate asked for its turn (before any wait).", "x-column": true }
+    "started_at": { "type": "string", "format": "date-time", "description": "When the gate asked for its turn (before any wait).", "x-column": true },
+    "flaky": { "type": ["boolean", "null"], "description": "Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass.", "x-column": true },
+    "failed_tests": { "type": ["array", "null"], "items": { "type": "string", "maxLength": 200 }, "maxItems": 20, "description": "The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded.", "x-column": true },
+    "failed_at": { "type": ["string", "null"], "format": "date-time", "description": "On a flaky pass row, when the failed run started. Null otherwise.", "x-column": true }
   },
   "examples": [
-    { "life": "tn0brb", "seq": 6, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 184000, "run_ms": 412000, "concurrency": 1, "queued_behind": 2, "started_at": "2026-10-16T15:49:06.252Z" }
+    { "life": "tn0brb", "seq": 6, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 184000, "run_ms": 412000, "concurrency": 1, "queued_behind": 2, "started_at": "2026-10-16T15:49:06.252Z" },
+    { "life": "tn0brb", "seq": 7, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 0, "run_ms": 398000, "concurrency": 1, "queued_behind": 0, "started_at": "2026-10-16T16:05:11.100Z", "flaky": true, "failed_tests": ["tests/cli.test.js > prints help", "tests/db.test.js > connects"], "failed_at": "2026-10-16T15:49:06.252Z" }
   ]
 }

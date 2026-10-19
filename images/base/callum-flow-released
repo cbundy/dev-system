@@ -1,0 +1,227 @@
+#!/usr/bin/env node
+// callum-flow-released: write the `released` factory event for one release tag
+// (cbundy/dev-system#1010, part of #871). It reads the tag from GitHub through `gh api` only, builds
+// the payload with release-contents.js (the one definition of what a release carried) and writes it
+// with `callum-flow-event --type released`.
+//
+// Usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]
+//
+//   --repo     default CALLUM_FLOW_REPO, else `gh repo view --json nameWithOwner`
+//   --source   who cut the release; default manual
+//   --dry-run  print the payload as one JSON line on stdout and write nothing
+//
+// Reads: the tag's commit (sha and committer date), the repo's v* tags (for the previous final tag),
+// the compare of previous...tag (first-parent PRs; without a previous tag, the tag's commit list),
+// one GraphQL query per PR (body and closing issues) and the tag's GitHub Release (headlines; no
+// Release gives headlines [] and a note on stderr).
+//
+// Dedupe: when the factory log already holds a `released` event for the tag, nothing is written, a
+// `callum-flow-released: <tag> already written as <event_id>, skipped` line goes to stderr and the
+// exit is 0.
+//
+// Exit codes: 0 written (or skipped as already written, or dry run); 1 a GitHub read failed or the
+// event tool failed (nothing is written); 2 usage error.
+//
+// Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_EVENT_BIN (the event tool; default callum-flow-event
+// beside this script, else on PATH), DEV_SYSTEM_SHARE (where release-contents.js is found when it is
+// not beside this script; default /usr/local/share/dev-system).
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const SOURCES = ["loop", "workflow", "manual"];
+const USAGE = "usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]\n";
+
+class UsageError extends Error {}
+class ReadError extends Error {
+  constructor(msg, notFound = false) {
+    super(msg);
+    this.notFound = notFound;
+  }
+}
+
+function sharedFile(name) {
+  const dirs = [__dirname, process.env.DEV_SYSTEM_SHARE || "/usr/local/share/dev-system"];
+  const hit = dirs.map((d) => path.join(d, name)).find((f) => fs.existsSync(f));
+  if (!hit) throw new ReadError(`cannot find ${name} beside the tool or in ${dirs[1]}`);
+  return hit;
+}
+
+// GET (paginated and flattened into one array of pages' items) or POST, through gh.
+function gh(method, endpoint, body) {
+  const args = ["api", "-X", method, endpoint];
+  if (method === "GET") args.push("--paginate", "--slurp");
+  if (body !== undefined) args.push("--input", "-");
+  const r = spawnSync("gh", args, { encoding: "utf-8", input: body === undefined ? undefined : JSON.stringify(body), maxBuffer: 256 * 1024 * 1024 });
+  const what = `gh api ${method} ${endpoint}`;
+  if (r.error) throw new ReadError(`${what} failed: ${r.error.message}`);
+  if (r.status !== 0) throw new ReadError(`${what} failed: ${(r.stderr || r.stdout).trim()}`, /HTTP 404/.test(r.stderr || ""));
+  const out = r.stdout.trim();
+  if (!out) throw new ReadError(`${what} returned nothing`);
+  let json;
+  try {
+    json = JSON.parse(out);
+  } catch {
+    throw new ReadError(`${what} returned something that is not JSON`);
+  }
+  return method === "GET" ? (Array.isArray(json[0]) ? json.flat() : json) : json;
+}
+
+// --slurp wraps the pages in an array; a single object endpoint is the first page.
+const one = (pages) => (Array.isArray(pages) ? pages[0] : pages);
+
+const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { body closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } } } }
+  }
+}`;
+
+function parseArgs(argv) {
+  const o = { tag: null, repo: null, source: "manual", dryRun: false, help: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const value = () => {
+      if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+      return argv[++i];
+    };
+    if (a === "-h" || a === "--help") o.help = true;
+    else if (a === "--dry-run") o.dryRun = true;
+    else if (a === "--repo") o.repo = value();
+    else if (a === "--source") o.source = value();
+    else if (a.startsWith("-")) throw new UsageError(`unknown option ${a}`);
+    else if (o.tag === null) o.tag = a;
+    else throw new UsageError(`unexpected argument ${a}`);
+  }
+  if (o.help) return o;
+  if (!o.tag) throw new UsageError("no tag given");
+  if (!SOURCES.includes(o.source)) throw new UsageError(`--source must be one of ${SOURCES.join(", ")}`);
+  if (o.repo !== null && !/^[^/\s]+\/[^/\s]+$/.test(o.repo)) throw new UsageError("--repo must look like owner/name");
+  return o;
+}
+
+function resolveRepo(flag) {
+  const repo = flag || process.env.CALLUM_FLOW_REPO || "";
+  if (repo) {
+    if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new UsageError("the repo must look like owner/name");
+    return repo;
+  }
+  const r = spawnSync("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { encoding: "utf-8" });
+  const name = (r.stdout || "").trim();
+  if (r.status !== 0 || !/^[^/\s]+\/[^/\s]+$/.test(name)) throw new ReadError("cannot work out the repo; pass --repo O/N");
+  return name;
+}
+
+function eventTool() {
+  if (process.env.CALLUM_FLOW_EVENT_BIN) return process.env.CALLUM_FLOW_EVENT_BIN;
+  const beside = path.join(__dirname, "callum-flow-event");
+  return fs.existsSync(beside) ? beside : "callum-flow-event";
+}
+
+// The event_id of a `released` event for `tag` already in the log, or null.
+function alreadyWritten(tool, repo, tag) {
+  const r = spawnSync(tool, ["--new-path", "--repo", repo], { encoding: "utf-8" });
+  if (r.status !== 0) throw new ReadError(`${tool} --new-path failed: ${(r.stderr || "").trim()}`);
+  let text;
+  try {
+    text = fs.readFileSync(r.stdout.trim(), "utf-8");
+  } catch {
+    return null;
+  }
+  for (const line of text.split("\n")) {
+    if (!line.includes('"released"')) continue;
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e && e.type === "released" && e.data && e.data.tag === tag) return e.event_id || "unknown";
+  }
+  return null;
+}
+
+function buildPayload(rc, repo, tag, source, note) {
+  const [owner, name] = repo.split("/");
+  const base = `repos/${repo}`;
+  const commit = one(gh("GET", `${base}/commits/${encodeURIComponent(tag)}`));
+  const sha = commit.sha;
+  const releasedAt = commit.commit && commit.commit.committer && commit.commit.committer.date;
+  if (!sha || !releasedAt) throw new ReadError(`${base}/commits/${tag} has no sha or committer date`);
+
+  const refs = gh("GET", `${base}/git/matching-refs/tags/v?per_page=100`);
+  const tagNames = (Array.isArray(refs) ? refs : []).map((r) => String(r.ref).replace(/^refs\/tags\//, ""));
+  const prev = rc.previousTag(tagNames, tag);
+
+  let commits;
+  if (prev) {
+    const pages = gh("GET", `${base}/compare/${encodeURIComponent(prev)}...${encodeURIComponent(tag)}?per_page=100`);
+    commits = (Array.isArray(pages) ? pages : [pages]).flatMap((p) => (p && p.commits) || []);
+  } else {
+    commits = gh("GET", `${base}/commits?sha=${encodeURIComponent(tag)}&per_page=100`);
+  }
+  const chain = rc.firstParentChain(commits, sha);
+  const prNumbers = chain
+    .map((c) => rc.parseCommit({ subject: String(c.commit.message).split("\n")[0], body: "" }).pr)
+    .filter(Boolean)
+    .map(Number);
+
+  const prs = [];
+  for (const number of [...new Set(prNumbers)]) {
+    const res = gh("POST", "graphql", { query: PR_QUERY, variables: { owner, name, number } });
+    const pr = res && res.data && res.data.repository && res.data.repository.pullRequest;
+    if (!pr) throw new ReadError(`pull request #${number} not found in ${repo}`);
+    prs.push({ number, body: pr.body || "", closing: pr.closingIssuesReferences.nodes });
+  }
+  const c = rc.contents(prs, repo);
+
+  let headlines = [];
+  try {
+    const rel = one(gh("GET", `${base}/releases/tags/${encodeURIComponent(tag)}`));
+    headlines = rc.headlines(rel && rel.body);
+  } catch (e) {
+    if (!e.notFound) throw e;
+    note(`callum-flow-released: ${tag} has no GitHub Release, headlines left empty`);
+  }
+  return { tag, previous_tag: prev, commit: sha, released_at: releasedAt, prs: c.prs, issues: c.issues, issues_closed: c.issues_closed, headlines, source };
+}
+
+function main(argv) {
+  const err = (s) => process.stderr.write(`${s}\n`);
+  try {
+    const o = parseArgs(argv);
+    if (o.help) {
+      process.stdout.write(USAGE);
+      return 0;
+    }
+    const repo = resolveRepo(o.repo);
+    const rc = require(sharedFile("release-contents.js"));
+    if (!o.dryRun) {
+      const have = alreadyWritten(eventTool(), repo, o.tag);
+      if (have) {
+        err(`callum-flow-released: ${o.tag} already written as ${have}, skipped`);
+        return 0;
+      }
+    }
+    const payload = buildPayload(rc, repo, o.tag, o.source, err);
+    if (o.dryRun) {
+      process.stdout.write(`${JSON.stringify(payload)}\n`);
+      return 0;
+    }
+    const w = spawnSync(eventTool(), ["--type", "released", "--data", JSON.stringify(payload), "--repo", repo], { encoding: "utf-8" });
+    if (w.stderr) process.stderr.write(w.stderr);
+    if (w.error || w.status !== 0) throw new ReadError(`the event tool failed${w.error ? `: ${w.error.message}` : ` (exit ${w.status})`}`);
+    return 0;
+  } catch (e) {
+    if (e instanceof UsageError) {
+      err(`callum-flow-released: ${e.message}`);
+      process.stderr.write(USAGE);
+      return 2;
+    }
+    err(`callum-flow-released: ${e.message}`);
+    return 1;
+  }
+}
+
+process.exit(main(process.argv.slice(2)));

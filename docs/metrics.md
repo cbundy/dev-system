@@ -343,6 +343,114 @@ GROUP BY repo, trigger
 ORDER BY repo, trigger;
 ```
 
+## 2d. Flaky tests
+
+Which tests passed on a re-run of the same code, how often, and where. Two events carry it, both
+from the loop. A `gate_run` pass row has `flaky` true when the run just before it, in the same issue
+and life, failed on the same head and both slots were clean; `failed_tests` then holds the names from
+the fail before it and `failed_at` when that run started (`gate_run.v1.json`). A `ci-rerun`
+`intervention` row with `flaky` true records the re-run's result as a second row for the same fact, so
+section 9 still counts the fact once; its `failed_jobs` and `failed_tests` name what failed
+(`intervention.v1.json`). A retried write can repeat a row, so a gate flake counts once per (issue,
+life, seq, started_at) and a CI flake once per (issue, fact). A row with `flaky` false is not a flake.
+The queries read the columns migration 0011 lifted into `factory.event_log` and take
+`-v repo=... -v since=...`; `since` filters on when the flake passed. There are no rows until the
+producers (#1026 and #1027) ship.
+
+The first query gives one row per flake per test. `source` is `gate` or `ci`; `job` is null for the
+gate and the failed jobs for CI; `test` is null when no name was recorded; `failed_at` is the gate's
+`failed_at`, or for CI the time of the first `ci-rerun` row for the fact; `passed_at` is the flake
+row's time. The second lists each test with its flake count, first and last flake and the issues it
+hit.
+
+```sql
+-- one row per flake per test
+WITH gate AS (
+  -- a gate flake: the flaky pass row, once per (issue, life, seq, started_at) however often it was written
+  SELECT repo, issue, life, seq, started_at, max(head) AS head,
+    min(failed_at) AS failed_at, min(ts) AS passed_at,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), first_rerun AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, min(ts) AS rerun_at
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND repo = :'repo'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), ci AS (
+  -- a CI flake: the ci-rerun row with flaky = true, once per (issue, fact)
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(life) AS life, max(head) AS head,
+    min(ts) AS passed_at,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, repo, issue, life, head, NULL::text AS job, failed_at, passed_at,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', c.repo, c.issue, c.life, c.head,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.jobs) = 'array' THEN c.jobs ELSE '[]'::jsonb END) AS j),
+    f.rerun_at, c.passed_at,
+    CASE WHEN jsonb_typeof(c.tests) = 'array' THEN c.tests ELSE '[]'::jsonb END
+  FROM ci c
+  LEFT JOIN first_rerun f ON f.repo = c.repo AND f.issue IS NOT DISTINCT FROM c.issue AND f.fact = c.fact
+)
+SELECT f.source, f.repo, f.issue, f.life, f.head, f.job, t.test, f.failed_at, f.passed_at
+FROM flakes f
+LEFT JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test) ON true
+ORDER BY f.passed_at DESC, f.source, f.issue, t.test;
+```
+
+```sql
+-- each test per repo: how often it flaked, when, and in how many issues
+WITH gate AS (
+  -- a gate flake: the flaky pass row, once per (issue, life, seq, started_at) however often it was written
+  SELECT repo, issue, life, seq, started_at, max(head) AS head,
+    min(failed_at) AS failed_at, min(ts) AS passed_at,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), first_rerun AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, min(ts) AS rerun_at
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND repo = :'repo'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), ci AS (
+  -- a CI flake: the ci-rerun row with flaky = true, once per (issue, fact)
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(life) AS life, max(head) AS head,
+    min(ts) AS passed_at,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, repo, issue, life, head, NULL::text AS job, failed_at, passed_at,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', c.repo, c.issue, c.life, c.head,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.jobs) = 'array' THEN c.jobs ELSE '[]'::jsonb END) AS j),
+    f.rerun_at, c.passed_at,
+    CASE WHEN jsonb_typeof(c.tests) = 'array' THEN c.tests ELSE '[]'::jsonb END
+  FROM ci c
+  LEFT JOIN first_rerun f ON f.repo = c.repo AND f.issue IS NOT DISTINCT FROM c.issue AND f.fact = c.fact
+)
+SELECT f.repo, t.test, count(*) AS flakes, min(f.passed_at) AS first_flake, max(f.passed_at) AS last_flake,
+  count(DISTINCT f.issue) AS issues
+FROM flakes f
+CROSS JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test)
+GROUP BY f.repo, t.test
+ORDER BY flakes DESC, last_flake DESC, t.test;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`
