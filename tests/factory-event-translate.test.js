@@ -407,6 +407,14 @@ test("CLI: --quiet drops the per-state summary, keeps the miss line and the exit
   assert.equal(cli(["--quiet", "--nope"], "").code, 2);
 });
 
+test("transition why=done translates and validates", () => {
+  const base = sample("transition");
+  const r = translate(withNote(base, base.note.replace("to=queued", "to=closed").replace(/ why=\S+/, " why=done")));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.equal(r.event.data.why, "done");
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+});
+
 test("transition wait=: the waiting state and its condition list (dev-system#836)", () => {
   const base = sample("transition");
   const note = (over) => base.note.replace("to=queued", over);

@@ -23,6 +23,7 @@ import {
   tokensOf,
 } from '../hooks/v2/events'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
+import { endedOf } from '../hooks/v2/lives'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from '../hooks/v2/types'
 import type { IssueRecord, IssueState, WaitCondition } from '../hooks/v2/types'
 import { NOW } from './fixtures'
@@ -337,6 +338,13 @@ describe('columns and notes per state', () => {
     expect(eventNote(e)).toBe('reason=reconcile outcome=requeue lives=2 stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
     const migration: ReleaseEvent = { ...e, state: 'abandoned', outcome: 'leave', lives: null }
     expect(eventNote(migration)).toBe('reason=reconcile outcome=leave lives=none stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
+  })
+
+  test('a closed record with why done round-trips, and its life reads as already merged', () => {
+    const e = transition(rng(11), true)
+    const done: TransitionEvent = { ...e, record: { ...e.record, state: 'closed', why: 'done' } }
+    expect(roundTrip(done)).toEqual(done)
+    expect(endedOf(done.record)).toMatch(/^its work had merged already/)
   })
 
   test('a note from before the outcome and lives fields reads: a release by its state, with no count; a transition as a first life', () => {

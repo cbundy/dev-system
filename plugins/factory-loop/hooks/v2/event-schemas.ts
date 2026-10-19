@@ -412,7 +412,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "triages": {"minimum":0,"type":"integer"},
       "via": {"pattern":"^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$","type":"string"},
       "wait": {"items":{"additionalProperties":false,"properties":{"issue":{"minimum":1,"type":["integer","null"]},"kind":{"enum":["issue-closed","pr-merged","tag-contains"]},"pr":{"minimum":1,"type":["integer","null"]},"repo":{"pattern":"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$","type":["null","string"]},"sha":{"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]}},"required":["kind"],"type":"object"},"maxItems":8,"minItems":1,"type":["array","null"]},
-      "why": {"enum":["claim-lost","closed-on-github","dropped","merged","merged-by-hand","split",null]},
+      "why": {"enum":["claim-lost","closed-on-github","done","dropped","merged","merged-by-hand","split",null]},
     },
   },
   "untrusted_stripped.v1": {

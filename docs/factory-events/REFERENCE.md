@@ -200,7 +200,7 @@ Example:
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
 | `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
-| `why` | enum | `transition` | closed: why the life ended; null otherwise. |
+| `why` | enum | `transition` | closed: why the life ended (done: its work had already merged); null otherwise. |
 
 ## abandoned
 
@@ -924,7 +924,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `round` | integer | required | no | minimum 0 | yes | Entries to reviewing so far in this life: the review round. |
 | `question` | string | required | yes | maxLength 2000 | yes | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `wait` | array of object | optional | yes | minItems 1; maxItems 8 |  | waiting: the conditions the loop re-checks each pass; null otherwise |
-| `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null | yes | closed: why the life ended; null otherwise. |
+| `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null | yes | closed: why the life ended (done: its work had already merged); null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
 | `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |

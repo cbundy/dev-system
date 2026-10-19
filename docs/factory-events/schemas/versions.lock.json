@@ -1465,6 +1465,7 @@
         "enum": [
           "claim-lost",
           "closed-on-github",
+          "done",
           "dropped",
           "merged",
           "merged-by-hand",
