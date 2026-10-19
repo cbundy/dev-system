@@ -1,13 +1,13 @@
--- 0012: lift the flake fields of gate_run and intervention into factory.event_log.
+-- 0012: lift the state of a repo's default branch from main_state into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; the view replace keeps the view's existing ones.
 --
--- Adds the fields marked "x-column": true in the gate_run and intervention schemas that are new:
--- flaky, failed_tests, failed_jobs and failed_at (intervention's head is the existing head column).
--- Postgres only adds columns at the end on OR REPLACE, so they come last and every earlier column
--- keeps its name, type and order. Null for older rows and for other types. No @> and no DISTINCT ON.
+-- Builds on 0011 (comment_url keeps its place). Adds the fields marked "x-column": true in the main_state schema that are not columns yet:
+-- observed_at, green and changed (branch, head and pr already are). Postgres only adds columns at
+-- the end on OR REPLACE, so they come last and every earlier column keeps its name, type and
+-- order. Null for older rows and for other types. No @> and no DISTINCT ON.
 
 CREATE OR REPLACE VIEW factory.event_log AS
 SELECT
@@ -114,8 +114,7 @@ SELECT
   (e.data ->> 'holding')::boolean AS holding,
   e.data -> 'prs' AS prs,
   e.data ->> 'comment_url' AS comment_url,
-  (e.data ->> 'flaky')::boolean AS flaky,
-  e.data -> 'failed_tests' AS failed_tests,
-  e.data -> 'failed_jobs' AS failed_jobs,
-  (e.data ->> 'failed_at')::timestamptz AS failed_at
+  (e.data ->> 'observed_at')::timestamptz AS observed_at,
+  (e.data ->> 'green')::boolean AS green,
+  e.data ->> 'changed' AS changed
 FROM factory.event_store e;
