@@ -127,7 +127,7 @@ db=$new_db
 [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname = '$db'")" = 0 ] || fail "$db exists before the run"
 boot --db "$db" || fail "first run failed: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "expected one summary line, got: $(cat "$tmpdir/out")"
-grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader), schema version $EXPECTED\$" "$tmpdir/out" \
+grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; created: ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; new passwords: none; wrote: none), schema version $EXPECTED\$" "$tmpdir/out" \
   || fail "unexpected summary: $(cat "$tmpdir/out")"
 [ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$db'")" = "${db}_owner" ] \
   || fail "the database is not owned by ${db}_owner"
