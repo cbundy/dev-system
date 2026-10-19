@@ -351,7 +351,7 @@ async function readOne(reader, db, { at, tagDir, share }) {
   if (reader.kind === "state") {
     const base = path.join(tagDir, "images", "base");
     const r = await run(process.execPath, [path.join(base, "callum-flow-factory-state"), "--source", "new", "--github", "off", "--at", at, "--format", "json"], {
-      env: cleanEnv({ DEV_SYSTEM_SHARE: share, CALLUM_FLOW_DEV_QUERY_BIN: path.join(base, "dev-query"), FACTORY_DB_READER_URL: db.readerUrl }),
+      env: cleanEnv({ DEV_SYSTEM_SHARE: share, CALLUM_FLOW_DEV_QUERY_BIN: path.join(base, "dev-query"), FACTORY_DB_READER_URL: db.readerUrl, AGENTSVIEW_PG_URL: db.readerUrl }),
     });
     if (r.status !== 0) return { id: reader.id, ok: false, error: `exit ${r.status}: ${(r.stderr || r.stdout).trim().slice(0, 600)}`, outside: false };
     return { id: reader.id, ok: true, state: true, raw: r.stdout };
