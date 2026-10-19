@@ -23,6 +23,8 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`main_state`](#main_state) | v1 | none | One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
 | [`milestone_state`](#milestone_state) | v1 | none | The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. |
+| [`prompt_denied`](#prompt_denied) | v1 | required | An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). |
+| [`prompt_waiting`](#prompt_waiting) | v1 | required | An agent stopped on a permission prompt and is waiting for an answer nobody gives (the companion saw Claude Code's notification). |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
 | [`released`](#released) | v1 | none | A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
@@ -104,12 +106,13 @@ Example:
 | `acting` | integer | `loop_passes` | Of those passes, how many acted (did something rather than finding nothing to do). |
 | `acting_mean_ms` | integer | `loop_passes` | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
 | `additions` | integer | `merged` | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
-| `agent_id` | string | `loop_entry` | The agent's id, for an agent step; null otherwise. |
+| `agent_id` | string | `loop_entry`, `prompt_denied`, `prompt_waiting` | The agent's id, for an agent step; null otherwise. |
+| `agent_type` | string | `prompt_denied`, `prompt_waiting` | The agent's type, for example Explore or general-purpose; null when unknown. |
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
-| `attempt` | integer | `transition` | The attempt of that step, from 1. |
+| `attempt` | integer | `prompt_denied`, `prompt_waiting`, `transition` | The attempt of that step; null when unknown. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
 | `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
-| `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
+| `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
 | `bucket` | integer | `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
@@ -129,21 +132,25 @@ Example:
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
 | `errors` | integer | `loop_passes`, `reviewed` | Of those passes, how many threw. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
+| `failed_at` | string | `gate_run` | On a flaky pass row, when the failed run started. Null otherwise. |
+| `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
+| `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
 | `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
 | `five_hour_pct` | integer | `usage` | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | `usage` | When the five-hour window resets. |
 | `fixes` | integer | `transition` | Loop state, for the record rebuild: entries to fixing so far in this life. |
+| `flaky` | boolean | `gate_run`, `intervention` | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `green` | boolean | `main_state` | true when the newest completed run of every workflow concluded success, skipped or neutral. |
-| `head` | string | `finding_handled`, `gate_run`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `head` | string | `finding_handled`, `gate_run`, `intervention`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
-| `life` | string | `comment_posted`, `gate_run`, `intervention`, `transition` | The life the comment belongs to. |
+| `life` | string | `comment_posted`, `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | The life the comment belongs to. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
@@ -165,7 +172,7 @@ Example:
 | `passes` | integer | `loop_passes` | Passes that ended in the minute. 0 when none did; then every duration below is null. |
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
 | `planner` | enum | `loop_passes` | Which planner the loop ran. |
-| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `previous_tag` | string | `released` | The release tag before this one; null for a first release. |
 | `prs` | array of integer | `released` | The pull requests the release carried. |
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
@@ -179,7 +186,7 @@ Example:
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
-| `seq` | integer | `comment_posted`, `gate_run`, `transition` | The seq of the transition whose entry action posted the comment. |
+| `seq` | integer | `comment_posted`, `gate_run`, `prompt_denied`, `prompt_waiting`, `transition` | The seq of the transition whose entry action posted the comment. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
@@ -188,7 +195,7 @@ Example:
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `status` | enum | `loop_entry` | The status it changed to. |
-| `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
+| `step` | string or enum | `prompt_denied`, `prompt_waiting`, `transition` | The step the agent was running, for example build; null when unknown. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
@@ -196,6 +203,8 @@ Example:
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
+| `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
+| `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
@@ -409,7 +418,7 @@ Example:
 
 ## gate_run
 
-One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at).
+One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at). A pass row can carry flaky once the loop has checked it: flaky is true when the run just before it, in the same issue and life, failed on the same head and both slots were clean (so the same code passed after failing).
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -428,6 +437,9 @@ One run of the stop gate in a writer's slot finished: the repo's gate commands r
 | `concurrency` | integer | required | yes | minimum 1 | yes | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `queued_behind` | integer | required | no | minimum 0 | yes | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `started_at` | string | required | no | format date-time | yes | When the gate asked for its turn (before any wait). |
+| `flaky` | boolean | optional | yes |  | yes | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
+| `failed_tests` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
+| `failed_at` | string | optional | yes | format date-time | yes | On a flaky pass row, when the failed run started. Null otherwise. |
 
 Example:
 
@@ -475,7 +487,7 @@ Example:
 
 ## intervention
 
-Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.
+Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts. A ci-rerun row carrying flaky records the re-run's result as a second row for the same fact, so it still counts once as an intervention under that key.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -490,6 +502,10 @@ Someone had to step in where the plan did not foresee it: a person (an owner op,
 | `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | The issue's life it happened in, as in transition; null when none applies. |
 | `fact` | string | required | yes |  | yes | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `pr` | integer | required | yes | minimum 1 | yes | The pull request involved, when there is one. |
+| `flaky` | boolean | optional | yes |  | yes | On a ci-rerun row recording the re-run's result: true when the re-run passed on the same head as the failure; false when it failed again. Null otherwise. |
+| `failed_tests` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The names of the tests that failed in the CI run. Null when none were recorded. |
+| `failed_jobs` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The names of the CI jobs that failed. Null when none were recorded. |
+| `head` | string | optional | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit the CI run was on, when known. |
 | `detail` | string | required | no |  |  | One line for people saying what happened; empty when none was given. Never parse it. |
 
 Example:
@@ -737,6 +753,100 @@ Example:
   "expected": "minor",
   "holding": true,
   "hold_reason": "an open issue changes the same schema"
+}
+```
+
+## prompt_denied
+
+An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). Written by the loop's companion. Not a stage and not progress. The companion never retries the write, so count one per event_id.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: event_id
+
+### prompt_denied v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | Which life of the issue the prompt came in; null when unknown. |
+| `seq` | integer | required | yes | minimum 0 | yes | The record's sequence in this life; null when unknown. |
+| `step` | string | required | yes |  | yes | The step the agent was running, for example build; null when unknown. |
+| `attempt` | integer | required | yes | minimum 1 | yes | The attempt of that step; null when unknown. |
+| `agent_id` | string | required | yes |  | yes | The agent's id; null when the prompt came from no sub-agent. |
+| `agent_type` | string | required | yes |  | yes | The agent's type, for example Explore or general-purpose; null when unknown. |
+| `tool_name` | string | required | yes |  | yes | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
+| `tool_input` | string | required | yes | maxLength 2000 | yes | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
+| `ask_reason` | string | required | yes | maxLength 500 |  | Claude Code's reason, rule and decider for asking, cut at 500 characters; null when unknown. |
+| `slot` | string | required | yes |  |  | The writer's slot (worktree path) the prompt came from; null when unknown. |
+| `session` | string | required | yes |  |  | The Claude Code session id; null when unknown. |
+| `transcript` | string | required | yes |  |  | The path of the session's transcript; null when unknown. |
+| `branch` | string | required | yes |  | yes | The issue's branch; null when unknown. |
+| `pr` | integer | required | yes | minimum 1 | yes | The issue's PR number; null when it has none yet. |
+
+Example:
+
+```json
+{
+  "life": "ltn0brb",
+  "seq": 12,
+  "step": "build",
+  "attempt": 1,
+  "agent_id": "a20142b8cd21d3b2b",
+  "agent_type": "general-purpose",
+  "tool_name": "Bash",
+  "tool_input": "git push origin main",
+  "ask_reason": "permission rule: ask Bash(git push:*), decided by the user's settings",
+  "slot": "/work/slots/3/repo",
+  "session": "01MR3Be83yxy3baM8zGwY7jA",
+  "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
+  "branch": "issue-92",
+  "pr": 101
+}
+```
+
+## prompt_waiting
+
+An agent stopped on a permission prompt and is waiting for an answer nobody gives (the companion saw Claude Code's notification). Written by the loop's companion. Not a stage and not progress. The companion never retries the write, so count one per event_id.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: event_id
+
+### prompt_waiting v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | yes | pattern `^[0-9a-z]+$` | yes | Which life of the issue the prompt came in; null when unknown. |
+| `seq` | integer | required | yes | minimum 0 | yes | The record's sequence in this life; null when unknown. |
+| `step` | string | required | yes |  | yes | The step the agent was running, for example build; null when unknown. |
+| `attempt` | integer | required | yes | minimum 1 | yes | The attempt of that step; null when unknown. |
+| `agent_id` | string | required | yes |  | yes | The agent's id; null when the prompt came from no sub-agent. |
+| `agent_type` | string | required | yes |  | yes | The agent's type, for example Explore or general-purpose; null when unknown. |
+| `tool_name` | string | required | yes |  | yes | Always null: the notification names no tool. |
+| `tool_input` | string | required | yes |  | yes | The notification's message, which says what the agent waits for; not clipped; null when unknown. |
+| `slot` | string | required | yes |  |  | The writer's slot (worktree path) the prompt came from; null when unknown. |
+| `session` | string | required | yes |  |  | The Claude Code session id; null when unknown. |
+| `transcript` | string | required | yes |  |  | The path of the session's transcript; null when unknown. |
+| `branch` | string | required | yes |  | yes | The issue's branch; null when unknown. |
+| `pr` | integer | required | yes | minimum 1 | yes | The issue's PR number; null when it has none yet. |
+
+Example:
+
+```json
+{
+  "life": "ltn0brb",
+  "seq": 12,
+  "step": "build",
+  "attempt": 1,
+  "agent_id": null,
+  "agent_type": null,
+  "tool_name": null,
+  "tool_input": "Claude needs your permission to use Bash",
+  "slot": "/work/slots/3/repo",
+  "session": "01MR3Be83yxy3baM8zGwY7jA",
+  "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
+  "branch": "issue-92",
+  "pr": null
 }
 ```
 

@@ -403,6 +403,30 @@
           "null"
         ]
       },
+      "failed_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
       "head": {
         "pattern": "^[0-9a-f]{7,40}$",
         "type": [
@@ -505,6 +529,41 @@
         "type": "string"
       },
       "fact": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "failed_jobs": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{7,40}$",
         "type": [
           "null",
           "string"
@@ -1054,6 +1113,223 @@
     ],
     "type": "object",
     "x-issue": "none"
+  },
+  "prompt_denied.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_id": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "agent_type": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "ask_reason": {
+        "maxLength": 500,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "attempt": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "branch": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "seq": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "session": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "slot": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "step": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_input": {
+        "maxLength": 2000,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_name": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "transcript": {
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "agent_id",
+      "agent_type",
+      "ask_reason",
+      "attempt",
+      "branch",
+      "life",
+      "pr",
+      "seq",
+      "session",
+      "slot",
+      "step",
+      "tool_input",
+      "tool_name",
+      "transcript"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
+  "prompt_waiting.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_id": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "agent_type": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "attempt": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "branch": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "seq": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "session": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "slot": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "step": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_input": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_name": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "transcript": {
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "agent_id",
+      "agent_type",
+      "attempt",
+      "branch",
+      "life",
+      "pr",
+      "seq",
+      "session",
+      "slot",
+      "step",
+      "tool_input",
+      "tool_name",
+      "transcript"
+    ],
+    "type": "object",
+    "x-issue": "required"
   },
   "ready.v1": {
     "additionalProperties": false,

@@ -561,7 +561,7 @@ test("mapping: the new store's row becomes the common event the old line becomes
 });
 
 test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
-  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read"]) {
+  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read", "prompt_denied", "prompt_waiting"]) {
     const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
     assert.equal(m.type, type);
   }

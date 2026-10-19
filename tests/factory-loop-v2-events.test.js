@@ -222,7 +222,8 @@ test("a gate_run goes through the real writer's native mode: exit 0, no warning,
   assert.deepEqual(got.data, data);
   assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
   assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
-  assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data });
+  // the reader gives the optional flake fields, which an older writer never sends, as null
+  assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { ...data, flaky: null, failed_tests: null, failed_at: null } });
 });
 
 // A shadow_read (sources-records.ts) is written in the new format alone and for no issue: the argv has no

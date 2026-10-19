@@ -126,7 +126,8 @@ test("coverage: the corpus produces every current type, and every writer state i
   const made = new Set(expected.map((e) => e.type));
   // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
   // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  // prompt_denied and prompt_waiting: the translator child (#1037) removes them from this list once it maps them.
+  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "prompt_denied", "prompt_waiting"]; // the stop gate's runs (#811): written by the loop once a writer exists
   for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
   for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
@@ -274,6 +275,20 @@ test("abandoned shape 3: a split's reason tokens give the new fields, a missing 
   const dropped = translate(withNote(base, "reason=dropped note=x why_split=a")).event.data;
   assert.deepEqual([dropped.why_split, dropped.child_whys], [null, null]);
   assert.match(missOf(withNote(base, `${note} surprise=1`)), /^abandoned: unexpected token surprise=/);
+});
+
+test("intervention: the flake tokens map to the fields, and their absence gives nulls", () => {
+  const base = sample("intervention");
+  const none = translate(withNote(base, "who=loop cause=ci-rerun")).event.data;
+  assert.deepEqual([none.flaky, none.failed_tests, none.failed_jobs, none.head], [null, null, null, null]);
+  const sha = "0821e6a3c0f4b1d2e5a6978877665544332211ff";
+  const r = translate(withNote(base, `who=loop cause=ci-rerun fact=f1 flaky=yes failed_tests=a,b%2Cc failed_jobs=ci head=${sha} reason=x`));
+  assert.deepEqual([r.event.data.flaky, r.event.data.failed_tests, r.event.data.failed_jobs, r.event.data.head], [true, ["a", "b,c"], ["ci"], sha]);
+  assert.deepEqual(reader.validateStrict("intervention", 1, r.event.data), []);
+  const no = translate(withNote(base, "who=loop cause=ci-rerun flaky=no failed_tests=none failed_jobs=none head=none")).event.data;
+  assert.deepEqual([no.flaky, no.failed_tests, no.failed_jobs, no.head], [false, null, null, null]);
+  assert.match(missOf(withNote(base, "who=loop cause=ci-rerun flaky=maybe")), /bad yes\/no flaky=maybe/);
+  assert.match(missOf(withNote(base, "who=loop cause=ci-rerun head=XYZ")), /^intervention:/);
 });
 
 test("misses name their cause and give no event", () => {
