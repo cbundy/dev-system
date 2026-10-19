@@ -139,13 +139,34 @@ export type IssueFacts = {
   blocking: number | null
   subIssues: number | null
   title: string
+  // the open issues of this repo that this one blocks (the reader's `blocking` list); null: not read
+  blockingList: number[] | null
+  // the newest closed_at among its listed closed blockers, any repo; null: none listed or not read
+  blockersClosedAt: Ms | null
+  // the parent's number when the parent is in this repo, else null
+  parent: number | null
+  // the parent's other sub-issues in this repo, itself left out; null: not read or no parent here
+  siblings: { number: number; open: boolean }[] | null
 }
 
-function factsOf(issue: unknown): IssueFacts | null {
+type Node = { number: number; repo: string; state: string }
+const nodesOf = (v: unknown): Node[] | null =>
+  Array.isArray(v) && v.every(n => n !== null && typeof n === 'object' && typeof n.number === 'number' && typeof n.repo === 'string' && typeof n.state === 'string')
+    ? (v as Node[])
+    : null
+
+function factsOf(issue: unknown, repo?: string): IssueFacts | null {
   if (issue === null || typeof issue !== 'object') return null
-  const i = issue as { state?: unknown; labels?: unknown; title?: unknown; issue_dependencies_summary?: { blocked_by?: unknown; blocking?: unknown }; sub_issues_summary?: { total?: unknown } }
+  const i = issue as { number?: unknown; blocking?: unknown; blocked_by?: unknown; parent?: unknown; state?: unknown; labels?: unknown; title?: unknown; issue_dependencies_summary?: { blocked_by?: unknown; blocking?: unknown }; sub_issues_summary?: { total?: unknown } }
   const deps = i.issue_dependencies_summary
   const subs = i.sub_issues_summary
+  const blocking = repo === undefined ? null : nodesOf(i.blocking)
+  const blockedBy = Array.isArray(i.blocked_by) ? (i.blocked_by as { state?: unknown; closed_at?: unknown }[]) : null
+  const closed = (blockedBy ?? []).flatMap(b => (b?.state === 'closed' && typeof b.closed_at === 'string' ? [isoMs(b.closed_at)] : []))
+  const closedAts = closed.filter((t): t is number => typeof t === 'number')
+  const par = i.parent !== null && typeof i.parent === 'object' ? (i.parent as Node & { sub_issues?: unknown }) : null
+  const here = repo !== undefined && par !== null && par.repo === repo
+  const sibs = here ? nodesOf(par.sub_issues) : null
   return {
     open: i.state === 'open',
     labels: Array.isArray(i.labels) ? i.labels.map((l: { name?: unknown }) => String(l?.name ?? '')).filter(Boolean) : [],
@@ -153,6 +174,10 @@ function factsOf(issue: unknown): IssueFacts | null {
     blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
     subIssues: typeof subs?.total === 'number' ? subs.total : null,
     title: typeof i.title === 'string' ? i.title : '',
+    blockingList: blocking === null ? null : blocking.filter(n => n.state === 'open' && n.repo === repo).map(n => n.number),
+    blockersClosedAt: closedAts.length > 0 ? Math.max(...closedAts) : null,
+    parent: here ? par.number : null,
+    siblings: sibs === null ? null : sibs.filter(n => n.repo === repo && n.number !== i.number).map(n => ({ number: n.number, open: n.state === 'open' })),
   }
 }
 
@@ -168,7 +193,7 @@ export function parseIssueRead(json: string): IssueFacts | null {
 // same mapping as parseIssueRead), the numbers refused as untrusted, the numbers GitHub does not know.
 export type IssuesRead = { facts: Map<number, IssueFacts>; refused: number[]; missing: number[] }
 
-export function parseIssuesRead(json: string): IssuesRead | null {
+export function parseIssuesRead(json: string, repo?: string): IssuesRead | null {
   try {
     const o = JSON.parse(json)
     const nums = (v: unknown): number[] | null => (Array.isArray(v) && v.every(n => Number.isInteger(n)) ? (v as number[]) : null)
@@ -177,7 +202,7 @@ export function parseIssuesRead(json: string): IssuesRead | null {
     if (!Array.isArray(o?.issues) || refused === null || missing === null) return null
     const facts = new Map<number, IssueFacts>()
     for (const item of o.issues) {
-      const f = factsOf(item)
+      const f = factsOf(item, repo)
       if (f === null || !Number.isInteger(item.number)) return null
       facts.set(item.number, f)
     }

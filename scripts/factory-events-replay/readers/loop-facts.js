@@ -4,7 +4,7 @@
 // the rows of EVENTS_SQL through eventsFromRows) and once from factory.event_store (new: the rows of
 // NEW_EVENTS_SQL through eventsFromNewRows), each through the plugin's own derive.ts and
 // v2/sources-facts.ts, imported, not copied. The compared things are the loop's: the newest `reclaimed`
-// per issue (facts.reclaimed), the ledger deriveLedger rebuilds and the once keys v2's `logged` reads,
+// and the newest `ready` per issue (facts.reclaimed, facts.readyAt), the ledger deriveLedger rebuilds and the once keys v2's `logged` reads,
 // per device (v2/sources-facts.ts viewOf). The loop's `eventsSource` switch reads the same functions. A
 // new row the loop's reader refuses throws, so the compare fails on it, as the loop's `new` read does.
 
@@ -40,11 +40,12 @@ const byRepo = (rows) => {
   return out;
 };
 
-// per repo: { reclaimed: { issue: ts }, devices: { device: { ledger, once } } }
+// per repo: { reclaimed: { issue: ts }, ready: { issue: ts }, devices: { device: { ledger, once } } }
 function viewsOf(events, viewOf) {
   const devices = [...new Set(events.map((e) => e.device).filter((d) => d !== null))].sort();
   return {
     reclaimed: Object.fromEntries(viewOf(events, "").reclaimed),
+    ready: Object.fromEntries(viewOf(events, "").readyAt),
     devices: Object.fromEntries(
       devices.map((d) => {
         const v = viewOf(events, d);

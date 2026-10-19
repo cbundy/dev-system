@@ -123,7 +123,7 @@ describe('parse', () => {
       },
       stripped: 0,
     })
-    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue' })
+    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue', blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
     const two = JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0, blocking: 2 } } })
     expect(parseIssueRead(two)?.blocking).toBe(2)
     expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
@@ -148,6 +148,34 @@ describe('parse', () => {
     for (const bad of ['', '{}', '{"issues":[],"refused":"x","missing":[]}', '{"issues":[{"state":"open"}],"refused":[],"missing":[]}', '{"issues":[],"refused":[1.5],"missing":[]}']) {
       expect(parseIssuesRead(bad)).toBeNull()
     }
+  })
+
+  test('parseIssuesRead maps the blocking, blocked-by and parent lists, and gives null for an older reader and the single read', () => {
+    const node = (number: number, state: string, repo = REPO) => ({ number, repo, state })
+    const base = { number: 45, title: 'T', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 1, blocking: 1 }, sub_issues_summary: { total: 0 } }
+    const closedA = Date.UTC(2026, 0, 2, 3, 4, 5)
+    const closedB = Date.UTC(2026, 5, 1)
+    const full = {
+      ...base,
+      blocking: [node(7, 'open'), node(8, 'closed'), node(9, 'open', 'other/repo')],
+      blocked_by: [{ ...node(3, 'closed'), closed_at: iso(closedA) }, { ...node(4, 'closed', 'other/repo'), closed_at: iso(closedB) }, { ...node(5, 'open'), closed_at: null }],
+      parent: { ...node(12, 'open'), sub_issues: [node(45, 'open'), node(46, 'open'), node(47, 'closed'), node(48, 'open', 'other/repo')] },
+    }
+    const read = parseIssuesRead(JSON.stringify({ issues: [full, { ...base, number: 50 }, { ...base, number: 51, blocked_by: [{ ...node(5, 'open'), closed_at: null }], parent: { ...node(13, 'open', 'other/repo'), sub_issues: [node(51, 'open', 'other/repo')] } }], refused: [], missing: [], stripped: 0 }), REPO)
+    expect(read?.facts.get(45)).toMatchObject({
+      blockingList: [7],
+      blockersClosedAt: Math.max(closedA, closedB),
+      parent: 12,
+      siblings: [{ number: 46, open: true }, { number: 47, open: false }],
+    })
+    // an older reader: no fields at all
+    expect(read?.facts.get(50)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // no closed blocker listed, and a parent in another repo
+    expect(read?.facts.get(51)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // without the repo nothing can be said of this repo's issues
+    expect(parseIssuesRead(JSON.stringify({ issues: [full], refused: [], missing: [] }))?.facts.get(45)).toMatchObject({ blockingList: null, parent: null, siblings: null })
+    // the single read carries none of them
+    expect(parseIssueRead(JSON.stringify({ issue: full }))).toMatchObject({ blockingList: null, parent: null, siblings: null })
   })
 
   test('the newest design brief comment, by its heading', () => {
@@ -1418,6 +1446,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect(i.open).toBe(true)
       expect(i).toEqual(ref.state.issues.find(j => j.number === i.number))
     }
+  })
+
+  test('the open issues a read issue blocks join the next read last, behind every other reason and within the cap, and a closed one is not read (#1004)', async () => {
+    const blocking = (...ns: number[]) => ({ stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: ns.map(number => ({ number, repo: REPO, state: 'open' })) }, stripped: 0 }) })
+    const h = host({ issues: { '--json 45': blocking(900), '--json 900': { stdout: ISSUE(900) } } })
+    const first = await h.pass(runtime(), stored())
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+    expect(first.state.issues.find(i => i.number === 45)?.blockingList).toEqual([900])
+    expect(first.state.issues.find(i => i.number === 114)?.blockingList).toBeNull()
+
+    // the next pass: one call, 900 after the others
+    await h.pass(runtime(), stored(), NOW + 6 * MIN)
+    expect(h.commands().filter(c => c.includes('--issues'))).toHaveLength(1)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+
+    // 900 closed: known closed, it is not read again
+    h.world.issues['--json 900'] = CLOSED(900)
+    await h.pass(runtime(), stored(), NOW + 12 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+    await h.pass(runtime(), stored(), NOW + 18 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+  })
+
+  test('a chain never starves the issues the loop acts on: with twelve other due issues the blocked one is not read (#1004)', async () => {
+    const blocking = { stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: [{ number: 900, repo: REPO, state: 'open' }] }, stripped: 0 }) }
+    const h = host({ issues: { '--json 45': blocking } })
+    await h.pass(runtime(), stored())
+    const queue = Array.from({ length: 14 }, (_, i) => 300 + i)
+    h.world.queue = { stdout: `queue known=none now=${queue.join(',')}
+` }
+    await h.pass(runtime(), stored({ queueKnown: null }), NOW + 6 * MIN)
+    const reads = issueReads(h)
+    expect(reads).toHaveLength(12)
+    expect(reads).not.toContain('900')
   })
 
   test('a failed batched call keeps every last value and marks github not ok; an exit-2 reader falls back to single reads; a refused number is untrusted (#922)', async () => {
