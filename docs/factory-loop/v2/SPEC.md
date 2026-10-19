@@ -1180,6 +1180,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `queue:patch`, `queue:linkage` | the queue's head went back to review because its patch changed (T14), or its body was re-rendered after a `linkage` FAIL (9.3) | the issue |
 | `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, a command, or a call in the background (10.4). An agent did something strange | the issue |
 | `gate-unknown` | a stop gate that could not run (10.6) | the issue |
+| `gate-rerun`, `gate-cut` | the companion ran again a stop gate a restart cut (`gate-rerun`), or gave it up because the slot's marker had moved on (`gate-cut`, 10.6) | the issue |
 | `prompt-denied` | the companion refused a call that would have waited on a prompt nobody answers (10.10). The agent was told to find another way | the issue |
 | `tripwire` | the main-checkout tripwire fired (10.7) | none |
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
@@ -1214,7 +1215,8 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
 - **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
-  (`gate-pass`, `gate-fail`, 10.6) is not, and neither is `gate-wait` (a gate that waited for its turn).
+  (`gate-pass`, `gate-fail`, 10.6) is not, and neither is `gate-wait` (a gate that waited for its turn)
+  or `gate-start` (a gate that began, 10.6).
   The loop reads those gate lines for `gate_run` events (10.6, `rules-gates.ts`), not as interventions.
   The companion writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
@@ -1921,6 +1923,29 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   `gate-fail` or `gate-unknown`. Only `gate-unknown` is an intervention; the loop skips the other
   two, so the log is the audit of every run. The last result is also written to
   `<slot git dir>/factory-gate.json`, which the next run overwrites.
+- **The start line, and a gate a restart cut.** The loop's restart (or a wind-down's cap) can end the
+  process that runs a gate before the gate settles, and then nothing on disk says the gate began.
+  So when a gated writer's `SubagentStop` begins, before it asks for a turn, the companion appends
+  one `gate-start` line (the issue, life, seq, `startedAt`, which its settling line carries too,
+  `slot`, `gitDir` and `process`, the id `pid:start-time` of its process from `/proc/self/stat`).
+  It is neither an intervention nor a `gate_run`. The stop gate body is one function for the stop and
+  the recovery, so the two cannot drift.
+  **Recovery.** Only the session that holds the loop dir's `act.lock` (its lease names the session
+  and has not expired) runs it, at most once per loop dir per process, checked on each handshake
+  beat until it has run, from the beat's clock callback and not inside a hook handler, so the 10 s
+  handler budget never cuts it. It reads the last 24 hours of `companion.jsonl` and picks each
+  (issue, life, seq) whose newest line is `gate-start` or `gate-wait`, with no `gate-pass`,
+  `gate-fail`, `gate-unknown`, `gate-rerun` or `gate-cut` at or after it, and whose start line's
+  `process` is gone (`/proc/<pid>/stat` no longer gives the same id; a line with no `process`, from
+  a companion before this one, counts as gone when it predates this process's start). When the
+  slot's `factory-step.json` still names that issue, life and seq as a writer with gate commands,
+  it writes `gate-rerun` and runs the gate through the same turns and budget, then writes the usual
+  settling line with `rerun: true` and `factory-gate.json`; nothing is blocked, because no agent is
+  left. Any other candidate gets one `gate-cut` line whose reason says why and runs nothing. A
+  candidate gets at most one `gate-rerun` or `gate-cut`, across beats and restarts. `gate-rerun`
+  and `gate-cut` are interventions (7.2); a re-run's settling line gives one `gate_run`. The
+  loop treats a re-run's `gate-pass` or `gate-unknown` as any settling line (10.8). A re-run's
+  `gate-fail` ends the hold instead, and the step ends lost (10.8).
 - **Turns.** The companion runs at most `gateConcurrency` stop gates at once across every slot in
   its process, because `scripts/test.sh` sizes its pool to the whole container and several full
   gates at once would starve each other into timeouts. `gateConcurrency` is a whole number of at
@@ -1995,7 +2020,13 @@ safeguards remain:
   not-ok alike, is taken only once the companion log holds a settling gate line for that attempt,
   the newest `gate-pass`, `gate-fail` or `gate-unknown` line with its issue, life and seq dated at
   or after its `startedAt`, of cause `gate-pass` or `gate-unknown`. A newest `gate-fail` keeps the
-  step open, as the agent is refused and works on; `gate-wait` lines are ignored. A turn that
+  step open, as the agent is refused and works on; `gate-wait` lines are ignored. A newest
+  `gate-fail` with `rerun: true` (the recovery's run of a gate a restart cut, 10.6) refuses
+  nobody, since the agent that held the step is gone: it ends the hold and the answer is not taken.
+  The next pass's agent-list read no longer holds the entry, so it ends lost, and as it started
+  before this module load it gets the free re-run with cause `load`, whose builder then meets the
+  failing gate. A re-run's `gate-pass` or `gate-unknown` settles a held entry from before the
+  restart, with the same note. A turn that
   completes first leaves the step `running` (held): the agent list does not mark it lost, and a
   later pass ends it when the line arrives. The hold is bounded: `gateWaitTimeoutMs` plus
   `gateTimeoutMs` plus 2 minutes from its start, a reload restarting the count, after which the
@@ -2134,6 +2165,8 @@ writes none and removes no request:
 `started_at` is the first pass that saw this request (read back from the previous status file while
 its `requested_at` matches). `gate` is true when a build or fix step runs: the loop cannot see a
 stop gate apart from its step, whose hook runs it, so a running writer step may be in its gate.
+The wind-down waits for a held writer step, so it waits for its gate; a gate the cap cuts anyway is
+run again by the companion after the restart (10.6, recovery).
 `queue` is a running `queue-update` or `queue-merge`, `release` a running release task. `idle` is
 true when no step, gate, queue action or release task runs. `stop_now` is true when the stop-now
 file exists. The stopper (#842) waits for `idle` or `stop_now` or its own timeout.

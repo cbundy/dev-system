@@ -107,6 +107,8 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 // (null: not known). waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
 // startedAt (ISO, 3 ms digits) is when it asked for its turn, before any wait, and queuedBehind how
 // many held a turn or waited ahead of it then (0: none); the loop writes `gate_run` from these.
+// rerun: the run is the recovery's, of a gate the loop's restart cut, with no agent left to refuse
+// (the field is written only then).
 export function gateLine(
   r: GateResult,
   head: string | null,
@@ -115,8 +117,9 @@ export function gateLine(
   startedAt: string,
   queuedBehind: number,
   clean: boolean | null,
+  rerun = false,
 ): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean }
+  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}) }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
   if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode, failedTests: r.failedTests } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }

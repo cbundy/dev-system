@@ -11,7 +11,9 @@
 // - the timeout (10.5): a Bash call with no timeout gets 10 minutes;
 // - the stop gate (10.6): a writer may not finish while the repo's gate commands fail; a gate that
 //   cannot run lets it finish, logged as gate-unknown; every run is a line of companion.jsonl, the
-//   last also in factory-gate.json;
+//   last also in factory-gate.json; a `gate-start` line says a gate began, and the session that holds the
+//   loop's act lock runs again, once per loop dir, a gate whose process is gone before it settled
+//   (a restart cut it), as `gate-rerun` and a settling line with `rerun: true`, or gives it up as `gate-cut`;
 // - prompts nobody answers (10.10): a call of a mapped agent that Claude Code would put to a person
 //   (tool.check answered `ask`) is denied instead, with a reason that tells the agent to find another
 //   way, and written as a native `prompt_denied` event and a `prompt-denied` line of companion.jsonl; a
@@ -26,7 +28,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
 import { blockText, gateLine, gateRecord, oneLine, runGates, waitedOut } from './gate'
-import type { Ran } from './gate'
+import type { GateResult, Ran } from './gate'
+import { bootMs, gateEntries, isDead, judge, leaseHeld, openGates, pidOf, startMs } from './recover'
 import { recordWindow } from './window'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
@@ -155,7 +158,12 @@ let beat: { cancel: () => void } | null = null
 // session gets its own file, and a pruned or deleted one comes back.
 async function beating($: EngineInterface): Promise<void> {
   beat?.cancel()
-  beat = $.clock.every(HANDSHAKE_EVERY_MS, () => void beatOnce($))
+  // the recovery runs from the clock's callback, never inside a hook handler, so its gate is not
+  // cut by a handler's budget
+  beat = $.clock.every(HANDSHAKE_EVERY_MS, () => {
+    void beatOnce($)
+    void recoverGates($).catch(() => undefined)
+  })
   await beatOnce($)
 }
 
@@ -246,7 +254,7 @@ async function refusalOf($: EngineInterface, a: WorkspaceAgent, e: Record<string
 }
 
 // logLine: one line of the companion's log, which the loop reads (v2/sources-interventions.ts).
-async function logLine($: EngineInterface, a: WorkspaceAgent, cause: string, reason: string, fields: Record<string, unknown> = {}): Promise<void> {
+async function logLine($: EngineInterface, a: Pick<WorkspaceAgent, 'issue' | 'life' | 'seq' | 'loopDir'>, cause: string, reason: string, fields: Record<string, unknown> = {}): Promise<void> {
   const line = { at: new Date(await $.clock.now()).toISOString(), issue: a.issue, life: a.life, seq: a.seq, cause, reason: oneLine(reason, 500), ...fields }
   await appendFile($, `${a.loopDir}/companion.jsonl`, `${JSON.stringify(line)}\n`).catch(() => undefined)
 }
@@ -322,6 +330,126 @@ async function headSha($: EngineInterface, slot: string): Promise<string | null>
 async function slotClean($: EngineInterface, slot: string): Promise<boolean | null> {
   const r = await run($, ['git', '-C', slot, 'status', '--porcelain']).catch(() => null)
   return r !== null && r.exitCode === 0 ? r.stdout.trim() === '' : null
+}
+
+// What a stop gate needs of an attempt: a writer's agent, or the marker of a slot whose gate a
+// restart cut.
+type GateTarget = Pick<WorkspaceAgent, 'slot' | 'gitDir' | 'issue' | 'life' | 'seq' | 'gateCommands' | 'gateTimeoutMs' | 'loopDir' | 'gateConcurrency' | 'gateWaitTimeoutMs'>
+
+// runStopGate: the one gate run of a stop (the writer's finish) and of the recovery (a re-run), so the two
+// cannot drift: a turn first (10.6; at most gateConcurrency gates run at once in this process, a marker
+// with no limit takes none), then the head and tree, the commands, factory-gate.json and the settling
+// line (with `rerun: true` for the recovery's). ran: false when `cut` said the engine ended the caller
+// while it waited, and no gate ran. A turn always goes back, so a stuck or crashed gate never blocks the others.
+async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string, opts: { rerun?: boolean; cut?: () => boolean } = {}): Promise<{ ran: true; result: GateResult } | { ran: false }> {
+  const rerun = opts.rerun === true
+  const limit = a.gateConcurrency
+  let turn: Extract<Turn, { ok: true }> | null = null
+  let waitMs = 0
+  let queuedBehind = 0
+  if (limit !== undefined) {
+    const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
+    const got = await turns.acquire(limit, {
+      now: () => $.clock.now(),
+      after: (ms, fn) => $.clock.after(ms, fn),
+      maxWaitMs: cap,
+      idle: () => run($, ['sleep', String(IDLE_S)], { timeoutMs: IDLE_S * 1000 + QUICK_MS }),
+    })
+    waitMs = got.waitMs
+    queuedBehind = got.queuedBehind
+    if (!got.ok) {
+      const result = waitedOut(got.waitMs, cap, limit)
+      const head = await headSha($, a.slot)
+      await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs), null, 2)}\n`).catch(() => undefined)
+      const line = gateLine(result, head, waitMs, limit, startedAt, queuedBehind, null, rerun)
+      await logLine($, a, line.cause, line.reason, line.fields)
+      return { ran: true, result }
+    }
+    turn = got
+  }
+  // the engine cut the caller off while it waited: the loop has moved on, so it runs no gate
+  if (opts.cut?.() === true) {
+    turn?.release()
+    return { ran: false }
+  }
+  try {
+    if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
+    const headBefore = await headSha($, a.slot)
+    const cleanBefore = await slotClean($, a.slot)
+    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
+    const head = await headSha($, a.slot)
+    // a head that moved during the run means the tree did too: never clean
+    const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
+    const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean)
+    await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
+    const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean, rerun)
+    await logLine($, a, line.cause, line.reason, line.fields)
+    return { ran: true, result }
+  } finally {
+    turn?.release()
+  }
+}
+
+// this process, as the handshake names it (undefined: no /proc/self/stat)
+async function ownProcess($: EngineInterface): Promise<string | undefined> {
+  return processIdOf(await readText($, '/proc/self/stat'))
+}
+
+// --- the recovery of a cut gate (10.6) --------------------------------------------------------------
+
+// the loop dirs whose recovery has run in this process, and those being looked at now
+const recovered = new Set<string>()
+const checking = new Set<string>()
+
+// recoverGates: on a handshake beat, until it has run for each loop dir: the loop dirs of the config dir
+// whose act lock this session holds. The owner's own sessions hold none, so they never run it.
+async function recoverGates($: EngineInterface): Promise<void> {
+  const session = await $.session.id()
+  const base = `${await configDir($)}/factory-loop`
+  const entries = await $.fs.list(base).catch(() => [])
+  for (const ent of entries) {
+    if (ent.kind !== 'dir' || ent.name === 'workspace') continue
+    const loopDir = `${base}/${ent.name}`
+    if (recovered.has(loopDir) || checking.has(loopDir)) continue
+    checking.add(loopDir)
+    try {
+      if (!leaseHeld(await readText($, `${loopDir}/act.lock`), session, await $.clock.now())) continue
+      recovered.add(loopDir)
+      await recoverDir($, loopDir).catch(() => undefined)
+    } finally {
+      checking.delete(loopDir)
+    }
+  }
+}
+
+// recoverDir: every gate of the loop dir's log that a restart cut (recover.ts), run again when its slot's
+// marker still names the attempt and given up otherwise, each one line (`gate-rerun` or `gate-cut`).
+async function recoverDir($: EngineInterface, loopDir: string): Promise<void> {
+  const open = openGates(gateEntries(await readText($, `${loopDir}/companion.jsonl`), await $.clock.now()))
+  if (open.length === 0) return
+  const ownStart = startMs(await readText($, '/proc/self/stat'), bootMs(await readText($, '/proc/stat')))
+  for (const g of open) {
+    const pid = pidOf(g.process)
+    const current = pid === null ? undefined : processIdOf(await readText($, `/proc/${pid}/stat`))
+    if (!isDead(g, current, ownStart)) continue
+    const marker = g.gitDir !== null && g.gitDir.startsWith('/') ? parseMarker(await readText($, `${g.gitDir}/${MARKER_FILE}`)) : null
+    const verdict = judge(g, marker)
+    const attempt = { issue: g.issue, life: g.life, seq: g.seq, loopDir }
+    const cutAt = g.startedAt ?? new Date(g.at).toISOString()
+    const fields = { cutStartedAt: g.startedAt, process: g.process, slot: g.slot, gitDir: g.gitDir, marker: marker === null ? null : { issue: marker.issue, life: marker.life, seq: marker.seq } }
+    if (!verdict.rerun || marker === null || g.slot === null || g.gitDir === null) {
+      await logLine($, attempt, 'gate-cut', `the stop gate started at ${cutAt} was cut by a restart and is not run again: ${verdict.rerun ? 'its marker did not read' : verdict.why}`, fields)
+      continue
+    }
+    await logLine($, attempt, 'gate-rerun', `the stop gate started at ${cutAt} was cut by a restart; it runs again, with no agent to refuse`, fields)
+    const target: GateTarget = { ...attempt, slot: g.slot, gitDir: g.gitDir, gateCommands: marker.gateCommands, gateTimeoutMs: marker.gateTimeoutMs, gateConcurrency: marker.gateConcurrency, gateWaitTimeoutMs: marker.gateWaitTimeoutMs }
+    try {
+      await runStopGate($, target, new Date(await $.clock.now()).toISOString(), { rerun: true })
+    } catch (err) {
+      // a gate that could not run is never passed silently
+      await logLine($, attempt, 'gate-unknown', failedReason(err), { rerun: true })
+    }
+  }
 }
 
 // --- the hooks --------------------------------------------------------------------------------------
@@ -440,57 +568,13 @@ export const register: Register = on => {
     cut.delete(e)
     const a = await agentOf($, e.agent_id)
     if (a === null || a.root !== e.agent_id || a.role !== 'writer' || a.gateCommands.length === 0) return next(e)
-    // a turn first (10.6): at most gateConcurrency gates run at once in this process; a marker with no
-    // limit takes none
-    const limit = a.gateConcurrency
-    let turn: Extract<Turn, { ok: true }> | null = null
-    let waitMs = 0
-    let queuedBehind = 0
-    // when the gate asked for its turn, before any wait, with or without a limit
+    // when the gate asked for its turn, before any wait, with or without a limit; the start line
+    // is written before it asks, so a restart that cuts the gate leaves a trace of it (recovery)
     const startedAt = new Date(await $.clock.now()).toISOString()
-    if (limit !== undefined) {
-      const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
-      const got = await turns.acquire(limit, {
-        now: () => $.clock.now(),
-        after: (ms, fn) => $.clock.after(ms, fn),
-        maxWaitMs: cap,
-        idle: () => run($, ['sleep', String(IDLE_S)], { timeoutMs: IDLE_S * 1000 + QUICK_MS }),
-      })
-      waitMs = got.waitMs
-      queuedBehind = got.queuedBehind
-      if (!got.ok) {
-        const result = waitedOut(got.waitMs, cap, limit)
-        const head = await headSha($, a.slot)
-        await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs), null, 2)}\n`).catch(() => undefined)
-        const line = gateLine(result, head, waitMs, limit, startedAt, queuedBehind, null)
-        await logLine($, a, line.cause, line.reason, line.fields)
-        return next(e)
-      }
-      turn = got
-    }
-    // the engine cut this handler off while it waited: the loop has moved on, so it runs no gate
-    if (cutOff(e, next)) {
-      turn?.release()
-      return next(e)
-    }
-    // whatever happens from here, the turn goes back, so a stuck or crashed gate never blocks the others
-    try {
-      if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
-      const headBefore = await headSha($, a.slot)
-      const cleanBefore = await slotClean($, a.slot)
-      const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
-      const head = await headSha($, a.slot)
-      // a head that moved during the run means the tree did too: never clean
-      const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
-      const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean)
-      await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-      const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean)
-      await logLine($, a, line.cause, line.reason, line.fields)
-      if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
-      return next(e)
-    } finally {
-      turn?.release()
-    }
+    const started = ownProcess($).then(process => logLine($, a, 'gate-start', 'the stop gate started', { startedAt, slot: a.slot, gitDir: a.gitDir, ...(process === undefined ? {} : { process }) }))
+    const out = await runStopGate($, a, startedAt, { cut: () => cutOff(e, next) }).finally(() => started.catch(() => undefined))
+    if (out.ran && out.result.result === 'fail') return { block: blockText(out.result, a.slot, a.gateCommands) }
+    return next(e)
   }).catch(async ($, e, next) => {
     cut.add(e)
     // the engine hands the catch the error on its next

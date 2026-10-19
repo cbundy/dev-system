@@ -5,6 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { blockText, failedTests, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
+import { bootMs, gateEntries, isDead, judge, leaseHeld, openGates, pidOf, startMs } from '../hooks/recover'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
 import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
@@ -621,5 +622,72 @@ describe('prompts nobody answers', () => {
     expect(transcriptOf('/c/projects/p/s1.jsonl', 'a1')).toBe('/c/projects/p/s1/subagents/agent-a1.jsonl')
     expect(transcriptOf(undefined, 'a1')).toBeNull()
     expect(transcriptOf('', 'a1')).toBeNull()
+  })
+})
+
+describe('the recovery of a cut gate (10.6)', () => {
+  const NOW_MS = Date.UTC(2026, 9, 15, 12, 0)
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const row = (cause: string, at: number, over: Record<string, unknown> = {}) => JSON.stringify({ at: iso(at), issue: 571, life: 'ss1x2k', seq: 7, cause, ...over })
+  const open = (...rows: string[]) => openGates(gateEntries(rows.join('\n'), NOW_MS))
+
+  test('an attempt is open while its newest line is a start or a wait; the newest start is the cut one', () => {
+    const s1 = { slot: '/s', gitDir: '/g', process: '1:2', startedAt: 'x' }
+    expect(open(row('gate-start', NOW_MS - 3, s1))).toMatchObject([{ issue: 571, life: 'ss1x2k', seq: 7, at: NOW_MS - 3, process: '1:2', slot: '/s', gitDir: '/g' }])
+    expect(open(row('gate-start', NOW_MS - 5, s1), row('gate-fail', NOW_MS - 4), row('gate-start', NOW_MS - 3, { ...s1, process: '3:4' }), row('gate-wait', NOW_MS - 2))).toMatchObject([{ at: NOW_MS - 3, process: '3:4' }])
+    expect(open(row('gate-wait', NOW_MS - 2))).toMatchObject([{ at: NOW_MS - 2, process: null, slot: null }])
+  })
+
+  test('a settling line, a re-run or a cut closes it, another attempt\'s line does not, and nothing past 24 h is read', () => {
+    for (const closing of ['gate-pass', 'gate-fail', 'gate-unknown', 'gate-rerun', 'gate-cut']) expect(open(row('gate-start', NOW_MS - 3), row(closing, NOW_MS - 2))).toEqual([])
+    expect(open(row('gate-start', NOW_MS - 3), row('gate-pass', NOW_MS - 2, { seq: 8 }))).toHaveLength(1)
+    expect(open(row('gate-start', NOW_MS - 25 * 3_600_000))).toEqual([])
+    expect(open('not json', row('gate-start', NOW_MS, { life: 'BAD' }), row('gate-start', NOW_MS, { issue: 0 }), row('guard:write', NOW_MS))).toEqual([])
+  })
+
+  test('a process is dead when /proc gives another id for its pid, or none', () => {
+    const at = NOW_MS
+    expect(isDead({ at, process: '4242:7' }, '4242:7', null)).toBe(false)
+    expect(isDead({ at, process: '4242:7' }, '4242:8', null)).toBe(true)
+    expect(isDead({ at, process: '4242:7' }, undefined, null)).toBe(true)
+    expect(pidOf('4242:7')).toBe('4242')
+    expect(pidOf('x')).toBeNull()
+    expect(pidOf(null)).toBeNull()
+  })
+
+  test('a line with no process is dead only when it predates this process\'s start, which needs /proc/stat', () => {
+    const boot = bootMs('cpu 1\nbtime 1000\n')
+    expect(boot).toBe(1_000_000)
+    const stat = `4242 (a b) S ${'1 '.repeat(18)}500 5`
+    expect(startMs(stat, boot)).toBe(1_005_000)
+    expect(isDead({ at: 1_004_999, process: null }, undefined, 1_005_000)).toBe(true)
+    expect(isDead({ at: 1_005_001, process: null }, undefined, 1_005_000)).toBe(false)
+    expect(isDead({ at: 1, process: null }, undefined, null)).toBe(false)
+    expect(bootMs(null)).toBeNull()
+    expect(startMs(null, boot)).toBeNull()
+  })
+
+  test('the lease is held by this session until it expires', () => {
+    const lock = JSON.stringify({ session: 's1', renewedAt: 1, expiresAt: 100 })
+    expect(leaseHeld(lock, 's1', 99)).toBe(true)
+    expect(leaseHeld(lock, 's1', 100)).toBe(false)
+    expect(leaseHeld(lock, 's2', 50)).toBe(false)
+    expect(leaseHeld('{', 's1', 50)).toBe(false)
+    expect(leaseHeld(null, 's1', 50)).toBe(false)
+  })
+
+  test('judge re-runs only a writer\'s marker that still names the attempt', () => {
+    const g = { issue: 571, life: 'ss1x2k', seq: 7, at: 1, startedAt: null, slot: '/s', gitDir: '/g', process: '1:2' }
+    const m = parseMarker(JSON.stringify({ v: 1, repo: 'o/r', issue: 571, life: 'ss1x2k', seq: 7, step: 'build', role: 'writer', branch: 'b', gateCommands: ['x'], gateTimeoutMs: 1, loopDir: '/l' }))
+    expect(judge(g, m)).toEqual({ rerun: true })
+    expect(judge(g, null)).toMatchObject({ rerun: false })
+    expect(judge({ ...g, slot: null }, m)).toMatchObject({ rerun: false })
+    expect(judge({ ...g, seq: 8 }, m)).toMatchObject({ rerun: false, why: expect.stringContaining('not this attempt') })
+  })
+
+  test('gateLine adds rerun only for a re-run', () => {
+    const pass = { result: 'pass', ms: 1 } as const
+    expect(gateLine(pass, null, 0, null, 'x', 0, true).fields).not.toHaveProperty('rerun')
+    expect(gateLine(pass, null, 0, null, 'x', 0, true, true).fields).toMatchObject({ rerun: true })
   })
 })

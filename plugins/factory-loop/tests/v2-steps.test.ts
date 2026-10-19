@@ -382,7 +382,7 @@ function gateLine(w: ReturnType<typeof world>, over: Record<string, unknown>) {
   const line = { at: NOW + 5000, cause: 'gate-pass', issue: 470, life: 'tbq3k0', seq: 3, ms: 1000, waitMs: 0, head: null, concurrency: null, ...over }
   w.files.set(path, `${w.files.get(path) ?? ''}${JSON.stringify(line)}\n`)
 }
-const line = (over: Partial<GateLine>): GateLine => ({ at: NOW + 1000, issue: 470, life: 'tbq3k0', seq: 3, cause: 'gate-pass', head: null, ms: 1, waitMs: 0, concurrency: null, startedAt: null, startedMs: null, derived: null, queuedBehind: null, clean: null, hasClean: false, failedTests: null, ...over })
+const line = (over: Partial<GateLine>): GateLine => ({ at: NOW + 1000, issue: 470, life: 'tbq3k0', seq: 3, cause: 'gate-pass', head: null, ms: 1, waitMs: 0, concurrency: null, startedAt: null, startedMs: null, derived: null, queuedBehind: null, clean: null, hasClean: false, failedTests: null, rerun: false, ...over })
 const AT = { issue: 470, life: 'tbq3k0', seq: 3, since: NOW }
 
 describe('gateSettled', () => {
@@ -398,6 +398,14 @@ describe('gateSettled', () => {
     expect(gateSettled([line({ cause: 'gate-pass', at: NOW + 1 }), line({ cause: 'gate-fail', at: NOW + 2 })], AT)).toEqual({ cause: 'gate-fail' })
     expect(gateSettled([line({ cause: 'gate-fail', at: NOW + 2 }), line({ cause: 'gate-pass', at: NOW + 3 })], AT)).toEqual({ cause: 'gate-pass', at: NOW + 3 })
     expect(gateSettled([line({ cause: 'gate-wait', at: NOW + 9 })], AT)).toEqual({ cause: null })
+  })
+
+  test('a re-run\'s fail is told from an agent\'s: only the re-run ends the hold; its pass and unknown settle as any', () => {
+    expect(gateSettled([line({ cause: 'gate-fail', at: NOW + 2, rerun: true })], AT)).toEqual({ cause: 'gate-fail', rerun: true })
+    expect(gateSettled([line({ cause: 'gate-fail', at: NOW + 2, rerun: false })], AT)).toEqual({ cause: 'gate-fail' })
+    expect(gateSettled([line({ cause: 'gate-fail', at: NOW + 2, rerun: true }), line({ cause: 'gate-pass', at: NOW + 3 })], AT)).toEqual({ cause: 'gate-pass', at: NOW + 3 })
+    expect(gateSettled([line({ cause: 'gate-pass', at: NOW + 2, rerun: true })], AT)).toEqual({ cause: 'gate-pass', at: NOW + 2 })
+    expect(gateSettled([line({ cause: 'gate-unknown', at: NOW + 2, rerun: true })], AT)).toEqual({ cause: 'gate-unknown', at: NOW + 2 })
   })
 
   test('the hold is the wait, the run and two minutes', () => {
@@ -419,6 +427,58 @@ describe('a gated writer\'s step ends on its settling gate line (#918)', () => {
     const [taken] = await pass()
     expect(taken?.exec).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok', reason: 'declined' } } })
     expect(taken?.exec.summary).toContain(`(after its gate-pass at ${new Date(NOW + 9000).toISOString()})`)
+  })
+
+  test('a held entry from before the restart settles on a re-run\'s gate-pass, saying so', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    const hold = new Map<string, number>([['agent-1', NOW]])
+    const read = () => stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, DEPS, hold)
+    expect(await read()).toBeNull()
+    gateLine(w, { cause: 'gate-pass', at: NOW + 9000, rerun: true })
+    const taken = await read()
+    expect(taken).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'ok' } } })
+    expect(taken?.summary).toContain(`(after its gate-pass at ${new Date(NOW + 9000).toISOString()})`)
+    expect(hold.size).toBe(0)
+  })
+
+  test('a re-run\'s gate-fail ends the hold and does not take the answer; a plain gate-fail keeps the hold', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    const hold = new Map<string, number>([['agent-1', NOW]])
+    const read = () => stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, DEPS, hold)
+    clock(w, NOW + MIN)
+    gateLine(w, { cause: 'gate-fail', at: NOW + 3000 })
+    expect(await read()).toBeNull()
+    expect(hold.has('agent-1')).toBe(true)
+    gateLine(w, { cause: 'gate-fail', at: NOW + 9000, rerun: true })
+    expect(await read()).toBeNull()
+    expect(hold.size).toBe(0)
+  })
+
+  test('through actPass a re-run\'s gate-fail leaves the entry lost, where a plain fail keeps it running', async () => {
+    for (const rerun of [false, true]) {
+      const w = world()
+      gated(w)
+      const build = await spawned(w, stepAction('build'))
+      w.env.live.ledger = [build.entry]
+      recorded(w, build.entry.key, 'build', { result: 'cannot', reason: 'no way' })
+      const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map([['agent-1', NOW]]) }
+      gateLine(w, { cause: 'gate-fail', at: NOW + 3000, rerun })
+      clock(w, NOW + 5 * MIN)
+      await actPass(w.env, { ...state(), now: NOW + 5 * MIN }, { ok: true, agents: [] }, between)
+      // the pass that reads the line ends the hold; the next one finds the agent gone
+      expect(w.env.live.ledger[0]?.status).toBe('running')
+      expect(between.gateHeld.has('agent-1')).toBe(!rerun)
+      clock(w, NOW + 6 * MIN)
+      await actPass(w.env, { ...state(), now: NOW + 6 * MIN }, { ok: true, agents: [] }, between)
+      expect(w.env.live.ledger[0]?.status).toBe(rerun ? 'lost' : 'running')
+      expect(between.gateHeld.has('agent-1')).toBe(!rerun)
+    }
   })
 
   test('a gate line of an earlier attempt or another seq does not settle it', async () => {

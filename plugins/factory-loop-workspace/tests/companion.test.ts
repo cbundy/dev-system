@@ -64,8 +64,12 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     decided: { decision: 'ask' } as Record<string, unknown>,
     ids: 0,
     sleeps: 0,
+    // the files the plugin reads (the marker, /proc, the loop's act lock and companion log), kept as the
+    // engine would: a line appended to the companion log is read back
+    files: undefined as unknown as Map<string, string>,
   }
-  const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT]])
+  const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT], ['/proc/4242/stat', PROC_STAT]])
+  w.files = files
   const gates = [...(opts.gates ?? [])]
   const ran = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -86,6 +90,11 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     return { value: undefined }
   })
   on('fs.exists', ($, e) => ({ value: w.written.has(e.path) }))
+  // the loop dirs under the config dir, and its handshake folder
+  on('fs.list', ($, e) => {
+    if (e.path !== `${CONFIG}/factory-loop`) throw new Error(`ENOENT ${e.path}`)
+    return { value: ['o__r', 'workspace'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })) }
+  })
   on('fs.stat', ($, e) => {
     if (e.path === SLOT || e.path === `${SLOT}/src`) return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }
     // a symlink in the slot that leads out of it
@@ -120,6 +129,7 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     if (cmd === 'sh' && a1 === '-c' && a2?.includes('cat >>')) {
       const path = e.argv[4] as string
       w.appended.set(path, (w.appended.get(path) ?? '') + (e.init?.stdin ?? ''))
+      files.set(path, (files.get(path) ?? '') + (e.init?.stdin ?? ''))
       return ran('')
     }
     if (cmd === 'sh' && a1 === '-c' && a2?.includes('cat >')) {
@@ -147,11 +157,14 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
 }
 
 const START = { cwd: MAIN, surface: null, isInteractive: false }
-const companionLines = (w: { appended: Map<string, string> }) =>
+const allLines = (w: { appended: Map<string, string> }) =>
   (w.appended.get(`${LOOP_DIR}/companion.jsonl`) ?? '')
     .split('\n')
     .filter(l => l !== '')
     .map(l => JSON.parse(l) as Record<string, unknown>)
+// the lines the plugin wrote, but for the `gate-start` ones (the stop gate's own tests are about the
+// lines after it; the start lines have their own tests below)
+const companionLines = (w: { appended: Map<string, string> }) => allLines(w).filter(l => l.cause !== 'gate-start')
 
 describe('the context window file', () => {
   const file = (dir: string) => `${dir}/s1`
@@ -795,5 +808,193 @@ describe('permission prompts waiting', () => {
     await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'someone-else' } as never)
     await $.classic.Notification({ ...note, notification_type: 'idle_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toEqual([])
+  })
+})
+
+describe('the gate-start line and the recovery of a gate a restart cut (10.6)', () => {
+  const STOP = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
+  const iso = (ms: number) => new Date(ms).toISOString()
+  // a process that is gone (nothing under /proc), and the one the world runs as (PROC_STAT)
+  const DEAD = '999:111'
+  const ALIVE = '4242:342070008'
+  const CUT_AT = NOW - 10 * 60_000
+  const start = (over: Record<string, unknown> = {}) => ({ at: iso(CUT_AT), issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-start', reason: 'the stop gate started', startedAt: iso(CUT_AT), slot: SLOT, gitDir: GIT_DIR, process: DEAD, ...over })
+  const wait = (over: Record<string, unknown> = {}) => ({ at: iso(CUT_AT + 30_000), issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-wait', reason: 'waited', waitMs: 30_000, queuedBehind: 1, concurrency: 1, ...over })
+  const text = (...lines: Record<string, unknown>[]) => lines.map(l => `${JSON.stringify(l)}\n`).join('')
+  // the loop's session with its lease (this session is s1), the log, then a session that beats once
+  async function afterRestart($: Engine, w: ReturnType<typeof world>, log: string, lock: unknown = { session: 's1', renewedAt: NOW, expiresAt: NOW + 3_600_000 }) {
+    w.files.set(`${LOOP_DIR}/companion.jsonl`, log)
+    if (lock !== null) w.files.set(`${LOOP_DIR}/act.lock`, JSON.stringify(lock))
+    await $.session.start(START)
+    await beat($, w)
+  }
+  // one minute of the clock: the handshake beat, and the recovery it starts, which has no hook to wait for
+  async function beat($: Engine, w: ReturnType<typeof world>) {
+    await w.clock.advance(60_000)
+    for (let i = 0; i < 30; i++) await new Promise<void>(resolve => setTimeout(resolve, 5))
+  }
+  const causes = (w: ReturnType<typeof world>) => allLines(w).map(l => l.cause)
+
+  test('SubagentStop writes gate-start before its turn, and its startedAt is the settling line\'s', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateConcurrency: 1 } })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop(STOP)
+    const lines = allLines(w)
+    expect(lines.map(l => l.cause)).toEqual(['gate-start', 'gate-pass'])
+    expect(lines[0]).toMatchObject({ issue: 571, life: 'ss1x2k', seq: 7, startedAt: iso(NOW), slot: SLOT, gitDir: GIT_DIR, process: '4242:342070008' })
+    expect(lines[1]).toMatchObject({ startedAt: iso(NOW) })
+    expect(lines[1]).not.toHaveProperty('rerun')
+  })
+
+  test('a reader\'s or an ungated writer\'s stop writes no gate-start', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateCommands: [] } })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop(STOP)
+    expect(allLines(w)).toEqual([])
+  })
+
+  test('the issue\'s case: a start and a wait from a dead process, no settling line: one beat re-runs the gate, a second writes nothing more', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start(), wait()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(w.gateRuns.map(g => [g.command, g.cwd])).toEqual([['npm run lint', SLOT], ['npm test', SLOT]])
+    const [rerun, pass] = allLines(w)
+    expect(rerun).toMatchObject({ issue: 571, life: 'ss1x2k', seq: 7, cutStartedAt: iso(CUT_AT), process: DEAD, slot: SLOT, gitDir: GIT_DIR, marker: { issue: 571, life: 'ss1x2k', seq: 7 } })
+    expect(rerun?.reason).toContain(iso(CUT_AT))
+    expect(pass).toMatchObject({ rerun: true, startedAt: iso(NOW + 60_000), clean: true })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass' })
+    await beat($, w)
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(w.gateRuns).toHaveLength(2)
+  })
+
+  test('the #1065 case: a lone gate-start (the gate took its turn at once) is recovered', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true })
+  })
+
+  test('a failing re-run writes gate-fail with rerun: true and blocks nothing', async ($, on) => {
+    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'FAIL parses the marker\n' }] })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-fail'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'fail' })
+  })
+
+  test('a re-run uses a turn like a stop gate: it waits behind the limit and logs gate-wait', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateConcurrency: 1 } })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true, concurrency: 1 })
+  })
+
+  for (const [what, marker] of [['another seq', { ...MARKER, seq: 8 }], ['another issue', { ...MARKER, issue: 572 }], ['another life', { ...MARKER, life: 'other' }], ['a reader', { ...MARKER, role: 'reader' }], ['no gate commands', { ...MARKER, gateCommands: [] }]] as const) {
+    test(`a marker that names ${what} gives one gate-cut with its why, and no command runs`, async ($, on) => {
+      const w = world(on, { marker })
+      await afterRestart($, w, text(start()))
+      expect(causes(w)).toEqual(['gate-cut'])
+      expect(allLines(w)[0]).toMatchObject({ issue: 571, seq: 7, cutStartedAt: iso(CUT_AT), process: DEAD })
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('a missing marker is a gate-cut that says so', async ($, on) => {
+    const w = world(on)
+    w.files.delete(`${GIT_DIR}/factory-step.json`)
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-cut'])
+    expect(allLines(w)[0]?.reason).toContain('no readable step marker')
+    expect(w.gateRuns).toEqual([])
+  })
+
+  const settle = (cause: string, at: number) => ({ ...wait(), cause, at: iso(at) })
+  const left: [string, string][] = [
+    ['a start line from a live process', text(start({ process: ALIVE }))],
+    ['a settled attempt (gate-pass)', text(start(), settle('gate-pass', CUT_AT + 60_000))],
+    ['a settled attempt (gate-fail)', text(start(), settle('gate-fail', CUT_AT + 60_000))],
+    ['a settled attempt (gate-unknown)', text(start(), settle('gate-unknown', CUT_AT + 60_000))],
+    ['an attempt already re-run', text(start(), settle('gate-rerun', CUT_AT + 60_000))],
+    ['an attempt already cut', text(start(), settle('gate-cut', CUT_AT + 60_000))],
+    ['a refused finish and a live stop after it', text(start(), settle('gate-fail', CUT_AT + 60_000), start({ at: iso(CUT_AT + 120_000), process: ALIVE }))],
+    ['a start line older than 24 h', text(start({ at: iso(NOW - 25 * 3_600_000) }))],
+  ]
+  for (const [what, log] of left) {
+    test(`${what} is left alone`, async ($, on) => {
+      const w = world(on)
+      await afterRestart($, w, log)
+      expect(causes(w)).toEqual([])
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('a fail after a cut start, then a new start from a dead process, is open again', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start(), { ...wait(), cause: 'gate-fail', at: iso(CUT_AT + 60_000) }, start({ at: iso(CUT_AT + 120_000), startedAt: iso(CUT_AT + 120_000) })))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[0]?.reason).toContain(iso(CUT_AT + 120_000))
+  })
+
+  for (const [what, lock] of [['another session\'s lease', { session: 'other', renewedAt: NOW, expiresAt: NOW + 3_600_000 }], ['an expired lease of its own', { session: 's1', renewedAt: NOW - 3_600_000, expiresAt: NOW + 1_000 }], ['no lock at all', null]] as const) {
+    test(`a session with ${what} runs nothing`, async ($, on) => {
+      const w = world(on)
+      await afterRestart($, w, text(start()), lock)
+      expect(causes(w)).toEqual([])
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('the lock is checked on each beat until it is held: the recovery runs on the beat after the session takes it', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start()), { session: 'other', renewedAt: NOW, expiresAt: NOW + 3_600_000 })
+    expect(causes(w)).toEqual([])
+    w.files.set(`${LOOP_DIR}/act.lock`, JSON.stringify({ session: 's1', renewedAt: NOW, expiresAt: NOW + 3_600_000 }))
+    await beat($, w)
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+  })
+
+  // this process started at btime + 342070008 ticks of 10 ms
+  const BOOT_TO_START_S = 3_420_700
+  const oldLine = () => start({ process: undefined, slot: undefined, gitDir: undefined })
+  test('a line with no process (a companion before it) that predates this process is dead; with no slot named it is cut', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `cpu 1 2 3\nbtime ${Math.floor(NOW / 1000) - BOOT_TO_START_S + 3_000}\n`)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual(['gate-cut'])
+    expect(allLines(w)[0]?.reason).toContain('names no slot')
+  })
+
+  test('a line with no process written after this process started is left alone', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `cpu 1 2 3\nbtime ${Math.floor(NOW / 1000) - BOOT_TO_START_S - 3_000}\n`)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual([])
+  })
+
+  test('a line with no process, when this process\'s start cannot be read, is left alone', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual([])
+  })
+
+  test('a gate-wait with no start line from a companion before gate-start is cut, as it has no slot', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `btime ${Math.floor(NOW / 1000) + 10_000}\n`)
+    await afterRestart($, w, text(wait()))
+    expect(causes(w)).toEqual(['gate-cut'])
+  })
+
+  test('every candidate of the log is judged: two attempts, one re-run and one cut', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start({ issue: 572, seq: 3 }), start()))
+    expect(allLines(w).map(l => [l.cause, l.issue])).toEqual([['gate-cut', 572], ['gate-rerun', 571], ['gate-pass', 571]])
+  })
+
+  test('a gate that cannot run in the re-run is a gate-unknown with rerun: true', async ($, on) => {
+    const w = world(on, { gates: ['timeout'] })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-unknown'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true })
   })
 })

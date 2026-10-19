@@ -14,8 +14,9 @@ const MIN = 60_000
 export type GateAt = { issue: number; life: string; seq: number; since: Ms }
 
 // A gate line that settles the step (its cause, its time), or the newest line's cause when it does
-// not: 'gate-fail' keeps the step open, as the agent is refused and works on; null is no line.
-export type GateSettled = { cause: 'gate-pass' | 'gate-unknown'; at: Ms } | { cause: 'gate-fail' | null }
+// not: 'gate-fail' keeps the step open, as the agent is refused and works on; null is no line. A
+// re-run's fail (`rerun`) refuses nobody: the agent that held the step is gone, so it ends the hold.
+export type GateSettled = { cause: 'gate-pass' | 'gate-unknown'; at: Ms } | { cause: 'gate-fail'; rerun: true } | { cause: 'gate-fail' | null }
 
 // gateSettled: the newest `gate-pass`, `gate-fail` or `gate-unknown` line of the step, by its own
 // time (the hook's catch line has no startedAt), dated at or after the attempt's start. `gate-wait`
@@ -27,7 +28,7 @@ export function gateSettled(lines: readonly GateLine[], at: GateAt): GateSettled
     if (newest === null || l.at >= newest.at) newest = l
   }
   if (newest === null) return { cause: null }
-  if (newest.cause === 'gate-fail') return { cause: 'gate-fail' }
+  if (newest.cause === 'gate-fail') return newest.rerun ? { cause: 'gate-fail', rerun: true } : { cause: 'gate-fail' }
   return { cause: newest.cause === 'gate-pass' ? 'gate-pass' : 'gate-unknown', at: newest.at }
 }
 

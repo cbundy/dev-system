@@ -203,6 +203,27 @@ GROUP BY repo, day
 ORDER BY repo, day DESC;
 ```
 
+How often a restart cut a stop gate, and what became of it (v2 SPEC 10.6). The companion re-runs
+a cut gate when its slot's marker still names the attempt (`gate-rerun`) and gives it up
+otherwise (`gate-cut`); each is an `intervention` with that cause. A re-run's outcome is the first
+`gate_run` of the same issue and life that started after that row. A re-run that failed ends the
+held step lost, which shows as a `free:load` intervention. So per repo and day: the re-runs, the
+cuts, and the re-runs by outcome (no outcome yet shows as NULL).
+
+```sql
+SELECT i.repo, i.ts::date AS day, i.cause, g.result, count(*) AS n
+FROM factory.event_log i
+LEFT JOIN LATERAL (
+  SELECT result FROM factory.event_log r
+  WHERE r.type = 'gate_run' AND r.repo = i.repo AND r.issue = i.issue AND r.life = i.life
+    AND r.started_at > i.ts AND i.cause = 'gate-rerun'
+  ORDER BY r.started_at LIMIT 1
+) g ON true
+WHERE i.type = 'intervention' AND i.cause IN ('gate-rerun', 'gate-cut')
+GROUP BY i.repo, i.ts::date, i.cause, g.result
+ORDER BY i.repo, day DESC, i.cause;
+```
+
 Writer steps that ended before their gate (v2 SPEC 10.8). The loop ends a gated build or fix step
 only on that attempt's settling gate line, so after the release that added the rule every row's
 `hold_ms` is zero or more, and `ended_early` is false. A row with `ended_early` true is a step

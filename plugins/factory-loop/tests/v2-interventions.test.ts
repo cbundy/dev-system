@@ -634,6 +634,18 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
     expect(new Set(p.map(x => x.key)).size).toBe(4)
   })
 
+  test('a gate the restart cut, re-run or given up, is one intervention of the loop each; gate-start is none', () => {
+    const text = [
+      JSON.stringify({ at: NOW - 3 * MIN, issue: N, life: LIFE, seq: 7, cause: 'gate-start', startedAt: new Date(NOW - 4 * MIN).toISOString() }),
+      JSON.stringify({ at: NOW - 2 * MIN, issue: N, life: LIFE, seq: 7, cause: 'gate-rerun', reason: 'the gate started at 13:21 was cut by a restart' }),
+      JSON.stringify({ at: NOW - MIN, issue: N, life: LIFE, seq: 8, cause: 'gate-cut', reason: 'the slot moved on to seq 9' }),
+    ].join('\n')
+    const lines = companionLines(text, NOW)
+    expect(lines.map(l => l.cause)).toEqual(['gate-rerun', 'gate-cut'])
+    const p = ivs({ facts: { companion: lines, controlDigest: null, configDigest: null } })
+    expect(p.map(x => [x.event.who, x.event.cause, x.event.issue])).toEqual([['loop', 'gate-rerun', N], ['loop', 'gate-cut', N]])
+  })
+
   test('a fact is judged only while the rebuild of a wiped store reads whether it is logged, so it cannot log it twice (R4-F5)', () => {
     expect(FACT_WINDOW_MS).toBeLessThan(REBUILD_DAYS * 24 * 60 * MIN)
     expect(COMPANION_WINDOW_MS).toBe(FACT_WINDOW_MS)
