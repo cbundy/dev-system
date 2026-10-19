@@ -136,3 +136,26 @@ A newer base image can ship new migrations. `dev-doctor` fails with "behind" unt
 only the migrations not yet recorded.
 
 Then run `dev-doctor` and expect the factory database line OK for both roles.
+
+## Schema compatibility
+
+The schema at any release works for the writers and readers of the last 10 minor releases, so a
+workspace on an older image keeps working against a database a newer image has upgraded. Migrations are
+therefore expand-only.
+
+Allowed: new tables, new nullable or defaulted columns, new view columns (`CREATE OR REPLACE VIEW`, or a
+`DROP VIEW` that the same file re-creates with `CREATE VIEW`), new indexes, new functions and triggers,
+and `DROP NOT NULL`.
+
+Forbidden, and refused by `npm run lint` (`scripts/migration-lint.js`, which prints `<file>:<line>` for each hit):
+
+- any `DROP`, except `ALTER COLUMN ... DROP NOT NULL` and a `DROP VIEW` re-created in the same file;
+- any `RENAME`;
+- a column type change (`ALTER COLUMN ... TYPE`);
+- `ADD COLUMN ... NOT NULL` with no `DEFAULT`, and `ALTER COLUMN ... SET NOT NULL`;
+- a narrowed check: `ADD CHECK`, `UNIQUE`, `PRIMARY KEY`, `FOREIGN KEY` or `EXCLUDE` on an existing table,
+  `ALTER DOMAIN ... ADD CONSTRAINT`, and `CREATE UNIQUE INDEX` on a table not created in the same file;
+- any `REVOKE`.
+
+An applied migration is immutable: the bootstrap refuses a file whose sha256 changed. Removing dead
+fields is out of scope here; the epic that introduced this window owns it.
