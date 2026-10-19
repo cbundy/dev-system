@@ -123,6 +123,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
 | `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
 | `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed read keeps the last reading, which the window still bounds, and shows in `sources` |
+| `main` | act mode only: `gh api repos/R --jq .default_branch` (once per load), `gh api repos/R/commits/<branch> --jq .sha`, `gh api repos/R/commits/<head>/pulls` (only when the head moved), `gh api repos/R/actions/workflows?per_page=100` (the active workflows), for each `gh api repos/R/actions/workflows/<id>/runs?branch=<b>&per_page=10`, then `gh api repos/R/deployments?sha=<head>&per_page=100` (the newest of each environment) and for each `gh api repos/R/deployments/<id>/statuses?per_page=1` | `mainEveryMs`; none during a GitHub backoff or once a rate limit met this pass ends the loop's reads (checked before each call). When skipped or not yet due, the last reading stands | the `main_state` event (7.1, rule M1). Any failed call, or output not understood, fails the whole read: `sources.main` is not ok and the pass carries no reading, so a partial read is never shown as green |
 | `dualWrite` | act mode only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
@@ -146,8 +147,8 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 - **The companion's log** (`<loop dir>/companion.jsonl`, 7.2) is read each pass with the loop
   dir's answer files (10.8), not as a source of its own. Its gate lines also give the `gate_run`
   events (10.6).
-- **Not read:** a mirror of every `factory:*` label, a 5-minute scan of open PRs (the `releasePrs` list is read only while a hold can apply), main's check
-  runs and the session environment. The loop has no rule that needs them.
+- **Not read:** a mirror of every `factory:*` label, a 5-minute scan of open PRs (the `releasePrs` list is read only while a hold can apply)
+  and the session environment. The loop has no rule that needs them. Main's check runs are read by the `main` source, only to be logged (9.5).
 
 ### 2.5 Module layout
 
@@ -702,8 +703,8 @@ S3 plans these for the record's current seq until each is done. Keys are
 | building | event `delegated --note "brief <url>"` |
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
-| parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
-| waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
+| parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. Once the comment is done with a URL, a free `event comment_posted` (key `.../event/comment-posted`; `--type comment_posted --data {life, seq, to_state, comment_url} --issue N`) follows it, before the tell; a comment found with no URL logs none. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
+| waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. Once the comment is done with a URL, a free `event comment_posted` (key `.../event/comment-posted`; `--type comment_posted --data {life, seq, to_state, comment_url} --issue N`) follows it, before the links; a comment found with no URL logs none. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
 | closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note). done: `comment` (key `.../comment`, hidden key, no closing keyword: the evidence, the designer's reason and what becomes of the issue branch), then `close-issue` as completed (key `.../follow/close-issue`, `logClosed`: the executor logs `closed` with reason `completed` after the close), then `delete-branch` (key `.../follow/delete-branch`) once the close is done, then the `close-tracker` chain of a merge (8.7), then `tell(done)`; the branch is deleted only when it exists on origin and either has no commit beyond origin/<base> or its head is the evidence PR's head, by `git push --force-with-lease=refs/heads/<b>:<sha> origin :refs/heads/<b>` (a lease the branch no longer meets is kept as `moved`, an answer, not a failure), and is otherwise kept, which the comment and the tell say |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
@@ -1063,6 +1064,12 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
 | `reviewed` | each review result (8.3) | issue, branch, pr, head | `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`, the counts of error, warning and info findings, the reviewer's id, the answer's path |
 | `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person`, `loop` or `judge`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 
+- `main_state` (main_state.v1) is written in the new format alone, for no issue, by
+  `callum-flow-event --type main_state --data <json>`, by rule M1 (14.1) from the `main` source (2.4):
+  once for each change of the state of the default branch (its head, each workflow's newest completed
+  run, each environment's newest deployment), with `changed` naming the first part that differs
+  (`first`, `head`, `workflow` or `deploy`). Its key is `main/<last>/<current>` (appendix C). It sets no
+  stage and is no progress for the stuck test.
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
 - The companion writes two more states, `prompt_denied` and `prompt_waiting` (10.10), through
@@ -1094,6 +1101,9 @@ the note today's queries read:
 - The Coder stop script (`wind-down.sh`, 10.11) writes the native `wind_down` event, one per loop dir
   per stop, through `callum-flow-event --type wind_down` (`docs/factory-events/schemas/wind_down.v1.json`);
   the loop itself does not write or read it.
+- The loop writes the native `comment_posted` (`docs/factory-events/schemas/comment_posted.v1.json`)
+  through `events.ts`, as it does `gate_run` and `shadow_read`: once per park or wait seq, after its
+  comment is done with a URL (4.5).
 
 The loop no longer logs `superseded`, `rebased_behind` or `run_started`, and no watcher states
 (there are no pipeline runs).
@@ -1634,7 +1644,7 @@ the guard checks only facts the loop owns:
 
 ### 9.5 No hold while main is red
 
-The queue never holds for a red main, and the loop does not read main's checks:
+The queue never holds for a red main. The loop reads main's checks (2.4 `main`) only to log them as `main_state` events (7.1); no rule waits on them or tells the owner:
 
 - With "Require branches to be up to date" on, every PR's CI after its update runs on main plus
   the PR, so the head's own checks already carry main's state.
@@ -3417,7 +3427,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-Twenty-one rules, by id.
+Twenty-two rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3442,6 +3452,7 @@ Twenty-one rules, by id.
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour (or, with waiting issues, one that saw them all); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>` (plus `:w<N>.<N>` when issues wait), fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
+| M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
 
 ## 15. Decisions
 
@@ -3964,6 +3975,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `ciStartMs` | `10m` | 4.4 |
 | `ciRunMs` | `30m` | 4.4 |
 | `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
+| `mainEveryMs` (written `mainEvery`) | `5m` | 2.4: how often the default branch's state is read (act mode), any positive duration |
 | `maxTriages` | 2 | 5.1 |
 | `windDownMinutes` | 10 | 10.11: the minutes a requested wind-down may take, a whole number of at least 0; 0 turns wind-down off (a request is ignored). Read every pass from both settings files; `/factory config` shows it as `windDown`, with its source |
 | `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
@@ -4033,9 +4045,10 @@ deliberately, as one argv.
 | follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
+| main state | `main/<last>/<current>`, each a state key `<head>.<workflows>.<deployments>` (8 hex digits each) or `none` before the first |
 | heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-13 families of the loop's own, plus the foundation's 5.
+14 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 

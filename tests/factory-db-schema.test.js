@@ -25,7 +25,7 @@ for (const f of schemaFiles) {
 const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "parent", "milestone_closed", "milestone_open"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at"]);
-const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs"]);
+const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -94,4 +94,12 @@ test("a re-push of the same event_id makes no second row", opts, (t) => {
   db.query(sql.replace("gen_random_uuid()", "'3f1c9a52-8b0e-4f7a-9d21-6c4e2b7a1f08'"), "writer");
   assert.throws(() => db.query(sql.replace("gen_random_uuid()", "'3f1c9a52-8b0e-4f7a-9d21-6c4e2b7a1f08'"), "writer"), /duplicate key/);
   assert.equal(db.query("SELECT count(*) FROM factory.event_store"), "1");
+});
+
+test("factory.workers and factory.workers_status have config jsonb", opts, (t) => {
+  const db = createDb(t);
+  for (const rel of ["workers", "workers_status"]) {
+    const type = db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = '${rel}' AND column_name = 'config'`);
+    assert.equal(type, "jsonb", `${rel}.config`);
+  }
 });

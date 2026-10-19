@@ -2009,6 +2009,7 @@ document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-lat
 background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
 `push` (event file and push-marker modification times, the no-mistakes mirror's recorded last push, and
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
+The nullable `config` column (jsonb) holds the settings snapshot of the factory loop (see [Settings snapshot](#settings-snapshot)); neither the UPSERT nor the stats UPDATE writes it. The guarded DDL adds it to an agentsview database that lacks it (migration 0015 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
 intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
 `pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
@@ -2018,6 +2019,19 @@ the factory database gets the UPSERT alone. `dev-init` starts the loop under `/t
 the last beat and state, and fails when either URL is configured and no loop runs.
 `/usr/local/share/dev-system/heartbeat-loop --once` makes one beat and exits 0 only when every configured target
 succeeded.
+
+#### Settings snapshot
+
+Each running beat also sends a third, separate psql call (`-- heartbeat config`) to every target whose UPSERT
+succeeded, after its stats call: `UPDATE factory.workers SET config = ... WHERE device = ...`. The value is the
+`config` that `heartbeat-state --repo <owner/name>` read from
+`$CLAUDE_CONFIG_DIR/factory-loop/<owner>__<name>/settings.json` (default `~/.claude`; the repo is the row's `repo`,
+and a folder differing only in case is found). It is NULL when there is no repo, no file, or the file is
+unreadable, not a JSON object, invalid or over 256 KiB, so the row never shows a snapshot that is gone. It
+reaches psql only as a `-v` variable. A failure (for example a database not yet at migration 0015) is logged,
+masked, as `heartbeat-loop: <target> config write failed`; it never changes the exit code, resends DDL or skips the
+other target. The stopped beat sends none and leaves `config` as it was. Judge a snapshot's freshness by
+`config->>'at'` (the loop's last observing pass), not by `last_seen`.
 
 #### Machine stats
 

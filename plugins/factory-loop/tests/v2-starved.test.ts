@@ -34,7 +34,7 @@ const BLOCKED = [issue(10, { blockedBy: 1 }), issue(11, { blockedBy: 1 }), issue
 
 function world(over: Partial<State> = {}, v2: Partial<V2State> = {}, records: IssueRecord[] = []): State {
   const s = baseState({ queue: [10, 11, 12], issues: BLOCKED, ...over })
-  return { ...s, v2: { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK, releasePrs: OK }, ...v2 } }
+  return { ...s, v2: { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK, releasePrs: OK, main: OK }, ...v2 } }
 }
 
 // the classic: 10 and 11 wait on 20, 12 on 30

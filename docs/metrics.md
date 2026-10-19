@@ -1433,8 +1433,9 @@ ORDER BY 1 DESC;
 
 ## Main after merge
 
-Reads the `main_state` events. Nothing writes them yet, so the queries return no rows until a
-producer does. Count a state once by `(repo, device, observed_at)`.
+Reads the `main_state` events. The factory loop writes one (rule M1) when the state of the default
+branch it read differs from the last one it logged; it reads the branch every `mainEveryMs` (5
+minutes) in act mode. Count a state once by `(repo, device, observed_at)`.
 
 Main's newest state per repo:
 
@@ -1514,6 +1515,37 @@ FROM factory.worker_samples
 WHERE sampled_at > now() - interval '1 day'
 GROUP BY device, hour
 ORDER BY device, hour;
+```
+
+## Settings
+
+Settings the loop runs on. A `settings_changed` event records one change of one setting (see
+[REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
+settings snapshot, written by each worker's heartbeat (images/base/README.md, "Settings snapshot"). No producer
+writes `settings_changed` yet, so the first query returns no rows until one does.
+
+Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
+devices counts once):
+
+```sql
+SELECT ts, repo, device, key, layer, who, old_value, new_value
+FROM (
+  SELECT e.*, row_number() OVER (PARTITION BY e.fact ORDER BY e.ts, e.device) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'settings_changed') c
+WHERE n = 1
+ORDER BY ts DESC, key;
+```
+
+Settings in force per worker. `config` is null while a worker has no snapshot (no loop settings file, or one that
+is unreadable, invalid or oversize). Judge how fresh a snapshot is by `config->>'at'`, the loop's last observing
+pass, never by `last_seen`: a worker keeps beating after its loop stops writing the snapshot:
+
+```sql
+SELECT device, repo, config->>'at' AS settings_at,
+  now() - (config->>'at')::timestamptz AS settings_age, config->'settings' AS settings
+FROM factory.workers_status
+ORDER BY device;
 ```
 
 ## Shadow runs (source switch)

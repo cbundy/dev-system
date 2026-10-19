@@ -103,6 +103,7 @@ export const DEFAULT_CONFIG: Config = {
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,
   prEveryMs: 30_000,
+  mainEveryMs: 5 * MIN,
   maxTriages: 2,
   windDownMinutes: 10,
   minimumReleaseCadenceMs: 6 * 60 * MIN,

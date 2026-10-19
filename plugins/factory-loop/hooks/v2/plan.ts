@@ -3,7 +3,7 @@
 // hooks/v2/*.ts and hooks/foundation.ts only (tests/factory-loop-plan.test.js).
 //
 // The order is the order the act step runs the actions in: R1 first (6.2), then the record's
-// rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions, the gate runs, and
+// rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions, the gate runs, M1 (the default branch's state, whatever the store's state), and
 // the fleet's (H2, O3); what used up its attempts is told, and a missing companion plugin (the
 // workspace rail, 10.9: its hold is in the record's rules); G4 admits; R2's restart goes last of
 // all, after the title, and only on a pass that admitted nothing else. When the records could not
@@ -14,6 +14,7 @@ import { reconcile } from './reconcile'
 import { fleetRules, fleetTells, restartOf, restartTells } from './rules-fleet'
 import { gateRunRules } from './rules-gates'
 import { interventionRules } from './rules-interventions'
+import { mainRules } from './rules-main'
 import { queueRules } from './rules-queue'
 import { slotRules } from './rules-slots'
 import { starvedRules } from './rules-starved'
@@ -51,6 +52,7 @@ export function planV2(state: State, config: Config): PlanResult {
     }
     interventionRules(ctx)
     gateRunRules(ctx)
+    mainRules(ctx)
     fleetRules(ctx)
     restartTells(ctx)
     fleetTells(ctx)

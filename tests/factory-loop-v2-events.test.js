@@ -226,6 +226,33 @@ test("a gate_run goes through the real writer's native mode: exit 0, no warning,
   assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { ...data, flaky: null, failed_tests: null, failed_at: null } });
 });
 
+// A comment_posted (rules-entry.ts) is native like gate_run: the real writer takes the argv events.ts
+// builds, with no warning, and the line matches the strict schema and reads back equal.
+test("a comment_posted goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema", () => {
+  const data = { life: "ss1x2k", seq: 7, to_state: "parked", comment_url: "https://github.com/cbundy/dev-system/issues/571#issuecomment-1" };
+  const e = { state: "comment_posted", issue: 571, data };
+  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+  const argv = ev.eventArgv(e);
+  assert.deepEqual(argv, ["callum-flow-event", "--type", "comment_posted", "--data", JSON.stringify(data), "--issue", "571"]);
+  const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "", `comment_posted warned: ${r.stderr}`);
+  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+  assert.equal(lines.length, before + 1, "one line");
+  newSeen.set(file, lines.length);
+  const got = JSON.parse(lines[lines.length - 1]);
+  assert.equal(got.type, "comment_posted");
+  assert.equal(got.issue, 571);
+  assert.deepEqual(got.data, data);
+  assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+  assert.deepEqual(reader.validateStrict("comment_posted", 1, got.data), []);
+  assert.deepEqual(reader.readEvent(got), { type: "comment_posted", type_version: 1, data });
+});
+
 // A shadow_read (sources-records.ts) is written in the new format alone and for no issue: the argv has no
 // --issue, the real writer takes it with no warning, and its line matches the strict schema.
 test("a shadow_read goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", async () => {

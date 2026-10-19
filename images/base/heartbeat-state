@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 'use strict';
-// heartbeat-state: prints {state, in_flight, chat_active_at, sessions, claude_sessions} as JSON
+// heartbeat-state: prints {state, in_flight, chat_active_at, sessions, claude_sessions, config} as JSON
 // for heartbeat-loop (cbundy/dev-system#339). One call per beat.
+//
+// Usage: heartbeat-state [--repo <owner/name>] [--source old|new|shadow]
+// config is the parsed $CLAUDE_CONFIG_DIR/factory-loop/<owner>__<name>/settings.json (the factory
+// loop's settings snapshot; default config dir ~/.claude), the file heartbeat-loop writes to
+// factory.workers.config. When that exact folder is missing, a folder under factory-loop/ whose
+// name matches case-insensitively is used (heartbeat-loop lowercases the repo). config is null
+// with no --repo, a missing file, or a file that is unreadable, not valid JSON, not a JSON object
+// or over 256 KiB; every case but "missing" warns once on stderr and never fails the call. It is
+// not part of the answer the source shadow compares.
 //
 // busy when any of these holds, otherwise idle:
 //   - an issue on THIS device whose latest lifecycle event is not merged,
@@ -85,7 +94,7 @@ const REPLAYED = new Set(['failed', 'head_mismatch', 'conflict', 'ci_stalled']);
 // exactly one of the two sets, so a new type forces a choice (tests/heartbeat-state.test.js).
 const EV_LIFECYCLE = new Set(['ready', 'claimed', 'requeued', 'claim_lost', 'closed', 'abandoned', 'merged', 'implementer_routed', 'finding_handled']);
 const EV_NOISE = new Set(['claim_renewed', 'transition', 'reviewed', 'intervention', 'loop_entry', 'loop_passes', 'usage',
-  'untrusted_stripped', 'test_weakened', 'shadow_read', 'gate_run', 'wind_down', 'released', 'milestone_state', 'main_state', 'comment_posted',
+  'untrusted_stripped', 'test_weakened', 'shadow_read', 'gate_run', 'wind_down', 'released', 'milestone_state', 'main_state', 'comment_posted', 'settings_changed',
   'prompt_denied', 'prompt_waiting']);
 const EV_DONE = new Set(['merged', 'abandoned', 'claim_lost', 'closed', 'ready', 'requeued']);
 const EV_TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
@@ -411,11 +420,53 @@ function intEnv(name, fallback) {
   return Number.isFinite(n) && n >= 0 && process.env[name] !== '' && process.env[name] !== undefined ? n : fallback;
 }
 
+const CONFIG_MAX_BYTES = 256 * 1024;
+
+// repoOf: the value of --repo / --repo=X in argv, else null.
+function repoOf(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--repo') return argv[i + 1] || null;
+    if (argv[i].startsWith('--repo=')) return argv[i].slice('--repo='.length) || null;
+  }
+  return null;
+}
+
+// readConfig: the repo's settings snapshot (see the header), or null.
+function readConfig(configDir, repo) {
+  if (!repo || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) return null;
+  const base = `${configDir.replace(/\/+$/, '')}/factory-loop`;
+  const want = repo.replace('/', '__');
+  let dir = path.join(base, want);
+  if (!fs.existsSync(dir)) {
+    let names = [];
+    try { names = fs.readdirSync(base); } catch { return null; }
+    const hit = names.filter((n) => n.toLowerCase() === want.toLowerCase()).sort()[0];
+    if (!hit) return null;
+    dir = path.join(base, hit);
+  }
+  const file = path.join(dir, 'settings.json');
+  try {
+    const st = fs.statSync(file);
+    if (st.size > CONFIG_MAX_BYTES) { warn(`config: ${file} is over ${CONFIG_MAX_BYTES} bytes`); return null; }
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) { warn(`config: ${file} is not a JSON object`); return null; }
+    return v;
+  } catch (e) {
+    if (e.code !== 'ENOENT') warn(`config: ${e.message}`);
+    return null;
+  }
+}
+
 async function main() {
   const dev = device();
   const dir = process.env.CALLUM_EVENTS_DIR || '/persist/events';
   let source = 'old';
-  try { source = resolveSource('heartbeat-state', process.argv.slice(2), process.env, 'new').source; } catch (e) { warn(`${e.message}: reading old`); }
+  let repo = repoOf(process.argv.slice(2));
+  try {
+    const r = resolveSource('heartbeat-state', process.argv.slice(2), process.env, 'new');
+    source = r.source;
+    repo = repoOf(r.argv);
+  } catch (e) { warn(`${e.message}: reading old`); }
   const runs = readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes');
   const empty = { issues: [], runIssue: new Map(), superseded: new Set() };
   const derivedOld = () => {
@@ -449,12 +500,14 @@ async function main() {
     sessions = liveSessions(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
       process.env.DEV_CONTEXT_WINDOW_DIR || '/tmp/dev-context-window', counts);
   } catch (e) { warn(`sessions: ${e.message}`); }
-  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts })}\n`);
+  let config = null;
+  try { config = readConfig(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), repo); } catch (e) { warn(`config: ${e.message}`); }
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts, config })}\n`);
 }
 
 const fallback = (e) => {
   warn(e.message);
-  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 } })}\n`);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null })}\n`);
 };
 
 if (require.main === module) {

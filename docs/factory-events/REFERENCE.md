@@ -29,6 +29,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`released`](#released) | v1 | none | A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
 | [`reviewed`](#reviewed) | v1 | required | One review of the issue's pull request finished. |
+| [`settings_changed`](#settings_changed) | v1 | none | One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. |
 | [`shadow_read`](#shadow_read) | v1 | none | One shadow compare made by a reader that has an old/new source switch: the command read the same keys from the old source and the new central one and counted where the answers differ. |
 | [`test_weakened`](#test_weakened) | v1 | required | A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or \|\| true, or commented an assertion out). |
 | [`transition`](#transition) | v1 | required | The loop's record of the issue changed: it moved to a new state, or its step, attempt or notes changed. |
@@ -131,7 +132,7 @@ Example:
 | `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
 | `errors` | integer | `loop_passes`, `reviewed` | Of those passes, how many threw. |
-| `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
+| `fact` | string | `intervention`, `settings_changed` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `failed_at` | string | `gate_run` | On a flaky pass row, when the failed run started. Null otherwise. |
 | `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
 | `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
@@ -146,9 +147,10 @@ Example:
 | `head` | string | `finding_handled`, `gate_run`, `intervention`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
-| `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
+| `key` | string | `loop_entry`, `settings_changed` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
+| `layer` | enum | `settings_changed` | The source of the new value; null for a derived value. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
 | `life` | string | `comment_posted`, `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | The life the comment belongs to. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
@@ -160,9 +162,11 @@ Example:
 | `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
 | `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
+| `new_value` | any | `settings_changed` | The value after the change, any JSON; null when it is now unset. |
 | `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `observed_at` | string | `main_state` | When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
+| `old_value` | any | `settings_changed` | The value before the change, any JSON; null when it was unset. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `p50_ms` | integer | `loop_passes` | The median duration (nearest rank), in milliseconds; null when there was no pass. |
@@ -212,7 +216,7 @@ Example:
 | `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
 | `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
-| `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
+| `who` | enum | `intervention`, `settings_changed` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
 | `why` | enum | `transition` | closed: why the life ended (done: its work had already merged); null otherwise. |
 
 ## abandoned
@@ -358,7 +362,7 @@ Example:
 
 ## comment_posted
 
-The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. No producer writes it yet.
+The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. The loop's park and wait entry actions write it (rules-entry.ts).
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -619,7 +623,7 @@ Example:
 
 ## main_state
 
-One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. No producer writes it yet. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.
+One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. The factory loop writes it (rule M1), reading the branch every mainEveryMs. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)
@@ -991,6 +995,40 @@ Example:
   "infos": 2,
   "reviewer": "adjudicator",
   "answer_path": "/persist/claude/factory-loop/cbundy__plant-console/answers/i92_ltn0brb_review_c46dbb8_r1_a1.answer.json"
+}
+```
+
+## settings_changed
+
+One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). No producer writes it yet.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: fact (the once key, such as settings/maxInFlightIssues/mvb4ci14)
+
+### settings_changed v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `key` | string | required | no | minLength 1 | yes | The canonical leaf of the setting, such as maxInFlightIssues, stateTimeoutMs.design or derived.gateConcurrency. |
+| `old_value` | any | required | no |  | yes | The value before the change, any JSON; null when it was unset. |
+| `new_value` | any | required | no |  | yes | The value after the change, any JSON; null when it is now unset. |
+| `layer` | enum | required | yes | one of "default", "repo", "workspace", "plugin", "env", "directive", null | yes | The source of the new value; null for a derived value. |
+| `who` | enum | required | no | one of "person", "judge", "repo", "plugin" | yes | Who made the change: a person, the judge (an operation change), the repo (its own config) or a plugin default change. |
+| `fact` | string | required | no |  | yes | The once key of the change, such as settings/maxInFlightIssues/mvb4ci14. |
+| `detail` | string | optional | yes | maxLength 500 |  | A short note on the change. |
+
+Example:
+
+```json
+{
+  "key": "maxInFlightIssues",
+  "old_value": 3,
+  "new_value": 5,
+  "layer": "workspace",
+  "who": "judge",
+  "fact": "settings/maxInFlightIssues/mvb4ci14",
+  "detail": "raised after a quiet week"
 }
 ```
 

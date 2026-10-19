@@ -47,6 +47,12 @@ export function gateRunKey(r: RecordRef, startedAtMs: number): string {
   return `${seqKey(r)}/gate/${startedAtMs.toString(36)}`
 }
 
+// mainKey: a change in the state of the default branch, from the last state logged to this one
+// (rules-main.ts): main/<last>/<current>, each a state key (`none` before the first).
+export function mainKey(last: string, current: string): string {
+  return `main/${last}/${current}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`

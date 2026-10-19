@@ -395,7 +395,7 @@ export type V2Tell = (typeof V2_TELLS)[number]
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'M1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 
@@ -439,7 +439,18 @@ export type IssueComment = { body: string; at: Ms; url: string | null }
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).
 export type HeadSeen = { pr: number; at: Ms }
 
-export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs'] as const
+// The newest completed run of a workflow on the default branch (sources-main.ts).
+export type MainRun = { id: number; attempt: number; head: string; event: string; conclusion: string }
+// One active workflow as the main read showed it: its newest completed run (null: none) and whether
+// a newer run is queued or in progress.
+export type MainWorkflow = { id: number; name: string; run: MainRun | null; running: boolean }
+// The newest deployment of an environment at the head, and its newest status (null: none).
+export type MainDeployment = { environment: string; id: number; state: string | null }
+// What one read of the default branch showed (sources-main.ts, the schema main_state.v1): when (ISO, 3 ms digits), the
+// branch and its head, the merged PR the head came from, the workflows and the deployments.
+export type MainReading = { observedAt: string; branch: string; head: string; pr: number | null; workflows: MainWorkflow[]; deployments: MainDeployment[] }
+
+export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs', 'main'] as const
 // What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
 // was read and the "<issue>:<life>:<seq>" of this device's transitions it holds.
 export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
@@ -483,6 +494,8 @@ export type V2State = {
   waitsUnread?: Record<string, WaitUnread>
   // the open release bump PRs (sources-release.ts) the merge queue holds for; absent: none read
   releasePrs?: ReleasePrsRead
+  // the default branch as the last read that succeeded showed it (sources-main.ts); absent: none this pass
+  main?: MainReading
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>
