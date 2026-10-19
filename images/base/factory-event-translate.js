@@ -151,7 +151,7 @@ const SPECS = {
   },
   reviewed: { branch: NE, pr: I(1), head: HEX, verdict: E("approve", "changes", "unknown"), round: I(1), patch: NE, errors: I(0), warnings: I(0), infos: I(0), reviewer: NE, answer_path: NE },
   finding_handled: { branch: NE, pr: nul(I(1)), head: nul(HEX), finding: NE, outcome: E("fixed", "declined"), detail: S },
-  intervention: { who: E("person", "loop", "judge"), cause: RX(/^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$/), life: nul(RX(/^[0-9a-z]+$/)), fact: nul(S), pr: nul(I(1)), detail: S },
+  intervention: { who: E("person", "loop", "judge"), cause: RX(/^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$/), life: nul(RX(/^[0-9a-z]+$/)), fact: nul(S), pr: nul(I(1)), detail: S, flaky: nul(B), failed_tests: nul(L(S)), failed_jobs: nul(L(S)), head: nul(HEX) },
   implementer_routed: { model: NE, reason: E("label", "default", "hash", "fallback"), bucket: nul(I(0)), opus_pct: I(0) },
   test_weakened: { branch: NE, pr: I(1), head: HEX, commit: HEX, restored: B, kinds: L1(S), files: L1(S) },
   untrusted_stripped: { source: E("issue", "pr", "comment", "comments", "timeline", "list"), refused: B, count: nul(I(0)), pr: nul(I(1)) },
@@ -495,7 +495,9 @@ function verdict(line) {
 }
 
 function intervention(line) {
-  const t = strictTokens(line.note ?? null, { keep: ["who", "cause", "life", "fact", "reason"], need: ["who", "cause"] });
+  const t = strictTokens(line.note ?? null, { keep: ["who", "cause", "life", "fact", "reason", "flaky", "failed_tests", "failed_jobs", "head"], need: ["who", "cause"] });
+  // A comma list as child_whys is: `none` and a missing token are null.
+  const listN = (k) => (t.get(k) === undefined || t.get(k) === "none" ? null : tList(t, k));
   return {
     who: tStr(t, "who"),
     cause: tStr(t, "cause"),
@@ -503,6 +505,10 @@ function intervention(line) {
     fact: tStrN(t, "fact"),
     pr: colInt(line, "pr"),
     detail: tStr(t, "reason") ?? "",
+    flaky: tBool(t, "flaky") ?? null,
+    failed_tests: listN("failed_tests"),
+    failed_jobs: listN("failed_jobs"),
+    head: tStrN(t, "head"),
   };
 }
 
