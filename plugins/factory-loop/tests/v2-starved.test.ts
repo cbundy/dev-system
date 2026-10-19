@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
+import { summaryOf } from '../hooks/driver-pass-log'
 import { followKey, lifeOf } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import type { SourceCtx } from '../hooks/v2/observe'
@@ -351,5 +352,15 @@ describe('the blockers read (sources-blockers.ts)', () => {
     const none = await readBlockers(ctx({}).c, null, SPELL, false)
     expect(none?.error).toBe('every read failed')
     expect(Object.values(none?.nodes ?? {}).every(v => v.read === 'failed')).toBe(true)
+  })
+})
+
+describe('the decision log line of a tell', () => {
+  test('keeps the tell fields the Starved queue query reads', () => {
+    const fields = { since: '2026-10-19T01:00:00Z', minutes: 75, period: 0, roots: '12', why: 'no-pr' }
+    const tell = { kind: 'tell', class: 'owner', key: 'tell:starved:1:0', rule: 'S1', issue: null, reason: 'starved', fields } as unknown as Action
+    expect(summaryOf(tell).fields).toEqual(fields)
+    const plain = { kind: 'tell', class: 'owner', key: 'k', rule: 'S1', issue: null, reason: 'r' } as unknown as Action
+    expect(summaryOf(plain).fields).toBeUndefined()
   })
 })

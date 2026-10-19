@@ -83,6 +83,8 @@ export function summaryOf(a: Action) {
     run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
     pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
     reason: a.reason,
+    // a wake action's fields (a tell's since, roots, why...), so the decision log says what it named
+    fields: 'fields' in a && typeof a.fields === 'object' && a.fields !== null ? a.fields : undefined,
   }
 }
 
