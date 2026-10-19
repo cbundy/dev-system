@@ -15,7 +15,8 @@
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when the
 # factory event docs, version lock or shapes are stale or a schema breaks the authoring or bump
-# rules (`node scripts/build-event-docs.js --check`), when a
+# rules (`node scripts/build-event-docs.js --check`), when a factory database migration is not
+# expand-only (`node scripts/migration-lint.js`; docs/factory-db.md "Schema compatibility"), when a
 # file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
 # whose allowlist is empty), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
@@ -84,6 +85,13 @@ fi
 checked=$((checked + 1))
 if ! node scripts/build-event-docs.js --check > /dev/null; then
   fail "factory event docs out of date or schemas invalid (see above; run npm run build:events)"
+fi
+
+# Factory database migrations must be expand-only (scripts/migration-lint.js); its hits print
+# on stderr as <file>:<line>: <what>.
+checked=$((checked + 1))
+if ! node scripts/migration-lint.js; then
+  fail "images/base/factory-db/migrations: a migration that is not expand-only (see above; docs/factory-db.md)"
 fi
 
 # The factory loop's size guard (docs/factory-loop/v2/SPEC.md 2.5): no file under its hooks over
