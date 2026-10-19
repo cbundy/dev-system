@@ -259,7 +259,7 @@ fi
 # left out) and parent, from the comments read above (callum-flow-event --data, cbundy/dev-system#870).
 # A writer that does not know --data answers exit 2: the event is then logged again without it.
 facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
-  {title: (if (.title | type) == "string" then .title[0:256] else null end),
+  {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
    labels: (if (.labels | type) == "array" then [.labels[] | .name | strings | select(. != $ready)] else null end),
    parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
      | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' "$tmp/issue.json" 2>/dev/null) || facts=

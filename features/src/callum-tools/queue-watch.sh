@@ -104,7 +104,7 @@ record_ready() {
   shift
   rr_data=$(printf '%s' "${listed-}" | jq -c --argjson n "$rr_n" --arg repo "$repo" '
     first(.issues[] | select(.number == $n))
-    | {title: (if (.title | type) == "string" then .title[0:256] else null end),
+    | {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
        labels: (if (.labels | type) == "array" then [.labels[] | .name | strings] else null end),
        parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
          | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' 2>/dev/null) || rr_data=
