@@ -13,6 +13,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`claim_renewed`](#claim_renewed) | v1 | required | A heartbeat extended this device's claim on the issue. |
 | [`claimed`](#claimed) | v1 | required | This device took the claim on the issue: no other device works on it while the lease holds. |
 | [`closed`](#closed) | v1 | required | GitHub shows the issue closed, outside the factory's own merge. |
+| [`comment_posted`](#comment_posted) | v1 | required | The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. |
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
 | [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
@@ -117,6 +118,7 @@ Example:
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `class` | enum | `loop_entry` | The planner's class for the work. |
+| `comment_url` | string | `comment_posted` | The comment's URL on GitHub. |
 | `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
@@ -141,7 +143,7 @@ Example:
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
-| `life` | string | `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | Which life of the issue the gate ran in. |
+| `life` | string | `comment_posted`, `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | The life the comment belongs to. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
@@ -176,7 +178,7 @@ Example:
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
-| `seq` | integer | `gate_run`, `prompt_denied`, `prompt_waiting`, `transition` | The record's sequence in this life whose writer step ran the gate. |
+| `seq` | integer | `comment_posted`, `gate_run`, `prompt_denied`, `prompt_waiting`, `transition` | The seq of the transition whose entry action posted the comment. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
@@ -191,7 +193,7 @@ Example:
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
 | `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
-| `to_state` | enum | `transition` | The state after: the issue's state from now on. |
+| `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
 | `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
 | `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
@@ -343,6 +345,34 @@ Example:
 ```json
 {
   "reason": "completed"
+}
+```
+
+## comment_posted
+
+The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. No producer writes it yet.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: (repo, issue, life, seq)
+
+### comment_posted v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | no | pattern `^[0-9a-z]+$` | yes | The life the comment belongs to. |
+| `seq` | integer | required | no | minimum 0 | yes | The seq of the transition whose entry action posted the comment. |
+| `to_state` | enum | required | no | one of "parked", "waiting" | yes | The state that seq entered. |
+| `comment_url` | string | required | no | pattern `^https://\S+$`; maxLength 500 | yes | The comment's URL on GitHub. |
+
+Example:
+
+```json
+{
+  "life": "ltn4zqo",
+  "seq": 7,
+  "to_state": "parked",
+  "comment_url": "https://github.com/cbundy/plant-console/issues/42#issuecomment-6259542165"
 }
 ```
 

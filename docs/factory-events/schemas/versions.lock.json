@@ -221,6 +221,38 @@
     "type": "object",
     "x-issue": "required"
   },
+  "comment_posted.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "comment_url": {
+        "maxLength": 500,
+        "pattern": "^https://\\S+$",
+        "type": "string"
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": "string"
+      },
+      "seq": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "to_state": {
+        "enum": [
+          "parked",
+          "waiting"
+        ]
+      }
+    },
+    "required": [
+      "comment_url",
+      "life",
+      "seq",
+      "to_state"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
   "envelope.v1": {
     "additionalProperties": false,
     "properties": {
