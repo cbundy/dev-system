@@ -28,6 +28,10 @@ const FORBIDDEN = {
   "DROP COLUMN": ["ALTER TABLE t DROP COLUMN c;", 1],
   "DROP VIEW without a re-create": ["DROP VIEW factory.v;", 1],
   "DROP VIEW re-created before it": ["CREATE VIEW v AS SELECT 1;\nDROP VIEW v;", 2],
+  "DROP VIEW of several views": ["DROP VIEW factory.v, factory.w;\nCREATE VIEW factory.v AS SELECT 1;", 1],
+  "DROP VIEW CASCADE": ["DROP VIEW factory.v CASCADE;\nCREATE VIEW factory.v AS SELECT 1;", 1],
+  "DROP after an E-string with an escaped quote": ["SELECT E'it\\'s';\nDROP TABLE x;", 2],
+  "ADD EXCLUDE": ["ALTER TABLE t ADD EXCLUDE USING gist (c WITH =);", 1],
   "DROP INDEX": ["DROP INDEX i;", 1],
   "DROP FUNCTION": ["DROP FUNCTION f();", 1],
   "DROP in a function body": ["CREATE FUNCTION f() RETURNS void AS $$\nBEGIN\n  DROP TABLE x;\nEND $$ LANGUAGE plpgsql;", 3],
@@ -70,7 +74,7 @@ CREATE UNIQUE INDEX u ON factory.a (x);
 CREATE FUNCTION f() RETURNS void AS $$ BEGIN DELETE FROM factory.a; END $$ LANGUAGE plpgsql;
 CREATE TRIGGER t AFTER INSERT ON factory.a FOR EACH ROW EXECUTE FUNCTION f();
 ALTER TABLE factory.a ALTER COLUMN n DROP NOT NULL;
-DROP VIEW factory.w;
+DROP VIEW IF EXISTS factory.w RESTRICT;
 CREATE VIEW factory.w AS SELECT 1 AS one;
 `);
   assert.equal(r.status, 0, r.stderr);

@@ -35,8 +35,10 @@ function sanitize(text) {
       out += blank(text.slice(i, j));
       i = j;
     } else if (c === "'") {
+      const esc = /^[eE]$/.test(text[i - 1] || '') && !/[\w$]/.test(text[i - 2] || ''); // E'..' takes backslash escapes
       let j = i + 1;
       while (j < text.length) {
+        if (esc && text[j] === '\\') { j += 2; continue; }
         if (text[j] === "'") {
           if (text[j + 1] === "'") { j += 2; continue; }
           break;
@@ -121,7 +123,7 @@ function check(text) {
     while ((m = drop.exec(t))) {
       const rest = t.slice(m.index + 4);
       if (/^\s+NOT\s+NULL\b/i.test(rest)) continue;
-      const v = new RegExp(`^\\s+VIEW\\s+(?:IF\\s+EXISTS\\s+)?${NAME}`, 'i').exec(rest);
+      const v = new RegExp(`^\\s+VIEW\\s+(?:IF\\s+EXISTS\\s+)?${NAME}(\\s+RESTRICT)?\\s*$`, 'i').exec(rest);
       if (v && creates.some((c) => c.name === norm(v[1]) && c.off > st.off)) continue;
       add(at(m.index), 'DROP is forbidden (a view may be dropped only when the same file creates it again)');
     }
