@@ -208,6 +208,10 @@ Notices:
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this
   repo, so the released orchestrator is still driving and the loop stays in observe until its
   lock has been gone ten minutes (v2 SPEC 13.11.2). Owner stops that watcher or the old session.
+- `schema-behind` (to, error): the startup migrate (`factory-db-migrate`) failed or timed out, so the
+  factory database's schema is behind this image and the loop stays in observe (v2 SPEC 13.11.2). It
+  comes once per startup. Owner reads the error, fixes the migrator secret or the database, and runs
+  `factory-db-migrate`; the next pass acts by itself once it succeeds.
 - `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
   checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop

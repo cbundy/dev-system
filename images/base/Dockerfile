@@ -255,6 +255,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-evaluate \
   images/base/callum-flow-factory-state \
   images/base/factory-db-bootstrap \
+  images/base/factory-db-migrate \
   images/base/systemctl \
   images/base/callum-flow-evidence-upload \
   /usr/local/bin/

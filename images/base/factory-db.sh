@@ -9,7 +9,9 @@
 # DEV_SECRETS_DIR (/run/secrets/dev-system), the reader URL likewise as FACTORY_DB_READER_URL or
 # factory-db-reader-url. A workspace can use another database: a file of the same name in
 # DEV_WORKSPACE_SECRETS_DIR (/run/secrets/dev-system-workspace) wins over the shared one, even when
-# it is empty or unreadable. Neither ever falls back to AGENTSVIEW_PG_URL, and a file's value is never
+# it is empty or unreadable. The migrator's file (factory-db-migrator-url, for factory-db-migrate,
+# cbundy/dev-system#888) follows the same rule, with DEV_MIGRATOR_SECRETS_DIR
+# (/run/secrets/dev-system-migrator) in the shared folder's place. Neither ever falls back to AGENTSVIEW_PG_URL, and a file's value is never
 # exported. The procedure is in docs/factory-db.md.
 
 _FACTORY_DB_SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -17,9 +19,13 @@ _FACTORY_DB_SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pw
 . "$_FACTORY_DB_SELF_DIR/agentsview.sh"
 
 # factory_db_url_shared_file ROLE / factory_db_url_workspace_file ROLE: the file's path in the
-# shared folder and in the workspace's own folder (ROLE is writer or reader).
+# shared folder and in the workspace's own folder (ROLE is writer, reader or migrator; the
+# migrator's "shared" folder is the template's migrator mount).
 factory_db_url_shared_file() {
-  echo "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/factory-db-$1-url"
+  case "$1" in
+    migrator) echo "${DEV_MIGRATOR_SECRETS_DIR:-/run/secrets/dev-system-migrator}/factory-db-migrator-url" ;;
+    *) echo "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/factory-db-$1-url" ;;
+  esac
 }
 factory_db_url_workspace_file() {
   echo "${DEV_WORKSPACE_SECRETS_DIR:-/run/secrets/dev-system-workspace}/factory-db-$1-url"

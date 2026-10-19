@@ -2997,13 +2997,13 @@ model (FINDINGS check 3).
 A `tell` is a wake whose turn writes one line to the owner in the conversation, which the phone
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
-`breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
+`breaker`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
 `checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable` and `starved`) go out before any other
 wake, and the title counts the open ones.
 
-Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act
-mode back, 13.11.2), `breaker kind=ping` (the ping storm, 13.11.4) and `pass-error` (three passes in a
+Five notices come from outside plan: `heartbeat-other`, `old-watcher` and `schema-behind` (a rail
+holding act mode back, 13.11.2; `schema-behind` carries `to` and `error`), `breaker kind=ping` (the ping storm, 13.11.4) and `pass-error` (three passes in a
 row that threw, 13.10 item 9). Each is keyed by when its spell began, so it goes out once per
 spell, through the wake executor, and only while no wake is open. A rail or breaker notice waits
 in the store meanwhile; it is dropped once its spell ended before it could go out, and sent again
@@ -3095,6 +3095,15 @@ refused plans and records exactly as observe mode does (13.11.1).
   query blocks, and so does a device with no name (`DEV_MACHINE_NAME`), which cannot tell its
   own heartbeat from another's. It covers two workspaces on one repo, which the per-workspace
   act lock cannot see.
+- **The schema is current.** `dev-init` runs `factory-db-migrate` before the loop starts
+  (cbundy/dev-system#888); it writes its outcome to `DEV_FACTORY_DB_MIGRATE_STATUS` (default
+  `/tmp/dev-factory-db-migrate.json`). A missing file passes (no migrator is set up), as do
+  `migrated` and `current`. `failed` and `timed-out` keep the loop in observe with the reason
+  `schema: migrate to <v> failed: <error>` and tell the owner once per startup
+  (`tell(schema-behind)`, keyed by the status's `at`). `running` keeps it in observe without a
+  tell for 10 minutes; a `running` record older than that, or a file that cannot be parsed,
+  keeps it in observe and tells (fail safe). The next pass after a success acts with no other
+  step. The check runs after the heartbeat guard and before the act lock.
 - **The act lock**, `<loop dir>/act.lock`, a JSON lease (`session`, `renewedAt`, `expiresAt`)
   taken only when every rail above passes. A lease lasts the longer of 5 passes and 15 minutes,
   longer than any single step (a queue merge, then its rollout read), and an acting
@@ -4019,7 +4028,7 @@ Notices (TELL kinds), owner items first:
 | `starved` | yes | S1: the ready queue was starved (all of it unclaimable, nothing queued or in flight, no owner hold) for `starvedNoticeAfterMs`; names each root blocker and why it is not moving; once per spell and 24 h period of it |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
-| `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `pass-error` | no | foundation, unchanged |
+| `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
 10 kinds of the loop's own, 8 of them owner items, plus the foundation's.
 

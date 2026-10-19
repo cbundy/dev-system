@@ -801,6 +801,23 @@ write_versions() {
   dev-version --snapshot > /dev/null 2>&1 || log "WARNING: could not write the version snapshot"
 }
 
+# run_factory_db_migrate: bring the factory database's schema up to this image's version before
+# the loop starts (cbundy/dev-system#888). factory-db-migrate does nothing without the migrator's
+# secret, bounds itself (DEV_FACTORY_DB_MIGRATE_TIMEOUT, default 120s), records its outcome in
+# ${DEV_FACTORY_DB_MIGRATE_STATUS:-/tmp/dev-factory-db-migrate.json}, which the loop's schema rail
+# reads, and always exits 0 here. An image without the command is skipped.
+run_factory_db_migrate() {
+  local out line
+  if ! command -v factory-db-migrate > /dev/null 2>&1; then
+    log "factory-db-migrate is not in this image, skipping the schema migrate"
+    return 0
+  fi
+  out=$(factory-db-migrate 2>&1) || log "WARNING: factory-db-migrate exited $?"
+  while IFS= read -r line; do
+    [ -z "$line" ] || log "$line"
+  done <<< "$out"
+}
+
 if [ "${1:-}" = --repo ]; then
   setup_gh_token
   setup_git_credentials
@@ -827,6 +844,7 @@ seed_no_mistakes_model
 setup_gh_token
 setup_git_credentials
 sync_repo
+run_factory_db_migrate
 recover_no_mistakes
 write_versions
 start_agentsview_push
