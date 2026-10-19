@@ -55,6 +55,14 @@ export type IssueView = {
   // the open issues waiting on this one, or null if unread
   blocking: number | null
   subIssues: number | null
+  // the open issues of this repo this one blocks, from the read's `blocking` list; null if unread
+  blockingList: number[] | null
+  // the newest closed_at among its listed closed blockers; null if none or unread
+  blockersClosedAt: Ms | null
+  // the parent's number when the parent is in this repo; null if none or unread
+  parent: number | null
+  // the parent's other sub-issues in this repo (itself left out); null if unread
+  siblings: { number: number; open: boolean }[] | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null
   // a tracker's open sub-issues, nested ones included, ascending, from its timeline; read only
@@ -66,6 +74,8 @@ export type IssueView = {
   claimLapsedAt: Ms | null
   // the newest `reclaimed` event of the issue: a sweep or a release gave its claim back (v2 H1)
   reclaimedAt: Ms | null
+  // the newest `ready` event of the issue, or null if none
+  readyAt: Ms | null
 }
 
 export type RunState =

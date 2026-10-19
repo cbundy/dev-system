@@ -492,10 +492,11 @@ expect_rc 0 "pr with summary"
 no_dep_calls "pr"
 
 # --- --issues: many issues in one GraphQL request -------------------------------------
-# gq <n> <login> <id> <state> <title> [typename] -> a GraphQL alias value
+# gq <n> <login> <id> <state> <title> [typename] [extra-json] -> a GraphQL alias value;
+# the extra object overrides blocking, blockedBy and parent (default: empty, empty, null)
 gq() {
-  jq -n --argjson n "$1" --arg l "$2" --argjson i "$3" --arg s "$4" --arg t "$5" --arg k "${6:-User}" \
-    '{number: $n, title: $t, state: $s, author: {__typename: $k, login: $l, databaseId: $i},
+  jq -n --argjson n "$1" --arg l "$2" --argjson i "$3" --arg s "$4" --arg t "$5" --arg k "${6:-User}" --argjson x "${7:-{\}}" \
+    '{blocking: {nodes: []}, blockedBy: {nodes: []}, parent: null} + $x + {number: $n, title: $t, state: $s, author: {__typename: $k, login: $l, databaseId: $i},
       labels: {totalCount: 2, nodes: [{name: "ready"}, {name: "queue"}]},
       issueDependenciesSummary: {blockedBy: 1, blocking: 3, totalBlockedBy: 2, totalBlocking: 4},
       subIssuesSummary: {total: 5, completed: 2}}'
@@ -559,6 +560,60 @@ expect_rc 0 "--issues missing"
 jq -e '.missing == [2] and (.issues | map(.number) == [1]) and .stripped == 0' "$tmpdir/out" >/dev/null || fail "--issues missing: $(cat "$tmpdir/out")"
 rc_of "$READ" --issues 1,2
 present "missing: #2" "--issues text missing"
+
+# nested dependencies: mapped, trust-filtered, counted, one call
+# nd <number> <state> <login> <id> [repo] -> a nested node
+nd() { jq -n --argjson n "$1" --arg s "$2" --arg l "$3" --argjson i "$4" --arg r "${5:-o/r}" \
+  '{number: $n, state: $s, repository: {nameWithOwner: $r}, author: {__typename: "User", login: $l, databaseId: $i}}'; }
+reset
+X=$(jq -n --argjson b1 "$(nd 7 OPEN cbundy 13131067)" --argjson b2 "$(nd 8 CLOSED cbundy 13131067 x/y)" \
+  --argjson p "$(nd 9 OPEN cbundy 13131067)" --argjson s1 "$(nd 45 OPEN cbundy 13131067)" --argjson s2 "$(nd 10 CLOSED cbundy 13131067)" \
+  '{blocking: {nodes: [$b1]}, blockedBy: {nodes: [($b2 + {closedAt: "2026-01-02T03:04:05Z"}), ($b1 + {closedAt: null})]},
+    parent: ($p + {subIssues: {nodes: [$s1, $s2]}})}')
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User "$X")" '{i45: $a}')"
+rc_of "$READ" --json --issues 45
+expect_rc 0 "--issues nested"
+[ "$(grep -c graphql "$d/calls")" = 1 ] || fail "--issues nested: not one graphql call"
+[ "$(grep -c '^repos' "$d/calls" || true)" = 0 ] || fail "--issues nested made a REST call"
+jq -e '.stripped == 0 and .issues[0].blocking == [{number: 7, repo: "o/r", state: "open"}]
+  and .issues[0].blocked_by == [{number: 8, repo: "x/y", state: "closed", closed_at: "2026-01-02T03:04:05Z"}, {number: 7, repo: "o/r", state: "open", closed_at: null}]
+  and .issues[0].parent == {number: 9, repo: "o/r", state: "open", sub_issues: [{number: 45, repo: "o/r", state: "open"}, {number: 10, repo: "o/r", state: "closed"}]}
+  and (has("nested") | not)' "$tmpdir/out" >/dev/null || fail "--issues nested json: $(cat "$tmpdir/out")"
+# an empty item has empty lists and a null parent
+reset
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T')" '{i45: $a}')"
+rc_of "$READ" --json --issues 45
+jq -e '.issues[0].blocking == [] and .issues[0].blocked_by == [] and .issues[0].parent == null' "$tmpdir/out" >/dev/null || fail "--issues empty nested: $(cat "$tmpdir/out")"
+
+# untrusted nested nodes of each kind are left out, never printed, counted, one event per item
+reset
+X=$(jq -n --argjson b1 "$(nd 7 OPEN evil 99)" --argjson b2 "$(nd 8 CLOSED cbundy 5)" --argjson bn "$(nd 6 OPEN cbundy 13131067 | jq '.author = null')" \
+  --argjson p "$(nd 9 OPEN cbundy 13131067)" --argjson s1 "$(nd 45 OPEN cbundy 13131067)" --argjson s2 "$(nd 10 OPEN evil 99)" \
+  '{blocking: {nodes: [$b1]}, blockedBy: {nodes: [($b2 + {closedAt: null}), ($bn + {closedAt: null})]},
+    parent: ($p + {subIssues: {nodes: [$s1, $s2]}})}')
+Y=$(jq -n --argjson p "$(nd 90 OPEN evil 99)" --argjson s1 "$(nd 46 OPEN cbundy 13131067)" '{parent: ($p + {subIssues: {nodes: [$s1]}})}')
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User "$X")" --argjson b "$(gq 46 cbundy 13131067 OPEN 'U' User "$Y")" '{i45: $a, i46: $b}')"
+rc_of "$READ" --json --issues 45,46
+expect_rc 0 "--issues nested untrusted"
+jq -e '.stripped == 5 and .refused == [] and .issues[0].blocking == [] and .issues[0].blocked_by == []
+  and (.issues[0].parent.sub_issues | map(.number) == [45]) and .issues[1].parent == null' "$tmpdir/out" >/dev/null || fail "--issues nested untrusted json: $(cat "$tmpdir/out")"
+for n in 6 7 8 10 90; do grep -qE "(^|[^0-9])$n([^0-9]|$)" "$tmpdir/out" && fail "--issues nested: #$n printed: $(cat "$tmpdir/out")"; done
+[ "$(events | grep -c untrusted_stripped)" = 2 ] || fail "--issues nested: wanted 2 untrusted_stripped events: $(events)"
+events | grep -q 'dependencies=4' || fail "--issues nested: no dependencies=4 note: $(events)"
+events | grep -q 'dependencies=1' || fail "--issues nested: no dependencies=1 note: $(events)"
+rc_of "$READ" --issues 45,46
+present "stripped: 5" "--issues nested text"
+for n in 6 7 8 10 90; do grep -qE "(^|[^0-9])$n([^0-9]|$)" "$tmpdir/out" && fail "--issues nested text: #$n printed"; done
+
+# a malformed nested node fails closed
+reset
+for bad in '{"blocking": {"nodes": ["x"]}}' '{"blocking": {"nodes": [{"number": 1, "state": "OPEN"}]}}' \
+  '{"blockedBy": {"nodes": [{"number": 1, "state": "OPEN", "repository": {"nameWithOwner": "o/r"}, "closedAt": 5}]}}' \
+  '{"parent": {"number": "x"}}' '{"blocking": null}'; do
+  gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User "$bad")" '{i45: $a}')"
+  rc_of "$READ" --json --issues 45
+  expect_rc 1 "--issues malformed nested $bad"; no_out "--issues malformed nested $bad"
+done
 
 # anything else fails closed with nothing on stdout
 reset
