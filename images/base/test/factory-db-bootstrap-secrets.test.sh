@@ -195,7 +195,7 @@ wait "$dpid" || :
 grep -qF -- "decoy-$$" "$tmpdir/decoy" || fail "the argv sampler does not see a process's arguments"
 for f in "$lsd/factory-db-writer-url" "$lsd/factory-db-reader-url" "$lmd/factory-db-migrator-url"; do
   [ -s "$f" ] || fail "$f was not written"
-  pw=$(sed 's/.*://; s/@.*//' "$f")
+  pw=$(sed 's,^postgresql://[^:]*:,,; s/@.*//' "$f")
   [ "${#pw}" = 64 ] || fail "$f: unexpected password length"
   grep -qF -- "$pw" "$tmpdir/lout" && fail "a generated password reached the output"
   grep -qF -- "$pw" "$tmpdir/argv" && fail "a generated password reached a process's argv"
