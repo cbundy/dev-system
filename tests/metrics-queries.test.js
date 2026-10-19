@@ -101,7 +101,7 @@ const blocks = sqlBlocks(markdown);
 // Blocks that are compared against a frozen old query (SPECS below) and blocks that are only run.
 const RUN_ONLY = [
   "Factory metrics #0", "Fix rounds with no new head #0",
-  "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2",
+  "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2", "2b. Gate waits #3",
   "6b. Reader shadow compares #0",
   "7a. How waits end #0", "7b. Done closes #0",
   "Split trackers closed by the loop #0", "Split children parked on their open decision #0",

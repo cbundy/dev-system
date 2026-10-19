@@ -227,7 +227,7 @@ async function gateRule(ctx: ExecCtx, entry: LedgerEntry, record: StepRecord, an
   }
   // a re-run's fail: no agent is left to refuse, so the hold ends and the answer is not taken; the
   // entry, held from before this load, is then lost and re-run free (10.8)
-  if ('rerun' in settled) {
+  if ((settled as { rerun?: boolean }).rerun === true) {
     hold.delete(id)
     return { take: false }
   }
