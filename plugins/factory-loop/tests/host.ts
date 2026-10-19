@@ -155,6 +155,8 @@ export function host(on: On, opts: HostOptions = {}) {
     // $.agent.list() is refused while this is set
     failList: false,
     // $.store.get and $.store.set are refused for the keys these name
+    // the temp-and-rename file write exits 1 for the paths this names
+    failWrite: (_path: string) => false,
     failGet: (_key: string) => false,
     failSet: (_key: string) => false,
     // the decision log's lines, oldest first
@@ -262,6 +264,7 @@ export function host(on: On, opts: HostOptions = {}) {
     })
     // the wind-down status file's write: temp file beside it, then a rename over it (wind-down.ts)
     if (argv[0] === 'sh' && argv[2] === WIND_DOWN_WRITE_SCRIPT) {
+      if (h.failWrite(argv[4] ?? '')) return done({ exitCode: 1, stderr: 'mv: cannot move: Read-only file system' })
       files.set(argv[4] ?? '', e.init?.stdin ?? '')
       return done({})
     }

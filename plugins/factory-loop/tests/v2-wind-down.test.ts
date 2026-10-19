@@ -319,7 +319,7 @@ describe('a pass in the test host', () => {
     const first = status(h)
     expect(first).toMatchObject({ requested_at: new Date(NOW - MIN).toISOString(), cap_ms: 180_000, running: { steps: [], gate: false, queue: false, release: false }, idle: true, stop_now: false })
     // written by the temp-and-rename script, over the status path
-    const writes = h.seen.filter(s => s.argv[2] === WIND_DOWN_WRITE_SCRIPT)
+    const writes = h.seen.filter(s => s.argv[2] === WIND_DOWN_WRITE_SCRIPT && s.argv[3] === 'wind-down-status')
     expect(writes.length).toBeGreaterThan(0)
     expect(writes.every(s => s.argv[4] === FILES.status)).toBe(true)
     await clock.advance(60_000)

@@ -70,6 +70,51 @@ file. Notes:
   corrected, and the migrator's other memberships are revoked.
 - The roles are named after the database, so several databases share one server.
 
+## Adopt an existing server (one time)
+
+On a server that already has the factory database, run the bootstrap once **without
+`--secrets-dir`**. Without a secrets directory no writer or reader password is generated and
+`factory-db-writer-url` / `factory-db-reader-url` are not touched, so the workspaces keep working.
+
+For the shared production database:
+
+```sh
+export FACTORY_DB_ADMIN_URL='postgresql://factory_admin:<admin password>@db.example.com:5432/postgres?sslmode=require'
+docker run --rm --user root --entrypoint factory-db-bootstrap -e FACTORY_DB_ADMIN_URL \
+  -v /etc/dev-system:/etc/dev-system ghcr.io/cbundy/dev-system/base:2 \
+  --db factory --migrator-dir /etc/dev-system/migrator
+```
+
+(`--admin-url-file PATH` reads the admin URL from a file instead.) On an existing server it adopts
+the roles, creates `factory_migrator`, writes only `factory-db-migrator-url` into the migrator
+directory, leaves the writer and reader URL files and their passwords alone, and applies any
+pending migrations. This is the last time the admin URL is needed: from then on the loop migrates
+with the migrator URL.
+
+For a workspace on its own database (for example the dev server's `factory_testbed`), point
+`--migrator-dir` at that workspace's folder, so its `factory-db-migrator-url` wins over the template
+mount (the `factory-db-migrate` lookup below) and that loop migrates its own database:
+
+```sh
+docker run --rm --user root --entrypoint factory-db-bootstrap -e FACTORY_DB_ADMIN_URL \
+  -v /etc/dev-system:/etc/dev-system ghcr.io/cbundy/dev-system/base:2 \
+  --db factory_testbed \
+  --migrator-dir /etc/dev-system/workspace-secrets/callum-bundy/dev-system-testbed-loop
+```
+
+Never pass the shared secrets directory (`--secrets-dir /etc/dev-system/secrets`) together with
+another database's name: the bootstrap would write that database's writer and reader URLs over the
+production files.
+
+Check it after the next release:
+
+1. The foreman pushes the loop template (`coder/push.sh` keeps `migrator_secrets_dir` only for
+   `orchestrator-loop`).
+2. Each loop restart writes one `loop_entry` with task `task:migrate:<to_version>`, carrying
+   `from_version` / `to_version` and the outcome `migrated` (first loop) or `current` (second loop).
+   Query it with "Startup schema migrates" in [docs/metrics.md](metrics.md).
+3. `dev-doctor` shows both factory database lines OK.
+
 ## 4. The secrets
 
 Each role has its own secret, separate from the agentsview secret (`agentsview-pg-url`):
@@ -110,8 +155,8 @@ came from.
 Restart the workspace or run `dev-doctor`. Expect, for each role:
 
 ```
-dev-doctor: OK   factory database (writer): database factory as factory_writer, schema version 3 (URL from /run/secrets/dev-system/factory-db-writer-url)
-dev-doctor: OK   factory database (reader): database factory as factory_reader, schema version 3 (URL from /run/secrets/dev-system/factory-db-reader-url)
+dev-doctor: OK   factory database (writer): database factory as factory_writer, schema version N (URL from /run/secrets/dev-system/factory-db-writer-url)
+dev-doctor: OK   factory database (reader): database factory as factory_reader, schema version N (URL from /run/secrets/dev-system/factory-db-reader-url)
 ```
 
 It never prints a URL or password. Each failure names its fix:
@@ -123,7 +168,7 @@ It never prints a URL or password. Each failure names its fix:
 | FAIL cannot connect | wrong URL or password, server down, or `sslmode=require` missing for a non-local host |
 | FAIL connected as role X, expected `_writer` / `_reader` | the wrong URL is in the slot (an admin URL, or the reader in the writer slot), or the role can create in schema `factory` |
 | FAIL no `factory.schema_migrations` | the bootstrap has not run on that database |
-| FAIL behind the image | re-run the bootstrap with the admin URL to apply the newer migrations |
+| FAIL behind the image | the loop migrates at its next start; or run `factory-db-migrate --strict` / `factory-db-bootstrap --db <name> --migrate` with the migrator URL (no admin URL) |
 | FAIL ahead of the image | the database is newer than this image: pull a newer image |
 
 ## Rotate a password
@@ -135,8 +180,9 @@ again: the role gets a new password and the file is rewritten. Or set the role's
 
 ## Upgrade the schema
 
-A newer base image can ship new migrations. `dev-doctor` fails with "behind" until you run them.
-The migrator URL is enough, no admin URL needed:
+A newer base image can ship new migrations. The loop applies them itself at its next start (see
+[Automatic migrate at start-up](#automatic-migrate-at-start-up)); `dev-doctor` fails with "behind"
+until then. To apply them by hand, the migrator URL is enough, no admin URL needed:
 
 ```sh
 docker run --rm --user root --entrypoint factory-db-bootstrap \
@@ -146,7 +192,7 @@ docker run --rm --user root --entrypoint factory-db-bootstrap \
 
 `--migrate` connects as `factory_migrator` only (it refuses any other role, the admin URL
 included), applies only the migrations not yet recorded and prints the schema version before and
-after. Running the full command of step 3 with the admin URL works too.
+after.
 
 Then run `dev-doctor` and expect the factory database line OK for both roles.
 
