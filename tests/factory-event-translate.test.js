@@ -4,7 +4,7 @@
 // ones for shapes with no real example; expected.jsonl is the golden output of the whole corpus.
 "use strict";
 
-const { test, before } = require("node:test");
+const { test, before, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { register } = require("node:module");
 const { spawnSync } = require("node:child_process");
@@ -202,14 +202,60 @@ test("coverage: every row of translator.md has a corpus line, and each shape is 
   has("loop_passes", (d) => d.acting_mean_ms === null && d.passes > 0, "none for acting_mean_ms");
 });
 
-test("a loop kind=passes line never becomes a loop_entry, and a task line with out= and decision= is dropped to its entry", () => {
+test("a loop kind=passes line never becomes a loop_entry, and a task wake keeps its decision", () => {
   const passesLine = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
   assert.equal(translate(passesLine).event.type, "loop_passes");
   const task = withNote(sample("loop", (l) => /kind=task/.test(l.note ?? "")), "kind=task key=task:release:2:none status=done attempts=1 class=drive rule=O3 started=1792184909172 ended=1792185127762 wake=release out=wake decision=hold agent=x");
   const r = translate(task);
   assert.equal(r.event.type, "loop_entry");
   assert.equal(r.event.data.ended_at, "2026-10-16T21:12:07.762Z");
-  assert.deepEqual(Object.keys(r.event.data).sort(), ["agent_id", "attempts", "class", "ended_at", "key", "kind", "rule", "started_at", "status", "wake"]);
+  assert.equal(r.event.data.decision, "hold");
+  assert.deepEqual(Object.keys(r.event.data).sort(), ["agent_id", "attempts", "class", "decision", "ended_at", "key", "kind", "rule", "started_at", "status", "wake"]);
+});
+
+describe("loop_entry decision and decision_reason", () => {
+  const base = "status=done attempts=1 class=drive rule=O3 started=1792184909172 ended=1792185127762 wake=release";
+  const line = (note) => withNote(sample("loop", (l) => /kind=task/.test(l.note ?? "")), note);
+  const data = (note, opts) => translate(line(note), opts).event.data;
+
+  test("reason is decoded", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=a%20b`);
+    assert.equal(d.decision, "hold");
+    assert.equal(d.decision_reason, "a b");
+  });
+  test("reason is cut to 200 characters", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=${"x".repeat(250)}`);
+    assert.equal(d.decision_reason.length, 200);
+  });
+  test("reason=none is null", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=none`);
+    assert.equal(d.decision_reason, null);
+  });
+  test("decision=none is null and carries no reason", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=none reason=x`);
+    assert.equal(d.decision, null);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("decision without out=wake is dropped", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} decision=hold reason=x`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("a tell drops decision and reason", () => {
+    const d = data(`kind=tell key=tell:x ${base} out=wake decision=ok reason=x`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("a tell with --data decision still translates and --data wins", () => {
+    const d = data(`kind=tell key=tell:x ${base} out=wake decision=ok reason=x`, { data: { decision: "d", decision_reason: "r" } });
+    assert.equal(d.decision, "d");
+    assert.equal(d.decision_reason, "r");
+  });
+  test("a task with neither token has neither key", () => {
+    const d = data(`kind=task key=task:release:2:none ${base}`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
 });
 
 test("passes: a note built by the real passesNote from closeMinute translates to a valid loop_passes", () => {

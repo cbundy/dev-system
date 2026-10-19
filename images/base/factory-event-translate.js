@@ -678,12 +678,21 @@ function loop(line) {
   if (typeof key === "string" && key.startsWith("cap:") && status === "held") throw new Skip("loop key=cap:* status=held");
   if (V1_LOOP_KINDS.includes(kind)) throw new Skip(`loop kind=${kind}`);
   if (kind === "passes") return { type: "loop_passes", data: passes(line) };
-  // agent= and the v1 outcome tokens out= and decision= are named drops
+  // agent= and out= are named drops. decision= and reason= are known: a kind=task line with out=wake
+  // keeps them as decision and decision_reason; every other line drops them (a flake-bug tell carries
+  // both by --data, so keeping them there would collide).
   const keep = ["kind", "key", "status", "attempts", "class", "rule", "started", "ended", "agentId", "wake"];
-  const t = strictTokens(note, { keep, drop: ["agent", "out", "decision"], need: ["kind", "key", "status", "attempts", "class", "rule", "started"] });
+  const t = strictTokens(note, { keep, drop: ["agent", "out", "decision", "reason"], need: ["kind", "key", "status", "attempts", "class", "rule", "started"] });
+  const wake_ = kind === "task" && t.get("out") === "wake";
+  const outcome = {};
+  if (wake_ && t.has("decision")) {
+    outcome.decision = tStrN(t, "decision");
+    if (outcome.decision !== null && t.has("reason")) outcome.decision_reason = tStrN(t, "reason")?.slice(0, 200) ?? null;
+  }
   return {
     type: "loop_entry",
     data: {
+      ...outcome,
       kind: tStr(t, "kind"),
       key: tStr(t, "key"),
       status: tStr(t, "status"),
