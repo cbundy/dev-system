@@ -1312,7 +1312,7 @@ Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, 
 an agent's tool use that the companion denied, and an agent that stopped on a permission prompt nobody
 answers. Neither is a stage or progress. The companion never retries the write, so each row is one
 prompt (one per `event_id`). Nothing writes them yet, so the query returns no rows until a producer does.
-`tool_name`, `tool_input` and `agent_type` are the columns migration 0011 lifted; a `prompt_waiting` has
+`tool_name`, `tool_input` and `agent_type` are the columns migration 0014 lifted; a `prompt_waiting` has
 no `tool_name` (its notification names none), and its `tool_input` is the notification's message.
 
 One block, two kinds of row told apart by `part`: `daily` is the prompts per repo and day (denied by

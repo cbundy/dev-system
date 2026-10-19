@@ -1,10 +1,10 @@
--- 0013: lift the permission-prompt facts of prompt_denied and prompt_waiting into factory.event_log.
+-- 0014: lift the permission-prompt facts of prompt_denied and prompt_waiting into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; the view replace keeps the view's existing ones.
 --
--- Builds on 0012 (main_state's columns keep their place). Adds the fields marked "x-column": true in the prompt_denied and prompt_waiting schemas that no
+-- Builds on 0013 (flaky, failed_tests, failed_jobs and failed_at keep their place). Adds the fields marked "x-column": true in the prompt_denied and prompt_waiting schemas that no
 -- earlier column carries: tool_name, tool_input and agent_type. Postgres only adds columns at the
 -- end on OR REPLACE, so they come last and every earlier column keeps its name, type and order.
 -- Null for older rows and for other types. No @> and no DISTINCT ON.
@@ -117,6 +117,10 @@ SELECT
   (e.data ->> 'observed_at')::timestamptz AS observed_at,
   (e.data ->> 'green')::boolean AS green,
   e.data ->> 'changed' AS changed,
+  (e.data ->> 'flaky')::boolean AS flaky,
+  e.data -> 'failed_tests' AS failed_tests,
+  e.data -> 'failed_jobs' AS failed_jobs,
+  (e.data ->> 'failed_at')::timestamptz AS failed_at,
   e.data ->> 'tool_name' AS tool_name,
   e.data ->> 'tool_input' AS tool_input,
   e.data ->> 'agent_type' AS agent_type
