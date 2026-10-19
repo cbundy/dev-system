@@ -18,6 +18,10 @@
 //       `sha`, 7 to 40 hex, stored lower-case), each number at least 1, never the issue itself, none
 //       twice; the loop re-checks them and resumes the designer once every one holds; the outcome
 //       carries conditions and reason only for a wait
+//   A child with "ready": false carries an open owner decision: an optional "decision" object
+//   { question, context?, options?, recommendation? }, checked as a question answer is
+//   (split-decision.mjs; refused on a ready child), which the loop parks the child on. Without one, the
+//   body's ## Open decisions section is the question.
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief has an `## Observability` section (the decisions it adds and where each is recorded,
@@ -53,6 +57,7 @@
 // alike. ES2023 alone, nothing of Node or the engine. Its types are contracts-work.d.mts's.
 
 import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
+import { childDecisionOf } from './split-decision.mjs'
 
 export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
@@ -255,7 +260,7 @@ function childrenOf(v, problems, parent) {
       problems.push(`children[${i}] must be an object { key, title, why, body, blockedBy, ready }`)
       return
     }
-    strays(c, ['key', 'title', 'why', 'body', 'blockedBy', 'ready'], `children[${i}]`, problems)
+    strays(c, ['key', 'title', 'why', 'body', 'blockedBy', 'ready', 'decision'], `children[${i}]`, problems)
     const key = typeof c.key === 'string' && CHILD_KEY.test(c.key) ? c.key : null
     if (key === null) problems.push(`${where}key ${show(c.key)} must be a short lower-case key: letters, digits and dashes, at most 24`)
     else if (keys.indexOf(key) !== i) problems.push(`${where}key ${key} is used twice`)
@@ -278,8 +283,9 @@ function childrenOf(v, problems, parent) {
       }
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
+    const decision = childDecisionOf(c, `children[${i}]${key === null ? '' : ` (${key})`}.`, c.ready, body, parent, problems)
     if (body !== null) problems.push(...rolloutProblems(body, `children[${i}]${key === null ? '' : ` (${key})`} body`))
-    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true })
+    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true, decision })
   })
   if (out.length === v.length) {
     const cycle = cycleOf(out)

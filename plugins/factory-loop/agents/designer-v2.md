@@ -182,8 +182,12 @@ shape (without the date heading, with a `## Rollout` each that follows the rule 
 unless the child has its own `## Run it`, is research or a proposal, or needs a person), the keys of the siblings it is
 blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
 and whether it is ready. A child is not ready only when it carries an open owner
-decision. The loop makes each child an issue under this one, links its `blocked_by`, labels the
-ready ones `ready` once every link exists, and keeps this issue as the tracking epic. The loop closes it once every child is closed.
+decision, and then it has a `decision` in the shape of a question answer: `question` (the decision
+as one sentence) and, optionally, `context`, `options` (2 to 6 of `key` A to F, `title`, `detail`)
+and `recommendation` (`key`, `reason`); the rendered text is at most 2000 characters. A ready child
+takes no `decision`. The loop makes each child an issue under this one, links its `blocked_by`, labels the
+ready ones `ready` once every link exists, claims each not-ready one at once and parks it on its
+`decision` for the owner (your design of it resumes when the owner answers), and keeps this issue as the tracking epic. The loop closes it once every child is closed.
 
 The `reasons` object has exactly four keys, each a short, concrete text (at most 500 characters)
 that names what you weighed: `why_split` (size, the areas touched, an owner decision or spike

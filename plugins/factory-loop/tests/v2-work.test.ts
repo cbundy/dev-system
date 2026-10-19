@@ -16,6 +16,9 @@ import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { commentBody } from '../hooks/v2/act-state'
 import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-work.mjs'
+import { renderQuestion } from '../hooks/v2/question.mjs'
+import { decisionFallback } from '../hooks/v2/split-decision.mjs'
+import { legacyDecision } from '../hooks/v2/rules-work'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -77,6 +80,7 @@ const problems = (name: 'design-v2' | 'build' | 'fix', input: unknown, data?: Re
   return c.ok ? [] : c.problems
 }
 
+const FALLBACK = 'This issue was split from #300 and carries an open owner decision. The split did not word it: read the issue, answer in a comment, then resume it.'
 const REASONS = { why_split: 'It spans the loop and the image', why_count: 'Two: one per side', why_parts: 'The image ships on its own', why_order: 'The image waits on the loop' }
 
 describe('the design-v2 contract (8.7)', () => {
@@ -90,8 +94,48 @@ describe('the design-v2 contract (8.7)', () => {
     // texts are kept trimmed
     expect(check('design-v2', { kind: 'split', brief: 'the plan', reasons: { ...REASONS, why_count: '  Two: one per side  ' }, children })).toEqual({
       ok: true,
-      outcome: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children: children.map(c => ({ ...c, body: c.body.trim() })) },
+      outcome: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children: children.map(c => ({ ...c, body: c.body.trim(), decision: c.ready ? null : FALLBACK })) },
     })
+  })
+
+  test('a not-ready child carries a decision, checked as a question answer is and rendered; a ready child takes none', () => {
+    const ready = { key: 'a', title: 'Part one', why: 'The loop side', body: BRIEF, blockedBy: [], ready: true }
+    const waits = (decision?: unknown) => ({ key: 'b', title: 'Part two', why: 'The image side', body: BRIEF, blockedBy: ['a'], ready: false, ...(decision === undefined ? {} : { decision }) })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', reasons: REASONS, children })
+    const decision = { question: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call' }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommendation: { key: 'A', reason: 'Simpler.' } }
+    const out = check('design-v2', split(ready, waits(decision)))
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.outcome.children[0]?.decision).toBeNull()
+    expect(out.outcome.children[1]?.decision).toBe(renderQuestion({ question: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call', detail: null }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommendation: { key: 'A', reason: 'Simpler.' } }))
+    expect(out.outcome.children[1]?.decision).toContain('- [ ] **B** - Two calls')
+    // a bare question is the decision alone
+    const bare = check('design-v2', split(ready, waits({ question: 'Which API shape?' })))
+    if (bare.ok) expect(bare.outcome.children[1]?.decision).toBe('Which API shape?')
+    expect(bare.ok).toBe(true)
+    // refused: on a ready child, a bad option key, a rendered text over 2 000 characters, a stray, no question
+    expect(problems('design-v2', split({ ...ready, decision }, waits()))).toEqual(['children[0] (a).decision must be absent or null on a child that is ready: only a child with ready false carries an open owner decision'])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', options: [{ key: 'Z', title: 'x' }, { key: 'B', title: 'y' }] })))).toEqual(['children[1] (b).decision.options[0].key "Z" is not one of A, B, C, D, E, F'])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', context: 'c'.repeat(700), options: [{ key: 'A', title: 'x', detail: 'd'.repeat(300) }, { key: 'B', title: 'y', detail: 'd'.repeat(300) }, { key: 'C', title: 'z', detail: 'd'.repeat(300) }, { key: 'D', title: 'w', detail: 'd'.repeat(300) }, { key: 'E', title: 'v', detail: 'd'.repeat(300) }] })))).toEqual([expect.stringMatching(/^children\[1\] \(b\)\.decision\.question comes to \d+ characters once rendered/)])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', extra: 1 })))).toEqual(['children[1] (b).decision.extra is not a field of a decision (only question, context, options, recommendation)'])
+    expect(problems('design-v2', split(ready, waits({ context: 'no question' })))).toEqual(['children[1] (b).decision.question is required: the decision as one sentence'])
+    expect(problems('design-v2', split(ready, waits('a string')))).toEqual(['children[1] (b).decision must be an object { question, context, options, recommendation }'])
+  })
+
+  test('a not-ready child without a decision still passes: its question is its body\'s Open decisions, cut to 2 000 characters, else a fixed sentence naming the parent', () => {
+    const ready = { key: 'a', title: 'Part one', why: 'The loop side', body: BRIEF, blockedBy: [], ready: true }
+    const waits = (body: string) => ({ key: 'b', title: 'Part two', why: 'The image side', body, blockedBy: ['a'], ready: false })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', reasons: REASONS, children })
+    const decisionOf = (body: string) => {
+      const out = check('design-v2', split(ready, waits(body)))
+      return out.ok ? out.outcome.children[1]?.decision : out.problems
+    }
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n- Which API shape: one call or two?\n\n## Notes\nlater`)).toBe('- Which API shape: one call or two?')
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n${'x'.repeat(2500)}`)).toHaveLength(2000)
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n- none`)).toBe(FALLBACK)
+    expect(decisionOf(BRIEF)).toBe(FALLBACK)
+    // the planner holds the same fixed sentence for an answer recorded before `decision` existed
+    expect(legacyDecision(300)).toBe(decisionFallback('none', 300))
   })
 
   test('a blockedBy entry may be #<N>, an existing issue; the issue being split, a malformed reference and a stranger are each refused', () => {
@@ -841,8 +885,8 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
 
   test('a split makes each child once the siblings it waits on exist, then posts the plan, then closes the record (T4); the parent\'s release lists the children', () => {
     const children = [
-      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: ['a'], ready: false },
-      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true },
+      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: ['a'], ready: false, decision: 'Which API shape?' },
+      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true, decision: null },
       { key: 'c', title: 'Part three', why: 'The image side', body: 'three', blockedBy: [], ready: true },
     ]
     const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children } })
@@ -854,7 +898,17 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     expect(of(second, 330).map(made)).toEqual([['b', [601]]])
     expect(transitionOf(second, 330)).toBeUndefined()
     const third = plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602)]))
-    const post = of(third, 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    // the regression: the not-ready child is claimed to park on its decision, and only that one, before the plan is posted
+    expect(of(third, 602).map(a => (a.kind === 'claim' ? [a.issue, a.park, a.rule, a.class] : a.kind))).toEqual([[602, { question: 'Which API shape?', parent: 330 }, 'S2', 'free']])
+    expect(third.actions.filter(a => a.kind === 'claim')).toHaveLength(1)
+    expect(of(third, 330).some(a => a.kind === 'comment')).toBe(false)
+    expect(transitionOf(third, 330)).toBeUndefined()
+    const claim = of(third, 602).find(a => a.kind === 'claim')?.key ?? ''
+    expect(claim).toBe(`i602/claim/${lifeOf(NOW)}`)
+    const claimed = done(claim, 'claim', { issue: 602, outcome: { kind: 'claim', result: 'claimed', park: { question: 'Which API shape?', parent: 330 } } })
+    const fourth = plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), claimed]))
+    expect(fourth.actions.some(a => a.kind === 'claim')).toBe(false)
+    const post = of(fourth, 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
     expect(post?.body).toBe(
       [
         'the plan',
@@ -872,10 +926,10 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
       ].join('\n'),
     )
     const posted = done(entryKey(r, 'comment'), 'comment', { issue: 330, outcome: { kind: 'cli', exit: 0, detail: BRIEF_URL(330) } })
-    const t = transitionOf(plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), posted])), 330)
+    const t = transitionOf(plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), claimed, posted])), 330)
     expect(t).toMatchObject({ row: 'T4', next: { state: 'closed', why: 'split', notes: ['split into #602, #601, #603'] } })
     if (t === undefined) return
-    const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
+    const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), claimed, posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
     expect(of(after, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: REASONS, childWhys: ['The loop side', 'Waits on the owner', 'The image side'] })
     // the design entry gone from the ledger: the release still happens, with null reasons
     const gone = plan(withLedger(world([t.next]), [child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))

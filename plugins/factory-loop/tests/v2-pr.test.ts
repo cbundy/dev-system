@@ -384,8 +384,9 @@ describe('the split executor (8.7)', () => {
 
   test('a child that waits on an owner decision is not labelled ready', async () => {
     const g = gh({ issues: [{ number: 300, id: 9_000_300, title: 'parent', body: 'p', labels: [] }] })
-    const action = splitOf('a', { child: { key: 'a', title: 'Part', body: 'b', blockedBy: [], ready: false } })
-    expect(await act(g).run(action)).toMatchObject({ status: 'done', outcome: { kind: 'split', child: 601 } })
+    const action = splitOf('a', { child: { key: 'a', title: 'Part', body: 'b', blockedBy: [], ready: false, decision: 'Which API?' } })
+    // the claim parks it (rules-work.ts parkClaim); the summary says so
+    expect(await act(g).run(action)).toMatchObject({ status: 'done', outcome: { kind: 'split', child: 601 }, summary: 'made #601 under #300, parks on the owner' })
     expect(g.writes.map(a => a.slice(0, 3).join(' '))).toEqual(['gh issue create', 'gh api --method'])
   })
 
