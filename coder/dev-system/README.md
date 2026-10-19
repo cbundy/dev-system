@@ -307,7 +307,8 @@ workspace ([First-run logins](#first-run-logins)).
   loop starts nothing new, and waits until no step runs, `/factory stop-now` is used, or the cap
   passes (the smaller of the loop's own cap and the template's, counted from the request). It
   records one `wind_down` event per loop (outcome `idle`, `cap`, `now` or `off`), removes the
-  request, status and stop-now files, and gives the heartbeat its `--final` beat. Docker's stop
+  stop-now file (the request and status stay, so the loop starts nothing until the container is
+  gone; the workspace's next start clears them before the loop runs), and gives the heartbeat its `--final` beat. Docker's stop
   grace is the cap plus 60 s (660 s), and the script's own timeout the cap plus 45 s, so a stuck
   script never holds a stop past them; the script always exits 0.
   - **Stop now**: `/factory stop-now`, or by hand `touch

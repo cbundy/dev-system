@@ -7,8 +7,9 @@
 // v2 agent's turn end (act-between.ts agentAnswered) runs with the real, unbuilt ones.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ctxOf } from '../hooks/act'
+import { actPass, ctxOf } from '../hooks/act'
 import { agentAnswered } from '../hooks/act-between'
+import { reconcilable } from '../hooks/act'
 import type { ActEnv, Between } from '../hooks/act'
 import { jobPathOf, parseJob } from '../hooks/contract.mjs'
 import type { V2Contract } from '../hooks/contract.mjs'
@@ -19,6 +20,8 @@ import type { ActIo, Exec, SpawnInput } from '../hooks/exec'
 import { finish, loopEvent, start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry } from '../hooks/types'
+import { gateHoldMs, gateSettled } from '../hooks/v2/steps-gate'
+import type { GateLine } from '../hooks/v2/sources-interventions'
 import { parseStepRecord, stepAnswerPath, stepAnswered, stepAnswers, stepExecutor, stepRecordPath, stepRecorded } from '../hooks/v2/steps'
 import type { StepDeps, StepModule, StepRecord } from '../hooks/v2/steps'
 import { STEP_AGENT, WHY_CAUSE, unknownResult } from '../hooks/v2/types'
@@ -350,7 +353,7 @@ describe('the act step routes a v2 agent\'s turn end to steps.ts (act-between.ts
     }
     w.files.set(stepRecordPath(LOOP_DIR, action.key), JSON.stringify(record))
     w.env.live.ledger = [entry]
-    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
     const sent: [string, string][] = []
     const repair = async (id: string, _text: string, type: string) => {
       sent.push([id, type])
@@ -364,5 +367,157 @@ describe('the act step routes a v2 agent\'s turn end to steps.ts (act-between.ts
     expect(second).toMatchObject({ result: 'applied', key: action.key, repaired: true })
     expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', step: 'triage', result: { event: 'unknown', why: 'bad-answer' } } })
     expect(sent).toHaveLength(1)
+  })
+})
+
+// --- the stop gate decides when a gated writer's step ends (v2 SPEC 10.6, 10.8, #918) -------------------
+
+const MIN = 60_000
+const gated = (w: ReturnType<typeof world>) => {
+  w.env.rt = { ...w.env.rt, config: { ...config(), gateCommands: ['npm test'] } }
+}
+const clock = (w: ReturnType<typeof world>, now: number) => Object.assign(w.env.io, { now: async () => now })
+function gateLine(w: ReturnType<typeof world>, over: Record<string, unknown>) {
+  const path = `${LOOP_DIR}/companion.jsonl`
+  const line = { at: NOW + 5000, cause: 'gate-pass', issue: 470, life: 'tbq3k0', seq: 3, ms: 1000, waitMs: 0, head: null, concurrency: null, ...over }
+  w.files.set(path, `${w.files.get(path) ?? ''}${JSON.stringify(line)}\n`)
+}
+const line = (over: Partial<GateLine>): GateLine => ({ at: NOW + 1000, issue: 470, life: 'tbq3k0', seq: 3, cause: 'gate-pass', head: null, ms: 1, waitMs: 0, concurrency: null, startedAt: null, startedMs: null, derived: null, queuedBehind: null, ...over })
+const AT = { issue: 470, life: 'tbq3k0', seq: 3, since: NOW }
+
+describe('gateSettled', () => {
+  test('the newest settling line of this issue, life and seq, dated at or after the attempt\'s start', () => {
+    expect(gateSettled([], AT)).toEqual({ cause: null })
+    expect(gateSettled([line({ seq: 4 }), line({ life: 'other' }), line({ issue: 9 }), line({ at: NOW - 1 })], AT)).toEqual({ cause: null })
+    expect(gateSettled([line({ at: NOW })], AT)).toEqual({ cause: 'gate-pass', at: NOW })
+    // the hook's catch line has no startedAt, so it is dated by its own time
+    expect(gateSettled([line({ cause: 'gate-unknown', at: NOW + 7, startedAt: null, startedMs: null })], AT)).toEqual({ cause: 'gate-unknown', at: NOW + 7 })
+  })
+
+  test('a newest gate-fail keeps the step open; a later pass settles it; gate-wait is ignored', () => {
+    expect(gateSettled([line({ cause: 'gate-pass', at: NOW + 1 }), line({ cause: 'gate-fail', at: NOW + 2 })], AT)).toEqual({ cause: 'gate-fail' })
+    expect(gateSettled([line({ cause: 'gate-fail', at: NOW + 2 }), line({ cause: 'gate-pass', at: NOW + 3 })], AT)).toEqual({ cause: 'gate-pass', at: NOW + 3 })
+    expect(gateSettled([line({ cause: 'gate-wait', at: NOW + 9 })], AT)).toEqual({ cause: null })
+  })
+
+  test('the hold is the wait, the run and two minutes', () => {
+    expect(gateHoldMs({ gateWaitTimeoutMs: 30 * MIN, gateTimeoutMs: 10 * MIN })).toBe(42 * MIN)
+  })
+})
+
+describe('a gated writer\'s step ends on its settling gate line (#918)', () => {
+  test('a not-ok answer (a declined fix) is held with no gate line and after a gate-fail, and ends on a later gate-pass, saying so', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'no', reason: 'declined' })
+    const pass = () => stepAnswers([build.entry], e => ctxOf(w.env, state(), e), DEPS)
+    expect(await pass()).toEqual([])
+    gateLine(w, { cause: 'gate-fail', at: NOW + 3000 })
+    expect(await pass()).toEqual([])
+    gateLine(w, { cause: 'gate-pass', at: NOW + 9000 })
+    const [taken] = await pass()
+    expect(taken?.exec).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok', reason: 'declined' } } })
+    expect(taken?.exec.summary).toContain(`(after its gate-pass at ${new Date(NOW + 9000).toISOString()})`)
+  })
+
+  test('a gate line of an earlier attempt or another seq does not settle it', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    gateLine(w, { at: NOW - 5000 })
+    gateLine(w, { seq: 4 })
+    expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, DEPS)).toBeNull()
+  })
+
+  test('an ungated writer keeps today\'s rule: its not-ok is taken when read, its ok at the turn\'s end', async () => {
+    const w = world()
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'no', reason: 'cannot' })
+    expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, false, DEPS)).toMatchObject({ status: 'done' })
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, false, DEPS)).toBeNull()
+  })
+
+  test('a turn that ended in error is unchanged by the gate: a recorded not-ok is kept', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'no', reason: 'cannot' })
+    const r = await stepAnswered(ctxOf(w.env, state(), build.entry), build.entry, { agentId: 'agent-1', answer: 'API Error: 529', reason: 'error' }, DEPS)
+    expect(r.held).toBeUndefined()
+    expect(r.exec).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok' } } })
+  })
+
+  test('the hold is bounded: held at the bound, taken past it with a note; an unreadable log is held too', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    const hold = new Map<string, number>()
+    const bound = gateHoldMs(w.env.rt.config)
+    const read = () => stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, DEPS, hold)
+    clock(w, NOW)
+    expect(await read()).toBeNull()
+    clock(w, NOW + bound)
+    expect(await read()).toBeNull()
+    Object.assign(w.env.io, { readFile: async (path: string) => (path.endsWith('companion.jsonl') ? Promise.reject(new Error('EIO')) : (w.files.get(path) ?? null)) })
+    expect(await read()).toBeNull()
+    clock(w, NOW + bound + 1)
+    const taken = await read()
+    expect(taken).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'ok' } } })
+    expect(taken?.summary).toContain('(no stop gate line within 42 min)')
+    expect(hold.size).toBe(0)
+  })
+
+  test('a turn that ends before the gate line is held, the entry runs on, the agent is not lost, and the next pass ends it', async () => {
+    const w = world()
+    gated(w)
+    const build = await spawned(w, stepAction('build'))
+    w.env.live.ledger = [build.entry]
+    // the real build contract and module, which read a `cannot` from the answer alone
+    recorded(w, build.entry.key, 'build', { result: 'cannot', reason: 'no way' })
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
+    const r = await agentAnswered(w.env, state(), { agentId: 'agent-1', answer: 'done', reason: 'answer' }, between)
+    expect(r).toEqual({ result: 'held', key: build.entry.key })
+    expect(w.env.live.ledger[0]).toMatchObject({ status: 'running' })
+    expect(between.gateHeld.has('agent-1')).toBe(true)
+    // listed completed, long after: still at work while held
+    const listed = [{ id: 'agent-1', status: 'completed' as const }]
+    const seen = new Map<string, number>([['agent-1', NOW - MIN]])
+    expect(reconcilable(listed, new Set(), seen, NOW + MIN, new Map(), between.gateHeld, gateHoldMs(w.env.rt.config))).toEqual([{ id: 'agent-1', status: 'running' }])
+    // past the bound the hold lapses and the list judges it again
+    expect(reconcilable(listed, new Set(), seen, NOW + 43 * MIN, new Map(), between.gateHeld, gateHoldMs(w.env.rt.config))).toEqual(listed)
+    between.gateHeld.set('agent-1', NOW)
+    gateLine(w, {})
+    const [taken] = await stepAnswers(w.env.live.ledger, e => ctxOf(w.env, state(), e), undefined, between.gateHeld)
+    expect(taken?.exec.summary).toContain('(after its gate-pass at')
+    // and a turn that ends after the line is taken at once
+    const again = await agentAnswered(w.env, state(), { agentId: 'agent-1', answer: 'done', reason: 'answer' }, between)
+    expect(again).toMatchObject({ result: 'applied' })
+  })
+
+  test('through actPass the hold ends past its bound, for a listed completed agent and an unlisted one', async () => {
+    for (const listedAgents of [[{ id: 'agent-1', status: 'completed' as const }], []]) {
+      const w = world()
+      gated(w)
+      const build = await spawned(w, stepAction('build'))
+      w.env.live.ledger = [build.entry]
+      recorded(w, build.entry.key, 'build', { result: 'cannot', reason: 'no way' })
+      const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]), repairing: new Map(), gateHeld: new Map() }
+      const bound = gateHoldMs(w.env.rt.config)
+      const pass = async (at: number) => {
+        clock(w, at)
+        await actPass(w.env, { ...state(), now: at }, { ok: true, agents: listedAgents }, between)
+      }
+      await pass(NOW + 1000)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'running' })
+      await pass(NOW + 1000 + bound / 2)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'running' })
+      await pass(NOW + 1000 + bound + 1)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok' } } })
+      expect(w.env.live.ledger[0]?.summary).toContain('no stop gate line within 42 min')
+    }
   })
 })

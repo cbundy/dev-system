@@ -1845,6 +1845,8 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").
+- **The loop ends a writer step only on that step's settling gate line** (10.8): a gated build or fix
+  attempt is not taken while its stop gate still runs, or is about to, in its slot.
 
 ### 10.7 The main checkout
 
@@ -1864,8 +1866,21 @@ safeguards remain:
 
 - **An answer ends the step when it is read.** The loop reads each running agent step's answer
   file on every pass, not only at the agent's `turn.complete`. A valid answer
-  ends the step at once. The one exception is a writer's `ok`, which is read when the agent's turn
-  ends, so the stop gate has its say first.
+  ends the step at once, except a writer's. A build or fix attempt whose repo has stop-gate
+  commands (gated) ends on one rule at all four reads (the per-pass read, the agent-list read
+  before marking lost, `turn.complete` with reason `answer`, and a reload): its answer, `ok` and
+  not-ok alike, is taken only once the companion log holds a settling gate line for that attempt,
+  the newest `gate-pass`, `gate-fail` or `gate-unknown` line with its issue, life and seq dated at
+  or after its `startedAt`, of cause `gate-pass` or `gate-unknown`. A newest `gate-fail` keeps the
+  step open, as the agent is refused and works on; `gate-wait` lines are ignored. A turn that
+  completes first leaves the step `running` (held): the agent list does not mark it lost, and a
+  later pass ends it when the line arrives. The hold is bounded: `gateWaitTimeoutMs` plus
+  `gateTimeoutMs` plus 2 minutes from its start, a reload restarting the count, after which the
+  answer is taken anyway (`(no stop gate line within N min)`); an unreadable log stays held until
+  then. The summary says `(after its gate-pass at <iso>)` or `(after its gate-unknown at <iso>)`.
+  An ungated writer's `ok` is read when the agent's turn ends, its not-ok when read; readers end
+  when read. A turn that ended in error, aborted or refused never ran the stop gate, and is read
+  as before.
 - **Before an agent step treats its agent as lost,** and before it spawns, it looks for a valid
   answer already recorded for its key (`answers/<key>.a*`). One that is there is the result, as the foundation does before marking an agent lost (13.6, `exec.ts`).
 - **A writer's answer is confirmed on origin.** On a builder's or fixer's answer, the loop reads
@@ -2024,8 +2039,12 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   passing (`idle`, 0 running).
 - **The event.** One `wind_down` event per loop dir, with `running_at_request` from the first matching
   status and `cut_at_stop` from the last (for `cap` and `now`; 0 otherwise).
-- **Cleanup.** It removes the stop-now, request and status files, so the next start does not wind
-  down again, then gives the heartbeat its `--final` beat. It always exits 0.
+- **Cleanup.** It removes only the stop-now file (one shot). The request and status files stay,
+  so the loop starts nothing in the seconds until Coder stops the container; the workspace start
+  (`wind-down-start.sh`, run from the startup script before the loop) removes all three, so the
+  next start does not wind down again. A request left by a stop that did not stop the container
+  ends by the stale rule after the cap plus 5 minutes. The script then gives the heartbeat its
+  `--final` beat. It always exits 0.
 
 ## 11. Releases and parking
 
@@ -3083,7 +3102,7 @@ Two more things hold act mode back for a pass: a ledger the store could not load
 `dev-restart-self` that already returned (rule `R2`), which holds it for the rest of the
 module's life when `windDownMinutes` is 0. With wind-down on, R2 wrote a request first and the
 session keeps acting in wind-down instead: it reads answers and finishes work, starts nothing, and
-remembers the request in case the stop script removes it; once that request is stale the restart
+remembers the request in case the request file is lost; once that request is stale the restart
 never came, and the session plans normally. The rails remember each blocking spell in the store, so a reload does not tell
 it again.
 

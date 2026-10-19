@@ -713,6 +713,12 @@ resource "coder_agent" "main" {
       fi
     fi
 
+    # A wind-down request left by the last stop is stale now: the stop script leaves it in place
+    # so the loop starts nothing while the container is still up, and this clears it before the
+    # loop (started by dev-init) plans. Runs whatever wind_down_minutes is. The file holds no
+    # Terraform template sequences (wind-down-start.sh); a failure never blocks the start.
+    ( ${file("${path.module}/wind-down-start.sh")} ) || echo "WARNING: wind-down cleanup failed - continuing"
+
     if ! command -v dev-init >/dev/null 2>&1; then
       echo "no dev-init in this image - not a dev-system image, nothing to start"
       exit 0

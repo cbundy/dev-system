@@ -200,6 +200,44 @@ GROUP BY repo, day
 ORDER BY repo, day DESC;
 ```
 
+Writer steps that ended before their gate (v2 SPEC 10.8). The loop ends a gated build or fix step
+only on that attempt's settling gate line, so after the release that added the rule every row's
+`hold_ms` is zero or more, and `ended_early` is false. A row with `ended_early` true is a step
+that closed while its stop gate still ran or was about to. It joins the done `loop_entry` of a
+build or fix step (its key carries the life and seq) to the `gate_run` events of the same issue,
+life and seq that started at or after the step's `started_at`; a gate's end is its `started_at`
+plus `wait_ms` plus `run_ms`. Count `ended_early` per `day` in code, and take the p50 and p95 of
+`hold_ms` (what the hold added) there too; steps with no gate run give no row.
+
+```sql
+WITH steps AS (
+  SELECT repo, issue, key,
+    substring(key from '^i[0-9]+/l([0-9a-z]+)/s[0-9]+/(?:build|fix)/a[0-9]+$')      AS life,
+    substring(key from '^i[0-9]+/l[0-9a-z]+/s([0-9]+)/(?:build|fix)/a[0-9]+$')::int AS seq,
+    min(started_at) AS started_at, min(ended_at) AS ended_at
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND kind = 'agent-step' AND status = 'done'
+    AND key ~ '^i[0-9]+/l[0-9a-z]+/s[0-9]+/(build|fix)/a[0-9]+$'
+  GROUP BY repo, issue, key
+),
+gates AS (
+  SELECT repo, issue, life, seq, started_at,
+    started_at + (min(wait_ms) + min(run_ms)) * interval '1 millisecond' AS gate_end
+  FROM factory.event_log
+  WHERE type = 'gate_run'
+  GROUP BY repo, issue, life, seq, started_at
+)
+SELECT s.repo, s.issue, s.key, s.ended_at::date AS day, s.ended_at, max(g.gate_end) AS last_gate_end,
+  max(g.gate_end) > s.ended_at AS ended_early,
+  round(extract(epoch FROM s.ended_at - max(g.gate_end)) * 1000)::bigint AS hold_ms
+FROM steps s
+JOIN gates g ON g.repo = s.repo AND g.issue = s.issue AND g.life = s.life AND g.seq = s.seq
+  AND g.started_at >= s.started_at
+WHERE s.ended_at IS NOT NULL
+GROUP BY s.repo, s.issue, s.key, s.ended_at
+ORDER BY s.ended_at DESC;
+```
+
 ## 2c. Wind-downs
 
 How long a stop of the loop waited for running steps, and what the cap cost. The loop writes one
