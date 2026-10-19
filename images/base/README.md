@@ -2043,8 +2043,9 @@ trigger function `factory.worker_samples_prune()` (`SECURITY DEFINER`, owned by 
 `agentsview.sessions.id`), `parent_session_id` (null for a top-level session) and `context_window` (null when
 unknown). A top-level session is one Claude Code registers in `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` whose
 process still runs; a sub-agent (`agent-<id>`) is one of its transcripts whose last message is not a finished
-turn. `context_window` is the size the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
-`DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without that mod and
+turn. `context_window` is the size the [factory-loop-workspace](../../plugins/factory-loop-workspace/README.md) plugin
+or the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
+`DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without either plugin and
 for sub-agents. A session is live while it is listed in a row that is not `stale`; the stopped beat lists none.
 `state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
 `completed`, `failed` or `cancelled` and no `superseded` event on this device names it, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`

@@ -44,15 +44,18 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
+function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node' })
+  mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node', ...opts.env })
   const w = {
     clock,
     session: 's1',
     spawned: [] as { name?: string; cwd?: string; parentAgentId?: string }[],
     calls: [] as Record<string, unknown>[],
     written: new Map<string, string>(),
+    window: 1_000_000 as number | undefined,
+    usageFails: false,
+    windowWrites: [] as string[],
     appended: new Map<string, string>(),
     gateRuns: [] as { command: string; cwd?: string; timeoutMs?: number }[],
     // callum-flow-event's argv, and the engine's own answer to a tool.check
@@ -72,6 +75,15 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
+  })
+  on('session.usage', () => {
+    if (w.usageFails) throw new Error('no usage')
+    return { value: { startedAt: NOW, context: { window: w.window as number, tokens: 1, percent: 1 }, rateLimits: undefined as never } }
+  })
+  on('fs.write', (_$, e) => {
+    w.windowWrites.push(e.path)
+    w.written.set(e.path, e.text)
+    return { value: undefined }
   })
   on('fs.exists', ($, e) => ({ value: w.written.has(e.path) }))
   on('fs.stat', ($, e) => {
@@ -139,6 +151,63 @@ const companionLines = (w: { appended: Map<string, string> }) =>
     .split('\n')
     .filter(l => l !== '')
     .map(l => JSON.parse(l) as Record<string, unknown>)
+
+describe('the context window file', () => {
+  const file = (dir: string) => `${dir}/s1`
+  test('session start writes the window under DEV_CONTEXT_WINDOW_DIR, else /tmp/dev-context-window', async ($, on) => {
+    const w = world(on, { env: { DEV_CONTEXT_WINDOW_DIR: '/win' } })
+    await $.session.start(START)
+    expect(w.written.get(file('/win'))).toBe('1000000\n')
+  })
+
+  test('with the env unset it writes /tmp/dev-context-window', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    expect(w.written.get(file('/tmp/dev-context-window'))).toBe('1000000\n')
+  })
+
+  test('the beat writes again only for a changed window or a new session', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await w.clock.advance(60_000)
+    expect(w.windowWrites).toEqual(['/tmp/dev-context-window/s1'])
+    w.window = 200_000
+    await w.clock.advance(60_000)
+    expect(w.written.get(file('/tmp/dev-context-window'))).toBe('200000\n')
+    expect(w.windowWrites).toHaveLength(2)
+    w.session = 's2'
+    await w.clock.advance(60_000)
+    expect(w.written.get('/tmp/dev-context-window/s2')).toBe('200000\n')
+  })
+
+  for (const value of [undefined, 0, -5, 1.5]) {
+    test(`a window of ${value} writes no file, and the handshake is still written`, async ($, on) => {
+      const w = world(on)
+      w.window = value
+      await $.session.start(START)
+      expect(w.windowWrites).toEqual([])
+      expect(w.written.has(`${CONFIG}/factory-loop/workspace/s1.json`)).toBe(true)
+    })
+  }
+
+  test('a usage that throws writes no file, and the handshake is still written', async ($, on) => {
+    const w = world(on)
+    w.usageFails = true
+    await $.session.start(START)
+    expect(w.windowWrites).toEqual([])
+    expect(w.written.has(`${CONFIG}/factory-loop/workspace/s1.json`)).toBe(true)
+  })
+})
+
+describe('the context window file after a reload', () => {
+  test('the first turn after a /reload-plugins records the window', async ($, on) => {
+    const w = world(on)
+    on('turn.start', () => ({ turnId: 't1' }))
+    await $.turn.start({ turnId: 't1', prompt: 'hi' } as never)
+    await w.clock.advance(0)
+    expect(w.written.get('/tmp/dev-context-window/s1')).toBe('1000000\n')
+  })
+})
 
 describe('the handshake', () => {
   test('session start writes this session\'s file, and the beat writes it again for a new session', async ($, on) => {

@@ -22,7 +22,7 @@ loop gives every agent step. Every other agent is left alone.
 | `tool.check` | Prompts nobody answers (v2 SPEC 10.10). Calls `next(e)` once; when the call is from a mapped loop agent (or its child) and Claude Code answered `ask`, it returns a deny instead, saying the call would wait on a person nobody watches, quoting Claude Code's reason, and telling the agent to find another way or end its step saying what it needed. Any other result, and any caller not in the map (the owner's own session), is returned unchanged. |
 | `classic.Notification` | A `permission_prompt` (or `worker_permission_prompt`) notification from a mapped agent is logged as a `prompt_waiting` event. Returns `next(e)` always. |
 | `classic.SubagentStart` | Learns each agent's transcript path for the notes above. |
-| `session.start` | The handshake: writes `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` with the time and this process's id (its pid and start time, from `/proc/self/stat`), again every minute (the first row or turn starts the beat when a `/reload-plugins` added the plugin). The loop holds every agent step while this session's file is missing, names another process or is older than 3 minutes. |
+| `session.start` | The handshake: writes `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` with the time and this process's id (its pid and start time, from `/proc/self/stat`), again every minute (the first row or turn starts the beat when a `/reload-plugins` added the plugin). The loop holds every agent step while this session's file is missing, names another process or is older than 3 minutes. The same beat writes the session's context window (`$.session.usage().context.window`) to `DEV_CONTEXT_WINDOW_DIR/<session>`, only when the session or the window changes; no window, or a failed read or write, writes nothing and never touches the handshake. |
 
 ## What it writes
 
@@ -39,6 +39,9 @@ loop gives every agent step. Every other agent is left alone.
   the deny and its `companion.jsonl` line. There is no `prompt_answered`: no hook shows the answer.
 - `factory-gate.json` in the slot's git dir: the last gate result (pass, fail or unknown) with the
   slot's HEAD and `waitMs`.
+- `${DEV_CONTEXT_WINDOW_DIR:-/tmp/dev-context-window}/<session>`: the session's context window size
+  as `<integer>\n`, which the worker heartbeat pushes as `sessions[].context_window` (the
+  [factory-hud](../factory-hud/README.md) mod writes the same file; sub-agents stay null).
 - The handshake file above. Files older than 7 days are pruned at session start.
 
 The guard matches commands, not effects. A Bash write into another slot is not refused; each
