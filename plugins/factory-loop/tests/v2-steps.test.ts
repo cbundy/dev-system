@@ -7,7 +7,7 @@
 // v2 agent's turn end (act-between.ts agentAnswered) runs with the real, unbuilt ones.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ctxOf } from '../hooks/act'
+import { actPass, ctxOf } from '../hooks/act'
 import { agentAnswered } from '../hooks/act-between'
 import { reconcilable } from '../hooks/act'
 import type { ActEnv, Between } from '../hooks/act'
@@ -496,5 +496,28 @@ describe('a gated writer\'s step ends on its settling gate line (#918)', () => {
     // and a turn that ends after the line is taken at once
     const again = await agentAnswered(w.env, state(), { agentId: 'agent-1', answer: 'done', reason: 'answer' }, between)
     expect(again).toMatchObject({ result: 'applied' })
+  })
+
+  test('through actPass the hold ends past its bound, for a listed completed agent and an unlisted one', async () => {
+    for (const listedAgents of [[{ id: 'agent-1', status: 'completed' as const }], []]) {
+      const w = world()
+      gated(w)
+      const build = await spawned(w, stepAction('build'))
+      w.env.live.ledger = [build.entry]
+      recorded(w, build.entry.key, 'build', { result: 'cannot', reason: 'no way' })
+      const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]), repairing: new Map(), gateHeld: new Map() }
+      const bound = gateHoldMs(w.env.rt.config)
+      const pass = async (at: number) => {
+        clock(w, at)
+        await actPass(w.env, { ...state(), now: at }, { ok: true, agents: listedAgents }, between)
+      }
+      await pass(NOW + 1000)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'running' })
+      await pass(NOW + 1000 + bound / 2)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'running' })
+      await pass(NOW + 1000 + bound + 1)
+      expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok' } } })
+      expect(w.env.live.ledger[0]?.summary).toContain('no stop gate line within 42 min')
+    }
   })
 })

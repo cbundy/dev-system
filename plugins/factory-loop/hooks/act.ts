@@ -361,16 +361,21 @@ export function reconcilable(
   holdMs: Ms = 0,
 ): ListedAgent[] {
   for (const [id, at] of [...repairing]) if (now - at > REPAIR_GRACE_MS) repairing.delete(id)
-  for (const [id, at] of [...gateHeld]) if (now - at > holdMs) gateHeld.delete(id)
+  // a hold past its bound counts for nothing here but stays in the map: gateRule (steps.ts) owns its
+  // start and takes the answer once the bound runs out, which a deleted hold would restart
+  const holding = (id: string): boolean => {
+    const at = gateHeld.get(id)
+    return at !== undefined && now - at <= holdMs
+  }
   const out = agents.map(a => {
-    if (answering.has(a.id) || gateHeld.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
+    if (answering.has(a.id) || holding(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     if (!turnEnded(a.status)) return a
     if (repairing.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     const first = seen.get(a.id)
     if (first === undefined) seen.set(a.id, now)
     return first === undefined || first === now ? { id: a.id, status: 'running' as AgentStatus } : a
   })
-  for (const id of [...answering, ...gateHeld.keys()]) if (!agents.some(a => a.id === id) && !out.some(a => a.id === id)) out.push({ id, status: 'running' })
+  for (const id of [...answering, ...[...gateHeld.keys()].filter(holding)]) if (!agents.some(a => a.id === id) && !out.some(a => a.id === id)) out.push({ id, status: 'running' })
   for (const id of [...seen.keys()]) if (!agents.some(a => a.id === id && turnEnded(a.status))) seen.delete(id)
   return out
 }
