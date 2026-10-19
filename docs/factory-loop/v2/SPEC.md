@@ -1423,6 +1423,11 @@ The designer is a reader: it writes nothing to GitHub.
   answers, or "none - no new decision". Optional fields on an existing event type come before a
   new type; a new type ships schema, view fields and migration in one release before any
   producer. The reviewer holds the change to the section like an acceptance criterion.
+- **Compatible by default.** A brief has a `## Compatibility` section, and the contract refuses
+  one without it: what changes in a migration, event schema, the event writer or a
+  factory-database reader and why every loop of the last 10 minor versions keeps working (only
+  additive changes), and the test that proves it, or "none - no schema, event or reader change".
+  The reviewer holds the change to the section like an acceptance criterion.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child

@@ -73,6 +73,9 @@ low | medium | high - one line why
 ## Observability
 - each decision the change adds - where it is recorded - the question it answers; or "none - no new decision"
 
+## Compatibility
+- what changes in a migration, event schema, the event writer or a factory-database reader - why every loop version in the 10-minor-version window keeps working - the test that proves it; or "none - no schema, event or reader change"
+
 ## Sequencing
 - what must merge first, or "none"
 
@@ -108,8 +111,17 @@ release or hold, merge or send back. For each one the change adds:
 - a new event type ships whole in its first release: schema, `x-column` view fields and migration
   together, before any producer.
 
-The answer script checks the heading, the Rollout and the Observability section before it records
-the brief.
+`## Compatibility` is required in every brief. It is "none - no schema, event or reader change"
+unless the change touches a migration (`images/base/factory-db/migrations/`), an event schema
+(`docs/factory-events/schemas/`), the event writer (`callum-flow-event`, `factory-event-write.js`)
+or a reader of the factory database (`callum-flow-factory-state`, the `docs/metrics.md` queries,
+the loop's event reads). Otherwise it names what changes, why every loop of the last 10 minor
+releases keeps writing and reading (only adds: new tables, nullable or defaulted columns, view
+columns, indexes; never drops, renames or retypes anything an old version uses), and which test
+proves it. `docs/factory-db.md` defines the window.
+
+The answer script checks the heading, the Rollout and the Observability and the Compatibility
+sections before it records the brief.
 
 ## A flake bug
 
