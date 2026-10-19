@@ -37,11 +37,12 @@ export function fleetRules(ctx: V2Ctx): void {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
-  // an issue that waits on a release tag of this repo makes the review due too: the judge answers that wait
+  // an issue that waits on a release tag of this repo makes the review due too: the judge answers that wait,
+  // and one that starts waiting after the hour's review makes one more due, its reason naming it
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains' && c.repo === undefined)).map(r => r.issue).sort((a, b) => a - b)
   for (const a of reopenedOffNext(ctx)) want(ctx, a)
   const due = releaseDue(state, config, waiting)
-  if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
+  if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
 }
 
 // fleetTells: what used up its attempts with no record to hold (a record's own exhausted effects
