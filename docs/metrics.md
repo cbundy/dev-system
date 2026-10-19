@@ -899,7 +899,7 @@ the done comment on the issue and the `done` tell (`fields.branch`: `deleted`, `
 
 ```sh
 jq -rs '[.[] | (.outcomes // [])[] | select(.key | test("/follow/delete-branch$")) | "\(.key) \(.status): \(.summary)"] | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
-jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and .wake == "done") | "#\(.issue) branch \(.fields.branch)"] | unique | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and .reason == "tell done") | "#\(.issue) branch \(.fields.branch)"] | unique | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
 How often a done answer's evidence fails the loop's own check: the design step's unknown with `why` `bad-answer`
