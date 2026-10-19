@@ -1399,8 +1399,9 @@ ORDER BY 1 DESC;
 
 ## Main after merge
 
-Reads the `main_state` events. Nothing writes them yet, so the queries return no rows until a
-producer does. Count a state once by `(repo, device, observed_at)`.
+Reads the `main_state` events. The factory loop writes one (rule M1) when the state of the default
+branch it read differs from the last one it logged; it reads the branch every `mainEveryMs` (5
+minutes) in act mode. Count a state once by `(repo, device, observed_at)`.
 
 Main's newest state per repo:
 

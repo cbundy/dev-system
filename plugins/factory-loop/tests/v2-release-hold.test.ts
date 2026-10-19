@@ -60,7 +60,7 @@ function world(releasePrs: ReleasePr[] | undefined, over: Partial<State> = {}, v
     ...baseState(over),
     v2: {
       ...emptyV2State(NOW, records),
-      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK, releasePrs: OK },
+      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK, releasePrs: OK, main: OK },
       prs: { prs, main: { branch: 'main', sha: MAIN } },
       heads: { [HEAD]: { pr: 601, at: NOW - 15 * MIN } },
       reads: Object.fromEntries(records.map(r => [r.issue, { at: NOW, open: true, labels: [] as string[] }])),

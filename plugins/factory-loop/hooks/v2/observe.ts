@@ -15,6 +15,8 @@ import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
+import { EMPTY_MAIN, readMain } from './sources-main'
+import type { MainCache } from './sources-main'
 import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
 import type { ReleaseCache } from './sources-release'
 import { readBlockers } from './sources-blockers'
@@ -92,12 +94,14 @@ export type V2Cache = {
   blockers: BlockerTree | null
   // the release bump PRs the merge queue holds for (sources-release.ts)
   release: ReleaseCache
+  // the default branch's state, read in act mode only to be logged (sources-main.ts)
+  main: MainCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
   dualWrite: { at: Ms; read: DualWriteRead } | null
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -389,6 +393,11 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.release = release.read
   sources.releasePrs = release.source
 
+  // the default branch's state (sources-main.ts): act mode only, on its own cadence
+  const main = await readMain(ctx, cache.main)
+  cache.main = main.read
+  sources.main = main.source
+
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
   const comments: Record<number, IssueComment[]> = {}
@@ -452,6 +461,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(starvedSince === null ? {} : { starvedSince }),
     ...(cache.blockers === null ? {} : { blockers: cache.blockers }),
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
+    ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
@@ -510,7 +520,7 @@ export function commentsOf(json: string): IssueComment[] | null {
 export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
   const off: Source = { ok: false, at: null, error: 'not read' }
   return {
-    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now } },
+    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now }, main: { ok: true, at: now } },
     records,
     recordsFrom: records.length > 0 ? 'store' : 'none',
     heads: {},
