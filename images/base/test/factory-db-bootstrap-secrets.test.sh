@@ -102,7 +102,7 @@ for pair in "$sd/factory-db-writer-url:${db}_writer" "$sd/factory-db-reader-url:
   [ "$(wc -l < "$f")" = 1 ] || fail "$f is not one line"
   [ "$(who "$f")" = "${pair#*:}|$db" ] || fail "$f does not connect as ${pair#*:} to $db: '$(who "$f")'"
   case "$(cat "$f")" in "postgresql://${pair#*:}:"*) ;; *) fail "$f has an unexpected shape" ;; esac
-  [ "$(sed 's/.*://; s/@.*//' "$f" | wc -c)" = 65 ] || fail "$f: the password is not 64 hex characters"
+  [ "$(sed 's,^postgresql://[^:]*:,,; s/@.*//' "$f" | wc -c)" = 65 ] || fail "$f: the password is not 64 hex characters"
 done
 [ -z "$(find "$sd" "$md" -name '.*' -type f)" ] || fail "a temp file was left behind"
 
