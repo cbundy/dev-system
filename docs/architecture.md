@@ -90,7 +90,13 @@ failure), then `test: N failed` and exit non-zero. `scripts/test.sh` owns the sl
 order, the currently empty serial list, and the shared per-run environment block. That
 block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`,
 `NO_MISTAKES_HOME`, `NM_PUSH_STATE_DIR` and `AGENTSVIEW_DATA_DIR` each point to an empty
-temporary directory, which is checked after the suites and removed on exit.
+temporary directory, which is checked after the suites and removed on exit. The sandbox also keeps tests
+off the workspace's real databases: `DEV_SECRETS_DIR`, `DEV_WORKSPACE_SECRETS_DIR` and
+`DEV_MIGRATOR_SECRETS_DIR` point at missing folders inside it, the database URL variables are unset, and
+a `psql` guard (`scripts/test-db-guard`) first on PATH refuses a connection to a host of the real
+configured URLs (read once at setup, only hostnames kept) even when a test scrubs its env. A refusal is
+recorded and the run prints `FAIL test isolation: non-test database <host> (<caller>)` (counted in the same
+one failure).
 The sandbox also gives the database tests a real PostgreSQL (`scripts/test-pg.sh`). When
 `FACTORY_TEST_PG_ADMIN_URL` is set (CI's `postgres:17` service) the run uses that server; otherwise it
 starts a private cluster from the highest `/usr/lib/postgresql/*/bin`, on a unix socket only, and stops and
