@@ -27,7 +27,7 @@ const RULE = 'S2'
 
 // The design answer as the step's result carries it (contracts-work.mjs DesignAnswer).
 type Design = {
-  kind: 'brief' | 'question' | 'split' | 'wait'
+  kind: 'brief' | 'question' | 'split' | 'wait' | 'done'
   brief: string | null
   question: string | null
   reasons: SplitReasons | null
@@ -35,7 +35,16 @@ type Design = {
   // a wait: what it waits on and why
   conditions: WaitCondition[]
   reason: string | null
+  // a done close: the evidence, the commit the loop checked, the evidence PR's merge commit, and the
+  // branch as the design step read it (null before the step's check)
+  evidence: DoneEvidence | null
+  checked: string | null
+  mergeCommit: string | null
+  prHead: string | null
+  branch: { sha: string | null; beyond: number | null } | null
 }
+
+export type DoneEvidence = { pr: number | null; commit: string | null; runIt: string | null }
 
 const REASON_KEYS = ['why_split', 'why_count', 'why_parts', 'why_order'] as const
 
@@ -53,7 +62,10 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
   const data = e?.outcome?.kind === 'step' ? e.outcome.result.data : null
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
   const d = data as Partial<Design>
-  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait') return null
+  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait' && d.kind !== 'done') return null
+  const x = data as Record<string, unknown>
+  const ev = x.evidence !== null && typeof x.evidence === 'object' ? (x.evidence as Record<string, unknown>) : null
+  const br = x.branch !== null && typeof x.branch === 'object' ? (x.branch as Record<string, unknown>) : null
   const children = Array.isArray(d.children) ? d.children : []
   const conditions = Array.isArray(d.conditions) ? d.conditions : []
   return {
@@ -64,6 +76,11 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
     children,
     conditions,
     reason: typeof d.reason === 'string' ? d.reason : null,
+    evidence: ev === null ? null : { pr: typeof ev.pr === 'number' ? ev.pr : null, commit: typeof ev.commit === 'string' ? ev.commit : null, runIt: typeof ev.runIt === 'string' ? ev.runIt : null },
+    checked: typeof x.checked === 'string' ? x.checked : null,
+    mergeCommit: typeof x.mergeCommit === 'string' ? x.mergeCommit : null,
+    prHead: typeof x.prHead === 'string' ? x.prHead : null,
+    branch: br === null ? null : { sha: typeof br.sha === 'string' ? br.sha : null, beyond: typeof br.beyond === 'number' ? br.beyond : null },
   }
 }
 
@@ -76,6 +93,20 @@ export function splitDesignOf(ctx: StepEnv['ctx'], r: Pick<IssueRecord, 'issue' 
   for (const e of steps) {
     const d = designOf(e)
     if (d !== null && d.kind === 'split') return d
+  }
+  return null
+}
+
+// doneDesignOf: the done close a life's designer answered (its newest done design step that said
+// done), or null when no entry of the life still holds it. The closed entry reads the evidence and
+// the branch reading from it.
+export function doneDesignOf(ctx: StepEnv['ctx'], r: Pick<IssueRecord, 'issue' | 'life'>): Design | null {
+  const steps = lifeEntries(ctx, r, 'agent-step')
+    .filter(e => e.status === 'done' && e.outcome?.kind === 'step' && e.outcome.step === 'design')
+    .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+  for (const e of steps) {
+    const d = designOf(e)
+    if (d !== null && d.kind === 'done') return d
   }
   return null
 }
@@ -195,6 +226,12 @@ export const designPlan: StepPlan = env => {
     return { kind: 'result', event, trigger: read.trigger }
   }
   if (d.kind === 'split') return splitPlan(env, d, read.trigger)
+  if (d.kind === 'done') {
+    if (d.evidence === null || (d.evidence.pr === null && d.evidence.commit === null)) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the done answer holds no evidence'), trigger: read.trigger }
+    const data = entry?.outcome?.kind === 'step' && entry.outcome.result.data !== null && typeof entry.outcome.result.data === 'object' ? (entry.outcome.result.data as { text?: unknown }) : {}
+    const text = typeof data.text === 'string' ? data.text : 'done: the work is already merged'
+    return { kind: 'result', event: { kind: 'not-ok', reason: 'done', data: { text, evidence: d.evidence } }, trigger: read.trigger }
+  }
   if (d.kind === 'wait') {
     if (d.conditions.length === 0) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer waits on no condition'), trigger: read.trigger }
     const text = d.reason ?? 'the designer waits on a condition'

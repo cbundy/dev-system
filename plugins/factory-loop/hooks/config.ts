@@ -185,7 +185,7 @@ export function shortDuration(ms: Ms): string {
 
 // Every action kind, for the loaders that read one from text (v2 SPEC 13.6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
-  'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
+  'heartbeat', 'sweep', 'claim', 'close-issue', 'delete-branch', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
   'judge', 'task', 'tell', 'title',
   ...V2_ACTION_KINDS,
 ]

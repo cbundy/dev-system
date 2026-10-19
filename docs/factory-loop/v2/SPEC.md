@@ -557,6 +557,7 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | T3 | designing | not-ok | a question | parked | question; resumeTo designing | transition |
 | T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ..., with the designer's reasons) |
 | T16 | designing | not-ok | a wait | waiting | `wait` set to the answer's conditions; resumeTo designing; the reason to notes | transition |
+| T18 | designing | not-ok | a done close | closed | why done; the evidence line (`done: PR #N (merge <sha7>)`, `commit <sha7>`, the run-it URL) to notes | transition |
 | T5 | building | ok | - | reviewing | head set; round +1 | transition |
 | T6 | building | not-ok | triages < max | building, step triage | attempt 1; triages +1; cut cleared | transition |
 | T7 | building | not-ok | triages = max | parked | question (the builder's reason); resumeTo building | transition |
@@ -630,7 +631,7 @@ Interventions (7.2) are not listed per row. `rules-interventions.ts` derives the
 | State | ok | not-ok | unknown | triage | drop | cleared | unpark | issue-closed | pr-merged | pr-closed | claim-lost | timeout |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | queued | T1 | E7 | E7 | E7 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | E6 |
-| designing | T2 | T3, T4, T16 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
+| designing | T2 | T3, T4, T16, T18 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | building | T5 | T6, T7 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | reviewing | T8 | T9, T10 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | fixing | T11 | T12, T17 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
@@ -703,7 +704,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
 | waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note). done: `comment` (key `.../comment`, hidden key, no closing keyword: the evidence, the designer's reason and what becomes of the issue branch), then `close-issue` as completed (key `.../follow/close-issue`, `logClosed`: the executor logs `closed` with reason `completed` after the close), then `delete-branch` (key `.../follow/delete-branch`) once the close is done, then the `close-tracker` chain of a merge (8.7), then `tell(done)`; the branch is deleted only when it exists on origin and either has no commit beyond origin/<base> or its head is the evidence PR's head, by `git push --force-with-lease=refs/heads/<b>:<sha> origin :refs/heads/<b>` (a lease the branch no longer meets is kept as `moved`, an answer, not a failure), and is otherwise kept, which the comment and the tell say |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **The owner's tick** (`park-text.ts` `ticksOf`). On the label route of an unpark, the loop reads
@@ -1420,10 +1421,10 @@ The designer is a reader: it writes nothing to GitHub.
   background and a turn end is final (10.8), so an explorer's report would arrive after the
   answer and never be recorded; the definition carries an exploration checklist instead
   ([#851](https://github.com/cbundy/dev-system/issues/851)).
-- **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
+- **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait" | "done",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean, decision?: { question, context?, options?, recommendation? } }],
-  conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason? }`.
+  conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason?, evidence?: { pr: N | null, commit: sha | null, runIt: url | null } }`.
 - **Observable by default.** A brief has an `## Observability` section, and the contract refuses
   one without it: each decision the change adds (a point where an agent or a rule chooses), where
   it is recorded with the facts weighed and the reason, and the `docs/metrics.md` query it
@@ -1486,6 +1487,25 @@ The designer is a reader: it writes nothing to GitHub.
   404 or 422, "release not found", an unresolvable PR) is refused like any problem, one per
   condition; an indeterminate read (no `gh`, network, rate limit, auth, timeout) records the wait and
   names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
+- **A done close** (`kind: "done"`, the designer's choice when the issue's work is already merged on
+  the default branch). `evidence` is `{ pr, commit, runIt }`, at least one of `pr` and `commit` (a
+  whole number of at least 1; 7 to 40 hex digits, stored lower-case); `runIt`, when given, is a
+  comment URL on this issue (`https://github.com/<repo>/issues/<N>#issuecomment-<digits>`); `reason` is
+  one line of at most 500 characters; `brief` is null. Stray fields are refused as for the other kinds
+  (`hooks/v2/done-answer.mjs`), and `bin/factory-answer` reports "a done close on PR #N" (or `commit
+  <sha7>`). Before it records, `bin/factory-answer` reads the evidence on GitHub
+  (`hooks/v2/done-check.mjs`, as for a wait): the PR must be MERGED and the commit must be on the
+  default branch (`gh api repos/R/compare/<default>...<sha> --jq .status` gives `behind` or
+  `identical`); a definite negative is refused, an indeterminate read records the answer and names the
+  unchecked evidence on stderr. The design step checks it again against origin: it fetches, then runs
+  `git merge-base --is-ancestor` of the commit (or the PR's merge commit) against origin/<base>; evidence
+  that is no ancestor, or a PR with no merge commit, is a bad answer (unknown, why `bad-answer`), so the
+  step retries and then goes to triage like any bad answer, and a failed read is unknown (`cli`). The
+  step result carries the evidence, the checked commit, the PR's merge commit and head, and the branch
+  reading `{ sha, beyond }` (origin's ls-remote and `rev-list --count origin/<base>..<head>`). The step is
+  not-ok(done), T18 closes the record why `done`, and the closed row (4.5) closes the issue.
+  Nothing is posted by the step. An issue the done issue blocks is claimable once its `blockedBy`
+  reads 0 (rules-claim.ts); no new mechanism.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
   `callum-flow-issue-read --json N` shows it closed (for an issue of another repo, run with `CALLUM_FLOW_REPO` set to that repo), a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
@@ -2747,7 +2767,8 @@ Appendix E gives what v2 makes of it (4.5).
      and prints every problem, exit 1; a usage error exits 2. On success it writes
      `{ v: 1, contract, answer }` atomically (a new temp file in the same directory, flushed, then
      renamed over the answer file), prints that it is recorded, and exits 0. For a `design-v2` wait it
-     first reads the conditions on GitHub (8.7): a definite negative is refused, an indeterminate
+     first reads the conditions on GitHub (8.7), and for a done close its evidence (a merged PR, a commit
+     on the default branch): a definite negative is refused, an indeterminate
      read is recorded and named on stderr. It runs from any
      directory under plain node, as a CommonJS script or an ES module alike.
    - **Reading.** The loop reads the answer file at the path it issued for that step and attempt,
@@ -2811,7 +2832,7 @@ Appendix E gives what v2 makes of it (4.5).
 
 Most transitions are already logged by the CLIs the executors call (`claimed`, `claim_lost`,
 `renewed`, `reclaimed`, `closed`, `implementer_routed`, `merged` and the queue state through
-`queue-watch.sh --once`). v2 logs its own states through `hooks/v2/events.ts` (7.1). The
+`queue-watch.sh --once`). A done close (8.7) also logs `closed` (reason `completed`) itself, as the `close-issue` executor's second step once `gh issue close` has passed, the way a split tracker's close is logged. v2 logs its own states through `hooks/v2/events.ts` (7.1). The
 foundation logs one state, `loop`, for its own transitions (DECISIONS D-09):
 
 - each agent and wake entry (`agent-step`, `task`, `tell`, owner notices
@@ -3007,7 +3028,7 @@ A `tell` is a wake whose turn writes one line to the owner in the conversation, 
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` and `task-timeout`; v2 adds its own
-(appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
+(appendix D, which includes the notice `done`). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
 `checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable` and `starved`) go out before any other
 wake, and the title counts the open ones.
 
@@ -4046,6 +4067,7 @@ Notices (TELL kinds), owner items first:
 | `starved` | yes | S1: the ready queue was starved (all of it unclaimable, nothing queued or in flight, no owner hold) for `starvedNoticeAfterMs`; names each root blocker and why it is not moving; once per spell and 24 h period of it |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
+| `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
 10 kinds of the loop's own, 8 of them owner items, plus the foundation's.

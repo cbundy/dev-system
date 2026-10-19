@@ -19,6 +19,7 @@ import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { decisionOf, parkText, waitText } from './park-text'
 import { fixWhyOf, lifeEntries } from './rules-agent'
+import { doneItems } from './rules-done'
 import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, TRACKER_DEPTH, labelOf, resumeStep } from './types'
@@ -228,7 +229,8 @@ function trackerItems(ctx: V2Ctx, r: IssueRecord, o: { rollout: string | null; c
   return items
 }
 
-// closedItems: a closed record's follow-ups by why (4.5): a drop's `abandoned`; a merge's rollout
+// closedItems: a closed record's follow-ups by why (4.5): a drop's `abandoned`; a done close's comment,
+// close, branch delete and tell (rules-done.ts); a merge's rollout
 // read, then a close for an epic base or a later milestone for a run-it or keep-open rollout
 // (D-29); a split's parent released.
 function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
@@ -250,6 +252,7 @@ function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
       if (tell !== null) items.push({ action: tell, soft: false, tell: true })
     }
   }
+  if (r.why === 'done') items.push(...doneItems(ctx, r, trackerItems(ctx, r, { rollout: 'merge', closeIssue: null })))
   if (r.why === 'split') {
     const created = lifeEntries(ctx, r, 'split').flatMap(e => (e.status === 'done' && e.outcome?.kind === 'split' ? [e.outcome.child] : []))
     const sorted = [...new Set(created)].sort((a, b) => a - b)

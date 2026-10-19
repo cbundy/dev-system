@@ -18,7 +18,7 @@ import { commentBody } from '../hooks/v2/act-state'
 import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-work.mjs'
 import { renderQuestion } from '../hooks/v2/question.mjs'
 import { decisionFallback } from '../hooks/v2/split-decision.mjs'
-import { legacyDecision } from '../hooks/v2/rules-work'
+import { designOf, legacyDecision } from '../hooks/v2/rules-work'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -160,7 +160,7 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
       'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
@@ -168,7 +168,7 @@ describe('the design-v2 contract (8.7)', () => {
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
-    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait', 'brief is required'])
+    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait, done', 'brief is required'])
     expect(problems('design-v2', 'a brief')).toHaveLength(1)
   })
 
@@ -232,14 +232,35 @@ describe('the design-v2 contract (8.7)', () => {
     // stray fields: a PR number on an issue condition, a field of another kind of answer
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue, repo)'])
     expect(problems('design-v2', { ...wait, children: [] })).toEqual(['children must be absent or null unless kind is split'])
-    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)'])
+    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)'])
     // the reason is required, one line, and at most 500 characters
     expect(problems('design-v2', { kind: 'wait', conditions })).toEqual(['reason is required'])
     expect(problems('design-v2', { ...wait, reason: 'two\nlines' })).toEqual(['reason must be one line'])
     expect(problems('design-v2', { ...wait, reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
     expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
-    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait or done'])
+  })
+
+  test('a done close gives its evidence and a one-line reason: the outcome carries them for a done alone, and the summary names the evidence', () => {
+    const done = { kind: 'done', evidence: { pr: 812, commit: 'BD2FEE14', runIt: `https://github.com/${REPO}/issues/300#issuecomment-77` }, reason: '  Shipped in PR 812  ', brief: null }
+    expect(check('design-v2', done)).toEqual({
+      ok: true,
+      outcome: { kind: 'done', brief: null, question: null, evidence: { pr: 812, commit: 'bd2fee14', runIt: `https://github.com/${REPO}/issues/300#issuecomment-77` }, reason: 'Shipped in PR 812', reasons: null, children: [] },
+    })
+    expect(CONTRACTS['design-v2'].summary(done)).toBe('a done close on PR #812')
+    expect(CONTRACTS['design-v2'].summary({ ...done, evidence: { pr: null, commit: 'bd2fee14', runIt: null } })).toBe('a done close on commit bd2fee1')
+    // one of pr and commit is enough, on its own
+    expect(problems('design-v2', { ...done, evidence: { pr: 812 } })).toEqual([])
+    expect(problems('design-v2', { ...done, evidence: { commit: 'bd2fee14' } })).toEqual([])
+    expect(problems('design-v2', { ...done, evidence: { runIt: null } })).toEqual(['evidence needs a merged pr or a commit on the default branch (at least one)'])
+    expect(problems('design-v2', { ...done, evidence: 'PR 812' })).toEqual(['evidence is required for done: { pr, commit, runIt }, at least one of pr and commit'])
+    expect(problems('design-v2', { ...done, reason: 'a'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
+    // a run-it of another issue, or of another repo, is refused; a malformed comment id too
+    expect(problems('design-v2', { ...done, evidence: { pr: 1, runIt: `https://github.com/${REPO}/issues/301#issuecomment-77` } })).toHaveLength(1)
+    expect(problems('design-v2', { ...done, evidence: { pr: 1, runIt: `https://github.com/${REPO}/issues/300#issuecomment-x` } })).toHaveLength(1)
+    // evidence belongs to a done alone
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, evidence: { pr: 1 } })).toEqual(['evidence must be absent or null unless kind is done'])
   })
 
   test('a brief must say how it stays compatible: an empty or missing ## Compatibility is refused', () => {
@@ -849,6 +870,57 @@ describe('the design step (8.7)', () => {
     h.answer('design', 'design-v2', { kind: 'brief', brief: BRIEF })
     expect(resultOf(await h.atEnd(e))).toMatchObject({ event: 'ok', data: { kind: 'brief', brief: BRIEF.trim() } })
   })
+
+  // the done close: its evidence checked against origin in the slot (fetch, the PR's merge commit,
+  // is-ancestor of origin/main), and the branch read for the closed entry
+  const DONE = { kind: 'done', evidence: { pr: 812, commit: null, runIt: null }, reason: 'Shipped in PR 812', brief: null }
+  const MERGE = SHA('a')
+  const PR_HEAD = SHA('b')
+  const doneWorld = (over: { pr?: string; ancestor?: number; fetch?: number; branch?: string | null; beyond?: number } = {}) => (argv: string[]): Reply => {
+    if (argv[0] === 'gh') return { stdout: over.pr ?? `${MERGE} ${PR_HEAD}\n` }
+    if (argv[1] === 'fetch') return { exitCode: over.fetch ?? 0 }
+    if (argv[1] === 'merge-base') return { exitCode: over.ancestor ?? 0 }
+    if (argv[1] === 'ls-remote') return { stdout: over.branch === null ? '' : `${over.branch ?? SHA('c')}\trefs/heads/issue-321\n` }
+    if (argv[1] === 'rev-list') return { stdout: `${over.beyond ?? 0}\n` }
+    return {}
+  }
+  const doneResultOf = async (reply: (argv: string[]) => Reply, answer: unknown = DONE) => {
+    const r = rec(321, { state: 'designing', step: 'design' })
+    const h = harness(r, reply)
+    const { entry: e } = await h.spawn('design')
+    h.answer('design', 'design-v2', answer)
+    return { result: resultOf(await h.atEnd(e)), runs: h.runs }
+  }
+
+  test('a done close is not-ok done once its PR\'s merge commit is an ancestor of origin/main; the data carries the evidence, the checked commit and the branch reading', async () => {
+    const { result, runs } = await doneResultOf(doneWorld({ beyond: 0 }))
+    expect(result).toMatchObject({
+      event: 'not-ok',
+      reason: 'done',
+      data: { kind: 'done', evidence: { pr: 812 }, checked: MERGE, mergeCommit: MERGE, prHead: PR_HEAD, branch: { sha: SHA('c'), beyond: 0 }, text: `done: PR #812 (merge ${MERGE.slice(0, 7)})` },
+    })
+    expect(runs.map(x => x.argv.slice(0, 2).join(' '))).toEqual(['git fetch', 'gh pr', 'git merge-base', 'git ls-remote', 'git rev-list'])
+    expect(runs.find(x => x.argv[1] === 'merge-base')?.argv).toEqual(['git', 'merge-base', '--is-ancestor', MERGE, 'origin/main'])
+    expect(runs.find(x => x.argv[0] === 'gh')?.argv).toContain('--repo')
+    expect(runs.every(x => x.cwd === SLOT(321))).toBe(true)
+  })
+
+  test('a done close on a commit checks that commit, and a runIt rides in the notes text; no branch on origin reads as sha null', async () => {
+    const answer = { ...DONE, evidence: { pr: null, commit: 'bd2fee14', runIt: `https://github.com/${REPO}/issues/321#issuecomment-5` } }
+    const { result, runs } = await doneResultOf(doneWorld({ branch: null }), answer)
+    expect(result).toMatchObject({ event: 'not-ok', reason: 'done', data: { checked: 'bd2fee14', branch: { sha: null, beyond: null }, text: `done: commit bd2fee1, https://github.com/${REPO}/issues/321#issuecomment-5` } })
+    expect(runs.some(x => x.argv[0] === 'gh')).toBe(false)
+    expect(runs.find(x => x.argv[1] === 'merge-base')?.argv[3]).toBe('bd2fee14')
+  })
+
+  test('evidence that is not an ancestor of origin/main is a bad answer, so is a PR with no merge commit; a failed read is unknown (cli)', async () => {
+    expect((await doneResultOf(doneWorld({ ancestor: 1 }))).result).toMatchObject({ event: 'unknown', why: 'bad-answer', reason: expect.stringContaining('is not on origin/main') })
+    expect((await doneResultOf(doneWorld({ ancestor: 128 }))).result).toMatchObject({ event: 'unknown', why: 'cli' })
+    expect((await doneResultOf(doneWorld({ pr: `- ${PR_HEAD}\n` }))).result).toMatchObject({ event: 'unknown', why: 'bad-answer', reason: expect.stringContaining('has no merge commit') })
+    expect((await doneResultOf(doneWorld({ fetch: 128 }))).result).toMatchObject({ event: 'unknown', why: 'cli', reason: expect.stringContaining('origin did not read') })
+    const prFails = (argv: string[]): Reply => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'gh: boom' } : doneWorld()(argv))
+    expect((await doneResultOf(prFails)).result).toMatchObject({ event: 'unknown', why: 'cli' })
+  })
 })
 
 // --- the designer's plan side (rules-work.ts, through planV2) ---------------------------------------------------
@@ -958,6 +1030,17 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     expect(of(plan(withLedger(world([r]), [split])), 330).map(made)).toEqual([['a', [57]]])
     const a = done(childKey(r, 'a'), 'split', { issue: 330, outcome: { kind: 'split', child: 601 } })
     expect(of(plan(withLedger(world([r]), [split, a])), 330).map(made)).toEqual([['b', [601, 57]]])
+  })
+
+  test('a done close posts nothing in the step: it is not-ok done at once, and T18 closes the record why done, the evidence in its notes', () => {
+    const data = { kind: 'done', brief: null, question: null, children: [], evidence: { pr: 812, commit: null, runIt: null }, reason: 'Shipped', text: 'done: PR #812 (merge aaaaaaa)', checked: SHA('a'), mergeCommit: SHA('a'), prHead: SHA('b'), branch: { sha: SHA('c'), beyond: 0 } }
+    const p = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'done', data })]))
+    expect(of(p, 330).filter(a => a.kind === 'comment')).toEqual([])
+    expect(transitionOf(p, 330)).toMatchObject({ row: 'T18', via: 'done', next: { state: 'closed', why: 'done', notes: ['done: PR #812 (merge aaaaaaa)'] } })
+    expect(designOf(stepDone(r, 'design', { event: 'not-ok', reason: 'done', data }))).toMatchObject({ kind: 'done', evidence: { pr: 812 }, checked: SHA('a'), prHead: SHA('b'), branch: { sha: SHA('c'), beyond: 0 } })
+    // an answer with no evidence is a bad answer
+    const bare = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'done', data: { kind: 'done' } })]))
+    expect(transitionOf(bare, 330)).toMatchObject({ row: 'U2', via: 'unknown:bad-answer' })
   })
 
   test('a design answer with no kind the plan reads goes down the unknown path', () => {

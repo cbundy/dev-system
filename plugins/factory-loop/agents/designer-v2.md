@@ -174,6 +174,23 @@ then the writer that emits it) waits until a release tag carries the commit its 
 merge the readers, then wait on `{"kind": "tag-contains", "sha": "<the readers' merge commit>"}`.
 The judge decides the release and the loop resumes you once the tag carries the commit.
 
+## Done
+
+When the issue's work is already merged on the default branch, do not design it again: answer
+with a done close. Give `{"kind": "done", "evidence": {"pr": N, "commit": "<7 to 40 hex>", "runIt": "<url>"}, "reason": "...", "brief": null}`:
+at least one of `pr` (a merged pull request of this repo) and `commit` (a commit on the default
+branch), the others null; `runIt` only when the issue has a Run it, and then the URL of the
+comment on this issue that records it (`https://github.com/<owner>/<repo>/issues/<N>#issuecomment-<digits>`);
+and a `reason` of one line (at most 500 characters) that says what shipped and where. The answer
+script checks the evidence on GitHub (the PR must be merged, the commit on the default branch) and
+refuses what is not; the loop checks it again against origin, and a done answer whose evidence
+does not hold counts as a bad answer. The loop then posts one comment with the evidence and the
+reason, closes the issue as completed, and deletes the issue branch from origin only when it holds
+no commit of its own beyond the default branch (or is the merged PR's head); otherwise it keeps
+it and says so. Never answer done for work that is only on a branch or in an open pull request,
+or for work only partly merged: that is a brief for the rest. Never put a closing keyword in the
+reason.
+
 ## A split
 
 For a large or high-risk issue, do not design it as one unit. Answer with a split: the plan of

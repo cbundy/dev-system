@@ -241,7 +241,7 @@ const notOk = (reason: string, data: unknown): StepResult => ({ event: 'not-ok',
 
 function asDesign(answer: unknown): DesignAnswer | null {
   const a = answer as Partial<DesignAnswer> | null
-  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait') ? (a as DesignAnswer) : null
+  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait' || a.kind === 'done') ? (a as DesignAnswer) : null
 }
 
 // designResult: the checked design answer's meaning (8.7), with the answer as the data the plan
@@ -256,7 +256,72 @@ export function designResult(answer: unknown): StepResult {
     return notOk(a.kind, { ...a, question, text: question })
   }
   if (a.kind === 'wait') return notOk(a.kind, { ...a, text: a.reason ?? 'the designer waits on a condition' })
+  if (a.kind === 'done') return notOk(a.kind, { ...a, text: doneText(a, null) })
   return notOk(a.kind, { ...a, text: a.kind === 'question' ? a.question : `split into ${a.children.length} children` })
+}
+
+// doneText: the evidence line of a done close, in the transition's notes: `done: PR #N (merge
+// <sha7>)`, `commit <sha7>`, and the runIt URL when given.
+function doneText(a: DesignAnswer, merge: string | null): string {
+  const e = a.evidence
+  const parts: string[] = []
+  if (e?.pr !== null && e?.pr !== undefined) parts.push(`PR #${e.pr}${merge === null ? '' : ` (merge ${merge.slice(0, 7)})`}`)
+  if (e?.commit !== null && e?.commit !== undefined) parts.push(`commit ${e.commit.slice(0, 7)}`)
+  if (e?.runIt !== null && e?.runIt !== undefined) parts.push(e.runIt)
+  return `done: ${parts.join(', ')}`
+}
+
+// mergeCommitOf: the merge commit and the head of the evidence's PR, as GitHub reports them (gh pr
+// view --json mergeCommit,headRefOid), each null when GitHub gives none.
+async function mergeCommitOf(ctx: ExecCtx, slot: string, pr: number): Promise<{ merge: string | null; head: string | null } | { failed: string }> {
+  const argv = ARGV.prMergeArgv(ctx.rt.repo, pr)
+  const r = await git(ctx, argv, slot)
+  if (!r.ok) return { failed: r.why }
+  if (r.exit !== 0) return { failed: failure(r, argv) }
+  const [merge, head] = r.out.trim().split(/\s+/)
+  return { merge: /^[0-9a-f]{40}$/.test(merge ?? '') ? (merge as string) : null, head: /^[0-9a-f]{40}$/.test(head ?? '') ? (head as string) : null }
+}
+
+// doneResult: a done answer, its evidence checked against origin (8.7): the commit, or the evidence
+// PR's merge commit, must be an ancestor of origin/<base>. Anything else is a bad answer, so the
+// designer retries; a read that fails is unknown (cli). The branch reading rides along as data
+// ({ sha, beyond }): the closed entry deletes the branch only from it.
+export async function doneResult(ctx: ExecCtx, record: StepRecord, answer: unknown): Promise<StepResult> {
+  const a = asDesign(answer)
+  if (a === null || a.kind !== 'done' || a.evidence === undefined) return unknownResult('bad-answer', 'the done answer holds no evidence')
+  if (record.slot === null) return unknownResult('cli', 'the design step has no slot to read origin from')
+  const base = baseOf(ctx.state)
+  const fetch = ARGV.fetchArgv()
+  const f = await git(ctx, fetch, record.slot, FETCH_MS)
+  if (!f.ok) return unknownResult('cli', `origin did not read: ${f.why}`)
+  if (f.exit !== 0) return unknownResult('cli', `origin did not read: ${failure(f, fetch)}`)
+  let merge: string | null = null
+  let prHead: string | null = null
+  let checked = a.evidence.commit
+  if (a.evidence.pr !== null) {
+    const m = await mergeCommitOf(ctx, record.slot, a.evidence.pr)
+    if ('failed' in m) return unknownResult('cli', `PR #${a.evidence.pr} did not read: ${m.failed}`)
+    merge = m.merge
+    prHead = m.head
+    if (checked === null) checked = merge
+  }
+  if (checked === null) return unknownResult('bad-answer', `the done answer's PR #${a.evidence.pr} has no merge commit: it is not merged, so the work is not done`)
+  const argv = ARGV.isAncestorArgv(checked, `origin/${base}`)
+  const anc = await git(ctx, argv, record.slot)
+  if (!anc.ok) return unknownResult('cli', `origin did not read: ${anc.why}`)
+  if (anc.exit === 1 || (anc.exit === 128 && /not a valid|bad object|unknown revision/i.test(anc.err))) {
+    return unknownResult('bad-answer', `the done evidence ${checked.slice(0, 12)} is not on origin/${base}: the work is not merged, so answer a brief instead`)
+  }
+  if (anc.exit !== 0) return unknownResult('cli', `origin did not read: ${failure(anc, argv)}`)
+  const read = await originHead(ctx, record.branch, record.slot)
+  if ('failed' in read) return unknownResult('cli', `origin's ${record.branch} did not read: ${read.failed}`)
+  let count: number | null = null
+  if (read.sha !== null) {
+    const c = await beyond(ctx, record.slot, base, read.sha)
+    if ('failed' in c) return unknownResult('cli', `origin's ${record.branch} did not read: ${c.failed}`)
+    count = c.count
+  }
+  return notOk('done', { ...a, text: doneText(a, merge), checked, mergeCommit: merge, prHead, branch: { sha: read.sha, beyond: count } })
 }
 
 // buildResult: a build answer, its head confirmed on origin (10.8).
@@ -340,7 +405,7 @@ const design: StepModule = {
     const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
     return { prompt, model: model(modelLabelOf(ctx.state, r.issue)), data: null }
   },
-  result: async (_ctx, _record, answer) => designResult(answer),
+  result: async (ctx, record, answer) => (asDesign(answer)?.kind === 'done' ? doneResult(ctx, record, answer) : designResult(answer)),
 }
 
 // The builder's model: the route's answer (an issue's model label first, then the comparison's

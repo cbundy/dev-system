@@ -216,6 +216,12 @@ export function beyondBaseArgv(base: string, head: string): string[] {
   return ['git', 'rev-list', '--count', `origin/${base}..${head}`]
 }
 
+// A PR's merge commit and head, as GitHub reports them: two shas on one line, the merge commit
+// empty when the PR is not merged.
+export function prMergeArgv(repo: string, pr: number): string[] {
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'mergeCommit,headRefOid', '--jq', '[.mergeCommit.oid // "-", .headRefOid] | join(" ")']
+}
+
 // Whether a commit is the head or one of its ancestors: exit 0 yes, 1 no.
 export function isAncestorArgv(commit: string, head: string): string[] {
   return ['git', 'merge-base', '--is-ancestor', commit, head]

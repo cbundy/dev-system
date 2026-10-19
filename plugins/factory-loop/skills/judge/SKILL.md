@@ -223,6 +223,10 @@ Notices:
 - `wind-down-stale` (requested_at, cap_minutes): a wind-down was requested, the stop never followed
   within its cap plus 5 minutes, and the loop removed the request and works normally again. Say so
   in one line; the owner checks why the stopper did not stop the loop.
+- `done` (issue, branch; detail: the issue's link, the evidence, what became of the branch): the designer
+  found the issue's work already merged and the loop closed it as completed. Say it in one `[INFO]` line:
+  the issue, the evidence (PR or commit), and whether its branch was deleted, kept or absent. Nothing to
+  do; the owner checks only if the evidence looks wrong.
 - `task-timeout` (key): the release task went unanswered and is not retried. Owner says whether to
   redo it.
 
