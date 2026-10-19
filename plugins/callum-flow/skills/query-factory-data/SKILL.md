@@ -58,6 +58,7 @@ Name queries by schema and title, never by bare number: both sets start at 1.
 | First-pass rate, fix rounds and review rounds per issue | `factory.event_log`, [2. First-pass gate pass rate](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2-first-pass-gate-pass-rate) and the rounds block of [9. Interventions, judgement calls and claim completion](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9-interventions-judgement-calls-and-claim-completion) |
 | Sonnet against Opus as the implementer: time taken, first-pass rate and fix requests per model | `factory.event_log`, [8. Implementer model comparison](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#8-implementer-model-comparison) (medians in code) |
 | Main after merge: main's newest state, and whether main stayed green after each merge (plant console panel F) | `factory.event_log`, [Main after merge](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#main-after-merge) |
+| Settings changes over time, and the settings each worker runs on | `factory.event_log` and `factory.workers_status`, [Settings](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#settings) (empty until the loop writes them) |
 | Agent tokens and wall time, pipeline gates, parked time, failure categories | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
 

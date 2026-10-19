@@ -3,7 +3,8 @@
 The factory database is a PostgreSQL database that holds the factory event store and the worker
 heartbeats. This page takes a fresh server to a healthy `dev-doctor`. The event push loop and the
 heartbeat write to it, and `dev-query --factory` reads it with the reader role; the other push
-loops still use the agentsview database.
+loops still use the agentsview database. The worker table, `factory.workers`, has a nullable `config`
+column (jsonb) for the settings snapshot of the worker's loop; nothing writes it yet (migration 0013).
 
 You need PostgreSQL 17 or later, the `psql` client, and the base image (it ships
 `factory-db-bootstrap` and the migrations).

@@ -1275,6 +1275,56 @@
     "type": "object",
     "x-issue": "required"
   },
+  "settings_changed.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "detail": {
+        "maxLength": 500,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "fact": {
+        "type": "string"
+      },
+      "key": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "layer": {
+        "enum": [
+          "default",
+          "directive",
+          "env",
+          "plugin",
+          "repo",
+          "workspace",
+          null
+        ]
+      },
+      "new_value": {},
+      "old_value": {},
+      "who": {
+        "enum": [
+          "judge",
+          "person",
+          "plugin",
+          "repo"
+        ]
+      }
+    },
+    "required": [
+      "fact",
+      "key",
+      "layer",
+      "new_value",
+      "old_value",
+      "who"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "shadow_read.v1": {
     "additionalProperties": false,
     "properties": {

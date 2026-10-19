@@ -1345,7 +1345,34 @@ GROUP BY device, hour
 ORDER BY device, hour;
 ```
 
-## Shadow runs (source switch)
+## Settings
+
+Settings the loop runs on. A `settings_changed` event records one change of one setting (see
+[REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
+settings snapshot. No producer writes either yet, so both queries return no rows until it does.
+
+Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
+devices counts once):
+
+```sql
+SELECT ts, repo, device, key, layer, who, old_value, new_value
+FROM (
+  SELECT e.*, row_number() OVER (PARTITION BY e.fact ORDER BY e.ts, e.device) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'settings_changed') c
+WHERE n = 1
+ORDER BY ts DESC, key;
+```
+
+Settings in force per worker. `config` is null until a worker's heartbeat writes the loop's settings
+snapshot (cbundy/dev-system#1016):
+
+```sql
+SELECT device, repo, config->>'at' AS settings_at, config->'settings' AS settings
+FROM factory.workers_status
+ORDER BY device;
+```
+
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
 kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`). Per tool since a given time:

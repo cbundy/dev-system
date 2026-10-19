@@ -155,7 +155,8 @@ BEGIN
     ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz'),
     ('cpu_pct', 'real'), ('cpu_limit_cores', 'numeric'), ('cpu_quota_set', 'boolean'),
     ('mem_used_bytes', 'bigint'), ('mem_limit_bytes', 'bigint'), ('claude_interactive', 'int'),
-    ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz')
+    ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz'),
+    ('config', 'jsonb')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN

@@ -85,7 +85,7 @@ const REPLAYED = new Set(['failed', 'head_mismatch', 'conflict', 'ci_stalled']);
 // exactly one of the two sets, so a new type forces a choice (tests/heartbeat-state.test.js).
 const EV_LIFECYCLE = new Set(['ready', 'claimed', 'requeued', 'claim_lost', 'closed', 'abandoned', 'merged', 'implementer_routed', 'finding_handled']);
 const EV_NOISE = new Set(['claim_renewed', 'transition', 'reviewed', 'intervention', 'loop_entry', 'loop_passes', 'usage',
-  'untrusted_stripped', 'test_weakened', 'shadow_read', 'gate_run', 'wind_down', 'released', 'milestone_state', 'main_state', 'comment_posted']);
+  'untrusted_stripped', 'test_weakened', 'shadow_read', 'gate_run', 'wind_down', 'released', 'milestone_state', 'main_state', 'comment_posted', 'settings_changed']);
 const EV_DONE = new Set(['merged', 'abandoned', 'claim_lost', 'closed', 'ready', 'requeued']);
 const EV_TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
 const EV_LIFE = new Set(['ready', 'requeued', 'claimed', 'implementer_routed']);

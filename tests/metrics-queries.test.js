@@ -111,6 +111,7 @@ const RUN_ONLY = [
   "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
+  "Settings #0", "Settings #1",
   "Startup schema migrates #0",
 ];
 
