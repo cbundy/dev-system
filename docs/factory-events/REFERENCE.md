@@ -13,6 +13,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`claim_renewed`](#claim_renewed) | v1 | required | A heartbeat extended this device's claim on the issue. |
 | [`claimed`](#claimed) | v1 | required | This device took the claim on the issue: no other device works on it while the lease holds. |
 | [`closed`](#closed) | v1 | required | GitHub shows the issue closed, outside the factory's own merge. |
+| [`comment_posted`](#comment_posted) | v1 | required | The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. |
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
 | [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
@@ -116,6 +117,7 @@ Example:
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `changed` | string | `main_state` | What changed since the last main_state event of the repo: first, head, workflow or deploy. |
 | `class` | enum | `loop_entry` | The planner's class for the work. |
+| `comment_url` | string | `comment_posted` | The comment's URL on GitHub. |
 | `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
@@ -141,7 +143,7 @@ Example:
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
-| `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
+| `life` | string | `comment_posted`, `gate_run`, `intervention`, `transition` | The life the comment belongs to. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
@@ -177,7 +179,7 @@ Example:
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
-| `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
+| `seq` | integer | `comment_posted`, `gate_run`, `transition` | The seq of the transition whose entry action posted the comment. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `settle_seconds` | integer | `shadow_read` | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
@@ -192,7 +194,7 @@ Example:
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
 | `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
-| `to_state` | enum | `transition` | The state after: the issue's state from now on. |
+| `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
@@ -202,7 +204,7 @@ Example:
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
 | `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
-| `why` | enum | `transition` | closed: why the life ended; null otherwise. |
+| `why` | enum | `transition` | closed: why the life ended (done: its work had already merged); null otherwise. |
 
 ## abandoned
 
@@ -342,6 +344,34 @@ Example:
 ```json
 {
   "reason": "completed"
+}
+```
+
+## comment_posted
+
+The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. No producer writes it yet.
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: (repo, issue, life, seq)
+
+### comment_posted v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | no | pattern `^[0-9a-z]+$` | yes | The life the comment belongs to. |
+| `seq` | integer | required | no | minimum 0 | yes | The seq of the transition whose entry action posted the comment. |
+| `to_state` | enum | required | no | one of "parked", "waiting" | yes | The state that seq entered. |
+| `comment_url` | string | required | no | pattern `^https://\S+$`; maxLength 500 | yes | The comment's URL on GitHub. |
+
+Example:
+
+```json
+{
+  "life": "ltn4zqo",
+  "seq": 7,
+  "to_state": "parked",
+  "comment_url": "https://github.com/cbundy/plant-console/issues/42#issuecomment-6259542165"
 }
 ```
 
@@ -968,7 +998,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `round` | integer | required | no | minimum 0 | yes | Entries to reviewing so far in this life: the review round. |
 | `question` | string | required | yes | maxLength 2000 | yes | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `wait` | array of object | optional | yes | minItems 1; maxItems 8 |  | waiting: the conditions the loop re-checks each pass; null otherwise |
-| `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null | yes | closed: why the life ended; null otherwise. |
+| `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null | yes | closed: why the life ended (done: its work had already merged); null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
 | `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |

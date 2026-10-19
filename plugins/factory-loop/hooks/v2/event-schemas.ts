@@ -28,6 +28,7 @@ export const CURRENT: Record<string, number> = {
   "claim_renewed": 1,
   "claimed": 1,
   "closed": 1,
+  "comment_posted": 1,
   "finding_handled": 1,
   "gate_run": 1,
   "implementer_routed": 1,
@@ -112,6 +113,18 @@ export const SCHEMAS: Record<string, Shape> = {
     "x-issue": "required",
     "properties": {
       "reason": {"type":["null","string"]},
+    },
+  },
+  "comment_posted.v1": {
+    "additionalProperties": false,
+    "required": ["comment_url","life","seq","to_state"],
+    "type": "object",
+    "x-issue": "required",
+    "properties": {
+      "comment_url": {"maxLength":500,"pattern":"^https://\\S+$","type":"string"},
+      "life": {"pattern":"^[0-9a-z]+$","type":"string"},
+      "seq": {"minimum":0,"type":"integer"},
+      "to_state": {"enum":["parked","waiting"]},
     },
   },
   "envelope.v1": {
@@ -425,7 +438,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "triages": {"minimum":0,"type":"integer"},
       "via": {"pattern":"^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$","type":"string"},
       "wait": {"items":{"additionalProperties":false,"properties":{"issue":{"minimum":1,"type":["integer","null"]},"kind":{"enum":["issue-closed","pr-merged","tag-contains"]},"pr":{"minimum":1,"type":["integer","null"]},"repo":{"pattern":"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$","type":["null","string"]},"sha":{"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]}},"required":["kind"],"type":"object"},"maxItems":8,"minItems":1,"type":["array","null"]},
-      "why": {"enum":["claim-lost","closed-on-github","dropped","merged","merged-by-hand","split",null]},
+      "why": {"enum":["claim-lost","closed-on-github","done","dropped","merged","merged-by-hand","split",null]},
     },
   },
   "untrusted_stripped.v1": {

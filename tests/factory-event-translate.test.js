@@ -126,7 +126,7 @@ test("coverage: the corpus produces every current type, and every writer state i
   const made = new Set(expected.map((e) => e.type));
   // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
   // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted"]; // the stop gate's runs (#811): written by the loop once a writer exists
   for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
   for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
@@ -405,6 +405,14 @@ test("CLI: --quiet drops the per-state summary, keeps the miss line and the exit
   assert.equal(r.code, 1);
   assert.equal(r.err, "line 1: miss: frobnicated: unknown state\n");
   assert.equal(cli(["--quiet", "--nope"], "").code, 2);
+});
+
+test("transition why=done translates and validates", () => {
+  const base = sample("transition");
+  const r = translate(withNote(base, base.note.replace("to=queued", "to=closed").replace(/ why=\S+/, " why=done")));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.equal(r.event.data.why, "done");
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
 });
 
 test("transition wait=: the waiting state and its condition list (dev-system#836)", () => {

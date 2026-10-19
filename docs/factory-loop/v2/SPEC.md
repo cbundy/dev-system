@@ -226,7 +226,7 @@ the record; the owner may still resume or drop it (11).
 type IssueState = 'queued' | 'designing' | 'building' | 'reviewing' | 'fixing' | 'merge-queue' | 'parked' | 'waiting' | 'closed'
 type StepKind = 'lease' | 'design' | 'build' | 'review' | 'fix' | 'queue' | 'triage'
 type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number }
-type ClosedWhy = 'merged' | 'merged-by-hand' | 'dropped' | 'split' | 'closed-on-github' | 'claim-lost'
+type ClosedWhy = 'merged' | 'merged-by-hand' | 'dropped' | 'split' | 'closed-on-github' | 'claim-lost' | 'done'  // 'done': read-only until its producer ships (#1022)
 
 type IssueRecord = {
   issue: number
