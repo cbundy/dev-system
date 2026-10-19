@@ -108,6 +108,16 @@ test("the breaking fixture re-creates event_log without issue from information_s
   assert.match(sql, /column_name <> 'issue'/);
 });
 
+test("cleanEnv({}) resolves no agentsview and no factory database URL (cbundy/dev-system#1056)", () => {
+  const { spawnSync } = require("node:child_process");
+  const run = (script) => spawnSync("bash", ["-c", `. "${path.join(sc.ROOT, "images", "base", "agentsview.sh")}"; . "${path.join(sc.ROOT, "images", "base", "factory-db.sh")}"; ${script}`], { env: sc.cleanEnv({}), encoding: "utf8" });
+  for (const script of ["agentsview_pg_url", "factory_db_url writer"]) {
+    const r = run(script);
+    assert.equal(r.status, 1, `${script} must return 1, got ${r.status}: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), "", `${script} must print no URL`);
+  }
+});
+
 // -------------------------------------------------------------------------------- the window
 
 const tags = sc.selectTags(sc.mergedTags());

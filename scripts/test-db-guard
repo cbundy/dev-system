@@ -51,6 +51,8 @@ candidates=$(
     case "$a" in
       -h?*) printf '%s\n' "${a#-h}" ;;
       --host=*) printf '%s\n' "${a#--host=}" ;;
+      --dbname=*) hosts_of "${a#--dbname=}" ;;
+      -d?*) hosts_of "${a#-d}" ;;
       *) hosts_of "$a" ;;
     esac
     prev=$a
