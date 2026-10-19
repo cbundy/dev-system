@@ -307,6 +307,7 @@ export function loopEventArgs(entry: LedgerEntry): string[] {
   if (entry.pr !== null) args.push('--pr', String(entry.pr))
   if (entry.head !== null) args.push('--head', entry.head)
   args.push('--note', loopNote(entry))
+  if (entry.loopData !== undefined) args.push('--data', JSON.stringify(entry.loopData))
   return args
 }
 

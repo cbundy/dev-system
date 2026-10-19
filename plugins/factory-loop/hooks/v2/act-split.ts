@@ -113,22 +113,22 @@ async function run(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_
 }
 
 // ok: a command that must exit 0; its stdout, or the failed attempt.
-async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<{ out: string } | { exec: Exec }> {
+export async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<{ out: string } | { exec: Exec }> {
   const ran = await run(ctx, argv, stdin, timeoutMs)
   if (!ran.ok) return { exec: ran.exec }
   return ran.r.exitCode === 0 ? { out: ran.r.stdout } : { exec: commandFailure(argv, ran.r) }
 }
 
-function failed(summary: string, detail: string): Exec {
+export function failed(summary: string, detail: string): Exec {
   return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: detail.slice(0, 2000) }, summary: clip(summary) }
 }
 
-function refused(why: string): Exec {
+export function refused(why: string): Exec {
   return { status: 'failed', summary: clip(`refused: ${why}`), noRetry: true }
 }
 
 // idOf: an issue's REST id, through the reader.
-async function idOf(ctx: ExecCtx, issue: number): Promise<{ id: number } | { exec: Exec }> {
+export async function idOf(ctx: ExecCtx, issue: number): Promise<{ id: number } | { exec: Exec }> {
   const r = await ok(ctx, ARGV.issueReadArgv(issue))
   if ('exec' in r) return r
   const id = issueId(r.out)
@@ -164,7 +164,7 @@ async function childOf(ctx: ExecCtx, a: SplitAction): Promise<{ number: number; 
 }
 
 // linked: a POST link made unless the read of existing links already holds the id.
-async function linked(ctx: ExecCtx, read: string[], id: number, post: string[]): Promise<{ added: boolean } | { exec: Exec }> {
+export async function linked(ctx: ExecCtx, read: string[], id: number, post: string[]): Promise<{ added: boolean } | { exec: Exec }> {
   const held = await ok(ctx, read)
   if ('exec' in held) return held
   const have = ids(held.out)
@@ -224,10 +224,10 @@ const link: Executor = async (ctx, action) => {
 
 export const executors: Partial<Record<ActionKind, Executor>> = { split, link }
 
-function clip(text: string): string {
+export function clip(text: string): string {
   return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 3)}...` : text
 }
 
-function message(err: unknown): string {
+export function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }

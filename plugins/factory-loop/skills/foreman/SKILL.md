@@ -50,3 +50,9 @@ Never claim, label, merge, or run agents for the loop. Never touch other repos' 
 ## Report
 A short update to the owner after each check that found something, and a daily summary. Lead with what needs
 them, link every issue and PR, and say what is blocked and on what.
+
+The daily summary lists the flake bugs the loop filed (rule F1): how many were filed, readied, held by
+`flakeBugReadyCap`, fixed (closed or merged) and are still open, with a link to each open one and the
+test it is for. Take the counts from the daily-summary query in `docs/metrics.md` section 2d (run it with
+`dev-query --factory`, `-v repo=<owner/name> -v since=<24 hours ago>`), and name each held bug as one the
+owner can ready.

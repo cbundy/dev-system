@@ -231,6 +231,10 @@ export const SCHEMAS: Record<string, Shape> = {
       "duration_ms": {"minimum":0,"type":["integer","null"]},
       "ended_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":["null","string"]},
       "error": {"type":["null","string"]},
+      "filed_issue": {"minimum":1,"type":["integer","null"]},
+      "first_flake_at": {"format":"date-time","type":["null","string"]},
+      "flake_test": {"maxLength":512,"type":["null","string"]},
+      "flakes": {"minimum":0,"type":["integer","null"]},
       "from_version": {"minimum":0,"type":["integer","null"]},
       "key": {"minLength":1,"type":"string"},
       "kind": {"enum":["agent-step","task","tell"]},
@@ -240,6 +244,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "status": {"enum":["done","failed","lost","running","timed-out"]},
       "to_version": {"minimum":0,"type":["integer","null"]},
       "wake": {"type":["null","string"]},
+      "window_days": {"minimum":1,"type":["integer","null"]},
     },
   },
   "loop_passes.v1": {

@@ -663,6 +663,34 @@
           "string"
         ]
       },
+      "filed_issue": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "first_flake_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "flake_test": {
+        "maxLength": 512,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "flakes": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "from_version": {
         "minimum": 0,
         "type": [
@@ -718,6 +746,13 @@
         "type": [
           "null",
           "string"
+        ]
+      },
+      "window_days": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
         ]
       }
     },

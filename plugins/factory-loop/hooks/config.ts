@@ -109,6 +109,10 @@ export const DEFAULT_CONFIG: Config = {
   minimumReleaseCadenceMs: 6 * 60 * MIN,
   releaseBranchPrefix: null,
   releaseHoldMs: 10 * MIN,
+  flakeWindowDays: 7,
+  flakeBugMin: 2,
+  flakeBugReadyCap: 2,
+  flakeEpic: null,
   maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
@@ -314,6 +318,15 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'maxTriages' || key === 'windDownMinutes') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number')
+      } else if (key === 'flakeWindowDays' || key === 'flakeBugMin') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 1) out[key] = value
+        else bad(raw, value, 'a whole number of at least 1')
+      } else if (key === 'flakeBugReadyCap') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
+        else bad(raw, value, 'a whole number')
+      } else if (key === 'flakeEpic') {
+        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
+        else bad(raw, value, 'an issue number or null')
       } else if (key === 'maxLives') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 1) out[key] = value
         else bad(raw, value, 'a whole number of at least 1')

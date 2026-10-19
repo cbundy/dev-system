@@ -193,6 +193,11 @@ Owner items (the title counts them until resolved):
   name the issue and why it waits. For a "no release tag of <repo>" line, that repo must cut a
   release, or the owner resumes or drops the issue; for "its read has failed", the owner checks
   access to the repo or the number of the issue or PR the condition names.
+- `flake-bug` (bug, flakes, days, decision; detail: the test and what happened to the bug): the loop saw one
+  test flake `flakes` times in `days` days and filed (or found) the bug. `decision=ready` means the loop
+  labelled it `ready` and will claim it; `decision=held` means `flakeBugReadyCap` flake bugs were already
+  ready or in flight, so it waits for the owner to add `ready`. Lead with `[INFO]` for ready and
+  `[DECISION]` for held: link the bug, name the test, and for a held bug say it needs `ready`.
 - `starved` (since, minutes, period, queue, blocked, roots, why; detail: one line per root blocker, most
   blocking first, then one line per queue issue held by something other than a blocker): the ready queue
   has been unclaimable with nothing in flight for the whole spell, so the factory is idle. Each root line

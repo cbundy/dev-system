@@ -125,7 +125,8 @@ sections before it records the brief.
 
 ## A flake bug
 
-An issue is a flake bug when it carries the `flaky` label or the loop's flake-bug marker. Its
+An issue is a flake bug when it carries the `flaky` label or the loop's flake-bug marker, the hidden
+`<!-- factory-loop:flake:<hash> -->` in its body. Its
 brief's acceptance criteria and test plan must require: (1) reproducing the flake under load
 first, meaning the test or its suite run many times while the machine is busy (for example
 alongside two other full `npm test` runs); (2) fixing the cause (real waits instead of sleeps,

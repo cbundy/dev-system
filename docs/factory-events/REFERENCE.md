@@ -136,10 +136,14 @@ Example:
 | `failed_at` | string | `gate_run` | On a flaky pass row, when the failed run started. Null otherwise. |
 | `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
 | `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
+| `filed_issue` | integer | `loop_entry` | A flake bug tell: the number of the bug the loop filed (or found); null otherwise. |
 | `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `first_flake_at` | string | `loop_entry` | A flake bug tell: when the first flake of the test in the window happened; null otherwise. |
 | `five_hour_pct` | integer | `usage` | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | `usage` | When the five-hour window resets. |
 | `fixes` | integer | `transition` | Loop state, for the record rebuild: entries to fixing so far in this life. |
+| `flake_test` | string | `loop_entry` | A flake bug tell (wake flake-bug): the exact name of the flaky test; null otherwise. |
+| `flakes` | integer | `loop_entry` | A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise. |
 | `flaky` | boolean | `gate_run`, `intervention` | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
@@ -218,6 +222,7 @@ Example:
 | `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
 | `who` | enum | `intervention`, `settings_changed` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
 | `why` | enum | `transition` | closed: why the life ended (done: its work had already merged); null otherwise. |
+| `window_days` | integer | `loop_entry` | A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise. |
 
 ## abandoned
 
@@ -555,6 +560,11 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `duration_ms` | integer | optional | yes | minimum 0 |  | A schema migrate: how long it took, in milliseconds. |
 | `outcome` | enum | optional | yes | one of "migrated", "current", "failed", "timed-out", null |  | A schema migrate: migrated (versions applied), current (nothing to apply), failed or timed-out. |
 | `error` | string | optional | yes |  |  | A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded. |
+| `flake_test` | string | optional | yes | maxLength 512 | yes | A flake bug tell (wake flake-bug): the exact name of the flaky test; null otherwise. |
+| `flakes` | integer | optional | yes | minimum 0 | yes | A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise. |
+| `window_days` | integer | optional | yes | minimum 1 | yes | A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise. |
+| `first_flake_at` | string | optional | yes | format date-time | yes | A flake bug tell: when the first flake of the test in the window happened; null otherwise. |
+| `filed_issue` | integer | optional | yes | minimum 1 | yes | A flake bug tell: the number of the bug the loop filed (or found); null otherwise. |
 
 Example:
 

@@ -46,7 +46,7 @@ Run only commands known to exit. Read source, docs and `--help` output only from
   skip or only, an assertion commented out). One that was is an error finding, unless the brief,
   or the writer's stated reason (in the PR's summary or a fixer's answer), shows the test is
   absolutely not required. You judge that reason.
-- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker), the
+- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker, `<!-- factory-loop:flake:<hash> -->` in its body), the
   reproduction under load and the stress run of consecutive passes are requirements like the
   acceptance criteria. Missing either, or a retry, skip or unexplained timeout raise, is an error
   finding.

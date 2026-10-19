@@ -30,6 +30,7 @@ import {
   parseUsage,
 } from '../hooks/parse'
 import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
+import { FLAKES_SQL } from '../hooks/v2/sources-flakes'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
@@ -1111,13 +1112,13 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const obs = await h.pass(runtime(), stored({ ledger: kept }))
     expect([obs.ledgerSource, obs.state.ledger]).toEqual(['store', kept])
     // (v2 reads the last 90 days of its own device's events beside, for its dual write)
-    expect(h.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(h.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
 
     const o = host()
     const shadow = await o.pass(runtime({ mode: 'observe' }))
     expect(shadow.ledgerSource).toBe('events')
     expect(shadow.state.ledger.map(e => e.key)).toEqual(['heartbeat:derived', 'sweep:derived'])
-    expect(o.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(o.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
   })
 
   test('a lost store is rebuilt from 7 days of events, once: holds older than the facts window survive', async () => {
@@ -1139,7 +1140,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const h = host({ factory, week: [loop, ...RECENT] })
     const obs = await h.pass(runtime(), stored({ ledger: null }))
     expect(obs.ledgerSource).toBe('events')
-    expect(h.calls.filter(c => c.argv[0] === 'dev-query').map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
+    expect(h.calls.filter(c => c.argv[0] === 'dev-query' && c.stdin !== FLAKES_SQL).map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
       ['days=3', true],
       ['days=7', true],
       ['days=90', false],
