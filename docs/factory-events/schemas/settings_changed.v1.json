@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "settings_changed.v1.json",
   "title": "settings_changed",
-  "description": "One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). No producer writes it yet.",
+  "description": "One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). The loop writes it (rule N1): each acting pass compares its settings snapshot with the one it kept and logs one event for every setting that differs.",
   "x-issue": "none",
   "type": "object",
   "additionalProperties": false,

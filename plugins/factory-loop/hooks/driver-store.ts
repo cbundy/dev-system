@@ -10,7 +10,9 @@ import type { StoreIo } from './ledger'
 import type { Runtime } from './observe'
 import { EMPTY_RAIL_MEMORY, actLockPath, decideLock, leaseMsOf } from './rails'
 import type { Notice, RailMemory } from './rails'
+import type { Snapshot } from './settings-snapshot'
 import type { LedgerEntry, Ms, SourceName, State } from './types'
+import { opsFrom } from './v2/rules-settings'
 import { loadV2 } from './v2/store'
 import { orphanedWakes } from './wake'
 import { actIo, acting, killed, mayWrite, message, text, v2StoreIo, wakeIdAt } from './driver-io'
@@ -23,6 +25,8 @@ export const keysOf = (repo: string) => ({
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
   titles: `titles:${repo}`,
+  settings: `settings:${repo}`,
+  settingsOps: `settings-ops:${repo}`,
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
@@ -227,4 +231,30 @@ export function bareState(rt: Runtime, now: Ms): State {
     githubBackoffUntil: null,
     checkout: null,
   }
+}
+
+// keepSettings: after an acting pass, the snapshot it ran with is the one kept (rule N1), only when it differs from the
+// kept one but for its time; the config ops older than the snapshot before it are dropped. The ops are read again, since
+// one may have landed while the pass ran.
+export async function keepSettings(
+  keep: (key: string, value: unknown) => Promise<unknown>,
+  $: EngineInterface,
+  keys: ReturnType<typeof keysOf>,
+  snap: Snapshot,
+  before: Snapshot | null,
+) {
+  const same = before !== null && JSON.stringify({ ...before, at: '' }) === JSON.stringify({ ...snap, at: '' })
+  if (!same) await keep(keys.settings, snap)
+  const stored = await storeGet($, keys.settingsOps)
+  const ops = opsFrom(stored)
+  const floor = Date.parse((before ?? snap).at)
+  const kept = ops.filter(o => o.at >= floor)
+  if (Array.isArray(stored) && kept.length !== stored.length) await keep(keys.settingsOps, kept)
+}
+
+// noteConfigOp: a config op that landed, `{key, by, at}` in the store, for the next pass's rule N1 to name who changed the setting
+export async function noteConfigOp($: EngineInterface, repo: string, key: string, by: 'person' | 'judge', at: Ms) {
+  const k = keysOf(repo).settingsOps
+  const problems: string[] = []
+  await storeSet($, k, [...opsFrom(await storeGet($, k)), { key, by, at }], problems)
 }

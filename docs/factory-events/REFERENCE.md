@@ -1010,7 +1010,7 @@ Example:
 
 ## settings_changed
 
-One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). No producer writes it yet.
+One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). The loop writes it (rule N1): each acting pass compares its settings snapshot with the one it kept and logs one event for every setting that differs.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)

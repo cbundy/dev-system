@@ -1621,8 +1621,10 @@ ORDER BY device, hour;
 
 Settings the loop runs on. A `settings_changed` event records one change of one setting (see
 [REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
-settings snapshot, written by each worker's heartbeat (images/base/README.md, "Settings snapshot"). No producer
-writes `settings_changed` yet, so the first query returns no rows until one does.
+settings snapshot, written by each worker's heartbeat (images/base/README.md, "Settings snapshot"). The loop writes
+`settings_changed` (rule N1): each acting pass compares its settings with the last it kept and logs one event per
+setting that differs (at most 50 per pass), with `who` (person, judge, repo or plugin) and the `layer` of the new value
+(null for a derived value such as `derived.gateConcurrency`). The first pass after a start logs none, only keeps the snapshot.
 
 Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
 devices counts once):

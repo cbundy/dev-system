@@ -138,4 +138,16 @@ export type MainStateEvent = { state: 'main_state'; data: MainStateData }
 export type CommentPostedData = { life: string; seq: number; to_state: 'parked' | 'waiting'; comment_url: string }
 export type CommentPostedEvent = { state: 'comment_posted'; issue: number; data: CommentPostedData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | CommentPostedEvent | MainStateEvent
+// One change in one setting the loop runs on (settings_changed.v1): written in the new format alone, for no
+// issue, by `callum-flow-event --type settings_changed --data <json>`; rules-settings.ts builds it.
+export type SettingsChangedData = {
+  key: string
+  old_value: unknown
+  new_value: unknown
+  layer: 'default' | 'repo' | 'workspace' | 'plugin' | 'env' | 'directive' | null
+  who: 'person' | 'judge' | 'repo' | 'plugin'
+  fact: string
+}
+export type SettingsChangedEvent = { state: 'settings_changed'; data: SettingsChangedData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | CommentPostedEvent | MainStateEvent | SettingsChangedEvent
