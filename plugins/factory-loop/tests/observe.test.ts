@@ -29,7 +29,7 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
-import { NEW_EVENTS_SQL } from '../hooks/v2/sources-facts'
+import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
@@ -888,6 +888,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     week: FactoryEvent[] | null
     // the new store's rows for the facts (NEW_EVENTS_SQL), as dev-query prints them; undefined: exit 78
     newEvents?: Reply
+    // each device's first row in the new store (NEW_FLOORS_SQL); the default has no device and so no floor
+    floors?: Reply
     pipeline: Reply
     queue: Reply
     issues: Record<string, Reply>
@@ -927,6 +929,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
         case 'dev-query':
           // the facts' read of the new store (v2/sources-facts.ts); no factory URL when the test gives none
           if (stdin === NEW_EVENTS_SQL) return world.newEvents ?? { exitCode: 78 }
+          if (stdin === NEW_FLOORS_SQL) return world.floors ?? { stdout: 'device,floor\n' }
           if (!args.includes('days=7')) return { stdout: csv(world.recent) }
           return world.week === null ? { exitCode: 1, stderr: 'psql: connection refused' } : { stdout: csv(world.week) }
         case `${TOOLS}/pipeline-watch.sh`:
@@ -1211,6 +1214,41 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect(failed.state.sources.facts.ok).toBe(true)
       expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
       expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+    })
+
+    test('shadow reads the device floors once per compare, through the factory database, and a failing read fails the compare alone', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const floorCalls = () => calls(h, NEW_FLOORS_SQL).map(c => c.argv.join(' '))
+      const first = await h.pass(withSource('shadow'))
+      expect(floorCalls()).toEqual([`dev-query --factory --csv -v repo=${REPO}`])
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length, floorCalls().length]).toEqual([1, 1, 1])
+      expect(first.state.v2?.factsShadow?.data).toMatchObject({ new_ok: true, scope_floor: null, out_of_scope: 0 })
+      // no compare within the hour: no floor read
+      await h.pass(withSource('shadow'), undefined, NOW + 30 * MIN)
+      expect(floorCalls()).toHaveLength(0)
+      // old and new make no floor call
+      for (const source of ['old', 'new'] as const) {
+        const other = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+        await other.pass(withSource(source))
+        expect(calls(other, NEW_FLOORS_SQL)).toHaveLength(0)
+      }
+      // a floor read that fails: the compare failed on the new side, the pass and its facts stay ok
+      const down = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) }, floors: { exitCode: 1, stderr: 'boom' } })
+      const failed = await down.pass(withSource('shadow'))
+      expect(failed.state.sources.facts.ok).toBe(true)
+      expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
+      expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+      expect(failed.state.v2?.factsShadow?.data.detail).toContain('source new')
+    })
+
+    test('shadow: the events older than their device floor are no difference, and the data names the floor', async () => {
+      const old = ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 30 * MIN })
+      const floor = iso(NOW - 10 * MIN).replace('.000Z', 'Z')
+      const withFloor = host({ recent: [old], newEvents: { stdout: eventsCsv([]) }, floors: { stdout: `device,floor\n${old.device},${floor}\n` } })
+      const o = await withFloor.pass(withSource('shadow'))
+      expect(keys(o)).toEqual(['heartbeat:derived'])
+      expect(o.state.v2?.factsShadow?.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [], new_ok: true, out_of_scope: 1 })
+      expect(o.state.v2?.factsShadow?.data.scope_floor).toBe(floor.replace('Z', '.000Z'))
     })
 
     test('the ledger rebuild of a lost store reads the week from the source eventsSource picks', async () => {

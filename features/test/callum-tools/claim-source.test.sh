@@ -32,7 +32,9 @@ EV="$tmpdir/events"
 
 # stub dev-query: the old store ($S/old) or, with --factory, the new one ($S/new) hold every row as
 # ts|issue|state|device, oldest first. Like the real queries it applies the window (-v since / until, cut
-# at whole seconds) and answers per issue the latest non-claim row and the latest claim row.
+# at whole seconds) and the -v floors device cut (a row of a device older than its floor is left out), and
+# answers per issue the latest non-claim row and the latest claim row. The floor query (the SQL with min(ts))
+# answers each device's first row as device|time. $S/floors-rc makes only that query fail.
 # $S/old-rc and $S/new-rc make a store fail with that exit status. Calls are logged to $S/calls-old / calls-new.
 cat > "$tmpdir/dev-query" <<'STUB'
 #!/bin/sh
@@ -41,18 +43,30 @@ side=old
 [ "$1" != --factory ] || { side=new; shift; }
 echo "dev-query $*" >> "$S/calls-$side"
 [ ! -f "$S/$side-rc" ] || { echo "dev-query: boom" >&2; exit "$(cat "$S/$side-rc")"; }
-since='' until=''
+since='' until='' floors='' sql=''
 while [ $# -gt 0 ]; do
   case "$1" in
-    -v) case "$2" in since=*) since=${2#since=} ;; until=*) until=${2#until=} ;; esac; shift ;;
+    -v) case "$2" in since=*) since=${2#since=} ;; until=*) until=${2#until=} ;; floors=*) floors=${2#floors=} ;; esac; shift ;;
+    -c) sql=$2; shift ;;
   esac
   shift
 done
+case "$sql" in
+  *'min(ts)'*)
+    echo "floor-query" >> "$S/calls-floors"
+    [ ! -f "$S/floors-rc" ] || { echo "dev-query: boom" >&2; exit "$(cat "$S/floors-rc")"; }
+    [ -f "$S/$side" ] || exit 0
+    awk -F'|' '$4 != "" { t = substr($1, 1, 19) "Z"; if (!($4 in m) || t < m[$4]) m[$4] = t } END { for (d in m) print d "|" m[d] }' "$S/$side" | sort
+    exit 0 ;;
+esac
 [ -f "$S/$side" ] || exit 0
-awk -F'|' -v since="$since" -v until="$until" '
+[ -z "$floors" ] || printf '%s' "$floors" | jq -r 'to_entries[] | "\(.key)|\(.value)"' > "$S/floors-applied"
+awk -F'|' -v since="$since" -v until="$until" -v ff="$S/floors-applied" '
+  BEGIN { while ((getline l < ff) > 0) { split(l, p, "|"); fl[p[1]] = p[2] } }
   { t = substr($1, 1, 19) }
   since != "" && t < substr(since, 1, 19) { next }
   until != "" && t >= substr(until, 1, 19) { next }
+  ($4 in fl) && t < substr(fl[$4], 1, 19) { next }
   { cl = ($3 ~ /^(claimed|ready|reclaimed|requeued|merged|closed|abandoned)$/) ? 1 : 0; k = $2 SUBSEP cl; row[k] = $0 }
   END { for (k in row) print row[k] }' "$S/$side"
 STUB
@@ -85,7 +99,8 @@ reset() {
 }
 # drive [VAR=VALUE]...: runs the driver; stdout in $tmpdir/stdout, stderr in $tmpdir/stderr
 drive() {
-  rm -rf "$tmpdir/out" "$S/calls-old" "$S/calls-new"
+  rm -rf "$tmpdir/out" "$S/calls-old" "$S/calls-new" "$S/calls-floors" "$S/floors-applied"
+  : > "$S/floors-applied"
   set +e
   env -i PATH="$toolbin" HOME="$tmpdir" TMP="$tmpdir" SHARE="$SHARE" REAL_EVENT="$REAL_EVENT" OUT="$tmpdir/out" STUB_DIR="$S" \
     CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA CLAUDE_SESSION_ID= CLAUDE_CODE_SESSION_ID= "$@" "$SH" "$tmpdir/drv.sh" > "$tmpdir/stdout" 2> "$tmpdir/stderr"
@@ -277,7 +292,7 @@ expect_stderr_empty "equal"
 ev=$(shadow_events)
 [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "one shadow_read per compare: $ev"
 printf '%s\n' "$ev" | validate || fail "equal: the event breaks shadow_read.v1: $ev"
-printf '%s\n' "$ev" | jq -e '.data == {reader: "claim-events", tool: "callum-flow-claim", compared: 4, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null}' > /dev/null || fail "equal: $ev"
+printf '%s\n' "$ev" | jq -e '.data == {reader: "claim-events", tool: "callum-flow-claim", compared: 4, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null}' > /dev/null || fail "equal: $ev"
 # the same events in both stores and the local logs, not just central ones: nothing differs
 printf '%s\n' "$ev" | jq -e '.repo == "o/r"' > /dev/null || fail "equal: repo"
 
@@ -321,6 +336,75 @@ row new -3000 43 transition devB
 row new -2900 43 finding_handled devB
 drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 1 and .differences == 0' > /dev/null || fail "non-deciding types: $(shadow_events)"
+
+# --- the scope floor: history from before a device's first new-store row ------------------
+# devB's first new row is at -3000: its older old-store rows are out of scope on both sides and no
+# difference; an old row of devB after the floor still is. devC has no new row at all, so its old
+# rows stay and show as differences. devA's own first new row sets scope_floor.
+reset
+row old -5000 80 claimed devB
+row old -4500 80 closed devB
+both -3000 81 claimed claimed devB
+row old -2900 82 claimed devB
+row old -5000 83 claimed devC
+row old -3500 84 claimed devB
+row old -5000 85 claimed ''
+both -3500 86 claimed claimed devA
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+rc_is 0 "floor"
+expect_stderr_empty "floor"
+ev=$(shadow_events)
+printf '%s\n' "$ev" | validate || fail "floor: the event breaks shadow_read.v1: $ev"
+printf '%s\n' "$ev" | jq -e '.data | .differences == 3 and .live_differences == 3 and .diff_keys == ["o/r#82", "o/r#83", "o/r#85"] and .old_ok and .new_ok and (.scope_floor | startswith("20")) and (.scope_floor | length) == 20' > /dev/null || fail "floor: $ev"
+# the decision is old's and keeps the out-of-scope rows
+grep -q '^80 closed closed devB$' "$tmpdir/out/latest" || fail "floor: the decision keeps the old history: $(latest)"
+floor_calls=$(wc -l < "$S/calls-floors")
+[ "$floor_calls" = 1 ] || fail "floor: one floor read per compare: $floor_calls"
+# both central reads carry the floors and cut on them before picking the latest per issue
+for side in old new; do
+  grep -q "floors={" "$S/calls-$side" || fail "floor: the $side read passes the floors: $(cat "$S/calls-$side")"
+  grep -q ":'floors'::jsonb ->> device" "$S/calls-$side" || fail "floor: the $side read cuts on the floors"
+done
+# old and new make no floor read
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old
+[ ! -e "$S/calls-floors" ] || fail "old reads no floors"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new
+[ ! -e "$S/calls-floors" ] || fail "new reads no floors"
+# devB with no new row: its old rows show as differences (the floor is per device)
+grep -v '|devB$' "$S/new" > "$S/new.nob" || :
+mv "$S/new.nob" "$S/new"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+shadow_events | tail -1 | jq -e '.data.diff_keys | index("o/r#80") != null and index("o/r#81") != null' > /dev/null || fail "no floor for devB: $(shadow_events | tail -1)"
+# a row in the floor's own second is kept on both sides (old whole second, new .250)
+reset
+row new -3000 90 claimed devB
+row old -3000 90 claimed devB
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+shadow_events | jq -e '.data | .compared == 1 and .differences == 0 and .live_differences == 0' > /dev/null || fail "floor second: $(shadow_events)"
+# this device's local logs are cut at its floor: a floor in the future leaves the local event out
+reset
+local_event claimed --issue 91
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+shadow_events | jq -e '.data | .compared == 1 and .scope_floor == null' > /dev/null || fail "local, no floor: $(shadow_events)"
+row new 3600 92 claimed devA
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+shadow_events | tail -1 | jq -e '.data | .compared == 0 and .differences == 0 and .scope_floor != null' > /dev/null || fail "local floor: $(shadow_events | tail -1)"
+# a failing floor read: new_ok false, one warning, the decision still old's; exit 78 records nothing
+reset
+both -4000 93 claimed claimed devB
+echo 1 > "$S/floors-rc"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+rc_is 0 "floor read fails"
+[ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "floor read fails: one warning: $(cat "$tmpdir/stderr")"
+grep -q '^93 claimed claimed devB$' "$tmpdir/out/latest" || fail "floor read fails: the decision"
+ev=$(shadow_events)
+printf '%s\n' "$ev" | validate || fail "floor read fails: the event breaks shadow_read.v1: $ev"
+printf '%s\n' "$ev" | jq -e '.data | .new_ok == false and .old_ok == true and .compared == 0 and .differences == 0 and .scope_floor == null' > /dev/null || fail "floor read fails: $ev"
+echo 78 > "$S/floors-rc"
+drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+expect_stderr_empty "floor read exit 78"
+[ "$(shadow_events | wc -l)" = 1 ] || fail "floor read exit 78 records nothing"
+rm "$S/floors-rc"
 
 # more than 50 differing keys: the list is clipped, the count is not
 reset

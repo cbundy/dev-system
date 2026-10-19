@@ -8,7 +8,7 @@ import type { FactoryEvent } from '../hooks/derive'
 import { eventArgv, onceKey } from '../hooks/v2/events'
 import { validateStrict } from '../hooks/v2/event-reader'
 import { planV2 } from '../hooks/v2/plan'
-import { compareFacts, eventsFromNewRows, viewOf } from '../hooks/v2/sources-facts'
+import { compareFacts, eventsFromNewRows, floorsFromRows, viewOf } from '../hooks/v2/sources-facts'
 import { SETTLE_MS } from '../hooks/v2/sources-records'
 import type { Action, LedgerEntry, State } from '../hooks/types'
 import { emptyCache } from '../hooks/observe'
@@ -119,12 +119,20 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
   })
 })
 
+describe('floorsFromRows', () => {
+  test('reads the device and its floor; a row that does not read throws, naming the source new', () => {
+    expect(floorsFromRows([{ device: 'a', floor: '2026-10-17T13:26:02Z' }])).toEqual(new Map([['a', Date.parse('2026-10-17T13:26:02Z')]]))
+    expect(() => floorsFromRows([{ device: 'a', floor: 'x' }])).toThrow('source new')
+    expect(() => floorsFromRows([{ floor: '2026-10-17T13:26:02Z' }])).toThrow('source new')
+  })
+})
+
 describe('compareFacts', () => {
   const base = [reclaimed(), claimed(), intervened('i48/a'), tell('done')]
 
   test('equal sides: nothing differs, and the compare is not empty', () => {
     const c = compareFacts(oldOf(base), newOf(base), DEVICE, NOW, NOW)
-    expect(c.data).toEqual({ reader: 'loop-facts', tool: 'factory-loop', compared: 1 + 3 + 1, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null })
+    expect(c.data).toEqual({ reader: 'loop-facts', tool: 'factory-loop', compared: 1 + 3 + 1, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null, out_of_scope: 0 })
     expect(validateStrict('shadow_read', 1, c.data)).toEqual([])
     expect(c.diffs).toEqual([])
   })
@@ -136,6 +144,59 @@ describe('compareFacts', () => {
     expect(c.data.diff_keys).toEqual(['reclaimed:#48', 'ledger:sweep:derived', 'ledger:tell:parked:48', 'once:intervention 48 park i48/a', 'once:intervention 48 park i48/b'])
     expect(c.diffs[0]?.text).toBe(`#48 reclaimed: old ${secs(T).replace('Z', '.000Z')}, new ${secs(T + MIN).replace('Z', '.000Z')}`)
     expect(c.data.detail).toBe(c.diffs[0]?.text)
+  })
+
+  describe('the scope floor: history from before a device\'s first new-store event', () => {
+    const FLOOR = T - 5 * MIN
+    const before = (o: Opts = {}) => ({ ...o, ts: FLOOR - 60 * MIN })
+    // the loop device's events from before its floor (old store only) and from the floor on (both)
+    const history = [claimed(before()), merged(before({ issue: 49 })), tell('done', before()), reviewed('/a/old.json', before()), intervened('i48/old', before())]
+    const after = [claimed({ ts: FLOOR + MIN, issue: 50 }), merged({ ts: FLOOR + MIN, issue: 51 }), reviewed('/a/new.json', { ts: FLOOR + MIN })]
+    const floors = new Map([[DEVICE, Math.floor(FLOOR / 1000) * 1000]])
+
+    test('without floors the old history is a difference: the loop\'s claim, rollout, tell and once keys', () => {
+      const c = compareFacts(oldOf([...history, ...after]), newOf(after), DEVICE, NOW, NOW)
+      expect(c.data.differences).toBeGreaterThan(0)
+      expect(c.data.diff_keys.some(k => k.startsWith('ledger:claim:48:derived:'))).toBe(true)
+      expect(c.data).toMatchObject({ scope_floor: null, out_of_scope: 0 })
+    })
+
+    test('with the floor both sides agree: 0 differences, 0 live, the dropped events counted', () => {
+      const c = compareFacts(oldOf([...history, ...after]), newOf(after), DEVICE, NOW, NOW, floors)
+      expect(c.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [], out_of_scope: history.length, scope_floor: iso(Math.floor(FLOOR / 1000) * 1000) })
+      expect(validateStrict('shadow_read', 1, c.data)).toEqual([])
+    })
+
+    test('an event in the floor\'s own second stays on both sides (old whole second, new with milliseconds)', () => {
+      const own = claimed({ ts: Math.floor(FLOOR / 1000) * 1000 + 663 })
+      const c = compareFacts(oldOf([own]), newOf([own]), DEVICE, NOW, NOW, floors)
+      expect(c.data).toMatchObject({ compared: 1, differences: 0, out_of_scope: 0 })
+      // and one that the new store lacks still shows
+      expect(compareFacts(oldOf([own]), newOf([]), DEVICE, NOW, NOW, floors).data.differences).toBe(1)
+    })
+
+    test('a device with no floor keeps its old events, and shows as a difference; events with no device stay', () => {
+      const lone = claimed({ ...before(), device: 'lone' })
+      const own = new Map([[DEVICE, Math.floor(FLOOR / 1000) * 1000]])
+      const c = compareFacts(oldOf([lone]), newOf([]), 'lone', NOW, NOW, own)
+      expect(c.data).toMatchObject({ differences: 1, out_of_scope: 0, scope_floor: null })
+      const nodev = reclaimed({ ...before(), device: '' })
+      expect(compareFacts(oldOf([nodev]), newOf([]), DEVICE, NOW, NOW, own).data.diff_keys).toContain('reclaimed:#48')
+    })
+
+    test('another device\'s floor cuts only that device\'s events, a reclaimed of it too', () => {
+      const other = reclaimed({ ts: FLOOR - 60 * MIN, device: 'someone-else', issue: 52 })
+      const mine = reclaimed({ ts: FLOOR - 60 * MIN, issue: 53 })
+      const both = new Map([...floors, ['someone-else', Math.floor(FLOOR / 1000) * 1000]])
+      const c = compareFacts(oldOf([other, mine]), newOf([]), DEVICE, NOW, NOW, both)
+      expect(c.data.diff_keys).toEqual([])
+      expect(c.data.out_of_scope).toBe(2)
+      // only the other device's floor: this device's reclaimed is a difference again
+      const onlyOther = new Map([['someone-else', Math.floor(FLOOR / 1000) * 1000]])
+      const keys = compareFacts(oldOf([other, mine]), newOf([]), DEVICE, NOW, NOW, onlyOther).data.diff_keys
+      expect(keys).toContain('reclaimed:#53')
+      expect(keys).not.toContain('reclaimed:#52')
+    })
   })
 
   test('a difference only inside the settle window shows in live_differences, not in differences', () => {

@@ -697,6 +697,8 @@ One shadow compare made by a reader that has an old/new source switch: the comma
 | `new_ok` | boolean | required | no |  | yes | Whether the central read of the new side succeeded. |
 | `settle_seconds` | integer | required | no | minimum 0 | yes | The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference. |
 | `detail` | string | required | yes | maxLength 500 |  | The first difference as old against new, or null when there is none. |
+| `scope_floor` | string | optional | yes |  |  | The writing device's first time in the new store for the repo (ISO, whole seconds), or null when it has none. The compare leaves out of both sides the events of a device older than its floor, history the new store never held. |
+| `out_of_scope` | integer | optional | yes | minimum 0 |  | How many events the floor left out of both sides, or null when the reader does not count them. |
 
 Example:
 
