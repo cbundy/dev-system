@@ -528,11 +528,37 @@
             "start"
           ]
         },
+        "database": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "ended_at": {
           "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
           "type": [
             "null",
             "string"
+          ]
+        },
+        "error": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "from_version": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "key": {
@@ -544,6 +570,15 @@
             "agent-step",
             "task",
             "tell"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "current",
+            "failed",
+            "migrated",
+            "timed-out",
+            null
           ]
         },
         "rule": {
@@ -561,6 +596,13 @@
             "lost",
             "running",
             "timed-out"
+          ]
+        },
+        "to_version": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "wake": {

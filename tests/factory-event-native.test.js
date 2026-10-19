@@ -127,6 +127,25 @@ test("every schema's own example goes through the CLI and reads back (the produc
   }
 });
 
+test("loop_entry: the startup migrate's fields (dev-system#888) are written and validate; an entry without them still does, with the fields read as null", () => {
+  const example = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "loop_entry.v1.json"), "utf8")).examples[0];
+  const migrate = {
+    kind: "task", key: "task:migrate:9", status: "failed", attempts: 1, class: "free", rule: "dev-init",
+    started_at: "2026-10-19T01:02:03.456Z", ended_at: "2026-10-19T01:02:04.456Z", agent_id: "box", wake: "migrate",
+    database: "fdb", from_version: null, to_version: 9, duration_ms: 1000, outcome: "failed", error: "boom",
+  };
+  for (const data of [migrate, example]) {
+    const { r, lines } = native(["--type", "loop_entry", "--data", JSON.stringify(data)]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const e = JSON.parse(lines[0]);
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, e.data), []);
+    assert.equal(reader.readEvent(e).data.outcome ?? null, data.outcome ?? null);
+    assert.equal(reader.readEvent(e).data.database ?? null, data.database ?? null);
+  }
+  assert.notDeepEqual(reader.validateStrict("loop_entry", 1, { ...migrate, outcome: "exploded" }), []);
+});
+
 test("wind_down: a full event is written with no warning and validates; bad ones fail strictly or exit 2", () => {
   const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "wind_down.v1.json"), "utf8")).examples[0];
   const write = (data) => native(["--type", "wind_down", "--data", JSON.stringify(data)]);

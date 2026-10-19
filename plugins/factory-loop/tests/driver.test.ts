@@ -326,6 +326,12 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     },
     { name: "another orchestrator's heartbeat", beats: `device,age_s\n${OTHER},30\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
     {
+      name: 'a failed startup migrate',
+      files: { '/tmp/dev-factory-db-migrate.json': JSON.stringify({ outcome: 'failed', at: new Date(NOW - 60_000).toISOString(), to_version: 12, error: 'connecting as x_migrator failed' }) },
+      reason: 'schema: migrate to 12 failed: connecting as x_migrator failed',
+      tell: 'TELL schema-behind id=w',
+    },
+    {
       name: 'a checkout of another repo',
       run: argv => (argv.join(' ') === 'git remote get-url origin' ? { stdout: 'git@github.com:cbundy/plant-console.git\n' } : undefined),
       reason: 'repo: the checkout /work is cbundy/plant-console, not cbundy/dev-system',

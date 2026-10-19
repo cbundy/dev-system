@@ -78,7 +78,7 @@ Each role has its own secret, separate from the agentsview secret (`agentsview-p
 |---|---|---|
 | `factory-db-writer-url` | `FACTORY_DB_WRITER_URL` | the writer URL |
 | `factory-db-reader-url` | `FACTORY_DB_READER_URL` | the reader URL |
-| `factory-db-migrator-url` (migrator directory only) | `FACTORY_DB_MIGRATOR_URL` | the migrator URL, for `--migrate` |
+| `factory-db-migrator-url` (migrator directory, or the workspace folder) | `FACTORY_DB_MIGRATOR_URL` (for `factory-db-bootstrap --migrate` only) | the migrator URL, for `--migrate` and for `factory-db-migrate` |
 
 The secrets directory is `DEV_SECRETS_DIR`, `/run/secrets/dev-system` in the image. On Docker it is
 the `dev-system-secrets` volume; on
@@ -149,6 +149,28 @@ included), applies only the migrations not yet recorded and prints the schema ve
 after. Running the full command of step 3 with the admin URL works too.
 
 Then run `dev-doctor` and expect the factory database line OK for both roles.
+
+### Automatic migrate at start-up
+
+`dev-init` runs `factory-db-migrate` after the repo sync and before the factory event push and the
+loop (cbundy/dev-system#888). It uses the migrator secret `factory-db-migrator-url`, looked up in
+two places, and the workspace folder wins:
+
+1. `${DEV_WORKSPACE_SECRETS_DIR:-/run/secrets/dev-system-workspace}/factory-db-migrator-url`
+   (the workspace's own folder);
+2. `${DEV_MIGRATOR_SECRETS_DIR:-/run/secrets/dev-system-migrator}/factory-db-migrator-url`
+   (the template's `migrator_secrets_dir`, mounted read-only; see
+   [coder/dev-system/README.md](../coder/dev-system/README.md)).
+
+With neither file the command does nothing, so a workspace without the migrator behaves as before.
+With one, it takes the database name from the writer URL (its `dbname` parameter, else its path)
+and runs `factory-db-bootstrap --db NAME --migrate` once, bounded by
+`DEV_FACTORY_DB_MIGRATE_TIMEOUT` (120 s). The outcome (`migrated`, `current`, `failed` or
+`timed-out`) goes to `DEV_FACTORY_DB_MIGRATE_STATUS` (`/tmp/dev-factory-db-migrate.json`) and to
+one `loop_entry` event. The factory loop reads the status file: while it says `failed`,
+`timed-out` or a migrate still `running`, the loop stays in observe and tells the owner once
+(`TELL schema-behind`). Run `factory-db-migrate --strict` by hand to retry (it exits 1 on a
+failure); when it succeeds the next pass acts with no other step.
 
 ## Schema compatibility
 

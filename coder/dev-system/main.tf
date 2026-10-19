@@ -311,6 +311,24 @@ variable "coder_login_secrets_dir" {
   }
 }
 
+# The factory database migrator URL (cbundy/dev-system#888): factory-db-migrator-url,
+# which factory-db-migrate uses at start-up to apply the image's migrations. It is the
+# migrator role's secret, so it must not sit under secrets_dir or workspace_secrets_dir,
+# which reach workspaces that must not hold it. Only the templates that run the loop
+# are pushed with it (coder/push.sh).
+variable "migrator_secrets_dir" {
+  default     = ""
+  description = "Directory on the Docker host holding factory-db-migrator-url (owned 1000:1000, mode 0700). Mounted read-only at /run/secrets/dev-system-migrator. Must not be equal to or under secrets_dir or workspace_secrets_dir. Empty turns the feature off."
+  type        = string
+  validation {
+    condition = (var.migrator_secrets_dir == "" || (
+      (var.secrets_dir == "" || (var.migrator_secrets_dir != var.secrets_dir && !startswith(var.migrator_secrets_dir, "${var.secrets_dir}/")))
+      && (var.workspace_secrets_dir == "" || (var.migrator_secrets_dir != var.workspace_secrets_dir && !startswith(var.migrator_secrets_dir, "${var.workspace_secrets_dir}/")))
+    ))
+    error_message = "migrator_secrets_dir must not be secrets_dir or workspace_secrets_dir, or under either: they reach workspaces that must not hold the migrator URL."
+  }
+}
+
 # Private images (e.g. a per-repo image built FROM the base image) need
 # registry credentials for both the digest lookup and the pull. They are read
 # from a Docker config.json on the machine running the provisioner, so the
@@ -989,6 +1007,15 @@ resource "docker_container" "workspace" {
     for_each = local.coder_login_on ? [var.coder_login_secrets_dir] : []
     content {
       container_path = "/run/secrets/dev-system-coder-login"
+      host_path      = volumes.value
+      read_only      = true
+    }
+  }
+  # The factory database migrator URL, for factory-db-migrate: whenever the variable is set.
+  dynamic "volumes" {
+    for_each = var.migrator_secrets_dir != "" ? [var.migrator_secrets_dir] : []
+    content {
+      container_path = "/run/secrets/dev-system-migrator"
       host_path      = volumes.value
       read_only      = true
     }

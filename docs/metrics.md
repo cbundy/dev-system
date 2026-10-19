@@ -1448,3 +1448,31 @@ either source. A key is `n/a` on its own when its columns are missing.
 
 The 10-minute window and the action list are constants in the script; tune them after real use.
 Idle, re-arm and stale wakes overlap (a re-arm is idle, a stale wake can be idle).
+
+### Startup schema migrates
+
+`factory-db-migrate` (run by `dev-init` before the loop starts, cbundy/dev-system#888) writes one
+`loop_entry` per run that found the migrator secret: a `task` with key `task:migrate:<to_version>`,
+wake `migrate`, status `done`, `failed` or `timed-out`, and the payload fields `database`,
+`from_version`, `to_version`, `duration_ms`, `outcome` (`migrated`, `current`, `failed`,
+`timed-out`) and `error`. They are not columns of `factory.event_log`, so the query reads
+`factory.event_store.data`. It answers when each database moved to each version, how long a migrate
+takes, how often it fails, and how long a database sat behind the newest image: the first attempt,
+the first success, the failed attempts and the time between them, per `database` and `to_version`.
+Take the time a migrate takes (p50, p95) in code from `duration_ms`. A join with
+`factory.schema_migrations.applied_at` (a query against that one database) confirms when the version landed. While a status is
+`failed` or `timed-out` the loop stays in observe and tells the owner once (`TELL schema-behind`).
+
+```sql
+SELECT s.data->>'database' AS database, (s.data->>'to_version')::int AS to_version,
+  min(l.ts) AS first_attempt,
+  min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) AS first_done,
+  count(*) FILTER (WHERE s.data->>'outcome' IN ('failed', 'timed-out')) AS failed_attempts,
+  round(extract(epoch FROM
+    min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) - min(l.ts)) / 60) AS minutes_behind
+FROM factory.event_log l
+JOIN factory.event_store s ON s.event_id = l.event_id
+WHERE l.type = 'loop_entry' AND l.kind = 'task' AND s.data->>'wake' = 'migrate'
+GROUP BY 1, 2
+ORDER BY first_attempt DESC;
+```
