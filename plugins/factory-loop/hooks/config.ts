@@ -44,6 +44,7 @@ export const DEFAULT_CONFIG: Config = {
   updateBehindRetries: 3,
   ciStallRecheckMs: 15 * MIN,
   blindNoticeAfterMs: 15 * MIN,
+  starvedNoticeAfterMs: 60 * MIN,
   agentTimeoutMs: { designer: 60 * MIN, implementer: 120 * MIN, adjudicator: 30 * MIN, fixer: 120 * MIN },
   wakeTimeoutMs: { judge: 30 * MIN, task: 360 * MIN, tell: 30 * MIN },
   maxAttempts: {

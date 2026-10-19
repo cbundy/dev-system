@@ -388,7 +388,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -446,6 +446,21 @@ export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
 
 export type V2SourceName = (typeof V2_SOURCES)[number]
 
+// One issue of the blocker tree (sources-blockers.ts): what its single read showed. `blockers` are its
+// open blockers in this repo, `foreign` its open blockers elsewhere (`owner/name#N`, never read);
+// `read` is how its read ended: refused (an untrusted author, exit 3) or failed.
+export type BlockerNode = { open: boolean; labels: string[]; title: string | null; blockers: number[]; foreign: string[]; read: 'ok' | 'refused' | 'failed' }
+
+// The blockers of the queue's blocked issues, read for one starved spell and one 24 h period of it.
+// `nodes` are by issue number; a blocker that has no node was not read (the cap stopped the walk).
+export type BlockerTree = { since: Ms; period: number; readAt: Ms; nodes: Record<number, BlockerNode>; truncated: boolean; error: string | null }
+
+// What S1 says of a pass (rules-claim.ts): `starved` is true when the queue is not empty, nothing is
+// queued or in flight, no owner hold or stopping tier applies and every queue issue was skipped by a claim
+// filter; null when a source failed (unknown). `skips`: each queue issue's filter reason, `blocked`: those
+// skipped for their blockers.
+export type StarvedVerdict = { starved: boolean | null; skips: Map<number, string>; blocked: number[] }
+
 // The State fields v2 adds (2.4), as State.v2: observeV2 reads them every pass; absent in a state
 // built outside a pass.
 export type V2State = {
@@ -490,10 +505,14 @@ export type V2State = {
   workspace?: WorkspaceRead
   // the wind-down request, stop-now file and last status (10.11; wind-down.ts); absent when not read
   windDown?: WindDownRead
+  // when the current starved spell began (the store's `starved:<repo>`); absent: no spell (S1)
+  starvedSince?: Ms
+  // the blocker tree read for the spell and its current period (sources-blockers.ts); absent: not read
+  blockers?: BlockerTree
 }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
-export type V2Ctx = PlanCtx & { v2: V2State }
+export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict }
 
 // --- what the executors may change beside the ledger (v2 SPEC 3.3, 4.6) -------------------------------
 
