@@ -977,13 +977,30 @@ describe('the ci-rerun executor (v2 SPEC 8.5, appendix B)', () => {
   test('one re-run of the run\'s failed jobs: exactly the argv of argv.ts; a failure is a failed attempt with its output', async () => {
     const ok = actWorld()
     expect(await dispatch(ctxOf(ok.env, s, start([], a, NOW).entry), a)).toMatchObject({ status: 'done', summary: `re-ran the failed jobs of run 18342299123 (PR #${PR}, round 1)` })
-    expect(ok.argvs).toEqual([ARGV.runRerunArgv(REPO, '18342299123')])
-    expect(ok.argvs[0]).toEqual(['gh', 'run', 'rerun', '18342299123', '--failed', '--repo', REPO])
+    expect(ok.argvs).toEqual([ARGV.runViewLogFailedArgv(REPO, '18342299123'), ARGV.runRerunArgv(REPO, '18342299123')])
+    expect(ok.argvs[0]).toEqual(['gh', 'run', 'view', '18342299123', '--log-failed', '--repo', REPO])
+    expect(ok.argvs[1]).toEqual(['gh', 'run', 'rerun', '18342299123', '--failed', '--repo', REPO])
+  })
+
+  test('the failed jobs\' log is read first; its names ride the done outcome, null when the read fails, and the re-run goes ahead either way', async () => {
+    const log = 'ci\tnpm test\t2026-10-19T08:00:00.0000000Z FAIL tests/a.test.js\n'
+    const names = async (read: (argv: string[]) => { exitCode?: number; stdout?: string }, throws = false) => {
+      const w = actWorld(argv => (argv[2] === 'view' ? read(argv) : {}))
+      if (throws) w.env.io.run = async argv => (argv[2] === 'view' ? Promise.reject(new Error('timed out')) : { exitCode: 0, stdout: '', stderr: '' })
+      const t = await dispatch(ctxOf(w.env, s, start([], a, NOW).entry), a)
+      return { t, w }
+    }
+    const ok = await names(() => ({ stdout: log }))
+    expect(ok.t).toMatchObject({ status: 'done', outcome: { kind: 'cli', exit: 0, failedJobs: ['ci'], failedTests: ['tests/a.test.js'] } })
+    for (const bad of [await names(() => ({ exitCode: 1 })), await names(() => ({}), true)]) {
+      expect(bad.t).toMatchObject({ status: 'done', outcome: { kind: 'cli', exit: 0, failedJobs: null, failedTests: null }, summary: `re-ran the failed jobs of run 18342299123 (PR #${PR}, round 1)` })
+    }
+    expect((await names(() => ({ exitCode: 1 }))).w.argvs[1]).toEqual(ARGV.runRerunArgv(REPO, '18342299123'))
   })
 
   test('GitHub\'s own refusal is never retried and is named as such; a transient failure is retried', async () => {
     const run = async (stderr: string) => {
-      const w = actWorld(() => ({ exitCode: 1, stderr }))
+      const w = actWorld(argv => (argv[2] === 'view' ? {} : { exitCode: 1, stderr }))
       return dispatch(ctxOf(w.env, s, start([], a, NOW).entry), a)
     }
     const no = await run('run 18342299123 cannot be rerun; its workflow file may be broken')

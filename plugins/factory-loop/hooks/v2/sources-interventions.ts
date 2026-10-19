@@ -68,6 +68,12 @@ export type GateLine = {
   startedMs: number | null
   derived: { iso: string; ms: number } | null
   queuedBehind: number | null
+  // the slot's tree was clean and its head did not move during the run (null: not known, or absent);
+  // hasClean: the line carries the field at all (a companion before it does not)
+  clean: boolean | null
+  hasClean: boolean
+  // the names of the tests a failed run reported (null: none, or absent)
+  failedTests: string[] | null
 }
 
 export type InterventionFacts = {
@@ -214,6 +220,9 @@ export function gateLines(text: string | null, now: Ms): GateLine[] {
       startedMs: Number.isFinite(parsed) ? parsed : null,
       derived: Number.isFinite(start) && Math.abs(start) <= 8.64e15 ? { iso: new Date(start).toISOString(), ms: Math.trunc(start) } : null,
       queuedBehind: num(o.queuedBehind),
+      clean: typeof o.clean === 'boolean' ? o.clean : null,
+      hasClean: 'clean' in o,
+      failedTests: Array.isArray(o.failedTests) && o.failedTests.every(t => typeof t === 'string') ? (o.failedTests as string[]) : null,
     })
   }
   return out

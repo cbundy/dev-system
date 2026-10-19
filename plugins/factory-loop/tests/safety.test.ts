@@ -409,6 +409,7 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['link', ARGV.blockersReadArgv(REPO, 470)],
   ['link', ARGV.blockedByArgv(REPO, 470, 3_100_201)],
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
+  ['ci-rerun', ARGV.runViewLogFailedArgv(REPO, '18342299123')],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470)],

@@ -130,6 +130,9 @@ const events = () => [
   { state: "transition", record: record({ question: "which API, at 100%? ".repeat(100), notes: Array.from({ length: 8 }, (_, i) => `check-${i}, red at 100% `.repeat(50).slice(0, 1000)) }), row: "U4", from: "building", via: "unknown" },
   { state: "reviewed", issue: 571, branch: "issue-571", pr: 621, head: "abc1234", verdict: "changes", round: 2, patch: "3fa2c1d0e9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4", errors: 1, warnings: 2, infos: 0, reviewer: "adjudicator", answer: "/home/x/.claude/factory-loop/o__r/answers/i571_review.json" },
   ev.intervention("loop", "unknown:timeout", "i571/lss1x2k/s7/t", "the build ran past 90 minutes", { issue: 571, life: "ss1x2k", pr: null }),
+  // a ci-rerun's second row, the flake verdict (rules-flakes.ts): it shares the first row's fact
+  { ...ev.intervention("loop", "ci-rerun", "i571/lss1x2k/rerun/r1/18342299123", "ci flake: run 18342299123 passed on its re-run on 0821e6a", { issue: 571, life: "ss1x2k", pr: 621 }), flaky: true, head: HEAD, failed_jobs: ["ci"], failed_tests: ["tests/a.test.js", "a, b"] },
+  { ...ev.intervention("loop", "ci-rerun", "i571/lss1x2k/rerun/r1/18342299123", "not a flake: ci failed again", { issue: 571, life: "ss1x2k", pr: 621 }), flaky: false, head: HEAD, failed_jobs: null, failed_tests: null },
   ev.intervention("person", "op:mode", "op/fleet/mode-act", "mode act", { issue: null, life: null, pr: null }),
   ev.intervention("person", "control-file", "control-file/fleet/lss2", "control.json changed with no op: paused #571", { issue: 571, life: null, pr: null }),
   { state: "reclaimed", issue: 533, branch: "issue-533", pr: null, stage: "queued", checked: "no live step: no slot, no run, no PR activity in 6 h", reason: "reconcile", outcome: "requeue", lives: 2 },
@@ -200,31 +203,37 @@ test("a fixer's verdict is logged as the fixer; every other event as the CLI's d
 // A gate_run is written in the new format alone (rules-gates.ts): the real callum-flow-event takes
 // the argv events.ts builds in native mode, warns of nothing, and writes a line the shared reader and
 // the strict schema accept, with the issue, the payload and no old-format line.
-test("a gate_run goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema", () => {
-  const data = { life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
-  const e = { state: "gate_run", issue: 571, data };
-  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
-  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
-  const argv = ev.eventArgv(e);
-  assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
-  const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+for (const [name, extra] of [
+  ["without the flake fields", {}],
+  ["with a flake", { flaky: true, failed_tests: ["group > fails here", "test isolation: database factory_test_x"], failed_at: "2026-10-15T09:10:00.000Z" }],
+]) {
+  test(`a gate_run ${name} goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema`, () => {
+    const data = { ...extra, life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
+    const e = { state: "gate_run", issue: 571, data };
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+    const argv = ev.eventArgv(e);
+    assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "", `gate_run warned: ${r.stderr}`);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, before + 1, "one line");
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.type, "gate_run");
+    assert.equal(got.issue, 571);
+    assert.deepEqual(got.data, data);
+    assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+    assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
+    // the reader gives the optional flake fields, which an older writer never sends, as null
+    assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { flaky: null, failed_tests: null, failed_at: null, ...data } });
+
   });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stderr, "", `gate_run warned: ${r.stderr}`);
-  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-  assert.equal(lines.length, before + 1, "one line");
-  newSeen.set(file, lines.length);
-  const got = JSON.parse(lines[lines.length - 1]);
-  assert.equal(got.type, "gate_run");
-  assert.equal(got.issue, 571);
-  assert.deepEqual(got.data, data);
-  assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
-  assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
-  // the reader gives the optional flake fields, which an older writer never sends, as null
-  assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { ...data, flaky: null, failed_tests: null, failed_at: null } });
-});
+}
 
 // A comment_posted (rules-entry.ts) is native like gate_run: the real writer takes the argv events.ts
 // builds, with no warning, and the line matches the strict schema and reads back equal.
@@ -281,6 +290,22 @@ test("a shadow_read goes through the real writer's native mode: no issue, no war
     assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
     assert.deepEqual(reader.validateStrict("shadow_read", 1, got.data), []);
   }
+});
+
+test("a flake row goes through the real writer and translator; its once-key differs from the first row's, which is unchanged", () => {
+  const at = { issue: 571, life: "ss1x2k", pr: 621 };
+  const fact = "i571/lss1x2k/rerun/r1/18342299123";
+  const first = ev.intervention("loop", "ci-rerun", fact, "a failed check re-run (r1/18342299123)", at);
+  const flake = { ...ev.intervention("loop", "ci-rerun", fact, "ci flake", at), flaky: true, head: HEAD, failed_jobs: ["ci"], failed_tests: ["a,b"] };
+  assert.ok(!ev.eventNote(first).includes("flaky="), "the first row's note is as it was");
+  const firstLine = log(ev.eventArgv(first));
+  assert.equal(ev.onceKey(firstLine), `intervention 571 ci-rerun ${fact}`);
+  const line = log(ev.eventArgv(flake));
+  assert.equal(ev.onceKey(line), `intervention 571 ci-rerun ${fact} flake`);
+  const lines = fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+  const read = reader.readEvent(JSON.parse(lines[lines.length - 1]));
+  assert.equal(read.type, "intervention");
+  assert.deepEqual([read.data.flaky, read.data.head, read.data.failed_jobs, read.data.failed_tests], [true, HEAD, ["ci"], ["a,b"]]);
 });
 
 test("the operator's hand-recorded rescue, as the playbook writes it, reads as a person intervention", () => {

@@ -161,6 +161,9 @@ repeat an event, so each run counts once per (issue, life, seq, started_at). The
 columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
 rows before a loop with this rule has run.
 
+A pass row can carry `flaky` (and, when true, `failed_tests` and `failed_at` of the fail it followed)
+and a fail row `failed_tests`; section 2d reads them.
+
 Take the p50 and p95 of `wait_ms` and `run_ms` per `day` in code (docs/factory-events/README.md:
 percentiles and medians are not SQL); a count and a mean per day are safe in SQL.
 
@@ -354,8 +357,8 @@ section 9 still counts the fact once; its `failed_jobs` and `failed_tests` name 
 (`intervention.v1.json`). A retried write can repeat a row, so a gate flake counts once per (issue,
 life, seq, started_at) and a CI flake once per (issue, fact). A row with `flaky` false is not a flake.
 The queries read the columns migration 0011 lifted into `factory.event_log` and take
-`-v repo=... -v since=...`; `since` filters on when the flake passed. There are no rows until the
-producers (#1026 and #1027) ship.
+`-v repo=... -v since=...`; `since` filters on when the flake passed. There are no gate rows until
+its producer (#1026) ships; the CI rows come from the loop's flake rule (v2 SPEC 8.5).
 
 The first query gives one row per flake per test. `source` is `gate` or `ci`; `job` is null for the
 gate and the failed jobs for CI; `test` is null when no name was recorded; `failed_at` is the gate's
@@ -1032,7 +1035,8 @@ logged: the loop derives most of them a pass or more after their fact, so a hand
 after the `merged` event. One with no life (an owner op, a hand-recorded rescue, a control-file edit),
 or a life no `transition` names, counts from the first `claimed` to the issue's closing `transition`
 (the first to `closed` since its last claim before the merge; else the merge) plus 30 minutes.
-Fleet-level interventions (no `issue`) attach to no issue.
+Fleet-level interventions (no `issue`) attach to no issue. A `ci-rerun` flake row (2d) shares its
+`fact` with the re-run's first row, so these queries count the pair once.
 
 ```sql
 -- interventions per repo and day, by who and cause; `fleet` counts those that name no issue

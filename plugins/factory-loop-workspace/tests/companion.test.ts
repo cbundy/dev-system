@@ -44,7 +44,7 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
+function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; status?: string | 'fail'; heads?: string[]; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node', ...opts.env })
   const w = {
@@ -96,7 +96,8 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     const [cmd, a1, a2] = e.argv
     if (cmd === 'git' && e.argv.includes('--show-toplevel')) return ran(`${SLOT}\n${GIT_DIR}\n${MAIN}/.git\n`)
     if (cmd === 'git' && e.argv.includes('symbolic-ref')) return ran(`${opts.head ?? 'issue-571'}\n`)
-    if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran('4c2d8aa0000000000000000000000000000000ff\n')
+    if (cmd === 'git' && e.argv.at(-1) === '--porcelain') return opts.status === 'fail' ? ran('', 128) : ran(opts.status ?? '')
+    if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran(`${opts.heads?.shift() ?? '4c2d8aa0000000000000000000000000000000ff'}\n`)
     if (cmd === 'find') return ran('')
     // the stop gate's idle slice while it queues: answers after a short real delay, never at once
     if (cmd === 'sleep') {
@@ -440,16 +441,42 @@ describe('the stop gate', () => {
 
   test('every gate run, the refusal and the pass after it, is a line of the companion\'s log', async ($, on) => {
     // drill 8b (R2 run, #30): factory-gate.json kept only the last run, so the refusal was lost
-    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'not ok 3\n' }] })
+    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'FAIL parses the marker\n  at x\n' }] })
     await $.agent.spawn(spawn(BUILD))
     const stop = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
     expect((await $.classic.SubagentStop(stop)).block).toContain('`npm test` exited 1')
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, command: 'npm test', exitCode: 1 },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true },
     ])
+  })
+
+  for (const [status, clean] of [['', true], [' M a.ts\n', false], ['fail', null]] as const) {
+    test(`the slot's tree is read before the gate: ${JSON.stringify(status)} is clean ${clean}`, async ($, on) => {
+      const w = world(on, { status })
+      await $.agent.spawn(spawn(BUILD))
+      await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+      expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', clean })
+      expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ clean })
+    })
+  }
+
+  test('a head that moved during the gate is never clean', async ($, on) => {
+    const w = world(on, { heads: ['4c2d8aa0000000000000000000000000000000ff', '5d3e9bb0000000000000000000000000000000ee'] })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+    expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', clean: false, head: '5d3e9bb0000000000000000000000000000000ee' })
+  })
+
+  test('a failure names its tests from the full output, past the tail', async ($, on) => {
+    const output = `FAIL first one\n  at x\n${Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')}\n`
+    const w = world(on, { gates: [{ exitCode: 0, output: '' }, { exitCode: 1, output }] })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+    expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-fail', failedTests: ['first one'] })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ failedTests: ['first one'] })
   })
 
   test('a passing gate lets it finish', async ($, on) => {
