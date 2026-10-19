@@ -238,8 +238,13 @@ export function oneLine(text: string): string {
   return line.length <= REASON_MAX ? line : `${line.slice(0, REASON_MAX - 3)}...`
 }
 
+// A ci-rerun's flake row (rules-flakes.ts) also carries flaky, failed_tests, failed_jobs and head; every
+// other intervention's note is as it always was.
 function interventionNote(e: InterventionEvent): string {
-  return [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`].join(' ')
+  const base = [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`]
+  if (e.flaky === undefined) return base.join(' ')
+  const flaky = e.flaky === null ? NONE : e.flaky ? 'yes' : 'no'
+  return [...base, `flaky=${flaky}`, `failed_tests=${list(e.failed_tests ?? [])}`, `failed_jobs=${list(e.failed_jobs ?? [])}`, `head=${str(e.head ?? null)}`].join(' ')
 }
 
 function releaseNote(e: ReleaseEvent): string {
@@ -419,6 +424,10 @@ export function parseIntervention(row: EventRow): InterventionEvent | null {
   const who = INTERVENTION_WHO.find(w => w === t.get('who'))
   const cause = unstr(t.get('cause'))
   if (who === undefined || typeof cause !== 'string' || cause === '') return null
+  const flakyToken = t.get('flaky')
+  const tests = unlist(t.get('failed_tests'))
+  const jobs = unlist(t.get('failed_jobs'))
+  const head = unstr(t.get('head'))
   return {
     state: 'intervention',
     who,
@@ -428,6 +437,10 @@ export function parseIntervention(row: EventRow): InterventionEvent | null {
     life: unstr(t.get('life')) ?? null,
     pr: row.pr,
     fact: unstr(t.get('fact')) ?? '',
+    ...(flakyToken === undefined ? {} : { flaky: flakyToken === 'yes' ? true : flakyToken === 'no' ? false : null }),
+    ...(tests === undefined ? {} : { failed_tests: tests.length === 0 ? null : tests }),
+    ...(jobs === undefined ? {} : { failed_jobs: jobs.length === 0 ? null : jobs }),
+    ...(head === undefined ? {} : { head }),
   }
 }
 
@@ -479,7 +492,8 @@ export function parseEvent(row: EventRow): V2Event | null {
 // its row read back agree. null for any other event: its ledger key alone logs it once.
 export function onceKey(row: EventRow): string | null {
   const t = tokensOf(row.note)
-  const id = row.state === 'intervention' ? [t.get('cause'), t.get('fact')] : row.state === 'reviewed' ? [t.get('answer')] : []
+  // a flake row (rules-flakes.ts) shares its fact with the ci-rerun row it settles, so it has its own key
+  const id = row.state === 'intervention' ? [t.get('cause'), t.get('fact'), ...(t.has('flaky') ? ['flake'] : [])] : row.state === 'reviewed' ? [t.get('answer')] : []
   if (id.length === 0 || id.some(v => v === undefined || v === NONE)) return null
   return [row.state, row.issue ?? NONE, ...id].join(' ')
 }
