@@ -98,6 +98,9 @@ export const S = {
   // dev-restart-self returned (rule H4): the workspace is about to be replaced, so nothing more is
   // started in this module's life, and the next load finds the update done (act.ts updateDone)
   restartAsked: null as Ms | null,
+  // the request R2 wrote for that restart (a wind-down, v2 SPEC 10.11): the loop keeps acting in
+  // wind-down meanwhile and starts nothing; null once it is stale or when no request was written
+  restartRequestAt: null as Ms | null,
   // the store refused the last ledger write (persist); null once one succeeds
   saveProblem: null as string | null,
   // serialized work: ledger saves, the act lock's writes, the hooks that change the ledger, and the

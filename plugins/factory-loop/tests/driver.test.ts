@@ -456,7 +456,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
     const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
-    const h = host(on, { config: ACT, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    const h = host(on, { config: { ...ACT, windDownMinutes: 0 }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(60_000)
@@ -472,6 +472,42 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect((h.last().rails as string[]).join(' ')).toContain('restart: dev-restart-self asked for a new workspace')
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+  })
+
+  test('R2 with wind-down on: the request is written before the restart, then the loop winds down, starts nothing, and forgets a restart that never came (D-15)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const f = factory()
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', startedAt: NOW - MIN, endedAt: null }),
+    ])
+    const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    const names = h.commands().map(s => (s.argv[0] === 'sh' && s.argv[3] === 'wind-down-request' ? 'write-request' : s.argv[0]))
+    expect(names.filter(n => n === 'write-request' || n === 'dev-restart-self')).toEqual(['write-request', 'dev-restart-self'])
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.request`) ?? '{}')).toMatchObject({ trigger: 'restart-self' })
+    expect(h.entry('restart:777')).toMatchObject({ status: 'done' })
+    // the next pass acts in wind-down: the status file is written and nothing starts
+    f.w.queue = [470]
+    h.files.set(`${LOOP_DIR}/control.json`, JSON.stringify({ updateDue: { reason: 'image', at: 777 } }))
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ executed: true })
+    expect(h.titles.at(-1)).toContain('winding down')
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.status.json`) ?? '{}')).toMatchObject({ cap_ms: 10 * MIN, running: { steps: [] } })
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+    // the stop script removed the request: still nothing starts, and no status file is written for it
+    h.files.delete(`${LOOP_DIR}/wind-down.request`)
+    h.files.delete(`${LOOP_DIR}/wind-down.status.json`)
+    await clock.advance(60_000)
+    expect(h.files.has(`${LOOP_DIR}/wind-down.status.json`)).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    // the restart never came: past the cap and the margin the loop plans normally again
+    await clock.advance(16 * MIN)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.events().filter(e => e.some(n => n.includes('wind-down-stale'))).length).toBeGreaterThan(0)
   })
 
   test('the new workspace finds the restart done before it loaded: the update is done (rule H4)', ENGINE_TEST, async ($, on) => {

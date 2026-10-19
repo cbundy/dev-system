@@ -12,7 +12,7 @@ const { available, createDb } = require("./lib/factory-db.js");
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
-// The three SQL blocks of the section, by heading.
+// The four SQL blocks of the section, by heading.
 function blocks() {
   const doc = fs.readFileSync(path.join(__dirname, "..", "docs", "metrics.md"), "utf8");
   const start = doc.indexOf("\n## 2c. Wind-downs");
@@ -20,7 +20,7 @@ function blocks() {
   const rest = doc.slice(start + 1);
   const end = rest.indexOf("\n## ", 1);
   const found = [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
-  assert.equal(found.length, 3, "section 2c holds three SQL blocks");
+  assert.equal(found.length, 4, "section 2c holds four SQL blocks");
   return found;
 }
 
@@ -73,7 +73,7 @@ test("section 2c: per-stop rows, summary and cut-step re-runs", opts, (t) => {
   transition(12, "bb2", "build", "unknown:agent-dead", "T9", "2026-10-17T11:07:00.000Z");
   transition(13, "cc3", "review", "free:load", "U1", "2026-10-17T11:08:00.000Z");
 
-  const [a, b, c] = blocks();
+  const [a, b, c, d] = blocks();
   const run = (sql) => db.query(sub(sql, "o/r", "2026-10-10T00:00:00Z"), "reader");
 
   const rowsA = run(a).split("\n").map((l) => l.split("|"));
@@ -84,6 +84,8 @@ test("section 2c: per-stop rows, summary and cut-step re-runs", opts, (t) => {
   assert.equal(pct(waited, 90), 300000);
 
   assert.equal(run(b), "o/r|4|0.500|1.00");
+  // (d): the same stops, grouped by their trigger
+  assert.equal(run(d), "o/r|restart-self|4|0.500|1.00");
 
   const rowsC = run(c).split("\n").map((l) => l.split("|"));
   const byKey = Object.fromEntries(rowsC.map((r) => [r[2], r]));

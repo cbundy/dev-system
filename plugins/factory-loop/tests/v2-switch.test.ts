@@ -219,7 +219,7 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
   })
 
   test('R2 restarts only on a pass that starts nothing else: a release task due in the same pass holds it, and the task\'s run holds it after (v2 SPEC 14.1)', () => {
-    const cfg = config()
+    const cfg = config({ windDownMinutes: 0 })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
     const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
@@ -230,6 +230,22 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const after = planV2({ ...release, ledger: [...release.ledger, running] }, cfg)
     expect(after.actions.some(a => a.kind === 'restart-self')).toBe(false)
     expect(after.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: waiting on task:release:unknown:2026-10-13T03' })
+  })
+
+  test('R2 with wind-down on does not wait for a queue action or the release task, and names them (v2 SPEC 14.1)', () => {
+    const cfg = config()
+    const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
+    expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2', reason: 'update due', windDownAt: NOW })
+    const merge = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    const task = entry('task:release:unknown:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
+    const busy = planV2({ ...quiet, ledger: [...quiet.ledger, merge, task] }, cfg)
+    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-merge:5, task:release:unknown:2026-10-13T03' })
+    // a pass that starts something still holds it
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
+    const both = planV2(release, cfg)
+    expect(both.actions.some(a => a.kind === 'restart-self')).toBe(false)
+    // off: no request
+    expect(planV2(quiet, config({ windDownMinutes: 0 })).actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: null })
   })
 
   test('the v2 planner with no v2 fields read plans no rule, and says why', () => {

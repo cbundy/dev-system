@@ -249,8 +249,8 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `drop <N>`: close the issue's current claim and stop its agents; the issue stays open, and
   re-adding `ready` brings it back.
 - `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.
-- `update [<reason>]` / `update off`: drain, then restart this workspace for an update once
-  nothing is in flight (D-15); off cancels.
+- `update [<reason>]` / `update off`: wind down (up to windDownMinutes), then restart this workspace
+  for an update (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.
 - `trace on|off`: each pass's timing to a local trace file, for troubleshooting (v2 SPEC 13.12.1).
 - `stop-now`: during a wind-down, stop at once without waiting for what still runs; only when the owner asks.

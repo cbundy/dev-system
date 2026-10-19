@@ -8,6 +8,8 @@ import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { splitNote } from './v2/events'
 import type { Action, ActionKind, LedgerEntry } from './types'
+import { WIND_DOWN_WRITE_SCRIPT } from './v2/wind-down-files'
+import { windDownPaths } from './v2/wind-down'
 
 const SEC = 1000
 const SUMMARY_MAX = 200
@@ -47,7 +49,7 @@ export type Step =
 // stepsOf: the steps one action runs, in order (v2 SPEC 13.6.1), or why it is refused: a loop bug,
 // never retried. Every command runs from the main checkout. gh gets --repo, so a write can
 // only reach the configured repo (v2 SPEC 13.11.5).
-export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[] | string {
+export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDir: string): Step[] | string {
   const n = action.issue === null ? null : String(action.issue)
   const noIssue = `${action.kind} names no issue`
   const unlabel = (issue: string): Step => ({
@@ -75,11 +77,20 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
         ? noIssue
         : [unlabel(n), { event: 'abandoned', fields: { issue: action.issue, note: splitNote(action.created, action.reasons ?? null, action.childWhys ?? null) } }]
     case 'restart-self':
-      // only once the drain for an update is complete (rule H4, D-15), or v2's restart without a
-      // drain (rule R2, v2 SPEC 14.1)
-      return action.rule === 'H4' || action.rule === 'R2'
-        ? [{ argv: ['dev-restart-self'], timeoutMs: CLI_TIMEOUT_MS['restart-self'] }]
-        : `restart-self comes only from rule H4 or R2, not ${action.rule}`
+      // only once the drain for an update is complete (rule H4, D-15), or v2's restart after a
+      // capped wind-down (rule R2, v2 SPEC 14.1): R2 with wind-down on first writes the request,
+      // in the form the status file's times take (wind-down.sh compares them as text)
+      if (action.rule !== 'H4' && action.rule !== 'R2') return `restart-self comes only from rule H4 or R2, not ${action.rule}`
+      return [
+        ...(action.rule === 'R2' && action.windDownAt != null
+          ? [{
+              argv: ['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', windDownPaths(loopDir).request],
+              timeoutMs: 10_000,
+              stdin: `${JSON.stringify({ requested_at: new Date(action.windDownAt).toISOString(), trigger: 'restart-self' })}\n`,
+            }]
+          : []),
+        { argv: ['dev-restart-self'], timeoutMs: CLI_TIMEOUT_MS['restart-self'] },
+      ]
     default:
       return `${action.kind} runs no command`
   }
@@ -187,11 +198,28 @@ function refused(why: string): Exec {
 function command(kind: CliKind): Executor {
   return async (ctx, action) => {
     if (action.kind !== kind) return refused(`the ${kind} executor got a ${action.kind} action`)
-    const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel)
+    const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel, ctx.rt.loopDir)
     if (typeof steps === 'string') return refused(steps)
     const ran = await runSteps(ctx, steps)
     return 'failed' in ran ? ran.failed : finish(action, ran.results)
   }
+}
+
+// restartSelf: the restart's steps; when dev-restart-self itself fails after the request was
+// written, the request comes off (best effort), so a restart that never came does not wind the
+// loop down.
+const restartSelf: Executor = async (ctx, action) => {
+  if (action.kind !== 'restart-self') return refused(`the restart-self executor got a ${action.kind} action`)
+  const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel, ctx.rt.loopDir)
+  if (typeof steps === 'string') return refused(steps)
+  // the request write (if any) is every step but the last
+  const written = steps.slice(0, -1)
+  const wrote = await runSteps(ctx, written)
+  if ('failed' in wrote) return wrote.failed
+  const ran = await runSteps(ctx, steps.slice(-1))
+  if (!('failed' in ran)) return finish(action, [...wrote.results, ...ran.results])
+  if (written.length > 0) await ctx.cmd(['rm', '-f', '--', windDownPaths(ctx.rt.loopDir).request], { timeoutMs: 10_000 }).catch(() => undefined)
+  return ran.failed
 }
 
 // ownAgent: the ledger holds this agent id on an entry still running, so the loop spawned it and
@@ -236,7 +264,7 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   'close-issue': command('close-issue'),
   'release-parent': command('release-parent'),
   'milestone-later': command('milestone-later'),
-  'restart-self': command('restart-self'),
+  'restart-self': restartSelf,
   'stop-agent': stopAgent,
   title,
 }

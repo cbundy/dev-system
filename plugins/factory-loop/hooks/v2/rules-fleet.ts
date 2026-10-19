@@ -2,9 +2,10 @@
 // period, and once a record closed, so the claim of a merged or closed issue ends at once), O3 wakes
 // the judge for the release task, R2 restarts for an update, and what used up its attempts with no
 // issue to hold is told to the owner. They keep v1's meaning and keys (v2 SPEC 13.5.3 and 14.1: H2, O3, R2), with
-// v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
-// with nothing else to start (section 15, "Restart without a drain"); a running step it cuts
-// re-runs free (row U1). Pure.
+// v1's drain gone: R2 restarts through a capped wind-down (section 15, "Restart after a capped
+// wind-down") and waits only for a pass with nothing else to start; with windDownMinutes 0 it also
+// waits for a queue action or the release task to finish. A running step it cuts re-runs free
+// (row U1). Pure.
 import { gate, releaseDue, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
@@ -55,7 +56,7 @@ export function fleetTells(ctx: PlanCtx): void {
   }
 }
 
-// The work R2 waits for: a merge-queue action or the release task, running.
+// The work R2 waits for with wind-down off, and names as unwaited-for with it on: a merge-queue action or the release task, running.
 const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || (e.kind === 'task' && e.wake === 'release'))
 
 // restartOf (R2): the restart for an update that is due, last in the pass, once no queue action or
@@ -71,8 +72,11 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
     skip(ctx, 'R2', null, 'wind-down')
     return null
   }
+  // with wind-down on, the restart cuts queue and release work (the stop script and the loop's own
+  // wind-down finish it up to the cap); with it off, it waits as before
+  const windDown = ctx.config.windDownMinutes > 0
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
-  if (holding.length > 0) {
+  if (!windDown && holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
     return null
   }
@@ -90,7 +94,8 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
     return null
   }
   if (g !== 'go') return null
-  return { kind: 'restart-self', key, class: 'free', rule: 'R2', reason: 'update due', issue: null, why: due.reason, at: due.at }
+  const reason = holding.length > 0 ? `update due; the wind-down finishes ${holding.join(', ')}` : 'update due'
+  return { kind: 'restart-self', key, class: 'free', rule: 'R2', reason, issue: null, why: due.reason, at: due.at, windDownAt: windDown ? ctx.state.now : null }
 }
 
 // restartTells: an exhausted restart, told once (rule R2), before the plan's admission.

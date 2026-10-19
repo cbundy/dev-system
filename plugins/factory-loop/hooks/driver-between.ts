@@ -109,9 +109,9 @@ export function bounded($: EngineInterface, work: (claim: Claim) => Promise<OpAn
 }
 
 // actsNow: the loop may start something (a reminder): act mode, no kill switch, and no restart
-// asked for.
+// asked for without a wind-down request (with one the loop keeps acting in wind-down).
 export async function actsNow($: EngineInterface, rt: Runtime): Promise<boolean> {
-  return rt.mode === 'act' && S.restartAsked === null && !(await killed($))
+  return rt.mode === 'act' && (S.restartAsked === null || S.restartRequestAt !== null) && !(await killed($))
 }
 
 // turn.start: a wake's own turn takes its turn id.

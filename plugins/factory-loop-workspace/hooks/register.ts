@@ -27,6 +27,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
 import { blockText, gateLine, gateRecord, oneLine, runGates, waitedOut } from './gate'
 import type { Ran } from './gate'
+import { recordWindow } from './window'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
 import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marker'
@@ -143,14 +144,19 @@ async function handshake($: EngineInterface): Promise<void> {
   await writeFile($, path, `${JSON.stringify({ v: 1, session, process: proc, version, at: new Date(now).toISOString() })}\n`)
 }
 
+// beatOnce: the handshake, and the window beside it, each caught on its own.
+async function beatOnce($: EngineInterface): Promise<void> {
+  await Promise.all([handshake($).catch(() => undefined), recordWindow($).catch(() => undefined)])
+}
+
 let beat: { cancel: () => void } | null = null
 
 // beating: the handshake now and again every minute, so its `at` stays fresh, a /clear's new
 // session gets its own file, and a pruned or deleted one comes back.
 async function beating($: EngineInterface): Promise<void> {
   beat?.cancel()
-  beat = $.clock.every(HANDSHAKE_EVERY_MS, () => void handshake($).catch(() => undefined))
-  await handshake($).catch(() => undefined)
+  beat = $.clock.every(HANDSHAKE_EVERY_MS, () => void beatOnce($))
+  await beatOnce($)
 }
 
 async function pruneHandshakes($: EngineInterface): Promise<void> {
