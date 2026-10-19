@@ -208,13 +208,18 @@ test("the v2 designer has a section on waiting between its question and split se
 
 test("the v2 designer makes every new decision observable, and the reviewer holds the change to it", () => {
   const raw = read("plugins/factory-loop/agents/designer-v2.md");
-  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Sequencing/);
+  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Compatibility\n[^\n]*\n\n## Sequencing/);
   const body = raw.replace(/\s+/g, " ");
   assert.match(body, /prefer optional fields on an existing event type/);
   assert.match(body, /add its query to `docs\/metrics\.md`/);
   assert.match(body, /ships whole in its first release/);
   const review = read("plugins/factory-loop/agents/reviewer.md").replace(/\s+/g, " ");
   assert.match(review, /`## Observability` section is a requirement like its acceptance criteria/);
+  assert.match(body, /none - no schema, event or reader change/);
+  assert.match(body, /10-minor-version window/);
+  assert.match(body, /The answer script checks the heading, the Rollout and the Observability and the Compatibility sections/);
+  assert.match(review, /`## Compatibility` section is a requirement like its acceptance criteria/);
+  assert.match(review, /drops, renames or retypes anything an old version reads/);
 });
 
 test("the v2 designer explores with its own reads: no Agent tool, no explorer, a checklist and an Exploration line (#851)", () => {

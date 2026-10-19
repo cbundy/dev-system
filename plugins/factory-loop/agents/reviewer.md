@@ -56,6 +56,11 @@ Run only commands known to exit. Read source, docs and `--help` output only from
 - The brief's `## Observability` section is a requirement like its acceptance criteria: a decision
   it names that the change does not record, or a query it promised that `docs/metrics.md` lacks,
   is an error finding.
+- The brief's `## Compatibility` section is a requirement like its acceptance criteria: a change
+  that drops, renames or retypes anything an old version reads (a table, column, view column,
+  event field, or a reader's expected field) is an error finding; so is a change that touches a
+  migration, an event schema, the event writer or a factory-database reader while its brief's
+  section says "none", or that lacks the test the section names.
 - Do not repeat yourself: what the fixer fixed in an earlier round is done, and a finding it
   declined comes back only when you show its reason wrong.
 

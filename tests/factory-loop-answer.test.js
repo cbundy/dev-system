@@ -502,10 +502,11 @@ test("with no gh on PATH the wait is recorded with the unchecked line", () => {
 });
 
 test("a brief, a question, a split and any other contract make no gh call", () => {
-  const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n";
+  const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n\n## Compatibility\n\nnone - no schema, event or reader change\n";
   for (const answer of [{ kind: "brief", brief }, { kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }]) {
     const r = answerWait(answer);
     assert.deepEqual(r.calls, [], JSON.stringify(answer));
+    if (answer.kind === "brief") assert.equal(r.code, 0, "the brief fixture stays a valid brief");
   }
   fs.rmSync(ghLog, { force: true });
   const g = issue(gate());

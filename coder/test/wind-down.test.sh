@@ -130,11 +130,17 @@ common_checks() {
   done
 }
 
-# gone <loop dir>: the request, status and stop-now files are removed.
-gone() {
-  for f in wind-down.request wind-down.status.json wind-down.stop-now; do
-    [ ! -e "$1/$f" ] || fail "$case_name: $1/$f was left behind"
-  done
+# kept <loop dir>: the request and status stay (the loop starts nothing until the container is
+# gone), and the one-shot stop-now file is removed.
+kept() {
+  [ -f "$1/wind-down.request" ] || fail "$case_name: $1/wind-down.request was removed"
+  [ ! -e "$1/wind-down.stop-now" ] || fail "$case_name: $1/wind-down.stop-now was left behind"
+}
+
+# nothing_written <loop dir>: an off outcome writes no request.
+nothing_written() {
+  [ ! -e "$1/wind-down.request" ] || fail "$case_name: $1/wind-down.request was written"
+  [ ! -e "$1/wind-down.stop-now" ] || fail "$case_name: $1/wind-down.stop-now was left behind"
 }
 
 expect() { # expect <n> <jq filter> <want>
@@ -159,7 +165,7 @@ expect 1 .cut_at_stop 0
 expect 1 '.cut_at_stop_keys | length' 0
 expect 1 .cap_ms 60000
 [ "$elapsed" -lt 5 ] || fail "$case_name: took ${elapsed}s"
-gone "$L"
+kept "$L"
 [ "$(sed -n 1p "$EVENTS" | cut -f1)" = cbundy/demo ] || fail "$case_name: wrong repo: $(cat "$EVENTS")"
 
 # 2. Cap: the template's cap is the smaller one.
@@ -175,7 +181,10 @@ expect 1 .cut_at_stop 2
 expect 1 '.cut_at_stop_keys | length' 2
 expect 1 .running_at_request 2
 [ "$elapsed" -le 5 ] || fail "$case_name: took ${elapsed}s"
-gone "$L"
+kept "$L"
+[ "$(jq -r .requested_at "$L/wind-down.request")" = "$(ev 1 .requested_at)" ] || fail "$case_name: the request changed"
+[ "$(jq -r .trigger "$L/wind-down.request")" = coder-stop ] || fail "$case_name: the request trigger changed"
+[ -f "$L/wind-down.status.json" ] || fail "$case_name: the status was removed"
 
 # 3. Cap: the status cap is the smaller one.
 case_name=cap-status
@@ -188,7 +197,7 @@ expect 1 .outcome cap
 expect 1 .cap_ms 2000
 expect 1 .cut_at_stop 2
 [ "$elapsed" -le 5 ] || fail "$case_name: took ${elapsed}s"
-gone "$L"
+kept "$L"
 
 # 4. Stop-now: the file appears mid-wait; the script ends within a poll or so.
 case_name=stop-now
@@ -200,7 +209,7 @@ common_checks 1
 expect 1 .outcome now
 expect 1 .cut_at_stop 2
 [ "$elapsed" -le 3 ] || fail "$case_name: took ${elapsed}s"
-gone "$L"
+kept "$L"
 
 # 5. Off: the repo layer, the user layer, and the OFF file.
 case_name=off-repo
@@ -215,7 +224,7 @@ expect 1 '.stopped_at == .requested_at' true
 expect 1 .running_at_request 0
 expect 1 .cut_at_stop 0
 expect 1 '.running_at_request_keys | length' 0
-gone "$L"
+nothing_written "$L"
 
 case_name=off-user
 setup off-user
@@ -223,7 +232,7 @@ echo '{"windDownMinutes": 0}' > "$CFG/factory-loop/config.json"
 run_script WIND_DOWN_CAP_MS=60000
 common_checks 1
 expect 1 .outcome off
-gone "$L"
+nothing_written "$L"
 
 case_name=repo-layer-beats-user
 setup repo-layer-beats-user
@@ -240,7 +249,7 @@ setup off-file
 run_script WIND_DOWN_CAP_MS=60000
 common_checks 1
 expect 1 .outcome off
-gone "$L"
+nothing_written "$L"
 
 # 6. No loop dir: no event, no files, the heartbeat still runs.
 case_name=no-loop
@@ -262,7 +271,7 @@ common_checks 1
 expect 1 .trigger restart-self
 expect 1 .requested_at "$at"
 expect 1 .outcome idle
-gone "$L"
+kept "$L"
 
 case_name=restart-self-stale
 setup restart-self-stale
@@ -281,7 +290,7 @@ expect 1 .outcome idle
 expect 1 .running_at_request 0
 expect 1 .cut_at_stop 0
 [ "$elapsed" -le 4 ] || fail "$case_name: took ${elapsed}s"
-gone "$L"
+kept "$L"
 
 # 9. A stale status (another requested_at) says idle and is ignored.
 case_name=stale-status
@@ -290,7 +299,7 @@ status "$L" "2020-01-01T00:00:00.000Z" true false 60000 "[]"
 run_script WIND_DOWN_CAP_MS=1500 WIND_DOWN_FIRST_STATUS_S=60
 common_checks 1
 expect 1 .outcome cap
-gone "$L"
+kept "$L"
 
 # 10. Two loops wind down together, each with its own event.
 case_name=two-loops
@@ -303,10 +312,10 @@ run_script WIND_DOWN_CAP_MS=60000
 end_loop
 common_checks 2
 cut -f1 "$EVENTS" | sort | tr '\n' ' ' | grep -qx 'cbundy/demo cbundy/other ' || fail "$case_name: repos: $(cut -f1 "$EVENTS")"
-gone "$L"
-gone "$L2"
+kept "$L"
+kept "$L2"
 
-# 11. callum-flow-event missing: a warning, exit 0, files still removed.
+# 11. callum-flow-event missing: a warning, exit 0.
 case_name=no-event-cli
 setup no-event-cli
 : > "$CFG/factory-loop/OFF"
@@ -327,5 +336,59 @@ run_script WIND_DOWN_CAP_MS=60000 CALLUM_EVENTS_DIR="$events_dir" DEV_SYSTEM_SHA
 [ "$rc" -eq 0 ] || fail "$case_name: exit status $rc"
 case "$err" in *warning*) fail "$case_name: warning on stderr: $err" ;; esac
 grep -rq '"wind_down"' "$events_dir" || fail "$case_name: no wind_down event written under $events_dir"
+
+# 13. The start script clears all three files in every loop dir, and says which request it cleared.
+START=$ROOT/coder/dev-system/wind-down-start.sh
+[ -f "$START" ] || fail "$START is missing"
+run_start() { # run_start: runs the start script; leaves $rc and $out
+  rc=0
+  out=$(env CLAUDE_CONFIG_DIR="$CFG" sh "$START" 2>&1) || rc=$?
+}
+
+case_name=clears_on_start
+setup clears_on_start
+L2=$CFG/factory-loop/cbundy__other
+L3=$CFG/factory-loop/not-a-loop-dir__
+mkdir -p "$L2" "$L3"
+for d in "$L" "$L2" "$L3"; do
+  echo '{"requested_at": "2026-10-18T10:00:00.000Z", "trigger": "coder-stop"}' > "$d/wind-down.request"
+  : > "$d/wind-down.status.json"
+  : > "$d/wind-down.stop-now"
+done
+mkdir -p "$CFG/factory-loop/-bad__dir"
+: > "$CFG/factory-loop/-bad__dir/wind-down.request"
+run_start
+[ "$rc" -eq 0 ] || fail "$case_name: exit status $rc: $out"
+for d in "$L" "$L2"; do
+  for f in wind-down.request wind-down.status.json wind-down.stop-now; do
+    [ ! -e "$d/$f" ] || fail "$case_name: $d/$f was left behind"
+  done
+done
+[ -e "$L3/wind-down.request" ] || fail "$case_name: removed from a dir failing the name filter"
+[ -e "$CFG/factory-loop/-bad__dir/wind-down.request" ] || fail "$case_name: removed from a dir failing the name filter"
+[ "$(printf '%s\n' "$out" | grep -c 'requested_at 2026-10-18T10:00:00.000Z, trigger coder-stop')" -eq 2 ] || fail "$case_name: wanted one line per request: $out"
+printf '%s\n' "$out" | grep -q "$L2" || fail "$case_name: no line names $L2: $out"
+
+case_name=startnoloop
+setup startnoloop
+rmdir "$L"
+run_start
+[ "$rc" -eq 0 ] || fail "$case_name: exit status $rc: $out"
+[ -z "$out" ] || fail "$case_name: printed: $out"
+rm -rf "$CFG/factory-loop"
+run_start
+[ "$rc" -eq 0 ] || fail "$case_name: no factory-loop dir: exit status $rc: $out"
+
+case_name=startunwritable
+setup startunwritable
+echo '{"requested_at": "2026-10-18T10:00:00.000Z", "trigger": "coder-stop"}' > "$L/wind-down.request"
+chmod 555 "$L"
+run_start
+chmod 755 "$L"
+[ "$rc" -eq 0 ] || fail "$case_name: exit status $rc: $out"
+
+# Terraform inlines the start script into the startup script: no template sequences, no exit.
+if grep -Eq '\$\{|%\{' "$START"; then fail "wind-down-start.sh holds a Terraform template sequence"; fi
+if grep -Eq '(^|[^A-Za-z_])exit([^A-Za-z_]|$)' "$START"; then fail "wind-down-start.sh uses exit"; fi
 
 echo "wind-down tests passed"

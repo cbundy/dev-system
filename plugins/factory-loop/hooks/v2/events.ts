@@ -123,6 +123,9 @@ export type ShadowReadData = {
   new_ok: boolean
   settle_seconds: number
   detail: string | null
+  // the writing device's first new-store time (ISO) or null, and how many events that floor left out
+  scope_floor?: string | null
+  out_of_scope?: number | null
 }
 export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
 

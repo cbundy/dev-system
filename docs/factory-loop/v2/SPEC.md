@@ -342,7 +342,11 @@ type IssueRecord = {
   `facts-shadow:<time>`; `diff_keys` are `reclaimed:#N`, `ledger:<key>` and `once:<key>`); a failing new read
   never fails the pass and is a compare with `new_ok` false. A compare with differences tells the owner once
   per distinct set of keys (`tell(facts-shadow)`, key `tell:facts-shadow:<keys>`, with the first difference
-  and the way back).
+  and the way back). Before comparing, the shadow reads each device's first new-store time for the repo
+  (`NEW_FLOORS_SQL`, one `dev-query --factory` read, only on the compare pass) and drops from both sides the events of
+  a device older than its floor: the production new store holds only dual-written events, so the old window reaches
+  back before its history begins. Events of a device with no new row, and events with no device, stay. The event
+  carries `scope_floor` and `out_of_scope`; a failing floor read is a compare with `new_ok` false.
 
 ### 3.4 Labels
 
@@ -1423,6 +1427,11 @@ The designer is a reader: it writes nothing to GitHub.
   answers, or "none - no new decision". Optional fields on an existing event type come before a
   new type; a new type ships schema, view fields and migration in one release before any
   producer. The reviewer holds the change to the section like an acceptance criterion.
+- **Compatible by default.** A brief has a `## Compatibility` section, and the contract refuses
+  one without it: what changes in a migration, event schema, the event writer or a
+  factory-database reader and why every loop of the last 10 minor versions keeps working (only
+  additive changes), and the test that proves it, or "none - no schema, event or reader change".
+  The reviewer holds the change to the section like an acceptance criterion.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
@@ -2015,8 +2024,12 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   passing (`idle`, 0 running).
 - **The event.** One `wind_down` event per loop dir, with `running_at_request` from the first matching
   status and `cut_at_stop` from the last (for `cap` and `now`; 0 otherwise).
-- **Cleanup.** It removes the stop-now, request and status files, so the next start does not wind
-  down again, then gives the heartbeat its `--final` beat. It always exits 0.
+- **Cleanup.** It removes only the stop-now file (one shot). The request and status files stay,
+  so the loop starts nothing in the seconds until Coder stops the container; the workspace start
+  (`wind-down-start.sh`, run from the startup script before the loop) removes all three, so the
+  next start does not wind down again. A request left by a stop that did not stop the container
+  ends by the stale rule after the cap plus 5 minutes. The script then gives the heartbeat its
+  `--final` beat. It always exits 0.
 
 ## 11. Releases and parking
 
@@ -3074,7 +3087,7 @@ Two more things hold act mode back for a pass: a ledger the store could not load
 `dev-restart-self` that already returned (rule `R2`), which holds it for the rest of the
 module's life when `windDownMinutes` is 0. With wind-down on, R2 wrote a request first and the
 session keeps acting in wind-down instead: it reads answers and finishes work, starts nothing, and
-remembers the request in case the stop script removes it; once that request is stale the restart
+remembers the request in case the request file is lost; once that request is stale the restart
 never came, and the session plans normally. The rails remember each blocking spell in the store, so a reload does not tell
 it again.
 
