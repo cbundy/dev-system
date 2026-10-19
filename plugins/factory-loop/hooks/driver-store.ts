@@ -18,6 +18,7 @@ import { S, live, liveV2 } from './driver-state'
 
 export const keysOf = (repo: string) => ({
   backoff: `backoff:${repo}`,
+  starved: `starved:${repo}`,
   known: `queue-known:${repo}`,
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
@@ -132,6 +133,14 @@ export async function storeSet($: EngineInterface, key: string, value: unknown, 
     await $.store.set(key, value)
   } catch (err) {
     problems.push(`store: ${key} not saved: ${message(err).slice(0, 200)}`)
+  }
+}
+
+export async function storeDelete($: EngineInterface, key: string, problems: string[]) {
+  try {
+    await $.store.delete(key)
+  } catch (err) {
+    problems.push(`store: ${key} not removed: ${message(err).slice(0, 200)}`)
   }
 }
 

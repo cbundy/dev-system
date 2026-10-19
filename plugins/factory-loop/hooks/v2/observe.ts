@@ -17,6 +17,7 @@ import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
 import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
 import type { ReleaseCache } from './sources-release'
+import { readBlockers } from './sources-blockers'
 import { readWaits } from './sources-waits'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
@@ -30,7 +31,7 @@ import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
 import { previousOf, requestOf } from './wind-down-files'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
-import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead, WaitUnread } from './types'
+import type { BlockerTree, HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead, WaitUnread } from './types'
 
 const DAY = 86_400_000
 // a closed record goes this long after it closed, as ledger entries do (3.3, v2 SPEC 13.7.1)
@@ -87,6 +88,8 @@ export type V2Cache = {
   waits: Record<string, WaitRead>
   // the conditions that cannot be read (sources-waits.ts)
   waitsUnread: Record<string, WaitUnread>
+  // the blockers of a starved queue, read for one spell and period (sources-blockers.ts)
+  blockers: BlockerTree | null
   // the release bump PRs the merge queue holds for (sources-release.ts)
   release: ReleaseCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
@@ -94,7 +97,7 @@ export type V2Cache = {
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, release: EMPTY_RELEASE, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -298,6 +301,8 @@ export type ObserveV2Input = {
   // a GitHub backoff holds this pass's reads; limited: a rate limit met this pass ends them
   backoff: boolean
   limited: () => boolean
+  // when the current starved spell began (the store's); none or null: no spell (S1)
+  starvedSince?: Ms | null
   readers?: V2Readers
 }
 
@@ -375,6 +380,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.waits = waited.waits
   cache.waitsUnread = waited.unread
 
+  // the blockers of a starved queue (sources-blockers.ts): only while a spell is old enough to tell
+  const starvedSince = input.starvedSince ?? null
+  cache.blockers = await readBlockers(ctx, cache.blockers, starvedSince === null ? null : { since: starvedSince, afterMs: rt.config.starvedNoticeAfterMs }, blocked())
+
   // the release bump PRs the merge queue holds for (sources-release.ts)
   const release = await readReleasePrs(ctx, cache.release)
   cache.release = release.read
@@ -440,6 +449,8 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     prs: prs.read,
     waits: cache.waits,
     waitsUnread: cache.waitsUnread,
+    ...(starvedSince === null ? {} : { starvedSince }),
+    ...(cache.blockers === null ? {} : { blockers: cache.blockers }),
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },

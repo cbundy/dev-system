@@ -20,9 +20,9 @@ import { stateCounts } from './v2/rules-state'
 import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/store'
 import { windDownFiles } from './v2/wind-down-files'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
-import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeGet, storeIo, storeSet } from './driver-store'
+import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
-import { clearUpdate, summaryOf, tellError, writeTrace } from './driver-pass-log'
+import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
@@ -186,7 +186,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
+    const starved = await storeGet($, keys.starved)
     stored = {
+      starvedSince: isMs(starved) ? starved : null,
       ledger: live.ledger.length > 0 ? live.ledger : null,
       githubBackoffUntil: isMs(backoff) ? backoff : null,
       queueKnown: Array.isArray(known) && known.every(n => typeof n === 'number') ? known : null,
@@ -314,6 +316,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
     const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
+    // the starved spell (S1): it starts on the first starved pass, stands through unknown passes and ends
+    // on the first pass that is not starved
+    if (result.starved === true && stored?.starvedSince == null) await keepInStore(keys.starved, state.now)
+    else if (result.starved === false && stored?.starvedSince != null) await storeDelete($, keys.starved, problems)
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 
@@ -343,6 +349,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     sources: Object.fromEntries(
       [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
+    starved: starvedOf(result, state),
     counts: { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
     transitions: transitionsOf(result),

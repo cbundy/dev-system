@@ -315,6 +315,8 @@ export type Config = {
   updateBehindRetries: number
   ciStallRecheckMs: Ms
   blindNoticeAfterMs: Ms
+  // a queue starved this long (ready issues, all blocked, nothing in flight) tells the owner (S1)
+  starvedNoticeAfterMs: Ms
   agentTimeoutMs: Record<AgentType, Ms>
   wakeTimeoutMs: Record<WakeKind, Ms>
   maxAttempts: Partial<Record<ActionKind | AgentType, number>>
@@ -408,4 +410,6 @@ export type PlanResult = {
   capped: string[]
   // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
+  // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
+  starved?: boolean | null
 }

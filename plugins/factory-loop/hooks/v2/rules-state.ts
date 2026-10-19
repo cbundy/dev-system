@@ -167,7 +167,7 @@ function periodOf(ctx: V2Ctx, r: IssueRecord): Ms {
 
 // openOf: the conditions of a waiting record no read has shown to hold (4.4): a condition not read,
 // or whose read failed or was skipped, is open.
-function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
+export function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
   return (r.wait ?? []).filter(c => ctx.v2.waits?.[waitKey(c)]?.held !== true)
 }
 
@@ -184,7 +184,7 @@ function clearedData(ctx: V2Ctx, r: IssueRecord): { tags: Record<string, string>
 
 // openText: the open conditions in words, for the skip line and E6's tell; a condition the loop
 // cannot read says so.
-function openText(ctx: V2Ctx, open: readonly WaitCondition[]): string {
+export function openText(ctx: V2Ctx, open: readonly WaitCondition[]): string {
   return open
     .map(c => {
       const text =

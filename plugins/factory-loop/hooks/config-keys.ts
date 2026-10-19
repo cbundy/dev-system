@@ -52,6 +52,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   updateBehindRetries: 'next-pass',
   ciStallRecheckMs: 'next-pass',
   blindNoticeAfterMs: 'next-pass',
+  starvedNoticeAfterMs: 'next-pass',
   agentTimeoutMs: 'next-pass',
   wakeTimeoutMs: 'next-pass',
   maxAttempts: 'next-pass',
