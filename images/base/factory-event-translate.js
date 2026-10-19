@@ -184,6 +184,37 @@ const SPECS = {
     first_flake_at: opt(nul(ISO)),
     filed_issue: opt(nul(I(1))),
   },
+  prompt_denied: {
+    life: nul(RX(/^[0-9a-z]+$/)),
+    seq: nul(I(0)),
+    step: nul(S),
+    attempt: nul(I(1)),
+    agent_id: nul(S),
+    agent_type: nul(S),
+    tool_name: nul(S),
+    tool_input: nul((v) => S(v) && v.length <= 2000),
+    ask_reason: nul((v) => S(v) && v.length <= 500),
+    slot: nul(S),
+    session: nul(S),
+    transcript: nul(S),
+    branch: nul(S),
+    pr: nul(I(1)),
+  },
+  prompt_waiting: {
+    life: nul(RX(/^[0-9a-z]+$/)),
+    seq: nul(I(0)),
+    step: nul(S),
+    attempt: nul(I(1)),
+    agent_id: nul(S),
+    agent_type: nul(S),
+    tool_name: nul(S),
+    tool_input: nul(S),
+    slot: nul(S),
+    session: nul(S),
+    transcript: nul(S),
+    branch: nul(S),
+    pr: nul(I(1)),
+  },
   loop_passes: {
     from_at: ISO,
     to_at: ISO,
@@ -203,7 +234,7 @@ const SPECS = {
 };
 
 // The types whose schema says `x-issue: required`: their line must carry an issue.
-const ISSUE_REQUIRED = new Set(["ready", "claimed", "claim_renewed", "claim_lost", "requeued", "closed", "abandoned", "merged", "transition", "reviewed", "finding_handled", "test_weakened", "untrusted_stripped"]);
+const ISSUE_REQUIRED = new Set(["ready", "claimed", "claim_renewed", "claim_lost", "requeued", "closed", "abandoned", "merged", "transition", "reviewed", "finding_handled", "test_weakened", "untrusted_stripped", "prompt_denied", "prompt_waiting"]);
 
 function checkData(type, data) {
   const spec = SPECS[type];
@@ -632,8 +663,35 @@ function loop(line) {
   };
 }
 
+// prompt_denied and prompt_waiting: the companion's twelve tokens (none of them required), the
+// columns for branch and pr. agent= is agent_id, tool= is tool_name, input= is tool_input and a
+// denied prompt's why= is ask_reason; a waiting prompt's why= (always none) is a named drop and its
+// tool= must be none, since the notification names no tool.
+function prompt(line, denied) {
+  const keep = ["life", "seq", "step", "attempt", "agent", "agent_type", "tool", "slot", "session", "transcript", "input"];
+  const t = strictTokens(line.note ?? null, denied ? { keep: [...keep, "why"] } : { keep, drop: ["why"] });
+  const data = {
+    life: tStrN(t, "life"),
+    seq: tInt(t, "seq", true) ?? null,
+    step: tStrN(t, "step"),
+    attempt: tInt(t, "attempt", true) ?? null,
+    agent_id: tStrN(t, "agent") || null,
+    agent_type: tStrN(t, "agent_type"),
+    tool_name: tStrN(t, "tool"),
+    tool_input: tStrN(t, "input"),
+    slot: tStrN(t, "slot"),
+    session: tStrN(t, "session"),
+    transcript: tStrN(t, "transcript"),
+    branch: colStr(line, "branch"),
+    pr: colInt(line, "pr"),
+  };
+  if (denied) data.ask_reason = tStrN(t, "why");
+  else if (data.tool_name !== null) miss(`tool=${t.get("tool")} on a waiting prompt: the notification names no tool`);
+  return data;
+}
+
 // Lines that make no new event, skipped by name: the state is the name.
-const SKIPPED_STATES = ["delegated", "fix_requested", "merge_ready", "prompt_denied", "prompt_waiting", "briefed", "design_routed", "run_started", "parked", "failed", "head_mismatch", "conflict", "ci_stalled", "rebased_behind", "superseded", "watcher_error"];
+const SKIPPED_STATES = ["delegated", "fix_requested", "merge_ready", "briefed", "design_routed", "run_started", "parked", "failed", "head_mismatch", "conflict", "ci_stalled", "rebased_behind", "superseded", "watcher_error"];
 
 // The states that translate (some of their lines skip: loop, verdict), each to its handler.
 const MAPPED = {
@@ -656,6 +714,8 @@ const MAPPED = {
   test_weakened: (l) => ({ type: "test_weakened", data: testWeakened(l) }),
   untrusted_stripped: (l) => ({ type: "untrusted_stripped", data: untrustedStripped(l) }),
   usage: (l) => ({ type: "usage", data: usage(l) }),
+  prompt_denied: (l) => ({ type: "prompt_denied", data: prompt(l, true) }),
+  prompt_waiting: (l) => ({ type: "prompt_waiting", data: prompt(l, false) }),
   loop,
 };
 const MAPPED_STATES = Object.keys(MAPPED);

@@ -287,3 +287,24 @@ test("a log that cannot be written warns and exits 0", () => {
   assert.match(r.stderr, /warning: cannot write .* event not recorded/);
   assert.ok(dir);
 });
+
+test("prompt_denied and prompt_waiting: the companion's own data goes through the native mode and reads back (dev-system#1037)", async () => {
+  const { promptData } = await import(path.join(ROOT, "plugins", "factory-loop-workspace", "hooks", "prompt.ts"));
+  const facts = {
+    life: "ss1x2k", seq: 7, step: "build", attempt: 1, agent: "agent-1", agent_type: "factory-loop:builder", tool: "Bash",
+    slot: "/slot", session: "s1", transcript: "/t.jsonl", why: "rm of a glob", input: "rm -f $D/*", branch: "issue-571", pr: 612,
+  };
+  for (const type of ["prompt_denied", "prompt_waiting"]) {
+    for (const f of [facts, {}]) {
+      const data = promptData(type, f);
+      const { r, lines } = native(["--type", type, "--issue", "571", "--repo", "o/r", "--data", JSON.stringify(data)]);
+      assert.equal(r.status, 0, `${type}: ${r.stderr}`);
+      assert.equal(r.stderr, "", type);
+      const e = JSON.parse(lines[0]);
+      assert.equal(e.type, type);
+      assert.equal(e.issue, 571);
+      assert.deepEqual(reader.validateStrict(type, e.type_version, e.data), [], type);
+      assert.deepEqual(reader.readEvent(e).data, data, type);
+    }
+  }
+});

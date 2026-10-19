@@ -1077,9 +1077,10 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
   stage and is no progress for the stuck test.
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
-- The companion writes two more states, `prompt_denied` and `prompt_waiting` (10.10), through
-  `callum-flow-event` itself, not through `events.ts`: `--issue` required, a `key=value` note with no
-  required token. They set no stage, are not progress for the stuck test and never decide whether an
+- The companion writes two more types, `prompt_denied` and `prompt_waiting` (10.10), through
+  `callum-flow-event --type` itself, not through `events.ts`: native events (`--data`, `--issue`
+  required). The states stay accepted by `callum-flow-event` for older companions, whose `key=value`
+  note the translator reads. They set no stage, are not progress for the stuck test and never decide whether an
   issue is final. The loop does not read them: it reads the companion's log (7.2 `prompt-denied`).
 - A retried event can be logged twice (a crash between the CLI's exit and the ledger's save).
   `transition` notes carry `life` and `seq`, and `intervention` notes their fact's key, so
@@ -2041,18 +2042,19 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
   watches, quotes Claude Code's own `reason`, `rule` or `decider` when there is one, names the safe
   rewrite for a Bash `rm` of a glob under a variable (`"${VAR:?}"/*` or the literal path), and ends
   by telling the agent to find another way or, failing that, to end its step saying what it needed.
-- **Each deny** writes one `prompt_denied` event (`callum-flow-event prompt_denied --issue N --branch B
-  [--pr P] --note <tokens>`) and one line of `companion.jsonl`, cause `prompt-denied`, which is an
-  intervention (7.2). Note tokens are `key=value` encoded as `events.ts` `enc`, `none` when unknown:
-  `life`, `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`, `input` (a Bash command, else the
-  JSON input, clipped to 2000 characters), `why`, `slot`, `session` and `transcript` (the agent's
-  own: `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`, learned from
-  `classic.SubagentStart`). Writing either never throws out of the hook and never turns the deny back
-  into an ask: an image whose `callum-flow-event` does not know the state still gets the deny and the
-  log line. A hook that fails for a mapped agent after `next` returned `ask` still denies.
+- **Each deny** writes one `prompt_denied` event (`callum-flow-event --type prompt_denied --data <json>
+  --issue N --repo R`, run in the slot) and one line of `companion.jsonl`, cause `prompt-denied`,
+  which is an intervention (7.2). The data holds the schema's fields, null when unknown: `life`,
+  `seq`, `step`, `attempt`, `agent_id`, `agent_type`, `tool_name`, `tool_input` (a Bash command,
+  else the JSON input, clipped to 2000 characters), `ask_reason`, `slot`, `session`, `transcript`
+  (the agent's own: `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`, learned from
+  `classic.SubagentStart`), `branch` and `pr`. Writing either never throws out of the hook and never
+  turns the deny back into an ask: an image whose `callum-flow-event` cannot write the event still
+  gets the deny and the log line. A hook that fails for a mapped agent after `next` returned `ask` still denies.
 - **`classic.Notification`** with `notification_type` `permission_prompt` or
   `worker_permission_prompt` and an `agent_id` in the map writes one `prompt_waiting` event with the
-  same columns and tokens (`input` is the message). Without an `agent_id`, or with an unmapped one,
+  same data, except that it has no `ask_reason`, `tool_name` is null and `tool_input` is the message
+  (clipped to 2000 characters). Without an `agent_id`, or with an unmapped one,
   it writes nothing. It always returns `next(e)`. There is no `prompt_answered`: the engine shows a
   mapped agent's answer to its prompt through no hook the companion could tie to the prompt.
 - **The map** keeps what the note needs: `agentType` (per agent, children included), `attempt` (the

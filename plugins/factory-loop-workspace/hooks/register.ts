@@ -14,8 +14,8 @@
 //   last also in factory-gate.json;
 // - prompts nobody answers (10.10): a call of a mapped agent that Claude Code would put to a person
 //   (tool.check answered `ask`) is denied instead, with a reason that tells the agent to find another
-//   way, and written as a `prompt_denied` event and a `prompt-denied` line of companion.jsonl; a
-//   permission_prompt notification of a mapped agent is a `prompt_waiting` event. A caller that is
+//   way, and written as a native `prompt_denied` event and a `prompt-denied` line of companion.jsonl; a
+//   permission_prompt notification of a mapped agent is a native `prompt_waiting` event. A caller that is
 //   not in the map (the owner's own session) is never touched;
 // - the handshake (10.9): <CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json says this
 //   session has the companion, and in which process, written again every minute; the loop holds
@@ -31,8 +31,8 @@ import { recordWindow } from './window'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
 import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marker'
-import { PROMPT_NOTIFICATIONS, inputOf, promptNote, promptReason, transcriptOf, whyOf } from './prompt'
-import type { Decided, NoteFields } from './prompt'
+import { PROMPT_NOTIFICATIONS, inputOf, promptData, promptReason, transcriptOf, whyOf } from './prompt'
+import type { Decided, PromptFields } from './prompt'
 import { withScratch } from './scratch'
 import { createTurns } from './turns'
 import type { Turn } from './turns'
@@ -262,16 +262,16 @@ function transcriptSeen(agentId: string, a: WorkspaceAgent): string | null {
   return a.transcript ?? transcripts.get(agentId) ?? null
 }
 
-// eventLine: one factory event through `callum-flow-event`, in the issue's repository. A failure
-// (an image that does not know the state exits 2, a missing command) is swallowed: the caller has
-// already done what it must.
-async function eventLine($: EngineInterface, a: WorkspaceAgent, state: string, note: string): Promise<void> {
-  const argv = ['callum-flow-event', state, '--issue', String(a.issue), '--branch', a.branch, ...(typeof a.pr === 'number' ? ['--pr', String(a.pr)] : []), '--repo', a.repo, '--note', note]
+// eventLine: one native factory event through `callum-flow-event --type`, in the issue's repository.
+// A failure (an image that cannot write it, a missing command) is swallowed: the caller has already
+// done what it must.
+async function eventLine($: EngineInterface, a: WorkspaceAgent, type: 'prompt_denied' | 'prompt_waiting', data: Record<string, unknown>): Promise<void> {
+  const argv = ['callum-flow-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(a.issue), '--repo', a.repo]
   await run($, argv, { cwd: a.slot }).catch(() => undefined)
 }
 
-// promptFields: the note's tokens for this agent; what cannot be read is none.
-async function promptFields($: EngineInterface, a: WorkspaceAgent, agentId: string): Promise<NoteFields> {
+// promptFields: the event's facts for this agent; what cannot be read is null.
+async function promptFields($: EngineInterface, a: WorkspaceAgent, agentId: string): Promise<PromptFields> {
   const session = await $.session.id().catch(() => null)
   return {
     life: a.life,
@@ -283,6 +283,8 @@ async function promptFields($: EngineInterface, a: WorkspaceAgent, agentId: stri
     slot: a.slot,
     session,
     transcript: transcriptSeen(agentId, a),
+    branch: a.branch,
+    pr: typeof a.pr === 'number' ? a.pr : null,
   }
 }
 
@@ -291,8 +293,8 @@ async function promptFields($: EngineInterface, a: WorkspaceAgent, agentId: stri
 async function refusePrompt($: EngineInterface, a: WorkspaceAgent, e: { tool: string; input?: unknown; agentId?: string }, decided: Decided): Promise<{ decision: 'deny'; reason: string }> {
   const reason = promptReason(e.tool, e.input, decided)
   try {
-    const note = promptNote({ ...(await promptFields($, a, e.agentId ?? '')), tool: e.tool, why: whyOf(decided), input: inputOf(e.tool, e.input) })
-    await eventLine($, a, 'prompt_denied', note)
+    const data = promptData('prompt_denied', { ...(await promptFields($, a, e.agentId ?? '')), tool: e.tool, why: whyOf(decided), input: inputOf(e.tool, e.input) })
+    await eventLine($, a, 'prompt_denied', data)
   } catch {
     // the deny is what matters
   }
@@ -427,8 +429,8 @@ export const register: Register = on => {
     if (typeof agentId === 'string' && PROMPT_NOTIFICATIONS.includes(e.notification_type)) {
       const a = await agentOf($, agentId)
       if (a !== null) {
-        const note = promptNote({ ...(await promptFields($, a, agentId)), input: e.message })
-        await eventLine($, a, 'prompt_waiting', note)
+        const data = promptData('prompt_waiting', { ...(await promptFields($, a, agentId)), input: e.message })
+        await eventLine($, a, 'prompt_waiting', data)
       }
     }
     return next(e)

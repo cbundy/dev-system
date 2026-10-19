@@ -86,7 +86,7 @@
         "string",
         "null"
       ],
-      "description": "The notification's message, which says what the agent waits for; not clipped; null when unknown.",
+      "description": "The notification's message, which says what the agent waits for, cut at 2000 characters; null when unknown.",
       "x-column": true
     },
     "slot": {

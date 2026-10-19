@@ -837,7 +837,7 @@ An agent stopped on a permission prompt and is waiting for an answer nobody give
 | `agent_id` | string | required | yes |  | yes | The agent's id; null when the prompt came from no sub-agent. |
 | `agent_type` | string | required | yes |  | yes | The agent's type, for example Explore or general-purpose; null when unknown. |
 | `tool_name` | string | required | yes |  | yes | Always null: the notification names no tool. |
-| `tool_input` | string | required | yes |  | yes | The notification's message, which says what the agent waits for; not clipped; null when unknown. |
+| `tool_input` | string | required | yes |  | yes | The notification's message, which says what the agent waits for, cut at 2000 characters; null when unknown. |
 | `slot` | string | required | yes |  |  | The writer's slot (worktree path) the prompt came from; null when unknown. |
 | `session` | string | required | yes |  |  | The Claude Code session id; null when unknown. |
 | `transcript` | string | required | yes |  |  | The path of the session's transcript; null when unknown. |

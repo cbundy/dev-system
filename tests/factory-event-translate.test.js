@@ -60,8 +60,6 @@ const EXPECTED_SKIPS = {
   delegated: 2,
   fix_requested: 3,
   merge_ready: 2,
-  prompt_denied: 1,
-  prompt_waiting: 1,
   briefed: 1,
   design_routed: 1,
   run_started: 1,
@@ -126,8 +124,7 @@ test("coverage: the corpus produces every current type, and every writer state i
   const made = new Set(expected.map((e) => e.type));
   // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
   // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  // prompt_denied and prompt_waiting: the translator child (#1037) removes them from this list once it maps them.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "settings_changed", "prompt_denied", "prompt_waiting"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "settings_changed"]; // the stop gate's runs (#811): written by the loop once a writer exists
   for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
   for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
@@ -538,4 +535,35 @@ test("CLI: --data makes it dual write and gives the same event; a foreign key is
   assert.equal(foreign.code, 1);
   assert.match(foreign.err, /miss: ready: internal: unexpected field nope/);
   assert.equal(cli(["--data", "x"], `${line}\n`).code, 2);
+});
+
+test("prompt_denied and prompt_waiting (dev-system#1037): renames, none as null, columns, strictly valid", () => {
+  const full = oldLines.filter((l) => l.state === "prompt_waiting").find((l) => /agent=a2/.test(l.note));
+  const note = "life=ld seq=7 step=build attempt=2 agent=a1 agent_type=Explore tool=Bash slot=/s session=s1 transcript=/t why=rule%20x input=rm%20-f%20$D/*";
+  const denied = translate({ ...full, state: "prompt_denied", note, pr: 612 });
+  assert.deepEqual(denied.event.data, { life: "ld", seq: 7, step: "build", attempt: 2, agent_id: "a1", agent_type: "Explore", tool_name: "Bash", tool_input: "rm -f $D/*", ask_reason: "rule x", slot: "/s", session: "s1", transcript: "/t", branch: "issue-729", pr: 612 });
+  assert.deepEqual(reader.validateStrict("prompt_denied", 1, denied.event.data), []);
+  const waiting = translate(full);
+  assert.equal(waiting.event.data.agent_id, "a20142b8cd21d3b2b");
+  assert.equal(waiting.event.data.tool_name, null);
+  assert.ok(!("ask_reason" in waiting.event.data));
+  assert.deepEqual(reader.validateStrict("prompt_waiting", 1, waiting.event.data), []);
+  // none and an empty agent are null
+  const none = translate({ ...full, state: "prompt_denied", note: "agent= seq=none attempt=none life=none why=none" });
+  assert.equal(none.event.data.agent_id, null);
+  assert.equal(none.event.data.seq, null);
+  assert.equal(none.event.data.ask_reason, null);
+  // no token is required
+  assert.deepEqual(reader.validateStrict("prompt_denied", 1, translate({ ...full, state: "prompt_denied", note: "input=x" }).event.data), []);
+});
+
+test("prompt_denied and prompt_waiting: an unknown token, a tool on a waiting prompt and an over-long input are misses", () => {
+  const w = oldLines.find((l) => l.state === "prompt_waiting");
+  assert.match(missOf(withNote(w, `${w.note} x=1`)), /^prompt_waiting: unexpected token x=/);
+  assert.match(missOf(withNote({ ...w, state: "prompt_denied" }, "tool=Bash why=a x=1")), /^prompt_denied: unexpected token x=/);
+  assert.match(missOf(withNote(w, "tool=Bash input=x")), /^prompt_waiting: tool=Bash on a waiting prompt/);
+  assert.match(missOf(withNote({ ...w, state: "prompt_denied" }, `input=${"x".repeat(2001)}`)), /tool_input is not valid/);
+  // a waiting message is not clipped by the schema
+  assert.ok(translate(withNote(w, `input=${"x".repeat(5000)}`)).event);
+  assert.match(missOf(withNote(w, "seq=-1")), /bad number seq=-1/);
 });
