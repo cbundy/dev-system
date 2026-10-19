@@ -8,7 +8,7 @@ description: >-
   with its labels and what it waits on. Use for "/dependency-chain 534", "map
   the dependency chain of the factory events work", "what blocks this epic?" or
   "diagram the chain with links".
-version: 0.60.0
+version: 0.61.0
 ---
 
 # Dependency chain
