@@ -30,10 +30,14 @@ Goals:
   unknown has one path.
 - The loop owns what it reconciles: the record, the branch, the PR, the slot and the merge. It
   never mirrors another tool's private state.
-- Few mechanisms: 21 rule ids. Section 14.1 counts the layer.
+- Few mechanisms: 23 rule ids. Section 14.1 counts the layer.
 - Every intervention is an event: each time a person, or the loop with unplanned judgement or
   recovery, had to step in. So "untouched", operator interventions and judgement calls can be
   read from factory data alone (issue #632, metrics 1 and 2).
+
+- The loop readies its own work in one case only (owner, 2026-10-18): a flake bug it filed itself
+  (8.5, rule F1), while fewer than `flakeBugReadyCap` flake bugs are ready or in flight. It readies
+  no other issue, and never readies a flake bug it held. The owner can.
 
 Non-goals:
 
@@ -124,6 +128,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
 | `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed read keeps the last reading, which the window still bounds, and shows in `sources` |
 | `main` | act mode only: `gh api repos/R --jq .default_branch` (once per load), `gh api repos/R/commits/<branch> --jq .sha`, `gh api repos/R/commits/<head>/pulls` (only when the head moved), `gh api repos/R/actions/workflows?per_page=100` (the active workflows), for each `gh api repos/R/actions/workflows/<id>/runs?branch=<b>&per_page=10`, then `gh api repos/R/deployments?sha=<head>&per_page=100` (the newest of each environment) and for each `gh api repos/R/deployments/<id>/statuses?per_page=1` | `mainEveryMs`; none during a GitHub backoff or once a rate limit met this pass ends the loop's reads (checked before each call). When skipped or not yet due, the last reading stands | the `main_state` event (7.1, rule M1). Any failed call, or output not understood, fails the whole read: `sources.main` is not ok and the pass carries no reading, so a partial read is never shown as green |
+| `flakes` | act mode only: `dev-query --factory --csv -v repo=R -v since=<now - flakeWindowDays>` with the per-flake query of metrics 2d (a gate flake and a CI flake, each once; one row per flake per test with the first row's event id and the test name's hash), then, only when some test has `flakeBugMin` flakes, `callum-flow-issue-read --json --list --label flaky --state open` (the reader lists trusted authors only) for the open flake bugs: number, marker, whether labelled `ready`, the flake ids its body names | `githubEveryMs`, and at once after an action of rule F1 ended; none during a GitHub backoff or after a rate limit | rule F1 (8.5). A missing factory URL (`dev-query` exit 77) is no flakes; any other failure or an unreadable list fails the source, and F1 plans nothing (`V2State.flakes`, `sources.flakes`) |
 | `dualWrite` | act mode only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
@@ -1424,6 +1429,33 @@ is a new `Reviewer` implementation and a setting, nothing more.
   `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.
   The GitHub rule is from GitHub's documentation.
 - **Waits** are bounded by `ciStartMs` and `ciRunMs` (4.4).
+
+- **A flake bug (rule F1).** A test that flaked `flakeBugMin` (2) times in the last
+  `flakeWindowDays` (7) gets exactly one bug. A flake is one of the two rows above (a gate flake, once
+  per issue, life, seq and started_at; a CI flake, once per issue and fact), read by the `flakes` source;
+  a test is matched by its exact name in `failed_tests`. The bug is found again by its hidden marker
+  `<!-- factory-loop:flake:<sha256 of the test name, 16 hex> -->` among the open issues by trusted
+  authors before it is made, so a retried action or a lost ledger files no second one. Its ledger key is
+  `flake-bug/<hash>/<event id of the first flake in the window>`. Its body has the marker, the test name,
+  one line per flake (issue, head, time, `gate` or `ci`), the failure lines from the flake rows (clipped,
+  in a fenced block, made safe as every body is, `neutralBody`), a link to `flakeEpic` when one is set,
+  the three requirements of a flake fix (reproduce under load first; fix the cause; show a run of
+  consecutive passes) and a hidden per-flake marker for each flake it lists. It is labelled `flaky` (the
+  executor makes the label first, `gh label create --force`) and `priorityLabel`, and linked as a
+  sub-issue of `flakeEpic` (default null: none). A later flake of a test that has an open bug gets one
+  comment on it, keyed `flake-bug/<hash>/c/<flake event id>` and carrying that key as its hidden
+  marker; a flake the bug's body names gets none. One flake of a test files and comments nothing.
+  The bounds: this is the one case where the loop readies its own work (owner, 2026-10-18), only a bug
+  it filed with the marker. The bug gets `ready` only when fewer than `flakeBugReadyCap` (2) open issues
+  carrying the marker are labelled `ready` or have a record that is not closed; otherwise it is filed
+  without `ready`. The loop never readies any other issue and never readies a held flake bug later: the
+  owner adds `ready`. Each bug filed is told once, `tell(flake-bug)` (key `tell:flake-bug:<bug number>`,
+  not an owner item), planned the pass after it is filed from the entry's outcome, naming the test,
+  the flake count and window, the bug, and whether it was readied or held by the cap. The tell's
+  `loop_entry` carries `decision` (`ready` or `held`), `decision_reason`, `flake_test`, `flakes`,
+  `window_days`, `first_flake_at` and `filed_issue`, so metrics 2d answers how long a test's first flake
+  took to be fixed and how often the cap held a bug. A failed or unread `flakes` source plans nothing for
+  F1 and never fails the pass.
 
 ### 8.6 Rounds and the cap
 
@@ -3457,7 +3489,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-Twenty-two rules, by id.
+Twenty-three rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3483,6 +3515,7 @@ Twenty-two rules, by id.
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour (or, with waiting issues, one that saw them all); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>` (plus `:w<N>.<N>` when issues wait), fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
 | M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
+| F1 | flake bug | the `flakes` source shows a test with `flakeBugMin` flakes in the last `flakeWindowDays` and no open bug carrying its marker; or a flake of a test with an open bug that is not on it; or a `flake-bug` entry done with no tell yet | `flake-bug` (one bug, `ready` only under `flakeBugReadyCap`), a `comment` for each later flake, and `tell(flake-bug)` once per bug (8.5) |
 
 ## 15. Decisions
 
@@ -4011,6 +4044,10 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
 | `releaseBranchPrefix` | `null` | 9.1: the head-branch prefix of a release's bump PR (like `chore/release-`), a non-empty string; null turns the release hold off. Read every pass from both settings files; `/factory config` shows it with its source |
 | `releaseHoldMs` (written `releaseHold`) | `10m` | 9.1: the longest the merge queue holds for a bump PR, counted from its creation; 0 turns the hold off. Read every pass from both settings files; `/factory config` shows it as `releaseHold` (`off` at 0) |
+| `flakeWindowDays` | 7 | 8.5: the days back a test's flakes count toward a flake bug, a whole number of at least 1 |
+| `flakeBugMin` | 2 | 8.5: the flakes of one test in the window that file a flake bug, a whole number of at least 1 |
+| `flakeBugReadyCap` | 2 | 8.5: a new flake bug is readied only while fewer open flake bugs than this are `ready` or in flight, a whole number of at least 0 |
+| `flakeEpic` | `null` | 8.5: the issue a flake bug is linked under as a sub-issue; null links none. dev-system's `.claude/factory-loop.json` sets 864 |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `reviewer` | `adjudicator` | 8.2 |
@@ -4046,6 +4083,7 @@ still accepts them in a settings file, and they have no effect.
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child; a not-ready child gets none: plan claims it with a `park` and row S7 parks it (8.7) | 3 |
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
+| `flake-bug` | free | rule F1 (8.5): `callum-flow-issue-read --json --list --state open` for the bug's marker, else `gh label create flaky --repo R ... --force` and `gh issue create --repo R --title <t> --body-file -`; then `gh issue edit <N> --repo R --add-label flaky --add-label <priorityLabel>`, the sub-issue link under `flakeEpic` (`gh api`, unless the epic holds it), and last `gh issue edit <N> --repo R --add-label <ready>` only when the action says the cap allowed it. The one place the safety tests let the loop add `ready` outside a split child and a requeue | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
@@ -4053,7 +4091,7 @@ still accepts them in a settings file, and they have no effect.
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
 
-13 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
+14 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
 command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other
 ban of the foundation (13.11). `rerun` is banned there otherwise, so `gh run rerun` is allowed
 deliberately, as one argv.
@@ -4076,9 +4114,10 @@ deliberately, as one argv.
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
 | main state | `main/<last>/<current>`, each a state key `<head>.<workflows>.<deployments>` (8 hex digits each) or `none` before the first |
+| flake bug | `flake-bug/<hash>/<first flake event id>` (the bug), `flake-bug/<hash>/c/<flake event id>` (a comment on it); its tell `tell:flake-bug:<bug number>` |
 | heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-14 families of the loop's own, plus the foundation's 5.
+15 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 
@@ -4093,6 +4132,7 @@ deliberately, as one argv.
 | `factory:parked` | `b60205` | Factory loop: waits on the owner; remove this label to resume |
 | `factory:waiting` | `fef2c0` | Factory loop: waits on a condition the loop checks; it resumes by itself |
 | `factory:rejected` | `6a737d` | Factory loop: its last life ended without a merge; remove this label and add ready to try again. Not a state (3.4, 6.4) |
+| `flaky` | `fbca04` | A test that failed and then passed on the same code. Not a state: F1's executor makes it (`gh label create --force`) and puts it on the flake bugs it files (8.5) |
 
 The owner's `don't-merge` label is not in this table: the loop never makes it. The owner sets it on an issue or its PR, and the loop reads it and never changes it (9.1). It is a hold on a merge-queue record, not a state.
 
@@ -4111,9 +4151,10 @@ Notices (TELL kinds), owner items first:
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
 | `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |
+| `flake-bug` | no | F1: a flake bug was filed (or found) for a test; names the test, its flake count and window, the bug, and whether it was readied or held by `flakeBugReadyCap`, whose owner step is to add `ready` (8.5) |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
-10 kinds of the loop's own, 8 of them owner items, plus the foundation's.
+11 kinds of the loop's own, 8 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 

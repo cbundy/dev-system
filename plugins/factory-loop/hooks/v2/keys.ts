@@ -161,3 +161,21 @@ export function keyParts(key: string): { issue: number; life: string; seq: numbe
 export function hiddenKey(key: string): string {
   return `<!-- factory-loop:${key} -->`
 }
+
+// --- flake bugs (rules-flake-bugs.ts, appendix C) ----------------------------------------------------------
+
+// flakeBugKey: the bug filed for a test, by the first flake of the test in the window.
+export function flakeBugKey(hash: string, firstFlake: string): string {
+  return `flake-bug/${hash}/${firstFlake}`
+}
+
+// flakeCommentKey: the comment (and the body's hidden marker) for one flake of a test on its bug.
+export function flakeCommentKey(hash: string, flake: string): string {
+  return `flake-bug/${hash}/c/${flake}`
+}
+
+// flakeMarker: the marker a flake bug's body carries, which finds it again by the test's hash: the
+// hidden key of `flake:<hash>`.
+export function flakeMarker(hash: string): string {
+  return hiddenKey(`flake:${hash}`)
+}

@@ -12,6 +12,7 @@ import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
 import type { FactsShadow } from './sources-facts'
+import type { FlakesRead } from './sources-flakes'
 import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
@@ -220,6 +221,8 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
+  // F1: the flake bug filed or found, with what its tell says (rules-flake-bugs.ts)
+  | { kind: 'flake-bug'; issue: number; made: boolean; ready: boolean; test: string; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
   // a close-tracker check: the split parent found (null: the issue is no split child), whether it was closed, and the sub-issues still open
   | { kind: 'close-tracker'; parent: number | null; closed: boolean; open: number[] }
   // leftovers: the patch file a prepare or a free saved the slot's leftovers to (10.2): its uncommitted
@@ -237,7 +240,11 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug'] as const
+// What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
+// body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
+export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
+
 export type V2ActionKind = (typeof V2_ACTION_KINDS)[number]
 
 // What the transition executor re-checks against the live ledger and records before it stores
@@ -320,6 +327,8 @@ export type V2Action =
   | (ActionBase & { kind: 'link'; blocker: number })
   // a merged split child's check upward: issue is the one to check from; its split parent is closed when every sub-issue is closed (act-tracker.ts)
   | (ActionBase & { kind: 'close-tracker' })
+  // F1: one bug for a flaky test, found again by its hidden marker or filed; ready: the cap allowed `ready` (rules-flake-bugs.ts)
+  | (ActionBase & { kind: 'flake-bug'; bug: FlakeBugSpec })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
@@ -389,13 +398,13 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, schema-behind, pass-error) stay.
 export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved'] as const
-export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done'] as const
+export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done', 'flake-bug'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'M1',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'M1', 'F1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 
@@ -450,7 +459,7 @@ export type MainDeployment = { environment: string; id: number; state: string | 
 // branch and its head, the merged PR the head came from, the workflows and the deployments.
 export type MainReading = { observedAt: string; branch: string; head: string; pr: number | null; workflows: MainWorkflow[]; deployments: MainDeployment[] }
 
-export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs', 'main'] as const
+export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs', 'main', 'flakes'] as const
 // What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
 // was read and the "<issue>:<life>:<seq>" of this device's transitions it holds.
 export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
@@ -496,6 +505,8 @@ export type V2State = {
   releasePrs?: ReleasePrsRead
   // the default branch as the last read that succeeded showed it (sources-main.ts); absent: none this pass
   main?: MainReading
+  // the flakes in the window and the open flake bugs (sources-flakes.ts); absent: not read this pass
+  flakes?: FlakesRead
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>

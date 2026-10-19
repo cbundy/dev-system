@@ -246,6 +246,8 @@ export type LedgerEntry = {
   session?: string
   // the executor's last few words, for the decision log
   summary?: string
+  // the wake's loop_entry payload fields (Action.loopData), written by `callum-flow-event loop --data`
+  loopData?: LoopData
   // a v2 agent step's kind, which the per-issue rate cap counts by (D-24; v2 appendix B)
   step?: AgentStep
   // the key's own attempt cap, when its action set one (a v2 slot op's, appendix B)
@@ -301,6 +303,11 @@ export type Config = {
   // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the window from the PR's opening (0: no hold)
   releaseBranchPrefix: string | null
   releaseHoldMs: Ms
+  // flake bugs (v2 SPEC 8.5 F1): the window in days, the flakes of one test that file a bug, the open flake bugs ready or in flight that hold a new one back from `ready`, and the epic a bug is linked under (null: none)
+  flakeWindowDays: number
+  flakeBugMin: number
+  flakeBugReadyCap: number
+  flakeEpic: number | null
   // the title is renamed at most this often (O1 is a throttle)
   titleEveryMs: Ms
   // the factory report is built at most this often (#684)
@@ -389,6 +396,9 @@ export type EventsSource = 'old' | 'new' | 'shadow'
 
 export type WakeKind = 'judge' | 'task' | 'tell'
 
+// The optional loop_entry fields a tell may carry (docs/factory-events/schemas/loop_entry.v1.json).
+export type LoopData = Record<string, string | number | null>
+
 // What every action carries. maxAttempts: the key's own cap, for a kind whose ops differ (v2's
 // slot); otherwise config.maxAttempts holds the kind's.
 export type ActionBase = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null; maxAttempts?: number }
@@ -413,7 +423,8 @@ export type Action =
   // rule M7 for a hand merge: read the merged issue's rollout
   | (Base & { kind: 'rollout'; pr: number | null })
   | (Base & { kind: 'stop-agent'; agentId: string; entry: string })
-  | (Base & { kind: WakeKind; wake: string; fields: Record<string, string>; context: string[] })
+  // loopData: payload fields the wake's loop_entry event carries beside its note (a flake bug tell's decision, v2 SPEC 8.5 F1)
+  | (Base & { kind: WakeKind; wake: string; fields: Record<string, string>; context: string[]; loopData?: LoopData })
   | (Base & { kind: 'title'; text: string })
   | V2Action
 

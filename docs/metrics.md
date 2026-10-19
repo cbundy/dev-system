@@ -454,6 +454,102 @@ GROUP BY f.repo, t.test
 ORDER BY flakes DESC, last_flake DESC, t.test;
 ```
 
+The flake bug rule (v2 SPEC 8.5, rule F1) files one bug for a test with at least `flakeBugMin`
+flakes in the last `flakeWindowDays`, and comments on that bug for each later flake. It reads this
+query: one row per flake per test, as the first query counts them, with the event id of the flake's
+first row (the identity a bug's comment is keyed by), the test's name hashed (the first 16 hex digits
+of its sha256, which the bug's marker carries) and the failed jobs of a CI flake. The loop runs it
+with `-v repo=... -v since=...`, `since` being now minus `flakeWindowDays`. The loop's copy of the
+query (`FLAKES_SQL` in `plugins/factory-loop/hooks/v2/sources-flakes.ts`) is held identical to this one
+by `tests/metrics-flakes.test.js`.
+
+```sql
+-- the bug rule's read: one row per flake per test, with the event id and the test's hash
+WITH gate AS (
+  SELECT repo, issue, life, seq, started_at, max(head) AS head, min(ts) AS passed_at,
+    (array_agg(event_id ORDER BY ts, device, device_seq))[1] AS event_id,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), ci AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(head) AS head, min(ts) AS passed_at,
+    (array_agg(event_id ORDER BY ts, device, device_seq))[1] AS event_id,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, event_id, issue, head, passed_at, NULL::text AS job,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', event_id, issue, head, passed_at,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(jobs) = 'array' THEN jobs ELSE '[]'::jsonb END) AS j),
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END
+  FROM ci
+)
+SELECT f.event_id, f.source, f.issue, f.head,
+  to_char(f.passed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS passed_at, t.test, f.job,
+  left(encode(sha256(convert_to(t.test, 'UTF8')), 'hex'), 16) AS hash
+FROM flakes f
+CROSS JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test)
+ORDER BY f.passed_at, f.event_id, t.test;
+```
+
+The rule writes one `loop_entry` tell (`wake` `flake-bug`) for each bug it files. It carries the
+decision (`ready`, or `held` when `flakeBugReadyCap` open flake bugs were already ready or in flight),
+the test (`flake_test`), how many flakes the window held (`flakes`, `window_days`), the first of them
+(`first_flake_at`) and the bug (`filed_issue`). The tell is written when the bug exists, and again as
+it is delivered, so the queries below group by the bug. The first gives the time from a test's first
+flake to its fix merging; the second, the daily summary, counts the bugs filed, readied, held, fixed
+(closed or merged) and still open, and how often the cap held one. A bug closed without a merge
+counts as fixed in the summary and has no row in the first.
+
+```sql
+-- time from a test's first flake to its fix merging, per flake bug
+WITH bugs AS (
+  SELECT repo, filed_issue, max(flake_test) AS flake_test, min(first_flake_at) AS first_flake,
+    min(ts) AS filed_at, bool_or(decision = 'ready') AS readied
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'flake-bug' AND filed_issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, filed_issue
+)
+SELECT b.filed_issue AS bug, b.flake_test, b.first_flake, b.filed_at, b.readied, m.merged_at,
+  m.merged_at - b.first_flake AS first_flake_to_merge
+FROM bugs b
+LEFT JOIN LATERAL (
+  SELECT min(ts) AS merged_at FROM factory.event_log
+  WHERE type = 'merged' AND repo = b.repo AND issue = b.filed_issue
+) m ON true
+ORDER BY b.first_flake, b.filed_issue;
+```
+
+```sql
+-- the daily summary: flake bugs filed, readied, held, fixed and still open
+WITH bugs AS (
+  SELECT repo, filed_issue, min(ts) AS filed_at,
+    bool_or(decision = 'ready') AS readied, bool_or(decision = 'held') AS held
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'flake-bug' AND filed_issue IS NOT NULL AND repo = :'repo'
+  GROUP BY repo, filed_issue
+), ended AS (
+  SELECT repo, issue, min(ts) AS ended_at
+  FROM factory.event_log
+  WHERE type IN ('closed', 'merged') AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY repo, issue
+)
+SELECT count(*) FILTER (WHERE b.filed_at >= :'since') AS filed,
+  count(*) FILTER (WHERE b.filed_at >= :'since' AND b.readied) AS readied,
+  count(*) FILTER (WHERE b.filed_at >= :'since' AND b.held) AS held,
+  count(*) FILTER (WHERE e.ended_at >= :'since') AS fixed,
+  count(*) FILTER (WHERE e.ended_at IS NULL) AS still_open
+FROM bugs b
+LEFT JOIN ended e ON e.repo = b.repo AND e.issue = b.filed_issue;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`

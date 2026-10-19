@@ -163,8 +163,8 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
         true,
       ])
     }
-    expect(V2_ACTION_KINDS).toHaveLength(13)
-    expect(V2_RULES).toHaveLength(22)
+    expect(V2_ACTION_KINDS).toHaveLength(14)
+    expect(V2_RULES).toHaveLength(23)
     expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved'])
   })
 
@@ -385,7 +385,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     expect(await of({ records: null, heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: true } } })
     expect(await of({ records: [], heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'store', sources: { store: { ok: true } } })
     // only the absent key reads this device's transition events for a rebuild (v2/record.ts)
-    expect(runs.filter(a => a[0] === 'dev-query')).toHaveLength(1)
+    // (the flakes source's own read, `since=`, is no rebuild)
+    expect(runs.filter(a => a[0] === 'dev-query' && !a.some(x => x.startsWith('since=')))).toHaveLength(1)
   })
 
   test('with no store records and no rebuild built yet, there are no records, and a state built outside a pass reads nothing', () => {

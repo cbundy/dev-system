@@ -21,6 +21,8 @@ import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
 import type { ReleaseCache } from './sources-release'
 import { readBlockers } from './sources-blockers'
 import { readWaits } from './sources-waits'
+import { EMPTY_FLAKES, readFlakesCached } from './sources-flakes'
+import type { FlakesCache } from './sources-flakes'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
@@ -98,10 +100,12 @@ export type V2Cache = {
   main: MainCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
   dualWrite: { at: Ms; read: DualWriteRead } | null
+  // the flakes and flake bugs F1 reads (sources-flakes.ts)
+  flakes: FlakesCache
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -279,8 +283,9 @@ export function readOrder(records: readonly IssueRecord[]): number[] {
 // --- one pass's v2 reads ---------------------------------------------------------------------------------
 
 // The source modules' reads, a test's own in place of the real ones.
-export type V2Readers = { prs: typeof readPrs; interventions: typeof readInterventions }
-const READERS: V2Readers = { prs: readPrs, interventions: readInterventions }
+// (`flakes` is optional: a test's readers that name none read no flakes)
+export type V2Readers = { prs: typeof readPrs; interventions: typeof readInterventions; flakes?: typeof readFlakesCached }
+const READERS: V2Readers = { prs: readPrs, interventions: readInterventions, flakes: readFlakesCached }
 
 export type ObserveV2Input = {
   io: Io
@@ -398,6 +403,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.main = main.read
   sources.main = main.source
 
+  // the flakes and the open flake bugs (sources-flakes.ts): act mode only, on its own cadence
+  if (readers.flakes !== undefined) cache.flakes = await readers.flakes(ctx, cache.flakes, blocked())
+  sources.flakes = cache.flakes.source ?? { ok: true, at: now }
+
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
   const comments: Record<number, IssueComment[]> = {}
@@ -462,6 +471,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(cache.blockers === null ? {} : { blockers: cache.blockers }),
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
     ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
+    ...(cache.flakes.read === null ? {} : { flakes: cache.flakes.read }),
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
@@ -520,7 +530,7 @@ export function commentsOf(json: string): IssueComment[] | null {
 export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
   const off: Source = { ok: false, at: null, error: 'not read' }
   return {
-    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now }, main: { ok: true, at: now } },
+    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now }, main: { ok: true, at: now }, flakes: { ok: true, at: now } },
     records,
     recordsFrom: records.length > 0 ? 'store' : 'none',
     heads: {},

@@ -123,7 +123,7 @@ RURL=$(url_for "$db" "${db}_reader" "$RPW")
 (umask 077 && printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url" \
   && printf '%s\n' "$RURL" > "$DEV_SECRETS_DIR/factory-db-reader-url")
 EXPECTED=$(factory_db_expected_version)
-[ "$EXPECTED" = 15 ] || fail "expected version should be 15 for the shipped migrations, got $EXPECTED"
+[ "$EXPECTED" = 16 ] || fail "expected version should be 16 for the shipped migrations, got $EXPECTED"
 for role in writer reader; do
   check $role
   expect 0 "OK" "database $db" "${db}_$role" "schema version $EXPECTED"
@@ -238,10 +238,10 @@ if printf '%s\n' "$out" | grep -q 'admin URL'; then
   fail "the behind fix must not offer the admin URL: $out"
 fi
 echo "ok: schema behind fails with the migrate fix"
-q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (16, 'future', 'x')" > /dev/null
+q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES ($next, 'future', 'x')" > /dev/null
 check writer
 expect 2 "FAIL" "ahead" "pull a newer image"
-q "$db" "DELETE FROM factory.schema_migrations WHERE version = 16" > /dev/null
+q "$db" "DELETE FROM factory.schema_migrations WHERE version = $next" > /dev/null
 echo "ok: schema ahead fails"
 echo "-- only a lower version" > "$tmpdir/mig-ahead/0000_none.sql"
 rc=0

@@ -175,6 +175,14 @@ const SPECS = {
     ended_at: nul(ISO),
     agent_id: nul(S),
     wake: nul(S),
+    // only a tell that decided something (a flake bug, dev-system#866) carries these, by --data
+    decision: opt(nul(S)),
+    decision_reason: opt(nul((v) => S(v) && v.length <= 200)),
+    flake_test: opt(nul((v) => S(v) && v.length <= 512)),
+    flakes: opt(nul(I(0))),
+    window_days: opt(nul(I(1))),
+    first_flake_at: opt(nul(ISO)),
+    filed_issue: opt(nul(I(1))),
   },
   loop_passes: {
     from_at: ISO,

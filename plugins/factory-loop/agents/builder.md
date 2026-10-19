@@ -48,7 +48,7 @@ it; never use run_in_background: your turn ends only with your answer.
   answer. CI on the PR is the final gate.
 - For a bug, write the regression test first and see it fail against the broken code: a test
   that only ever passed proves nothing.
-- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker), reproduce
+- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker, `<!-- factory-loop:flake:<hash> -->` in its body), reproduce
   the flake under load before changing code, then fix the cause (real waits instead of sleeps,
   wall-clock time, shared state, ordering). Put the stress command, the reproduced failure and
   the run of consecutive passes in your evidence. Add no retry, skip or raised timeout without a

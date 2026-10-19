@@ -35,6 +35,7 @@ const V2_ALLOWED = [
   "  return ['gh', 'pr', 'edit', String(pr), '--repo', repo, '--body-file', '-']",
   "  return ['gh', 'issue', 'create', '--repo', repo, '--title', title, '--body-file', '-']",
   "  return ['gh', 'issue', 'edit', String(child), '--repo', repo, '--add-label', readyLabel]",
+  "  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', flaky, '--add-label', priority]",
   "  return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]",
   "  return ['factory-slot', 'kill', path]",
 ];

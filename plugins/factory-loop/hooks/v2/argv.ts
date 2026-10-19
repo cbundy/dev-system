@@ -125,6 +125,11 @@ export function childReadyArgv(repo: string, child: number, readyLabel: string):
   return ['gh', 'issue', 'edit', String(child), '--repo', repo, '--add-label', readyLabel]
 }
 
+// A flake bug's two labels, each add idempotent: the flaky label and the repo's priority label.
+export function flakeLabelsArgv(repo: string, issue: number, flaky: string, priority: string): string[] {
+  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', flaky, '--add-label', priority]
+}
+
 // The open issues by trusted authors, whole, through the reader: a child made before a retry is
 // found again by the hidden key in its body.
 export function openIssuesArgv(): string[] {

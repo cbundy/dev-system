@@ -184,6 +184,7 @@ const RECORD: IssueRecord = {
 // the record's PR as the prs source reads it: the review step reads its head and patch
 const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, baseRef: 'main', checks: [], patch: 'f00dfeed', readAt: NOW }
 const at = `i470/l${LIFE}/s3`
+const FLAKE_BUG = { hash: '0123456789abcdef', test: 'tests/a.test.js > one', title: 'Flaky test: tests/a.test.js > one', body: 'Body --yes', flakeIds: ['0f0f0f0f-0000-4000-8000-000000000001'], ready: true, epic: 864, flakes: 2, windowDays: 7, firstFlakeAt: '2026-10-17T10:11:00.000Z', reason: '0 open flake bugs ready or in flight, under the cap of 2' }
 const V2_ACTIONS: Action[] = [
   { ...base, kind: 'transition', key: `${at}/t`, class: 'free', rule: 'S3', row: 'T2', event: 'ok', from: { issue: 470, life: LIFE, seq: 2 }, next: RECORD, trigger: { kind: 'entry', key: `i470/l${LIFE}/s2/design/a1`, status: 'done', startedAt: NOW - 2 * MIN } },
   { ...base, kind: 'label', key: `${at}/label`, class: 'free', rule: 'S3', op: 'set', label: 'factory:building' },
@@ -199,6 +200,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'pr', key: `${at}/pr/body/a1`, class: 'free', rule: 'Q2', op: 'body', branch: 'issue-470', base: 'main', pr: 512, title: 'The work', summary: 'x', evidence: 'npm test', brief: BRIEF },
   { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true, decision: null }, blockedBy: [] },
   { ...base, kind: 'split', key: `${at}/child/b`, class: 'free', rule: 'S3', parent: 470, child: { key: 'b', title: 'Part two', body: 'Do it', blockedBy: [], ready: false, decision: 'Which API?' }, blockedBy: [] },
+  // F1's flake bug (v2 SPEC 8.5): the one action that may add the ready label to an issue it filed itself, and only when the cap allowed it
+  { ...base, issue: null, kind: 'flake-bug', key: 'flake-bug/0123456789abcdef/0f0f0f0f-0000-4000-8000-000000000001', class: 'free', rule: 'F1', bug: FLAKE_BUG },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },
@@ -242,6 +245,15 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
         is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
+    case 'flake-bug': {
+      const api = (re: string) => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/${re}$`)
+      if (is('gh', 'issue', 'create', '--repo', REPO, '--title', text, '--body-file', '-')) return { body: true }
+      if (is('gh', 'label', 'create', 'flaky', '--repo', REPO, '--color', c => /^[0-9a-f]{6}$/.test(c), '--description', text, '--force')) return { labels: true }
+      if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', 'flaky', '--add-label', 'priority')) return { labels: true }
+      // the ready label: only when F1 allowed it under the cap (the action says so)
+      if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', READY)) return action.bug.ready ? { labels: true, ready: true } : {}
+      return is('gh', 'api', '--method', 'POST', p => api('sub_issues').test(p), '-F', f => /^sub_issue_id=[1-9]\d*$/.test(f)) || is('gh', 'api', p => api('sub_issues').test(p), '--paginate', '--jq', '.[].id') ? { api: true } : {}
+    }
     case 'link':
       // the blocker's id is read through the reader, the links already there are read (GET, ids
       // only), and one blocked_by link is made
@@ -402,6 +414,14 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['split', ARGV.issueReadArgv(471)],
   ['split', ARGV.subIssuesReadArgv(REPO, 470)],
   ['split', ARGV.blockersReadArgv(REPO, 471)],
+  ['flake-bug', ARGV.openIssuesArgv()],
+  ['flake-bug', ARGV.labelCreateArgv(REPO, { name: 'flaky', color: 'fbca04', description: 'A test that failed and then passed on the same code' })],
+  ['flake-bug', ARGV.issueCreateArgv(REPO, 'Flaky test: x')],
+  ['flake-bug', ARGV.issueReadArgv(601)],
+  ['flake-bug', ARGV.flakeLabelsArgv(REPO, 601, 'flaky', 'priority')],
+  ['flake-bug', ARGV.subIssuesReadArgv(REPO, 864)],
+  ['flake-bug', ARGV.subIssueArgv(REPO, 864, 3_100_601)],
+  ['flake-bug', ARGV.childReadyArgv(REPO, 601, READY)],
   ['close-tracker', ARGV.issueReadArgv(471)],
   ['close-tracker', ARGV.subIssueStatesArgv(REPO, 470)],
   ['close-tracker', ARGV.trackerCloseArgv(REPO, 470, 'Every sub-issue is finished.')],
@@ -472,6 +492,11 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/470/sub_issues`, '-F', 'sub_issue_id=1'], kindAction('link')],
       [['gh', 'api', '--method', 'DELETE', `repos/${REPO}/issues/470/dependencies/blocked_by`, '-F', 'issue_id=1'], kindAction('link')],
       [['gh', 'issue', 'edit', '471', '--repo', REPO, '--add-label', 'ready'], label],
+      // a flake bug is readied only when F1's cap allowed it, and never by another kind
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'ready'], { ...kindAction('flake-bug'), bug: { ...FLAKE_BUG, ready: false } } as Action],
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'ready'], kindAction('comment')],
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'bug'], kindAction('flake-bug')],
+      [['gh', 'label', 'create', 'ready', '--repo', REPO, '--color', 'ffffff', '--description', 'x', '--force'], kindAction('flake-bug')],
       [['gh', 'issue', 'close', '470', '--reason', 'completed', '--comment', 'x'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
       // the delete is leased, of the issue's own branch, and the only push there is

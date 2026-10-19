@@ -12,6 +12,7 @@ import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } 
 import type { Config, PlanResult, State } from '../types'
 import { reconcile } from './reconcile'
 import { fleetRules, fleetTells, restartOf, restartTells } from './rules-fleet'
+import { flakeBugRules } from './rules-flake-bugs'
 import { flakeRules } from './rules-flakes'
 import { gateRunRules } from './rules-gates'
 import { interventionRules } from './rules-interventions'
@@ -53,6 +54,7 @@ export function planV2(state: State, config: Config): PlanResult {
     }
     interventionRules(ctx)
     flakeRules(ctx)
+    flakeBugRules(ctx)
     gateRunRules(ctx)
     mainRules(ctx)
     fleetRules(ctx)

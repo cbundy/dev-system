@@ -25,7 +25,12 @@
     "to_version": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: the highest migration number the image ships." },
     "duration_ms": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: how long it took, in milliseconds." },
     "outcome": { "enum": ["migrated", "current", "failed", "timed-out", null], "description": "A schema migrate: migrated (versions applied), current (nothing to apply), failed or timed-out." },
-    "error": { "type": ["string", "null"], "description": "A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded." }
+    "error": { "type": ["string", "null"], "description": "A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded." },
+    "flake_test": { "type": ["string", "null"], "maxLength": 512, "description": "A flake bug tell (wake flake-bug): the exact name of the flaky test; null otherwise.", "x-column": true },
+    "flakes": { "type": ["integer", "null"], "minimum": 0, "description": "A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise.", "x-column": true },
+    "window_days": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise.", "x-column": true },
+    "first_flake_at": { "type": ["string", "null"], "format": "date-time", "description": "A flake bug tell: when the first flake of the test in the window happened; null otherwise.", "x-column": true },
+    "filed_issue": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the number of the bug the loop filed (or found); null otherwise.", "x-column": true }
   },
   "examples": [
     { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }
