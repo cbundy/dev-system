@@ -28,6 +28,8 @@ rm -f "$fakebin/event-calls"
 mixed=$(in_dir "$tmpdir" timeout 10 $qw --known 305) || fail "mixed queue: did not exit 0"
 [ "$mixed" = "queue-changed known=305 now=305,307" ] || fail "mixed queue: $mixed"
 grep -q 'ready --issue 307' "$fakebin/event-calls" || fail "no ready event for the trusted issue"
+grep -qF 'ready --issue 307 --if-changed --data {"title":"title 307","labels":["ready","bug"],"parent":1307} --actor watcher' "$fakebin/event-calls" ||
+  fail "the stream ready event lacks the issue facts: $(cat "$fakebin/event-calls")"
 if grep -q 'ready --issue 400' "$fakebin/event-calls"; then fail "ready event for the untrusted issue"; fi
 # a reader failure is a failed poll: never an empty queue
 queue_seq FAIL

@@ -79,8 +79,8 @@ case "$1 $2" in
           '{number: $n, title: "t", body: "b", user: $u, head: {ref: $r, sha: (if $s == "" then null else $s end)}}' ;;
       */issues/[0-9]*)
         n=${2##*/}
-        jq --argjson n "$n" --argjson u "$(author_of author "$n")" \
-          '{number: $n, title: "t", body: "b", user: $u, state: (.state | ascii_downcase), state_reason: (.state_reason // null), labels: .labels}' "$d/issue-$n.json" ;;
+        jq --argjson n "$n" --argjson u "$(author_of author "$n")" --arg t "$(cat "$d/title-$n" 2>/dev/null || echo t)" --arg p "$(cat "$d/parent-url-$n" 2>/dev/null || true)" \
+          '{number: $n, title: $t, body: "b", user: $u, state: (.state | ascii_downcase), state_reason: (.state_reason // null), labels: .labels, parent_issue_url: (if $p == "" then null else $p end)}' "$d/issue-$n.json" ;;
     esac ;;
   'api -X')
     verb=$3; path=$4
@@ -165,7 +165,7 @@ issue() {
 
 run() {
   PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-old}" \
-    CALLUM_FLOW_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+    CALLUM_FLOW_EVENT_BIN="${CLAIM_EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
     CALLUM_FLOW_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
 }
@@ -213,6 +213,43 @@ CALLUM_FLOW_LEASE_MINUTES=30 rc_of "$CLAIM" 7
 expect_rc 0 "lease override"
 jq -e '.[-1].body | startswith("claimed-by: devA at 2026-10-08T12:00:00Z lease: 30\n")' "$d/comments-7.json" >/dev/null || fail "lease override not recorded"
 events | jq -e '.state == "claimed" and .note == "lease: 30"' >/dev/null || fail "lease override: claimed note: $(events)"
+
+# the claimed event carries the issue's facts (callum-flow-event --data): the title, the labels
+# without the ready label the claim just removed, the parent's number when it is in the same repo
+cat > "$tmpdir/event-rec" <<'STUB'
+#!/bin/sh
+echo "$*" >> "${STUB_DIR:?}/event-calls"
+case "$*" in *--data*) [ ! -f "${STUB_DIR:?}/old-writer" ] || exit 2 ;; esac
+STUB
+chmod +x "$tmpdir/event-rec"
+reset
+issue 7 OPEN ready bug enhancement
+echo 'Facts of seven' > "$d/title-7"
+echo 'https://api.github.com/repos/o/r/issues/3' > "$d/parent-url-7"
+brief | arr > "$d/comments-7.json"
+CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+expect_rc 0 "facts"
+[ "$(cat "$d/event-calls")" = 'claimed --issue 7 --note lease: 120 --data {"title":"Facts of seven","labels":["bug","enhancement"],"parent":3}' ] || fail "facts: claimed call: $(cat "$d/event-calls")"
+# a parent in another repo, or none, is null
+echo 'https://api.github.com/repos/x/y/issues/3' > "$d/parent-url-7"
+rm -f "$d/event-calls"
+CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+expect_rc 0 "facts, other repo"
+grep -qF '"parent":null}' "$d/event-calls" || fail "facts, other repo: $(cat "$d/event-calls")"
+# a lost claim logs no claimed event
+reset
+cm 100 devB '2026-10-08T11:59:59Z' '2026-10-08T11:59:59Z' | jq -s '.' > "$d/inject-7.json"
+CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+expect_rc 3 "facts, collision loser"
+grep -q '^claimed' "$d/event-calls" 2>/dev/null && fail "facts, collision loser: claimed logged: $(cat "$d/event-calls")"
+# a writer that does not know --data (exit 2) is called again without it
+reset
+touch "$d/old-writer"
+CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+expect_rc 0 "old writer"
+[ "$(grep -c '^claimed' "$d/event-calls")" = 2 ] || fail "old writer: want two calls: $(cat "$d/event-calls")"
+[ "$(tail -n 1 "$d/event-calls")" = 'claimed --issue 7 --note lease: 120' ] || fail "old writer: second call: $(cat "$d/event-calls")"
+[ ! -s "$tmpdir/err" ] || fail "old writer: stderr: $(cat "$tmpdir/err")"
 
 # --- pre-check: a live foreign claim blocks, even with stale labels -------------
 reset
