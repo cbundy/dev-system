@@ -86,6 +86,8 @@ export type Stored = {
   githubBackoffUntil: number | null
   // the queue's last now= list, handed back to queue-watch.sh as --known (v2 SPEC 13.3.4)
   queueKnown: number[] | null
+  // when the current starved spell began (S1, v2/rules-starved.ts); null: no spell
+  starvedSince?: number | null
 }
 
 type Timed<T> = { at: number; value: T }
@@ -452,7 +454,7 @@ export async function observe(
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
-  const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), tags: repoTags(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, factsShadow: cache.factsShadow, backoff: backoffUntil !== null, limited: () => limited })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), tags: repoTags(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, factsShadow: cache.factsShadow, backoff: backoffUntil !== null, limited: () => limited, starvedSince: stored?.starvedSince ?? null })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

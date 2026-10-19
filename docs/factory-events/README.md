@@ -54,6 +54,13 @@ join factory.event_log r on r.repo = m.repo and r.issue = m.issue and r.type = '
 where m.repo = :'repo' and m.type = 'merged'
 group by m.issue, m.ts;
 SQL
+# an issue's newest title: the newest ready or claimed event with a title
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
+select distinct on (issue) issue, title, labels, parent, ts
+from factory.event_log
+where repo = :'repo' and type in ('ready', 'claimed') and title is not null
+order by issue, ts desc;
+SQL
 # review false positives: declined findings over all handled ones
 dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select outcome, count(*) from factory.event_log
@@ -119,6 +126,10 @@ SQL
   translates the line as dual write does and appends only the new event (never the old line, so
   `--if-changed` with it is a usage error); the factory loop's backfill (H1) uses it. `callum-flow-event
   --new-only --new-path` is its capability probe: it prints the new path with exit 0, and an older image exits 2.
+  `callum-flow-event <state> ... --data '<json object>'` (old-state mode, with or without `--new-only`) hands the
+  translator extra payload fields that only the new event carries (the old line is unchanged): `ready` and `claimed`
+  get the issue's `title`, `labels` and `parent` this way. Not an object: exit 2, nothing written. A key the type does
+  not accept is a translator miss (old line kept, no new event, one warning). An older image answers `--data` with exit 2.
   The old line still goes to today's file, and nothing that reads today's file sees the new one: not
   `--if-changed` (which keeps comparing old lines only) or the old shipper's `$DIR/*.jsonl` glob
   (`images/base/event-push-loop:202`). `callum-flow-claim` and `callum-flow-sweep` read both logs under a

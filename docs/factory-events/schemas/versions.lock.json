@@ -142,9 +142,32 @@
   "claimed.v1": {
     "additionalProperties": false,
     "properties": {
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
       "lease_minutes": {
         "minimum": 1,
         "type": "integer"
+      },
+      "parent": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "title": {
+        "maxLength": 256,
+        "type": [
+          "null",
+          "string"
+        ]
       }
     },
     "required": [
@@ -709,7 +732,31 @@
   },
   "ready.v1": {
     "additionalProperties": false,
-    "properties": {},
+    "properties": {
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "parent": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "title": {
+        "maxLength": 256,
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
     "required": [],
     "type": "object",
     "x-issue": "required"

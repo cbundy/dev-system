@@ -1588,6 +1588,7 @@ restart never replays old events; transitions a watcher observes are always logg
 log (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
 `--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` and `callum-flow-claim` then log the event again without it. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at

@@ -17,7 +17,11 @@
 // CommonJS with no dependencies: callum-flow-event (dual write) and the replay script both use it.
 // Temporary: deleted with the old event path (dev-system#656).
 //
-// CLI: node factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl
+// `opts.data` (CLI --data JSON, dual write only) is an object of extra payload fields merged into the
+// new event's data before the check (ready and claimed: title, labels, parent; dev-system#870). A key
+// the type does not accept, or a value of the wrong shape, is a miss. Replay (no opts) has none.
+//
+// CLI: node factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl
 //   One stderr line per miss and a summary of counts per state (--quiet drops the summary); exit 1 on any miss, else 0.
 
 // --- the token codec (plugins/factory-loop/hooks/v2/events.ts: dec, tokensOf, noteToken) ---------
@@ -92,9 +96,11 @@ const HEX = RX(/^[0-9a-f]{7,40}$/);
 const ISO = RX(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
 const STATES = ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"];
 
+const TITLE = (v) => S(v) && v.length <= 256;
+
 const SPECS = {
-  ready: {},
-  claimed: { lease_minutes: I(1) },
+  ready: { title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))) },
+  claimed: { lease_minutes: I(1), title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))) },
   claim_renewed: { lease_minutes: I(1) },
   claim_lost: { holder: nul(S), holder_since: nul(S), race: B },
   requeued: { reason: E("lease-expired", "reconcile"), stage: nul(S), lives: nul(I(1)), branch: nul(S), pr: nul(I(1)), detail: nul(S) },
@@ -708,6 +714,11 @@ function translate(input, opts) {
     const handler = MAPPED[state];
     if (handler === undefined) return miss("unknown state");
     const { type, data } = handler(line);
+    if (opts !== undefined && opts !== null && opts.data !== undefined && opts.data !== null) {
+      if (typeof opts.data !== "object" || Array.isArray(opts.data)) miss("--data is not an object");
+      for (const k of Object.keys(opts.data)) if (k in data) miss(`internal: unexpected field ${k}`);
+      Object.assign(data, opts.data);
+    }
     checkData(type, data);
     return { event: envelope(line, type, data, opts) };
   } catch (e) {
@@ -725,6 +736,7 @@ function main(argv) {
   let sessionId;
   let dual = false;
   let quiet = false;
+  let extra;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--ts" && i + 1 < argv.length) {
       ts = argv[++i];
@@ -732,14 +744,22 @@ function main(argv) {
     } else if (argv[i] === "--session-id" && i + 1 < argv.length) {
       sessionId = argv[++i];
       dual = true;
+    } else if (argv[i] === "--data" && i + 1 < argv.length) {
+      try {
+        extra = JSON.parse(argv[++i]);
+      } catch {
+        process.stderr.write("factory-event-translate.js: --data is not JSON\n");
+        return 2;
+      }
+      dual = true;
     } else if (argv[i] === "--quiet") {
       quiet = true;
     } else {
-      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl\n");
+      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
       return 2;
     }
   }
-  const opts = dual ? { ts, sessionId } : undefined;
+  const opts = dual ? { ts, sessionId, data: extra } : undefined;
   const counts = new Map();
   const bump = (state, what) => {
     const c = counts.get(state) ?? { translated: 0, skipped: 0, missed: 0 };
