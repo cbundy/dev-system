@@ -16,6 +16,7 @@ import { gateRunRules } from './rules-gates'
 import { interventionRules } from './rules-interventions'
 import { queueRules } from './rules-queue'
 import { slotRules } from './rules-slots'
+import { starvedRules } from './rules-starved'
 import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
 import { windDownGuard, windDownOf, windDownTells, windDownTitle } from './wind-down'
@@ -28,6 +29,7 @@ export function planV2(state: State, config: Config): PlanResult {
   const blind = !state.sources.factory.ok
   const wd = windDownOf(state, config)
   let counts: { counts: string; after: string[] } | null = null
+  let starved: boolean | null | undefined
   if (blind) {
     blindPass(base)
   } else if (state.v2 === undefined) {
@@ -42,6 +44,8 @@ export function planV2(state: State, config: Config): PlanResult {
       stateRules(ctx)
       slotRules(ctx)
       queueRules(ctx)
+      starvedRules(ctx)
+      starved = ctx.starved?.starved
     } else {
       skip(ctx, 'G2', null, `v2 records not read: ${store.error ?? 'the store failed'}; nothing is released, claimed or started`)
     }
@@ -74,7 +78,7 @@ export function planV2(state: State, config: Config): PlanResult {
   if (titleDue(state, config, title)) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   // the restart ends the session, so it goes after everything else, the title included
   if (restart !== null) actions.push(restart)
-  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap }
+  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap, ...(starved === undefined ? {} : { starved }) }
 }
 
 // What the decision log says of a plan's transitions: the issue, the row, its event, and the

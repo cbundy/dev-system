@@ -315,6 +315,8 @@ export type Config = {
   updateBehindRetries: number
   ciStallRecheckMs: Ms
   blindNoticeAfterMs: Ms
+  // a queue starved this long (ready issues, all blocked, nothing in flight) tells the owner (S1)
+  starvedNoticeAfterMs: Ms
   agentTimeoutMs: Record<AgentType, Ms>
   wakeTimeoutMs: Record<WakeKind, Ms>
   maxAttempts: Partial<Record<ActionKind | AgentType, number>>
@@ -386,7 +388,7 @@ export type Action =
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
-  | (Base & { kind: 'restart-self'; why: string; at: Ms })
+  | (Base & { kind: 'restart-self'; why: string; at: Ms; windDownAt?: Ms | null })
   // rule M7 for a hand merge: read the merged issue's rollout
   | (Base & { kind: 'rollout'; pr: number | null })
   | (Base & { kind: 'stop-agent'; agentId: string; entry: string })
@@ -408,4 +410,6 @@ export type PlanResult = {
   capped: string[]
   // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
+  // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
+  starved?: boolean | null
 }

@@ -284,6 +284,27 @@ GROUP BY f.repo, f.device, f.requested_at, f.key, f.issue, f.life, f.step, f.rer
 ORDER BY f.requested_at DESC, f.key;
 ```
 
+(d) Stops by trigger (`restart-self` is the loop's own restart for an update, `coder-stop` a Coder
+stop): the count, the cap share and the mean steps cut. It answers whether the loop's own restarts
+wind down like Coder stops and whether the cap is enough for them:
+
+```sql
+WITH stops AS (
+  SELECT repo, device, requested_at,
+    min(trigger) AS trigger, min(outcome) AS outcome, min(cut_at_stop) AS cut_at_stop
+  FROM factory.event_log
+  WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+  GROUP BY repo, device, requested_at
+)
+SELECT repo, trigger,
+  count(*)                                                        AS stops,
+  round(count(*) FILTER (WHERE outcome = 'cap')::numeric / count(*), 3) AS cap_share,
+  round(avg(cut_at_stop), 2)                                      AS mean_cut_per_stop
+FROM stops
+GROUP BY repo, trigger
+ORDER BY repo, trigger;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`
@@ -639,6 +660,25 @@ A wait the loop cannot read (a failing read, or a tag condition on a repo with n
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | test("/wait-unreadable/")))
   | {day: ($d.at | tostring | .[0:10]), issue, key}] | unique_by(.key) | group_by(.issue)[]
   | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+### Starved queue
+
+A ready queue the factory cannot touch while nothing is in flight raises the owner item `starved` once the
+spell is `starvedNoticeAfterMs` (default 60 min) old, and again once per 24 h period of it, keyed
+`tell:starved:<since>:<k>`. What each notice named, from the decision log:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:starved:")))
+  | {since: .fields.since, minutes: (.fields.minutes | tonumber), roots: .fields.roots, why: .fields.why}]
+  | unique_by(.since + .roots) | .[] | "\(.since) \(.minutes) min: \(.why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+The pass line carries `starved: {since, minutes}` while a pass is starved, so a spell's start, end and length
+show without the tell:
+
+```sh
+jq -rs 'map(select(.starved != null)) | group_by(.starved.since)[] | "\(.[0].starved.since): \((map(.starved.minutes) | max)) min"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
 ## 8. Implementer model comparison

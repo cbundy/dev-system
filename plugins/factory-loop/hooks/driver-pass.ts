@@ -18,11 +18,12 @@ import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
 import { stateCounts } from './v2/rules-state'
 import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/store'
-import { windDownFiles } from './v2/wind-down-files'
+import { windDownFiles, withRemembered } from './v2/wind-down-files'
+import { windDownOf } from './v2/wind-down'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
-import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeGet, storeIo, storeSet } from './driver-store'
+import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
-import { clearUpdate, summaryOf, tellError, writeTrace } from './driver-pass-log'
+import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
@@ -168,7 +169,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     const fresh: Notice[] = breaker === null ? rails.notices : [...rails.notices, breaker]
     for (const n of fresh) if (!book.pending.some(p => noticeTell(p).key === noticeTell(n).key)) book.pending.push(n)
     if (breaker !== null) await commandOf(aio, acting(rt), commands)(breakerEventArgv(breaker), { timeoutMs: 60_000 }).catch(() => undefined)
-    if (act && S.restartAsked !== null) {
+    if (act && S.restartAsked !== null && S.restartRequestAt === null) {
       act = false
       railReasons.push(`restart: dev-restart-self asked for a new workspace at ${new Date(S.restartAsked).toISOString()}; nothing acts until it restarts`)
     }
@@ -186,7 +187,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
+    const starved = await storeGet($, keys.starved)
     stored = {
+      starvedSince: isMs(starved) ? starved : null,
       ledger: live.ledger.length > 0 ? live.ledger : null,
       githubBackoffUntil: isMs(backoff) ? backoff : null,
       queueKnown: Array.isArray(known) && known.every(n => typeof n === 'number') ? known : null,
@@ -252,6 +255,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
         state = { ...state, control: { ...state.control, updateDue: null } }
       }
       // wind-down (v2 SPEC 10.11): the status file of an active one, or a stale request removed
+      state = withRemembered(state, S.restartRequestAt)
+      const winding = windDownOf(state, rt.config)
       problems.push(...(await windDownFiles({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, state, rt.config)))
       const acted = await actPass(env, state, listed, between)
       carve(tr, 'plan', acted.planned.ms)
@@ -260,7 +265,14 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       result = acted.result
       report = acted.report
       S.lastState = state
-      if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) S.restartAsked = state.now
+      // a request that went stale was told by the plan above: the restart never came, so the loop plans normally
+      if (winding.mode === 'stale' && S.restartRequestAt !== null) [S.restartAsked, S.restartRequestAt] = [null, null]
+      const restarted = report.outcomes.find(o => o.kind === 'restart-self' && o.status === 'done')
+      if (restarted !== undefined) {
+        S.restartAsked = state.now
+        const planned = result.actions.find(a => a.key === restarted.key)
+        S.restartRequestAt = planned?.kind === 'restart-self' && planned.windDownAt != null ? planned.windDownAt : null
+      }
       if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
       if (report.killed) await setTitle($, offTitle(rt))
@@ -284,7 +296,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
 
     // notices from outside plan go out once no wake is open, acting or not (v2 SPEC 13.9.2, 13.11.2), until a
     // restart was asked for
-    if (rt.mode === 'act' && S.restartAsked === null) {
+    if (rt.mode === 'act' && (S.restartAsked === null || S.restartRequestAt !== null)) {
       book.pending = book.pending.filter(n => !stale(n, memory, state.now))
       if (book.pending.length > 0 && (act || (await ensureLedger($, rt, problems)))) {
         const nenv: ActEnv = { ...env, rt: acting(rt) }
@@ -314,6 +326,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
     const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
+    // the starved spell (S1): it starts on the first starved pass, stands through unknown passes and ends
+    // on the first pass that is not starved
+    if (result.starved === true && stored?.starvedSince == null) await keepInStore(keys.starved, state.now)
+    else if (result.starved === false && stored?.starvedSince != null) await storeDelete($, keys.starved, problems)
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 
@@ -343,6 +359,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     sources: Object.fromEntries(
       [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
+    starved: starvedOf(result, state),
     counts: { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
     transitions: transitionsOf(result),

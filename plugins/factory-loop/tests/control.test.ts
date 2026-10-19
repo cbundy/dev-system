@@ -330,7 +330,7 @@ describe('applyOp', () => {
   test('update sets updateDue { reason, at: now }, owner by default; update off clears it (D-15)', () => {
     const due = applyOp(BUSY, op('update'), NOW)
     expect(due).toMatchObject({ changed: true, control: { updateDue: { reason: 'owner', at: NOW } } })
-    expect(due.text).toBe('Update due (owner): the loop drains, then restarts this workspace once nothing is in flight.')
+    expect(due.text).toBe('Update due (owner): the loop winds down (up to windDownMinutes), then restarts this workspace.')
     expect(applyOp(BUSY, op('update base image 1.4.0'), NOW).control.updateDue).toEqual({ reason: 'base image 1.4.0', at: NOW })
     // asked again, the request is new: a failed restart (one attempt) gets a fresh key
     expect(applyOp(due.control, op('update'), NOW + MIN).control.updateDue).toEqual({ reason: 'owner', at: NOW + MIN })

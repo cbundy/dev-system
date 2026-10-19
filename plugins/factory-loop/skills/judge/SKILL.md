@@ -193,6 +193,14 @@ Owner items (the title counts them until resolved):
   name the issue and why it waits. For a "no release tag of <repo>" line, that repo must cut a
   release, or the owner resumes or drops the issue; for "its read has failed", the owner checks
   access to the repo or the number of the issue or PR the condition names.
+- `starved` (since, minutes, period, queue, blocked, roots, why; detail: one line per root blocker, most
+  blocking first, then one line per queue issue held by something other than a blocker): the ready queue
+  has been unclaimable with nothing in flight for the whole spell, so the factory is idle. Each root line
+  says what blocks how many ready issues and why the root is not moving. Lead with `[DECISION]`: name the
+  roots, and what the owner can do for each: answer a parked root, run a Run it, make a root `ready`, cut
+  the release a merged change waits on, or close a kept-open issue. A `roots=unread` tell means the
+  blockers could not be read; the lines then give each ready issue's blocker count. It comes again at most
+  once a day while the spell lasts.
 
 Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
@@ -241,8 +249,8 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `drop <N>`: close the issue's current claim and stop its agents; the issue stays open, and
   re-adding `ready` brings it back.
 - `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.
-- `update [<reason>]` / `update off`: drain, then restart this workspace for an update once
-  nothing is in flight (D-15); off cancels.
+- `update [<reason>]` / `update off`: wind down (up to windDownMinutes), then restart this workspace
+  for an update (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.
 - `trace on|off`: each pass's timing to a local trace file, for troubleshooting (v2 SPEC 13.12.1).
 - `stop-now`: during a wind-down, stop at once without waiting for what still runs; only when the owner asks.
