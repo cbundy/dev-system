@@ -239,4 +239,11 @@ describe('diffRecords', () => {
     expect(diffRecords([A], [A, B])).toEqual([{ issue: 8, text: '#8 record: old absent, new present' }])
     expect(diffRecords([A, B], [B])).toEqual([{ issue: 7, text: '#7 record: old present, new absent' }])
   })
+
+  test('object key order is no difference, at any depth; array order is', () => {
+    const wait = [{ kind: 'pr-merged', pr: 997 }] as const
+    const reordered = JSON.parse('[{"pr":997,"kind":"pr-merged"}]')
+    expect(diffRecords([{ ...A, wait: [...wait] }], [{ ...A, wait: reordered }])).toEqual([])
+    expect(diffRecords([{ ...A, notes: ['a', 'b'] }], [{ ...A, notes: ['b', 'a'] }])).toEqual([{ issue: 7, text: '#7 notes: old ["a","b"], new ["b","a"]' }])
+  })
 })
