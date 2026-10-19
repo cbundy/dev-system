@@ -13,7 +13,7 @@
 #   test_pg_clean     stops the private cluster and removes its directory
 #   factory_test_db_new   makes factory_test_<pid>_<random> with the real bootstrap, prints
 #                         its name 
-#   factory_test_db_drop NAME   drops the database (WITH (FORCE)) and its three roles
+#   factory_test_db_drop NAME   drops the database (WITH (FORCE)) and its four roles
 #
 # Each test makes its own database, so tests share a server without colliding, and the run
 # fails when one is left behind.
@@ -100,6 +100,7 @@ factory_test_db_new() {
 
 factory_test_db_drop() {
   _tpg_psql "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)" > /dev/null
+  _tpg_psql "DROP ROLE IF EXISTS \"${1}_migrator\"" > /dev/null
   _tpg_psql "DROP ROLE IF EXISTS \"${1}_owner\"" > /dev/null
   _tpg_psql "DROP ROLE IF EXISTS \"${1}_writer\"" > /dev/null
   _tpg_psql "DROP ROLE IF EXISTS \"${1}_reader\"" > /dev/null
