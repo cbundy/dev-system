@@ -42,6 +42,9 @@ test("section 6b: counts, sums, failed reads and the newest difference detail pe
   read("o/r", "2026-10-17T11:00:00.000Z", { differences: 2, live_differences: 2, diff_keys: ["a", "b"], detail: "newest" });
   read("o/r", "2026-10-17T12:00:00.000Z"); // newer but clean: must not hide the detail
   read("o/r", "2026-10-17T12:00:00.000Z"); // a retried write of the same compare
+  read("o/r", "2026-10-17T13:00:00.000Z", { scope_floor: "2026-10-17T13:26:02Z", out_of_scope: 7 });
+  read("o/r", "2026-10-17T14:00:00.000Z", { scope_floor: "2026-10-17T13:26:02Z", out_of_scope: 5 });
+  read("o/r", "2026-10-17T15:00:00.000Z", { scope_floor: null }); // a newer compare of a device with no floor: must not hide it
   read("o/r", "2026-10-18T09:00:00.000Z", { new_ok: false });
   read("o/r", "2026-10-18T09:30:00.000Z", { reader: "other-reader", old_ok: false, differences: 1, live_differences: 1, detail: "x" });
   read("o/other", "2026-10-17T10:30:00.000Z", { differences: 9, detail: "other repo" });
@@ -50,10 +53,12 @@ test("section 6b: counts, sums, failed reads and the newest difference detail pe
 
   const sql = block().replaceAll(":'repo'", "'o/r'").replaceAll(":'since'", "'2026-10-10T00:00:00Z'");
   const rows = db.query(sql, "reader").split("\n").map((l) => l.split("|"));
-  // columns: reader, tool, device, day, compares, differences, live_differences, failed_reads, newest_detail
+  // columns: reader, tool, device, day, compares, differences, live_differences, failed_reads, newest_detail,
+  // scope_floor, out_of_scope
   assert.equal(rows.length, 3);
   const by = Object.fromEntries(rows.map((r) => [`${r[0]} ${r[3].slice(0, 10)}`, r]));
-  assert.deepEqual([by["claim-events 2026-10-17"][4], by["claim-events 2026-10-17"][5], by["claim-events 2026-10-17"][6], by["claim-events 2026-10-17"][7], by["claim-events 2026-10-17"][8]], ["4", "3", "4", "0", "newest"]);
-  assert.deepEqual(by["claim-events 2026-10-18"].slice(4), ["1", "0", "0", "1", ""]);
-  assert.deepEqual(by["other-reader 2026-10-18"].slice(4), ["1", "1", "1", "1", "x"]);
+  assert.deepEqual([by["claim-events 2026-10-17"][4], by["claim-events 2026-10-17"][5], by["claim-events 2026-10-17"][6], by["claim-events 2026-10-17"][7], by["claim-events 2026-10-17"][8]], ["7", "3", "4", "0", "newest"]);
+  assert.deepEqual(by["claim-events 2026-10-17"].slice(9), ["2026-10-17T13:26:02Z", "12"]);
+  assert.deepEqual(by["claim-events 2026-10-18"].slice(4), ["1", "0", "0", "1", "", "", "0"]);
+  assert.deepEqual(by["other-reader 2026-10-18"].slice(4), ["1", "1", "1", "1", "x", "", "0"]);
 });

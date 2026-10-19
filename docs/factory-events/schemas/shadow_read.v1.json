@@ -17,10 +17,13 @@
     "old_ok": { "type": "boolean", "description": "Whether the central read of the old side succeeded.", "x-column": true },
     "new_ok": { "type": "boolean", "description": "Whether the central read of the new side succeeded.", "x-column": true },
     "settle_seconds": { "type": "integer", "minimum": 0, "description": "The settle time in seconds: both sides are cut this far back so push lag is not counted as a difference.", "x-column": true },
-    "detail": { "type": ["string", "null"], "maxLength": 500, "description": "The first difference as old against new, or null when there is none." }
+    "detail": { "type": ["string", "null"], "maxLength": 500, "description": "The first difference as old against new, or null when there is none." },
+    "scope_floor": { "type": ["string", "null"], "description": "The writing device's first time in the new store for the repo (ISO, whole seconds), or null when it has none. The compare leaves out of both sides the events of a device older than its floor, history the new store never held." },
+    "out_of_scope": { "type": ["integer", "null"], "minimum": 0, "description": "How many events the floor left out of both sides, or null when the reader does not count them." }
   },
   "examples": [
     { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null },
-    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 2, "live_differences": 3, "diff_keys": ["o/r#12", "o/r#15"], "old_ok": true, "new_ok": false, "settle_seconds": 120, "detail": "o/r#12 old: claimed by dev-a, new: ready" }
+    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 2, "live_differences": 3, "diff_keys": ["o/r#12", "o/r#15"], "old_ok": true, "new_ok": false, "settle_seconds": 120, "detail": "o/r#12 old: claimed by dev-a, new: ready" },
+    { "reader": "loop-facts", "tool": "factory-loop", "compared": 191, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null, "scope_floor": "2026-10-17T13:26:02Z", "out_of_scope": 197 }
   ]
 }

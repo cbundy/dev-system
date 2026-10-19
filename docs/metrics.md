@@ -446,7 +446,12 @@ How often a reader with an old/new source switch (`reader`, such as `claim-event
 sources disagreeing. The command that compares (`tool`) writes one `shadow_read` event per compare,
 not per issue (`shadow_read.v1.json`). `differences` counts keys whose answers differ with both
 sides cut at the settle time, `live_differences` the same on everything read (push lag included),
-and `old_ok` / `new_ok` say whether that side's central read succeeded. A retried write can repeat
+and `old_ok` / `new_ok` say whether that side's central read succeeded. Both compares leave out the events of a
+device older than that device's first event in the new store (its floor): the production new store holds only
+dual-written events, so the old window reaches back before it begins. `scope_floor` is the writing device's floor
+(null when it has none) and `out_of_scope` how many events the floor left out (`loop-facts` only), so a clean
+compare can be told from one the floor cut most of; the query returns the newest `scope_floor` and the summed
+`out_of_scope`. A retried write can repeat
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
@@ -459,10 +464,12 @@ event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS
 before now; the query groups by reader and tool.
 
 ```sql
--- per reader, tool, device and day: compares, differences, failed reads, newest difference detail
+-- per reader, tool, device and day: compares, differences, failed reads, newest difference detail, newest scope floor, events out of scope
 WITH compares AS (
   SELECT e.reader, e.tool, e.device, e.ts, e.differences, e.live_differences, e.old_ok, e.new_ok,
          s.data ->> 'detail' AS detail,
+         s.data ->> 'scope_floor' AS scope_floor,
+         (s.data ->> 'out_of_scope')::int AS out_of_scope,
          row_number() OVER (PARTITION BY e.repo, e.device, e.ts ORDER BY e.event_id) AS dup
   FROM factory.event_log e
   JOIN factory.event_store s ON s.event_id = e.event_id
@@ -480,7 +487,9 @@ SELECT reader, tool, device, date_trunc('day', ts) AS day,
   sum(differences)                                 AS differences,
   sum(live_differences)                            AS live_differences,
   count(*) FILTER (WHERE NOT old_ok OR NOT new_ok) AS failed_reads,
-  max(detail) FILTER (WHERE newest = 1 AND differences > 0) AS newest_detail
+  max(detail) FILTER (WHERE newest = 1 AND differences > 0) AS newest_detail,
+  (array_agg(scope_floor ORDER BY ts DESC) FILTER (WHERE scope_floor IS NOT NULL))[1] AS scope_floor,
+  coalesce(sum(out_of_scope), 0)                   AS out_of_scope
 FROM once
 GROUP BY reader, tool, device, date_trunc('day', ts)
 ORDER BY day DESC, reader, tool, device;

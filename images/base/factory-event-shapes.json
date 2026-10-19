@@ -940,9 +940,22 @@
         "old_ok": {
           "type": "boolean"
         },
+        "out_of_scope": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "reader": {
           "pattern": "^[a-z][a-z0-9-]*$",
           "type": "string"
+        },
+        "scope_floor": {
+          "type": [
+            "null",
+            "string"
+          ]
         },
         "settle_seconds": {
           "minimum": 0,

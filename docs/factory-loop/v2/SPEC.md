@@ -342,7 +342,11 @@ type IssueRecord = {
   `facts-shadow:<time>`; `diff_keys` are `reclaimed:#N`, `ledger:<key>` and `once:<key>`); a failing new read
   never fails the pass and is a compare with `new_ok` false. A compare with differences tells the owner once
   per distinct set of keys (`tell(facts-shadow)`, key `tell:facts-shadow:<keys>`, with the first difference
-  and the way back).
+  and the way back). Before comparing, the shadow reads each device's first new-store time for the repo
+  (`NEW_FLOORS_SQL`, one `dev-query --factory` read, only on the compare pass) and drops from both sides the events of
+  a device older than its floor: the production new store holds only dual-written events, so the old window reaches
+  back before its history begins. Events of a device with no new row, and events with no device, stay. The event
+  carries `scope_floor` and `out_of_scope`; a failing floor read is a compare with `new_ok` false.
 
 ### 3.4 Labels
 
