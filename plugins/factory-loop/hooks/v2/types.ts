@@ -6,6 +6,7 @@
 // constants only: the pure planner imports this, so nothing here may run a command or read a
 // clock.
 import type { PlanCtx } from '../foundation'
+import type { Snapshot } from '../settings-snapshot'
 import type { ActionBase, ActionClass, Config, LedgerEntry, LedgerStatus, Ms, Source } from '../types'
 import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
@@ -533,7 +534,12 @@ export type V2State = {
   starvedSince?: Ms
   // the blocker tree read for the spell and its current period (sources-blockers.ts); absent: not read
   blockers?: BlockerTree
+  // the settings in force now, the last snapshot kept in the store (null: none valid) and the config ops that landed since (rules-settings.ts); absent: not read
+  settings?: { now: Snapshot; nowAt: Ms; before: Snapshot | null; beforeAt: Ms | null; ops: SettingsOp[] }
 }
+
+// a config op that landed (driver-controls.ts), kept in the store until the snapshot after it
+export type SettingsOp = { key: string; by: 'person' | 'judge'; at: Ms }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
 export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict }

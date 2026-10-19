@@ -1499,6 +1499,32 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect((await factoryOp($, 'config')).text).toContain('passEvery       5m')
   })
 
+  test('an acting pass keeps its settings snapshot, and a config op that lands is logged as a person\'s change (rule N1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // the first pass stores the snapshot and logs no change
+    expect(h.store.get(`settings:${REPO}`)).toMatchObject({ v: 1, repo: REPO, settings: { mode: 'act' } })
+    const settingsEvents = () => h.commands().filter(s => s.argv.join(' ').includes('--type settings_changed'))
+    expect(settingsEvents()).toEqual([])
+    expect(h.store.get(`settings-ops:${REPO}`)).toBeUndefined()
+    // a config op that lands is kept for the next pass
+    const r = await factoryOp($, 'config set maxInFlightIssues 7')
+    expect(r.text).toContain('maxInFlightIssues')
+    await clock.settle()
+    expect(h.store.get(`settings-ops:${REPO}`)).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', by: 'person' })])
+    await clock.advance(61_000)
+    const logged = settingsEvents().map(s => JSON.parse(s.argv[s.argv.indexOf('--data') + 1] ?? '{}') as Record<string, unknown>)
+    expect(logged).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' })])
+    expect((h.store.get(`settings:${REPO}`) as { settings: Record<string, unknown> }).settings.maxInFlightIssues).toBe(7)
+    // the pass after it has no change to log, and the op older than the snapshot is dropped
+    await clock.advance(61_000)
+    expect(settingsEvents()).toHaveLength(1)
+    expect(h.store.get(`settings-ops:${REPO}`)).toEqual([])
+  })
+
   test('/factory retry clears the issue\'s exhausted entries in the ledger', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()

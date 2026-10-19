@@ -11,18 +11,20 @@ import { holdsLock, recordPass } from './pass-summary'
 import { LOCK_CAS_SCRIPT, actLockPath, checkRails, holdActLock, leaseMsOf, nextPass, noticeTell, parseLease, passEnded, pingsIgnored, requestPass, waitOver } from './rails'
 import type { BreakerNotice, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { keepTitles } from './report'
-import { agentModelsOf, snapshotOf, writeSnapshot } from './settings-snapshot'
+import { agentModelsOf, snapshotFrom, snapshotOf, writeSnapshot } from './settings-snapshot'
+import type { Snapshot } from './settings-snapshot'
 import { digestOf } from './state'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
 import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
+import { opsFrom } from './v2/rules-settings'
 import { stateCounts } from './v2/rules-state'
 import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/store'
 import { windDownFiles, withRemembered } from './v2/wind-down-files'
 import { windDownOf } from './v2/wind-down'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
-import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
+import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
 import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
@@ -206,8 +208,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
   let state = observed.state
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
+  let snap: Snapshot | null = null
+  let before: Snapshot | null = null
   try {
-    const snap = snapshotOf(
+    snap = snapshotOf(
       rt,
       state.control,
       await agentModelsOf(path => text($, path), rt.pluginRoot),
@@ -217,6 +221,12 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     problems.push(...(await writeSnapshot({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, snap)))
   } catch (e) {
     problems.push(`settings snapshot: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  // an acting pass hands the planner the snapshot and the last one kept, with the config ops since (rule N1)
+  if (act && snap !== null && state.v2 !== undefined) {
+    const kept = snapshotFrom(await storeGet($, keys.settings))
+    before = kept?.snap ?? null
+    state = { ...state, v2: { ...state.v2, settings: { now: snap, nowAt: state.now, before, beforeAt: kept?.at ?? null, ops: opsFrom(await storeGet($, keys.settingsOps)) } } }
   }
   if (act) await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
@@ -345,6 +355,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     // on the first pass that is not starved
     if (result.starved === true && stored?.starvedSince == null) await keepInStore(keys.starved, state.now)
     else if (result.starved === false && stored?.starvedSince != null) await storeDelete($, keys.starved, problems)
+    if (snap !== null) await keepSettings(keepInStore, $, keys, snap, before)
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 

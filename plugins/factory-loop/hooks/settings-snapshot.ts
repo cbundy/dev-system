@@ -62,6 +62,14 @@ export type Snapshot = {
   problems: string[]
 }
 
+// snapshotFrom: the kept value as a snapshot with its time in ms, null when it is not a valid snapshot of this version
+export function snapshotFrom(raw: unknown): { snap: Snapshot; at: Ms } | null {
+  if (!isPlain(raw) || raw.v !== SNAPSHOT_VERSION || typeof raw.at !== 'string' || typeof raw.plugin_version !== 'string') return null
+  if (!isPlain(raw.settings) || !isPlain(raw.layers) || !isPlain(raw.derived)) return null
+  const at = Date.parse(raw.at)
+  return Number.isNaN(at) ? null : { snap: raw as unknown as Snapshot, at }
+}
+
 export function snapshotOf(rt: Runtime & Partial<ViewInputs>, control: Control, agentModels: AgentModels, env: ShareEnv, at: Ms): Snapshot {
   const repoRaw = rt.repoSettings ?? null
   const workspaceRaw = rt.workspaceRaw ?? {}
