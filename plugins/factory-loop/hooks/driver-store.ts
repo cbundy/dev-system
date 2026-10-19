@@ -165,6 +165,7 @@ export function noticeOf(raw: unknown): Notice | null {
   if (o === null || !isMs(o.since)) return null
   if (o.kind === 'heartbeat-other' && typeof o.device === 'string') return { kind: o.kind, device: o.device, since: o.since }
   if (o.kind === 'old-watcher' && typeof o.pid === 'string') return { kind: o.kind, pid: o.pid, since: o.since }
+  if (o.kind === 'schema-behind' && typeof o.to === 'string' && typeof o.error === 'string') return { kind: o.kind, to: o.to, error: o.error, since: o.since }
   if (o.kind === 'breaker' && isMs(o.until) && isMs(o.passes)) return { kind: o.kind, since: o.since, until: o.until, passes: o.passes }
   return null
 }
@@ -179,6 +180,8 @@ export function noticesFrom(raw: unknown): NoticeBook {
 // stale: a notice whose spell ended before it could go out says nothing true any more.
 export function stale(n: Notice, memory: RailMemory | null, now: Ms): boolean {
   if (n.kind === 'breaker') return now >= n.until
+  // keyed by the status's own `at`: the ledger's key makes it go out once
+  if (n.kind === 'schema-behind') return false
   if (memory === null) return false
   if (n.kind === 'heartbeat-other') return memory.heartbeat?.since !== n.since
   return memory.watcher?.since !== n.since

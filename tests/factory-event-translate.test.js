@@ -471,6 +471,35 @@ test("--data extras: an unknown key, a key the line already set and a wrong shap
   assert.match(miss(closed, { title: "T" }), /^closed: internal: unexpected field title/);
 });
 
+test("--data extras: score and factors on claimed are strictly valid; wrong shapes are misses naming the field", () => {
+  const line = oldLines.find((l) => l.state === "claimed" && l.note === "lease: 120");
+  const ts = "2026-10-17T01:02:03.456Z";
+  const run = (data) => translate(line, { ts, sessionId: null, data });
+  const base = translate(line).event.data;
+  for (const data of [
+    { score: 42, factors: [{ name: "bug", points: 25 }, { name: "age", points: 17 }] },
+    { score: -3, factors: [] },
+    { score: null, factors: null },
+    { score: 0 },
+  ]) {
+    const r = run(data);
+    assert.deepEqual(r.event.data, { ...base, ...data });
+    assert.deepEqual(reader.validateStrict("claimed", 1, r.event.data), []);
+  }
+  const bad = [
+    [{ score: 1.5 }, "score"],
+    [{ score: "3" }, "score"],
+    [{ factors: [{ name: "", points: 1 }] }, "factors"],
+    [{ factors: [{ name: "a" }] }, "factors"],
+    [{ factors: [{ name: "a", points: 1, x: 1 }] }, "factors"],
+    [{ factors: [{ name: "a", points: 1.5 }] }, "factors"],
+    [{ factors: {} }, "factors"],
+  ];
+  for (const [data, field] of bad) assert.match(run(data).miss, new RegExp(`^claimed: ${field} is not valid`), JSON.stringify(data));
+  const ready = oldLines.find((l) => l.state === "ready");
+  assert.match(translate(ready, { ts, data: { score: 1 } }).miss, /^ready: internal: unexpected field score/);
+});
+
 test("CLI: --data makes it dual write and gives the same event; a foreign key is a miss, not JSON is usage", () => {
   const line = JSON.stringify(oldLines.find((l) => l.state === "ready"));
   const facts = { title: "T", labels: ["ready"], parent: null };

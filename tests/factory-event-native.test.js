@@ -75,7 +75,7 @@ test("a known type is written as one envelope-v1 line to the new log only, and r
   const e = JSON.parse(lines[0]);
   assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
   assert.deepEqual(reader.validateStrict("claimed", 1, e.data), []);
-  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30, title: null, labels: null, parent: null } });
+  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30, title: null, labels: null, parent: null, score: null, factors: null } });
   assert.match(e.ts, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   assert.equal(e.session_id, null);
   assert.equal(e.issue, 7);
@@ -125,6 +125,25 @@ test("every schema's own example goes through the CLI and reads back (the produc
     assert.deepEqual(reader.validateStrict(type, e.type_version, e.data), [], type);
     assert.deepEqual(reader.readEvent(e).data, { ...Object.fromEntries(Object.keys(schema.properties).map((k) => [k, null])), ...data }, type);
   }
+});
+
+test("loop_entry: the startup migrate's fields (dev-system#888) are written and validate; an entry without them still does, with the fields read as null", () => {
+  const example = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "loop_entry.v1.json"), "utf8")).examples[0];
+  const migrate = {
+    kind: "task", key: "task:migrate:9", status: "failed", attempts: 1, class: "free", rule: "dev-init",
+    started_at: "2026-10-19T01:02:03.456Z", ended_at: "2026-10-19T01:02:04.456Z", agent_id: "box", wake: "migrate",
+    database: "fdb", from_version: null, to_version: 9, duration_ms: 1000, outcome: "failed", error: "boom",
+  };
+  for (const data of [migrate, example]) {
+    const { r, lines } = native(["--type", "loop_entry", "--data", JSON.stringify(data)]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const e = JSON.parse(lines[0]);
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, e.data), []);
+    assert.equal(reader.readEvent(e).data.outcome ?? null, data.outcome ?? null);
+    assert.equal(reader.readEvent(e).data.database ?? null, data.database ?? null);
+  }
+  assert.notDeepEqual(reader.validateStrict("loop_entry", 1, { ...migrate, outcome: "exploded" }), []);
 });
 
 test("wind_down: a full event is written with no warning and validates; bad ones fail strictly or exit 2", () => {

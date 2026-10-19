@@ -190,6 +190,9 @@ export function viewOf(events: readonly FactoryEvent[], device: string): View {
   const list = [...events]
   const ledger = new Map<string, LedgerEntry>()
   for (const entry of deriveLedger(list, device)) {
+    // the start-up migrate's record (factory-db-migrate) is written to the new store only, so it is no
+    // difference between the stores
+    if (entry.rule === 'dev-init' && entry.wake === 'migrate') continue
     if (entry.rule === 'derived') ledger.set(entry.key, entry)
     else ledger.set(entry.key, { ...entry, run: null, pr: null, head: null, outcome: undefined })
   }

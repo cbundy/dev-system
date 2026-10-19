@@ -19,7 +19,13 @@
     "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise.", "x-column": true },
     "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise.", "x-column": true },
     "decision": { "type": ["string", "null"], "description": "A wake's decision, for example hold or done; null when the wake made none.", "x-column": true },
-    "decision_reason": { "type": ["string", "null"], "maxLength": 200, "description": "Why the wake decided as it did; null when it made no decision." }
+    "decision_reason": { "type": ["string", "null"], "maxLength": 200, "description": "Why the wake decided as it did; null when it made no decision." },
+    "database": { "type": ["string", "null"], "description": "A schema migrate (task:migrate:<to_version>, wake migrate, written by factory-db-migrate at start-up): the factory database that was migrated." },
+    "from_version": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: the schema version before it; null when unknown (the migrate failed before it was read)." },
+    "to_version": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: the highest migration number the image ships." },
+    "duration_ms": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: how long it took, in milliseconds." },
+    "outcome": { "enum": ["migrated", "current", "failed", "timed-out", null], "description": "A schema migrate: migrated (versions applied), current (nothing to apply), failed or timed-out." },
+    "error": { "type": ["string", "null"], "description": "A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded." }
   },
   "examples": [
     { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }

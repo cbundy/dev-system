@@ -675,3 +675,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   path is refused. (e) would let a stale file or another agent's answer stand in: the path is
   who answered. Text stays every
   prompt's fallback, so an agent whose script call is refused still answers.
+
+### D-75 The loop stays in observe while the startup schema migrate has failed
+
+- **Decision** (the agent's choice, 2026-10-19; #888): `dev-init` migrates the factory database
+  with `factory-db-migrate` before the loop starts and records the outcome in a status file. A new
+  rail (`hooks/rail-schema.ts`, after the heartbeat guard, before the act lock) reads it. A missing
+  file, `migrated` and `current` pass; `failed`, `timed-out`, a `running` record older than 10
+  minutes and a file that cannot be parsed keep the loop in observe, and all but a young `running`
+  tell the owner once per startup as `TELL schema-behind to=<v> error=<e>` under
+  `tell:schema-behind:<at>` (v2 SPEC 13.9.2, 13.11.2).
+- **Alternatives**: (a) fail `dev-init`; (b) let the loop act and fail on the first write the schema
+  lacks; (c) have the loop run the migrate itself; (d) pass on a missing file only when no
+  migrator secret exists, checking the secret from the rail.
+- **Why**: a loop acting on an old schema writes events and reads views that are not there. (a)
+  would keep the workspace from starting for a database fault, and `dev-init` is best effort by
+  design. (b) leaves partial work. (c) gives a loop session the migrator secret. (d) makes the rail
+  read a secret folder; a missing status file already means nothing ran here.
