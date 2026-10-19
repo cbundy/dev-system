@@ -29,6 +29,12 @@
 # production new store holds only dual-written events); `differences` counts the window cut
 # CALLUM_FLOW_SHADOW_SETTLE_SECONDS (default 600) before now, so push lag is not a difference, and
 # `live_differences` the whole window. Cuts are at whole seconds on both sides and both local logs.
+# The window also reaches back before the new store's history: it holds only dual-written events and
+# is not backfilled. So the shadow reads each device's first time in factory.event_log for the repo
+# (the floor) once, and leaves out of both sides, and both local logs, every event of a device older
+# than that floor. A device with no new row keeps all its events and still shows as a difference.
+# The shadow_read event names this device's floor as scope_floor (null when it has none). The decision
+# paths (ce_load without shadow, ce_held) do not read floors.
 #
 # The caller sets before calling: DEVQ (the dev-query command), EVENT (callum-flow-event),
 # repo, CE_TOOL (its name, for warnings).
@@ -68,14 +74,16 @@ ce_source() {
   esac
 }
 
-# ce_read_central SIDE OUT [SINCE [UNTIL]]: JSON lines {ts, issue, state, device} of the latest
+# ce_read_central SIDE OUT [SINCE [UNTIL [FLOORS]]]: JSON lines {ts, issue, state, device} of the latest
 # lifecycle event and the latest claim event per issue, SIDE old (factory.events) or new
 # (factory.event_log through dev-query --factory). SINCE and UNTIL are ISO times cut at whole
-# seconds: the rows read are ts >= SINCE and ts < UNTIL (none given: all). OUT is empty when
+# seconds: the rows read are ts >= SINCE and ts < UNTIL (none given: all). FLOORS, when given, is a
+# JSON object of ISO time by device: a row of a device in it, older than its time, is left out
+# before the latest per issue is picked. OUT is empty when
 # dev-query is absent or not configured (exit 78); a failure warns (unless CE_QUIET is set) and
 # leaves it empty. CE_RC is the dev-query exit status (127 when it is absent).
 ce_read_central() {
-  _cside=$1 _cout=$2 _csince=${3:-} _cuntil=${4:-}
+  _cside=$1 _cout=$2 _csince=${3:-} _cuntil=${4:-} _cfloors=${5:-}
   : > "$_cout"
   CE_RC=127
   command -v "$DEVQ" >/dev/null 2>&1 || return 0
@@ -89,6 +97,10 @@ ce_read_central() {
   if [ -n "$_cuntil" ]; then
     _cw="$_cw AND ts < :'until'::timestamptz"
     set -- "$@" -v "until=$_cuntil"
+  fi
+  if [ -n "$_cfloors" ]; then
+    _cw="$_cw AND ((:'floors'::jsonb ->> device) IS NULL OR ts >= (:'floors'::jsonb ->> device)::timestamptz)"
+    set -- "$@" -v "floors=$_cfloors"
   fi
   if [ "$_cside" = new ]; then
     "$DEVQ" --factory "$@" -c "SELECT DISTINCT ON (issue, type IN ($CE_NEW_CLAIM_SQL)) to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') || '|' || issue || '|' || type || '|' || COALESCE(device, '')
@@ -193,15 +205,41 @@ ce_diff() {
     }' "$1" "$2" | sort -k1,1 -k2,2n
 }
 
-# ce_side DIR SIDE DEVICE SINCE UNTIL: the latest file DIR/latest of one side over one window.
-# Sets CE_SIDE_OK to 0 when its central read or its local log failed (not configured counts as
-# a failure here: a compare needs both sides).
+# ce_read_floors OUT: sets CE_FLOORS to the JSON object of each device's first time in the new store
+# (factory.event_log) for the repo, in whole seconds, by device. CE_RC is the dev-query exit status
+# (127 when it is absent); on a failure CE_FLOORS is empty. The shadow's compare alone reads it.
+ce_read_floors() {
+  CE_FLOORS=''
+  CE_RC=127
+  command -v "$DEVQ" >/dev/null 2>&1 || return 0
+  _frc=0
+  "$DEVQ" --factory -At -v "repo=$repo" -c "SELECT device || '|' || to_char(date_trunc('second', min(ts)) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+      FROM factory.event_log WHERE repo = :'repo' AND device IS NOT NULL GROUP BY device ORDER BY device" \
+    > "$1.raw" 2> /dev/null < /dev/null || _frc=$?
+  CE_RC=$_frc
+  if [ "$_frc" -eq 0 ]; then
+    CE_FLOORS=$(jq -R -s -c 'split("\n") | map(select(contains("|")) | split("|") | {key: .[0], value: .[1]}) | from_entries' "$1.raw" 2> /dev/null) || CE_FLOORS=''
+    [ -n "$CE_FLOORS" ] || CE_RC=1
+  elif [ "$_frc" -ne 78 ] && [ -z "${CE_QUIET:-}" ]; then
+    echo "$CE_TOOL: warning: cannot read the central event log (new source, dev-query --factory exit $_frc), using this device's log only" >&2
+  fi
+  return 0
+}
+
+# ce_side DIR SIDE DEVICE SINCE UNTIL [FLOORS]: the latest file DIR/latest of one side over one window,
+# without the events older than their device's floor (FLOORS as ce_read_central takes it; this
+# device's local log is cut at its own floor, as late as SINCE). Sets CE_SIDE_OK to 0 when its central
+# read or its local log failed (not configured counts as a failure here: a compare needs both sides).
 ce_side() {
   mkdir -p "$1" 2> /dev/null || return 1
   CE_SIDE_OK=0
-  ce_read_central "$2" "$1/central" "$4" "$5"
+  _sdsince=$4
+  if [ -n "${6:-}" ]; then
+    _sdsince=$(printf '%s' "$6" | jq -r --arg d "$3" --arg s "$4" '[(.[$d] // ""), $s] | max' 2> /dev/null) || _sdsince=$4
+  fi
+  ce_read_central "$2" "$1/central" "$4" "$5" "${6:-}"
   [ "$CE_RC" -ne 0 ] || CE_SIDE_OK=1
-  ce_read_local "$2" "$1/local" "$3" "$4" "$5" || CE_SIDE_OK=0
+  ce_read_local "$2" "$1/local" "$3" "$_sdsince" "$5" || CE_SIDE_OK=0
   ce_build_latest "$1" "$2"
 }
 
@@ -221,15 +259,28 @@ ce_shadow() {
   _sd="$1/shadow"
   rm -rf "$_sd" 2> /dev/null
   _sold_ok=1 _snew_ok=1
+  mkdir -p "$_sd" 2> /dev/null || return 0
+  # each device's first new-store time: the history before it is out of scope on both sides
+  CE_QUIET=''
+  ce_read_floors "$_sd/floors"
+  [ "$CE_RC" -ne 78 ] && [ "$CE_RC" -ne 127 ] || return 0
+  _sfloors=$CE_FLOORS
+  _sfloor=''
+  if [ "$CE_RC" -ne 0 ]; then
+    _snew_ok=0
+  else
+    _sfloor=$(printf '%s' "$_sfloors" | jq -r --arg d "$2" '.[$d] // empty' 2> /dev/null) || _sfloor=''
+  fi
   for _sw in settled live; do
+    [ "$_snew_ok" -eq 1 ] || break
     if [ "$_sw" = settled ]; then _suntil=$_scut; else _suntil=$_slive; fi
     CE_QUIET=1
-    ce_side "$_sd/old-$_sw" old "$2" "$_ssince" "$_suntil" || return 0
+    ce_side "$_sd/old-$_sw" old "$2" "$_ssince" "$_suntil" "$_sfloors" || return 0
     [ "$CE_RC" -ne 78 ] && [ "$CE_RC" -ne 127 ] || return 0
     [ "$CE_SIDE_OK" -eq 1 ] || _sold_ok=0
     # the new side warns once, on its first read
     if [ "$_sw" = settled ]; then CE_QUIET=''; fi
-    ce_side "$_sd/new-$_sw" new "$2" "$_ssince" "$_suntil" || return 0
+    ce_side "$_sd/new-$_sw" new "$2" "$_ssince" "$_suntil" "$_sfloors" || return 0
     [ "$CE_RC" -ne 78 ] && [ "$CE_RC" -ne 127 ] || return 0
     [ "$CE_SIDE_OK" -eq 1 ] || _snew_ok=0
     ce_tuples "$_sd/old-$_sw/latest" > "$_sd/old-$_sw/tuples"
@@ -259,11 +310,12 @@ ce_shadow() {
   _sdata=$(jq -n -c --arg tool "$CE_TOOL" --arg repo "$repo" --argjson compared "$_scompared" --argjson diffs "$_sdiffs" \
     --argjson live "$_slivediffs" --argjson oldok "$([ "$_sold_ok" -eq 1 ] && echo true || echo false)" \
     --argjson newok "$([ "$_snew_ok" -eq 1 ] && echo true || echo false)" --argjson settle "$_sset" --arg detail "$_sdetail" \
-    --rawfile keys "$_sd/keys" \
+    --rawfile keys "$_sd/keys" --arg floor "$_sfloor" \
     '{reader: "claim-events", tool: $tool, compared: $compared, differences: $diffs, live_differences: $live,
       diff_keys: ($keys | split("\n") | map(select(. != "") | "\($repo)#\(.)") | .[0:50]),
       old_ok: $oldok, new_ok: $newok, settle_seconds: $settle,
-      detail: (if $detail == "" then null else $detail[0:500] end)}') || return 0
+      detail: (if $detail == "" then null else $detail[0:500] end),
+      scope_floor: (if $floor == "" then null else $floor end)}') || return 0
   "$EVENT" --type shadow_read --data "$_sdata" --repo "$repo" > /dev/null 2>&1 \
     || echo "$CE_TOOL: warning: cannot record the shadow_read event" >&2
   return 0

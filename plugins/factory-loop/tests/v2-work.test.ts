@@ -36,7 +36,7 @@ const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
 const BIN = `${PLUGIN_ROOT}/bin/factory-answer`
-const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Observability', 'none - no new decision', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
+const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Observability', 'none - no new decision', '', '## Compatibility', 'none - no schema, event or reader change', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
 
 // --- worlds, as v2-state.test.ts builds them ------------------------------------------------------------
 
@@ -120,6 +120,7 @@ describe('the design-v2 contract (8.7)', () => {
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
       'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
+      'brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"',
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
@@ -195,6 +196,16 @@ describe('the design-v2 contract (8.7)', () => {
     expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
+  })
+
+  test('a brief must say how it stays compatible: an empty or missing ## Compatibility is refused', () => {
+    const COMPAT = '## Compatibility\nnone - no schema, event or reader change\n\n'
+    const problem = 'brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"'
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '## Compatibility\n\n') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '```\n## Compatibility\nnone\n```\n\n') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF })).toEqual([])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace('none - no schema, event or reader change', '- adds a nullable column to factory.events - every loop of the last 10 minor versions ignores it - the window test (#886)') })).toEqual([])
   })
 
   test('a brief must say what it makes observable: an empty or missing ## Observability is refused', () => {
