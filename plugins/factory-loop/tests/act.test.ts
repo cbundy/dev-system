@@ -125,7 +125,7 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
   test('every action kind is one a module of the current loop produces: no kind of the v1 planner is left', () => {
     expect([...ACTION_KINDS].sort()).toEqual(
       [
-        'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+        'heartbeat', 'sweep', 'claim', 'close-issue', 'delete-branch', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
         ...V2_ACTION_KINDS,
       ].sort(),
     )

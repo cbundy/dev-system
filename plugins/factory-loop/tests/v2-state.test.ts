@@ -485,6 +485,83 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(checks([read('merge'), { ...closed(key, 139, true), outcome: { kind: 'close-tracker', parent: null, closed: true, open: [] } }])).toEqual([])
   })
 
+  describe('a done close (T18): the work was already merged (8.7, 4.5)', () => {
+    const SHA = (c: string) => c.repeat(40).slice(0, 40)
+    const designing = rec(90, { state: 'designing', step: 'design' })
+    const closedRec = rec(90, { state: 'closed', step: null, why: 'done', seq: 4, seqAt: NOW - MIN, since: NOW - MIN, notes: ['done: PR #812 (merge aaaaaaa)'] })
+    const answer = (branch: { sha: string | null; beyond: number | null }, over: Record<string, unknown> = {}) =>
+      stepDone(designing, 'design', {
+        event: 'not-ok',
+        reason: 'done',
+        data: { kind: 'done', brief: null, question: null, children: [], evidence: { pr: 812, commit: null, runIt: `https://github.com/${REPO}/issues/90#issuecomment-5` }, reason: 'Shipped in PR 812', text: 'done: PR #812', checked: SHA('a'), mergeCommit: SHA('a'), prHead: SHA('b'), branch, ...over },
+      })
+    const at = (extra: LedgerEntry[], data = answer({ sha: SHA('c'), beyond: 0 })) => withLedger(world([closedRec]), [data, transitioned(closedRec, 'T18', 'designing', 'done'), ...extra])
+    const close = (status: LedgerEntry['status'] = 'done') => done(followKey(closedRec, 'close-issue'), 'close-issue', { issue: 90, status })
+
+    test('the closed entry clears the labels, posts one comment with the evidence, the reason and the branch line, then closes the issue as completed and logs closed; it tells the owner once', () => {
+      const r = plan(at([]))
+      expect(kinds(r, 90)).toEqual(['event transition', 'label clear', 'comment', 'close-issue', 'tell'])
+      const comment = of(r, 90).find(a => a.kind === 'comment')
+      expect(comment).toMatchObject({ key: entryKey(closedRec, 'comment'), on: 'issue', number: 90 })
+      const body = (comment as { body: string }).body
+      expect(body).toContain('PR #812 (merge aaaaaaa)')
+      expect(body).toContain(`run it: https://github.com/${REPO}/issues/90#issuecomment-5`)
+      expect(body).toContain('Reason: Shipped in PR 812')
+      expect(body).toContain('`issue-90` is deleted from origin, since it has no commit beyond the default branch')
+      expect(body).not.toMatch(/\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#\d+/i)
+      // a closing keyword in the designer's reason links nothing once the executor posts it
+      const worded = plan(at([], answer({ sha: SHA('c'), beyond: 0 }, { reason: 'Closes #12 and fixes #13' })))
+      expect(commentBody((of(worded, 90).find(x => x.kind === 'comment') as { body: string }).body, 'k')).toContain('Reason: Closing #12 and fixing #13')
+      expect(of(r, 90).find(a => a.kind === 'close-issue')).toMatchObject({ key: followKey(closedRec, 'close-issue'), issue: 90, logClosed: true })
+      expect(of(r, 90).find(a => a.kind === 'tell')).toMatchObject({ wake: 'done', fields: { issue: '90', branch: 'deleted' } })
+    })
+
+    test('the branch is deleted, leased on the head read, only once the close is done and only when it has no commit beyond main or is the evidence PR\'s head', () => {
+      const deletes = (extra: LedgerEntry[], data?: LedgerEntry) => of(plan(at(extra, data)), 90).filter(a => a.kind === 'delete-branch')
+      expect(deletes([])).toEqual([])
+      expect(deletes([close('running')])).toEqual([])
+      expect(deletes([close()])).toEqual([expect.objectContaining({ key: followKey(closedRec, 'delete-branch'), branch: 'issue-90', sha: SHA('c') })])
+      // its head is the merged PR's head, whatever it holds beyond main
+      expect(deletes([close()], answer({ sha: SHA('b'), beyond: 3 }))).toEqual([expect.objectContaining({ sha: SHA('b') })])
+      // its own commits: kept, and the comment and the tell say so
+      const own = plan(at([close()], answer({ sha: SHA('c'), beyond: 3 })))
+      expect(of(own, 90).filter(a => a.kind === 'delete-branch')).toEqual([])
+      expect((of(own, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('is kept, since it has 3 commits of its own beyond the default branch')
+      expect(of(own, 90).find(a => a.kind === 'tell')).toMatchObject({ fields: { branch: 'kept' } })
+      // not read beyond main: kept
+      expect(deletes([close()], answer({ sha: SHA('c'), beyond: null }))).toEqual([])
+      // no branch on origin: nothing to delete
+      const absent = plan(at([close()], answer({ sha: null, beyond: null })))
+      expect(of(absent, 90).filter(a => a.kind === 'delete-branch')).toEqual([])
+      expect((of(absent, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('origin has no branch issue-90')
+      // the design answer can no longer be read: the close still runs, no branch is deleted
+      const lost = plan(withLedger(world([closedRec]), [transitioned(closedRec, 'T18', 'designing', 'done'), close()]))
+      expect(kinds(lost, 90)).toEqual(['event transition', 'label clear', 'comment', 'close-tracker', 'tell'])
+      expect((of(lost, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('no branch is deleted')
+    })
+
+    test('a split child that was the last open one has its tracker checked after the close, the chain going up as a merge\'s does', () => {
+      const key = followKey(closedRec, 'close-tracker')
+      const checks = (extra: LedgerEntry[]) => plan(at(extra)).actions.filter(a => a.kind === 'close-tracker').map(a => [a.key, a.issue])
+      expect(checks([])).toEqual([])
+      expect(checks([close('running')])).toEqual([])
+      expect(checks([close()])).toEqual([[key, 90]])
+      expect(checks([close(), done(key, 'close-tracker', { issue: 90, outcome: { kind: 'close-tracker', parent: 139, closed: true, open: [] } })])).toEqual([[`${key}/up`, 139]])
+    })
+
+    test('the issue shows closed once the loop closed it: no E2 reads a closed done record', () => {
+      const s = withLedger(world([closedRec], {}, { reads: { 90: { open: false, at: NOW, state: null } as never } }), [transitioned(closedRec, 'T18', 'designing', 'done'), close()])
+      expect(transitionOf(plan(s), 90)).toBeUndefined()
+    })
+
+    test('an issue blocked by the done issue is claimable once its blockedBy reads 0 (rules-claim.ts)', () => {
+      const blocked = (blockedBy: number) => plan(world([], { queue: [91], issues: [issue(91, { blockedBy })] }))
+      expect(blocked(1).actions.filter(a => a.kind === 'claim')).toEqual([])
+      expect(said(blocked(1), 91)).toContain('blocked by 1 open issue')
+      expect(blocked(0).actions.filter(a => a.kind === 'claim').map(a => a.issue)).toEqual([91])
+    })
+  })
+
   test('a merged issue whose rollout read keep-open while open issues wait on it tells the owner once; nothing else does', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })

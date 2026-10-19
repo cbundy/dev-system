@@ -1,4 +1,4 @@
-// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 36 rows, each
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 38 rows, each
 // naming the states it applies to, the event it takes, a pure guard, the next state and the pure
 // change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
@@ -23,7 +23,7 @@ export const LIVE_STATES: readonly IssueState[] = ISSUE_STATES.filter(s => s !==
 // and T15. A step module that gives another one is read as unknown (normalize).
 export const NOT_OK_REASONS: Readonly<Record<IssueState, readonly string[]>> = {
   queued: [],
-  designing: ['question', 'split', 'wait'],
+  designing: ['question', 'split', 'wait', 'done'],
   building: ['cannot', 'no-commit'],
   reviewing: ['changes', 'ci-red', 'conflict'],
   fixing: ['declined', 'unchanged'],
@@ -240,6 +240,7 @@ const ROWS: readonly Row[] = [
     change: (_r, e) => ({ wait: dataOf(e).conditions ?? null, resumeTo: 'designing', notes: own(textOf(e, 'the designer waits on a condition')) }),
     via: 'wait',
   },
+  { id: 'T18', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'done', next: 'closed', change: (_r, e) => ({ why: 'done', notes: own(textOf(e, 'done')) }), via: 'done' },
   { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'build' },
   {
     id: 'T6',
@@ -419,7 +420,7 @@ const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE
 
 export const TABLE: readonly Row[] = [...ROWS, ...E7_ROWS]
 
-// The 35 row ids, in the table's order.
+// The row ids, in the table's order.
 export const ROW_IDS: readonly string[] = [...new Set(TABLE.map(r => r.id))]
 
 // laterOf: the later of two GitHub timestamps (ISO strings compare in time order).

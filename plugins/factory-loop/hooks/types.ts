@@ -207,6 +207,7 @@ export type ActionKind =
   | 'sweep'
   | 'claim'
   | 'close-issue'
+  | 'delete-branch'
   | 'release-parent'
   | 'milestone-later'
   | 'restart-self'
@@ -397,7 +398,11 @@ type Base = ActionBase
 // second this wake name, then key=value fields with no spaces. Context lines follow it in
 // the visible prompt: a mod cannot attach hidden context to its own prompt (v2 SPEC 13.8.1).
 export type Action =
-  | (Base & { kind: 'heartbeat' | 'sweep' | 'close-issue' | 'milestone-later' })
+  | (Base & { kind: 'heartbeat' | 'sweep' | 'milestone-later' })
+  // logClosed: a done close also logs the `closed` event (reason completed) once the issue is closed
+  | (Base & { kind: 'close-issue'; logClosed?: boolean })
+  // a done close's branch on origin, deleted only while it still reads sha (a leased delete)
+  | (Base & { kind: 'delete-branch'; branch: string; sha: string })
   // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
   | (Base & { kind: 'claim'; park?: { question: string; parent: number } })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);

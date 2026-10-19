@@ -875,6 +875,40 @@ show without the tell:
 jq -rs 'map(select(.starved != null)) | group_by(.starved.since)[] | "\(.[0].starved.since): \((map(.starved.minutes) | max)) min"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+## 7b. Done closes
+
+The designer answers `done` when an issue's work is already merged (v2 SPEC 8.7): the loop checks the
+evidence, closes the record with `why = 'done'` (row T18, `via` `done`) and closes the issue as completed.
+This lists each issue the loop closed that way, newest first, with the evidence the transition's `notes` hold for
+a person to read (`done: PR #N (merge <sha7>)`, `commit <sha7>`, and the run-it URL when given; never parsed), so a
+count per week is `date_trunc('week', closed_at)` over the rows. A retried write counts once. It takes
+`-v repo=... -v since=...`.
+
+```sql
+-- per done close: when, and on what evidence
+SELECT issue, life, closed_at, evidence
+FROM (SELECT issue, life, seq_at AS closed_at, notes::text AS evidence,
+             row_number() OVER (PARTITION BY repo, issue, life, seq ORDER BY ts, device, device_seq) AS n
+      FROM factory.event_log
+      WHERE type = 'transition' AND why = 'done' AND repo = :'repo' AND seq_at >= :'since'::timestamptz) x
+WHERE n = 1
+ORDER BY closed_at DESC;
+```
+
+What became of each issue's branch: the done close's `delete-branch` entry (key `.../follow/delete-branch`)
+is in the decision log's outcomes, with the summary `deleted issue-N` or `kept issue-N: it moved since it was
+read`. A branch the close kept for its own commits, or that origin did not have, plans no `delete-branch` at all;
+the done comment on the issue and the `done` tell (`fields.branch`: `deleted`, `kept` or `none`) say which:
+
+```sh
+jq -rs '[.[] | (.outcomes // [])[] | select(.key | test("/follow/delete-branch$")) | "\(.key) \(.status): \(.summary)"] | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and .reason == "tell done") | "#\(.issue) branch \(.fields.branch)"] | unique | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+How often a done answer's evidence fails the loop's own check: the design step's unknown with `why` `bad-answer`
+and a reason that starts "the done evidence ..." or "the done answer's PR ...", in the `transition` events'
+notes (the retry) and in the decision log. The answer script's refusals show only in the designer's stderr.
+
 ## 8. Implementer model comparison
 
 Sonnet against Opus as the implementer, from the split `callum-flow-implementer-route` makes (see the

@@ -307,7 +307,9 @@ test("the answer script's only writes are its own temp file and the rename over 
   assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'", "'node:child_process'", "'node:url'"].sort());
   assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 2);
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
-  assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', 'wait-check.mjs')).href)"));
+  // the one loader of the read-only checks takes its file from the two calls below: a wait's and a done close's
+  assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)"));
+  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')\)/g)].map((m) => m[1]), ["'wait-check.mjs'", "'done-check.mjs'"]);
 });
 
 // The act step holds GitHub writes for the rest of a pass that met a rate limit (v2 SPEC 13.10 item 2): the

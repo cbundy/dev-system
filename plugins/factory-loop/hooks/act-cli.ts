@@ -20,6 +20,7 @@ export type CliKind =
   | 'sweep'
   | 'claim'
   | 'close-issue'
+  | 'delete-branch'
   | 'release-parent'
   | 'milestone-later'
   | 'restart-self'
@@ -31,6 +32,7 @@ export const CLI_TIMEOUT_MS: Record<CliKind, number> = {
   sweep: 300 * SEC,
   claim: 120 * SEC,
   'close-issue': 60 * SEC,
+  'delete-branch': 60 * SEC,
   'release-parent': 60 * SEC,
   'milestone-later': 60 * SEC,
   'restart-self': 600 * SEC,
@@ -65,9 +67,17 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDi
       // exit 3: another device's live claim won, an answer (v2 SPEC 13.10 item 5)
       return n === null ? noIssue : [{ argv: ['callum-flow-claim', n], timeoutMs: CLI_TIMEOUT_MS.claim, ok: [0, 3] }]
     case 'close-issue':
+      // a done close (logClosed) also logs the `closed` event, the way the tracker's close does
       return n === null
         ? noIssue
-        : [{ argv: ['gh', 'issue', 'close', n, '--repo', repo, '--reason', 'completed'], timeoutMs: CLI_TIMEOUT_MS['close-issue'] }]
+        : [
+            { argv: ['gh', 'issue', 'close', n, '--repo', repo, '--reason', 'completed'], timeoutMs: CLI_TIMEOUT_MS['close-issue'] },
+            ...(action.logClosed === true ? [{ event: 'closed', fields: { issue: action.issue, note: 'completed' } }] : []),
+          ]
+    case 'delete-branch':
+      // leased on the head plan read: a branch that moved since is kept (exit 1, "stale info"), which
+      // is an answer, not a failure
+      return [{ argv: ['git', 'push', `--force-with-lease=refs/heads/${action.branch}:${action.sha}`, 'origin', `:refs/heads/${action.branch}`], timeoutMs: CLI_TIMEOUT_MS['delete-branch'], ok: [0, 1] }]
     case 'milestone-later':
       return n === null ? noIssue : [{ argv: ['callum-flow-milestone', 'plan', n, 'later'], timeoutMs: CLI_TIMEOUT_MS['milestone-later'] }]
     case 'release-parent':
@@ -147,6 +157,12 @@ export function finish(action: Action, results: RunResult[]): Exec {
       return ok('swept')
     case 'close-issue':
       return ok(`closed #${action.issue}`)
+    case 'delete-branch': {
+      if (last?.exitCode === 0) return { status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'deleted' }, summary: clip(`deleted ${action.branch}`) }
+      const text = `${last?.stderr ?? ''}\n${last?.stdout ?? ''}`
+      if (/stale info/i.test(text)) return { status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'kept: moved' }, summary: clip(`kept ${action.branch}: it moved since it was read`) }
+      return last === undefined ? { status: 'failed', summary: 'delete-branch ran no command' } : commandFailure(['git', 'push'], last)
+    }
     case 'release-parent':
       return ok(`released #${action.issue}, split into ${action.created.join(',')}`)
     case 'milestone-later':
@@ -262,6 +278,7 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   sweep: command('sweep'),
   claim: command('claim'),
   'close-issue': command('close-issue'),
+  'delete-branch': command('delete-branch'),
   'release-parent': command('release-parent'),
   'milestone-later': command('milestone-later'),
   'restart-self': restartSelf,

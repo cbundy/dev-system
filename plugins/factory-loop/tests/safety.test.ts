@@ -140,6 +140,7 @@ const ACTIONS: Action[] = [
   // a split's not-ready child, claimed to park on its decision (v2 SPEC 8.7): the same claim argv
   { ...base, kind: 'claim', key: 'i471/claim/tbq3k0', class: 'free', rule: 'S2', park: { question: 'Which API?', parent: 469 } },
   { ...base, kind: 'close-issue', key: 'close:470', class: 'free', rule: 'M7' },
+  { ...base, kind: 'delete-branch', key: 'delete-branch:470', class: 'free', rule: 'S3', branch: 'issue-470', sha: HEAD },
   { ...base, kind: 'milestone-later', key: 'milestone-later:470', class: 'free', rule: 'M7' },
   { ...base, kind: 'release-parent', key: 'release-parent:470', class: 'free', rule: 'D3', created: [471, 472] },
   { ...base, issue: null, kind: 'restart-self', key: 'restart:7', class: 'free', rule: 'H4', why: 'image', at: 7 },
@@ -216,7 +217,7 @@ const V2_ACTIONS: Action[] = [
 // requeue, with every state label off in the same call.
 const STATE_LABEL = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
 const FACTORY = (l: string) => ALL_FACTORY_LABELS.some(x => x.name === l)
-function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean } {
+function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean } {
   const is = (...shape: (string | ((s: string) => boolean))[]) => shape.length === argv.length && shape.every((p, i) => (typeof p === 'string' ? p === argv[i] : p(argv[i] ?? '')))
   const num = (s: string) => /^[1-9]\d*$/.test(s)
   const text = (s: string) => s !== '' && !s.startsWith('-')
@@ -253,6 +254,11 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
       return is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/sub_issues$`).test(p), '--paginate', '--jq', text) ||
         is('gh', 'issue', 'close', num, '--repo', REPO, '--reason', 'completed', '--comment', text)
         ? { api: true }
+        : {}
+    case 'delete-branch':
+      // the one git push: a delete of the issue's own branch, leased on the head plan read
+      return is('git', 'push', f => f === `--force-with-lease=refs/heads/${action.branch}:${action.sha}`, 'origin', r => r === `:refs/heads/${action.branch}`) && /^[0-9a-f]{7,40}$/.test(action.sha) && /^issue-[1-9]\d*/.test(action.branch)
+        ? { push: true }
         : {}
     case 'ci-rerun':
       return is('gh', 'run', 'rerun', num, '--failed', '--repo', REPO) ? { rerun: true } : {}
@@ -362,7 +368,7 @@ function bans(argv: readonly string[], action?: Action): string[] {
   // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
   const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step')) out.push(`git ${verb}`)
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true)) out.push(`git ${verb}`)
   return out
 }
 
@@ -468,6 +474,12 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'issue', 'edit', '471', '--repo', REPO, '--add-label', 'ready'], label],
       [['gh', 'issue', 'close', '470', '--reason', 'completed', '--comment', 'x'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
+      // the delete is leased, of the issue's own branch, and the only push there is
+      [['git', 'push', 'origin', ':refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force', 'origin', ':refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/main:abc1234', 'origin', ':refs/heads/main'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234', 'origin', 'HEAD:refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234', 'origin', ':refs/heads/issue-470'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--failed', '--repo', REPO], label],
       [['no-mistakes', 'rerun'], kindAction('ci-rerun')],
       [['gh', 'pr', 'create', '--repo', REPO, '--base', 'main', '--head', 'issue-470', '--title', 'x', '--body-file', '-', '--yes'], kindAction('pr')],
@@ -654,6 +666,8 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
     const w = world()
     const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
     await runActions(env, w.state, ACTIONS)
-    for (const argv of seen.argvs) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+    // the one git push is the delete-branch action's own
+    const deleter = ACTIONS.find(x => x.kind === 'delete-branch')
+    for (const argv of seen.argvs) expect({ argv, bans: bans(argv, argv[1] === 'push' ? deleter : undefined) }).toEqual({ argv, bans: [] })
   })
 })

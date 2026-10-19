@@ -32,6 +32,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'sweep',
   'rollout',
   'close-issue',
+  'delete-branch',
   'release-parent',
   'milestone-later',
   'label',

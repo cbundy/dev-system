@@ -103,7 +103,7 @@ const RUN_ONLY = [
   "Factory metrics #0", "Fix rounds with no new head #0",
   "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2",
   "6b. Reader shadow compares #0",
-  "7a. How waits end #0",
+  "7a. How waits end #0", "7b. Done closes #0",
   "Split trackers closed by the loop #0", "Split children parked on their open decision #0",
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
   "2d. Flaky tests #0", "2d. Flaky tests #1",

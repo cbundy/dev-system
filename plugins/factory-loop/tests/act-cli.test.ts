@@ -114,6 +114,8 @@ const A = {
   sweep: (): Action => ({ ...base, kind: 'sweep', key: 'sweep:0', rule: 'H2', issue: null }),
   claim: (issue: number | null = 470): Action => ({ ...base, class: 'start', kind: 'claim', key: `claim:${issue}:new`, rule: 'D1', issue }),
   close: (): Action => ({ ...base, kind: 'close-issue', key: 'close:470', rule: 'M7', issue: 470 }),
+  closeDone: (): Action => ({ ...base, kind: 'close-issue', key: 'i470/follow/close-issue', rule: 'S3', issue: 470, logClosed: true }),
+  deleteBranch: (): Action => ({ ...base, kind: 'delete-branch', key: 'i470/follow/delete-branch', rule: 'S3', issue: 470, branch: 'issue-470', sha: 'abc1234def' }),
   releaseParent: (): Action => ({ ...base, kind: 'release-parent', key: 'release-parent:470', rule: 'D3', issue: 470, created: [471, 472] }),
   later: (): Action => ({ ...base, kind: 'milestone-later', key: 'milestone-later:470', rule: 'M7', issue: 470 }),
   restart: (rule = 'H4'): Action => ({ ...base, kind: 'restart-self', key: 'restart:1', rule, issue: null, why: 'image 1.2.3', at: 1 }),
@@ -259,6 +261,41 @@ describe('gh writes: close-issue', () => {
     expect(cancelled).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 2 } })
     expect('noRetry' in cancelled).toBe(false)
     expect((await exec(A.close(), [{ exitCode: 1, stderr: 'GraphQL: API rate limit exceeded for user ID 1234.' }])).result).toMatchObject({ rateLimited: true })
+  })
+})
+
+describe('a done close: close-issue logs closed, delete-branch is leased (8.7)', () => {
+  test('close-issue with logClosed runs the same close, then logs `closed` (completed); without it, no event', async () => {
+    const plain = await exec(A.close())
+    expect(plain.events).toEqual([])
+    const { result, calls, events } = await exec(A.closeDone())
+    expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
+    expect(events).toEqual([{ state: 'closed', fields: { issue: 470, note: 'completed' } }])
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed #470' })
+    // a close that failed logs nothing
+    const failed = await exec(A.closeDone(), [{ exitCode: 1, stderr: 'boom' }])
+    expect(failed.events).toEqual([])
+    expect(failed.result).toMatchObject({ status: 'failed' })
+    // an event that did not log is the close's failure to retry, the close being idempotent
+    const unlogged = await exec(A.closeDone(), [], { event: async () => { throw new Error('callum-flow-event closed: exit 1') } })
+    expect(unlogged.result).toMatchObject({ status: 'failed' })
+  })
+
+  test('delete-branch pushes a delete leased on the head it read, from the main checkout, in 60 s', async () => {
+    const { result, calls } = await exec(A.deleteBranch())
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.argv).toEqual(['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234def', 'origin', ':refs/heads/issue-470'])
+    expect(calls[0]?.init).toEqual({ timeoutMs: 60_000 })
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'deleted' }, summary: 'deleted issue-470' })
+  })
+
+  test('a rejected lease (the branch moved) is done and kept, an answer; any other failure is failed', async () => {
+    const moved = (await exec(A.deleteBranch(), [{ exitCode: 1, stderr: 'To github.com:o/r.git\n ! [rejected]        issue-470 (stale info)\nerror: failed to push some refs' }])).result
+    expect(moved).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'kept: moved' }, summary: 'kept issue-470: it moved since it was read' })
+    const down = (await exec(A.deleteBranch(), [{ exitCode: 1, stderr: 'fatal: unable to access: Could not resolve host' }])).result
+    expect(down).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
+    const other = (await exec(A.deleteBranch(), [{ exitCode: 128, stderr: 'fatal: boom' }])).result
+    expect(other).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 128 } })
   })
 })
 
@@ -439,6 +476,7 @@ describe('guards and pure readers', () => {
       [
         'claim',
         'close-issue',
+        'delete-branch',
         'heartbeat',
         'milestone-later',
         'release-parent',

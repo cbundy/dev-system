@@ -116,7 +116,7 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
     return ['E7']
   }
   const own: Record<string, { ok: string[]; notOk: string[] }> = {
-    designing: { ok: ['T2'], notOk: ['T3', 'T4', 'T16'] },
+    designing: { ok: ['T2'], notOk: ['T3', 'T4', 'T16', 'T18'] },
     building: { ok: ['T5'], notOk: ['T6', 'T7'] },
     reviewing: { ok: ['T8'], notOk: ['T9', 'T10'] },
     fixing: { ok: ['T11'], notOk: ['T12', 'T17'] },
@@ -135,9 +135,9 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
 }
 
 describe('the table (v2 SPEC 4.3, 4.6)', () => {
-  test('37 rows, the spec\'s, held as data; S0 and S7 make a record and rowFor never returns them', SWEEP, () => {
-    expect(ROW_IDS).toEqual(['S0', 'S7', 'T1', 'T2', 'T3', 'T4', 'T16', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T17', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
-    expect(ROW_IDS).toHaveLength(37)
+  test('38 rows, the spec\'s, held as data; S0 and S7 make a record and rowFor never returns them', SWEEP, () => {
+    expect(ROW_IDS).toEqual(['S0', 'S7', 'T1', 'T2', 'T3', 'T4', 'T16', 'T18', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T17', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
+    expect(ROW_IDS).toHaveLength(38)
     // the event schema's table_row pattern (docs/factory-events/schemas/transition.v1.json)
     for (const id of ROW_IDS) expect({ id, ok: /^([A-Z][0-9]+|recovered)$/.test(id) }).toEqual({ id, ok: true })
     // E7 has one row for each event kind: every event has a row with no meaning in every state
