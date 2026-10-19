@@ -650,7 +650,7 @@ const check = ($: Engine, input: Record<string, unknown>) => $.tool.check(input 
 const SESSION_TRANSCRIPT = '/c/projects/p/s1.jsonl'
 const AGENT_TRANSCRIPT = '/c/projects/p/s1/subagents/agent-agent-1.jsonl'
 const RM = { tool: 'Bash', input: { command: 'rm -f $D/*' }, agentId: 'agent-1' }
-const noteOf = (argv: string[]) => Object.fromEntries((argv[argv.indexOf('--note') + 1] ?? '').split(' ').map(t => [t.slice(0, t.indexOf('=')), decodeURIComponent(t.slice(t.indexOf('=') + 1))]))
+const dataOf = (argv: string[]) => JSON.parse(argv[argv.indexOf('--data') + 1] ?? 'null') as Record<string, unknown>
 
 describe('prompts nobody answers', () => {
   test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
@@ -669,22 +669,25 @@ describe('prompts nobody answers', () => {
     expect(reason).toContain('end your step saying what you needed')
     expect(w.events).toHaveLength(1)
     const argv = w.events[0] as string[]
-    expect(argv.slice(0, 2)).toEqual(['callum-flow-event', 'prompt_denied'])
-    expect(argv.join(' ')).toContain('--issue 571 --branch issue-571')
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_denied', '--data'])
+    expect(argv.slice(4 + 1)).toEqual(['--issue', '571', '--repo', argv[argv.indexOf('--repo') + 1]])
+    expect(argv).not.toContain('--note')
     expect(argv).not.toContain('--pr')
-    expect(noteOf(argv)).toEqual({
+    expect(dataOf(argv)).toEqual({
       life: 'ss1x2k',
-      seq: '7',
+      seq: 7,
       step: 'build',
-      attempt: '1',
-      agent: 'agent-1',
+      attempt: 1,
+      agent_id: 'agent-1',
       agent_type: 'factory-loop:builder',
-      tool: 'Bash',
+      tool_name: 'Bash',
+      tool_input: 'rm -f $D/*',
+      ask_reason: expect.stringContaining('rm of a glob under a variable'),
       slot: SLOT,
       session: 's1',
       transcript: AGENT_TRANSCRIPT,
-      why: expect.stringContaining('rm of a glob under a variable'),
-      input: 'rm -f $D/*',
+      branch: 'issue-571',
+      pr: null,
     })
     expect(companionLines(w)).toEqual([expect.objectContaining({ issue: 571, life: 'ss1x2k', seq: 7, cause: 'prompt-denied', reason: expect.stringContaining('Bash: factory-loop-workspace:') })])
   })
@@ -712,7 +715,7 @@ describe('prompts nobody answers', () => {
     const r = (await check($, { tool: 'Bash', input: { command: 'curl https://example.com' }, agentId: 'agent-1' })) as { reason: string }
     expect(r.reason).not.toContain(':?')
     expect(r.reason).not.toContain("Claude Code's own reason")
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ why: 'none', transcript: 'none' })
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ ask_reason: null, transcript: null })
   })
 
   test('a child of the loop agent is denied and logged with its own agent type', async ($, on) => {
@@ -720,7 +723,7 @@ describe('prompts nobody answers', () => {
     await $.agent.spawn(spawn(BUILD))
     await $.agent.spawn(spawn({ subagentType: 'Explore', description: 'look', prompt: 'look around', parentAgentId: 'agent-1' }))
     expect((await check($, { ...RM, agentId: 'agent-2' })).decision).toBe('deny')
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-2', agent_type: 'Explore', step: 'build', attempt: '1' })
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ agent_id: 'agent-2', agent_type: 'Explore', step: 'build', attempt: 1 })
   })
 
   test('the main session and an agent the companion does not know are left to Claude Code', async ($, on) => {
@@ -738,14 +741,14 @@ describe('prompts nobody answers', () => {
     const w = world(on)
     await $.agent.spawn(spawn(BUILD))
     await check($, { tool: 'Bash', input: { command: `echo ${'x'.repeat(5000)}` }, agentId: 'agent-1' })
-    expect(noteOf(w.events[0] as string[]).input).toHaveLength(INPUT_CLIP)
+    expect(dataOf(w.events[0] as string[]).tool_input).toHaveLength(INPUT_CLIP)
     await check($, { tool: 'Write', input: { file_path: '/x', content: 'y'.repeat(5000) }, agentId: 'agent-1' })
-    const input = noteOf(w.events[1] as string[]).input as string
+    const input = dataOf(w.events[1] as string[]).tool_input as string
     expect(input).toHaveLength(INPUT_CLIP)
     expect(input.startsWith('{"file_path":"/x"')).toBe(true)
   })
 
-  test('an image whose callum-flow-event refuses the state still gets the deny and the line', async ($, on) => {
+  test('an image whose callum-flow-event refuses the write still gets the deny and the line', async ($, on) => {
     const w = world(on, { eventExit: 2 })
     await $.agent.spawn(spawn(BUILD))
     expect((await check($, RM)).decision).toBe('deny')
@@ -753,11 +756,12 @@ describe('prompts nobody answers', () => {
     expect(companionLines(w).map(l => l.cause)).toEqual(['prompt-denied'])
   })
 
-  test('a marker with a pr gives --pr, and one without gives none', async ($, on) => {
+  test('a marker with a pr gives pr in the data, and one without gives null', async ($, on) => {
     const w = world(on, { marker: { ...MARKER, pr: 612 } })
     await $.agent.spawn(spawn(BUILD))
     await check($, RM)
-    expect(w.events[0]?.join(' ')).toContain('--pr 612')
+    expect(dataOf(w.events[0] as string[]).pr).toBe(612)
+    expect(w.events[0]).not.toContain('--pr')
   })
 })
 
@@ -770,10 +774,18 @@ describe('permission prompts waiting', () => {
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
     await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toHaveLength(1)
-    expect((w.events[0] as string[]).slice(0, 2)).toEqual(['callum-flow-event', 'prompt_waiting'])
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-1', agent_type: 'factory-loop:builder', input: note.message, transcript: AGENT_TRANSCRIPT, tool: 'none', seq: '7' })
+    expect((w.events[0] as string[]).slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_waiting', '--data'])
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', tool_input: note.message, transcript: AGENT_TRANSCRIPT, tool_name: null, seq: 7, branch: 'issue-571' })
+    expect(dataOf(w.events[0] as string[])).not.toHaveProperty('ask_reason')
     await $.classic.Notification({ ...note, notification_type: 'worker_permission_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toHaveLength(2)
+  })
+
+  test('a message over the clip is cut to 2000 characters', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.Notification({ ...note, message: 'm'.repeat(5000), notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
+    expect(dataOf(w.events[0] as string[]).tool_input).toHaveLength(INPUT_CLIP)
   })
 
   test('no agent, an unmapped one, or another kind of notification logs nothing', async ($, on) => {

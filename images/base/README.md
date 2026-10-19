@@ -1570,7 +1570,9 @@ and `round=`) and `intervention` (someone had to step in: `who=person|loop` and 
 `--issue` optional) carry their fields as `key=value` tokens in the note, percent-encoded, and
 `reviewed` and `intervention` are never a stage or progress. `prompt_denied` and `prompt_waiting` are
 the factory loop companion's (a loop agent's call refused, or waiting, on a prompt nobody answers):
-`--issue` required, a `key=value` note with no token required, never a stage, progress or final. A rescue the loop cannot see is
+`--issue` required, never a stage, progress or final. The current companion writes the native types
+(`--type`, `--data`); the states are kept for older companions and the history, with a `key=value`
+note and no token required. A rescue the loop cannot see is
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to

@@ -97,9 +97,10 @@
 #   'who=person cause=rescue reason=what%20was%20done')
 #   (`prompt_denied`: the factory loop's companion refused a loop agent's tool call, because the
 #   engine would have asked a person nobody watches; `prompt_waiting`: a loop agent is waiting on
-#   such a prompt now. --issue is required; the note is `key=value` tokens (life, seq, step,
-#   attempt, agent, agent_type, tool, input, why, slot, session, transcript), none required;
-#   never a stage, never progress, never final)
+#   such a prompt now. --issue is required; never a stage, never progress, never final. The
+#   current companion writes the native types (--type, --data); the states are kept for older
+#   companions and the history, with a `key=value` note of tokens (life, seq, step, attempt,
+#   agent, agent_type, tool, input, why, slot, session, transcript), none required)
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the

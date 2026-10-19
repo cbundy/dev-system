@@ -8,7 +8,7 @@ import type { Ran } from '../hooks/gate'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
 import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
-import { INPUT_CLIP, clip, enc, inputOf, promptNote, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
+import { INPUT_CLIP, clip, inputOf, promptData, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
 import { createTurns } from '../hooks/turns'
@@ -562,11 +562,6 @@ describe('the stop gate\'s turns', () => {
 })
 
 describe('prompts nobody answers', () => {
-  test('enc leaves no space or percent in a value', () => {
-    expect(enc('rm -f $D/* 100%')).toBe('rm%20-f%20$D/*%20100%25')
-    expect(enc('a\nb\tc')).toBe('a%0Ab%09c')
-  })
-
   test('the reason names the rewrite for an rm of a glob under a variable, with the command\'s own variable', () => {
     for (const command of ['rm -f $D/*', 'rm -rf ${OUT}/build/*', 'cd x && rm -f "$DIR"/*.log']) {
       expect(unguardedGlob('Bash', { command })).not.toBeNull()
@@ -586,10 +581,32 @@ describe('prompts nobody answers', () => {
     expect(whyOf({})).toBeNull()
   })
 
-  test('the note has every token, none for the unknown, and a value with no space in it', () => {
-    expect(promptNote({ life: 'ss1x2k', seq: 7, tool: 'Bash', input: 'rm -f $D/*', agent_type: 'none' })).toBe(
-      'life=ss1x2k seq=7 step=none attempt=none agent=none agent_type=%6Eone tool=Bash slot=none session=none transcript=none why=none input=rm%20-f%20$D/*',
-    )
+  test('the denied data has every required key, null for the unknown', () => {
+    expect(promptData('prompt_denied', { life: 'ss1x2k', seq: 7, tool: 'Bash', input: 'rm -f $D/*', agent_type: 'none', agent: '' })).toEqual({
+      life: 'ss1x2k',
+      seq: 7,
+      step: null,
+      attempt: null,
+      agent_id: null,
+      agent_type: 'none',
+      tool_name: 'Bash',
+      tool_input: 'rm -f $D/*',
+      ask_reason: null,
+      slot: null,
+      session: null,
+      transcript: null,
+      branch: null,
+      pr: null,
+    })
+  })
+
+  test('the waiting data has no ask_reason, a null tool_name and a clipped message', () => {
+    const d = promptData('prompt_waiting', { agent: 'a1', tool: 'Bash', why: 'x', input: 'm'.repeat(INPUT_CLIP + 5), branch: 'issue-1', pr: 3 })
+    expect(d).not.toHaveProperty('ask_reason')
+    expect(d).toMatchObject({ agent_id: 'a1', tool_name: null, branch: 'issue-1', pr: 3 })
+    expect(d.tool_input).toHaveLength(INPUT_CLIP)
+    expect(Object.keys(promptData('prompt_waiting', {}))).toHaveLength(13)
+    expect(Object.keys(promptData('prompt_denied', {}))).toHaveLength(14)
   })
 
   test('an input is a Bash command, else JSON, and clipped', () => {
