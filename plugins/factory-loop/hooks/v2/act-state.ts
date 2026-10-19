@@ -259,6 +259,7 @@ const claim: Executor = async (ctx, action) => {
     return { status: 'done', outcome: { kind: 'claim', result: 'lost' }, summary: clip(`lost #${n}${why === '' ? '' : `: ${why}`}`) }
   }
   if (ran.r.exitCode !== 0) return commandFailure(argv, ran.r)
+  if (action.park !== undefined) return { status: 'done', outcome: { kind: 'claim', result: 'claimed', park: action.park }, summary: `claimed #${n} to park it on its open decision` }
   if (action.rule !== 'S1') return { status: 'done', outcome: { kind: 'claim', result: 'claimed' }, summary: `claimed #${n} again` }
   const listArgv = ARGV.openPrsArgv(ctx.rt.repo)
   const listed = await run(ctx, listArgv, GH_MS)
