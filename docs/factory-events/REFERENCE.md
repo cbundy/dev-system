@@ -131,6 +131,7 @@ Example:
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
+| `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
@@ -146,6 +147,7 @@ Example:
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `p50_ms` | integer | `loop_passes` | The median duration (nearest rank), in milliseconds; null when there was no pass. |
 | `p90_ms` | integer | `loop_passes` | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
+| `parent` | integer | `claimed`, `ready` | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
 | `pass_every_ms` | integer | `loop_passes` | The loop's configured time between passes, in milliseconds. |
 | `passes` | integer | `loop_passes` | Passes that ended in the minute. 0 when none did; then every duration below is null. |
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
@@ -174,6 +176,7 @@ Example:
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
+| `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
@@ -291,6 +294,9 @@ This device took the claim on the issue: no other device works on it while the l
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `lease_minutes` | integer | required | no | minimum 1 | yes | How long the claim holds without a renewal, in minutes. |
+| `title` | string | optional | yes | maxLength 256 | yes | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
+| `labels` | array of string | optional | yes |  | yes | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
+| `parent` | integer | optional | yes | minimum 1 | yes | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
 
 Example:
 
@@ -575,7 +581,7 @@ Example:
 
 ## ready
 
-The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time.
+The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time. Also carries the issue's title, labels and parent as the queue listing showed them.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -585,6 +591,9 @@ The issue was seen with the ready label: it is in the factory's queue. Written b
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `title` | string | optional | yes | maxLength 256 | yes | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
+| `labels` | array of string | optional | yes |  | yes | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
+| `parent` | integer | optional | yes | minimum 1 | yes | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
 
 Example:
 

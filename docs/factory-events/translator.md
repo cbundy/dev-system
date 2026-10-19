@@ -59,8 +59,8 @@ ISO 8601 with three millisecond digits.
 
 | Today | New | Mapping |
 |---|---|---|
-| `ready` | `ready` | `{}` |
-| `claimed` | `claimed` | `lease: <m>` gives `lease_minutes`. A null note (157 early rows) gives 120, the default when they were written. |
+| `ready` | `ready` | `{}` in replay. A dual write may add `title`, `labels` and `parent` from `callum-flow-event --data`; replay gives none. |
+| `claimed` | `claimed` | `lease: <m>` gives `lease_minutes`. A null note (157 early rows) gives 120, the default when they were written. A dual write may add `title`, `labels` and `parent` from `--data`; replay gives none. |
 | `renewed` | `claim_renewed` | as `claimed` |
 | `claim_lost` | `claim_lost` | `held by <dev> since <at>` gives `holder`, `holder_since` and `race` false. `race lost to <dev>` gives `holder` (null for the text "another device"), `holder_since` null and `race` true. |
 | `reclaimed` | `requeued` | `lease expired` gives `reason` lease-expired and leaves the rest null except `branch` and `pr` from the columns. `reason=reconcile ...` (outcome requeue) gives `reason` reconcile plus `stage`, `lives` and `detail` (from `checked`), with `branch` and `pr` from the columns (`pr`, else the `pr=` token). |

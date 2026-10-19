@@ -2,13 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ready.v1.json",
   "title": "ready",
-  "description": "The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time.",
+  "description": "The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time. Also carries the issue's title, labels and parent as the queue listing showed them.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,
   "required": [],
-  "properties": {},
+  "properties": {
+    "title": { "type": ["string", "null"], "maxLength": 256, "description": "The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title.", "x-column": true },
+    "labels": { "type": ["array", "null"], "items": { "type": "string" }, "description": "The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read.", "x-column": true },
+    "parent": { "type": ["integer", "null"], "minimum": 1, "description": "The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read.", "x-column": true }
+  },
   "examples": [
-    {}
+    {},
+    { "title": "Add a title to the ready event", "labels": ["ready", "enhancement"], "parent": 12 }
   ]
 }
