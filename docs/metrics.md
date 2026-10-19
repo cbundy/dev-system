@@ -1373,6 +1373,7 @@ FROM factory.workers_status
 ORDER BY device;
 ```
 
+## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
 kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`). Per tool since a given time:
