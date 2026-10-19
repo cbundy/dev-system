@@ -166,6 +166,29 @@
     "claimed.v1": {
       "additionalProperties": false,
       "properties": {
+        "factors": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "points": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "points"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "labels": {
           "items": {
             "type": "string"
@@ -181,6 +204,12 @@
         },
         "parent": {
           "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "score": {
           "type": [
             "integer",
             "null"

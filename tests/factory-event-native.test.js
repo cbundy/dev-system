@@ -75,7 +75,7 @@ test("a known type is written as one envelope-v1 line to the new log only, and r
   const e = JSON.parse(lines[0]);
   assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
   assert.deepEqual(reader.validateStrict("claimed", 1, e.data), []);
-  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30, title: null, labels: null, parent: null } });
+  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30, title: null, labels: null, parent: null, score: null, factors: null } });
   assert.match(e.ts, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   assert.equal(e.session_id, null);
   assert.equal(e.issue, 7);

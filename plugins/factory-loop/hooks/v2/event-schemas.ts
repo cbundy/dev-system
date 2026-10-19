@@ -94,9 +94,11 @@ export const SCHEMAS: Record<string, Shape> = {
     "type": "object",
     "x-issue": "required",
     "properties": {
+      "factors": {"items":{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"points":{"type":"integer"}},"required":["name","points"],"type":"object"},"type":["array","null"]},
       "labels": {"items":{"type":"string"},"type":["array","null"]},
       "lease_minutes": {"minimum":1,"type":"integer"},
       "parent": {"minimum":1,"type":["integer","null"]},
+      "score": {"type":["integer","null"]},
       "title": {"maxLength":256,"type":["null","string"]},
     },
   },
