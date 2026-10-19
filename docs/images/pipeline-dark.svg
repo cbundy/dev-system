@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 8 744 264" width="744" height="264" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5">
+<title>The line: queued, design, build, review, merge queue, merged, with fix and parked side paths</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#656c76"/></marker></defs>
+<rect x="16" y="16" width="728" height="248" rx="12" fill="#0d1117" stroke="#3d444d" stroke-width="1.25"/>
+<text x="32" y="44" font-size="13" font-weight="600" fill="#f0f6fc">The line</text>
+<text x="724" y="44" font-size="11.5" text-anchor="end" fill="#9198a1">every state has a timeout</text>
+<rect x="32" y="64" width="102" height="72" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="44" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Queued</text>
+<text x="44" y="106" font-size="11" fill="#9198a1">issue labelled</text>
+<text x="44" y="121" font-size="11" fill="#9198a1">ready</text>
+<rect x="150" y="64" width="102" height="72" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="162" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Design</text>
+<text x="162" y="106" font-size="11" fill="#9198a1">designer writes</text>
+<text x="162" y="121" font-size="11" fill="#9198a1">a brief</text>
+<rect x="268" y="64" width="102" height="72" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="280" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Build</text>
+<text x="280" y="106" font-size="11" fill="#9198a1">builder, in its</text>
+<text x="280" y="121" font-size="11" fill="#9198a1">own worktree</text>
+<rect x="386" y="64" width="102" height="72" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="398" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Review</text>
+<text x="398" y="106" font-size="11" fill="#9198a1">reviewer</text>
+<text x="398" y="121" font-size="11" fill="#9198a1">and CI</text>
+<rect x="504" y="64" width="102" height="72" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="516" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Merge queue</text>
+<text x="516" y="106" font-size="11" fill="#9198a1">rebase on main,</text>
+<text x="516" y="121" font-size="11" fill="#9198a1">then merge</text>
+<rect x="622" y="64" width="102" height="72" rx="8" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-width="1.5"/>
+<text x="634" y="86" font-size="13" font-weight="600" fill="#f0f6fc">Merged</text>
+<text x="634" y="106" font-size="11" fill="#9198a1">shipped in the</text>
+<text x="634" y="121" font-size="11" fill="#9198a1">next release</text>
+<path d="M134 100H150" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<path d="M252 100H268" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<path d="M370 100H386" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<path d="M488 100H504" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<path d="M606 100H622" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<rect x="386" y="176" width="102" height="68" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="398" y="198" font-size="13" font-weight="600" fill="#f0f6fc">Fix</text>
+<text x="398" y="218" font-size="11" fill="#9198a1">fixer answers</text>
+<text x="398" y="233" font-size="11" fill="#9198a1">the review</text>
+<path d="M425 136V176" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<path d="M449 176V136" fill="none" stroke="#656c76" stroke-width="1.25" marker-end="url(#a)"/>
+<text x="418" y="160" font-size="11" text-anchor="end" fill="#9198a1">changes</text>
+<text x="456" y="160" font-size="11" fill="#9198a1">fixed</text>
+<rect x="150" y="176" width="220" height="68" rx="8" fill="#151b23" fill-opacity="1" stroke="#3d444d" stroke-width="1.25"/>
+<text x="162" y="198" font-size="13" font-weight="600" fill="#f0f6fc">Parked</text>
+<text x="162" y="218" font-size="11" fill="#9198a1">a question for you on the issue;</text>
+<text x="162" y="233" font-size="11" fill="#9198a1">answer it and the issue requeues</text>
+<path d="M319 136V176" fill="none" stroke="#656c76" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<path d="M150 210H83V136" fill="none" stroke="#656c76" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<text x="326" y="160" font-size="11" fill="#9198a1">stuck</text>
+<text x="90" y="160" font-size="11" fill="#9198a1">answered</text>
+<text x="622" y="198" font-size="11" fill="#9198a1">Code drives every</text>
+<text x="622" y="213" font-size="11" fill="#9198a1">arrow; agents do</text>
+<text x="622" y="228" font-size="11" fill="#9198a1">the work in a box.</text>
+</svg>
