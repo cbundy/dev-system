@@ -27,7 +27,8 @@ export const WIND_DOWN_MARGIN_MS = 5 * 60_000
 // file the loop wrote last pass (for started_at).
 export type WindDownRead = {
   // iso: requestedAt as the writer's text, for the owner's tell (the planner reads no clock)
-  request: { requestedAt: Ms; iso: string; trigger: string | null; problem: string | null } | null
+  // remembered: the session's own memory of the request it wrote (withRemembered), the file being gone
+  request: { requestedAt: Ms; iso: string; trigger: string | null; problem: string | null; remembered?: true } | null
   stopNow: boolean
   previous: { requestedAt: Ms; startedAt: Ms } | null
 }

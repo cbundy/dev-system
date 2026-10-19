@@ -386,7 +386,7 @@ export type Action =
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
-  | (Base & { kind: 'restart-self'; why: string; at: Ms })
+  | (Base & { kind: 'restart-self'; why: string; at: Ms; windDownAt?: Ms | null })
   // rule M7 for a hand merge: read the merged issue's rollout
   | (Base & { kind: 'rollout'; pr: number | null })
   | (Base & { kind: 'stop-agent'; agentId: string; entry: string })

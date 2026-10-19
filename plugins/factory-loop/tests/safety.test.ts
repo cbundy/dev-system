@@ -29,6 +29,7 @@ import { emptyV2State } from '../hooks/v2/observe'
 import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
+import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
@@ -615,6 +616,9 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
     expect(wrong).toMatchObject({ status: 'failed', argvs: [] })
     const r2 = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:9', class: 'free', rule: 'R2', why: 'x', at: 9 })
     expect(r2).toMatchObject({ status: 'done', argvs: [['dev-restart-self']] })
+    const r2w = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:10', class: 'free', rule: 'R2', why: 'x', at: 10, windDownAt: NOW })
+    expect(r2w).toMatchObject({ status: 'done', argvs: [['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', `${LOOP_DIR}/wind-down.request`], ['dev-restart-self']] })
+    for (const argv of r2w.argvs) expect(bans(argv)).toEqual([])
     const { io, seen } = recorder()
     const w = world()
     const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }

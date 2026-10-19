@@ -284,6 +284,27 @@ GROUP BY f.repo, f.device, f.requested_at, f.key, f.issue, f.life, f.step, f.rer
 ORDER BY f.requested_at DESC, f.key;
 ```
 
+(d) Stops by trigger (`restart-self` is the loop's own restart for an update, `coder-stop` a Coder
+stop): the count, the cap share and the mean steps cut. It answers whether the loop's own restarts
+wind down like Coder stops and whether the cap is enough for them:
+
+```sql
+WITH stops AS (
+  SELECT repo, device, requested_at,
+    min(trigger) AS trigger, min(outcome) AS outcome, min(cut_at_stop) AS cut_at_stop
+  FROM factory.event_log
+  WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+  GROUP BY repo, device, requested_at
+)
+SELECT repo, trigger,
+  count(*)                                                        AS stops,
+  round(count(*) FILTER (WHERE outcome = 'cap')::numeric / count(*), 3) AS cap_share,
+  round(avg(cut_at_stop), 2)                                      AS mean_cut_per_stop
+FROM stops
+GROUP BY repo, trigger
+ORDER BY repo, trigger;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`
