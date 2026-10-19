@@ -1880,6 +1880,19 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   `queued_behind` from the `gate-wait` line of the same seq inside the run (0 when `waitMs` is 0,
   else skipped); a line with no numeric `waitMs`, and any line whose values the schema refuses,
   gives no event. The companion writes no event itself.
+  Flakes (rule S2): each gate line also carries `clean` (true when `git status --porcelain` ran
+  and printed nothing before the commands and the head did not move during them; false when the
+  tree was dirty or the head moved; null when it could not be read, and on the wait-cap
+  `gate-unknown`), and a `gate-fail` carries `failedTests`, parsed by `failedTests(output)` of
+  gate.ts from the failing command's full output: `FAIL <name>` and `(fail) <name> [<n>ms]` lines
+  after ANSI escapes and leading blanks are removed, the job wrappers of `test-job.sh` and `FAIL
+  test setup:` left out, `FAIL test isolation: <what>` kept, duplicates dropped, names cut to 200
+  characters, at most 20 (null for none). A `gate-pass` with `clean` true gets `flaky: true`,
+  `failed_tests` and `failed_at` (the fail's `started_at`) only when the run before it (same issue
+  and life, latest known start, any seq) is a `gate-fail` with the same non-null head and a clean
+  slot, and no run of unknown start lies between; any other pass with `clean` present gets
+  `flaky: false`, and one from a companion before `clean` gets no `flaky`. A `gate-fail` row carries
+  its own `failed_tests`. The action's reason names the outcome.
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").

@@ -316,6 +316,12 @@ async function headSha($: EngineInterface, slot: string): Promise<string | null>
   return r !== null && r.exitCode === 0 ? r.stdout.trim() : null
 }
 
+// slotClean: whether `git status --porcelain` ran and printed nothing (null: it could not run or failed).
+async function slotClean($: EngineInterface, slot: string): Promise<boolean | null> {
+  const r = await run($, ['git', '-C', slot, 'status', '--porcelain']).catch(() => null)
+  return r !== null && r.exitCode === 0 ? r.stdout.trim() === '' : null
+}
+
 // --- the hooks --------------------------------------------------------------------------------------
 
 export const register: Register = on => {
@@ -454,7 +460,7 @@ export const register: Register = on => {
         const result = waitedOut(got.waitMs, cap, limit)
         const head = await headSha($, a.slot)
         await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs), null, 2)}\n`).catch(() => undefined)
-        const line = gateLine(result, head, waitMs, limit, startedAt, queuedBehind)
+        const line = gateLine(result, head, waitMs, limit, startedAt, queuedBehind, null)
         await logLine($, a, line.cause, line.reason, line.fields)
         return next(e)
       }
@@ -468,11 +474,15 @@ export const register: Register = on => {
     // whatever happens from here, the turn goes back, so a stuck or crashed gate never blocks the others
     try {
       if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
+      const headBefore = await headSha($, a.slot)
+      const cleanBefore = await slotClean($, a.slot)
       const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
       const head = await headSha($, a.slot)
-      const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs)
+      // a head that moved during the run means the tree did too: never clean
+      const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
+      const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean)
       await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-      const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind)
+      const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean)
       await logLine($, a, line.cause, line.reason, line.fields)
       if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
       return next(e)

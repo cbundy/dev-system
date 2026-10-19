@@ -203,31 +203,37 @@ test("a fixer's verdict is logged as the fixer; every other event as the CLI's d
 // A gate_run is written in the new format alone (rules-gates.ts): the real callum-flow-event takes
 // the argv events.ts builds in native mode, warns of nothing, and writes a line the shared reader and
 // the strict schema accept, with the issue, the payload and no old-format line.
-test("a gate_run goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema", () => {
-  const data = { life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
-  const e = { state: "gate_run", issue: 571, data };
-  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
-  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
-  const argv = ev.eventArgv(e);
-  assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
-  const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+for (const [name, extra] of [
+  ["without the flake fields", {}],
+  ["with a flake", { flaky: true, failed_tests: ["group > fails here", "test isolation: database factory_test_x"], failed_at: "2026-10-15T09:10:00.000Z" }],
+]) {
+  test(`a gate_run ${name} goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema`, () => {
+    const data = { ...extra, life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
+    const e = { state: "gate_run", issue: 571, data };
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+    const argv = ev.eventArgv(e);
+    assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "", `gate_run warned: ${r.stderr}`);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, before + 1, "one line");
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.type, "gate_run");
+    assert.equal(got.issue, 571);
+    assert.deepEqual(got.data, data);
+    assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+    assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
+    // the reader gives the optional flake fields, which an older writer never sends, as null
+    assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { flaky: null, failed_tests: null, failed_at: null, ...data } });
+
   });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stderr, "", `gate_run warned: ${r.stderr}`);
-  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-  assert.equal(lines.length, before + 1, "one line");
-  newSeen.set(file, lines.length);
-  const got = JSON.parse(lines[lines.length - 1]);
-  assert.equal(got.type, "gate_run");
-  assert.equal(got.issue, 571);
-  assert.deepEqual(got.data, data);
-  assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
-  assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
-  // the reader gives the optional flake fields, which an older writer never sends, as null
-  assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { ...data, flaky: null, failed_tests: null, failed_at: null } });
-});
+}
 
 // A comment_posted (rules-entry.ts) is native like gate_run: the real writer takes the argv events.ts
 // builds, with no warning, and the line matches the strict schema and reads back equal.
