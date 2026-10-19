@@ -14,7 +14,7 @@ const root = path.join(__dirname, '..')
 function cleanEnv(extra = {}) {
   const env = { ...process.env }
   for (const k of ['FACTORY_TEST_PG_ADMIN_URL', 'CALLUM_EVENTS_DIR', 'NO_MISTAKES_HOME', 'NM_PUSH_STATE_DIR',
-    'AGENTSVIEW_DATA_DIR', 'TEST_SANDBOX', 'TEST_RESULTS_DIR', 'TEST_NODE_FILES', 'TEST_JOB_FAILED', 'TEST_REQUIRE_POSTGRES', 'NODE_TEST_CONTEXT']) delete env[k]
+    'AGENTSVIEW_DATA_DIR', 'TEST_SANDBOX', 'TEST_RESULTS_DIR', 'TEST_NODE_FILES', 'TEST_JOB_FAILED', 'TEST_REQUIRE_POSTGRES', 'TEST_REQUIRE_TAGS', 'NODE_TEST_CONTEXT']) delete env[k]
   return { ...env, ...extra }
 }
 
