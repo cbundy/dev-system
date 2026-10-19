@@ -1,4 +1,4 @@
--- 0011: lift the permission-prompt facts of prompt_denied and prompt_waiting into factory.event_log.
+-- 0012: lift the permission-prompt facts of prompt_denied and prompt_waiting into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
@@ -113,6 +113,7 @@ SELECT
   (e.data ->> 'milestone_open')::int AS milestone_open,
   (e.data ->> 'holding')::boolean AS holding,
   e.data -> 'prs' AS prs,
+  e.data ->> 'comment_url' AS comment_url,
   e.data ->> 'tool_name' AS tool_name,
   e.data ->> 'tool_input' AS tool_input,
   e.data ->> 'agent_type' AS agent_type
