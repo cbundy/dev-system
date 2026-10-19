@@ -165,7 +165,7 @@ gone "$L"
 # 2. Cap: the template's cap is the smaller one.
 case_name=cap-template
 setup cap-template
-fake_loop "$L" 'while :; do status "$d" "$at" false false 60000 "$KEYS"; sleep 0.2; done'
+fake_loop "$L" 'while [ -f "$d/wind-down.request" ]; do status "$d" "$at" false false 60000 "$KEYS"; sleep 0.2; done'
 run_script WIND_DOWN_CAP_MS=2000
 end_loop
 common_checks 1
@@ -180,7 +180,7 @@ gone "$L"
 # 3. Cap: the status cap is the smaller one.
 case_name=cap-status
 setup cap-status
-fake_loop "$L" 'while :; do status "$d" "$at" false false 2000 "$KEYS"; sleep 0.2; done'
+fake_loop "$L" 'while [ -f "$d/wind-down.request" ]; do status "$d" "$at" false false 2000 "$KEYS"; sleep 0.2; done'
 run_script WIND_DOWN_CAP_MS=60000
 end_loop
 common_checks 1
