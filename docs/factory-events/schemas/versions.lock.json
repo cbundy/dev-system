@@ -371,6 +371,30 @@
           "null"
         ]
       },
+      "failed_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
       "head": {
         "pattern": "^[0-9a-f]{7,40}$",
         "type": [
@@ -473,6 +497,41 @@
         "type": "string"
       },
       "fact": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "failed_jobs": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{7,40}$",
         "type": [
           "null",
           "string"
