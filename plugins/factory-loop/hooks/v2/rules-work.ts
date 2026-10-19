@@ -18,7 +18,7 @@
 // rules-state.ts takes each step's plan from PLANS, over the generic one. Pure.
 import { want } from '../foundation'
 import type { LedgerEntry } from '../types'
-import { childKey, entryKey } from './keys'
+import { childKey, claimKey, entryKey, lifeOf } from './keys'
 import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
@@ -119,17 +119,37 @@ function order(children: readonly SplitChild[]): SplitChild[] {
   return out
 }
 
-// splitPlan: each child made once the siblings it waits on exist, then the parent's comment, then
-// the result.
+// parkClaim: a not-ready child's first claim, planned once the child exists: the claim makes the
+// child's record, parked on its open decision (row S7), so the owner is asked and the child is never
+// silent. A claim of the child the ledger holds already (its key carries the time it was first
+// planned) is the one that is kept; a lost one stays lost.
+// legacyDecision: the question of a not-ready child from a design answer recorded before `decision`
+// existed (the contract, split-decision.mjs, fills it in for every later one). The planner reaches no
+// answer contract (.mjs), so it holds the contract's fixed sentence (a test pins the two together).
+export const legacyDecision = (parent: number) => `This issue was split from #${parent} and carries an open owner decision. The split did not word it: read the issue, answer in a comment, then resume it.`
+
+function parkClaim(env: StepEnv, parent: number, n: number, c: SplitChild): Effect {
+  const { ctx } = env
+  const prefix = claimKey(n, '')
+  const held = ctx.state.ledger.find(e => e.kind === 'claim' && e.key.startsWith(prefix))
+  const key = held?.key ?? claimKey(n, lifeOf(ctx.state.now))
+  const question = typeof c.decision === 'string' && c.decision !== '' ? c.decision : legacyDecision(parent)
+  return effect(env, { kind: 'claim', key, class: 'free', rule: RULE, reason: `claim split child ${c.key} to park it on its open decision`, issue: n, park: { question, parent } }, `split: claim of child ${c.key}`)
+}
+
+// splitPlan: each child made once the siblings it waits on exist, a not-ready child claimed to park
+// on its decision, then the parent's comment, then the result.
 function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
   const { ctx, r } = env
   const made = new Map<string, number>()
   const waits: StepRead[] = []
+  const claims: Effect[] = []
   for (const c of order(d.children)) {
     const key = childKey(r, c.key)
     const done = childOf(ctx.byKey.get(key))
     if (done !== null) {
       made.set(c.key, done)
+      if (!c.ready) claims.push(parkClaim(env, r.issue, done, c))
       continue
     }
     // a sibling key resolves through the made children, "#<N>" straight to N
@@ -142,11 +162,17 @@ function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
     if ('read' in step) waits.push(step.read)
     else {
       const n = childOf(step.done)
-      if (n !== null) made.set(c.key, n)
+      if (n !== null) {
+        made.set(c.key, n)
+        if (!c.ready) claims.push(parkClaim(env, r.issue, n, c))
+      }
     }
   }
   // a pass that planned a child says nothing more; else the first wait names why
   if (made.size < d.children.length) return waits.find(w => w.kind === 'held' && w.why === '') ?? waits[0] ?? { kind: 'held', why: 'split: its children are being made' }
+  // every not-ready child is claimed before the plan is posted and the parent closes
+  const pending = claims.find(k => 'read' in k)
+  if (pending !== undefined && 'read' in pending) return pending.read
   const list = d.children.map(c => `- #${made.get(c.key)}: ${c.title}${typeof c.why === 'string' && c.why !== '' ? ` - ${c.why}` : ''}${c.ready ? '' : ' (waits on an owner decision)'}`)
   const why = d.reasons === null ? [] : ['', 'Why this split:', `- Why split: ${d.reasons.why_split}`, `- Why this many parts: ${d.reasons.why_count}`, `- Why these parts: ${d.reasons.why_parts}`, `- Why this order: ${d.reasons.why_order}`]
   const body = [d.brief ?? `The designer split #${r.issue} into ${d.children.length} issues.`, ...why, '', 'Split by the factory loop into:', ...list].join('\n')

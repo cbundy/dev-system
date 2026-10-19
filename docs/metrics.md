@@ -372,6 +372,36 @@ WHERE type = 'transition' AND table_row = 'T17'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
+### Split children parked on their open decision
+
+A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).
+Per such park this gives how long it waited for the owner and whether the next transition (the owner's
+resume, P1) was followed by the designer's step (T1 to designing). `waited_seconds` is null while the
+child still waits; `resumed_via` is the resume route (`unpark:label` or `unpark:op`). Take the count of rows
+for how many children park, the median of `waited_seconds` for how long, and the share with `designing_at`
+set for how many reach designing. It takes `-v repo=... -v since=...`.
+
+```sql
+WITH tr AS (
+  SELECT repo, issue, life, seq, table_row, to_state, via, seq_at,
+         lead(seq_at) OVER w AS next_at, lead(via) OVER w AS next_via,
+         lead(table_row) OVER w AS next_row, lead(to_state, 2) OVER w AS then_state,
+         lead(seq_at, 2) OVER w AS then_at
+  FROM (SELECT l.repo, l.issue, l.life, l.seq, l.table_row, l.to_state, l.via, l.seq_at,
+          row_number() OVER (PARTITION BY l.repo, l.issue, l.life, l.seq ORDER BY l.ts, l.device, l.device_seq) AS n
+        FROM factory.event_log l
+        WHERE l.type = 'transition' AND l.issue IS NOT NULL AND l.repo = :'repo') x
+  WHERE n = 1
+  WINDOW w AS (PARTITION BY repo, issue ORDER BY seq_at, seq)
+)
+SELECT repo, issue, seq_at AS parked_at, next_via AS resumed_via,
+       extract(epoch FROM next_at - seq_at) AS waited_seconds,
+       CASE WHEN then_state = 'designing' THEN then_at END AS designing_at
+FROM tr
+WHERE table_row = 'S7' AND via = 'split-decision' AND seq_at >= :'since'::timestamptz
+ORDER BY seq_at DESC;
+```
+
 ## 4. Merges per device
 
 ```sql
