@@ -32,7 +32,8 @@
 //     end_turn); its session_id is agent-<id>, as agentsview names it, and its
 //     parent_session_id the top-level session
 //   - context_window is the window size the session's status line last wrote
-//     to $DEV_CONTEXT_WINDOW_DIR/<session_id> (the factory-hud mod), else null
+//     to $DEV_CONTEXT_WINDOW_DIR/<session_id> (factory-loop-workspace, in every
+//     loop workspace, or the factory-hud mod), else null; always null for sub-agents
 // claude_sessions is {interactive, headless}: the count of those top-level sessions by the entrypoint
 // the registry file names (headless when it starts with sdk-, as `claude -p` writes sdk-cli; any
 // other is interactive). Sub-agents are not counted. This is read from the registry, never from a
