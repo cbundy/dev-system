@@ -126,9 +126,10 @@ Example:
 | `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
+| `context` | string | `transition` | parked: the context of the owner's question, set only when an agent structured the question; null otherwise. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
-| `decision` | string | `loop_entry` | A wake's decision, for example hold or done; null when the wake made none. |
+| `decision` | string | `loop_entry`, `transition` | A wake's decision, for example hold or done; null when the wake made none. |
 | `deletions` | integer | `merged` | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
@@ -172,6 +173,7 @@ Example:
 | `observed_at` | string | `main_state` | When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `old_value` | any | `settings_changed` | The value before the change, any JSON; null when it was unset. |
+| `options` | array of object | `transition` | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `p50_ms` | integer | `loop_passes` | The median duration (nearest rank), in milliseconds; null when there was no pass. |
@@ -188,6 +190,8 @@ Example:
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
 | `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `recommendation` | string | `transition` | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
+| `recommended` | enum | `transition` | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
@@ -1185,6 +1189,11 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `fixes` | integer | required | no | minimum 0 | yes | Loop state, for the record rebuild: entries to fixing so far in this life. |
 | `round` | integer | required | no | minimum 0 | yes | Entries to reviewing so far in this life: the review round. |
 | `question` | string | required | yes | maxLength 2000 | yes | parked: the question for the owner; null otherwise. For people; never parse it. |
+| `decision` | string | optional | yes | maxLength 2000 | yes | parked: the one-sentence ask of the owner's question, set only when an agent structured the question; null otherwise. Shares the decision column with loop_entry. |
+| `context` | string | optional | yes | maxLength 800 | yes | parked: the context of the owner's question, set only when an agent structured the question; null otherwise. |
+| `options` | array of object | optional | yes | minItems 2; maxItems 6 | yes | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
+| `recommended` | enum | optional | yes | one of "A", "B", "C", "D", "E", "F", null | yes | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
+| `recommendation` | string | optional | yes | maxLength 200 | yes | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
 | `wait` | array of object | optional | yes | minItems 1; maxItems 8 |  | waiting: the conditions the loop re-checks each pass; null otherwise |
 | `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null | yes | closed: why the life ended (done: its work had already merged); null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |

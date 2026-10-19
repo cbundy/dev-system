@@ -115,12 +115,13 @@ SQL
 ## Field conventions
 
 - **Names.** snake_case. A shared name (`pr`, `branch`, `head`, `life`, `round`) means the same
-  thing in every type, which is what lets the view lift it into one column.
+  thing in every type, which is what lets the view lift it into one column (`decision` is shared between `loop_entry` and `transition`).
 - **Times.** UTC ISO 8601 ending in `Z`, named `*_at` (the envelope uses `ts`). Times the writer
   makes carry exactly three millisecond digits, so they sort as text. Times copied from elsewhere
   (`pr_closed_at`, `holder_since`, the usage reset times) stay exactly as given.
 - **Presence.** A missing value is JSON `null`, never the string `"none"`. **Flat:** scalars, or
-  at most arrays of scalars; no nested objects.
+  at most arrays of scalars; no nested objects. The exception is a bounded list of objects whose schema is closed
+  (`additionalProperties: false`): `wait` and `options`.
 - **Codes.** A closed list is an `enum`. An open family (`cause`, `via`) is a patterned string with
   examples in its description.
 - **Free text** (`detail`, `question`, `notes`) is for people and never parsed. When a reader
