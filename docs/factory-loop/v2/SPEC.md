@@ -341,7 +341,7 @@ type IssueRecord = {
   version, or whose payload the reader refuses, fails the whole read (the `store` source is not ok, its
   error names the event_id and the source `new`), a missing factory URL (`dev-query` exit 77, 78) too, and
   no row is skipped. `shadow` reads both stores once per load and then at most hourly, whether or not the
-  store holds records, rebuilds records from each, compares them per issue and field with both sides cut
+  store holds records, rebuilds records from each, compares them per issue and field (object key order ignored) with both sides cut
   600 s back, and writes one `shadow_read` event (`reader` `loop-records`, `tool` `factory-loop`; rule H1,
   key `records-shadow:<time>`). The records still come from the store, else the old read; a failing new
   read never fails the pass. A compare with differences tells the owner once per distinct set of issues

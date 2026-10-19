@@ -8,7 +8,7 @@ import type { FactoryEvent } from '../hooks/derive'
 import { eventArgv, onceKey } from '../hooks/v2/events'
 import { validateStrict } from '../hooks/v2/event-reader'
 import { planV2 } from '../hooks/v2/plan'
-import { compareFacts, eventsFromNewRows, floorsFromRows, viewOf } from '../hooks/v2/sources-facts'
+import { compareFacts, diffViews, eventsFromNewRows, floorsFromRows, viewOf } from '../hooks/v2/sources-facts'
 import { SETTLE_MS } from '../hooks/v2/sources-records'
 import type { Action, LedgerEntry, State } from '../hooks/types'
 import { emptyCache } from '../hooks/observe'
@@ -286,5 +286,15 @@ describe('the facts shadow in the planner (rules-shadow.ts)', () => {
     expect(tells(await plan(compare(49), [done]))).toEqual([])
     // another set is told again
     expect(tells(await plan(compare(50), [done])).map(a => a.key)).toEqual(['tell:facts-shadow:reclaimed:#48,reclaimed:#50'])
+  })
+})
+
+describe('diffViews', () => {
+  test('a ledger entry that differs only in key order is no difference', () => {
+    const e = { key: 'k', kind: 'event', class: 'record', rule: 'derived', issue: 1, run: null, pr: null, head: null, status: 'done', attempts: 1, startedAt: NOW } as unknown as LedgerEntry
+    const reordered = Object.fromEntries(Object.entries(e).reverse()) as unknown as LedgerEntry
+    const view = (x: LedgerEntry) => ({ reclaimed: new Map<number, number>(), readyAt: new Map<number, number>(), ledger: new Map([['k', x]]), once: new Set<string>() })
+    expect(diffViews(view(e), view(reordered))).toEqual([])
+    expect(diffViews(view(e), view({ ...e, attempts: 2 }))).toHaveLength(1)
   })
 })

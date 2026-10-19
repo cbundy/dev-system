@@ -25,6 +25,7 @@ import type { LedgerEntry } from '../types'
 import { readEvent } from './event-reader'
 import { eventNote, onceKey } from './events'
 import type { ShadowReadData } from './events'
+import { sameValue } from './same-value'
 import { failedShadow, SETTLE_MS, SHADOW_EVERY_MS } from './sources-records'
 import type { Ctx, Read } from './sources-records'
 
@@ -201,10 +202,9 @@ export function viewOf(events: readonly FactoryEvent[], device: string): View {
   return { reclaimed: facts.reclaimed, readyAt: facts.readyAt, ledger, once }
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 const iso = (ms: number | undefined): string => (ms === undefined ? 'absent' : new Date(ms).toISOString())
 
-function diffViews(a: View, b: View): { key: string; text: string }[] {
+export function diffViews(a: View, b: View): { key: string; text: string }[] {
   const out: { key: string; text: string }[] = []
   for (const issue of [...new Set([...a.reclaimed.keys(), ...b.reclaimed.keys()])].sort((x, y) => x - y)) {
     if (a.reclaimed.get(issue) !== b.reclaimed.get(issue)) out.push({ key: `reclaimed:#${issue}`, text: `#${issue} reclaimed: old ${iso(a.reclaimed.get(issue))}, new ${iso(b.reclaimed.get(issue))}` })
@@ -215,7 +215,7 @@ function diffViews(a: View, b: View): { key: string; text: string }[] {
   for (const key of [...new Set([...a.ledger.keys(), ...b.ledger.keys()])].sort()) {
     const x = a.ledger.get(key)
     const y = b.ledger.get(key)
-    if (!same(x, y)) out.push({ key: `ledger:${key}`, text: `ledger ${key}: old ${x === undefined ? 'absent' : JSON.stringify(x)}, new ${y === undefined ? 'absent' : JSON.stringify(y)}` })
+    if (!sameValue(x, y)) out.push({ key: `ledger:${key}`, text: `ledger ${key}: old ${x === undefined ? 'absent' : JSON.stringify(x)}, new ${y === undefined ? 'absent' : JSON.stringify(y)}` })
   }
   for (const key of [...new Set([...a.once, ...b.once])].sort()) {
     if (a.once.has(key) !== b.once.has(key)) out.push({ key: `once:${key}`, text: `once ${key}: old ${a.once.has(key) ? 'present' : 'absent'}, new ${b.once.has(key) ? 'present' : 'absent'}` })
