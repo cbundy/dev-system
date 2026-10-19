@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "comment_posted.v1.json",
   "title": "comment_posted",
-  "description": "The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. No producer writes it yet.",
+  "description": "The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. The loop's park and wait entry actions write it (rules-entry.ts).",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,
