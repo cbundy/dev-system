@@ -46,8 +46,11 @@ test("Settings: one row per fact, newest first; config null until written", opts
   ]);
 
   const rowsB = db.query(b, "reader").split("\n").map((l) => l.split("|"));
-  assert.deepEqual(rowsB, [
-    ["w1", "o/a", "2026-10-19T09:00:00.000Z", '{"maxInFlightIssues": 5}'],
-    ["w2", "o/a", "", ""],
+  // settings_age depends on the clock: the fixed snapshot time is in the past, so it is an interval
+  // for w1 and empty for w2 (no snapshot).
+  assert.match(rowsB[0][3], /^-?\d+ days? |^-?\d{2,}:\d{2}:\d{2}|^-?\d+ (mons?|years?)/);
+  assert.deepEqual(rowsB.map((r) => [r[0], r[1], r[2], r[4], r[3] === ""]), [
+    ["w1", "o/a", "2026-10-19T09:00:00.000Z", '{"maxInFlightIssues": 5}', false],
+    ["w2", "o/a", "", "", true],
   ]);
 });

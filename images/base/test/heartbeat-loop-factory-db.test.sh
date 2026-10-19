@@ -65,7 +65,7 @@ mkdir -p "$DEV_SECRETS_DIR" "$tmpdir/hb" "$tmpdir/events" "$tmpdir/share"
 for f in agentsview.sh factory-db.sh workspace.sh; do ln -s "$ROOT/images/base/$f" "$tmpdir/share/$f"; done
 cat > "$tmpdir/share/heartbeat-state" <<STUB
 #!/bin/sh
-printf '{"state":"%s","in_flight":[],"chat_active_at":null,"sessions":[]}\n' "\$(cat "$tmpdir/state")"
+printf '{"state":"%s","in_flight":[],"chat_active_at":null,"sessions":[],"config":%s}\n' "\$(cat "$tmpdir/state")" "\$(cat "$tmpdir/config" 2>/dev/null || echo null)"
 STUB
 chmod +x "$tmpdir/share/heartbeat-state"
 
@@ -102,6 +102,16 @@ awk -v a="${first#*|}" -v b="${second#*|}" 'BEGIN { exit !(b > a) }' || fail "la
 grep -q 'stats write failed' "$tmpdir/beat.out" && fail "the stats write failed: $(cat "$tmpdir/beat.out")"
 grep -q 'permission denied\|ERROR' "$tmpdir/beat.out" && fail "the writer beat logged an error: $(cat "$tmpdir/beat.out")"
 echo "heartbeat-loop factory-db: ok"
+
+# the settings snapshot: the writer role's config UPDATE lands, and a null config clears it
+echo '{"v":1,"at":"2026-10-19T08:00:00Z","settings":{"a":1}}' > "$tmpdir/config"
+beat || fail "beat with config: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT config->>'at' FROM factory.workers WHERE device = 'dev-box'")" = 2026-10-19T08:00:00Z ] || fail "config should carry the snapshot"
+grep -q 'config write failed' "$tmpdir/beat.out" && fail "the config write failed: $(cat "$tmpdir/beat.out")"
+echo null > "$tmpdir/config"
+beat || fail "beat with null config: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT config IS NULL FROM factory.workers WHERE device = 'dev-box'")" = t ] || fail "a null config should clear the column"
+echo "heartbeat-loop config (factory database): ok"
 
 # a workspace on another database: the writer file in its own folder (no env var) takes the beat
 db2="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')_ws"
@@ -149,3 +159,23 @@ q "$db3" "INSERT INTO factory.worker_samples (device, sampled_at) VALUES ('dev-b
 av_beat || fail "agentsview beat 3"
 [ "$(q "$db3" "SELECT count(*) FROM factory.worker_samples WHERE sampled_at < now() - interval '30 days'")" = 0 ] || fail "the old sample should be pruned"
 echo "heartbeat-loop agentsview stats DDL: ok"
+
+# the agentsview target gets the column from the guarded DDL, then takes config
+echo '{"v":1,"at":"2026-10-19T10:00:00Z"}' > "$tmpdir/config"
+av_beat || fail "agentsview beat with config: $(cat "$tmpdir/beat.out")"
+grep -q 'config write failed' "$tmpdir/beat.out" && fail "the agentsview config write failed: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db3" "SELECT config->>'at' FROM factory.workers WHERE device = 'dev-box'")" = 2026-10-19T10:00:00Z ] || fail "the agentsview database should take config"
+echo "heartbeat-loop config (agentsview database): ok"
+
+echo '{"v":1,"at":"2026-10-19T09:00:00Z"}' > "$tmpdir/config"
+echo busy > "$tmpdir/state"
+# a database without the column still records the beat; only the config write fails
+q "$db" "ALTER TABLE factory.workers DROP COLUMN config CASCADE" > /dev/null
+before=$(q "$db" "SELECT extract(epoch FROM last_seen) FROM factory.workers WHERE device = 'dev-box'")
+sleep 1
+beat || fail "a missing config column must not fail the beat: $(cat "$tmpdir/beat.out")"
+after=$(q "$db" "SELECT extract(epoch FROM last_seen) FROM factory.workers WHERE device = 'dev-box'")
+awk -v a="$before" -v b="$after" 'BEGIN { exit !(b > a) }' || fail "last_seen should still advance: $before -> $after"
+grep -q 'factory database config write failed' "$tmpdir/beat.out" || fail "the config failure is logged: $(cat "$tmpdir/beat.out")"
+grep -q 'stats write failed' "$tmpdir/beat.out" && fail "stats must still land: $(cat "$tmpdir/beat.out")"
+echo "heartbeat-loop config (column dropped): ok"

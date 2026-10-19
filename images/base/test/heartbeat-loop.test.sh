@@ -46,7 +46,17 @@ cat > "$fakebin/psql" <<'STUB'
 d=$(dirname "$0")
 in="$d/psql-in.$$"
 cat > "$in"
-if head -n 1 "$in" | grep -qx -- '-- heartbeat stats'; then
+if head -n 1 "$in" | grep -qx -- '-- heartbeat config'; then
+  kind=config
+  n=$(($(if [ -f "$d/config-calls" ]; then wc -l < "$d/config-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/config-sql-$n"
+  printf '%s\n' "$@" > "$d/config-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/config-db-$n"
+  echo x >> "$d/config-calls"
+  # the order of the calls, to prove config follows its target's stats
+  echo "config ${PGDATABASE:-}" >> "$d/order"
+elif head -n 1 "$in" | grep -qx -- '-- heartbeat stats'; then
+  echo "stats ${PGDATABASE:-}" >> "$d/order"
   kind=stats
   n=$(($(if [ -f "$d/stats-calls" ]; then wc -l < "$d/stats-calls"; else echo 0; fi) + 1))
   mv "$in" "$d/stats-sql-$n"
@@ -54,6 +64,7 @@ if head -n 1 "$in" | grep -qx -- '-- heartbeat stats'; then
   printf '%s\n' "${PGDATABASE:-}" > "$d/stats-db-$n"
   echo x >> "$d/stats-calls"
 else
+  echo "main ${PGDATABASE:-}" >> "$d/order"
   kind=main
   n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
   mv "$in" "$d/psql-sql-$n"
@@ -65,6 +76,7 @@ fail=0
 [ -e "$d/psql-fail" ] && fail=1
 [ -e "$d/psql-fail-${PGDATABASE:-}" ] && fail=1
 [ "$kind" = stats ] && [ -e "$d/psql-fail-stats" ] && fail=1
+[ "$kind" = config ] && [ -e "$d/psql-fail-config" ] && fail=1
 [ ! -e "$d/psql-hang" ] || exec sleep 60
 if [ "$fail" = 1 ]; then
   # Recording a call does not mean its error response has reached the loop.
@@ -94,13 +106,18 @@ STUB
 cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
+printf '%s\n' "$@" >> "$(dirname "$0")/state-args"
 [ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 60
-echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2}}'
+if [ -e "$(dirname "$0")/state-nocfg" ]; then
+  echo '{"state":"busy","in_flight":[],"sessions":[],"claude_sessions":null,"config":null}'
+  exit 0
+fi
+echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2},"config":{"v":1,"repo":"acme/widgets","at":"2026-10-19T08:00:00Z","settings":{"a":1}}}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/config-* "$fakebin/order" "$share/state-args" "$share/state-nocfg" "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
@@ -624,5 +641,62 @@ reset
 touch "$fakebin/psql-fail-x"
 hb env FACTORY_DB_WRITER_URL="$FDB" HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$pd" "$BASH" "$LOOP" --once > /dev/null 2>&1 && fail "old target failing fails --once"
 [ "$(wc -l < "$fakebin/stats-calls" | tr -d ' ')" = 1 ] && [ "$(cat "$fakebin/stats-db-1")" = fdb ] || fail "only the target whose UPSERT landed gets stats"
+
+# --- settings snapshot: a third, separate call per target ------------------------------
+carg() { sed -n "s/^$2=//p" "$fakebin/config-args-$1"; } # CALL name
+reset
+once > "$tmpdir/c.out" 2>&1 || fail "--once with config: $(cat "$tmpdir/c.out")"
+[ "$(calls)" = 1 ] && [ "$(wc -l < "$fakebin/config-calls" | tr -d ' ')" = 1 ] || fail "one UPSERT and one config call expected"
+head -n 1 "$fakebin/config-sql-1" | grep -qx -- '-- heartbeat config' || fail "the config SQL is marked"
+grep -qF "config = NULLIF(:'config', '')::jsonb WHERE device = :'device'" "$fakebin/config-sql-1" || fail "the config UPDATE: $(cat "$fakebin/config-sql-1")"
+[ "$(carg 1 device)" = dev-box ] || fail "config device"
+[ "$(carg 1 config | jq -c .at)" = '"2026-10-19T08:00:00Z"' ] || fail "config value: $(carg 1 config)"
+grep -qx -- '--repo' "$share/state-args" && grep -qx -- 'acme/widgets' "$share/state-args" || fail "heartbeat-state gets --repo: $(cat "$share/state-args")"
+grep -q 'CREATE TABLE' "$fakebin/config-sql-1" && fail "a config call never carries DDL"
+sed -n '/^INSERT INTO factory.workers (/,$p' "$fakebin/psql-sql-1" | grep -q 'config' && fail "the UPSERT must not touch config"
+# the snapshot is only ever a psql -v value: not in the UPSERT's SQL, not in a log line
+grep -q '2026-10-19T08:00:00Z' "$tmpdir/c.out" && fail "the snapshot reached a log line"
+
+# a heartbeat-state with no config sends config= (empty, so NULL)
+reset
+touch "$share/state-nocfg"
+once > /dev/null 2>&1 || fail "--once without config"
+grep -qx -- 'config=' "$fakebin/config-args-1" || fail "no config sends an empty value: $(cat "$fakebin/config-args-1")"
+rm -f "$share/state-nocfg"
+
+# a failing config write: logged, masked, exit 0, UPSERT and stats delivered
+reset
+touch "$fakebin/psql-fail-config"
+rc=0
+once > "$tmpdir/c.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] || fail "a config failure must not fail --once, got $rc"
+[ "$(calls)" = 1 ] && [ -f "$fakebin/stats-calls" ] || fail "UPSERT and stats still sent"
+grep -q 'heartbeat-loop: agentsview database config write failed' "$tmpdir/c.out" || fail "the failure is logged: $(cat "$tmpdir/c.out")"
+grep -q 's3cret' "$tmpdir/c.out" && fail "the config failure leaked the password"
+
+# a failed UPSERT sends no config for that target
+reset
+touch "$fakebin/psql-fail"
+rc=0
+once > /dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] && [ ! -e "$fakebin/config-calls" ] || fail "no config after a failed UPSERT (rc=$rc)"
+
+# the stopped beat sends no config
+reset
+hb env HEARTBEAT_DDL_SENT=1 "$BASH" "$LOOP" --final || fail "--final"
+[ "$(calls)" = 1 ] && [ ! -e "$fakebin/config-calls" ] || fail "the stopped beat must send no config"
+
+# two targets: config after each target's stats, agentsview first; a config failure on one skips nothing
+reset
+hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "two targets with config"
+[ "$(tr '\n' ',' < "$fakebin/order")" = 'main x,stats x,config x,main fdb,stats fdb,config fdb,' ] || fail "call order: $(tr '\n' ',' < "$fakebin/order")"
+reset
+touch "$fakebin/psql-fail-config"
+hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "config failures on both targets keep exit 0"
+[ "$(wc -l < "$fakebin/config-calls" | tr -d ' ')" = 2 ] && [ "$(calls)" = 2 ] || fail "both targets still get their calls"
+reset
+touch "$fakebin/psql-fail-x"
+hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 && fail "old target failing fails --once"
+[ "$(wc -l < "$fakebin/config-calls" | tr -d ' ')" = 1 ] && [ "$(cat "$fakebin/config-db-1")" = fdb ] || fail "only the target whose UPSERT landed gets config"
 
 echo "heartbeat-loop: ok"

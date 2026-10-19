@@ -1490,7 +1490,8 @@ ORDER BY device, hour;
 
 Settings the loop runs on. A `settings_changed` event records one change of one setting (see
 [REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
-settings snapshot. No producer writes either yet, so both queries return no rows until it does.
+settings snapshot, written by each worker's heartbeat (images/base/README.md, "Settings snapshot"). No producer
+writes `settings_changed` yet, so the first query returns no rows until one does.
 
 Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
 devices counts once):
@@ -1505,11 +1506,13 @@ WHERE n = 1
 ORDER BY ts DESC, key;
 ```
 
-Settings in force per worker. `config` is null until a worker's heartbeat writes the loop's settings
-snapshot (cbundy/dev-system#1016):
+Settings in force per worker. `config` is null while a worker has no snapshot (no loop settings file, or one that
+is unreadable, invalid or oversize). Judge how fresh a snapshot is by `config->>'at'`, the loop's last observing
+pass, never by `last_seen`: a worker keeps beating after its loop stops writing the snapshot:
 
 ```sql
-SELECT device, repo, config->>'at' AS settings_at, config->'settings' AS settings
+SELECT device, repo, config->>'at' AS settings_at,
+  now() - (config->>'at')::timestamptz AS settings_age, config->'settings' AS settings
 FROM factory.workers_status
 ORDER BY device;
 ```
