@@ -2009,7 +2009,7 @@ document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-lat
 background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
 `push` (event file and push-marker modification times, the no-mistakes mirror's recorded last push, and
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
-The nullable `config` column (jsonb) is for the settings snapshot of the loop; it stays null until the heartbeat writes the snapshot, and neither the UPSERT nor the stats UPDATE writes it yet. The guarded DDL adds it to an agentsview database that lacks it (migration 0013 does so in the factory database).
+The nullable `config` column (jsonb) is for the settings snapshot of the loop; it stays null until the heartbeat writes the snapshot, and neither the UPSERT nor the stats UPDATE writes it yet. The guarded DDL adds it to an agentsview database that lacks it (migration 0014 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
 intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
 `pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
