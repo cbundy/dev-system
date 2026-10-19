@@ -360,6 +360,8 @@ export type Config = {
   ciRunMs: Ms
   // a PR's read stands this long, unless something the loop knows makes it due sooner (v2 SPEC 2.4)
   prEveryMs: Ms
+  // the default branch's state is read this often, in act mode, to be logged as main_state (v2 SPEC 2.4, 9.5)
+  mainEveryMs: Ms
   // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
   maxTriages: number
   // minutes a requested wind-down may take before the stop (0: wind-down off; v2 SPEC 10.11)

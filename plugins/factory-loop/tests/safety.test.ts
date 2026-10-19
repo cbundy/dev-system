@@ -317,10 +317,21 @@ function scriptGit(script: string): string[] {
   return out
 }
 
+// The main source's reads (sources-main.ts): GETs of the repo's own paths, no method, no field, and a
+// --jq of the branch or the sha at most. Nothing writes through them.
+const MAIN_READ_PATH = new RegExp(
+  `^repos/${REPO}(/commits/[^/?]+(/pulls)?|/actions/workflows\\?per_page=100|/actions/workflows/[1-9]\\d*/runs\\?branch=[^&/]+&per_page=10|/deployments\\?sha=[0-9a-f]{40}&per_page=100|/deployments/[1-9]\\d*/statuses\\?per_page=1)?$`,
+)
+function mainRead(args: readonly string[]): boolean {
+  const [verb, path = '', ...rest] = args
+  const jq = rest.length === 0 || (rest.length === 2 && rest[0] === '--jq' && ['.default_branch', '.sha'].includes(rest[1] ?? ''))
+  return verb === 'api' && MAIN_READ_PATH.test(path) && jq
+}
+
 function bans(argv: readonly string[], action?: Action): string[] {
   const out: string[] = []
   const [cmd = '', ...args] = argv
-  const v2 = v2Shape(argv, action)
+  const v2 = cmd === 'gh' && mainRead(args) ? { api: true } : v2Shape(argv, action)
   if (argv.some(a => a === '--yes' || a.startsWith('--yes='))) out.push('--yes')
   if (argv.some(a => (a === 'rerun' && v2.rerun !== true) || a === 'abort')) out.push('rerun/abort')
   if (cmd === 'no-mistakes' && !(args[0] === 'axi' && args[1] === 'respond')) out.push(`no-mistakes ${args.slice(0, 2).join(' ')}`)
@@ -604,6 +615,22 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
     }
     await observe(io, runtime(), emptyCache(), NOW, null, null, { ledger: null, githubBackoffUntil: null, queueKnown: null })
     for (const argv of [...own, ...seen]) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+  })
+
+  test('the main source\'s reads are plain GETs of the repo\'s own paths; a write or another repo is still banned', () => {
+    const reads = [
+      ARGV.defaultBranchArgv(REPO),
+      ARGV.branchHeadArgv(REPO, 'main'),
+      ARGV.commitPullsArgv(REPO, 'a'.repeat(40)),
+      ARGV.workflowsArgv(REPO),
+      ARGV.workflowRunsArgv(REPO, 1001, 'main'),
+      ARGV.deploymentsArgv(REPO, 'a'.repeat(40)),
+      ARGV.deploymentStatusArgv(REPO, 501),
+    ]
+    for (const argv of reads) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+    expect(bans([...ARGV.workflowsArgv(REPO), '--method', 'POST'])).toEqual(['gh api', 'gh without --repo <the repo>'])
+    expect(bans(['gh', 'api', 'repos/other/repo/commits/main', '--jq', '.sha'])).not.toEqual([])
+    expect(bans(['gh', 'api', `repos/${REPO}/actions/runs/1/rerun`])).not.toEqual([])
   })
 
   test('stop-agent stops only an agent the ledger holds running; any other, an answered one included, is refused before TaskStop', async () => {

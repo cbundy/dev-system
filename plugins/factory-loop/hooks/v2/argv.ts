@@ -169,6 +169,43 @@ export function prRunsArgv(repo: string, head: string): string[] {
   return ['gh', 'api', `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`]
 }
 
+// --- the default branch's state (sources-main.ts, 2.4) ---------------------------------------------------------
+
+// The repo's default branch name.
+export function defaultBranchArgv(repo: string): string[] {
+  return ['gh', 'api', `repos/${repo}`, '--jq', '.default_branch']
+}
+
+// The sha the branch points at.
+export function branchHeadArgv(repo: string, branch: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${branch}`, '--jq', '.sha']
+}
+
+// The pull requests a commit came from.
+export function commitPullsArgv(repo: string, head: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${head}/pulls`]
+}
+
+// The repo's workflows (the caller keeps the active ones).
+export function workflowsArgv(repo: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/workflows?per_page=100`]
+}
+
+// A workflow's newest runs on the branch.
+export function workflowRunsArgv(repo: string, workflow: number, branch: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(branch)}&per_page=10`]
+}
+
+// The deployments of a commit.
+export function deploymentsArgv(repo: string, head: string): string[] {
+  return ['gh', 'api', `repos/${repo}/deployments?sha=${head}&per_page=100`]
+}
+
+// A deployment's newest status.
+export function deploymentStatusArgv(repo: string, deployment: number): string[] {
+  return ['gh', 'api', `repos/${repo}/deployments/${deployment}/statuses?per_page=1`]
+}
+
 // The one re-run of a failed or cancelled check per round: its failed jobs only.
 export function runRerunArgv(repo: string, runId: string): string[] {
   return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]
