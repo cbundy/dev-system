@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "main_state.v1.json",
+  "title": "main_state",
+  "description": "One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. No producer writes it yet. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "observed_at",
+    "branch",
+    "head",
+    "pr",
+    "workflows",
+    "workflow_ids",
+    "run_ids",
+    "run_attempts",
+    "run_heads",
+    "run_events",
+    "conclusions",
+    "running",
+    "green",
+    "deploy_environments",
+    "deploy_ids",
+    "deploy_states",
+    "changed"
+  ],
+  "properties": {
+    "observed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+      "description": "When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits.",
+      "x-column": true
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The default branch name.",
+      "x-column": true
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "The commit the branch pointed at when read.",
+      "x-column": true
+    },
+    "pr": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "The pull request the head commit came from; null when it is not known or the commit did not come from a pull request.",
+      "x-column": true
+    },
+    "workflows": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The names of the repo's workflows, one per index. Every array of workflow facts lines up with this one index by index."
+    },
+    "workflow_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "The workflow ids, in the order of workflows."
+    },
+    "run_ids": {
+      "type": "array",
+      "items": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1
+      },
+      "description": "The id of the newest completed run of each workflow on the branch; null when it has none."
+    },
+    "run_attempts": {
+      "type": "array",
+      "items": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1
+      },
+      "description": "The attempt number of that run; null when it has none."
+    },
+    "run_heads": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "description": "The commit that run ran on; null when it has none."
+    },
+    "run_events": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^[a-z_]+$"
+      },
+      "description": "What started that run, such as push, schedule or workflow_dispatch; null when it has none."
+    },
+    "conclusions": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^[a-z_]+$"
+      },
+      "description": "How that run ended: success, failure, cancelled, skipped, timed_out, neutral, action_required, startup_failure or stale; null when there is no completed run."
+    },
+    "running": {
+      "type": "array",
+      "items": {
+        "type": "boolean"
+      },
+      "description": "true when a newer run of that workflow is queued or in progress."
+    },
+    "green": {
+      "type": "boolean",
+      "description": "true when the newest completed run of every workflow concluded success, skipped or neutral.",
+      "x-column": true
+    },
+    "deploy_environments": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The deployment environments of the repo, one per index; empty when the repo has none. deploy_ids and deploy_states line up with this one."
+    },
+    "deploy_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "The id of the newest deployment of each environment, in the order of deploy_environments."
+    },
+    "deploy_states": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^[a-z_]+$"
+      },
+      "description": "The state of that deployment: success, failure, error, inactive, in_progress, queued or pending; null when none is known."
+    },
+    "changed": {
+      "type": "string",
+      "pattern": "^[a-z_]+$",
+      "description": "What changed since the last main_state event of the repo: first, head, workflow or deploy.",
+      "x-column": true
+    }
+  },
+  "examples": [
+    {
+      "observed_at": "2026-10-19T08:00:00.123Z",
+      "branch": "main",
+      "head": "f94eb46adde9adb19a154dc41e32877369596f3b",
+      "pr": 141,
+      "workflows": [
+        "ci"
+      ],
+      "workflow_ids": [
+        1001
+      ],
+      "run_ids": [
+        null
+      ],
+      "run_attempts": [
+        null
+      ],
+      "run_heads": [
+        null
+      ],
+      "run_events": [
+        null
+      ],
+      "conclusions": [
+        null
+      ],
+      "running": [
+        true
+      ],
+      "green": true,
+      "deploy_environments": [],
+      "deploy_ids": [],
+      "deploy_states": [],
+      "changed": "first"
+    },
+    {
+      "observed_at": "2026-10-19T08:12:30.456Z",
+      "branch": "main",
+      "head": "f94eb46adde9adb19a154dc41e32877369596f3b",
+      "pr": 141,
+      "workflows": [
+        "ci",
+        "deploy"
+      ],
+      "workflow_ids": [
+        1001,
+        1002
+      ],
+      "run_ids": [
+        9001,
+        9002
+      ],
+      "run_attempts": [
+        1,
+        2
+      ],
+      "run_heads": [
+        "f94eb46adde9adb19a154dc41e32877369596f3b",
+        "f94eb46adde9adb19a154dc41e32877369596f3b"
+      ],
+      "run_events": [
+        "push",
+        "push"
+      ],
+      "conclusions": [
+        "failure",
+        "success"
+      ],
+      "running": [
+        false,
+        false
+      ],
+      "green": false,
+      "deploy_environments": [
+        "production"
+      ],
+      "deploy_ids": [
+        501
+      ],
+      "deploy_states": [
+        "success"
+      ],
+      "changed": "workflow"
+    }
+  ]
+}

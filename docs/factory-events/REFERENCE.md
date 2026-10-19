@@ -20,6 +20,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
 | [`loop_passes`](#loop_passes) | v1 | none | Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. |
+| [`main_state`](#main_state) | v1 | none | One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
 | [`milestone_state`](#milestone_state) | v1 | none | The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
@@ -108,12 +109,13 @@ Example:
 | `attempt` | integer | `transition` | The attempt of that step, from 1. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
 | `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
-| `branch` | string | `abandoned`, `finding_handled`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
+| `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
 | `bucket` | integer | `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
+| `changed` | string | `main_state` | What changed since the last main_state event of the repo: first, head, workflow or deploy. |
 | `class` | enum | `loop_entry` | The planner's class for the work. |
 | `comment_url` | string | `comment_posted` | The comment's URL on GitHub. |
 | `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
@@ -133,7 +135,8 @@ Example:
 | `fixes` | integer | `transition` | Loop state, for the record rebuild: entries to fixing so far in this life. |
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
-| `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `green` | boolean | `main_state` | true when the newest completed run of every workflow concluded success, skipped or neutral. |
+| `head` | string | `finding_handled`, `gate_run`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
@@ -151,6 +154,7 @@ Example:
 | `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
+| `observed_at` | string | `main_state` | When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
@@ -161,7 +165,7 @@ Example:
 | `passes` | integer | `loop_passes` | Passes that ended in the minute. 0 when none did; then every duration below is null. |
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
 | `planner` | enum | `loop_passes` | Which planner the loop ran. |
-| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `main_state`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `previous_tag` | string | `released` | The release tag before this one; null for a first release. |
 | `prs` | array of integer | `released` | The pull requests the release carried. |
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
@@ -594,6 +598,76 @@ Example:
   "mode": "act",
   "planner": "v2",
   "pass_every_ms": 10000
+}
+```
+
+## main_state
+
+One change in the state of a repo's default branch as the loop read it: its head, the newest completed run of each workflow, whether main is green and the newest deployment of each environment. Written only when something changed since the last event of the repo. No producer writes it yet. Count one per (repo, device, observed_at). The arrays workflows, workflow_ids, run_ids, run_attempts, run_heads, run_events, conclusions and running line up index by index; so do deploy_environments, deploy_ids and deploy_states.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: (repo, device, observed_at)
+
+### main_state v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `observed_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits. |
+| `branch` | string | required | no | minLength 1 | yes | The default branch name. |
+| `head` | string | required | no | pattern `^[0-9a-f]{40}$` | yes | The commit the branch pointed at when read. |
+| `pr` | integer | required | yes | minimum 1 | yes | The pull request the head commit came from; null when it is not known or the commit did not come from a pull request. |
+| `workflows` | array of string | required | no | items: minLength 1 |  | The names of the repo's workflows, one per index. Every array of workflow facts lines up with this one index by index. |
+| `workflow_ids` | array of integer | required | no |  |  | The workflow ids, in the order of workflows. |
+| `run_ids` | array of integer | required | no |  |  | The id of the newest completed run of each workflow on the branch; null when it has none. |
+| `run_attempts` | array of integer | required | no |  |  | The attempt number of that run; null when it has none. |
+| `run_heads` | array of string | required | no |  |  | The commit that run ran on; null when it has none. |
+| `run_events` | array of string | required | no |  |  | What started that run, such as push, schedule or workflow_dispatch; null when it has none. |
+| `conclusions` | array of string | required | no |  |  | How that run ended: success, failure, cancelled, skipped, timed_out, neutral, action_required, startup_failure or stale; null when there is no completed run. |
+| `running` | array of boolean | required | no |  |  | true when a newer run of that workflow is queued or in progress. |
+| `green` | boolean | required | no |  | yes | true when the newest completed run of every workflow concluded success, skipped or neutral. |
+| `deploy_environments` | array of string | required | no | items: minLength 1 |  | The deployment environments of the repo, one per index; empty when the repo has none. deploy_ids and deploy_states line up with this one. |
+| `deploy_ids` | array of integer | required | no |  |  | The id of the newest deployment of each environment, in the order of deploy_environments. |
+| `deploy_states` | array of string | required | no |  |  | The state of that deployment: success, failure, error, inactive, in_progress, queued or pending; null when none is known. |
+| `changed` | string | required | no | pattern `^[a-z_]+$` | yes | What changed since the last main_state event of the repo: first, head, workflow or deploy. |
+
+Example:
+
+```json
+{
+  "observed_at": "2026-10-19T08:00:00.123Z",
+  "branch": "main",
+  "head": "f94eb46adde9adb19a154dc41e32877369596f3b",
+  "pr": 141,
+  "workflows": [
+    "ci"
+  ],
+  "workflow_ids": [
+    1001
+  ],
+  "run_ids": [
+    null
+  ],
+  "run_attempts": [
+    null
+  ],
+  "run_heads": [
+    null
+  ],
+  "run_events": [
+    null
+  ],
+  "conclusions": [
+    null
+  ],
+  "running": [
+    true
+  ],
+  "green": true,
+  "deploy_environments": [],
+  "deploy_ids": [],
+  "deploy_states": [],
+  "changed": "first"
 }
 ```
 
