@@ -34,6 +34,7 @@ const WHY_TEXT: Readonly<Record<ClosedWhy, string>> = {
   split: 'split into sub-issues',
   'closed-on-github': 'the issue was closed on GitHub',
   'claim-lost': 'another device claimed it',
+  done: 'its work had merged already',
 }
 
 const RELEASED: Readonly<Record<ReleaseOutcome, string>> = {

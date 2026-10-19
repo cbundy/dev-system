@@ -75,7 +75,7 @@ newest one:
 | `merge-queue` | `ready to merge` |
 | `parked` | `parked` |
 | `waiting` | `waiting` |
-| `closed` | `merged` when its `why` is `merged` or `merged-by-hand`, else `closed without merge` |
+| `closed` | `merged` when its `why` is `merged`, `merged-by-hand` or `done`, else `closed without merge` |
 
 The detail shows the v2 state, the step and the attempt, and time in stage runs from the record's
 own `since`. Only the newest life counts (its `life=` token is the claim's start time): a

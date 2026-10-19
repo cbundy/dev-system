@@ -144,7 +144,7 @@ const SPECS = {
     round: I(0),
     question: nul(S),
     wait: opt(nul(WAIT)),
-    why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost")),
+    why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done")),
     notes: L(S),
     pr_closed_at: nul(S),
     lives: I(1),

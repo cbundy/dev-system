@@ -61,6 +61,16 @@ from factory.event_log
 where repo = :'repo' and type in ('ready', 'claimed') and title is not null
 order by issue, ts desc;
 SQL
+# each parked issue's question link: the newest transition per issue, if parked, and its comment
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
+select t.issue, t.life, t.seq, c.comment_url
+from (select issue, life, seq, to_state,
+             row_number() over (partition by issue order by seq_at desc, seq desc) as n
+      from factory.event_log where repo = :'repo' and type = 'transition') t
+left join factory.event_log c on c.repo = :'repo' and c.type = 'comment_posted'
+  and c.issue = t.issue and c.life = t.life and c.seq = t.seq
+where t.n = 1 and t.to_state = 'parked';
+SQL
 # review false positives: declined findings over all handled ones
 dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select outcome, count(*) from factory.event_log

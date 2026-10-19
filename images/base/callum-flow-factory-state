@@ -82,7 +82,7 @@ const V2_STAGE = {
   queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
   'merge-queue': 'ready to merge', parked: 'parked', waiting: 'waiting',
 };
-const V2_MERGED = new Set(['merged', 'merged-by-hand']);
+const V2_MERGED = new Set(['merged', 'merged-by-hand', 'done']);
 const FACTORY_LABEL = 'factory:';
 // an issue the loop rejected at its last life (v2 SPEC 6.4): out of the factory, so not a state
 const LABEL_REJECTED = 'factory:rejected';
