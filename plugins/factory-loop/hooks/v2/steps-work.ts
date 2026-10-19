@@ -18,8 +18,9 @@
 //   declined answer is never ok, and `says` and the result always agree. A fix with nothing pushed
 //   that fixed a finding outside the branch (the PR's description or evidence) answers unchanged:
 //   not-ok (unchanged) the same way, its notes naming each finding fixed and each declined (T17).
-// build and fix give `says` (steps.ts StepModule), so a writer's not-ok ends its step when read
-// while its ok waits for the turn's end and the stop gate (10.8).
+// build and fix give `says` (steps.ts StepModule): in a repo without stop-gate commands a writer's
+// not-ok ends its step when read while its ok waits for the turn's end. With them, neither ends
+// the step before the attempt's settling gate line (steps-gate.ts, 10.8).
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry, State } from '../types'
 import * as ARGV from './argv'
