@@ -283,6 +283,8 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
         return { stdout: '[]' }
       case 'callum-flow-implementer-route':
         return { stdout: 'sonnet\n' }
+      case 'callum-flow-designer-route':
+        return { stdout: 'opus\n' }
       case 'callum-flow-milestone':
         // a closed item in the Next release milestone: the hourly release review is due (rule O3)
         return w.release ? { stdout: 'Next release (v1.0.0)\nExpected: patch\n#469 closed  Done\n' } : undefined

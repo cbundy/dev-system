@@ -1102,6 +1102,7 @@ the note today's queries read:
 | `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md`, section 3) |
 | `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
+| `designer_routed` | `callum-flow-designer-route` before a design, or the loop itself as reason `fallback` (null `sonnet_pct`) when the route could not run | the designer model comparison in `docs/metrics.md` |
 | `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
 
 - The Coder stop script (`wind-down.sh`, 10.11) writes the native `wind_down` event, one per loop dir

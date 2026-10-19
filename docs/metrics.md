@@ -61,7 +61,7 @@ whose `to_state` is the issue's state: `queued`, `designing`, `building`, `revie
 - `claim_lost` is logged by `callum-flow-claim` on exit 3 (`holder` says who holds the issue, `race`
   whether both devices claimed at once). `claim_renewed` is the lease heartbeat, not progress.
   `test_weakened` is one flagged commit of a merged PR. `implementer_routed` is the model chosen for
-  a build.
+  a build and `designer_routed` the model chosen for a design (reason `hash`, `label` or `fallback`).
 
 The four version columns (`base_image`, `dev_image`, `template_version`, `plugin_version`: what
 `dev-version --json` calls the running base image, dev image, Coder template version and callum-flow
@@ -1109,6 +1109,57 @@ SELECT model,
   round(100.0 * count(*) FILTER (WHERE green_at IS NOT NULL AND (setback_at IS NULL OR setback_at > green_at))
         / nullif(count(green_at), 0), 1)                                           AS first_pass_pct,
   round(avg(fix_requests) FILTER (WHERE merged_at IS NOT NULL), 2)                 AS fix_requests_per_merged
+FROM per_issue
+GROUP BY model
+ORDER BY model;
+```
+
+## 8b. Designer model comparison
+
+The design step runs on the model `callum-flow-designer-route` picks and logs as `designer_routed`;
+when the route cannot run, the loop logs the same event with reason `fallback` and a null
+`sonnet_pct`. Set the share of issues designed by Sonnet with `"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }`
+in the repo's `.claude/settings.json`, and keep it fixed while the comparison runs. Only
+hash-routed issues count: an issue with any other reason, or routed to both models, is left out. A
+timed-out route can leave a tool event and a fallback event for one attempt; the hash-only rule
+excludes both. Each issue is counted from its first `designer_routed`.
+
+- `built_clean`: the first design transition after the route is T2 (to building) with no T3 or T4 before it.
+- `parked_pct`: the share of issues with a T3 question after the route.
+- `splits`: issues with a T4. `waits`: issues with a T16. `merged`: a `merged` event after the route.
+
+```sql
+WITH routed AS (
+  SELECT repo, issue, min(ts) AS routed_at, min(model) AS model
+  FROM factory.event_log
+  WHERE type = 'designer_routed'
+  GROUP BY repo, issue
+  HAVING count(*) FILTER (WHERE reason IS DISTINCT FROM 'hash') = 0
+     AND count(DISTINCT model) = 1
+),
+per_issue AS (
+  SELECT r.model,
+    (SELECT t.table_row FROM factory.event_log t
+      WHERE t.repo = r.repo AND t.issue = r.issue AND t.type = 'transition'
+        AND t.seq_at >= r.routed_at AND t.table_row IN ('T2', 'T3', 'T4', 'T16')
+      ORDER BY t.seq_at, t.seq LIMIT 1) = 'T2'                                      AS built_clean,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T3' AND t.seq_at >= r.routed_at) AS parked,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T4' AND t.seq_at >= r.routed_at) AS split,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T16' AND t.seq_at >= r.routed_at) AS waited,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'merged' AND t.ts >= r.routed_at)                            AS merged
+  FROM routed r
+)
+SELECT model,
+  count(*)                                                       AS issues,
+  count(*) FILTER (WHERE built_clean)                            AS built_clean,
+  round(100.0 * count(*) FILTER (WHERE parked) / count(*), 1)    AS parked_pct,
+  count(*) FILTER (WHERE split)                                  AS splits,
+  count(*) FILTER (WHERE waited)                                 AS waits,
+  count(*) FILTER (WHERE merged)                                 AS merged
 FROM per_issue
 GROUP BY model
 ORDER BY model;
