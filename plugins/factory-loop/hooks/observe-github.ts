@@ -8,7 +8,7 @@ import type { GithubIssue } from './state'
 
 type Timed<T> = { at: number; value: T }
 type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
-type Opts = { cache: Map<number, Timed<GithubIssue>>; now: number; designing: Set<number>; limited: () => boolean }
+type Opts = { repo: string; cache: Map<number, Timed<GithubIssue>>; now: number; designing: Set<number>; limited: () => boolean }
 
 const READER = 'callum-flow-issue-read'
 
@@ -22,7 +22,7 @@ export async function readIssues(run: Run, due: number[], opts: Opts): Promise<b
   try {
     const r = await run([READER, '--json', '--issues', due.join(',')])
     if (r.exitCode === 2) return await readEach(run, due, opts)
-    const read = r.exitCode === 0 ? parseIssuesRead(r.stdout) : null
+    const read = r.exitCode === 0 ? parseIssuesRead(r.stdout, opts.repo) : null
     if (read === null) return false
     const asked = new Set(due)
     for (const n of read.refused) {

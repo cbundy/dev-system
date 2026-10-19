@@ -25,7 +25,9 @@ name: CI
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
 #   (dev-system#52), the callum-tools script tests and every mod's validation
-#   and tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
+#   and tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1), plus the schema
+#   compatibility test (tests/schema-compat.test.js), which runs the last 10 minor releases'
+#   writers and readers against head's factory schema (full clone with tags; TEST_REQUIRE_TAGS=1).
 # The heavy, path-filtered image and feature workflows stay separate.
 on:
   pull_request:
@@ -106,8 +108,12 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
+      # Full history and tags: tests/schema-compat.test.js extracts the last 10 minor releases with
+      # git archive (TEST_REQUIRE_TAGS=1 fails a shallow clone), as release.yml does.
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -126,6 +132,7 @@ jobs:
           TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           TEST_REQUIRE_CLAUDE: "1"
           TEST_REQUIRE_POSTGRES: "1"
+          TEST_REQUIRE_TAGS: "1"
           FACTORY_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm test
 
