@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "released.v1.json",
+  "title": "released",
+  "description": "A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device. No producer writes it yet.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tag", "previous_tag", "commit", "released_at", "prs", "issues", "issues_closed", "headlines", "source"],
+  "properties": {
+    "tag": { "type": "string", "minLength": 1, "description": "The release tag, for example v0.61.0.", "x-column": true },
+    "previous_tag": { "type": ["string", "null"], "description": "The release tag before this one; null for a first release.", "x-column": true },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$", "description": "The sha the tag points at.", "x-column": true },
+    "released_at": { "type": "string", "format": "date-time", "description": "The tag commit's time, copied as given." },
+    "prs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The pull requests the release carried.", "x-column": true },
+    "issues": { "type": "array", "items": { "type": "integer" }, "description": "Every issue those pull requests link, closing or not." },
+    "issues_closed": { "type": "array", "items": { "type": "integer" }, "description": "The issues those pull requests close." },
+    "headlines": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "description": "The release notes' headlines, one per entry." },
+    "source": { "enum": ["loop", "workflow", "manual"], "description": "Who cut the release: the loop, the release workflow, or a person by hand." }
+  },
+  "examples": [
+    { "tag": "v0.61.0", "previous_tag": "v0.60.0", "commit": "e691458", "released_at": "2026-10-18T21:04:11Z", "prs": [1050, 1052], "issues": [1009, 1010], "issues_closed": [1010], "headlines": ["Test the 10-minor schema window against each tag's writers and readers"], "source": "loop" },
+    { "tag": "v0.1.0", "previous_tag": null, "commit": "3ae20a1c9f", "released_at": "2026-01-05T09:30:00Z", "prs": [1], "issues": [], "issues_closed": [], "headlines": [], "source": "manual" }
+  ]
+}

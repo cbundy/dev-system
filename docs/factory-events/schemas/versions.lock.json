@@ -539,6 +539,19 @@
           "string"
         ]
       },
+      "decision": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "decision_reason": {
+        "maxLength": 200,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "duration_ms": {
         "minimum": 0,
         "type": [
@@ -801,6 +814,69 @@
     "type": "object",
     "x-issue": "optional"
   },
+  "milestone_state.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "expected": {
+        "enum": [
+          "major",
+          "minor",
+          "patch",
+          null
+        ]
+      },
+      "hold_reason": {
+        "maxLength": 200,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "holding": {
+        "type": "boolean"
+      },
+      "last_tag": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "milestone_closed": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "milestone_open": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "oldest_closed_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "oldest_unreleased_merge_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "expected",
+      "hold_reason",
+      "holding",
+      "last_tag",
+      "milestone_closed",
+      "milestone_open",
+      "oldest_closed_at",
+      "oldest_unreleased_merge_at"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "ready.v1": {
     "additionalProperties": false,
     "properties": {
@@ -831,6 +907,75 @@
     "required": [],
     "type": "object",
     "x-issue": "required"
+  },
+  "released.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "commit": {
+        "pattern": "^[0-9a-f]{7,40}$",
+        "type": "string"
+      },
+      "headlines": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "issues": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "issues_closed": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "previous_tag": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "prs": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "released_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "source": {
+        "enum": [
+          "loop",
+          "manual",
+          "workflow"
+        ]
+      },
+      "tag": {
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "commit",
+      "headlines",
+      "issues",
+      "issues_closed",
+      "previous_tag",
+      "prs",
+      "released_at",
+      "source",
+      "tag"
+    ],
+    "type": "object",
+    "x-issue": "none"
   },
   "requeued.v1": {
     "additionalProperties": false,

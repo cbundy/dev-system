@@ -1198,6 +1198,68 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+## 10. Releases
+
+Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
+writes them yet, so the queries return no rows until a producer does. Count a release once by
+`(repo, tag)`.
+
+Releases per week and the pull requests each carried:
+
+```sql
+SELECT date_trunc('week', ts)::date AS week, repo, tag, previous_tag,
+  jsonb_array_length(prs) AS pr_count, prs
+FROM factory.event_log
+WHERE type = 'released'
+ORDER BY week DESC, ts DESC;
+```
+
+How long Next sat full before each release (from the first milestone with closed work after the
+previous release to the release):
+
+```sql
+WITH rel AS (
+  SELECT repo, tag, min(ts) AS ts,
+    lag(min(ts)) OVER (PARTITION BY repo ORDER BY min(ts)) AS prev_ts
+  FROM factory.event_log
+  WHERE type = 'released'
+  GROUP BY repo, tag
+)
+SELECT r.repo, r.tag, r.ts AS released_at,
+  r.ts - (
+    SELECT min(m.ts) FROM factory.event_log m
+    WHERE m.type = 'milestone_state' AND m.repo = r.repo AND m.milestone_closed > 0
+      AND (r.prev_ts IS NULL OR m.ts > r.prev_ts) AND m.ts <= r.ts
+  ) AS sat_full
+FROM rel r
+ORDER BY r.ts DESC;
+```
+
+How often the judge held, per week (wakes that decided hold, and the milestone states where holding
+turned true):
+
+```sql
+WITH judged AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS wakes_held
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'release' AND decision = 'hold'
+  GROUP BY 1
+), states AS (
+  SELECT ts, holding, lag(holding) OVER (PARTITION BY repo ORDER BY ts) AS was_holding
+  FROM factory.event_log
+  WHERE type = 'milestone_state'
+), turned AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS holds_started
+  FROM states
+  WHERE holding AND coalesce(was_holding, false) = false
+  GROUP BY 1
+)
+SELECT coalesce(j.week, t.week) AS week,
+  coalesce(j.wakes_held, 0) AS wakes_held, coalesce(t.holds_started, 0) AS holds_started
+FROM judged j FULL JOIN turned t ON j.week = t.week
+ORDER BY 1 DESC;
+```
+
 ## Workers
 
 The [base image's worker heartbeat reference](../images/base/README.md#worker-heartbeat)
