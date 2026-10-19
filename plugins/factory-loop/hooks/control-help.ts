@@ -70,7 +70,7 @@ export const MEANING: Record<OpName, string> = {
   override: 'run past a usage tier up to <pct> for <hours>; off ends it',
   resume: 'release what waits on you: unpark issues N (a note goes to their next step)',
   retry: "clear issue N's used-up actions, so its rules try again",
-  update: 'an update is due: drain, then restart the workspace; off cancels it',
+  update: 'an update is due: wind down (up to windDownMinutes), then restart the workspace; off cancels it',
   drop: 'abandon issue N: its agents stop and its claim is released (for this life only; ready brings it back)',
   note: "an instruction for issue N's agents (for every issue without N)",
   mode: 'off runs nothing, observe plans and logs only, act does the work',

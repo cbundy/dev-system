@@ -128,17 +128,19 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
 
 ### D-15 The loop restarts its own workspace for an update
 
-- **Decision**: when an update is due, rule R2 runs `dev-restart-self` once no queue action and no
-  release task is in flight, and the loop resumes by itself after the restart (v2 SPEC 14.1).
-  There is no drain: nothing else waits for it. The reconciler says an update is due through
+- **Decision**: when an update is due, rule R2 writes a `restart-self` wind-down request and
+  runs `dev-restart-self`, and the loop resumes by itself after the restart (v2 SPEC 14.1). The
+  wind-down is capped at `windDownMinutes`, so queue actions and the release task finish within the
+  cap; only with `windDownMinutes` 0 does R2 wait for them to finish first. There is no
+  uncapped drain. The reconciler says an update is due through
   control state (`updateDue`): it owns which versions are wanted, and the loop owns when it is
   safe to switch. Whenever the owner wants one, `/factory update` sets it by hand
   (owner, 2026-10-13).
 - **Alternatives**: restarting stays a model or owner action; the reconciler filing an issue for
   the orchestrator to update itself.
 - **Why**: owner, 2026-10-13: the safe moment can be computed, so waiting for a person is
-  needless. Agent steps survive a restart through the ledger, so only a queue action or the
-  release task, which a restart would cut off, needs to finish first.
+  needless. Agent steps survive a restart through the ledger, and the capped wind-down gives a
+  queue action or the release task, which a restart would cut off, time to finish (owner, 2026-10-17).
 
 ### D-16 Owner directives become control state
 

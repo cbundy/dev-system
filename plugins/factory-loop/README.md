@@ -99,7 +99,7 @@ Each change is logged and asks for a pass at once. The ops:
   on an issue that is not parked it changes nothing. See
   [the owner ops](../../docs/factory-loop/v2/SPEC.md#appendix-e-owner-ops) for what each op does;
 - `retry <N>`: let N's exhausted actions run again;
-- `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
+- `update [<reason>]|off`: winds down (up to windDownMinutes), then restarts this workspace;
 - `drop <N>`: abandon N and stop its agents;
 - `note [<N>] <text>`: an instruction the next agent prompts carry, for N or for all;
 - `mode off|observe|act`: written to the workspace file, from the next pass;

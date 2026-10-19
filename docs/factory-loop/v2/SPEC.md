@@ -1945,7 +1945,7 @@ record and no ledger entry.
 
 | File | Written by | Contents |
 |---|---|---|
-| `wind-down.request` | the stopper (the stop script, or a person by hand) | JSON `{ "requested_at": ISO, "trigger": "restart-self" \| "coder-stop" \| null }` |
+| `wind-down.request` | the stopper (the stop script, or a person by hand), or R2 for its `restart-self` (13.11.2) | JSON `{ "requested_at": ISO, "trigger": "restart-self" \| "coder-stop" \| null }` |
 | `wind-down.status.json` | the loop, each pass in wind-down | below |
 | `wind-down.stop-now` | `/factory stop-now`, or by hand | one shot: JSON `{ "at": ISO }`; any content counts |
 
@@ -1963,8 +1963,8 @@ start action with the skip line `wind-down: no new start (<kind>)`:
 - `claim` (S1 and H1), `agent-step` (every step and attempt, re-runs included), `slot` with `op: lease`
   (W1), `queue-update` (Q1), `queue-merge` (Q2), `ci-rerun`, and the `judge` and `task` wakes (the O3
   release task included);
-- `restart-self`: R2's `restartOf` returns null with the skip line `R2: wind-down` (the rule itself
-  is unchanged; see "Restart without a drain", section 15).
+- `restart-self`: R2's `restartOf` returns null with the skip line `R2: wind-down`. R2 itself writes the
+  `restart-self` request before it restarts (see "Restart after a capped wind-down", section 15).
 
 It keeps everything that finishes work: a running step's answer is read and its `transition`, `pr`,
 `label`, `comment`, `event` and `split` effects run; `slot` prepare, kill and free (W2), `stop-agent`,
@@ -2006,7 +2006,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 - **Off.** If the repo's effective `windDownMinutes` is 0 (repo `.claude/factory-loop.json`, then the
   user `config.json`, else 10), or the `OFF` file exists, it writes no request and records outcome
   `off` (`waited_ms` 0, `stopped_at` = `requested_at`).
-- **The request.** It keeps a `restart-self` request no older than the cap plus 5 minutes; otherwise
+- **The request.** It keeps a `restart-self` request (written by R2 just before `dev-restart-self`) no older than the cap plus 5 minutes; otherwise
   it writes `{ "requested_at", "trigger": "coder-stop" }` atomically (temp file, then `mv`).
 - **The poll.** Every 2 s it reads the status, counting only one whose `requested_at` equals the
   request's. It ends at the first of: the stop-now file or a status with `stop_now` (outcome `now`);
@@ -3072,7 +3072,10 @@ refused plans and records exactly as observe mode does (13.11.1).
 
 Two more things hold act mode back for a pass: a ledger the store could not load (13.7.1), and a
 `dev-restart-self` that already returned (rule `R2`), which holds it for the rest of the
-module's life. The rails remember each blocking spell in the store, so a reload does not tell
+module's life when `windDownMinutes` is 0. With wind-down on, R2 wrote a request first and the
+session keeps acting in wind-down instead: it reads answers and finishes work, starts nothing, and
+remembers the request in case the stop script removes it; once that request is stale the restart
+never came, and the session plans normally. The rails remember each blocking spell in the store, so a reload does not tell
 it again.
 
 #### 13.11.3 The kill switch
@@ -3342,7 +3345,7 @@ Twenty-one rules, by id.
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
-| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
+| R2 | restart | `updateDue` is set, the pass admitted no other action, and (only with `windDownMinutes` 0) no `queue-update`, `queue-merge` or release task runs | `restart-self`, last in the pass; with wind-down on it writes the `restart-self` request first and the wind-down finishes queue and release work up to the cap; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
 | S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then issues labelled `priorityLabel`, then ascending; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0. The pass also gets a starved verdict (`PlanResult.starved`): true when the queue is not empty, no record is queued or in a slot state, no first claim is in flight, `noNewWork` is off, `only` is empty, the tier is not `stop-new` or `stop-all`, and every queue issue was skipped by a claim filter; null when the queue or github source failed. While it is true and the spell (the store's `starved:<repo>`, set on the first starved pass, kept through unknown passes, removed on the first pass that is not starved) is `starvedNoticeAfterMs` old, `tell(starved)` (an owner item, key `tell:starved:<since>:<k>`) names each root blocker found in the `blockers` tree and why it is not moving; it waits, with the skip `starved since <time>: blockers not read yet`, until that period's tree is read |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
@@ -3768,13 +3771,18 @@ The first entries are the owner's own decisions; they are settled.
 - **Why:** a question for a fact the loop can read costs the owner an interruption for nothing;
   and waiting in a slot state would waste capacity (#828).
 
-### Restart without a drain
+### Restart after a capped wind-down
 
-- **Decision:** R2 restarts at once except during a queue action or the release task, on a pass
-  that admits nothing else (what it would start would only be cut); a running step it cuts
-  re-runs free (5.1).
-- **Alternatives:** a drain before the restart; waiting for agent steps.
-- **Why:** steps are re-runnable and pushed work survives; the drain held the factory for hours.
+- **Decision:** R2 writes the `restart-self` wind-down request (10.11) and runs `dev-restart-self`
+  on a pass that admits nothing else. The stop script and the loop's own wind-down then finish
+  queue actions, the release task and steps, up to `windDownMinutes`. A running step the cap cuts
+  re-runs free (5.1). With `windDownMinutes` 0, R2 keeps the old wait for a queue action or the
+  release task, writes no request, and the restart rail holds act mode.
+- **Alternatives:** v1's drain before the restart; restarting at once and cutting queue actions;
+  waiting for agent steps.
+- **Why:** v1's drain had no cap and held the factory for hours. The cap bounds this wait, so
+  finishing a merge or a release is cheap and safe, and the restart no longer cuts them. Owner
+  approved on 2026-10-17.
 
 ### A resume resets the budgets and hears GitHub answers
 

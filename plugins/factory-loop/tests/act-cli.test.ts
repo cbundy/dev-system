@@ -5,6 +5,7 @@
 // treehouse status --json as it printed on 2026-10-13).
 import { describe, expect, test } from 'claude-code/testing'
 
+import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, stepsOf, usageError } from '../hooks/act-cli'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
@@ -17,6 +18,8 @@ const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
 
 type Call = { argv: string[]; init: RunInit }
 type Reply = Partial<RunResult> | Error
+
+const LOOP = '/cfg/factory-loop/cbundy__dev-system'
 
 function runtime(): Runtime {
   return {
@@ -120,7 +123,7 @@ const A = {
 
 describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
   const argv = (a: Action) => {
-    const steps = stepsOf(a, REPO, IN_DEV)
+    const steps = stepsOf(a, REPO, IN_DEV, LOOP)
     if (typeof steps === 'string') throw new Error(steps)
     return steps.map(s => ('argv' in s ? s.argv : [`event:${s.event}`]))
   }
@@ -133,12 +136,22 @@ describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
     expect(argv(A.releaseParent())).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV], ['event:abandoned']])
     expect(argv(A.later())).toEqual([['callum-flow-milestone', 'plan', '470', 'later']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
+    expect(argv(A.restart('R2'))).toEqual([['dev-restart-self']])
+    expect(argv({ ...A.restart('R2'), windDownAt: null } as Action)).toEqual([['dev-restart-self']])
+  })
+
+  test('R2 with a wind-down writes the request first, in the status file\'s time form', () => {
+    const at = Date.UTC(2026, 9, 19, 1, 2, 3, 456)
+    const steps = stepsOf({ ...A.restart('R2'), windDownAt: at } as Action, REPO, IN_DEV, LOOP)
+    if (typeof steps === 'string') throw new Error(steps)
+    expect(steps.map(s => ('argv' in s ? s.argv : []))).toEqual([['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', `${LOOP}/wind-down.request`], ['dev-restart-self']])
+    expect(steps[0]).toMatchObject({ stdin: '{"requested_at":"2026-10-19T01:02:03.456Z","trigger":"restart-self"}\n' })
   })
 
   test('refusals: an issue kind with no issue, restart-self outside H4, a kind that runs no command', () => {
-    expect(stepsOf(A.claim(null), REPO, IN_DEV)).toBe('claim names no issue')
-    expect(stepsOf(A.restart('O1'), REPO, IN_DEV)).toBe('restart-self comes only from rule H4 or R2, not O1')
-    expect(stepsOf(A.title(), REPO, IN_DEV)).toBe('title runs no command')
+    expect(stepsOf(A.claim(null), REPO, IN_DEV, LOOP)).toBe('claim names no issue')
+    expect(stepsOf(A.restart('O1'), REPO, IN_DEV, LOOP)).toBe('restart-self comes only from rule H4 or R2, not O1')
+    expect(stepsOf(A.title(), REPO, IN_DEV, LOOP)).toBe('title runs no command')
   })
 
   test('no template can pass a forbidden flag or command (v2 SPEC 13.6.1)', () => {
@@ -318,6 +331,27 @@ describe('restart-self', () => {
     const { result, calls } = await exec(A.restart(), [{ stderr: 'dev-restart-self: start build requested.\n' }])
     expect(calls.map(c => c.argv)).toEqual([['dev-restart-self']])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'restart requested' })
+  })
+
+  test('with a wind-down it writes the request, then restarts; a failed write never restarts', async () => {
+    const R2 = { ...A.restart('R2'), windDownAt: NOW } as Action
+    const ok = await exec(R2)
+    expect(ok.calls.map(c => c.argv[0] === 'sh' ? c.argv[3] : c.argv)).toEqual(['wind-down-request', ['dev-restart-self']])
+    expect(ok.calls[0]?.init.stdin).toBe(`{"requested_at":"${new Date(NOW).toISOString()}","trigger":"restart-self"}\n`)
+    expect(ok.result).toMatchObject({ status: 'done' })
+    const bad = await exec(R2, [{ exitCode: 1, stderr: 'mv: no space' }])
+    expect(bad.calls).toHaveLength(1)
+    expect(bad.result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
+  })
+
+  test('a failed dev-restart-self takes the request back off', async () => {
+    const R2 = { ...A.restart('R2'), windDownAt: NOW } as Action
+    const { result, calls } = await exec(R2, [{}, { exitCode: 1, stderr: 'refusing' }])
+    expect(result).toMatchObject({ status: 'failed' })
+    expect(calls.map(c => c.argv.slice(0, 3))).toEqual([['sh', '-c', WIND_DOWN_WRITE_SCRIPT], ['dev-restart-self'], ['rm', '-f', '--']])
+    expect(calls[2]?.argv[3]).toBe(`${LOOP}/wind-down.request`)
+    // with no request written, nothing is removed
+    expect((await exec(A.restart('R2'), [{ exitCode: 1 }])).calls.map(c => c.argv)).toEqual([['dev-restart-self']])
   })
 
   test('from any other rule it is refused and never run', async () => {

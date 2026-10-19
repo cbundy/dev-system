@@ -14,7 +14,7 @@ import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES, V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2State } from '../hooks/v2/types'
 import { windDownGuard, windDownOf, windDownPaths } from '../hooks/v2/wind-down'
-import { WIND_DOWN_WRITE_SCRIPT, previousOf, requestOf, windDownStatus } from '../hooks/v2/wind-down-files'
+import { WIND_DOWN_WRITE_SCRIPT, previousOf, withRemembered, requestOf, windDownStatus } from '../hooks/v2/wind-down-files'
 import type { WindDownRead } from '../hooks/v2/wind-down'
 import { MIN, NOW, config, control, entry, issue, state as baseState } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, ENGINE_TEST } from './host'
@@ -76,6 +76,16 @@ describe('windDownOf (config windDownMinutes, the request)', () => {
     expect(windDownOf(world([], requested(15 * MIN)), CFG).mode).toBe('active')
     expect(windDownOf(world([], requested(15 * MIN + 1)), CFG)).toEqual({ mode: 'stale', requestedAt: NOW - 15 * MIN - 1, capMs: 10 * MIN })
     expect(windDownOf(world([], requested(9 * MIN)), { windDownMinutes: 3 }).mode).toBe('stale')
+  })
+
+  test('a remembered request (the session\'s own restart-self) is active then stale, and a request read from the file wins over it', () => {
+    const off = world([], undefined)
+    expect(withRemembered(off, null)).toBe(off)
+    expect(windDownOf(withRemembered(off, NOW - MIN), CFG)).toMatchObject({ mode: 'active', requestedAt: NOW - MIN })
+    expect(windDownOf(withRemembered(off, NOW - 15 * MIN - 1), CFG).mode).toBe('stale')
+    const read = world([], requested(2 * MIN))
+    expect(withRemembered(read, NOW - 9 * MIN)).toBe(read)
+    expect(withRemembered(off, NOW - MIN).v2?.windDown?.request).toMatchObject({ trigger: 'restart-self', remembered: true })
   })
 
   test('started_at is the first pass that saw this request: kept while the status file names it, new for another request', () => {
