@@ -17,7 +17,9 @@
     "started_at": { "type": "string", "description": "When this attempt started.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
     "ended_at": { "type": ["string", "null"], "description": "When it ended; null while running.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
     "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise.", "x-column": true },
-    "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise." }
+    "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise.", "x-column": true },
+    "decision": { "type": ["string", "null"], "description": "A wake's decision, for example hold or done; null when the wake made none.", "x-column": true },
+    "decision_reason": { "type": ["string", "null"], "maxLength": 200, "description": "Why the wake decided as it did; null when it made no decision." }
   },
   "examples": [
     { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }

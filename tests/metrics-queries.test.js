@@ -107,6 +107,7 @@ const RUN_ONLY = [
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
+  "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
 ];
 

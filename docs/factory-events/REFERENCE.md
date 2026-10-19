@@ -20,7 +20,9 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
 | [`loop_passes`](#loop_passes) | v1 | none | Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
+| [`milestone_state`](#milestone_state) | v1 | none | The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
+| [`released`](#released) | v1 | none | A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
 | [`reviewed`](#reviewed) | v1 | required | One review of the issue's pull request finished. |
 | [`shadow_read`](#shadow_read) | v1 | none | One shadow compare made by a reader that has an old/new source switch: the command read the same keys from the old source and the new central one and counted where the answers differ. |
@@ -112,10 +114,12 @@ Example:
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `class` | enum | `loop_entry` | The planner's class for the work. |
+| `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
+| `decision` | string | `loop_entry` | A wake's decision, for example hold or done; null when the wake made none. |
 | `deletions` | integer | `merged` | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
@@ -128,6 +132,7 @@ Example:
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `key` | string | `loop_entry` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
@@ -138,6 +143,8 @@ Example:
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
 | `mean_ms` | integer | `loop_passes` | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
+| `milestone_closed` | integer | `milestone_state` | Closed issues in the milestone. |
+| `milestone_open` | integer | `milestone_state` | Open issues in the milestone. |
 | `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
 | `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
@@ -153,6 +160,8 @@ Example:
 | `patch` | string | `reviewed` | The patch id reviewed: an approval holds for exactly this patch. |
 | `planner` | enum | `loop_passes` | Which planner the loop ran. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `previous_tag` | string | `released` | The release tag before this one; null for a first release. |
+| `prs` | array of integer | `released` | The pull requests the release carried. |
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
@@ -176,6 +185,7 @@ Example:
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
+| `tag` | string | `released` | The release tag, for example v0.61.0. |
 | `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
@@ -186,6 +196,7 @@ Example:
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
+| `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
 | `why` | enum | `transition` | closed: why the life ended; null otherwise. |
 
@@ -479,7 +490,9 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `started_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this attempt started. |
 | `ended_at` | string | required | yes | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When it ended; null while running. |
 | `agent_id` | string | required | yes |  | yes | The agent's id, for an agent step; null otherwise. |
-| `wake` | string | required | yes |  |  | The wake's name, for a tell or task, for example parked; null otherwise. |
+| `wake` | string | required | yes |  | yes | The wake's name, for a tell or task, for example parked; null otherwise. |
+| `decision` | string | optional | yes |  | yes | A wake's decision, for example hold or done; null when the wake made none. |
+| `decision_reason` | string | optional | yes | maxLength 200 |  | Why the wake decided as it did; null when it made no decision. |
 
 Example:
 
@@ -579,6 +592,42 @@ Example:
 }
 ```
 
+## milestone_state
+
+The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes. No producer writes it yet.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: not stated
+
+### milestone_state v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `milestone_closed` | integer | required | no | minimum 0 | yes | Closed issues in the milestone. |
+| `milestone_open` | integer | required | no | minimum 0 | yes | Open issues in the milestone. |
+| `oldest_closed_at` | string | required | yes | format date-time |  | When the oldest closed issue in the milestone closed; null when none is closed. |
+| `last_tag` | string | required | yes |  |  | The newest release tag; null when the repo has none. |
+| `oldest_unreleased_merge_at` | string | required | yes | format date-time |  | When the oldest merged pull request not yet in a release merged; null when none. |
+| `expected` | enum | required | yes | one of "patch", "minor", "major", null |  | The size of the release the unreleased work calls for; null when undecided. |
+| `holding` | boolean | required | no |  | yes | true when the newest release task for this milestone ended in hold and no release followed. |
+| `hold_reason` | string | required | yes | maxLength 200 |  | Why the judge held; null when not holding. |
+
+Example:
+
+```json
+{
+  "milestone_closed": 3,
+  "milestone_open": 1,
+  "oldest_closed_at": "2026-10-17T10:00:00Z",
+  "last_tag": "v0.61.0",
+  "oldest_unreleased_merge_at": "2026-10-17T09:55:12Z",
+  "expected": "minor",
+  "holding": true,
+  "hold_reason": "an open issue changes the same schema"
+}
+```
+
 ## ready
 
 The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time. Also carries the issue's title, labels and parent as the queue listing showed them.
@@ -599,6 +648,54 @@ Example:
 
 ```json
 {}
+```
+
+## released
+
+A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device. No producer writes it yet.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: not stated
+
+### released v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tag` | string | required | no | minLength 1 | yes | The release tag, for example v0.61.0. |
+| `previous_tag` | string | required | yes |  | yes | The release tag before this one; null for a first release. |
+| `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The sha the tag points at. |
+| `released_at` | string | required | no | format date-time |  | The tag commit's time, copied as given. |
+| `prs` | array of integer | required | no |  | yes | The pull requests the release carried. |
+| `issues` | array of integer | required | no |  |  | Every issue those pull requests link, closing or not. |
+| `issues_closed` | array of integer | required | no |  |  | The issues those pull requests close. |
+| `headlines` | array of string | required | no | items: maxLength 200 |  | The release notes' headlines, one per entry. |
+| `source` | enum | required | no | one of "loop", "workflow", "manual" |  | Who cut the release: the loop, the release workflow, or a person by hand. |
+
+Example:
+
+```json
+{
+  "tag": "v0.61.0",
+  "previous_tag": "v0.60.0",
+  "commit": "e691458",
+  "released_at": "2026-10-18T21:04:11Z",
+  "prs": [
+    1050,
+    1052
+  ],
+  "issues": [
+    1009,
+    1010
+  ],
+  "issues_closed": [
+    1010
+  ],
+  "headlines": [
+    "Test the 10-minor schema window against each tag's writers and readers"
+  ],
+  "source": "loop"
+}
 ```
 
 ## requeued
@@ -732,7 +829,7 @@ A commit on a merged pull request deleted or weakened a test (removed an asserti
 | `branch` | string | required | no | minLength 1 | yes | The merged branch. |
 | `pr` | integer | required | no | minimum 1 | yes | The merged pull request. |
 | `head` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The merged head. |
-| `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` |  | The flagged commit (short sha). |
+| `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The flagged commit (short sha). |
 | `restored` | boolean | required | no |  | yes | true when a later commit on the branch put the test back. |
 | `kinds` | array of string | required | no | minItems 1 |  | What the commit did to the tests, one code each, for example removed-assertion. |
 | `files` | array of string | required | no | minItems 1 | yes | The test files it touched, repo-relative. |
