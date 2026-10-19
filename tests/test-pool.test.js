@@ -243,7 +243,7 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
   const scripts = path.join(root, "scripts");
   fs.mkdirSync(scripts);
-  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh", "test-pg.sh"]) {
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh", "test-pg.sh", "test-db-guard"]) {
     fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
   }
   fs.mkdirSync(path.join(root, "tests"));
@@ -419,5 +419,31 @@ test("test.sh fails, naming each file, when a suite writes into the sandboxed st
     assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
   } finally {
     repo.cleanup();
+  }
+});
+
+test("test.sh fails when a suite connects psql to a real configured database host", () => {
+  const secrets = fs.mkdtempSync(path.join(os.tmpdir(), "denied-secrets-"));
+  fs.writeFileSync(path.join(secrets, "agentsview-pg-url"), "postgres://u:secret@denied.example/x\n");
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "fake-psql-"));
+  fs.writeFileSync(path.join(fakeBin, "psql"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const repo = fakeRepo({
+    nodeTests: { "ok.test.js": 'require("node:test")("ok", () => {});\n' },
+    suites: { "leak.test.sh": 'env -i PATH="$PATH" psql "postgres://u@denied.example/x" -c "select 1" || true\n' },
+  });
+  try {
+    const r = spawnSync("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      encoding: "utf8",
+      env: { ...repo.env, PATH: `${fakeBin}:${process.env.PATH}`, TEST_SANDBOX_DENY_HOSTS_FROM: secrets },
+    });
+    assert.strictEqual(r.status, 1, r.stderr);
+    const lines = r.stderr.trim().split("\n");
+    assert.ok(lines.some((l) => /^FAIL test isolation: non-test database denied\.example \(.+\)$/.test(l)), r.stderr);
+    assert.ok(!r.stderr.includes("secret"), "no credential is printed");
+    assert.strictEqual(lines.pop(), "test: 1 failed");
+  } finally {
+    repo.cleanup();
+    fs.rmSync(secrets, { recursive: true, force: true });
+    fs.rmSync(fakeBin, { recursive: true, force: true });
   }
 });

@@ -141,9 +141,15 @@ function run(cmd, args, { env = process.env, cwd, input, timeout = 120000 } = {}
   });
 }
 
+// The environment for a tag's own scripts: no database URL, and the secrets folders point at a missing
+// path. Deleting the folder variables instead would let a tag's hard-coded default
+// (/run/secrets/dev-system) find the workspace's real agentsview URL and beat a production row
+// (cbundy/dev-system#1056).
+const NO_SECRETS = path.join(os.tmpdir(), "schema-compat-no-secrets");
 const cleanEnv = (extra) => {
   const env = { ...process.env };
-  for (const k of ["AGENTSVIEW_PG_URL", "FACTORY_DB_WRITER_URL", "FACTORY_DB_READER_URL", "DEV_SECRETS_DIR", "DEV_WORKSPACE_SECRETS_DIR", "CALLUM_FLOW_FACTORY_STATE_SOURCE"]) delete env[k];
+  for (const k of ["AGENTSVIEW_PG_URL", "FACTORY_DB_WRITER_URL", "FACTORY_DB_READER_URL", "FACTORY_DB_MIGRATOR_URL", "CALLUM_FLOW_FACTORY_STATE_SOURCE"]) delete env[k];
+  for (const k of ["DEV_SECRETS_DIR", "DEV_WORKSPACE_SECRETS_DIR", "DEV_MIGRATOR_SECRETS_DIR"]) env[k] = path.join(NO_SECRETS, k);
   return { ...env, ...extra };
 };
 
@@ -462,5 +468,5 @@ async function runTag(t, tag, { createDb, at, migrationsDir }) {
 module.exports = {
   ROOT, KEY_PATHS, selectTags, dedupeTags, mergedTags, isShallow, requireTagsProblem, tagKey, extractTag, hasMigrations,
   writeEvents, writeAll, listReaders, readOne, readAll, compare, skipped, unknownVars, isOutsideRead, parseCsv, sqlBlocks,
-  runTag,
+  runTag, cleanEnv,
 };
