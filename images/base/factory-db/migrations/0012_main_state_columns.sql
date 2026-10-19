@@ -1,10 +1,10 @@
--- 0011: lift the state of a repo's default branch from main_state into factory.event_log.
+-- 0012: lift the state of a repo's default branch from main_state into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
 -- has none; the view replace keeps the view's existing ones.
 --
--- Adds the fields marked "x-column": true in the main_state schema that are not columns yet:
+-- Builds on 0011 (comment_url keeps its place). Adds the fields marked "x-column": true in the main_state schema that are not columns yet:
 -- observed_at, green and changed (branch, head and pr already are). Postgres only adds columns at
 -- the end on OR REPLACE, so they come last and every earlier column keeps its name, type and
 -- order. Null for older rows and for other types. No @> and no DISTINCT ON.
@@ -113,6 +113,7 @@ SELECT
   (e.data ->> 'milestone_open')::int AS milestone_open,
   (e.data ->> 'holding')::boolean AS holding,
   e.data -> 'prs' AS prs,
+  e.data ->> 'comment_url' AS comment_url,
   (e.data ->> 'observed_at')::timestamptz AS observed_at,
   (e.data ->> 'green')::boolean AS green,
   e.data ->> 'changed' AS changed
