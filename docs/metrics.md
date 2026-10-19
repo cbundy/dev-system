@@ -1198,6 +1198,35 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+## 9b. Permission prompts
+
+Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):
+an agent's tool use that the companion denied, and an agent that stopped on a permission prompt nobody
+answers. Neither is a stage or progress. The companion never retries the write, so each row is one
+prompt (one per `event_id`). Nothing writes them yet, so the query returns no rows until a producer does.
+`tool_name`, `tool_input` and `agent_type` are the columns migration 0011 lifted; a `prompt_waiting` has
+no `tool_name` (its notification names none), and its `tool_input` is the notification's message.
+
+One block, two kinds of row told apart by `part`: `daily` is the prompts per repo and day (denied by
+`tool_name` and `agent_type`, and waiting), and `blocked` is the issues with a `prompt_waiting` in the last
+24 hours (issue, `agent_type`, `tool_input`, `ts`). It takes `-v repo=... -v since=...` (the daily part
+only; `blocked` is always the last 24 hours).
+
+```sql
+SELECT 'daily' AS part, repo, date_trunc('day', ts)::date AS day, NULL::int AS issue,
+  tool_name, agent_type, NULL::text AS tool_input, NULL::timestamptz AS ts,
+  count(*) FILTER (WHERE type = 'prompt_denied') AS denied,
+  count(*) FILTER (WHERE type = 'prompt_waiting') AS waiting
+FROM factory.event_log
+WHERE type IN ('prompt_denied', 'prompt_waiting') AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, date_trunc('day', ts)::date, tool_name, agent_type
+UNION ALL
+SELECT 'blocked', repo, NULL::date, issue, NULL::text, agent_type, tool_input, ts, NULL::bigint, NULL::bigint
+FROM factory.event_log
+WHERE type = 'prompt_waiting' AND repo = :'repo' AND ts >= now() - interval '24 hours'
+ORDER BY 1, 3 DESC, 2, 4, 5, 6;
+```
+
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
