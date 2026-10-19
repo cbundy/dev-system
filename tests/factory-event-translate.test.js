@@ -127,7 +127,7 @@ test("coverage: the corpus produces every current type, and every writer state i
   // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
   // translator makes none. Each is named here with its issue, and the list may only hold such types.
   // prompt_denied and prompt_waiting: the translator child (#1037) removes them from this list once it maps them.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "comment_posted", "prompt_denied", "prompt_waiting"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "prompt_denied", "prompt_waiting"]; // the stop gate's runs (#811): written by the loop once a writer exists
   for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
   for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
