@@ -10,7 +10,7 @@
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
 import { waitKey } from './sources-waits'
-import type { EmitState, IssueRecord, IssueState, Row, TableEvent, WaitCondition } from './types'
+import type { EmitState, IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -46,6 +46,8 @@ export type EventData = {
   tags?: Record<string, string>
   // a designer's or the triage's question for the owner (T3, X4)
   question?: string
+  // T3, X4: the parts of that question when the agent structured it
+  parts?: ParkParts | null
   // T2: the brief comment's URL, once the loop posted it
   brief?: string
   // T5, T11: the head a writer confirmed on origin
@@ -227,7 +229,7 @@ const ROWS: readonly Row[] = [
     on: 'not-ok',
     when: (r, e) => ownStep(r) && e.reason === 'question',
     next: 'parked',
-    change: (_r, e) => ({ question: questionOf(e, 'the designer asks the owner'), resumeTo: 'designing' }),
+    change: (_r, e) => ({ question: questionOf(e, 'the designer asks the owner'), parts: dataOf(e).parts ?? null, resumeTo: 'designing' }),
     via: 'question',
   },
   { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), via: 'split' },
@@ -369,6 +371,7 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => onTriage(r) && (e.choice === 'park' || (e.choice === 'fix' && !fixValid(r, e, c))),
     next: 'parked',
     change: (r, e) => ({
+      parts: e.choice === 'park' ? (dataOf(e).parts ?? null) : null,
       question:
         e.choice === 'park'
           ? questionOf(e, 'the triage asks the owner')
@@ -493,17 +496,20 @@ export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): Is
     cut: entered ? false : r.cut,
     notes: entered ? [] : r.notes,
     question: state === 'parked' ? r.question : null,
+    parts: state === 'parked' ? r.parts : null,
     wait: state === 'waiting' ? r.wait : null,
     why: state === 'closed' ? r.why : null,
     resumeTo: state === 'parked' || state === 'queued' || state === 'waiting' ? r.resumeTo : null,
   }
-  return { ...base, ...row.change(r, ev, now) }
+  const change = row.change(r, ev, now)
+  // parts never outlive the question they belong to
+  return { ...base, ...('question' in change && !('parts' in change) ? { parts: null } : {}), ...change }
 }
 
 // The claim a record is made from (S0, 3.5): the life (the claim's time in base-36 seconds), the
 // branch (an adopted PR's head branch, else issue-<N>), the adopted PR and the others left alone.
 // park: a split's not-ready child, claimed to park on its open decision (row S7, 8.7).
-export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[]; park?: { question: string; parent: number } }
+export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[]; park?: { question: string; parent: number; parts?: ParkParts | null } }
 
 // The first note of a split child's parked record: park-text.ts reads the parent back from it.
 export const splitParkNote = (parent: number) => `Split from #${parent}: it parked on its open decision.`
@@ -515,7 +521,7 @@ export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
   const base = madeQueued(claim, now, lives)
   if (claim.park === undefined) return base
   // row S7: parked at once, the designer's step still to come (a resume goes on with designing)
-  return { ...base, state: 'parked', resumeTo: 'designing', step: null, question: claim.park.question, notes: [splitParkNote(claim.park.parent)] }
+  return { ...base, state: 'parked', resumeTo: 'designing', step: null, question: claim.park.question, parts: claim.park.parts ?? null, notes: [splitParkNote(claim.park.parent)] }
 }
 
 function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
@@ -540,6 +546,7 @@ function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
     fixes: 0,
     round: 0,
     question: null,
+    parts: null,
     wait: null,
     why: null,
     notes: others,

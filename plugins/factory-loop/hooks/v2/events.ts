@@ -23,6 +23,8 @@
 import type { FactoryEvent } from '../derive'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { IssueRecord, IssueState, WaitCondition } from './types'
+import { NONE, dec, enc, str, unstr } from './codec'
+import { partsOfTokens, partsTokens } from './park-parts'
 import { INTERVENTION_WHO, RELEASE_OUTCOMES } from './event-data'
 import type { GateRunData, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, ShadowReadData, TransitionEvent, V2Event } from './event-data'
 
@@ -33,6 +35,7 @@ export const REASON_MAX = 200
 
 // The event types live in event-data.ts; they are re-exported here so every import from './events' works.
 export * from './event-data'
+export { dec, enc } from './codec'
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -57,33 +60,6 @@ export function abandonReason(note: string): AbandonReason {
 }
 
 // --- the value codec (derive.ts enc, dec) ---------------------------------------------------------
-
-const NONE = 'none'
-
-// enc: a value with no space in it: `%` and whitespace percent-encoded, so URLs stay readable.
-export function enc(v: string): string {
-  return v.replace(/[%\s]/g, c => encodeURIComponent(c))
-}
-
-export function dec(v: string): string {
-  try {
-    return decodeURIComponent(v)
-  } catch {
-    return v
-  }
-}
-
-// A string, or `none` for null. A string that is literally `none` has its first letter encoded,
-// so it reads back as itself.
-function str(v: string | null): string {
-  if (v === null) return NONE
-  return v === NONE ? '%6Eone' : enc(v)
-}
-
-function unstr(v: string | undefined): string | null | undefined {
-  if (v === undefined) return undefined
-  return v === NONE ? null : dec(v)
-}
 
 function num(v: number | null): string {
   return v === null ? NONE : String(v)
@@ -218,6 +194,7 @@ function transitionNote(e: TransitionEvent): string {
     `via=${str(e.via)}`,
     `brief=${str(r.brief)}`,
     `question=${str(r.question)}`,
+    ...partsTokens(r.parts),
     `notes=${list(r.notes)}`,
   ].join(' ')
 }
@@ -355,6 +332,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   const prClosedAt = unstr(t.get('prClosedAt'))
   const notes = unlist(t.get('notes'))
   const wait = unwait(t.get('wait'))
+  const parts = partsOfTokens(k => t.get(k))
   // a note from before the field carries no count: its life is read as a first one
   const lives = t.get('lives') === undefined ? 1 : unnum(t.get('lives'))
   if (typeof life !== 'string' || life === '' || typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null
@@ -365,7 +343,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   if (typeof rowId !== 'string' || via === undefined || brief === undefined || question === undefined) return null
   if (approvedPatch === undefined || prClosedAt === undefined || notes === undefined) return null
   if (typeof lives !== 'number' || !Number.isInteger(lives) || lives < 1) return null
-  if (wait === undefined) return null
+  if (wait === undefined || parts === undefined) return null
   const record: IssueRecord = {
     issue: row.issue,
     life,
@@ -386,6 +364,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     fixes: fixes as number,
     round: round as number,
     question,
+    parts,
     wait,
     why: why as IssueRecord['why'],
     notes,

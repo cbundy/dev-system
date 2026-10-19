@@ -25,7 +25,7 @@ import {
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
 import { endedOf } from '../hooks/v2/lives'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from '../hooks/v2/types'
-import type { IssueRecord, IssueState, WaitCondition } from '../hooks/v2/types'
+import type { IssueRecord, IssueState, OptionKey, ParkParts, WaitCondition } from '../hooks/v2/types'
 import { NOW } from './fixtures'
 
 // --- a seeded generator, so a failure is reproducible ------------------------------------------------
@@ -57,6 +57,19 @@ function maybe<T>(g: Rng, v: T): T | null {
   return g.next() < 0.3 ? null : v
 }
 
+function parts(g: Rng, max: number): ParkParts {
+  const n = 2 + g.int(5)
+  const options = Array.from({ length: n }, (_, i) => ({ key: 'ABCDEF'[i] as OptionKey, title: text(g, max), detail: maybe(g, text(g, max)) }))
+  const withOptions = g.next() < 0.7
+  return {
+    decision: text(g, max),
+    context: maybe(g, text(g, max)),
+    options: withOptions ? options : null,
+    recommended: withOptions && g.next() < 0.5 ? (options[g.int(n)] as { key: OptionKey }).key : null,
+    recommendation: maybe(g, text(g, max)),
+  }
+}
+
 function record(g: Rng, small: boolean): IssueRecord {
   const state = g.pick(ISSUE_STATES)
   const free = small ? 12 : 400
@@ -80,6 +93,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     fixes: g.int(4),
     round: g.int(6),
     question: maybe(g, text(g, free)),
+    parts: maybe(g, parts(g, free)),
     why: state === 'closed' ? g.pick(CLOSED_WHYS) : null,
     notes: Array.from({ length: g.int(small ? 3 : 8) }, () => text(g, free)),
     prClosedAt: maybe(g, '2026-10-15T09:30:00Z'),
@@ -143,6 +157,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
         fixes: 1,
         round: 1,
         question: null,
+        parts: null,
         why: null,
         notes: ['check ci', 'a,b'],
         prClosedAt: null,
@@ -152,7 +167,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
     }
     expect(eventNote(e)).toBe(
       'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
-        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
+        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
     )
   })
 })
@@ -183,6 +198,7 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       fixes: 0,
       round: 0,
       question: null,
+      parts: null,
       why: null,
       notes: [],
       prClosedAt: null,

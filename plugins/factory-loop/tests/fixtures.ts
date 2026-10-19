@@ -247,6 +247,8 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     fixes: r.fixes,
     round: r.round,
     question: r.question,
+    // the parts of a structured park question; absent keys are read as null
+    ...(r.parts === null ? {} : { decision: r.parts.decision, context: r.parts.context, options: r.parts.options, recommended: r.parts.recommended, recommendation: r.parts.recommendation }),
     ...(r.wait === null ? {} : { wait: r.wait }),
     why: r.why,
     notes: r.notes,

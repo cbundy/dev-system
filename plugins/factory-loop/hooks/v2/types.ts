@@ -73,6 +73,18 @@ export const STEP_AGENT: Readonly<Record<AgentStep, `factory-loop:${string}`>> =
 // another repository for issue-closed and tag-contains; absent means the loop's own repo.
 export type WaitCondition = { kind: 'issue-closed'; issue: number; repo?: string } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string; repo?: string }
 
+// The parts of a structured question for the owner (3.2, 11): what the agent gave before the loop
+// rendered them into `question`. `decision` is the one sentence; options are 2 to 6 closed, with a
+// null detail when none was given; `recommended` names one of the options, `recommendation` is why.
+export type OptionKey = 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
+export type ParkParts = {
+  decision: string
+  context: string | null
+  options: { key: OptionKey; title: string; detail: string | null }[] | null
+  recommended: OptionKey | null
+  recommendation: string | null
+}
+
 // The record (3.2). The slot is not a field: a record holds the slot whose lease holder is
 // `factory-loop:<N>:<life>` (10.1).
 export type IssueRecord = {
@@ -112,6 +124,9 @@ export type IssueRecord = {
   round: number
   // parked: the question for the owner
   question: string | null
+  // parked: the parts of that question when an agent structured it, else null (always null in any
+  // other state); `question` is their rendering
+  parts: ParkParts | null
   // waiting: the conditions it waits on, every one of which must hold; null in any other state
   wait: WaitCondition[] | null
   // closed: why
@@ -285,7 +300,7 @@ export type StepMarker = {
 export type SplitReasons = { why_split: string; why_count: string; why_parts: string; why_order: string }
 
 // A child a designer's split asks for (8.7).
-export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean; decision: string | null }
+export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean; decision: string | null; decisionParts?: ParkParts | null }
 
 export type V2Action =
   // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;

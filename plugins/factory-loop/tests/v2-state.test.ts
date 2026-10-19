@@ -1571,7 +1571,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(problems({ choice: 'retry', reason: 'r', instructions: 'x'.repeat(4001) })).toEqual(['instructions is 4001 characters; at most 4000'])
     expect(problems('retry')).toEqual(['the answer must be one JSON object: {"choice", "reason", and "instructions" or "question"}'])
     expect(V2_CONTRACTS.triage.summary({ choice: 'retry', reason: 'flaky' })).toBe('retry: flaky')
-    expect(triageResult({ choice: 'park', reason: 'r', instructions: null, question: 'which?' })).toEqual({ event: 'ok', reason: 'r', why: null, head: null, choice: 'park', data: { text: 'r', instructions: undefined, question: 'which?' } })
+    expect(triageResult({ choice: 'park', reason: 'r', instructions: null, question: 'which?' })).toEqual({ event: 'ok', reason: 'r', why: null, head: null, choice: 'park', data: { text: 'r', instructions: undefined, question: 'which?', parts: { decision: 'which?', context: null, options: null, recommended: null, recommendation: null } } })
     expect(triageResult({})).toMatchObject({ event: 'unknown', why: 'bad-answer' })
   })
 

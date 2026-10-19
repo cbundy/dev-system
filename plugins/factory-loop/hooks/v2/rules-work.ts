@@ -19,9 +19,10 @@
 import { want } from '../foundation'
 import type { LedgerEntry } from '../types'
 import { childKey, claimKey, entryKey, lifeOf } from './keys'
+import { partsOfAnswer } from './park-parts'
 import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
-import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
+import type { IssueRecord, ParkParts, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
 
 const RULE = 'S2'
 
@@ -30,6 +31,8 @@ type Design = {
   kind: 'brief' | 'question' | 'split' | 'wait' | 'done'
   brief: string | null
   question: string | null
+  // the designer's question as the owner will see it in parts, null for a ledger entry from before
+  parts: ParkParts | null
   reasons: SplitReasons | null
   children: SplitChild[]
   // a wait: what it waits on and why
@@ -72,6 +75,7 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
     kind: d.kind,
     brief: typeof d.brief === 'string' ? d.brief : null,
     question: typeof d.question === 'string' ? d.question : null,
+    parts: typeof x.decision === 'string' ? partsOfAnswer(x.decision, x) : null,
     reasons: reasonsOf(d.reasons),
     children,
     conditions,
@@ -165,7 +169,7 @@ function parkClaim(env: StepEnv, parent: number, n: number, c: SplitChild): Effe
   const held = ctx.state.ledger.find(e => e.kind === 'claim' && e.key.startsWith(prefix))
   const key = held?.key ?? claimKey(n, lifeOf(ctx.state.now))
   const question = typeof c.decision === 'string' && c.decision !== '' ? c.decision : legacyDecision(parent)
-  return effect(env, { kind: 'claim', key, class: 'free', rule: RULE, reason: `claim split child ${c.key} to park it on its open decision`, issue: n, park: { question, parent } }, `split: claim of child ${c.key}`)
+  return effect(env, { kind: 'claim', key, class: 'free', rule: RULE, reason: `claim split child ${c.key} to park it on its open decision`, issue: n, park: { question, parent, ...(c.decisionParts == null ? {} : { parts: c.decisionParts }) } }, `split: claim of child ${c.key}`)
 }
 
 // splitPlan: each child made once the siblings it waits on exist, a not-ready child claimed to park
@@ -222,7 +226,7 @@ export const designPlan: StepPlan = env => {
   const d = designOf(entry)
   if (d === null) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer holds no brief, question or split'), trigger: read.trigger }
   if (d.kind === 'question') {
-    const event: TableEvent = { kind: 'not-ok', reason: 'question', data: { question: d.question ?? 'the designer asks the owner a question it did not word' } }
+    const event: TableEvent = { kind: 'not-ok', reason: 'question', data: { question: d.question ?? 'the designer asks the owner a question it did not word', parts: d.parts } }
     return { kind: 'result', event, trigger: read.trigger }
   }
   if (d.kind === 'split') return splitPlan(env, d, read.trigger)

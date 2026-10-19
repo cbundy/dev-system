@@ -35,11 +35,13 @@ const HEAD = "0821e6a3c0f4b1d2e5a6978877665544332211ff";
 let ev;
 let dir;
 let reader;
+let rebuilt;
 const { translate } = require(path.join(ROOT, "images", "base", "factory-event-translate.js"));
 
 before(async () => {
   ev = await import(EVENTS);
   reader = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "event-reader.ts"));
+  rebuilt = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "park-parts.ts"));
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-v2-events-"));
 });
 
@@ -110,6 +112,7 @@ const record = (over) => ({
   triages: 2,
   fixes: 0,
   round: 1,
+  parts: null,
   question: "The builder says it cannot: the API it needs is gone. Drop it, or point it at the new one?",
   why: null,
   notes: ["the owner: keep it small", "a, b and none"],
@@ -119,6 +122,18 @@ const record = (over) => ({
   ...over,
 });
 
+const FULL_PARTS = {
+  decision: "Which API, at 100%? a=b none",
+  context: "Two callers differ.\nnone",
+  options: [
+    { key: "A", title: "v1 = old", detail: "keeps 100% of callers" },
+    { key: "B", title: "none", detail: null },
+  ],
+  recommended: "B",
+  recommendation: "newer, simpler",
+};
+const PARK_QUESTION = "Which API, at 100%? a=b none\n\n#### Context\n\nTwo callers differ.";
+
 const events = () => [
   { state: "transition", record: record(), row: "T7", from: "building", via: "not-ok" },
   { state: "transition", record: record({ state: "queued", seq: 0, pr: null, head: null, resumeTo: null, step: "lease", question: null, notes: [] }), row: "S0", from: null, via: "claim" },
@@ -126,6 +141,10 @@ const events = () => [
   { state: "transition", record: record({ state: "waiting", resumeTo: "designing", pr: null, head: null, question: null, wait: [{ kind: "issue-closed", issue: 57 }, { kind: "pr-merged", pr: 812 }] }), row: "T16", from: "designing", via: "wait" },
   { state: "transition", record: record({ state: "designing", resumeTo: null, pr: null, head: null, question: null, wait: null }), row: "C1", from: "waiting", via: "cleared" },
   { state: "transition", record: record({ state: "closed", why: "merged", step: null, question: null }), row: "T13", from: "merge-queue", via: "ok" },
+  // a structured park: every part, then the decision alone, then a park with no parts (the X4 fixer fallback)
+  { state: "transition", record: record({ state: "parked", question: PARK_QUESTION, parts: FULL_PARTS }), row: "T3", from: "designing", via: "question" },
+  { state: "transition", record: record({ state: "parked", question: "Which API?", parts: { decision: "Which API?", context: null, options: null, recommended: null, recommendation: null } }), row: "T3", from: "designing", via: "question" },
+  { state: "transition", record: record({ state: "parked", question: "the triage chose a fixer, which is not possible here", parts: null }), row: "X4", from: "building", via: "triage:fix" },
   // a record at the table's bounds: a question of 2000 characters and 8 notes of 1000, each whole
   { state: "transition", record: record({ question: "which API, at 100%? ".repeat(100), notes: Array.from({ length: 8 }, (_, i) => `check-${i}, red at 100% `.repeat(50).slice(0, 1000)) }), row: "U4", from: "building", via: "unknown" },
   { state: "reviewed", issue: 571, branch: "issue-571", pr: 621, head: "abc1234", verdict: "changes", round: 2, patch: "3fa2c1d0e9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4", errors: 1, warnings: 2, infos: 0, reviewer: "adjudicator", answer: "/home/x/.claude/factory-loop/o__r/answers/i571_review.json" },
@@ -191,6 +210,25 @@ test("a v2 split's token note goes through the real writer: the loop reads it ba
   const oldRead = reader.readEvent(JSON.parse(fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean).pop()));
   assert.equal(old.note, "split into 604,605");
   assert.deepEqual([oldRead.data.split_into, oldRead.data.why_split, oldRead.data.child_whys], [[604, 605], null, null]);
+});
+
+test("a structured park goes through the real writer and the image translator: the new log's payload carries the parts, passes the strict schema and reads back", () => {
+  const cases = events().filter((e) => e.state === "transition" && (e.row === "T3" || e.row === "X4"));
+  assert.equal(cases.length, 3);
+  for (const e of cases) {
+    const line = log(ev.eventArgv(e));
+    const back = ev.parseEvent({ state: line.state, issue: line.issue, branch: line.branch, pr: line.pr, head: line.head, note: line.note });
+    assert.deepEqual(back.record.parts, e.record.parts);
+    const newLines = fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+    const got = JSON.parse(newLines[newLines.length - 1]);
+    assert.equal(got.type, "transition");
+    assert.deepEqual(reader.validateStrict("transition", 1, got.data), []);
+    const p = e.record.parts;
+    const want = p === null ? [null, null, null, null, null] : [p.decision, p.context, p.options, p.recommended, p.recommendation];
+    assert.deepEqual([got.data.decision, got.data.context, got.data.options, got.data.recommended, got.data.recommendation], want);
+    // the loop's rebuild from the new log reads the same parts
+    assert.deepEqual(rebuilt.partsOfData(got.data), p);
+  }
 });
 
 test("a fixer's verdict is logged as the fixer; every other event as the CLI's default actor", () => {
