@@ -162,12 +162,11 @@ columns migration 0002 lifted into `factory.event_log` and gives one row per run
 rows before a loop with this rule has run.
 
 How often agents' own gate-command runs (`npm test` run by an agent) waited for the container's gate
-slots or were refused by them. The wrapper writes an `agent-gate` line to the companion's log
+slots or were refused by them (the second command gives the per-day counts of runs, waits and refusals). The wrapper writes an `agent-gate` line to the companion's log
 (`<loop dir>/companion.jsonl`) when each ends or is refused; they are not events, so read the file:
 
 ```sh
 jq -c 'select(.cause == "agent-gate") | {at, issue, command, waitMs, refused, ms}' <loop dir>/companion.jsonl
-# per day: runs, waited more than a second, refused
 jq -rs '[.[] | select(.cause == "agent-gate")] | group_by(.at[:10])[] | {day: .[0].at[:10], runs: length, waited: map(select(.waitMs > 1000)) | length, refused: map(select(.refused)) | length}' <loop dir>/companion.jsonl
 ```
 
