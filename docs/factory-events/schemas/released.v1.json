@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "released.v1.json",
   "title": "released",
-  "description": "A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device. No producer writes it yet.",
+  "description": "A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device.",
   "x-issue": "none",
   "type": "object",
   "additionalProperties": false,

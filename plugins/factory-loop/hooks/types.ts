@@ -132,7 +132,8 @@ export type AgentView = { id: string; type: string; status: AgentStatus }
 
 export type Bump = 'patch' | 'minor' | 'major'
 // openIssues: the numbers of the open issue lines (not PRs), in the order listed
-export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null }
+// oldestClosedAt: when the oldest closed issue of the milestone closed (ISO); absent: not read; null: none, the list was full, or the read failed
+export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null; oldestClosedAt?: string | null }
 // ReleaseInfo: the last release tag (null: the repo has no release yet) and when the oldest merge
 // into the default branch since that tag happened (null: unknown or none)
 export type ReleaseInfo = { tag: string | null; oldest: Ms | null }
@@ -303,6 +304,8 @@ export type Config = {
   // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the window from the PR's opening (0: no hold)
   releaseBranchPrefix: string | null
   releaseHoldMs: Ms
+  // after a release task answered `done` (the judge started a release), no release review is planned until a newer tag is seen or this long has passed since it ended (0: no suppression)
+  releaseInProgressMs: Ms
   // flake bugs (v2 SPEC 8.5 F1): the window in days, the flakes of one test that file a bug, the open flake bugs ready or in flight that hold a new one back from `ready`, and the epic a bug is linked under (null: none)
   flakeWindowDays: number
   flakeBugMin: number

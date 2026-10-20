@@ -11,6 +11,8 @@
 import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } from '../foundation'
 import type { Config, PlanResult, State } from '../types'
 import { reconcile } from './reconcile'
+import { refusedRules } from './rules-refused'
+import { releaseLogRules } from './rules-release-log'
 import { fleetRules, fleetTells, restartOf, restartTells } from './rules-fleet'
 import { flakeBugRules } from './rules-flake-bugs'
 import { flakeRules } from './rules-flakes'
@@ -56,10 +58,12 @@ export function planV2(state: State, config: Config): PlanResult {
     interventionRules(ctx)
     settingsRules(ctx)
     flakeRules(ctx)
+    refusedRules(ctx)
     flakeBugRules(ctx)
     gateRunRules(ctx)
     mainRules(ctx)
     fleetRules(ctx)
+    releaseLogRules(ctx)
     restartTells(ctx)
     fleetTells(ctx)
     workspaceTell(ctx)

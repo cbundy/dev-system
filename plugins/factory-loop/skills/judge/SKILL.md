@@ -8,7 +8,7 @@ description: >-
   Use whenever a prompt's first line starts with TASK or TELL, when the owner
   gives the factory an instruction, and at the start of an orchestrator
   session the factory loop drives.
-version: 0.67.0
+version: 0.71.0
 ---
 
 # Judge
@@ -74,7 +74,7 @@ the model was involved.
   with a reason. Decide whether to release now, by
   "Release decisions" below. To release, start the release agent and answer
   `done` (reason: the version and why now); to wait, answer `hold` with the reason, which the loop
-  only logs (the next hour's review asks again, and so does one within the hour when a new issue starts waiting). You do not do the release steps yourself. Once the release agent reports the release
+  only logs (the next hour's review asks again, and so does one within the hour when a new issue starts waiting). A `done` answer (the release started) quiets the review: the loop sends no release review until a newer tag is seen or `releaseInProgress` (2h) has passed since the answer. A review that comes after the window means the release did not land: check `git tag -l` before starting another. You do not do the release steps yourself. Once the release agent reports the release
   out, do the Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps,
   recording the result on the issue and closing it.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
@@ -206,8 +206,15 @@ Owner items (the title counts them until resolved):
   the release a merged change waits on, or close a kept-open issue. A `roots=unread` tell means the
   blockers could not be read; the lines then give each ready issue's blocker count. It comes again at most
   once a day while the spell lasts.
+- `actions-refused` (job, run, prs, why; detail: GitHub's message, that it is the account and not the code, and
+  the PRs held): GitHub did not start a CI job because the account's payments failed or its spending limit
+  is reached. The loop holds those PRs with no fixer and no re-run spent, re-runs one refused run every 30
+  minutes, and resumes by itself. Lead with `[ACTION]`: the owner fixes billing or raises the spending limit
+  in GitHub's settings; name the PRs held.
 
 Notices:
+- `actions-resumed` (minutes, pr; detail: the job that started): GitHub starts CI jobs again, so the refusal
+  spell ended and the loop re-runs each refused run once. Lead with `[INFO]`; nothing for the owner to do.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this

@@ -113,10 +113,13 @@ Example:
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
 | `attempt` | integer | `prompt_denied`, `prompt_waiting`, `transition` | The attempt of that step; null when unknown. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
-| `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). |
+| `auth` | enum | `usage` | Which login the reading was taken under. |
+| `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. |
 | `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
 | `bucket` | integer | `designer_routed`, `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (sonnet, the treatment, when below sonnet_pct); null otherwise. |
+| `budget_resets_at` | string | `usage` | When the budget period resets. |
+| `budget_usd` | number | `usage` | The budget for that period, in dollars. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
@@ -205,6 +208,7 @@ Example:
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
 | `seven_day_resets_at` | string | `usage` | When that seven-day window resets. |
 | `sonnet_pct` | integer | `designer_routed` | The configured share of issues routed to Sonnet (the treatment; the control is opus), in percent. Null only when the route tool could not run and logged a fallback. |
+| `spend_usd` | number | `usage` | Dollars spent in the current budget period up to the reading. |
 | `split_into` | array of integer | `abandoned` | split: the new issues it was split into; empty otherwise. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
@@ -770,7 +774,7 @@ Example:
 
 ## milestone_state
 
-The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes. No producer writes it yet.
+The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)
@@ -922,7 +926,7 @@ Example:
 
 ## released
 
-A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device. No producer writes it yet.
+A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)
@@ -1198,6 +1202,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null | yes | closed: why the life ended (done: its work had already merged); null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
+| `conflicts` | integer | optional | yes | minimum 0 |  | Loop state, for the record rebuild: the entries to fixing in this life caused by a conflict or red CI after other merges. Absent (or null) before the loop counted them; absent is read as 0. |
 | `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |
 
 Example:
@@ -1224,6 +1229,7 @@ Example:
   "triages": 0,
   "fixes": 1,
   "round": 2,
+  "conflicts": 1,
   "question": null,
   "why": null,
   "notes": [],
@@ -1272,12 +1278,16 @@ A reading of the Claude subscription's usage windows. Written by usage-check, wh
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `available` | boolean | required | no |  | yes | true when a reading was had; false when no source gave one (then every reading field is null). |
+| `available` | boolean | required | no |  | yes | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. |
 | `five_hour_pct` | integer | required | yes | minimum 0 | yes | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | required | yes | format date-time | yes | When the five-hour window resets. |
 | `seven_day_pct` | integer | required | yes | minimum 0 | yes | Percent of the most used seven-day window, rounded up. |
 | `seven_day_resets_at` | string | required | yes | format date-time | yes | When that seven-day window resets. |
-| `source` | enum | required | yes | one of "oauth", "statusline", null |  | Where the reading came from; null when unavailable. |
+| `source` | enum | required | yes | one of "oauth", "statusline", "spend", null |  | Where the reading came from; null when unavailable. spend is a spend reading against a budget, which has null window fields. |
+| `auth` | enum | optional | yes | one of "subscription", "api-key", null | yes | Which login the reading was taken under. |
+| `spend_usd` | number | optional | yes | minimum 0 | yes | Dollars spent in the current budget period up to the reading. |
+| `budget_usd` | number | optional | yes | minimum 0 | yes | The budget for that period, in dollars. |
+| `budget_resets_at` | string | optional | yes | format date-time | yes | When the budget period resets. |
 | `reasons` | array of string | required | no |  |  | When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise. |
 
 Example:

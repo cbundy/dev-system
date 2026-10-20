@@ -64,6 +64,8 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     decided: { decision: 'ask' } as Record<string, unknown>,
     ids: 0,
     sleeps: 0,
+    // what the plugin set with $.env.set, in order
+    envSet: [] as [string, string | undefined][],
     // the files the plugin reads (the marker, /proc, the loop's act lock and companion log), kept as the
     // engine would: a line appended to the companion log is read back
     files: undefined as unknown as Map<string, string>,
@@ -73,6 +75,10 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
   const gates = [...(opts.gates ?? [])]
   const ran = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('env.set', (_$, e) => {
+    w.envSet.push([e.name, e.value])
+    return { value: undefined }
+  })
   on('session.id', () => ({ value: w.session }))
   on('fs.read', ($, e) => {
     if (e.path.endsWith('/.claude-plugin/plugin.json')) return { value: '{"version":"9.9.9"}' }
@@ -552,6 +558,61 @@ describe('the stop gate', () => {
       expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass', waitMs: 7_000 })
     })
 
+    test('a second gate waits 9 minutes behind the first, then runs 5 minutes of commands and passes (the Done-when)', async ($, on) => {
+      const first = deferred()
+      // the second gate's two commands take 150 s each of clock time
+      let w: ReturnType<typeof world> | undefined
+      w = world(on, { marker: withLimit, hold: n => (n === 1 ? first.promise : n > 2 ? w?.clock.advance(150_000) : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      await w.clock.advance(540_000)
+      first.go()
+      const [r1, r2] = await Promise.all([p1, p2])
+      expect(r1.block).toBeUndefined()
+      expect(r2.block).toBeUndefined()
+      const lines = companionLines(w)
+      expect(lines.map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-pass'])
+      expect(lines[1]).toMatchObject({ cause: 'gate-wait', waitMs: 540_000 })
+      expect(lines[2]).toMatchObject({ cause: 'gate-pass', ms: 300_000, waitMs: 540_000 })
+      // the first command of the queued gate gets the whole gateTimeoutMs, not what the wait left
+      expect(w.gateRuns[2]).toMatchObject({ command: 'npm run lint', timeoutMs: 600_000 })
+      expect(w.gateRuns[3]).toMatchObject({ command: 'npm test', timeoutMs: 450_000 })
+    })
+
+    const STALL = 'CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS'
+
+    test('a writer with gates raises the engine\'s stall limit to cover its wait and run (the default wait, gateTimeoutMs, a margin)', async ($, on) => {
+      const w = world(on, { marker: withLimit })
+      await $.agent.spawn(spawn(BUILD))
+      expect(w.envSet).toEqual([[STALL, String(30 * 60_000 + MARKER.gateTimeoutMs + 5 * 60_000)]])
+    })
+
+    test('the stall limit follows the marker\'s own wait and run', async ($, on) => {
+      const w = world(on, { marker: { ...withLimit, gateWaitTimeoutMs: 900_000, gateTimeoutMs: 1_200_000 } })
+      await $.agent.spawn(spawn(BUILD))
+      expect(w.envSet).toEqual([[STALL, String(900_000 + 1_200_000 + 300_000)]])
+    })
+
+    test('a limit already at or past the bound is left as it is, never lowered', async ($, on) => {
+      const w = world(on, { marker: withLimit, env: { [STALL]: '9000000' } })
+      await $.agent.spawn(spawn(BUILD))
+      expect(w.envSet).toEqual([])
+    })
+
+    test('a marker with no concurrency limit waits for no turn: its bound is the gate\'s budget and the margin', async ($, on) => {
+      const w = world(on)
+      await $.agent.spawn(spawn(BUILD))
+      expect(w.envSet).toEqual([[STALL, String(MARKER.gateTimeoutMs + 5 * 60_000)]])
+    })
+
+    test('a writer with no gates leaves the stall limit alone', async ($, on) => {
+      const w = world(on, { marker: { ...withLimit, gateCommands: [] } })
+      await $.agent.spawn(spawn(BUILD))
+      expect(w.envSet).toEqual([])
+    })
+
     test('a marker with no limit runs both gates at once', async ($, on) => {
       const first = deferred()
       const w = world(on, { hold: n => (n === 1 ? first.promise : undefined) })
@@ -669,7 +730,7 @@ describe('prompts nobody answers', () => {
   test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
     // #674: `rm -f $D/*` waited for ever on a prompt nobody answered
     const w = world(on)
-    w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'permission-check' }
+    w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'host' }
     await $.agent.spawn(spawn(BUILD))
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
     const r = await check($, RM)

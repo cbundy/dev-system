@@ -20,7 +20,8 @@ export function flakeRules(ctx: V2Ctx): void {
       const p = keyParts(entry.key)
       const runId = p === null ? null : /^rerun\/r\d+\/(\d+)$/.exec(p.rest)?.[1]
       if (p === null || p.issue !== r.issue || p.life !== r.life || runId === undefined || runId === null) continue
-      const checks = view.checks.filter(c => c.runId === runId)
+      // a refused check never ran: it is neither failed nor settled
+      const checks = view.checks.filter(c => c.runId === runId && c.bucket !== 'refused')
       if (checks.length === 0) continue
       const since = (c: CheckRun) => c.completedAt !== null && c.completedAt >= entry.startedAt
       const bad = (c: CheckRun) => c.bucket === 'fail' || c.bucket === 'cancel'

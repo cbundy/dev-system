@@ -12,6 +12,7 @@ import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
 import { INPUT_CLIP, clip, inputOf, promptData, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
+import { runStopGate } from '../hooks/register'
 import { createTurns } from '../hooks/turns'
 import type { Turn, TurnIo } from '../hooks/turns'
 
@@ -323,6 +324,25 @@ describe('the stop gate', () => {
     const spent = await runGates(io([{ exitCode: 0, output: '', ms: 600_000 }]).io, ['npm run lint', 'npm test'], 600_000)
     expect(spent.result).toBe('unknown')
     if (spent.result === 'unknown') expect(spent.why).toContain('npm test')
+  })
+
+  test('a run the engine cut says so, with the wait and the run; otherwise the plain reason', async () => {
+    const aborted = { error: 'process.run(sh) aborted', ms: 60_000 }
+    // cut() holds: the cut reason, the wait and the run as two numbers
+    const t = io([aborted])
+    const cutIo = { ...t.io, cut: () => true }
+    const cut = await runGates(cutIo, ['npm test'], 600_000, 540_000)
+    if (cut.result !== 'unknown') throw new Error(`expected unknown, got ${cut.result}`)
+    expect(cut.why).toContain('the hook was cut off 600 s after the gate started (540 s waiting, 60 s running)')
+    expect(cut.why).toContain('`npm test`')
+    // cut() does not hold and the error is a plain failure: the plain reason, no cut claim
+    const plain = await runGates({ ...io([{ error: 'spawn sh ENOENT' }]).io, cut: () => false }, ['npm test'], 600_000, 540_000)
+    if (plain.result !== 'unknown') throw new Error('expected unknown')
+    expect(plain.why).toBe('`npm test` did not finish: spawn sh ENOENT')
+    // no cut() at all (the recovery's caller): an engine abort error is still named
+    const abortedOnly = await runGates(io([aborted]).io, ['npm test'], 600_000)
+    if (abortedOnly.result !== 'unknown') throw new Error('expected unknown')
+    expect(abortedOnly.why).toContain('cut off 60 s after the gate started (0 s waiting, 60 s running)')
   })
 
   test('its record carries the result and the head', () => {
@@ -689,5 +709,53 @@ describe('the recovery of a cut gate (10.6)', () => {
     const pass = { result: 'pass', ms: 1 } as const
     expect(gateLine(pass, null, 0, null, 'x', 0, true).fields).not.toHaveProperty('rerun')
     expect(gateLine(pass, null, 0, null, 'x', 0, true, true).fields).toMatchObject({ rerun: true })
+  })
+})
+
+describe('the stop gate hands runGates the engine\'s cut and the wait (10.6)', () => {
+  test('a queued gate the engine cut is gate-unknown naming the cut, with its wait and its run', async () => {
+    let now = 0
+    let commands = 0
+    let ended = false
+    let release: () => void = () => undefined
+    const holder = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    // only the pieces the stop gate touches: a clock with timers, and process.run
+    const $ = {
+      clock: {
+        now: async () => now,
+        after: () => ({ cancel: () => undefined }),
+      },
+      process: {
+        run: async (argv: string[]) => {
+          if (argv[0] === 'sleep') return new Promise(() => undefined)
+          if (argv[0] === 'sh' && argv[2]?.startsWith('exec 2>&1\n')) {
+            commands++
+            if (commands === 1) {
+              await holder
+              return ok
+            }
+            // the queued gate's command: 4 s in, the engine ends the hook (a plain error text, so only cut() names it)
+            now += 4_000
+            ended = true
+            throw new Error('the child was killed')
+          }
+          return ok
+        },
+      },
+    } as unknown as Parameters<typeof runStopGate>[0]
+    const target = { slot: SLOT, gitDir: '/w/g', issue: 571, life: 'ss1x2k', seq: 7, gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '/c/loop-cut-test', gateConcurrency: 1, gateWaitTimeoutMs: 1_800_000 }
+    const first = runStopGate($, target, new Date(0).toISOString(), { cut: () => false })
+    await tick()
+    const second = runStopGate($, target, new Date(0).toISOString(), { cut: () => ended })
+    await tick()
+    now += 7_000
+    release()
+    await first
+    const out = await second
+    if (!out.ran || out.result.result !== 'unknown') throw new Error(`expected an unknown result, got ${JSON.stringify(out)}`)
+    expect(out.result.why).toContain('the hook was cut off 11 s after the gate started (7 s waiting, 4 s running)')
   })
 })

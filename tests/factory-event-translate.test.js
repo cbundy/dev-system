@@ -258,6 +258,35 @@ describe("loop_entry decision and decision_reason", () => {
   });
 });
 
+describe("loop_entry decision_reason from the real loopNote", () => {
+  const taskLine = () => sample("loop", (l) => /kind=task/.test(l.note ?? ""));
+  const noteOf = async (reason, key = "task:release:2:none") => {
+    const { loopNote } = await import(path.join(HOOKS, "derive.ts"));
+    return loopNote({
+      kind: "task", key, status: "done", attempts: 1, class: "drive", rule: "O3", startedAt: 1792184909172,
+      endedAt: 1792185127762, wake: "release", issue: null, run: null, pr: null, head: null,
+      outcome: { kind: "wake", decision: "hold", reason, instructions: null, bump: null, bumpReason: null, fields: {} },
+    });
+  };
+  test("a reason with spaces and % comes through whole", async () => {
+    const reason = "not ready: 100% of the gate, 2 open";
+    const r = translate({ ...taskLine(), note: await noteOf(reason) });
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, r.event.data), []);
+    assert.equal(r.event.data.decision, "hold");
+    assert.equal(r.event.data.decision_reason, reason);
+  });
+  test("a shortened reason is at most 200 characters", async () => {
+    const note = await noteOf("a%".repeat(100), `task:release:2:${"k".repeat(130)}`);
+    const r = translate({ ...taskLine(), note });
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, r.event.data), []);
+    assert.equal(r.event.data.decision, "hold");
+    assert.ok(r.event.data.decision_reason.length <= 200);
+    assert.ok(r.event.data.decision_reason.endsWith("..."));
+  });
+});
+
 test("passes: a note built by the real passesNote from closeMinute translates to a valid loop_passes", () => {
   const minute = Date.UTC(2026, 9, 17, 0, 46);
   const settings = { mode: "act", planner: "v2", passEveryMs: 10000 };
@@ -501,6 +530,18 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
 });
 
+test("transition conflicts=: the optional conflict-entry count", () => {
+  const base = sample("transition");
+  const before = translate(base).event.data;
+  const r = translate(withNote(base, `${base.note} conflicts=2`));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+  assert.equal(r.event.data.conflicts, 2);
+  assert.equal("conflicts" in before, false, "a note without conflicts= leaves the key out");
+  assert.deepEqual({ ...r.event.data, conflicts: undefined }, { ...before, conflicts: undefined });
+  for (const v of ["x", "-1", "none"]) assert.match(missOf(withNote(base, `${base.note} conflicts=${v}`)), /conflicts=/, v);
+});
+
 test("transition question parts: decision, context, options, recommended, recommendation (dev-system#1064)", () => {
   const base = sample("transition");
   const opts3 = [{ key: "A", title: "One", detail: null }, { key: "B", title: "Two", detail: "More" }, { key: "C", title: "Three", detail: "Even more" }];
@@ -643,4 +684,44 @@ test("prompt_denied and prompt_waiting: an unknown token, a tool on a waiting pr
   // a waiting message is not clipped by the schema
   assert.ok(translate(withNote(w, `input=${"x".repeat(5000)}`)).event);
   assert.match(missOf(withNote(w, "seq=-1")), /bad number seq=-1/);
+});
+
+test("usage: auth on today's two shapes, and the spend shape (dev-system#1114)", () => {
+  const sub = sample("usage", (l) => /^five_hour=/.test(l.note));
+  const unavail = sample("usage", (l) => /^usage=unavailable/.test(l.note));
+  const validate = (d) => assert.deepEqual(reader.validateStrict("usage", 1, d), []);
+  // no auth token: no auth key at all
+  assert.equal("auth" in translate(sub).event.data, false);
+  assert.equal("auth" in translate(unavail).event.data, false);
+  const a = translate(withNote(sub, `${sub.note} auth=subscription`)).event.data;
+  assert.equal(a.auth, "subscription");
+  validate(a);
+  const u = translate(withNote(unavail, `${unavail.note} auth=api-key`)).event.data;
+  assert.equal(u.auth, "api-key");
+  validate(u);
+  const note = "auth=api-key spend_usd=42.5 budget_usd=100 budget_resets_at=2026-11-01T00:00:00.000Z source=spend";
+  const s = translate(withNote(sub, note)).event.data;
+  assert.deepEqual(s, {
+    available: true, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null,
+    source: "spend", reasons: [], auth: "api-key", spend_usd: 42.5, budget_usd: 100, budget_resets_at: "2026-11-01T00:00:00.000Z",
+  });
+  validate(s);
+  const none = translate(withNote(sub, "auth=api-key spend_usd=3 budget_usd=none budget_resets_at=none source=spend")).event.data;
+  assert.deepEqual([none.spend_usd, none.budget_usd, none.budget_resets_at], [3, null, null]);
+  validate(none);
+  const bare = translate(withNote(sub, "auth=api-key spend_usd=0 source=spend")).event.data;
+  assert.equal("budget_usd" in bare, false);
+  validate(bare);
+  for (const [bad, cause] of [
+    [note.replace("spend_usd=42.5", "spend_usd=-1"), /bad number spend_usd=-1/],
+    [note.replace("spend_usd=42.5", "spend_usd=abc"), /bad number spend_usd=abc/],
+    [note.replace("budget_usd=100", "budget_usd=-5"), /bad number budget_usd=-5/],
+    [note.replace("auth=api-key", "auth=other"), /bad auth=other/],
+    [note.replace("auth=api-key", "auth=subscription"), /needs auth=api-key/],
+    [`${note} stray=1`, /unexpected token stray=/],
+    [note.replace("spend_usd=42.5 ", ""), /missing token spend_usd=/],
+    [note.replace("auth=api-key ", ""), /missing token auth=/],
+    [`${sub.note} auth=other`, /bad auth=other/],
+    [`${unavail.note} auth=nope`, /bad auth=nope/],
+  ]) assert.match(missOf(withNote(sub, bad)), cause, bad);
 });

@@ -165,6 +165,8 @@ export function updateResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: s
 //   transient failure of the call (a GitHub blip, a gh error): it re-ran nothing, so the check is
 //   never red for it (the step tries the re-run again after its backoff, or is unknown once it is
 //   used up);
+// - refused: a check GitHub did not start for the account's sake (refused.ts) and none is red: an
+//   outside block, held with no bound (not pastWait), no re-run spent;
 // - pending: a check has not finished; a failed check's run still has a job going (GitHub refuses
 //   to re-run a run in progress); or a re-run's result is not read yet: it runs, or GitHub took it
 //   (done, its answer lost or timed out, or a check of the run ended since its start) and the read
@@ -174,6 +176,7 @@ export function updateResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: s
 export type CiRead =
   | { kind: 'red'; failed: CheckRun[]; refused: Record<string, string> }
   | { kind: 'retry'; runs: string[] }
+  | { kind: 'refused'; checks: CheckRun[] }
   | { kind: 'pending'; done: number; all: number }
   | { kind: 'none' }
   | { kind: 'green' }
@@ -213,6 +216,8 @@ export function ciOf(r: IssueRecord, checks: readonly CheckRun[], reruns: readon
   }
   if (red.length > 0) return { kind: 'red', failed: red, refused }
   if (rerun.size > 0) return { kind: 'retry', runs: [...rerun].sort() }
+  const refusedChecks = checks.filter(c => c.bucket === 'refused')
+  if (refusedChecks.length > 0) return { kind: 'refused', checks: refusedChecks }
   const done = checks.filter(c => c.bucket === 'pass' || c.bucket === 'skipping').length
   if (waiting || checks.some(c => c.bucket === 'pending')) return { kind: 'pending', done, all: checks.length }
   return checks.length === 0 ? { kind: 'none' } : { kind: 'green' }

@@ -772,7 +772,7 @@ compare can be told from one the floor cut most of; the query returns the newest
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
-loop setting `eventsSource` `shadow`, the default, once per load and then at most hourly; `differences` counts issues whose
+loop setting `eventsSource` `shadow` (opt-in; the default is `new`), once per load and then at most hourly; `differences` counts issues whose
 rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` and the newest `ready` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
@@ -961,6 +961,12 @@ How often a release wait triggers a review within the hour (the O3 key carries t
 
 ```sh
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "O3" and (.reason | test("started waiting"))) | {at: $d.at, key, reason}] | .[] | "\(.at) \(.key) \(.reason)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+How often, and for how long, a started release quiets the review (first and last pass held, passes held, the entry):
+
+```sh
+jq -rs '[.[] | . as $d | ($d.skipped // [])[] | select(.rule == "O3" and (.why | startswith("release in progress"))) | {at: $d.at, why}] | group_by(.why) | .[] | "\(.[0].at) \(.[-1].at) \(length) \(.[0].why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
 A wait the loop cannot read (a failing read, or a tag condition on a repo with no release) raises the owner item
@@ -1512,6 +1518,44 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+### Actions refusal spells
+
+When GitHub does not start a CI job for the account's sake (failed payments, a spending limit), the
+factory loop holds the PRs instead of fixing them and tells the owner once (v2 SPEC 8.5, "Refused
+jobs"). A spell runs from the `actions-refused` tell to the `actions-resumed` notice that names it
+(`tell:actions-resumed:<the tell's key>`). One row per spell started in the window: when it began, when
+it ended (null while open), its minutes, GitHub's message (read from `event_store` as `decision_reason`
+is not a column), and the refused runs and PRs the `ci-refused` interventions counted from ten minutes
+before it opened (the loop logs a run when it first sees it refused, a pass before the tell) to its end.
+The probes and resume re-runs are `ci-refused:probe` and `ci-refused:rerun` interventions, so
+`count(*) FILTER (WHERE cause = 'ci-refused:probe')` over the same span gives the probes a spell took.
+
+```sql
+SELECT s.started_at, s.resumed_at,
+  round(extract(epoch FROM coalesce(s.resumed_at, now()) - s.started_at) / 60) AS minutes,
+  s.reason,
+  count(DISTINCT i.fact) AS refused_runs, count(DISTINCT i.pr) AS prs
+FROM (
+  SELECT o.repo, o.key, o.started_at, o.reason,
+    (SELECT min(r.ts) FROM factory.event_log r
+     WHERE r.type = 'loop_entry' AND r.wake = 'actions-resumed' AND r.repo = o.repo
+       AND r.key = 'tell:actions-resumed:' || o.key) AS resumed_at
+  FROM (
+    SELECT l.repo, l.key, min(l.ts) AS started_at, max(e.data->>'decision_reason') AS reason
+    FROM factory.event_log l
+    JOIN factory.event_store e ON e.event_id = l.event_id
+    WHERE l.type = 'loop_entry' AND l.wake = 'actions-refused' AND l.repo = :'repo'
+    GROUP BY l.repo, l.key
+    HAVING min(l.ts) >= :'since'
+  ) o
+) s
+LEFT JOIN factory.event_log i
+  ON i.repo = s.repo AND i.type = 'intervention' AND i.cause = 'ci-refused'
+ AND i.ts >= s.started_at - interval '10 minutes' AND (s.resumed_at IS NULL OR i.ts <= s.resumed_at)
+GROUP BY s.repo, s.key, s.started_at, s.resumed_at, s.reason
+ORDER BY s.started_at DESC;
+```
+
 ## 9b. Permission prompts
 
 Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):
@@ -1543,9 +1587,10 @@ ORDER BY 1, 3 DESC, 2, 4, 5, 6;
 
 ## 10. Releases
 
-Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
-writes them yet, so the queries return no rows until a producer does. Count a release once by
-`(repo, tag)`.
+Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
+factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, and rule
+O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
+11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
 
 Releases per week and the pull requests each carried:
 
@@ -1601,6 +1646,18 @@ SELECT coalesce(j.week, t.week) AS week,
   coalesce(j.wakes_held, 0) AS wakes_held, coalesce(t.holds_started, 0) AS holds_started
 FROM judged j FULL JOIN turned t ON j.week = t.week
 ORDER BY 1 DESC;
+```
+
+Why the judge held, per week (the release wake's reason, one line of at most 200 characters, read
+from `event_store` as `decision_reason` is not a column):
+
+```sql
+SELECT date_trunc('week', l.ts)::date AS week, s.data->>'decision_reason' AS reason, count(*) AS holds
+FROM factory.event_log l
+JOIN factory.event_store s ON s.event_id = l.event_id
+WHERE l.type = 'loop_entry' AND l.wake = 'release' AND l.decision = 'hold'
+GROUP BY 1, 2
+ORDER BY 1 DESC, 3 DESC;
 ```
 
 ## Main after merge
@@ -1722,10 +1779,65 @@ FROM factory.workers_status
 ORDER BY device;
 ```
 
+## Spend on an API key
+
+A `usage` event ([REFERENCE.md](factory-events/REFERENCE.md)) taken on an API key records dollars, not window
+percentages. `auth` says which login the reading was taken under (`subscription` or `api-key`). A spend reading has
+`source` `spend`, `available` true and null window fields; `spend_usd` is the dollars spent in the current budget period,
+`budget_usd` the budget for that period and `budget_resets_at` when the period resets. All four are null on every
+other usage event, and no producer writes them yet.
+
+Spend per day against the budget, per repo and device: the day's last reading, its percent of the budget (null when
+there is no budget) and `spent_that_day`, the day's last spend less the previous day's last spend in the same budget
+period (the same `budget_resets_at`), else the day's own last spend:
+
+```sql
+WITH last_per_day AS (
+  SELECT repo, device, date_trunc('day', ts) AS day, spend_usd, budget_usd, budget_resets_at
+  FROM (
+    SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.device, date_trunc('day', e.ts) ORDER BY e.ts DESC) AS n
+    FROM factory.event_log e
+    WHERE e.type = 'usage' AND e.available AND e.auth = 'api-key' AND e.spend_usd IS NOT NULL
+      AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz) r
+  WHERE n = 1)
+SELECT day::date AS day, repo, device, spend_usd, budget_usd,
+  round(100 * spend_usd / nullif(budget_usd, 0)) AS pct_of_budget,
+  CASE WHEN lag(day) OVER w IS NOT NULL AND lag(budget_resets_at) OVER w IS NOT DISTINCT FROM budget_resets_at
+       THEN spend_usd - lag(spend_usd) OVER w
+       ELSE spend_usd END AS spent_that_day
+FROM last_per_day
+WINDOW w AS (PARTITION BY repo, device ORDER BY day)
+ORDER BY repo, device, day;
+```
+
+Time in each tier while on an API key, per repo and device. The tier is worked out from `100 * spend_usd / budget_usd`
+against the default thresholds 85 / 90 / 95 (slow, stop-new, stop-all); they mirror
+`plugins/factory-loop/hooks/config.ts` (`usageSlowPct`, `usageStopNewPct`, `usageStopAllPct`) and are edited here when
+the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); a
+reading with no spend or no budget counts as `unknown`:
+
+```sql
+SELECT repo, device,
+  CASE WHEN pct IS NULL THEN 'unknown'
+       WHEN pct >= 95 THEN 'stop-all'
+       WHEN pct >= 90 THEN 'stop-new'
+       WHEN pct >= 85 THEN 'slow'
+       ELSE 'normal' END AS tier,
+  sum(held) AS time_in_tier
+FROM (
+  SELECT repo, device, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
+    least(coalesce(lead(ts) OVER (PARTITION BY repo, device ORDER BY ts), now()) - ts, interval '15 minutes') AS held
+  FROM factory.event_log
+  WHERE type = 'usage' AND available AND auth = 'api-key'
+    AND repo = :'repo' AND ts >= :'since'::timestamptz) r
+GROUP BY repo, device, tier
+ORDER BY repo, device, tier;
+```
+
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
-kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`). Per tool since a given time:
+kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`, written only when set to `shadow`, as the claim tools' are). Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
 

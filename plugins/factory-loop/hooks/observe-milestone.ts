@@ -10,7 +10,8 @@ import type { Milestone, ReleaseInfo } from './types'
 
 type Timed<T> = { at: number; value: T }
 type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
-export type MilestoneCache = { milestone?: Timed<Milestone | null>; release?: Timed<ReleaseInfo>; tag?: Timed<string | null>; tags?: Record<string, Timed<string | null>> }
+// closed: when the oldest closed issue of the milestone closed (ISO); null: none, the list was full, or the read failed
+export type MilestoneCache = { milestone?: Timed<Milestone | null>; release?: Timed<ReleaseInfo>; tag?: Timed<string | null>; tags?: Record<string, Timed<string | null>>; closed?: Timed<string | null> }
 
 // readRelease: gh only (a local checkout's refs may be stale). The tag commit's date, not the
 // release's publishedAt, so a PR merged between tagging and publishing counts; the release's own
@@ -43,6 +44,27 @@ async function readTag(run: Run, repo: string): Promise<string | null | undefine
   return parseReleaseTag(view.stdout) ?? undefined
 }
 
+// readOldestClosed: when the oldest closed issue of the Next release milestone closed; null when none
+// is closed, when the list filled the limit (the oldest of the newest would understate it) or when the
+// read failed.
+async function readOldestClosed(run: Run, repo: string): Promise<string | null> {
+  const r = await run(['gh', 'issue', 'list', '--repo', repo, '--milestone', 'Next release', '--state', 'closed', '--json', 'closedAt', '--limit', String(LIST_LIMIT)])
+  if (r.exitCode !== 0) return null
+  let list: unknown
+  try {
+    list = JSON.parse(r.stdout)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(list) || list.length >= LIST_LIMIT) return null
+  let oldest: number | null = null
+  for (const item of list) {
+    const at = typeof item === 'object' && item !== null && typeof (item as { closedAt?: unknown }).closedAt === 'string' ? Date.parse((item as { closedAt: string }).closedAt) : NaN
+    if (!Number.isNaN(at) && (oldest === null || at < oldest)) oldest = at
+  }
+  return oldest === null ? null : new Date(oldest).toISOString()
+}
+
 // newestTag: the newest release tag the milestone reads hold: the full release read's or the tag view's, whichever is newer.
 export function newestTag(cache: MilestoneCache): string | null {
   const r = cache.release
@@ -73,7 +95,7 @@ export function repoTags(cache: MilestoneCache): Record<string, string | null> {
 
 export async function readMilestone(
   cache: MilestoneCache,
-  o: { now: number; every: number; repo: string; base: string | null; run: Run; tagWanted?: boolean; tagRepos?: readonly string[] },
+  o: { now: number; every: number; repo: string; base: string | null; run: Run; tagWanted?: boolean; tagRepos?: readonly string[]; backoff?: boolean },
 ): Promise<void> {
   // nothing printed means the repo has not opted in
   if (cache.milestone === undefined || o.now - cache.milestone.at >= o.every) {
@@ -110,11 +132,20 @@ export async function readMilestone(
       // leave the last reading
     }
   }
-  if (o.tagWanted !== true) return
+  // the closed-issue read, on the cadence, while the milestone exists; a failed read caches null
+  if (ms !== null && o.backoff !== true && (cache.closed === undefined || o.now - cache.closed.at >= o.every)) {
+    try {
+      cache.closed = { at: o.now, value: await readOldestClosed(o.run, o.repo) }
+    } catch {
+      cache.closed = { at: o.now, value: null }
+    }
+  }
+  // the tag is read while a record waits on it and whenever the milestone exists (the release log, O4)
+  if (o.tagWanted !== true && ms === null) return
   // the full read refreshed the tag; else the tag view alone, on the cadence
   if (releaseRead) {
     cache.tag = { at: o.now, value: cache.release?.value.tag ?? null }
-  } else if (cache.tag === undefined || o.now - cache.tag.at >= o.every) {
+  } else if (o.backoff !== true && (cache.tag === undefined || o.now - cache.tag.at >= o.every)) {
     try {
       const tag = await readTag(o.run, o.repo)
       if (tag !== undefined) cache.tag = { at: o.now, value: tag }

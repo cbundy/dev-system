@@ -11,6 +11,9 @@
 //                  classic.SubagentStop runs a 75 s gate with $.process.run; once it answered,
 //                  a message resumes it, as the loop's repair message does, to show the resumed
 //                  agent keeps its slot and its guard
+//   gate-queue-bare   - the agent starts in <run>/slot and finishes at once; the helper's
+//                  classic.SubagentStop then waits about 540 s in host-call slices and runs a
+//                  300 s command, the shape of a queued gate in the companion (v2 SPEC 10.6)
 // Every observation is one JSON line in <run>/log.jsonl.
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -23,6 +26,9 @@ Steps, each its own tool call:
 2. Write tool: file_path "done.txt", content "hello"
 3. Write tool: file_path "../escape.txt", content "escaped" (it may be refused: report what you were told)
 Then reply with one line per step and finish. If you are told a check failed when you finish, do what it says, then finish again.`
+
+const queueAsk = (slot: string) => `factory-slot: ${slot}
+Reply with the single word: done. Run no tool.`
 
 const cases = new Map<string, string>()
 const resumed = new Set<string>()
@@ -48,7 +54,7 @@ async function setTimeouts($: EngineInterface, where: string) {
 async function spawn($: EngineInterface, tries = 1) {
   const { run, probe } = await cfg($)
   try {
-    const prompt = probe === 'gate' ? gateAsk(`${run}/slot`) : SLEEP
+    const prompt = probe === 'gate' ? gateAsk(`${run}/slot`) : probe === 'gate-queue-bare' ? queueAsk(`${run}/slot`) : SLEEP
     const r = await $.agent.spawn({ subagentType: 'workspace-probe-spawner:worker', description: `workspace probe ${probe}`, prompt })
     if (r.agentId !== undefined) cases.set(r.agentId, probe)
     await log($, 'spawned', { probe, tries, agentId: r.agentId ?? null, deny: r.deny ?? null })

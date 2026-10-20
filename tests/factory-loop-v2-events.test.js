@@ -300,6 +300,36 @@ test("a comment_posted goes through the real writer's native mode: exit 0, no wa
   assert.deepEqual(reader.readEvent(got), { type: "comment_posted", type_version: 1, data });
 });
 
+// A milestone_state (rules-release-log.ts, O5) is written in the new format alone, for no issue: the real writer takes
+// the argv events.ts builds with no warning, and its line matches the strict schema.
+test("a milestone_state goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", () => {
+  const readings = [
+    { milestone_closed: 3, milestone_open: 1, oldest_closed_at: "2026-10-17T10:00:00.000Z", last_tag: "v0.61.0", oldest_unreleased_merge_at: "2026-10-17T09:55:12.000Z", expected: "minor", holding: true, hold_reason: "an open issue changes the same schema" },
+    { milestone_closed: 0, milestone_open: 0, oldest_closed_at: null, last_tag: null, oldest_unreleased_merge_at: null, expected: null, holding: false, hold_reason: null },
+  ];
+  for (const data of readings) {
+    const argv = ev.eventArgv({ state: "milestone_state", data });
+    assert.deepEqual(argv, ["callum-flow-event", "--type", "milestone_state", "--data", JSON.stringify(data)]);
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "", `milestone_state warned: ${r.stderr}`);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, before + 1, "one line");
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.type, "milestone_state");
+    assert.equal(got.issue ?? null, null);
+    assert.deepEqual(got.data, data);
+    assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+    assert.deepEqual(reader.validateStrict("milestone_state", 1, got.data), []);
+  }
+});
+
 // A shadow_read (sources-records.ts) is written in the new format alone and for no issue: the argv has no
 // --issue, the real writer takes it with no warning, and its line matches the strict schema.
 test("a shadow_read goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", async () => {

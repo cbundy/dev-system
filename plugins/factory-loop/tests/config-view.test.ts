@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -124,6 +124,15 @@ describe('configText', () => {
     expect(line(set, 'releaseBranchPrefix')).toEndWith(' repo')
     expect(line(set, 'releaseHold')).toContain('off')
     expect(line(set, 'releaseHold')).toEndWith(' workspace')
+  })
+
+  test('releaseInProgress shows its value and source; 0 shows off', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'releaseInProgress')).toContain('2h')
+    expect(line(def, 'releaseInProgress')).toEndWith(' default')
+    const set = configText(view({ releaseInProgress: '0' }, { releaseInProgress: 0 }), control(), NOW)
+    expect(line(set, 'releaseInProgress')).toContain('off')
+    expect(line(set, 'releaseInProgress')).toEndWith(' workspace')
   })
 
   test('minimumReleaseCadence shows short form with its source, and a rejected value shows the fallback (#772)', () => {
@@ -297,8 +306,9 @@ describe('gate concurrency', () => {
 })
 
 describe('eventsSource (the record rebuild\'s source, v2 SPEC 3.3)', () => {
-  test('shadow by default; old, new and shadow validate in either file; the key applies on the next pass', () => {
-    expect(DEFAULT_CONFIG.eventsSource).toBe('shadow')
+  test('new by default; old, new and shadow validate in either file; the key applies on the next pass', () => {
+    expect(DEFAULT_CONFIG.eventsSource).toBe('new')
+    expect(loadConfig({}).config.eventsSource).toBe('new')
     expect(SETTING_EFFECT.eventsSource).toBe('next-pass')
     for (const source of ['old', 'new', 'shadow'] as const) expect(loadConfig({ eventsSource: source })).toMatchObject({ config: { eventsSource: source }, problems: [] })
     expect(loadConfig({ eventsSource: 'new' }, { eventsSource: 'old' }).config.eventsSource).toBe('old')

@@ -53,6 +53,18 @@ export function mainKey(last: string, current: string): string {
   return `main/${last}/${current}`
 }
 
+// releasedKey: a release tag logged (rule O4): released:<repo>:<tag>. The tag is the third segment.
+export function releasedKey(repo: string, tag: string): string {
+  return `released:${repo}:${tag}`
+}
+
+// milestoneStateKey: a change in the milestone's reading (rule O5): milestone-state/<fingerprint of the
+// reading>/<base-36 end of the newest done entry, or 0>, so the ledger makes each change once and a
+// reading that comes back is logged again.
+export function milestoneStateKey(fingerprint: string, lastEndedAt: number): string {
+  return `milestone-state/${fingerprint}/${lastEndedAt.toString(36)}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`
@@ -112,6 +124,23 @@ export function childKey(r: RecordRef, child: string): string {
 // rerunKey: the one re-run of a failed check per round (8.5), by its run id.
 export function rerunKey(r: Life, round: number, runId: string): string {
   return `${lifeKey(r)}/rerun/r${round}/${runId}`
+}
+
+// refusedProbeKey and refusedGoKey: the re-runs of a run GitHub refused to start (rules-refused.ts, 8.5): the
+// probe of period k of a refusal spell, and the one re-run once Actions runs again. Neither matches
+// the round's rerunKey, which stays free for a real failure afterwards.
+export function refusedProbeKey(r: Life, runId: string, k: number): string {
+  return `${lifeKey(r)}/refused/${runId}/p${k}`
+}
+
+export function refusedGoKey(r: Life, runId: string): string {
+  return `${lifeKey(r)}/refused/${runId}/go`
+}
+
+// refusedKeyOf: 'probe' or 'go' for the rest of a refused run's key (after the life), else null.
+export function refusedKeyOf(rest: string): 'probe' | 'go' | null {
+  const m = /^refused\/\d+\/(p\d+|go)$/.exec(rest)
+  return m === null ? null : m[1] === 'go' ? 'go' : 'probe'
 }
 
 // queueKey: Q1's update, by main's head at plan time, or Q2's merge, by the PR's head (9.2, 9.3).

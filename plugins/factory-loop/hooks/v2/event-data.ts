@@ -150,4 +150,19 @@ export type SettingsChangedData = {
 }
 export type SettingsChangedEvent = { state: 'settings_changed'; data: SettingsChangedData }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | CommentPostedEvent | MainStateEvent | SettingsChangedEvent
+// One change in the reading of the Next release milestone (milestone_state.v1): written in the new format
+// alone, for no issue, by `callum-flow-event --type milestone_state --data <json>`; rules-release-log.ts
+// (O5) builds it.
+export type MilestoneStateData = {
+  milestone_closed: number
+  milestone_open: number
+  oldest_closed_at: string | null
+  last_tag: string | null
+  oldest_unreleased_merge_at: string | null
+  expected: 'patch' | 'minor' | 'major' | null
+  holding: boolean
+  hold_reason: string | null
+}
+export type MilestoneStateEvent = { state: 'milestone_state'; data: MilestoneStateData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent | CommentPostedEvent | MainStateEvent | MilestoneStateEvent | SettingsChangedEvent

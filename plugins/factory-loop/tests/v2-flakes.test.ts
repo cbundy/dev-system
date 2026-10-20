@@ -206,6 +206,8 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
       if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: world.head }]) }
       if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return { stdout: JSON.stringify(world.checks) }
       if (line.startsWith(`gh api repos/${REPO}/actions/runs?`)) return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
+      // the failed job ran: it has steps and a runner, so it is a failure of the code, not a refusal
+      if (line === ARGV.runJobsArgv(REPO, RUN).join(' ')) return { stdout: JSON.stringify({ total_count: 1, jobs: [{ id: 1, status: 'completed', conclusion: 'failure', runner_id: 7, runner_name: 'GitHub Actions 7', steps: [{ name: 'test' }] }] }) }
       return undefined
     }
     const h = host(on, {

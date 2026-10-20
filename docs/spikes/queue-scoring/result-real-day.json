@@ -1,0 +1,272 @@
+[
+ {
+  "n": 855,
+  "title": "Flaky: factory-loop driver tests time out at 5 s when the machine is busy",
+  "actual": 1,
+  "proposed": 1,
+  "score": 175,
+  "factors": "Owner priority +100, Bug +25, Factory health +20, Closes epic +25, Size M +5",
+  "claim": "09:40"
+ },
+ {
+  "n": 651,
+  "title": "Factory events: move the factory tools onto the new database",
+  "actual": 2,
+  "proposed": 2,
+  "score": 30,
+  "factors": "Unblocks 2 +20, Epic started +5, Size M (est.) +5",
+  "claim": "11:14"
+ },
+ {
+  "n": 652,
+  "title": "Factory events: rewrite the saved metrics queries on the new view",
+  "actual": 3,
+  "proposed": 4,
+  "score": 15,
+  "factors": "Unblocks 2 +20, Epic started +5, Size XL -10",
+  "claim": "11:15"
+ },
+ {
+  "n": 653,
+  "title": "Factory events: move the claim tools onto the new database",
+  "actual": 4,
+  "proposed": 3,
+  "score": 20,
+  "factors": "Unblocks 1 +10, Epic started +5, Size M (est.) +5",
+  "claim": "11:15"
+ },
+ {
+  "n": 897,
+  "title": "Factory events: dev-query --factory and the shared source switch with shadow records",
+  "actual": 5,
+  "proposed": 5,
+  "score": 41,
+  "factors": "Unblocks 3 +30, Frees 2 further +6, Size M +5",
+  "claim": "11:22"
+ },
+ {
+  "n": 903,
+  "title": "Factory events: shadow_read event type for reader shadow compares",
+  "actual": 6,
+  "proposed": 7,
+  "score": 18,
+  "factors": "Unblocks 1 +10, Frees 1 further +3, Size M +5",
+  "claim": "11:23"
+ },
+ {
+  "n": 904,
+  "title": "dev-query --factory: read the factory database with the reader role",
+  "actual": 7,
+  "proposed": 6,
+  "score": 33,
+  "factors": "Unblocks 1 +10, Frees 1 further +3, Epic started +5, Size S +15",
+  "claim": "11:24"
+ },
+ {
+  "n": 898,
+  "title": "Factory events: callum-flow-factory-state reads the new view, behind old|new|shadow",
+  "actual": 8,
+  "proposed": 8,
+  "score": 25,
+  "factors": "Unblocks 2 +20, Epic started +5, Size L 0",
+  "claim": "11:48"
+ },
+ {
+  "n": 899,
+  "title": "Factory events: callum-flow-evaluate reads new-format events, behind old|new|shadow",
+  "actual": 9,
+  "proposed": 9,
+  "score": 20,
+  "factors": "Unblocks 1 +10, Epic started +5, Size M +5",
+  "claim": "11:48"
+ },
+ {
+  "n": 905,
+  "title": "Claim tools: old/new/shadow source switch for the shared claim rule",
+  "actual": 10,
+  "proposed": 10,
+  "score": 25,
+  "factors": "Unblocks 1 +10, Nearly closes epic +10, Epic started +5, Size L 0",
+  "claim": "12:04"
+ },
+ {
+  "n": 914,
+  "title": "Add callum-flow-evidence-upload to the base image with per-repo Azure credentials",
+  "actual": 11,
+  "proposed": 11,
+  "score": 20,
+  "factors": "Unblocks 2 +20, Size L 0",
+  "claim": "12:37"
+ },
+ {
+  "n": 915,
+  "title": "Point the factory loop, implement-issue and synced CLAUDE.md evidence rules at the upload tool",
+  "actual": 12,
+  "proposed": 12,
+  "score": 40,
+  "factors": "Unblocks 1 +10, Nearly closes epic +10, Epic started +5, Size S +15",
+  "claim": "13:13"
+ },
+ {
+  "n": 901,
+  "title": "Factory events: the factory HUD gets its own source switch, passed to factory-state",
+  "actual": 13,
+  "proposed": 13,
+  "score": 30,
+  "factors": "Unblocks 1 +10, Epic started +5, Size S +15",
+  "claim": "13:21"
+ },
+ {
+  "n": 658,
+  "title": "v2: delete the v1 planner and split register.ts",
+  "actual": 14,
+  "proposed": 14,
+  "score": 10,
+  "factors": "Epic started +5, Size M (est.) +5",
+  "claim": "13:38"
+ },
+ {
+  "n": 926,
+  "title": "v2: delete the v1 planner, its v1-only kinds and the planner/shadow settings",
+  "actual": 15,
+  "proposed": 15,
+  "score": 3,
+  "factors": "Unblocks 1 +10, Frees 1 further +3, Size XL -10",
+  "claim": "13:43"
+ },
+ {
+  "n": 922,
+  "title": "Loop passes slow with a large queue: GitHub issue facts are read one at a time",
+  "actual": 16,
+  "proposed": 16,
+  "score": 55,
+  "factors": "Bug +25, Factory health +20, Epic started +5, Size M +5",
+  "claim": "13:45"
+ },
+ {
+  "n": 906,
+  "title": "Claim tools: read the new database by default after a clean shadow run",
+  "actual": 17,
+  "proposed": 17,
+  "score": 45,
+  "factors": "Closes epic +25, Epic started +5, Size S +15",
+  "claim": "13:46"
+ },
+ {
+  "n": 917,
+  "title": "v2 companion: a stop gate that queues for a turn is cut off after 10 s and logged unknown",
+  "actual": 18,
+  "proposed": 18,
+  "score": 55,
+  "factors": "Bug +25, Factory health +20, Epic started +5, Size M +5",
+  "claim": "13:47"
+ },
+ {
+  "n": 900,
+  "title": "Factory events: heartbeat-state derives busy from new-format events, behind old|new|shadow",
+  "actual": 19,
+  "proposed": 19,
+  "score": 30,
+  "factors": "Unblocks 1 +10, Nearly closes epic +10, Epic started +5, Size M +5",
+  "claim": "13:54"
+ },
+ {
+  "n": 902,
+  "title": "Factory events: flip the factory tools default to the new store after clean shadow runs",
+  "actual": 20,
+  "proposed": 20,
+  "score": 35,
+  "factors": "Closes epic +25, Epic started +5, Size M (est.) +5",
+  "claim": "15:08"
+ },
+ {
+  "n": 927,
+  "title": "v2: split register.ts and the remaining oversized hooks files, empty the size-guard allowlist",
+  "actual": 21,
+  "proposed": 21,
+  "score": 15,
+  "factors": "Unblocks 1 +10, Nearly closes epic +10, Epic started +5, Size XL -10",
+  "claim": "15:28"
+ },
+ {
+  "n": 937,
+  "title": "callum-flow-event records no session id: it reads CLAUDE_SESSION_ID, but Claude Code sets CLAUDE_CODE_SESSION_ID",
+  "actual": 22,
+  "proposed": 22,
+  "score": 160,
+  "factors": "Owner priority +100, Bug +25, Factory health +20, Size S +15",
+  "claim": "15:44"
+ },
+ {
+  "n": 928,
+  "title": "v2: rewrite the v2 SPEC and DECISIONS as built and remove the v1-era docs",
+  "actual": 23,
+  "proposed": 23,
+  "score": 35,
+  "factors": "Closes epic +25, Epic started +5, Size M (est.) +5",
+  "claim": "15:54"
+ },
+ {
+  "n": 943,
+  "title": "v2: fold the v1 spec's foundation into v2 SPEC section 13, delete the v1 spec and make every spec cite resolving",
+  "actual": 24,
+  "proposed": 24,
+  "score": 10,
+  "factors": "Unblocks 2 +20, Size XL -10",
+  "claim": "16:01"
+ },
+ {
+  "n": 942,
+  "title": "callum-flow: a dependency-chain skill that maps an issue's full dependency chain as a doc with clickable links",
+  "actual": 25,
+  "proposed": 25,
+  "score": 0,
+  "factors": "Size L 0",
+  "claim": "16:08"
+ },
+ {
+  "n": 946,
+  "title": "v2 split: the parent stays open as a tracker and keeps blocking the issues it blocked",
+  "actual": 26,
+  "proposed": 26,
+  "score": 55,
+  "factors": "Bug +25, Factory health +20, Epic started +5, Size M (est.) +5",
+  "claim": "16:12"
+ },
+ {
+  "n": 540,
+  "title": "Coder CLI login is lost on restart; persist it only where a workspace opts in",
+  "actual": 27,
+  "proposed": 28,
+  "score": 30,
+  "factors": "Bug +25, Size M (est.) +5",
+  "claim": "16:18"
+ },
+ {
+  "n": 607,
+  "title": "dev-login leaks its internal DL_ variables into login tmux servers",
+  "actual": 28,
+  "proposed": 27,
+  "score": 40,
+  "factors": "Bug +25, Size S +15",
+  "claim": "16:18"
+ },
+ {
+  "n": 952,
+  "title": "Lift the payload fields plant-console's repo line reads into factory.event_log",
+  "actual": 29,
+  "proposed": 29,
+  "score": 115,
+  "factors": "Owner priority +100, Unblocks 1 +10, Size M (est.) +5",
+  "claim": "16:59"
+ },
+ {
+  "n": 944,
+  "title": "v2: rewrite DECISIONS.md to the decisions in force and delete the v1 build records",
+  "actual": 30,
+  "proposed": 30,
+  "score": 30,
+  "factors": "Unblocks 1 +10, Nearly closes epic +10, Epic started +5, Size M (est.) +5",
+  "claim": "17:07"
+ }
+]
