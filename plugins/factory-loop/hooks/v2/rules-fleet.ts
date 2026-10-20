@@ -6,7 +6,7 @@
 // wind-down") and waits only for a pass with nothing else to start; with windDownMinutes 0 it also
 // waits for a queue action or the release task to finish. A running step it cuts re-runs free
 // (row U1). Pure.
-import { gate, releaseDue, skip, wake, want } from '../foundation'
+import { gate, isoOf, releaseDue, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
 import { entryDone, entryItems, reopenedOffNext } from './rules-entry'
@@ -22,6 +22,25 @@ function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
     if (last === undefined || e.endedAt > (last.endedAt ?? 0)) last = e
   }
   return last
+}
+
+// releaseInProgress: the newest release task the judge answered `done` (it started a release) that is still
+// inside the releaseInProgress window and whose tag is still the newest known one; null when none. Its tag
+// is the key's `<tag>` segment: `unknown` ends only by the window, `none` ends once any tag is known.
+export function releaseInProgress(ctx: PlanCtx & { v2: { tag: string | null } }): { entry: LedgerEntry; tag: string } | null {
+  const { state, config } = ctx
+  if (config.releaseInProgressMs <= 0) return null
+  let last: LedgerEntry | undefined
+  for (const e of state.ledger) {
+    if (e.kind !== 'task' || e.wake !== 'release' || e.status !== 'done' || e.endedAt === null) continue
+    if (e.outcome?.kind !== 'wake' || e.outcome.decision !== 'done') continue
+    if (last === undefined || e.endedAt > (last.endedAt ?? 0)) last = e
+  }
+  if (last === undefined || state.now - (last.endedAt ?? 0) >= config.releaseInProgressMs) return null
+  const tag = last.key.split(':')[2] ?? 'unknown'
+  const newest = ctx.v2.tag ?? state.release?.tag ?? null
+  if (newest !== null && tag !== 'unknown' && newest !== tag) return null
+  return { entry: last, tag }
 }
 
 // fleetRules: H2 and O3.
@@ -41,8 +60,11 @@ export function fleetRules(ctx: V2Ctx): void {
   // and one that starts waiting after the hour's review makes one more due, its reason naming it
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains' && c.repo === undefined)).map(r => r.issue).sort((a, b) => a - b)
   for (const a of reopenedOffNext(ctx)) want(ctx, a)
-  const due = releaseDue(state, config, waiting)
-  if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
+  const newest = ctx.v2.tag
+  const due = releaseDue(state, config, waiting, newest)
+  const going = due === null ? null : releaseInProgress(ctx)
+  if (due !== null && going !== null) skip(ctx, 'O3', null, `release in progress: ${going.entry.key} answered done at ${isoOf(going.entry.endedAt ?? 0)}, tag ${going.tag}; until a newer tag or ${isoOf((going.entry.endedAt ?? 0) + config.releaseInProgressMs)}`)
+  else if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
 }
 
 // fleetTells: what used up its attempts with no record to hold (a record's own exhausted effects
