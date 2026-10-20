@@ -126,6 +126,23 @@ export function rerunKey(r: Life, round: number, runId: string): string {
   return `${lifeKey(r)}/rerun/r${round}/${runId}`
 }
 
+// refusedProbeKey and refusedGoKey: the re-runs of a run GitHub refused to start (rules-refused.ts, 8.5): the
+// probe of period k of a refusal spell, and the one re-run once Actions runs again. Neither matches
+// the round's rerunKey, which stays free for a real failure afterwards.
+export function refusedProbeKey(r: Life, runId: string, k: number): string {
+  return `${lifeKey(r)}/refused/${runId}/p${k}`
+}
+
+export function refusedGoKey(r: Life, runId: string): string {
+  return `${lifeKey(r)}/refused/${runId}/go`
+}
+
+// refusedKeyOf: 'probe' or 'go' for the rest of a refused run's key (after the life), else null.
+export function refusedKeyOf(rest: string): 'probe' | 'go' | null {
+  const m = /^refused\/\d+\/(p\d+|go)$/.exec(rest)
+  return m === null ? null : m[1] === 'go' ? 'go' : 'probe'
+}
+
 // queueKey: Q1's update, by main's head at plan time, or Q2's merge, by the PR's head (9.2, 9.3).
 export function queueKey(r: Life, op: 'update' | 'merge', sha: string): string {
   return `${lifeKey(r)}/queue/${op}/${short(sha)}`

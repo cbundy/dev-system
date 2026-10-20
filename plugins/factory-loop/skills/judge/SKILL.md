@@ -206,8 +206,15 @@ Owner items (the title counts them until resolved):
   the release a merged change waits on, or close a kept-open issue. A `roots=unread` tell means the
   blockers could not be read; the lines then give each ready issue's blocker count. It comes again at most
   once a day while the spell lasts.
+- `actions-refused` (job, run, prs, why; detail: GitHub's message, that it is the account and not the code, and
+  the PRs held): GitHub did not start a CI job because the account's payments failed or its spending limit
+  is reached. The loop holds those PRs with no fixer and no re-run spent, re-runs one refused run every 30
+  minutes, and resumes by itself. Lead with `[ACTION]`: the owner fixes billing or raises the spending limit
+  in GitHub's settings; name the PRs held.
 
 Notices:
+- `actions-resumed` (minutes, pr; detail: the job that started): GitHub starts CI jobs again, so the refusal
+  spell ended and the loop re-runs each refused run once. Lead with `[INFO]`; nothing for the owner to do.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this

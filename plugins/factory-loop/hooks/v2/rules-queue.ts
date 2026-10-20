@@ -35,6 +35,7 @@ import type { Gate } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { prKey, rerunKey, short } from './keys'
 import { lifeEntries, triggerOf, unknownOf } from './rules-agent'
+import { refusedLine } from './refused'
 import { releaseHoldOf, utcTime } from './rules-release-hold'
 import { RERUN_ATTEMPTS } from './rules-review'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
@@ -208,6 +209,8 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
     }
     case 'retry':
       return rerun(env, view, ci.runs)
+    case 'refused':
+      return held(refusedLine('merge queue', head, ci.checks))
     case 'pending':
       return wait(env, facts, view, `merge queue: CI runs on ${short(head)} (${ci.done} of ${ci.all} checks done)`)
     case 'none':

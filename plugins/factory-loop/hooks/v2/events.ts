@@ -220,11 +220,16 @@ export function oneLine(text: string): string {
   return line.length <= REASON_MAX ? line : `${line.slice(0, REASON_MAX - 3)}...`
 }
 
-// A ci-rerun's flake row (rules-flakes.ts) also carries flaky, failed_tests, failed_jobs and head; every
+// A ci-rerun's flake row (rules-flakes.ts) also carries flaky, failed_tests, failed_jobs and head, a refused check's row
+// (rules-refused.ts) failed_jobs and head; every
 // other intervention's note is as it always was.
 function interventionNote(e: InterventionEvent): string {
   const base = [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`]
-  if (e.flaky === undefined) return base.join(' ')
+  if (e.flaky === undefined) {
+    // a refused check's row (rules-refused.ts) names its jobs and head without a re-run's result
+    if (e.failed_jobs === undefined && e.head === undefined) return base.join(' ')
+    return [...base, `failed_jobs=${list(e.failed_jobs ?? [])}`, `head=${str(e.head ?? null)}`].join(' ')
+  }
   const flaky = e.flaky === null ? NONE : e.flaky ? 'yes' : 'no'
   return [...base, `flaky=${flaky}`, `failed_tests=${list(e.failed_tests ?? [])}`, `failed_jobs=${list(e.failed_jobs ?? [])}`, `head=${str(e.head ?? null)}`].join(' ')
 }

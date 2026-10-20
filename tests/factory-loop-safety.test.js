@@ -182,8 +182,8 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
   lits.forEach((lit, n) => {
     const t = lit.text;
     const next = lits[n + 1]?.text;
-    // v2's kinds and key family name a re-run (and the companion's gate-rerun cause); none is a command
-    const named = t.replace(/\b(ci|gate)-rerun\b/g, "").replace(/\/rerun\//g, "/");
+    // v2's kinds and key family name a re-run (and the companion's gate-rerun cause, the ci-refused:rerun cause); none is a command
+    const named = t.replace(/\b(ci|gate)-rerun\b|\bci-refused:rerun\b/g, "").replace(/\/rerun\//g, "/");
     if (/(^|[\s=])--yes\b/.test(t)) flag(lit, "--yes");
     if (/\brerun\b/.test(named) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
     if (t === "coder" || /(^|[;&|(]\s*|^\s*)coder\s/.test(t)) flag(lit, "a coder command");

@@ -1480,6 +1480,40 @@ is a new `Reviewer` implementation and a setting, nothing more.
   `window_days`, `first_flake_at` and `filed_issue`, so metrics 2d answers how long a test's first flake
   took to be fixed and how often the cap held a bug. A failed or unread `flakes` source plans nothing for
   F1 and never fails the pass.
+- **Refused jobs.** A failed Actions job GitHub did not start for the account's sake (failed payments,
+  a spending limit) is the account's fault, not the code's, so it is neither red nor green. The `prs`
+  source classifies it: a failed check with a run and a job id (the job id is in its link,
+  `.../actions/runs/<run>/job/<job>`) whose job, in `gh api repos/R/actions/runs/<run>/jobs?filter=latest&per_page=100`,
+  has no steps and no runner (`runner_id` 0 or null, `runner_name` empty) and whose check run has an
+  annotation starting "The job was not started" (`gh api repos/R/check-runs/<job>/annotations`). It gets the
+  bucket `refused` and GitHub's message (`refusedWhy`, clipped to 200 characters). A zero-step failure
+  without that annotation (a bad matrix expression) stays `fail`. One jobs read per failed run not yet
+  classified and one annotations read per such job; a job's classification is kept in memory by job id (a
+  re-run makes a new id); a read that fails or does not parse leaves the PR unread this pass.
+  - The review step (`ciHalf`) and the merge queue's head (`ciOf`) hold on a head with a refused check and
+    no real failure, with a skip line naming the job, the run and GitHub's message. The hold spends no
+    round re-run, starts no fixer, counts toward no fix cap and is not bounded by `ciStartMs` or `ciRunMs`
+    (no `github-wait`): it is an outside block. A real failure beside a refused check still goes red as
+    above. The flake row (`rules-flakes.ts`) ignores refused checks.
+  - Repo-wide, a spell: while a read PR shows a refused check and no spell is open, the loop plans
+    `tell(actions-refused)` (an owner item, no issue, key `tell:actions-refused:<job id of the earliest
+    refused check>`), naming GitHub's message, that it is the account and not the code, the PRs it holds
+    and that the loop resumes by itself; its `loop_entry` carries `decision` `hold` and `decision_reason`.
+    The spell is open from that tell's ledger entry until the notice `actions-resumed` after it. Nothing
+    is parked and no issue is told.
+  - While it is open, every `PROBE_MS` (30 minutes, `rules-refused.ts`) the loop re-runs one refused run,
+    that of the first record in the prs source's order (the queue's head first): `ci-rerun`, key
+    `<life key>/refused/<run id>/p<k>`, k the period of the spell. A `gh run rerun` GitHub refuses leaves
+    the spell open for the next period.
+  - When a read shows a job that started after the spell opened (on any read head, not refused, not
+    skipped), the loop plans the notice `actions-resumed` (not an owner item, key
+    `tell:actions-resumed:<the refused tell's key>`, `decision` `resume`) and re-runs each refused run once,
+    key `<life key>/refused/<run id>/go`. Neither key is the round's `rerunKey`, which stays free for a real
+    failure afterwards, and neither matches the flake row's `rerun/r<round>/<run>`. A run refused again
+    after the resume, with a job that ended after the notice, opens a new spell.
+  - Each refused run is logged once as an `intervention` (cause `ci-refused`, fact `<life key>/refused/<run id>`,
+    the jobs, the head and GitHub's message); the probes and the resume re-runs log `ci-refused:probe` and
+    `ci-refused:rerun`, not `ci-rerun`. Metrics section 9 has the spells query.
 
 ### 8.6 Rounds and the cap
 
@@ -4201,7 +4235,7 @@ deliberately, as one argv.
 | review | `i571/lss1x2k/review/3fa2c1d/r2/a1` |
 | PR | `i571/lss1x2k/s8/pr/ensure`, `.../s12/pr/body/a1` |
 | split child | `i600/lss0q1z/s3/child/b` |
-| CI re-run | `i571/lss1x2k/rerun/r2/18342299123` |
+| CI re-run | `i571/lss1x2k/rerun/r2/18342299123`; of a refused run (8.5): `i571/lss1x2k/refused/18342299123/p2` (a probe), `.../refused/18342299123/go` (on resume) |
 | queue | `i571/lss1x2k/queue/update/9e01b77`, `.../queue/merge/4c2d8aa` |
 | slot | `i571/lss1x2k/lease/1`, `slot/<lease id>/free` |
 | follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
@@ -4244,13 +4278,15 @@ Notices (TELL kinds), owner items first:
 | `rejected` | yes | R1 rejected an issue at its `maxLives`-th life, with why each life ended (6.4) |
 | `wait-unreadable` | yes | E6: a waiting record has an open condition unread (its read failing, or no release tag known) for a whole period; it replaces that period's `waiting` tell |
 | `starved` | yes | S1: the ready queue was starved (all of it unclaimable, nothing queued or in flight, no owner hold) for `starvedNoticeAfterMs`; names each root blocker and why it is not moving; once per spell and 24 h period of it |
+| `actions-refused` | yes | 8.5: GitHub did not start a CI job for the account's sake (payments, a spending limit); once per spell, naming its message and the PRs held; the loop resumes by itself |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
 | `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |
 | `flake-bug` | no | F1: a flake bug was filed (or found) for a test; names the test, its flake count and window, the bug, and whether it was readied or held by `flakeBugReadyCap`, whose owner step is to add `ready` (8.5) |
+| `actions-resumed` | no | 8.5: a job started after a refusal spell opened; the spell ends and the refused runs are re-run once |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
-11 kinds of the loop's own, 8 of them owner items, plus the foundation's.
+14 kinds of the loop's own, 9 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 
