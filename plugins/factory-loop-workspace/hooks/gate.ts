@@ -12,7 +12,7 @@ export const DEFAULT_GATE_WAIT_MS = 30 * 60_000
 
 // Claude Code ends an async agent that makes no progress for CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS
 // (600000 by default on 2.1.304), aborting the signal of the agent's stop hook, so a gate that waits
-// for its turn and then runs outlives its handler at 10 minutes in all (SPEC 10.6; the gate-queue case
+// for its turn and then runs outlives its handler at 10 minutes in all (v2 SPEC 10.6; the gate-queue case
 // of docs/factory-loop/probes/workspace-probe). The companion raises the limit for a writer with gates.
 // (register.ts spells the variable out: the engine wants a literal name in $.env.get and $.env.set)
 // what Claude Code uses when the variable is unset

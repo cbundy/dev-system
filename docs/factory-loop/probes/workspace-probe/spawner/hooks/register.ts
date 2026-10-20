@@ -13,7 +13,7 @@
 //                  agent keeps its slot and its guard
 //   gate-queue-bare   - the agent starts in <run>/slot and finishes at once; the helper's
 //                  classic.SubagentStop then waits about 540 s in host-call slices and runs a
-//                  300 s command, the shape of a queued gate in the companion (SPEC 10.6)
+//                  300 s command, the shape of a queued gate in the companion (v2 SPEC 10.6)
 // Every observation is one JSON line in <run>/log.jsonl.
 import type { EngineInterface, Register } from 'claude-code'
 
