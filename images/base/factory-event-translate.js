@@ -251,6 +251,10 @@ const SPECS = {
     mode: E("off", "observe", "act"),
     planner: E("v1", "v2"),
     pass_every_ms: I(1),
+    observe_mean_ms: opt(nul(I(0))),
+    observe_commands_mean_ms: opt(nul(I(0))),
+    observe_in_process_mean_ms: opt(nul(I(0))),
+    observe_in_process_max_ms: opt(nul(I(0))),
   },
 };
 
@@ -690,15 +694,18 @@ function usage(line) {
 const V1_LOOP_KINDS = ["spawn", "delegate", "judge"];
 const PASSES_KEYS = ["kind", "key", "status", "from", "to", "passes", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting", "acting_mean_ms", "idle_mean_ms", "errors", "mode", "planner", "pass_every_ms"];
 
+// Optional (a loop older than the observe split leaves them out): kept, never needed.
+const OBSERVE_KEYS = ["observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms"];
+
 function passes(line) {
-  const t = strictTokens(line.note ?? null, { keep: PASSES_KEYS, need: PASSES_KEYS });
+  const t = strictTokens(line.note ?? null, { keep: [...PASSES_KEYS, ...OBSERVE_KEYS], need: PASSES_KEYS });
   if (t.get("status") !== "done") miss(`passes status=${t.get("status")} is not done`);
   const from = t.get("from");
   const fromMs = ISO(from) ? Date.parse(from) : NaN;
   if (Number.isNaN(fromMs)) miss(`bad time from=${from}`);
   if (t.get("key") !== `passes:${fromMs}`) miss(`passes key=${t.get("key")} is not passes:<epoch ms of from> (passes:${fromMs})`);
   const ms = (k) => tInt(t, k, true);
-  return {
+  const out = {
     from_at: from,
     to_at: tStr(t, "to"),
     passes: tInt(t, "passes"),
@@ -714,6 +721,8 @@ function passes(line) {
     planner: tStr(t, "planner"),
     pass_every_ms: tInt(t, "pass_every_ms"),
   };
+  for (const k of OBSERVE_KEYS) if (t.has(k)) out[k] = ms(k);
+  return out;
 }
 
 // loop: skips first (they carry tokens the entry does not), then the passes summary, then an entry.

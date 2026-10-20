@@ -966,6 +966,34 @@
           "off"
         ]
       },
+      "observe_commands_mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "observe_in_process_max_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "observe_in_process_mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "observe_mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "p50_ms": {
         "minimum": 0,
         "type": [

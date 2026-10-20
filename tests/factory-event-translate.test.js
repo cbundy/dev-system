@@ -319,6 +319,23 @@ test("passes: a note built by the real passesNote from closeMinute translates to
   }
 });
 
+test("passes: the optional observe tokens are carried when present, left out when absent, none is null, bad values are misses", () => {
+  const base = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
+  const OBSERVE = ["observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms"];
+  const today = translate(base).event.data;
+  for (const k of OBSERVE) assert.ok(!(k in today), `${k} is left out, not null`);
+  const withTokens = (extra) => translate(withNote(base, `${base.note} ${extra}`));
+  const all = withTokens("observe_mean_ms=2600 observe_commands_mean_ms=2300 observe_in_process_mean_ms=300 observe_in_process_max_ms=520").event.data;
+  assert.deepEqual({ ...all }, { ...today, observe_mean_ms: 2600, observe_commands_mean_ms: 2300, observe_in_process_mean_ms: 300, observe_in_process_max_ms: 520 });
+  assert.deepEqual(reader.validateStrict("loop_passes", 1, all), []);
+  const one = withTokens("observe_in_process_max_ms=7").event.data;
+  assert.deepEqual(one, { ...today, observe_in_process_max_ms: 7 });
+  const none = withTokens("observe_mean_ms=none observe_commands_mean_ms=none observe_in_process_mean_ms=none observe_in_process_max_ms=none").event.data;
+  for (const k of OBSERVE) assert.equal(none[k], null);
+  assert.deepEqual(reader.validateStrict("loop_passes", 1, none), []);
+  for (const bad of ["-1", "1.5", "x"]) assert.match(missOf(withNote(base, `${base.note} observe_mean_ms=${bad}`)), /bad number observe_mean_ms=/);
+});
+
 test("passes: an extra token, a missing token, a status other than done and a key not matching from are misses", () => {
   const base = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
   const note = base.note;
