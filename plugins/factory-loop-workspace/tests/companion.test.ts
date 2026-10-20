@@ -83,6 +83,8 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
   on('fs.read', ($, e) => {
     if (e.path.endsWith('/.claude-plugin/plugin.json')) return { value: '{"version":"9.9.9"}' }
     const text = files.get(e.path)
+    // the default cgroup dir answers an empty file (no reading): a throw is slower than the stop gate's timing tests allow
+    if (text === undefined && e.path.startsWith('/sys/fs/cgroup/memory.')) return { value: '' }
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
   })
@@ -467,9 +469,43 @@ describe('the stop gate', () => {
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true, memStartBytes: null, memPeakBytes: null, memLimitBytes: null, memSamples: 0, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true, memStartBytes: null, memPeakBytes: null, memLimitBytes: null, memSamples: 0 },
     ])
+  })
+
+  describe('the gate\'s memory (FACTORY_GATE_CGROUP_DIR)', () => {
+    const STOP = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
+    const NONE = { memStartBytes: null, memPeakBytes: null, memLimitBytes: null, memSamples: 0 }
+
+    test('a readable cgroup puts the start, the peak, the limit and the sample count on the pass line', async ($, on) => {
+      const w = world(on, { env: { FACTORY_GATE_CGROUP_DIR: '/cg' } })
+      w.files.set('/cg/memory.current', '3221225472\n')
+      w.files.set('/cg/memory.max', '17179869184\n')
+      await $.agent.spawn(spawn(BUILD))
+      await $.classic.SubagentStop(STOP)
+      expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', memStartBytes: 3221225472, memPeakBytes: 3221225472, memLimitBytes: 17179869184, memSamples: 2 })
+    })
+
+    test('a limit of max is null; a failing gate carries the fields too', async ($, on) => {
+      const w = world(on, { env: { FACTORY_GATE_CGROUP_DIR: '/cg' }, gates: [{ exitCode: 0, output: '' }, { exitCode: 1, output: 'FAIL x\n' }] })
+      w.files.set('/cg/memory.current', '100')
+      w.files.set('/cg/memory.max', 'max\n')
+      await $.agent.spawn(spawn(BUILD))
+      await $.classic.SubagentStop(STOP)
+      expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-fail', memStartBytes: 100, memPeakBytes: 100, memLimitBytes: null, memSamples: 2 })
+    })
+
+    test('a missing dir writes nulls and a zero count, and the gate\'s result and factory-gate.json are as without the sampler', async ($, on) => {
+      const w = world(on, { env: { FACTORY_GATE_CGROUP_DIR: '/nonexistent' } })
+      await $.agent.spawn(spawn(BUILD))
+      const r = await $.classic.SubagentStop(STOP)
+      expect(r.block).toBeUndefined()
+      expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', ...NONE })
+      const record = JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')
+      expect(record).toMatchObject({ result: 'pass' })
+      expect(Object.keys(record).filter(k => k.startsWith('mem'))).toEqual([])
+    })
   })
 
   for (const [status, clean] of [['', true], [' M a.ts\n', false], ['fail', null]] as const) {
@@ -526,8 +562,12 @@ describe('the stop gate', () => {
       })
       return { promise, go }
     }
+    // the gates' host calls (git, the memory sampler's reads) are real asynchronous hops: yield to the event loop between microtask turns
     const settle = async () => {
-      for (let i = 0; i < 300; i++) await Promise.resolve()
+      for (let i = 0; i < 20; i++) {
+        for (let j = 0; j < 300; j++) await Promise.resolve()
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+      }
     }
     // two writers in one slot's marker: agent-1 and agent-2 both finish
     async function two($: Engine) {
@@ -682,6 +722,24 @@ describe('the stop gate', () => {
       expect(r1.block).toBeUndefined()
       expect(r2.block).toContain('exited 1')
       expect(companionLines(w).map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-fail'])
+    })
+
+    test('a gate that waited out carries no memory fields, the one that ran does', async ($, on) => {
+      const first = deferred()
+      const w = world(on, { env: { FACTORY_GATE_CGROUP_DIR: '/cg' }, marker: { ...withLimit, gateWaitTimeoutMs: 60_000 }, hold: n => (n === 1 ? first.promise : undefined) })
+      w.files.set('/cg/memory.current', '5')
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      await w.clock.advance(60_000)
+      await p2
+      first.go()
+      await p1
+      const [waited, ran] = companionLines(w)
+      expect(waited).toMatchObject({ cause: 'gate-unknown' })
+      expect(Object.keys(waited ?? {}).filter(k => k.startsWith('mem'))).toEqual([])
+      expect(ran).toMatchObject({ cause: 'gate-pass', memStartBytes: 5, memPeakBytes: 5 })
     })
 
     test('a wait past gateWaitTimeoutMs is gate-unknown with the wait\'s why, and the gate never runs; the holder is unaffected', async ($, on) => {

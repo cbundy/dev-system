@@ -87,6 +87,11 @@ export type GateRunData = {
   flaky?: boolean | null
   failed_tests?: string[] | null
   failed_at?: string | null
+  // the container's memory (cgroup memory.current) when the run started, its peak while it ran and
+  // the cgroup's limit, in bytes; left out when not read
+  mem_start_bytes?: number
+  mem_peak_bytes?: number
+  mem_limit_bytes?: number
 }
 export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
 

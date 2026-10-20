@@ -245,6 +245,7 @@ test("a fixer's verdict is logged as the fixer; every other event as the CLI's d
 for (const [name, extra] of [
   ["without the flake fields", {}],
   ["with a flake", { flaky: true, failed_tests: ["group > fails here", "test isolation: database factory_test_x"], failed_at: "2026-10-15T09:10:00.000Z" }],
+  ["with memory readings", { mem_start_bytes: 3221225472, mem_peak_bytes: 5368709120, mem_limit_bytes: 17179869184 }],
 ]) {
   test(`a gate_run ${name} goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema`, () => {
     const data = { ...extra, life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
@@ -269,7 +270,7 @@ for (const [name, extra] of [
     assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
     assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
     // the reader gives the optional flake fields, which an older writer never sends, as null
-    assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { flaky: null, failed_tests: null, failed_at: null, ...data } });
+    assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data: { flaky: null, failed_tests: null, failed_at: null, mem_start_bytes: null, mem_peak_bytes: null, mem_limit_bytes: null, ...data } });
 
   });
 }

@@ -13,6 +13,7 @@ import { INPUT_CLIP, clip, inputOf, promptData, promptReason, transcriptOf, ungu
 import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
 import { runStopGate } from '../hooks/register'
+import { parseCurrent, parseMax, startMemorySampler } from '../hooks/memory'
 import { createTurns } from '../hooks/turns'
 import type { Turn, TurnIo } from '../hooks/turns'
 
@@ -757,5 +758,73 @@ describe('the stop gate hands runGates the engine\'s cut and the wait (10.6)', (
     const out = await second
     if (!out.ran || out.result.result !== 'unknown') throw new Error(`expected an unknown result, got ${JSON.stringify(out)}`)
     expect(out.result.why).toContain('the hook was cut off 11 s after the gate started (7 s waiting, 4 s running)')
+  })
+})
+
+describe('the gate\'s memory sampler', () => {
+  test('the parsers take an integer and nothing else', () => {
+    expect(parseCurrent('123456\n')).toBe(123456)
+    expect(parseCurrent('')).toBeNull()
+    expect(parseCurrent('garbage')).toBeNull()
+    expect(parseCurrent('-5')).toBeNull()
+    expect(parseCurrent('99999999999999999999')).toBeNull()
+    expect(parseCurrent(null)).toBeNull()
+    expect(parseMax('17179869184\n')).toBe(17179869184)
+    expect(parseMax('max\n')).toBeNull()
+    expect(parseMax(null)).toBeNull()
+  })
+
+  // a manual clock and a reader that answers from a list ('fail' throws, a string is the file's text)
+  function rig(readings: (string | 'fail')[], max: string | null = '1000') {
+    let tick: (() => void) | null = null
+    let canceled = false
+    let n = 0
+    const io = {
+      read: async () => {
+        const r = readings[Math.min(n++, readings.length - 1)]
+        if (r === 'fail') throw new Error('EIO')
+        return { current: r ?? null, max }
+      },
+      every: (_ms: number, fn: () => void) => {
+        tick = fn
+        return { cancel: () => void (canceled = true) }
+      },
+    }
+    return { io, fire: async () => { tick?.(); for (let i = 0; i < 10; i++) await Promise.resolve() }, canceled: () => canceled, reads: () => n }
+  }
+
+  test('keeps the start, the peak across rising and falling readings, and the count', async () => {
+    const r = rig(['10', '50', '30', '20'])
+    const s = await startMemorySampler(r.io)
+    await r.fire()
+    await r.fire()
+    expect(await s.stop()).toEqual({ memStartBytes: 10, memPeakBytes: 50, memLimitBytes: 1000, memSamples: 4 })
+  })
+
+  test('a failed or unparsable read counts no sample and is never thrown', async () => {
+    const r = rig(['fail', '40', 'garbage', 'fail'])
+    const s = await startMemorySampler(r.io)
+    await r.fire()
+    await r.fire()
+    expect(await s.stop()).toEqual({ memStartBytes: 40, memPeakBytes: 40, memLimitBytes: 1000, memSamples: 1 })
+  })
+
+  test('no reading worked: all null and zero samples', async () => {
+    const r = rig(['fail'])
+    const s = await startMemorySampler(r.io)
+    expect(await s.stop()).toEqual({ memStartBytes: null, memPeakBytes: null, memLimitBytes: null, memSamples: 0 })
+  })
+
+  test('stop cancels the timer, reads once more, and a tick after it reads nothing', async () => {
+    const r = rig(['1', '2'])
+    const s = await startMemorySampler(r.io)
+    expect(r.canceled()).toBe(false)
+    const out = await s.stop()
+    expect(r.canceled()).toBe(true)
+    const reads = r.reads()
+    await r.fire()
+    expect(r.reads()).toBe(reads)
+    expect(out).toMatchObject({ memStartBytes: 1, memPeakBytes: 2, memSamples: 2 })
+    expect(await s.stop()).toBe(out)
   })
 })

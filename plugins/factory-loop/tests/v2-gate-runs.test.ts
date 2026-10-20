@@ -86,6 +86,18 @@ describe('one gate line, one gate_run', () => {
     ])
   })
 
+  test('an old line without memory fields gives the data it always did; a line with them carries them, a null limit left out', () => {
+    const [plain] = dataOf(text(line()))
+    expect(Object.keys(plain ?? {}).filter(k => k.startsWith('mem_'))).toEqual([])
+    const mem = { memStartBytes: 3221225472, memPeakBytes: 5368709120, memLimitBytes: 17179869184, memSamples: 4 }
+    const [full] = dataOf(text(line(mem)))
+    expect(full).toEqual({ ...plain, mem_start_bytes: 3221225472, mem_peak_bytes: 5368709120, mem_limit_bytes: 17179869184 })
+    const [open] = dataOf(text(line({ ...mem, memLimitBytes: null })))
+    expect(open).toEqual({ ...plain, mem_start_bytes: 3221225472, mem_peak_bytes: 5368709120 })
+    const [bad] = dataOf(text(line({ ...mem, memPeakBytes: -1, memStartBytes: 1.5 })))
+    expect(bad).toEqual({ ...plain, mem_limit_bytes: 17179869184 })
+  })
+
   test('the result follows the cause; no limit is a null concurrency and a null head is kept', () => {
     const got = dataOf(text(line({ cause: 'gate-fail', startedAt: new Date(NOW - 30 * MIN).toISOString() }), line({ cause: 'gate-unknown', head: null, concurrency: null, waitMs: 0, queuedBehind: 0 })))
     expect(got.map(d => d?.result).sort()).toEqual(['fail', 'unknown'])
