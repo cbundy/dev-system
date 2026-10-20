@@ -153,6 +153,15 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
   const compact = timeouts.map(t => `${t.name} ${shortDuration(t.ms)}`)
   const half = Math.ceil(compact.length / 2)
 
+  const weights = Object.entries(c.queueScore).map(([name, v]) => ({ name, text: `${name} ${v}`, from: src(`queueScore.${name}`) }))
+  const scoreFrom = together(weights.map(w => w.from))
+  const scoreChanged = (['repo', 'workspace'] as const)
+    .map(s => ({ s, names: weights.filter(w => w.from === s).map(w => w.name) }))
+    .filter(g => g.names.length > 0)
+    .map(g => `${g.s}: ${g.names.join(' ')}`)
+  const scoreLines: string[] = []
+  for (let i = 0; i < weights.length; i += 3) scoreLines.push(clip(`    ${weights.slice(i, i + 3).map(w => w.text).join(' ')}`))
+
   const groups: [string, string[]][] = [
     [
       'Loop',
@@ -181,6 +190,8 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('readyLabel', 'readyLabel', c.readyLabel)),
         ...render(row('priorityLabel', 'priorityLabel', c.priorityLabel)),
         ...render(row('skipLabels', 'skipLabels', c.skipLabels.length === 0 ? 'none' : c.skipLabels.join(', '))),
+        ...render({ label: 'queueScore', value: '', source: scoreFrom, ...(scoreFrom === 'mixed' && scoreChanged.length > 0 ? { note: scoreChanged.join('; ') } : {}) }),
+        ...scoreLines,
       ],
     ],
     [

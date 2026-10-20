@@ -24,7 +24,9 @@ import { gate, skip, wake, want } from '../foundation'
 import type { IssueView, LedgerEntry, Ms } from '../types'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
-import { livesBefore } from './lives'
+import { failedLivesBefore, livesBefore } from './lives'
+import { claimableAt, compareRanked, score, scoreReason } from './score'
+import type { ScoreCtx, ScoreResult } from './score'
 import { ROW_S0, ROW_S7, madeRecord } from './table'
 import type { Claimed } from './table'
 import { REJECTED_LABEL, sameLabel } from './types'
@@ -225,18 +227,31 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const only = onlyIssues(ctx, issues)
   for (const n of only) if (!state.queue.includes(n)) skip(ctx, 'S1', n, 'owner: only names it, but it is not in the ready queue')
   const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
-  const rest = [...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)
-  const labelled = (n: number) => issues.get(n)?.labels?.some(l => sameLabel(l, config.priorityLabel)) === true
+  const rest = [...state.queue].filter(n => !listed.includes(n))
   const listedTier = control.only.length > 0 ? 'owner only' : 'owner priority'
-  // the label only changes the order: every filter and limit below applies to a labelled issue as to any
-  const order: Array<[number, string]> = [
-    ...listed.map((n): [number, string] => [n, listedTier]),
-    ...rest.filter(labelled).map((n): [number, string] => [n, `label ${config.priorityLabel}`]),
-    ...rest.filter(n => !labelled(n)).map((n): [number, string] => [n, 'number']),
-  ]
   const live = ctx.v2.records.filter(r => r.state !== 'closed')
   const firsts = firstClaims(ctx)
   const inFlight = inFlightClaims(ctx)
+  // the order: the owner's list first, then by score (score.ts); the label only changes the order, and every filter and limit below applies to a labelled issue as to any
+  const scoreCtx: ScoreCtx = {
+    now: state.now,
+    weights: config.queueScore,
+    priorityLabel: config.priorityLabel,
+    held: new Set([...live.map(r => r.issue), ...inFlight]),
+    blocking: n => state.blockGraph?.[n] ?? null,
+    failedLives: n => failedLivesBefore(ctx.v2.records, state.ledger, n),
+  }
+  const scoredOf = (n: number): ScoreResult => {
+    const issue = issues.get(n)
+    return issue === undefined ? { score: 0, factors: [] } : score(issue, scoreCtx)
+  }
+  const ranked = rest
+    .map(n => ({ issue: n, ...scoredOf(n), claimableAt: ((i: IssueView | undefined) => (i === undefined ? null : claimableAt(i)))(issues.get(n)) }))
+    .sort(compareRanked)
+  const order: Array<[number, string, ScoreResult]> = [
+    ...listed.map((n): [number, string, ScoreResult] => [n, listedTier, scoredOf(n)]),
+    ...ranked.map((r): [number, string, ScoreResult] => [r.issue, scoreReason(r), { score: r.score, factors: r.factors }]),
+  ]
   const held = live.filter(r => r.state !== 'parked' && r.state !== 'waiting').length + inFlight.size
   const cap = config.maxInFlightIssues
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
@@ -244,7 +259,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   // the starved verdict (rules-starved.ts): true while every queue issue ends at a claim filter
   const verdict: StarvedVerdict = { starved: false, skips: new Map(), blocked: [] }
   let past = false
-  for (const [n, orderTier] of order) {
+  for (const [n, orderText, scored] of order) {
     const record = live.find(r => r.issue === n)
     if (record !== undefined) {
       past = true
@@ -292,7 +307,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
       skip(ctx, 'S1', n, limit)
       continue
     }
-    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderTier})`, issue: n }) === 'go') started += 1
+    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderText})`, issue: n, score: scored }) === 'go') started += 1
   }
   verdict.starved = state.queue.length > 0 && !past && held === 0 && handled.size === 0 && !control.noNewWork && control.only.length === 0 && tier !== 'stop-new' && tier !== 'stop-all'
   ctx.starved = verdict

@@ -122,17 +122,17 @@ describe('S1: claims', () => {
     const r = plan(world([], { queue: [1, 2, 3, 4], issues }), cfg)
     expect(claims(r).map(a => a.issue)).toEqual([3, 1, 2, 4])
     expect(claims(r).map(a => a.reason)).toEqual([
-      'ready and unblocked (order: label priority)',
-      'ready and unblocked (order: number)',
-      'ready and unblocked (order: number)',
-      'ready and unblocked (order: number)',
+      'ready and unblocked (order: score 30: priority-label +30)',
+      'ready and unblocked (order: score 0)',
+      'ready and unblocked (order: score 0)',
+      'ready and unblocked (order: score 0)',
     ])
     // the owner's priority list goes first, then the label
     const listed = plan(world([], { queue: [1, 2, 4], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(4)], control: control({ priority: [4] }) }), cfg)
     expect(claims(listed).map(a => [a.issue, a.reason])).toEqual([
       [4, 'ready and unblocked (order: owner priority)'],
-      [2, 'ready and unblocked (order: label priority)'],
-      [1, 'ready and unblocked (order: number)'],
+      [2, 'ready and unblocked (order: score 30: priority-label +30)'],
+      [1, 'ready and unblocked (order: score 0)'],
     ])
     // `only` wins: the label never widens it
     const only = plan(world([], { queue: [1, 2], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] })], control: control({ only: [1] }) }), cfg)
@@ -143,6 +143,59 @@ describe('S1: claims', () => {
     expect(claims(upper).map(a => a.issue)).toEqual([2, 1])
     const urgent = world([], { queue: [1, 2, 3], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(3, { labels: ['ready', 'urgent'] })] })
     expect(claims(plan(urgent, { ...cfg, priorityLabel: 'urgent' })).map(a => a.issue)).toEqual([3, 1, 2])
+  })
+
+  test('the rest go by score: a bug that unblocks outranks a priority label, a tie goes to the oldest claimable then the lowest number; the owner lists stay first; every claim carries its score', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter((a): a is Extract<Action, { kind: 'claim' }> => a.kind === 'claim')
+    const issues = [
+      issue(1),
+      issue(2, { readyAt: NOW - 2 * HOUR }),
+      issue(3, { labels: ['ready', 'priority'] }),
+      issue(4, { labels: ['ready', 'bug'], blockingList: [90, 91] }),
+      issue(5, { labels: ['ready', 'priority', 'bug'] }),
+      issue(6, { labels: ['ready'] }),
+    ]
+    const r = plan(world([], { queue: [1, 2, 3, 4, 5, 6], issues }), cfg)
+    expect(claims(r).map(a => [a.issue, a.reason, a.score])).toEqual([
+      [5, 'ready and unblocked (order: score 55: priority-label +30, bug +25)', { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] }],
+      [4, 'ready and unblocked (order: score 45: bug +25, unblocks +20)', { score: 45, factors: [{ name: 'bug', points: 25 }, { name: 'unblocks', points: 20 }] }],
+      [3, 'ready and unblocked (order: score 30: priority-label +30)', { score: 30, factors: [{ name: 'priority-label', points: 30 }] }],
+      [2, 'ready and unblocked (order: score 4: waiting +4)', { score: 4, factors: [{ name: 'waiting', points: 4 }] }],
+      [1, 'ready and unblocked (order: score 0)', { score: 0, factors: [] }],
+      [6, 'ready and unblocked (order: score 0)', { score: 0, factors: [] }],
+    ])
+    // the owner's priority list stays first and in its order, though the rest outscore it
+    const listed = claims(plan(world([], { queue: [1, 2, 3, 4, 5, 6], issues, control: control({ priority: [6, 1] }) }), cfg))
+    expect(listed.map(a => [a.issue, a.reason])).toEqual([
+      [6, 'ready and unblocked (order: owner priority)'],
+      [1, 'ready and unblocked (order: owner priority)'],
+      [5, 'ready and unblocked (order: score 55: priority-label +30, bug +25)'],
+      [4, 'ready and unblocked (order: score 45: bug +25, unblocks +20)'],
+      [3, 'ready and unblocked (order: score 30: priority-label +30)'],
+      [2, 'ready and unblocked (order: score 4: waiting +4)'],
+    ])
+    expect(listed.every(a => a.score !== undefined)).toBe(true)
+    // `only` is its own tier, scored too
+    const only = claims(plan(world([], { queue: [1, 5], issues, control: control({ only: [1] }) }), cfg))
+    expect(only.map(a => [a.issue, a.reason, a.score])).toEqual([[1, 'ready and unblocked (order: owner only)', { score: 0, factors: [] }]])
+  })
+
+  test('the score reads what the pass knows: a sibling in the factory starts the epic, earlier lives that did not merge count against, and the block graph walks the chain', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter((a): a is Extract<Action, { kind: 'claim' }> => a.kind === 'claim')
+    const epic = { parent: 9, siblings: [{ number: 60, open: true }, { number: 61, open: true }] }
+    const issues = [issue(10, epic), issue(11, { blockingList: [20] })]
+    const s = world([rec(60)], { queue: [10, 11], issues: [...issues, issue(60)] })
+    const started = claims(plan(s, cfg))
+    expect(started.find(a => a.issue === 10)?.score).toEqual({ score: 10, factors: [{ name: 'epic-started', points: 10 }] })
+    const chain = claims(plan({ ...s, blockGraph: { 20: [21, 22], 21: [22], 22: [] } }, cfg))
+    expect(chain.find(a => a.issue === 11)?.score).toEqual({ score: 20, factors: [{ name: 'unblocks', points: 20 }] })
+    expect(claims(plan(s, cfg)).find(a => a.issue === 11)?.score).toEqual({ score: 10, factors: [{ name: 'unblocks', points: 10 }] })
+    const failed = rec(12, { life: lifeOf(NOW - 5 * HOUR), state: 'closed', step: null, why: 'dropped' })
+    const again = claims(plan(world([failed], { queue: [12], issues: [issue(12)] }), cfg))
+    expect(again[0]?.score).toEqual({ score: -10, factors: [{ name: 'failed-lives', points: -10 }] })
+    expect(again[0]?.reason).toBe('ready and unblocked (order: score -10: failed-lives -10)')
   })
 
   test('the priority label only orders: the capacity, the filters and unread labels apply as to any issue', () => {
@@ -202,9 +255,10 @@ describe('S1: claims', () => {
     const lost = done(claimKey(42, old), 'claim', { issue: 42, startedAt: NOW - 5 * MIN, outcome: { kind: 'claim', result: 'lost' } })
     const s = withLedger(world([dropped], { queue: [40, 41, 42], issues: [issue(40), issue(41), issue(42)], control: control({ dropped: [{ issue: 40, at: NOW - 3 * HOUR }] }) }), [failed, lost])
     const r = plan(s, { ...CFG, maxInFlightIssues: null })
+    // #40 had a life that ended dropped, so failed-lives -10 puts it after #41
     expect(r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.key])).toEqual([
-      [40, claimKey(40, lifeOf(NOW))],
       [41, claimKey(41, old)],
+      [40, claimKey(40, lifeOf(NOW))],
     ])
     expect(said(r, 42)).toContain('another device holds it')
     // queued again after the lost claim: a new claim
@@ -1532,6 +1586,12 @@ describe('the record\'s executors (act-state.ts)', () => {
     const again = actWorld([])
     expect(await again.run({ ...claim, rule: 'H1' })).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'claimed' } })
     expect(again.argvs).toEqual([['callum-flow-claim', '130']])
+    // a scored claim (S1) runs under env CALLUM_FLOW_CLAIM_SCORE, which the claim tool records on the claimed event
+    const score = { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] }
+    const scored = actWorld([], argv => (argv[0] === 'gh' ? { stdout: '[]' } : {}))
+    expect(await scored.run({ ...claim, score })).toMatchObject({ status: 'done', outcome: { kind: 'adopt' } })
+    expect(scored.argvs[0]).toEqual(['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify(score)}`, 'callum-flow-claim', '130'])
+    expect(JSON.parse((scored.argvs[0]?.[1] ?? '').slice('CALLUM_FLOW_CLAIM_SCORE='.length))).toEqual(score)
     expect(issueBranch('feat/issue-130', 130)).toBe(true)
     expect(issueBranch('issue-1300', 130)).toBe(false)
     expect(openPrsOf('nope', 130)).toBeNull()

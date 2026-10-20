@@ -58,6 +58,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   maxAttempts: 'next-pass',
   retryBackoffMs: 'next-pass',
   rateCaps: 'next-pass',
+  queueScore: 'next-pass',
   allowActOutsideOrchestrator: 'next-pass',
   trace: 'next-pass',
   traceMaxBytes: 'next-pass',

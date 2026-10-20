@@ -195,7 +195,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
   })
 
   test('a GitHub rate limit holds the pass\'s later GitHub writes, not its agents (v2 SPEC 13.10 item 2)', async () => {
-    const f = fake([], argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: RATE } : {}))
+    const f = fake([], argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: RATE } : {}))
     const report = await runActions(f.env, state(), [claim, closer, judge])
     expect(report.rateLimited).toBe(true)
     expect(report.outcomes.map(o => [o.key, o.status])).toEqual([
@@ -227,7 +227,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     let checks = 0
     // the switch is created while the claim runs
     const f = fake([], argv => {
-      if (argv[0] === 'callum-flow-claim') off = true
+      if (argv.includes('callum-flow-claim')) off = true
       return {}
     })
     f.env.killed = async () => {
@@ -304,7 +304,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     const replaced = { ...entry(claim.key, 'claim', { class: 'start', issue: 470, status: 'running', attempts: 2, startedAt: NOW + 1, endedAt: null }) }
     f = fake([], argv => {
       // a later attempt took the key meanwhile
-      if (argv[0] === 'callum-flow-claim') f.env.live.ledger = [replaced]
+      if (argv.includes('callum-flow-claim')) f.env.live.ledger = [replaced]
       return {}
     })
     await runActions(f.env, state(), [claim])

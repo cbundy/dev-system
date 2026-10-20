@@ -701,15 +701,67 @@ GROUP BY device;
 
 ### Claim order
 
-S1 names the tier a claim came from in its reason (`ready and unblocked (order: label priority)`).
-How many claims each tier gave per day, and which issues the label promoted, from the decision log
-(`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device):
+S1 names the order a claim came from in its reason: `ready and unblocked (order: owner only)` or
+`(order: owner priority)` for the owner's lists, else `(order: score <n>: <factor> <+/-points>, ...)`
+(`score 0` when no factor scored). The factors are `priority-label`, `bug`, `unblocks`, `closes-epic`,
+`nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`. How many claims each order gave
+per day, grouped by the owner tiers and `score`, and which factors put the issues first, from the
+decision log (`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device); a loop
+before the score reads `label priority` and `number`, and groups apart:
 
 ```sh
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "S1" and (.reason | test("order:")))
-  | {day: ($d.at | tostring | .[0:10]), tier: (.reason | capture("order: (?<t>[^)]*)").t), issue}]
-  | group_by([.day, .tier])[] | "\(.[0].day) \(.[0].tier): \(length) \(map(.issue) | @json)"' \
+  | {day: ($d.at | tostring | .[0:10]), order: (.reason | capture("order: (?<t>[^)]*)").t), issue}
+  | .tier = (.order | if startswith("score") then "score" else . end)
+  | .factors = (.order | if startswith("score") then ((capture("score -?[0-9]+: (?<f>.*)").f // "") | split(", ")) else [] end)]
+  | group_by([.day, .tier])[] | "\(.[0].day) \(.[0].tier): \(length) \(map({issue, factors}) | @json)"' \
   /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+Does a high score merge sooner, in fewer lives? The `claimed` event records the claim's `score` and
+`factors` in the event's `data` (read from `factory.event_store`, as no `event_log` column lifts them; events from a loop before the score carry none and stay out). One row per scored
+claim, with the seconds to its issue's next `merged` (null if none yet) and how many `claimed` events
+the issue has (its lives). Bucket by `score`, then count, take the median of `claim_to_merge_s` and
+the mean of `lives` in code (percentiles and medians are not SQL):
+
+```sql
+SELECT c.repo, c.issue, c.ts AS claimed_at, (s.data->>'score')::int AS score, s.data->'factors' AS factors,
+  extract(epoch FROM (m.ts - c.ts)) AS claim_to_merge_s,
+  count(*) OVER (PARTITION BY c.repo, c.issue) AS lives
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+LEFT JOIN LATERAL (
+  SELECT min(ts) AS ts FROM factory.event_log
+  WHERE type = 'merged' AND repo = c.repo AND issue = c.issue AND ts > c.ts
+) m ON true
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NULL
+ORDER BY c.ts;
+```
+
+Did the score change how long ready work waits for a claim? One row per claim with the seconds from
+the issue's last `ready` to its `claimed` and the plugin version the claim ran under; take the median
+per `plugin_version` in code and compare the versions before and after the release that brought the
+score (an issue with no `ready` event drops out). The second query is the loop's mean pass time per
+plugin version from `loop_passes`, weighted by passes, which should not move:
+
+```sql
+SELECT c.plugin_version, c.repo, c.issue, c.ts AS claimed_at,
+  extract(epoch FROM (c.ts - r.ts)) AS time_to_claim_s
+FROM factory.event_log c
+JOIN LATERAL (
+  SELECT max(ts) AS ts FROM factory.event_log
+  WHERE type = 'ready' AND repo = c.repo AND issue = c.issue AND ts <= c.ts
+) r ON r.ts IS NOT NULL
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL
+ORDER BY c.ts;
+```
+
+```sql
+SELECT plugin_version, sum(passes) AS passes, round(sum(mean_ms * passes)::numeric / sum(passes)) AS mean_pass_ms
+FROM factory.event_log
+WHERE type = 'loop_passes' AND passes > 0
+GROUP BY plugin_version
+ORDER BY min(ts);
 ```
 
 ### Split trackers closed by the loop

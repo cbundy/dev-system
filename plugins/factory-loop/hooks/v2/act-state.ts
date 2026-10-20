@@ -251,7 +251,7 @@ function held(n: number, exec: Exec): Exec {
 const claim: Executor = async (ctx, action) => {
   if (action.kind !== 'claim' || action.issue === null) return refused('a claim names an issue')
   const n = action.issue
-  const argv = ARGV.claimArgv(n)
+  const argv = ARGV.claimArgv(n, action.score)
   const ran = await run(ctx, argv, CLAIM_MS)
   if (!ran.ok) return ran.exec
   if (ran.r.exitCode === 3) {

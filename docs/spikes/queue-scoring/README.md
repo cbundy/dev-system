@@ -29,6 +29,8 @@ list, then lowest issue number)?
 
 `probe.js` was run from `/tmp` against the fetched issue JSON; its paths point there.
 
+`result-this-score.json` pins the "all ready at once" order the shipped score (`plugins/factory-loop/hooks/v2/score.ts`, default weights, no size factor) gives; `tests/factory-loop-score-backtest.test.js` drains `facts.json` with the real code and compares it to this file and to `result-all-ready.json`.
+
 ## Results
 
 - Today's order rarely holds work up: 28 of 30 issues were claimed within 5 minutes of becoming

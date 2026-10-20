@@ -122,6 +122,10 @@ export function buildState(o: Observed): State {
       }
     })
 
+  // every read issue's open blocked issues, the chain issues outside `issues` too (the claim score's transitive count)
+  const blockGraph: Record<number, number[]> = {}
+  for (const [n, g] of o.github) if (g.facts?.blockingList != null) blockGraph[n] = g.facts.blockingList
+
   const runs = o.runs ?? (o.factory !== null && o.facts !== null ? runsFromEvents(o.factory, o.facts) : [])
   return {
     now: o.now,
@@ -143,6 +147,7 @@ export function buildState(o: Observed): State {
     lastTitleAt: o.lastTitleAt,
     githubBackoffUntil: o.githubBackoffUntil,
     checkout: o.checkout ?? null,
+    blockGraph,
   }
 }
 

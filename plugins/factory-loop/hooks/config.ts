@@ -76,6 +76,21 @@ export const DEFAULT_CONFIG: Config = {
   },
   retryBackoffMs: 2 * MIN,
   rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
+  // the claim score's weights (v2/score.ts); penalties are magnitudes
+  queueScore: {
+    priorityLabel: 30,
+    bug: 25,
+    unblocksDirect: 10,
+    unblocksTransitive: 5,
+    unblocksCap: 40,
+    closesEpic: 20,
+    nearlyClosesEpic: 10,
+    epicStarted: 10,
+    waitingPerHour: 2,
+    waitingCap: 20,
+    failedLife: 10,
+    failedLivesCap: 30,
+  },
   allowActOutsideOrchestrator: false,
   // off: the decision log alone carries each pass's time and trigger (#552)
   trace: false,
@@ -199,7 +214,7 @@ export const ACTION_KINDS: readonly ActionKind[] = [
 // maxAttempts may name any action kind or agent type.
 export const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
 export const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
-export const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
+export const COUNT_MAPS = ['maxAttempts', 'rateCaps', 'queueScore'] as const
 
 // The settings the layers give, and what was wrong with them.
 export type LoadedConfig = { config: Config; problems: string[] }
@@ -237,6 +252,7 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
     stateTimeoutMs: { ...d.stateTimeoutMs },
     maxAttempts: { ...d.maxAttempts },
     rateCaps: { ...d.rateCaps },
+    queueScore: { ...d.queueScore },
     gateCommands: [...d.gateCommands],
   }
   const defaults = d as unknown as Record<string, unknown>

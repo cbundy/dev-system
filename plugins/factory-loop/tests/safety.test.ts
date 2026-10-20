@@ -448,6 +448,7 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['agent-step', ARGV.isAncestorArgv('abc1234', 'def5678')],
   ['agent-step', ARGV.implementerRouteArgv(470)],
   ['claim', ARGV.claimArgv(470)],
+  ['claim', ARGV.claimArgv(470, { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] })],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
   ['slot', ARGV.slotLeaseArgv(470, LIFE)],
   ['slot', ARGV.slotPrepareArgv(SLOT, 'lease-2', 'issue-470', '{"v":1}')],

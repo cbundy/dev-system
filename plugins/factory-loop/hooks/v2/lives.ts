@@ -94,3 +94,18 @@ export function claimedAt(life: string): string {
   const at = lifeAt(life)
   return at === null ? 'at an unknown time' : `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`
 }
+
+const MERGED_WHY: readonly ClosedWhy[] = ['merged', 'merged-by-hand', 'done']
+
+// failedLivesBefore: the issue's lives since the count last started that did not end merged (a
+// record whose why is merged, merged-by-hand or done); an R1 release counts as failed. The queue
+// score's failed-lives factor reads it, with the start rule of livesBefore.
+export function failedLivesBefore(records: readonly IssueRecord[], ledger: readonly LedgerEntry[], issue: number): number {
+  const all = knownLives(records, ledger, issue)
+  let start = 0
+  all.forEach((l, i) => {
+    if (l.rejected) start = i + 1
+  })
+  const merged = new Set(records.filter(r => r.issue === issue && r.state === 'closed' && r.why !== null && MERGED_WHY.includes(r.why)).map(r => r.life))
+  return all.slice(start).filter(l => !merged.has(l.life)).length
+}
