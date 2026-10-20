@@ -1610,6 +1610,18 @@ FROM judged j FULL JOIN turned t ON j.week = t.week
 ORDER BY 1 DESC;
 ```
 
+Why the judge held, per week (the release wake's reason, one line of at most 200 characters, read
+from `event_store` as `decision_reason` is not a column):
+
+```sql
+SELECT date_trunc('week', l.ts)::date AS week, s.data->>'decision_reason' AS reason, count(*) AS holds
+FROM factory.event_log l
+JOIN factory.event_store s ON s.event_id = l.event_id
+WHERE l.type = 'loop_entry' AND l.wake = 'release' AND l.decision = 'hold'
+GROUP BY 1, 2
+ORDER BY 1 DESC, 3 DESC;
+```
+
 ## Main after merge
 
 Reads the `main_state` events. The factory loop writes one (rule M1) when the state of the default

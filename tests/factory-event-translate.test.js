@@ -258,6 +258,35 @@ describe("loop_entry decision and decision_reason", () => {
   });
 });
 
+describe("loop_entry decision_reason from the real loopNote", () => {
+  const taskLine = () => sample("loop", (l) => /kind=task/.test(l.note ?? ""));
+  const noteOf = async (reason, key = "task:release:2:none") => {
+    const { loopNote } = await import(path.join(HOOKS, "derive.ts"));
+    return loopNote({
+      kind: "task", key, status: "done", attempts: 1, class: "drive", rule: "O3", startedAt: 1792184909172,
+      endedAt: 1792185127762, wake: "release", issue: null, run: null, pr: null, head: null,
+      outcome: { kind: "wake", decision: "hold", reason, instructions: null, bump: null, bumpReason: null, fields: {} },
+    });
+  };
+  test("a reason with spaces and % comes through whole", async () => {
+    const reason = "not ready: 100% of the gate, 2 open";
+    const r = translate({ ...taskLine(), note: await noteOf(reason) });
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, r.event.data), []);
+    assert.equal(r.event.data.decision, "hold");
+    assert.equal(r.event.data.decision_reason, reason);
+  });
+  test("a shortened reason is at most 200 characters", async () => {
+    const note = await noteOf("a%".repeat(100), `task:release:2:${"k".repeat(130)}`);
+    const r = translate({ ...taskLine(), note });
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, r.event.data), []);
+    assert.equal(r.event.data.decision, "hold");
+    assert.ok(r.event.data.decision_reason.length <= 200);
+    assert.ok(r.event.data.decision_reason.endsWith("..."));
+  });
+});
+
 test("passes: a note built by the real passesNote from closeMinute translates to a valid loop_passes", () => {
   const minute = Date.UTC(2026, 9, 17, 0, 46);
   const settings = { mode: "act", planner: "v2", passEveryMs: 10000 };

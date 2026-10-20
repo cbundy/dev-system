@@ -1070,6 +1070,9 @@ notes use (`loopNote` and its inverse `entryFromLoop` in `derive.ts`;
   clipped: each field is bounded where it is made (the table keeps a question to 2000
   characters and at most 8 notes of 1000; a reason is one line of 200), and `callum-flow-event`
   and `factory.events` put no bound on a note. So a note carries every field whole.
+  The `loop` note is the exception: it stays within 500 characters (`LOOP_NOTE_MAX`), and a wake's outcome
+  ends with `reason=` (one line of at most 200), shortened and then dropped to keep the note within 500
+  before the outcome is dropped. The translator maps it to `loop_entry.decision_reason`.
 - `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
   and `status=` for `loop` (`images/base/callum-flow-event`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
