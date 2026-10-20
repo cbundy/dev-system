@@ -45,6 +45,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   maxInFlightIssues: 'next-pass',
   worktreeReserve: 'next-pass',
   reviewFixCap: 'next-pass',
+  conflictFixCap: 'next-pass',
   guardRecheckMs: 'next-pass',
   guardTtlMs: 'next-pass',
   respondSettleMs: 'next-pass',

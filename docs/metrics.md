@@ -600,6 +600,25 @@ WHERE type = 'transition' AND table_row = 'T17'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
+### Fix rounds caused by other merges
+
+A conflict, or red CI in the merge queue, is charged to its own cap (`conflictFixCap`) apart from the
+PR's own fix rounds (v2 SPEC 8.6). This counts per repo and week the fix rounds other merges caused
+(via `fix:conflict`, or `fix:ci` from the merge queue) and the parks at the conflict cap (via
+`fix-cap:conflict`, or `fix-cap:ci` from the merge queue), to show whether the separate cap still
+parks busy days.
+
+```sql
+SELECT repo, date_trunc('week', seq_at) AS week,
+       count(*) FILTER (WHERE table_row = 'T9') AS conflict_rounds,
+       count(*) FILTER (WHERE table_row = 'T10') AS conflict_cap_parks
+FROM factory.event_log
+WHERE type = 'transition'
+  AND ((table_row = 'T9' AND (via = 'fix:conflict' OR (via = 'fix:ci' AND from_state = 'merge-queue')))
+    OR (table_row = 'T10' AND (via = 'fix-cap:conflict' OR (via = 'fix-cap:ci' AND from_state = 'merge-queue'))))
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ### Split children parked on their open decision
 
 A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).

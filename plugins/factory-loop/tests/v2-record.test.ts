@@ -159,6 +159,16 @@ describe('the rebuild from the new store (recordsFromNewRows, source new)', () =
     expect(recordsFromNewRows(rows)).toEqual([A, B, C])
   })
 
+  test('a payload without conflicts, or with null, reads 0; one with a count keeps it', () => {
+    const D = record(10, { seq: 2, state: 'fixing', step: 'fix', pr: 12, conflicts: 2 })
+    const row = transitionRow(D, NOW - DAY)
+    expect(recordsFromNewRows([row])).toEqual([D])
+    const data = JSON.parse(row.data) as Record<string, unknown>
+    const { conflicts: _c, ...without } = data
+    expect(recordsFromNewRows([{ ...row, data: JSON.stringify(without) }])).toEqual([{ ...D, conflicts: 0 }])
+    expect(recordsFromNewRows([{ ...row, data: JSON.stringify({ ...data, conflicts: null }) }])).toEqual([{ ...D, conflicts: 0 }])
+  })
+
   test('the newest life, then the highest seq wins; a record closed past the keep time goes', () => {
     const older = { ...A, seq: 2 }
     const newerLife = record(7, { life: lifeOf(NOW - DAY), seq: 1 })

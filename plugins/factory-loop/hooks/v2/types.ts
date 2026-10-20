@@ -118,8 +118,11 @@ export type IssueRecord = {
   cut: boolean
   // triage calls in this life, at most maxTriages
   triages: number
-  // entries to fixing in this life, at most fixCap
+  // entries to fixing in this life for a round not caused by other merges, at most reviewFixCap
   fixes: number
+  // entries to fixing in this life for a round caused by other merges (a conflict, or red CI in
+  // the merge queue), at most conflictFixCap
+  conflicts: number
   // entries to reviewing in this life
   round: number
   // parked: the question for the owner

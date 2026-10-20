@@ -15,6 +15,7 @@ import { NOW, config } from './fixtures'
 
 const CFG = config()
 const FIX_CAP = CFG.reviewFixCap
+const CONFLICT_CAP = CFG.conflictFixCap
 const MAX_TRIAGES = CFG.maxTriages
 const HEAD = '9e01b77c0ffee0000000000000000000000000aa'
 
@@ -43,11 +44,13 @@ function records(): IssueRecord[] {
         for (const cut of [false, true]) {
           for (const triages of [0, MAX_TRIAGES - 1, MAX_TRIAGES]) {
             for (const fixes of [0, FIX_CAP - 1, FIX_CAP]) {
-              for (const pr of [null, 512]) {
-                for (const head of [null, HEAD]) {
-                  const resumeTo: IssueState | null = state === 'queued' ? (pr === null ? null : 'reviewing') : state === 'parked' ? 'building' : state === 'waiting' ? 'designing' : null
-                  const wait = state === 'waiting' ? [{ kind: 'issue-closed' as const, issue: 57 }, { kind: 'pr-merged' as const, pr: 812 }] : null
-                  out.push({ ...base, state, step, attempt, cut, triages, fixes, pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null, wait })
+              for (const conflicts of [0, CONFLICT_CAP - 1, CONFLICT_CAP]) {
+                for (const pr of [null, 512]) {
+                  for (const head of [null, HEAD]) {
+                    const resumeTo: IssueState | null = state === 'queued' ? (pr === null ? null : 'reviewing') : state === 'parked' ? 'building' : state === 'waiting' ? 'designing' : null
+                    const wait = state === 'waiting' ? [{ kind: 'issue-closed' as const, issue: 57 }, { kind: 'pr-merged' as const, pr: 812 }] : null
+                    out.push({ ...base, state, step, attempt, cut, triages, fixes, conflicts, pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null, wait })
+                  }
                 }
               }
             }
@@ -143,7 +146,7 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     // E7 has one row for each event kind: every event has a row with no meaning in every state
     expect(TABLE.filter(r => r.id === 'E7').map(r => r.on).sort()).toEqual([...EVENT_KINDS].sort())
     const made = madeRecord({ issue: 7, life: 'ss1x2k', branch: 'issue-7', pr: null, others: [] }, NOW)
-    expect(made).toMatchObject({ state: 'queued', step: 'lease', seq: 1, seqAt: NOW, since: NOW, resumeTo: null, attempt: 1, cut: false, triages: 0, fixes: 0, round: 0 })
+    expect(made).toMatchObject({ state: 'queued', step: 'lease', seq: 1, seqAt: NOW, since: NOW, resumeTo: null, attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 0 })
     expect(madeRecord({ issue: 7, life: 'ss1x2k', branch: 'feat/issue-7-x', pr: 621, others: [619] }, NOW)).toMatchObject({ resumeTo: 'reviewing', pr: 621, branch: 'feat/issue-7-x', notes: [expect.stringContaining('#619')] })
     // S7: a split child's claim carrying a park makes the parked record, resumeTo designing (8.7)
     const parked = madeRecord({ issue: 8, life: 'ss1x2k', branch: 'issue-8', pr: null, others: [], park: { question: 'Which API?', parent: 7 } }, NOW)
@@ -214,6 +217,7 @@ function wellFormed(r: IssueRecord): boolean {
     r.attempt <= 2 &&
     r.triages <= MAX_TRIAGES &&
     r.fixes <= FIX_CAP &&
+    r.conflicts <= CONFLICT_CAP &&
     (r.state === 'parked') === (r.question !== null) &&
     (r.state === 'waiting') === (r.wait !== null) &&
     (r.state === 'closed') === (r.why !== null) &&
@@ -221,7 +225,7 @@ function wellFormed(r: IssueRecord): boolean {
   )
 }
 
-const stateKey = (r: IssueRecord) => JSON.stringify([r.state, r.step, r.attempt, r.cut, r.triages, r.fixes, r.pr !== null, r.head !== null, r.resumeTo])
+const stateKey = (r: IssueRecord) => JSON.stringify([r.state, r.step, r.attempt, r.cut, r.triages, r.fixes, r.conflicts, r.pr !== null, r.head !== null, r.resumeTo])
 
 // reachable: every record the table reaches from a new claim, over every event (bounded by its
 // counters; round is left out of the key, as it is counted and never capped).
@@ -290,7 +294,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     for (const r of parked) {
       const closed = { ...r, pr: 512, prClosedAt: '2026-10-15T10:00:00Z' }
       const n = next(closed, { kind: 'unpark', reason: 'label', data: { note: 'go on', closedAt: '2026-10-15T10:00:00Z' } })
-      expect(n).toMatchObject({ state: 'queued', resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, notes: ['go on'], prClosedAt: '2026-10-15T10:00:00Z', question: null })
+      expect(n).toMatchObject({ state: 'queued', resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, cut: false, notes: ['go on'], prClosedAt: '2026-10-15T10:00:00Z', question: null })
       // the PR's close is already handled: pr-closed is an edge on its closedAt, never present again
       expect(((n as IssueRecord).prClosedAt ?? '') >= '2026-10-15T10:00:00Z').toBe(true)
     }
@@ -324,7 +328,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     const note = 'PR #24 conflicts with main: merge origin/main into issue-471, resolve the conflicts and push'
     const conflict: TableEvent = { kind: 'not-ok', reason: 'conflict', data: { pr: 512, text: note, notes: [note] } }
     const queue: IssueRecord = { ...base, state: 'merge-queue', step: 'queue', pr: 512, head: HEAD, notes: [note] }
-    const parked = next({ ...queue, fixes: FIX_CAP }, conflict)
+    const parked = next({ ...queue, conflicts: CONFLICT_CAP }, conflict)
     expect(parked).toMatchObject({ state: 'parked' })
     expect((parked?.question ?? '').split(note).length - 1).toBe(1)
     expect(next(queue, { ...conflict, data: { pr: 512, notes: [note, 'other', note] } })?.notes).toEqual(['other', note])
@@ -364,9 +368,9 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
   test('property 7: with no outside event, every life ends parked, waiting or closed, and its agent steps stay under the bound from fixCap, maxTriages and one free re-run per attempt', SWEEP, () => {
     // each entry to a step state runs its own step at most twice, each with one free re-run (4);
     // the entries: designing and building once and once per redesign (1 + M each), reviewing once
-    // per build and per fix (1 + M + F), fixing once per fix (F); each triage grant runs triage at
+    // per build and per fix (1 + M + F + C), fixing once per fix (F + C), C being the conflict rounds; each triage grant runs triage at
     // most 4 times and gives one more attempt (2)
-    const bound = 4 * (2 * (1 + MAX_TRIAGES) + (1 + MAX_TRIAGES + FIX_CAP) + FIX_CAP) + MAX_TRIAGES * (4 + 2)
+    const bound = 4 * (2 * (1 + MAX_TRIAGES) + (1 + MAX_TRIAGES + FIX_CAP + CONFLICT_CAP) + FIX_CAP + CONFLICT_CAP) + MAX_TRIAGES * (4 + 2)
     for (let seed = 1; seed <= 400; seed++) {
       const rand = rng(seed)
       let r: IssueRecord = seed % 2 === 0 ? base : { ...base, pr: 512, resumeTo: 'reviewing' }
@@ -481,5 +485,31 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
       expect(r).toMatchObject({ state: 'reviewing', fixes: i, round: 1 + i, notes: ['r1-1 is not a defect'] })
     }
     expect(next(r, { kind: 'not-ok', reason: 'ci-red', data: { text: 'test failed' } })).toMatchObject({ state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('fix cap') })
+    expect(next(r, { kind: 'not-ok', reason: 'changes' })).toMatchObject({ state: 'parked', question: expect.stringContaining('fix cap') })
+  })
+
+  test('the conflict cap: a conflict, or red CI in the merge queue, charges conflicts and not fixes, so it still gets a fixer at the fix cap; at the conflict cap it parks with its own question', SWEEP, () => {
+    const queue: IssueRecord = { ...base, state: 'merge-queue', step: 'queue', pr: 512, head: HEAD, fixes: FIX_CAP }
+    const review: IssueRecord = { ...base, state: 'reviewing', step: 'review', round: 1, pr: 512, head: HEAD, fixes: FIX_CAP }
+    const baseCaused: [IssueRecord, TableEvent][] = [
+      [review, { kind: 'not-ok', reason: 'conflict', data: { text: 'conflicts with main' } }],
+      [queue, { kind: 'not-ok', reason: 'conflict', data: { text: 'conflicts with main' } }],
+      [queue, { kind: 'not-ok', reason: 'ci-red', data: { text: 'test failed' } }],
+    ]
+    for (const [r, e] of baseCaused) {
+      const fixing = next(r, e) as IssueRecord
+      expect(fixing).toMatchObject({ state: 'fixing', fixes: FIX_CAP, conflicts: 1 })
+      expect(next(fixing, { kind: 'ok', data: { head: HEAD } })).toMatchObject({ state: 'reviewing', conflicts: 1 })
+      const capped = next({ ...r, conflicts: CONFLICT_CAP }, e)
+      expect(capped).toMatchObject({ state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('conflicts and red CI after other merges') })
+      expect(capped?.question).toContain(`${CONFLICT_CAP} rounds`)
+      expect(capped?.question).not.toContain('the fix cap')
+      expect(rowFor({ ...r, conflicts: CONFLICT_CAP - 1 }, e, CFG).id).toBe('T9')
+    }
+    // red CI in review still counts toward fixes, and the conflict counter does not shield it
+    expect(next({ ...review, fixes: 0, conflicts: CONFLICT_CAP }, { kind: 'not-ok', reason: 'ci-red', data: { text: 'x' } })).toMatchObject({ state: 'fixing', fixes: 1, conflicts: CONFLICT_CAP })
+    // P1 resets both
+    const parked = { ...base, state: 'parked' as const, step: null, question: 'q', resumeTo: 'fixing' as const, fixes: FIX_CAP, conflicts: CONFLICT_CAP }
+    expect(next(parked, { kind: 'unpark', reason: 'label', data: { note: 'go' } })).toMatchObject({ state: 'queued', fixes: 0, conflicts: 0 })
   })
 })

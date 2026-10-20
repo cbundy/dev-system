@@ -111,6 +111,7 @@ const record = (over) => ({
   cut: false,
   triages: 2,
   fixes: 0,
+  conflicts: 2,
   round: 1,
   parts: null,
   question: "The builder says it cannot: the API it needs is gone. Drop it, or point it at the new one?",

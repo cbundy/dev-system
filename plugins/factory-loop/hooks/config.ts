@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG: Config = {
   maxInFlightIssues: 3,
   worktreeReserve: 2,
   reviewFixCap: 3,
+  conflictFixCap: 5,
   guardRecheckMs: 3 * MIN,
   // a backstop: a repair re-guards at once, and a failure is judged once (#550)
   guardTtlMs: 5 * MIN,

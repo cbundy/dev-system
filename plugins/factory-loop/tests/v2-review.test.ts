@@ -506,6 +506,13 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(of(fresh, 623).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
   })
 
+  test('a conflict at the review fix cap still goes to fixing: it has its own cap, so fixes stays and conflicts counts it', () => {
+    const r = { ...rec(626), fixes: CFG.reviewFixCap }
+    const p = plan(withLedger(world([r], [view(626, { mergeable: 'dirty' })]), [ensured(r), prepared(r)]))
+    const t = transitionOf(p, 626)
+    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1, pr: PR } })
+  })
+
   test('a failed check is re-run once per round, once its run has finished; a fail after the re-run is ci-red; a fail from before it waits', () => {
     const r = rec(624)
     const ledger = [ensured(r), prepared(r), approved(r)]

@@ -335,6 +335,8 @@ export type Config = {
   maxInFlightIssues: number | null
   worktreeReserve: number
   reviewFixCap: number
+  // fix rounds a life may spend on conflicts and red CI after other merges, apart from reviewFixCap
+  conflictFixCap: number
   guardRecheckMs: Ms
   guardTtlMs: Ms
   respondSettleMs: Ms

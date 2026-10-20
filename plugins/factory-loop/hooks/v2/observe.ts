@@ -154,6 +154,8 @@ export function recordOf(raw: unknown): IssueRecord | null {
   if (!strOrNull(o.question) || !Array.isArray(o.notes) || !o.notes.every(isStr) || !strOrNull(o.prClosedAt)) return null
   // a record stored before the field carries no count: its life is read as a first one
   const lives = o.lives === undefined ? 1 : o.lives
+  const conflicts = o.conflicts === undefined || o.conflicts === null ? 0 : o.conflicts
+  if (!isInt(conflicts, 0)) return null
   if (!isInt(lives, 1)) return null
   return {
     issue: o.issue,
@@ -173,6 +175,7 @@ export function recordOf(raw: unknown): IssueRecord | null {
     cut: o.cut,
     triages: o.triages,
     fixes: o.fixes,
+    conflicts,
     round: o.round,
     question: o.question,
     parts,
