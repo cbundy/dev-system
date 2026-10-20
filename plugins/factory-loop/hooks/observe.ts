@@ -7,12 +7,12 @@
 // v2/observe.ts reads what v2 adds (v2 SPEC 2.4); the loop reads no pipeline runs and infers no
 // slot's issue from its reflog.
 import { EMPTY_CONTROL, controlFrom } from './config'
-import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
+import { deriveLedger, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
 import { readIssues } from './observe-github'
-import { newestTag, readMilestone, waitsOnTag } from './observe-milestone'
+import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
@@ -30,6 +30,8 @@ import { LIVE, listedLive } from './foundation'
 import { TRACKER_DEPTH, buildState } from './state'
 import type { GithubIssue } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, ReleaseInfo, Source, SourceName, State, Usage } from './types'
+import { exitFail, readFacts } from './v2/sources-facts'
+import type { FactsShadow } from './v2/sources-facts'
 import { emptyV2Cache, lastEnded, observeV2, readDue, readOrder } from './v2/observe'
 import type { V2Cache, V2Stored } from './v2/observe'
 import type { HeadSeen } from './v2/types'
@@ -84,6 +86,8 @@ export type Stored = {
   githubBackoffUntil: number | null
   // the queue's last now= list, handed back to queue-watch.sh as --known (v2 SPEC 13.3.4)
   queueKnown: number[] | null
+  // when the current starved spell began (S1, v2/rules-starved.ts); null: no spell
+  starvedSince?: number | null
 }
 
 type Timed<T> = { at: number; value: T }
@@ -99,8 +103,12 @@ export type Cache = {
   usage?: Timed<Usage>
   milestone?: Timed<Milestone | null>
   release?: Timed<ReleaseInfo>
+  // when the oldest closed issue of the milestone closed (observe-milestone.ts)
+  closed?: Timed<string | null>
   factory?: Timed<Factory>
   events?: Timed<FactoryEvent[]>
+  // the last compare of the facts' two stores (v2/sources-facts.ts); absent: none made this load
+  factsShadow?: FactsShadow
   pool?: Timed<Pool>
   // act mode: the last ledger rebuilt from the event log, and how many entries it found
   rebuilt?: Timed<number>
@@ -120,8 +128,10 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.usage
   delete cache.milestone
   delete cache.release
+  delete cache.closed
   delete cache.factory
   delete cache.events
+  delete cache.factsShadow
   delete cache.pool
   delete cache.rebuilt
   cache.github.clear()
@@ -182,8 +192,7 @@ export async function observe(
     return r
   }
   const tool = (name: string) => `${rt.toolsDir}/${name}`
-  const fail = (r: { exitCode: number; stderr: string }) => `exit ${r.exitCode}: ${r.stderr.trim().split('\n').pop()?.slice(0, 200) ?? ''}`
-  const eventsSince = (days: number) => ['dev-query', '--csv', '-v', `repo=${rt.repo}`, '-v', `at=${new Date(now).toISOString()}`, '-v', `days=${days}`]
+  const fail = exitFail
   // act mode: GitHub reads wait out a rate limit (v2 SPEC 13.10 item 2); old values stay, with their age
   const until = stored?.githubBackoffUntil ?? null
   const backoffUntil = until !== null && until > now ? until : null
@@ -199,14 +208,10 @@ export async function observe(
     mark('factory', false, cache.factory?.at ?? null, String(err))
   }
 
-  // facts: the event log, one query
-  try {
-    const r = await run(eventsSince(EVENT_DAYS), EVENTS_SQL)
-    if (r.exitCode === 0) cache.events = { at: now, value: eventsFromRows(parseCsv(r.stdout)) }
-    mark('facts', r.exitCode === 0, cache.events?.at ?? null, r.exitCode === 0 ? undefined : fail(r))
-  } catch (err) {
-    mark('facts', false, cache.events?.at ?? null, String(err))
-  }
+  // facts: the event log, one query, from the store `eventsSource` picks (v2/sources-facts.ts)
+  const factsRead = await readFacts({ now, rt, run }, EVENT_DAYS, cache)
+  if (factsRead.ok) cache.events = { at: now, value: factsRead.value }
+  mark('facts', factsRead.ok, cache.events?.at ?? null, factsRead.ok ? undefined : factsRead.error)
   const factory = cache.factory?.value ?? null
   const events = cache.events?.value ?? []
   const facts = cache.events !== undefined ? factsOf(events) : null
@@ -234,17 +239,13 @@ export async function observe(
     let derived: LedgerEntry[] | null = null
     let problem = 'the factory source failed'
     if (factory !== null) {
-      try {
-        const r = await run(eventsSince(REBUILD_DAYS), EVENTS_SQL)
-        if (r.exitCode === 0) {
-          week = eventsFromRows(parseCsv(r.stdout))
-          derived = deriveLedger(week, rt.device)
-          cache.rebuilt = { at: now, value: derived.length }
-        } else {
-          problem = fail(r)
-        }
-      } catch (err) {
-        problem = String(err)
+      const weekRead = await readFacts({ now, rt, run }, REBUILD_DAYS)
+      if (weekRead.ok) {
+        week = weekRead.value
+        derived = deriveLedger(week, rt.device)
+        cache.rebuilt = { at: now, value: derived.length }
+      } else {
+        problem = weekRead.error
       }
     }
     chosen = choose(stored.ledger, derived)
@@ -336,8 +337,11 @@ export async function observe(
     const held = mine.map(i => i.number)
     // v2's records go first, in v2's read order (v2 SPEC 2.4); then the oldest reads
     const first = readOrder(v2Stored?.records ?? [])
-    const wanted = [...new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
-    const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : 0)
+    // the open issues the read issues block: read last, so a chain never starves the issues the loop acts on
+    const chain = [...cache.github.values()].flatMap(c => c.value.facts?.blockingList ?? [])
+    const named = new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])
+    const wanted = [...new Set([...named, ...chain])]
+    const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : named.has(n) ? 0 : 1)
     const due = wanted
       .filter(n => {
         const c = cache.github.get(n)
@@ -347,7 +351,7 @@ export async function observe(
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
     const designing = new Set(mine.filter(i => i.stage === 'designing').map(i => i.number))
-    let githubOk = await readIssues(run, due, { cache: cache.github, now, designing, limited: () => limited })
+    let githubOk = await readIssues(run, due, { repo: rt.repo, cache: cache.github, now, designing, limited: () => limited })
     // tracker timelines, in the reads left this pass, walked again so a tracker read just now counts
     const timelinesDue = walkTrackers()
       .trackers.filter(n => {
@@ -425,7 +429,7 @@ export async function observe(
   }
 
   // milestone and, while it qualifies, the last release (observe-milestone.ts)
-  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run, tagWanted: waitsOnTag(v2Stored?.records ?? []) })
+  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run, tagWanted: waitsOnTag(v2Stored?.records ?? []), tagRepos: tagRepos(v2Stored?.records ?? []), backoff: backoffUntil !== null })
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
 
   // act mode holds GitHub writes and waits while the backoff lasts, and from the pass that met a
@@ -447,7 +451,7 @@ export async function observe(
     usage,
     pool,
     agents,
-    milestone: cache.milestone?.value ?? null,
+    milestone: cache.milestone?.value == null || cache.closed === undefined ? (cache.milestone?.value ?? null) : { ...cache.milestone.value, oldestClosedAt: cache.closed.value },
     release: cache.release?.value ?? null,
     ledger,
     control,
@@ -456,7 +460,7 @@ export async function observe(
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
-  const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, backoff: backoffUntil !== null, limited: () => limited })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), tags: repoTags(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, factsShadow: cache.factsShadow, backoff: backoffUntil !== null, limited: () => limited, starvedSince: stored?.starvedSince ?? null })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

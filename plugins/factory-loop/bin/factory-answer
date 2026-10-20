@@ -34,6 +34,8 @@
 // the issue or PR must exist and a PR not be closed unmerged; a definite no refuses like any
 // other problem. A read that decides nothing (gh missing, network, rate limit, timeout) records
 // the answer and names the unchecked conditions on stderr. The loop's own re-check stays shape-only.
+// A design-v2 done answer's evidence is read the same way (hooks/v2/done-check.mjs): the PR must be
+// merged and the commit on the default branch; the loop checks it again against origin.
 'use strict'
 
 const NAME = 'factory-answer'
@@ -196,17 +198,34 @@ function ghRunner(execFile, timeout) {
     })
 }
 
+// readOnGitHub: a hooks/v2 check module (wait-check.mjs, done-check.mjs) loaded beside the contract,
+// with the runner that runs its `gh` reads (execFile with an argv, no shell, each read limited).
+async function readOnGitHub(mods, self, file) {
+  const { path } = mods
+  const [cp, url] = await Promise.all([import('node:child_process'), import('node:url')])
+  const check = await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)
+  const override = Number(process.env.FACTORY_ANSWER_GH_TIMEOUT_MS)
+  const timeout = Number.isInteger(override) && override > 0 ? override : check.READ_TIMEOUT_MS
+  return { check, runner: ghRunner(cp.execFile, timeout) }
+}
+
 // checkWaitOnGitHub: a wait's conditions read on GitHub (hooks/v2/wait-check.mjs, #980). A definite
 // negative refuses; a read that decided nothing is named on stderr and the answer is still recorded.
 async function checkWaitOnGitHub(mods, self, repo, conditions) {
-  const { path } = mods
-  const [cp, url] = await Promise.all([import('node:child_process'), import('node:url')])
-  const check = await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', 'wait-check.mjs')).href)
-  const override = Number(process.env.FACTORY_ANSWER_GH_TIMEOUT_MS)
-  const timeout = Number.isInteger(override) && override > 0 ? override : check.READ_TIMEOUT_MS
-  const { problems, unchecked } = await check.checkWait(conditions, repo, ghRunner(cp.execFile, timeout))
+  const { check, runner } = await readOnGitHub(mods, self, 'wait-check.mjs')
+  const { problems, unchecked } = await check.checkWait(conditions, repo, runner)
   if (problems.length > 0) throw new Refused(problems)
   if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking on GitHub: ${unchecked.join('; ')}. The loop checks every condition itself.\n`)
+}
+
+// checkDoneOnGitHub: a done answer's evidence read on GitHub (hooks/v2/done-check.mjs). A PR that is
+// not merged or a commit that is not on the default branch refuses; a read that decided nothing is
+// named on stderr and the answer is still recorded, since the loop checks the evidence itself.
+async function checkDoneOnGitHub(mods, self, repo, evidence) {
+  const { check, runner } = await readOnGitHub(mods, self, 'done-check.mjs')
+  const { problems, unchecked } = await check.checkDone(evidence, repo, runner)
+  if (problems.length > 0) throw new Refused(problems)
+  if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking on GitHub: ${unchecked.join('; ')}. The loop checks the evidence again itself.\n`)
 }
 
 async function main(argv) {
@@ -232,6 +251,7 @@ async function main(argv) {
   const body = contract.answerText(place.job, input)
   if (!body.ok) throw new Refused(body.problems)
   if (place.job.contract === 'design-v2' && input.kind === 'wait') await checkWaitOnGitHub(mods, self, place.job.repo, input.conditions)
+  if (place.job.contract === 'design-v2' && input.kind === 'done') await checkDoneOnGitHub(mods, self, place.job.repo, { pr: input.evidence.pr ?? null, commit: typeof input.evidence.commit === 'string' ? input.evidence.commit.trim().toLowerCase() : null })
   await writeAtomically(mods, place.dir, place.name, body.outcome)
   process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${contract.answerSummary(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
   return 0

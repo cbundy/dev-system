@@ -18,10 +18,20 @@
 //       `sha`, 7 to 40 hex, stored lower-case), each number at least 1, never the issue itself, none
 //       twice; the loop re-checks them and resumes the designer once every one holds; the outcome
 //       carries conditions and reason only for a wait
+//     { "kind": "done", "evidence": { "pr": N | null, "commit": "<7-40 hex>" | null, "runIt": "<comment URL on this issue>" | null },
+//       "reason": "<one line, at most 500>", "brief": null }
+//       the issue's work is already merged on the default branch; at least one of pr and commit
+//       (done-answer.mjs); the answer script and the loop check the evidence on GitHub and origin
+//   A child with "ready": false carries an open owner decision: an optional "decision" object
+//   { question, context?, options?, recommendation? }, checked as a question answer is
+//   (split-decision.mjs; refused on a ready child), which the loop parks the child on. Without one, the
+//   body's ## Open decisions section is the question.
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief has an `## Observability` section (the decisions it adds and where each is recorded,
-//   or "none - no new decision").
+//   or "none - no new decision"), and a `## Compatibility` section (what changes in a migration,
+//   event schema, the event writer or a factory-database reader and why the last 10 minor
+//   versions keep working, or "none - no schema, event or reader change").
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
 //   A keep-open whose reason says the issue is part of something larger is refused: a split child
@@ -51,8 +61,10 @@
 // alike. ES2023 alone, nothing of Node or the engine. Its types are contracts-work.d.mts's.
 
 import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
+import { checkDone } from './done-answer.mjs'
+import { childDecisionWithParts } from './split-decision.mjs'
 
-export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait'])
+export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait', 'done'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
 export const FIX_RESULTS = Object.freeze(['fixed', 'declined', 'unchanged'])
 export const DISPOSITIONS = Object.freeze(['fixed', 'declined'])
@@ -83,6 +95,7 @@ export const WAIT_KINDS = Object.freeze(['issue-closed', 'pr-merged', 'tag-conta
 // A child's key goes into its ledger key (keys.ts childKey) and its hidden marker.
 export const CHILD_KEY = /^[a-z0-9][a-z0-9-]{0,23}$/
 const SHA = /^[0-9a-f]{7,40}$/i
+const REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/
 const BRIEF_HEADING = /^\s*##\s+Design brief/
 
@@ -252,7 +265,7 @@ function childrenOf(v, problems, parent) {
       problems.push(`children[${i}] must be an object { key, title, why, body, blockedBy, ready }`)
       return
     }
-    strays(c, ['key', 'title', 'why', 'body', 'blockedBy', 'ready'], `children[${i}]`, problems)
+    strays(c, ['key', 'title', 'why', 'body', 'blockedBy', 'ready', 'decision'], `children[${i}]`, problems)
     const key = typeof c.key === 'string' && CHILD_KEY.test(c.key) ? c.key : null
     if (key === null) problems.push(`${where}key ${show(c.key)} must be a short lower-case key: letters, digits and dashes, at most 24`)
     else if (keys.indexOf(key) !== i) problems.push(`${where}key ${key} is used twice`)
@@ -275,8 +288,9 @@ function childrenOf(v, problems, parent) {
       }
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
+    const { decision, parts: decisionParts } = childDecisionWithParts(c, `children[${i}]${key === null ? '' : ` (${key})`}.`, c.ready, body, parent, problems)
     if (body !== null) problems.push(...rolloutProblems(body, `children[${i}]${key === null ? '' : ` (${key})`} body`))
-    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true })
+    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true, decision, ...(decisionParts === null ? {} : { decisionParts }) })
   })
   if (out.length === v.length) {
     const cycle = cycleOf(out)
@@ -312,7 +326,7 @@ function partsOf(p) {
 }
 
 // conditionsOf: a wait's conditions, as the loop stores them; every problem at once.
-function conditionsOf(v, problems, self) {
+function conditionsOf(v, problems, self, ownRepo) {
   if (!Array.isArray(v)) {
     problems.push(`conditions must be a list of ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max} conditions { kind: ${WAIT_KINDS.join(' | ')}, issue | pr | sha }`)
     return []
@@ -332,55 +346,67 @@ function conditionsOf(v, problems, self) {
       problems.push(`${where}.kind ${show(c.kind)} is not one of ${WAIT_KINDS.join(', ')}`)
       return
     }
+    const withRepo = kind !== 'pr-merged'
+    let repo
+    if (withRepo && c.repo !== undefined && c.repo !== null) {
+      if (typeof c.repo !== 'string' || !REPO.test(c.repo)) {
+        problems.push(`${where}.repo ${show(c.repo)} must be owner/name (letters, digits, . _ -)`)
+        return
+      }
+      const lower = c.repo.toLowerCase()
+      if (lower !== String(ownRepo).toLowerCase()) repo = lower
+    }
     if (kind === 'tag-contains') {
-      strays(c, ['kind', 'sha'], where, problems)
+      strays(c, ['kind', 'sha', 'repo'], where, problems)
       if (typeof c.sha !== 'string' || !SHA.test(c.sha)) {
         problems.push(`${where}.sha ${show(c.sha)} must be 7 to 40 hex characters (a commit sha)`)
         return
       }
       const sha = c.sha.toLowerCase()
-      if (seen.has(`${kind}:${sha}`)) {
-        problems.push(`${where} repeats ${kind}:${sha}`)
+      const id = repo === undefined ? `${kind}:${sha}` : `${kind}:${repo}@${sha}`
+      if (seen.has(id)) {
+        problems.push(`${where} repeats ${id}`)
         return
       }
-      seen.add(`${kind}:${sha}`)
-      out.push({ kind, sha })
+      seen.add(id)
+      out.push(repo === undefined ? { kind, sha } : { kind, sha, repo })
       return
     }
     const field = kind === 'issue-closed' ? 'issue' : 'pr'
-    strays(c, ['kind', field], where, problems)
+    strays(c, withRepo ? ['kind', field, 'repo'] : ['kind', field], where, problems)
     const n = c[field]
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
       problems.push(`${where}.${field} ${show(n)} must be a whole number of at least 1`)
       return
     }
-    if (kind === 'issue-closed' && n === self) {
+    if (kind === 'issue-closed' && n === self && repo === undefined) {
       problems.push(`${where}.issue ${n} is the issue itself, which stays open until its work is done, so the wait would never end`)
       return
     }
-    const id = `${kind}:${n}`
+    const id = kind === 'issue-closed' && repo !== undefined ? `${kind}:${repo}#${n}` : `${kind}:${n}`
     if (seen.has(id)) {
       problems.push(`${where} repeats ${id}`)
       return
     }
     seen.add(id)
-    out.push(kind === 'issue-closed' ? { kind, issue: n } : { kind, pr: n })
+    out.push(kind === 'issue-closed' ? (repo === undefined ? { kind, issue: n } : { kind, issue: n, repo }) : { kind, pr: n })
   })
   return out
 }
 
 function checkDesign(input, job) {
   const o = record(input)
-  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split" | "wait", "brief", and "question", "children" or "conditions" and "reason"}'] }
+  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split" | "wait" | "done", "brief", and "question", "children", "conditions" and "reason", or "evidence" and "reason"}'] }
   const problems = []
-  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children', 'conditions', 'reason'], 'a design answer', problems)
+  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children', 'conditions', 'reason', 'evidence'], 'a design answer', problems)
   const kind = DESIGN_KINDS.find(k => k === o.kind)
   if (kind === undefined) problems.push(`kind ${show(o.kind)} is not one of ${DESIGN_KINDS.join(', ')}`)
-  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' || kind === 'wait' ? 'optional' : 'required', problems)
+  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' || kind === 'wait' || kind === 'done' ? 'optional' : 'required', problems)
   if (kind === 'brief' && brief !== null) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
     problems.push(...rolloutProblems(brief, 'brief'))
     if (firstLineUnder(brief, 'observability') === null) problems.push('brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"')
+    if (firstLineUnder(brief, 'compatibility') === null) problems.push('brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"')
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let parts = {}
@@ -397,21 +423,32 @@ function checkDesign(input, job) {
   }
   let wait = {}
   if (kind === 'wait') {
-    const conditions = conditionsOf(o.conditions, problems, job.issue)
+    const conditions = conditionsOf(o.conditions, problems, job.issue, job.repo)
     const reason = text(o, 'reason', LIMITS.waitReason, 'required', problems)
     oneLine(reason, 'reason', problems)
     wait = { conditions, reason }
+  } else if (kind === 'done') {
+    if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
+    wait = checkDone(o, problems, job) ?? {}
   } else {
     if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
-    if (o.reason !== undefined && o.reason !== null) problems.push('reason must be absent or null unless kind is wait')
+    if (o.reason !== undefined && o.reason !== null) problems.push('reason must be absent or null unless kind is wait or done')
   }
+  if (kind !== 'done' && o.evidence !== undefined && o.evidence !== null) problems.push('evidence must be absent or null unless kind is done')
   return checked(problems, () => ({ kind, brief, question, ...parts, ...wait, reasons, children }))
+}
+
+function doneEvidenceText(e) {
+  const ev = record(e) ?? {}
+  if (typeof ev.pr === 'number') return `PR #${ev.pr}`
+  return typeof ev.commit === 'string' ? `commit ${ev.commit.slice(0, 7)}` : 'no evidence'
 }
 
 function summaryOfDesign(input) {
   const o = record(input) ?? {}
   if (o.kind === 'split') return `a split into ${Array.isArray(o.children) ? o.children.length : 0} children`
   if (o.kind === 'question') return 'a question for the owner'
+  if (o.kind === 'done') return `a done close on ${doneEvidenceText(o.evidence)}`
   if (o.kind === 'wait') return `a wait on ${Array.isArray(o.conditions) ? o.conditions.length : 0} conditions`
   return o.kind === 'brief' ? 'a design brief' : 'no kind'
 }

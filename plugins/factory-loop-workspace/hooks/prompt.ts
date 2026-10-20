@@ -1,18 +1,12 @@
 // Prompts nobody answers (docs/factory-loop/v2/SPEC.md 10.10), pure: the reason a refused call is
-// given, and the note of the `prompt_denied` and `prompt_waiting` events, so the rules test covers
-// them without the engine.
+// given, and the data of the native `prompt_denied` and `prompt_waiting` events (written with
+// `callum-flow-event --type`, docs/factory-events/schemas), so the rules test covers them without
+// the engine.
 import { oneLine } from './gate'
 
-// the most of a call's input a note carries (a Bash command, else the input as JSON)
+// the most of a call's input an event carries (a Bash command, else the input as JSON)
 export const INPUT_CLIP = 2000
-const NONE = 'none'
 const ME = 'factory-loop-workspace'
-
-// enc: a value with no space in it: `%` and whitespace percent-encoded, as the loop's
-// plugins/factory-loop/hooks/v2/events.ts enc does, so the loop's parsers read the note.
-export function enc(v: string): string {
-  return v.replace(/[%\s]/g, c => encodeURIComponent(c))
-}
 
 // clip: at most `max` characters.
 export function clip(text: string, max = INPUT_CLIP): string {
@@ -34,7 +28,7 @@ export function whyOf(d: Decided): string | null {
   return text === '' ? null : oneLine(text, 500)
 }
 
-// inputOf: what the note says of the call: a Bash command, else the input as JSON; clipped.
+// inputOf: what the event says of the call: a Bash command, else the input as JSON; clipped.
 export function inputOf(tool: string, input: unknown): string {
   const command = tool === 'Bash' && input !== null && typeof input === 'object' ? (input as Record<string, unknown>).command : undefined
   if (typeof command === 'string') return clip(command)
@@ -76,8 +70,8 @@ export function promptReason(tool: string, input: unknown, decided: Decided): st
     .join(' ')
 }
 
-// The tokens of a prompt note, each `none` when unknown.
-export type NoteFields = {
+// The facts of a prompt event, each null when unknown.
+export type PromptFields = {
   life?: string | null
   seq?: number | null
   step?: string | null
@@ -90,18 +84,34 @@ export type NoteFields = {
   transcript?: string | null
   why?: string | null
   input?: string | null
+  branch?: string | null
+  pr?: number | null
 }
 
-// the order of the tokens: what identifies first, free text last
-const NOTE_KEYS = ['life', 'seq', 'step', 'attempt', 'agent', 'agent_type', 'tool', 'slot', 'session', 'transcript', 'why', 'input'] as const
+const orNull = <T>(v: T | null | undefined): T | null => (v === undefined || v === '' ? null : v)
 
-// promptNote: `key=value` tokens, a value encoded with no space in it, `none` for an unknown one
-// (a string that is literally `none` has its first letter encoded, so it reads back as itself).
-export function promptNote(f: NoteFields): string {
-  return NOTE_KEYS.map(k => {
-    const v = f[k]
-    return `${k}=${v === undefined || v === null || v === '' ? NONE : v === NONE ? '%6Eone' : enc(String(v))}`
-  }).join(' ')
+// promptData: the data of a `prompt_denied` or `prompt_waiting` event, under the schema's names,
+// with every required key of the type (an unknown value null, an empty agent id null). A waiting
+// prompt has no tool and no ask_reason: its message is the tool_input, clipped like a deny's.
+export function promptData(kind: 'prompt_denied' | 'prompt_waiting', f: PromptFields): Record<string, string | number | null> {
+  const denied = kind === 'prompt_denied'
+  const input = orNull(f.input)
+  return {
+    life: orNull(f.life) ?? null,
+    seq: orNull(f.seq) ?? null,
+    step: orNull(f.step) ?? null,
+    attempt: orNull(f.attempt) ?? null,
+    agent_id: orNull(f.agent) ?? null,
+    agent_type: orNull(f.agent_type) ?? null,
+    tool_name: denied ? (orNull(f.tool) ?? null) : null,
+    tool_input: input === null ? null : clip(input),
+    ...(denied ? { ask_reason: orNull(f.why) ?? null } : {}),
+    slot: orNull(f.slot) ?? null,
+    session: orNull(f.session) ?? null,
+    transcript: orNull(f.transcript) ?? null,
+    branch: orNull(f.branch) ?? null,
+    pr: orNull(f.pr) ?? null,
+  }
 }
 
 // transcriptOf: an agent's own transcript, beside the session's:

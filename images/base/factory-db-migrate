@@ -1,0 +1,163 @@
+#!/bin/bash
+#
+# factory-db-migrate: brings the factory database's schema up to this image's version at
+# start-up (cbundy/dev-system#888). dev-init runs it before the loop starts; the owner can run
+# it again by hand.
+#
+# It looks for the migrator's secret factory-db-migrator-url: the workspace folder
+# (DEV_WORKSPACE_SECRETS_DIR, /run/secrets/dev-system-workspace) wins over the template's
+# migrator mount (DEV_MIGRATOR_SECRETS_DIR, /run/secrets/dev-system-migrator). With no file it
+# does nothing: it removes an old status file, prints nothing and exits 0. With one it takes the
+# database name from the writer URL (factory_db_url writer: its dbname parameter, else its path)
+# and runs, once,
+#   timeout -k 5 ${DEV_FACTORY_DB_MIGRATE_TIMEOUT:-120} factory-db-bootstrap --db NAME --migrate \
+#       --migrator-url-file FILE
+# It prints the bootstrap's line (or its last error line) prefixed "factory-db-migrate:".
+#
+# Usage: factory-db-migrate [--strict]
+#   --strict  exit 1 when the outcome is failed or timed-out (by hand). Without it the exit
+#             status is always 0, so dev-init stays best effort.
+#
+# The status file, DEV_FACTORY_DB_MIGRATE_STATUS (default /tmp/dev-factory-db-migrate.json), is
+# written atomically: {"outcome":"running","at":...,"started_at":...} before the run, then at, started_at, ended_at,
+# database, from_version (null when unknown), to_version (the highest migration this image
+# ships), duration_ms, outcome (migrated, current, failed or timed-out) and error (the last
+# error line, at most 300 characters, or null). The loop's schema rail reads it and stays in
+# observe while the outcome is failed or timed-out (docs/factory-loop/v2/SPEC.md).
+#
+# Each run that found the file also writes one loop_entry (task:migrate:<to_version>, wake
+# migrate) with callum-flow-event. A failed event write is logged and ignored.
+set -u
+
+SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
+# shellcheck source=agentsview.sh
+. "$SHARE/agentsview.sh"
+# shellcheck source=factory-db.sh
+. "$SHARE/factory-db.sh"
+
+strict=0
+case "${1:-}" in
+  "") ;;
+  --strict) strict=1 ;;
+  *)
+    echo "usage: factory-db-migrate [--strict]" >&2
+    exit 2
+    ;;
+esac
+
+STATUS=${DEV_FACTORY_DB_MIGRATE_STATUS:-/tmp/dev-factory-db-migrate.json}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
+
+# json_str TEXT: TEXT as a JSON string.
+json_str() {
+  printf '%s' "$1" | tr -d '\000-\010\013-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | awk 'BEGIN { ORS = "" } NR > 1 { print "\\n" } { print }' | sed -e '1s/^/"/' -e '$s/$/"/'
+}
+
+write_status() {
+  if printf '%s\n' "$1" > "$STATUS.$$.tmp"; then
+    mv -f -- "$STATUS.$$.tmp" "$STATUS"
+  else
+    rm -f -- "$STATUS.$$.tmp"
+    echo "factory-db-migrate: cannot write $STATUS" >&2
+  fi
+}
+
+file=$(factory_db_url_file migrator)
+if [ ! -e "$file" ]; then
+  rm -f -- "$STATUS"
+  exit 0
+fi
+
+# The database name from the writer URL: dbname parameter, else the path.
+db=''
+if wurl=$(factory_db_url writer 2>/dev/null); then
+  q=''
+  case "$wurl" in *\?*) q=${wurl#*\?} ;; esac
+  rest=$q
+  while [ -n "$rest" ]; do
+    kv=${rest%%&*}
+    case "$rest" in *\&*) rest=${rest#*&} ;; *) rest='' ;; esac
+    case "$kv" in dbname=*) db=${kv#dbname=} ;; esac
+  done
+  if [ -z "$db" ]; then
+    p=${wurl%%\?*}
+    p=${p#*://}
+    case "$p" in */*) db=${p#*/}; db=${db%%/*} ;; esac
+  fi
+fi
+
+to=$(factory_db_expected_version 2> /dev/null) || to=''
+from=''
+outcome=failed
+error=''
+rc=0
+started_at=$(now_iso)
+t0=$(date +%s%N)
+# The running record carries its time, so the loop's rail can tell a live migrate from a stale one.
+printf -v running_json '{"outcome":"running","at":"%s","started_at":"%s"}' "$started_at" "$started_at"
+write_status "$running_json"
+
+if [ -z "$db" ]; then
+  error="no database name: the writer URL is missing or names no database"
+elif [ -z "$to" ]; then
+  error="this image ships no factory migrations"
+elif ! errf=$(mktemp) || ! outf=$(mktemp); then
+  error="cannot make a temporary file"
+else
+  timeout -k 5 "${DEV_FACTORY_DB_MIGRATE_TIMEOUT:-120}" factory-db-bootstrap --db "$db" --migrate --migrator-url-file "$file" > "$outf" 2> "$errf" < /dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    line=$(grep -v '^[[:space:]]*$' "$outf" | tail -n 1 | mask_secrets)
+    from=$(printf '%s\n' "$line" | sed -n 's/.* from schema version \([0-9][0-9]*\) to [0-9][0-9]*.*/\1/p')
+    if [ -n "$from" ] && [ "$from" -eq "$to" ]; then outcome=current; else outcome=migrated; fi
+  else
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then outcome=timed-out; fi
+    error=$(grep -v '^[[:space:]]*$' "$errf" | tail -n 1 | mask_secrets)
+    [ -n "$error" ] || error=$(grep -v '^[[:space:]]*$' "$outf" | tail -n 1 | mask_secrets)
+    [ -n "$error" ] || error="factory-db-bootstrap exited $rc"
+    [ "$outcome" != timed-out ] || error="timed out after ${DEV_FACTORY_DB_MIGRATE_TIMEOUT:-120}s: $error"
+  fi
+  rm -f -- "$errf" "$outf"
+fi
+error=${error:0:300}
+
+ended_at=$(now_iso)
+duration_ms=$((($(date +%s%N) - t0) / 1000000))
+
+num_or_null() { if [ -n "$1" ]; then printf '%s' "$1"; else printf null; fi; }
+if [ -n "$error" ]; then error_json=$(json_str "$error"); else error_json=null; fi
+if [ -n "$db" ]; then db_json=$(json_str "$db"); else db_json=null; fi
+from_json=$(num_or_null "$from")
+to_json=$(num_or_null "$to")
+printf -v status_json '{"outcome":"%s","at":"%s","started_at":"%s","ended_at":"%s","database":%s,"from_version":%s,"to_version":%s,"duration_ms":%s,"error":%s}' \
+  "$outcome" "$ended_at" "$started_at" "$ended_at" "$db_json" "$from_json" "$to_json" "$duration_ms" "$error_json"
+write_status "$status_json"
+
+case "$outcome" in
+  migrated | current) echo "factory-db-migrate: database $db schema version ${from:-?} -> $to ($outcome, ${duration_ms}ms)" ;;
+  *) echo "factory-db-migrate: $outcome: $error" >&2 ;;
+esac
+
+# The record: one loop_entry task, when the version is known (the key needs it).
+if [ -n "$to" ]; then
+  case "$outcome" in migrated | current) status='done' ;; *) status=$outcome ;; esac
+  agent=${DEV_MACHINE_NAME:-dev-init}
+  agent_json=$(json_str "$agent")
+  fmt='{"kind":"task","key":"task:migrate:%s","status":"%s","attempts":1,"class":"free","rule":"dev-init",'
+  fmt="$fmt"'"started_at":"%s","ended_at":"%s","agent_id":%s,"wake":"migrate","database":%s,"from_version":%s,'
+  fmt="$fmt"'"to_version":%s,"duration_ms":%s,"outcome":"%s","error":%s}'
+  # shellcheck disable=SC2059 # the format is built above
+  printf -v data "$fmt" "$to" "$status" "$started_at" "$ended_at" "$agent_json" "$db_json" "$from_json" "$to" "$duration_ms" "$outcome" "$error_json"
+  set -- --type loop_entry --data "$data"
+  repo=''
+  case "${DEV_REPO_URL:-}" in
+    *[:/]*/*) repo=$(printf '%s' "$DEV_REPO_URL" | sed -e 's#/*$##' -e 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p') ;;
+  esac
+  [ -z "$repo" ] || set -- "$@" --repo "$repo"
+  callum-flow-event "$@" > /dev/null 2>&1 || echo "factory-db-migrate: could not write the loop_entry event" >&2
+fi
+
+if [ "$strict" = 1 ]; then
+  case "$outcome" in migrated | current) ;; *) exit 1 ;; esac
+fi
+exit 0

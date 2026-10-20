@@ -5,6 +5,7 @@
 // treehouse status --json as it printed on 2026-10-13).
 import { describe, expect, test } from 'claude-code/testing'
 
+import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, stepsOf, usageError } from '../hooks/act-cli'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
@@ -17,6 +18,8 @@ const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
 
 type Call = { argv: string[]; init: RunInit }
 type Reply = Partial<RunResult> | Error
+
+const LOOP = '/cfg/factory-loop/cbundy__dev-system'
 
 function runtime(): Runtime {
   return {
@@ -111,6 +114,8 @@ const A = {
   sweep: (): Action => ({ ...base, kind: 'sweep', key: 'sweep:0', rule: 'H2', issue: null }),
   claim: (issue: number | null = 470): Action => ({ ...base, class: 'start', kind: 'claim', key: `claim:${issue}:new`, rule: 'D1', issue }),
   close: (): Action => ({ ...base, kind: 'close-issue', key: 'close:470', rule: 'M7', issue: 470 }),
+  closeDone: (): Action => ({ ...base, kind: 'close-issue', key: 'i470/follow/close-issue', rule: 'S3', issue: 470, logClosed: true }),
+  deleteBranch: (): Action => ({ ...base, kind: 'delete-branch', key: 'i470/follow/delete-branch', rule: 'S3', issue: 470, branch: 'issue-470', sha: 'abc1234def' }),
   releaseParent: (): Action => ({ ...base, kind: 'release-parent', key: 'release-parent:470', rule: 'D3', issue: 470, created: [471, 472] }),
   later: (): Action => ({ ...base, kind: 'milestone-later', key: 'milestone-later:470', rule: 'M7', issue: 470 }),
   restart: (rule = 'H4'): Action => ({ ...base, kind: 'restart-self', key: 'restart:1', rule, issue: null, why: 'image 1.2.3', at: 1 }),
@@ -120,7 +125,7 @@ const A = {
 
 describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
   const argv = (a: Action) => {
-    const steps = stepsOf(a, REPO, IN_DEV)
+    const steps = stepsOf(a, REPO, IN_DEV, LOOP)
     if (typeof steps === 'string') throw new Error(steps)
     return steps.map(s => ('argv' in s ? s.argv : [`event:${s.event}`]))
   }
@@ -133,12 +138,22 @@ describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
     expect(argv(A.releaseParent())).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV], ['event:abandoned']])
     expect(argv(A.later())).toEqual([['callum-flow-milestone', 'plan', '470', 'later']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
+    expect(argv(A.restart('R2'))).toEqual([['dev-restart-self']])
+    expect(argv({ ...A.restart('R2'), windDownAt: null } as Action)).toEqual([['dev-restart-self']])
+  })
+
+  test('R2 with a wind-down writes the request first, in the status file\'s time form', () => {
+    const at = Date.UTC(2026, 9, 19, 1, 2, 3, 456)
+    const steps = stepsOf({ ...A.restart('R2'), windDownAt: at } as Action, REPO, IN_DEV, LOOP)
+    if (typeof steps === 'string') throw new Error(steps)
+    expect(steps.map(s => ('argv' in s ? s.argv : []))).toEqual([['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', `${LOOP}/wind-down.request`], ['dev-restart-self']])
+    expect(steps[0]).toMatchObject({ stdin: '{"requested_at":"2026-10-19T01:02:03.456Z","trigger":"restart-self"}\n' })
   })
 
   test('refusals: an issue kind with no issue, restart-self outside H4, a kind that runs no command', () => {
-    expect(stepsOf(A.claim(null), REPO, IN_DEV)).toBe('claim names no issue')
-    expect(stepsOf(A.restart('O1'), REPO, IN_DEV)).toBe('restart-self comes only from rule H4 or R2, not O1')
-    expect(stepsOf(A.title(), REPO, IN_DEV)).toBe('title runs no command')
+    expect(stepsOf(A.claim(null), REPO, IN_DEV, LOOP)).toBe('claim names no issue')
+    expect(stepsOf(A.restart('O1'), REPO, IN_DEV, LOOP)).toBe('restart-self comes only from rule H4 or R2, not O1')
+    expect(stepsOf(A.title(), REPO, IN_DEV, LOOP)).toBe('title runs no command')
   })
 
   test('no template can pass a forbidden flag or command (v2 SPEC 13.6.1)', () => {
@@ -249,6 +264,41 @@ describe('gh writes: close-issue', () => {
   })
 })
 
+describe('a done close: close-issue logs closed, delete-branch is leased (8.7)', () => {
+  test('close-issue with logClosed runs the same close, then logs `closed` (completed); without it, no event', async () => {
+    const plain = await exec(A.close())
+    expect(plain.events).toEqual([])
+    const { result, calls, events } = await exec(A.closeDone())
+    expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
+    expect(events).toEqual([{ state: 'closed', fields: { issue: 470, note: 'completed' } }])
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed #470' })
+    // a close that failed logs nothing
+    const failed = await exec(A.closeDone(), [{ exitCode: 1, stderr: 'boom' }])
+    expect(failed.events).toEqual([])
+    expect(failed.result).toMatchObject({ status: 'failed' })
+    // an event that did not log is the close's failure to retry, the close being idempotent
+    const unlogged = await exec(A.closeDone(), [], { event: async () => { throw new Error('callum-flow-event closed: exit 1') } })
+    expect(unlogged.result).toMatchObject({ status: 'failed' })
+  })
+
+  test('delete-branch pushes a delete leased on the head it read, from the main checkout, in 60 s', async () => {
+    const { result, calls } = await exec(A.deleteBranch())
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.argv).toEqual(['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234def', 'origin', ':refs/heads/issue-470'])
+    expect(calls[0]?.init).toEqual({ timeoutMs: 60_000 })
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'deleted' }, summary: 'deleted issue-470' })
+  })
+
+  test('a rejected lease (the branch moved) is done and kept, an answer; any other failure is failed', async () => {
+    const moved = (await exec(A.deleteBranch(), [{ exitCode: 1, stderr: 'To github.com:o/r.git\n ! [rejected]        issue-470 (stale info)\nerror: failed to push some refs' }])).result
+    expect(moved).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0, detail: 'kept: moved' }, summary: 'kept issue-470: it moved since it was read' })
+    const down = (await exec(A.deleteBranch(), [{ exitCode: 1, stderr: 'fatal: unable to access: Could not resolve host' }])).result
+    expect(down).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
+    const other = (await exec(A.deleteBranch(), [{ exitCode: 128, stderr: 'fatal: boom' }])).result
+    expect(other).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 128 } })
+  })
+})
+
 describe('release-parent: the label, then the event, stopping at the first failure', () => {
   test('release-parent: the claim label comes off, then `abandoned` notes the split', async () => {
     const { result, calls, events } = await exec(A.releaseParent())
@@ -318,6 +368,27 @@ describe('restart-self', () => {
     const { result, calls } = await exec(A.restart(), [{ stderr: 'dev-restart-self: start build requested.\n' }])
     expect(calls.map(c => c.argv)).toEqual([['dev-restart-self']])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'restart requested' })
+  })
+
+  test('with a wind-down it writes the request, then restarts; a failed write never restarts', async () => {
+    const R2 = { ...A.restart('R2'), windDownAt: NOW } as Action
+    const ok = await exec(R2)
+    expect(ok.calls.map(c => c.argv[0] === 'sh' ? c.argv[3] : c.argv)).toEqual(['wind-down-request', ['dev-restart-self']])
+    expect(ok.calls[0]?.init.stdin).toBe(`{"requested_at":"${new Date(NOW).toISOString()}","trigger":"restart-self"}\n`)
+    expect(ok.result).toMatchObject({ status: 'done' })
+    const bad = await exec(R2, [{ exitCode: 1, stderr: 'mv: no space' }])
+    expect(bad.calls).toHaveLength(1)
+    expect(bad.result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
+  })
+
+  test('a failed dev-restart-self takes the request back off', async () => {
+    const R2 = { ...A.restart('R2'), windDownAt: NOW } as Action
+    const { result, calls } = await exec(R2, [{}, { exitCode: 1, stderr: 'refusing' }])
+    expect(result).toMatchObject({ status: 'failed' })
+    expect(calls.map(c => c.argv.slice(0, 3))).toEqual([['sh', '-c', WIND_DOWN_WRITE_SCRIPT], ['dev-restart-self'], ['rm', '-f', '--']])
+    expect(calls[2]?.argv[3]).toBe(`${LOOP}/wind-down.request`)
+    // with no request written, nothing is removed
+    expect((await exec(A.restart('R2'), [{ exitCode: 1 }])).calls.map(c => c.argv)).toEqual([['dev-restart-self']])
   })
 
   test('from any other rule it is refused and never run', async () => {
@@ -405,6 +476,7 @@ describe('guards and pure readers', () => {
       [
         'claim',
         'close-issue',
+        'delete-branch',
         'heartbeat',
         'milestone-later',
         'release-parent',

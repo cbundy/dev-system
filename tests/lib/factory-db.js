@@ -1,7 +1,7 @@
 // Per-test factory database for node tests (cbundy/dev-system#646): the node twin of
 // factory_test_db_new / factory_test_db_drop in scripts/test-pg.sh. It makes a unique
 // factory_test_<pid>_<random> database with the real images/base/factory-db-bootstrap, over
-// psql through child_process, and registers the drop (the database WITH (FORCE), then its three
+// psql through child_process, and registers the drop (the database WITH (FORCE), then its four
 // roles) in t.after, so a failing test still cleans up. `npm test` fails when one is left.
 "use strict";
 
@@ -33,27 +33,45 @@ function psql(url, sql) {
 // the run already.
 const available = () => adminUrl() !== "";
 
-// createDb(t): { name, url, query(sql, role?) }. The drop is registered on t.
-function createDb(t) {
+// A role's URL for a database: the admin URL's scheme, host and query with the role's credentials,
+// as url_for does in images/base/test/heartbeat-loop-factory-db.test.sh.
+function roleUrl(db, user, password) {
+  const m = /^([a-z]+):\/\/(?:[^@/?]*@)?([^/?]*)(?:\/[^?]*)?(?:\?(.*))?$/i.exec(adminUrl());
+  if (m === null) throw new Error("FACTORY_TEST_PG_ADMIN_URL does not parse");
+  const cred = user ? `${user}${password ? `:${password}` : ""}@` : "";
+  return `${m[1]}://${cred}${m[2]}/${db}${m[3] ? `?${m[3]}` : ""}`;
+}
+
+// createDb(t, opts?): { name, url, writerUrl, readerUrl, query(sql, role?) }. The drop is registered
+// on t. opts: bootstrap (the factory-db-bootstrap to run, default the checkout's), migrationsDir
+// (sets FACTORY_DB_MIGRATIONS_DIR), writerPassword and readerPassword (the roles' passwords, which
+// writerUrl and readerUrl carry).
+function createDb(t, { bootstrap = BOOTSTRAP, migrationsDir, writerPassword, readerPassword } = {}) {
   const name = `factory_test_${process.pid}_${crypto.randomBytes(4).toString("hex")}`;
   const drop = () => {
     for (const sql of [
       `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`,
+      `DROP ROLE IF EXISTS "${name}_migrator"`,
       `DROP ROLE IF EXISTS "${name}_owner"`,
       `DROP ROLE IF EXISTS "${name}_writer"`,
       `DROP ROLE IF EXISTS "${name}_reader"`,
     ]) psql(adminUrl(), sql);
   };
   t.after(drop);
-  const r = spawnSync("bash", [BOOTSTRAP, "--db", name], {
-    encoding: "utf8",
-    env: { ...process.env, FACTORY_DB_ADMIN_URL: adminUrl() },
-  });
+  const env = { ...process.env, FACTORY_DB_ADMIN_URL: adminUrl() };
+  if (migrationsDir !== undefined) env.FACTORY_DB_MIGRATIONS_DIR = migrationsDir;
+  if (writerPassword !== undefined) env.FACTORY_DB_WRITER_PASSWORD = writerPassword;
+  if (readerPassword !== undefined) env.FACTORY_DB_READER_PASSWORD = readerPassword;
+  const r = spawnSync("bash", [bootstrap, "--db", name], { encoding: "utf8", env });
   if (r.status !== 0) throw new Error(`factory-db-bootstrap failed: ${r.stdout}${r.stderr}`);
   const url = urlFor(name);
   // query(sql, role): the rows unaligned; with a role, the statement runs as that role.
   const query = (sql, role) => psql(url, role ? `SET ROLE "${name}_${role}"; ${sql}` : sql);
-  return { name, url, query };
+  return {
+    name, url, query,
+    writerUrl: roleUrl(name, `${name}_writer`, writerPassword),
+    readerUrl: roleUrl(name, `${name}_reader`, readerPassword),
+  };
 }
 
 module.exports = { available, createDb };

@@ -10,7 +10,7 @@ description: >-
   it with dev-query --factory. Use for a quick targeted number. For a full windowed report
   or a comparison with a baseline, use evaluate-sessions instead. For what is
   happening right now (current stage, stuck issues), use factory-state.
-version: 0.57.0
+version: 0.71.0
 ---
 
 # Query factory data
@@ -54,9 +54,12 @@ Name queries by schema and title, never by bare number: both sets start at 1.
 | Gate wait, gate run time, gate queue (how long stop gates wait for a turn, run, and how many are ahead) | `factory.event_log`, [2b. Gate waits](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2b-gate-waits) (one row per run; take p50 and p95 per day in code) |
 | Wind-down: how long stops wait for running steps, how often the cap hits, steps cut and their re-runs | `factory.event_log`, [2c. Wind-downs](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2c-wind-downs) (a per-stop row; take the median and p90 of `waited_ms` in code) |
 | Reader shadow compares: how often a reader's old and new sources disagree, failed central reads, the newest difference | `factory.event_log`, [6b. Reader shadow compares](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#6b-reader-shadow-compares) (per reader, tool, device and day) |
+| Permission prompts denied or waiting, and the issues blocked on one | `factory.event_log`, [9b. Permission prompts](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9b-permission-prompts) (one block: `daily` rows per repo and day, `blocked` rows for the last 24 hours) |
 | Waiting versus working, dispatcher bound | `factory.event_log`, [7. The waiting split](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#7-the-waiting-split) (the gate-bound half of the call is in `callum-flow-evaluate`) |
 | First-pass rate, fix rounds and review rounds per issue | `factory.event_log`, [2. First-pass gate pass rate](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2-first-pass-gate-pass-rate) and the rounds block of [9. Interventions, judgement calls and claim completion](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9-interventions-judgement-calls-and-claim-completion) |
 | Sonnet against Opus as the implementer: time taken, first-pass rate and fix requests per model | `factory.event_log`, [8. Implementer model comparison](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#8-implementer-model-comparison) (medians in code) |
+| Main after merge: main's newest state, and whether main stayed green after each merge (plant console panel F) | `factory.event_log`, [Main after merge](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#main-after-merge) |
+| Settings changes over time, and the settings each worker runs on | `factory.event_log` and `factory.workers_status`, [Settings](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#settings) (empty until the loop writes them) |
 | Agent tokens and wall time, pipeline gates, parked time, failure categories | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
 

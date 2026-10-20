@@ -123,6 +123,8 @@ ev transition --issue 571 --branch issue-571 --note "row=T5 life=lss1x2k seq=7 f
 ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patch=f00d errors=1" || fail "reviewed should be accepted"
 ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
 [ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .note]')" = '["intervention",null,"who=person cause=op:mode reason=mode%20act"]' ] || fail "intervention line wrong: $(tail -n 1 "$log")"
+ev intervention --note "who=judge cause=op:pause" || fail "a judge intervention should be accepted"
+[ "$(tail -n 1 "$log" | jq -r .note)" = "who=judge cause=op:pause" ] || fail "judge line wrong: $(tail -n 1 "$log")"
 ev intervention --issue 571 --note "who=person cause=rescue reason=patched%20the%20trust%20file" || fail "a hand-recorded rescue should be accepted"
 # the companion's two (v2 SPEC 10.10): --issue is required, no note token is
 ev prompt_denied --issue 571 --branch issue-571 --pr 621 --note "life=l seq=7 tool=Bash input=rm%20-f%20\$D/*" || fail "prompt_denied should be accepted"
@@ -137,7 +139,7 @@ for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   "reviewed|1|round=1 verdict=|verdict= and round=" \
   "intervention||cause=x|who= and cause=" \
   "intervention||who=loop|who= and cause=" \
-  "intervention||who=robot cause=x|who=person or who=loop" \
+  "intervention||who=robot cause=x|who=person, who=loop or who=judge" \
   "prompt_denied||life=l|--issue is required" \
   "prompt_waiting||life=l|--issue is required"; do
   state=${bad%%|*} rest=${bad#*|}
@@ -271,6 +273,54 @@ PATH="$nonode" CALLUM_EVENTS_DIR="$d9" CALLUM_FLOW_REPO=cbundy/dev-system DEV_VE
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "no node warns once: $(cat "$tmpdir/dw.err")"
 [ "$(wc -l < "$d9/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "no node: old line only"
 [ ! -e "$d9/factory" ] || fail "no node: old line only"
+
+# --data (#870): extra payload fields only the new event carries; the old line is as without it
+FACTS='{"title":"T","labels":["ready"],"parent":3}'
+dd0="$tmpdir/dd0"
+dw "$dd0" ready --issue 7 || fail "ready without --data"
+dd1="$tmpdir/dd1"
+dw "$dd1" ready --issue 7 --data "$FACTS" || fail "ready --data must exit 0"
+[ ! -s "$tmpdir/dw.err" ] || fail "ready --data must be silent: $(cat "$tmpdir/dw.err")"
+[ "$(jq -c 'del(.event_id, .ts, .device_seq)' "$dd1/cbundy__dev-system.jsonl")" = "$(jq -c 'del(.event_id, .ts, .device_seq)' "$dd0/cbundy__dev-system.jsonl")" ] || fail "--data changed the old line: $(cat "$dd1/cbundy__dev-system.jsonl")"
+[ "$(jq -c '.data' "$dd1/factory/cbundy__dev-system.jsonl")" = "$FACTS" ] || fail "the new line lacks the facts: $(cat "$dd1/factory/cbundy__dev-system.jsonl")"
+[ "$(jq -c '.data' "$dd0/factory/cbundy__dev-system.jsonl")" = '{}' ] || fail "ready without --data: $(cat "$dd0/factory/cbundy__dev-system.jsonl")"
+# claimed keeps its lease_minutes beside the facts
+dd2="$tmpdir/dd2"
+dw "$dd2" claimed --issue 7 --note 'lease: 120' --data "$FACTS" || fail "claimed --data"
+[ "$(jq -c '.data' "$dd2/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"title":"T","labels":["ready"],"parent":3}' ] || fail "claimed --data: $(cat "$dd2/factory/cbundy__dev-system.jsonl")"
+# score and factors (claim rule) ride --data the same way and keep the old line's note
+SC='{"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}'
+dds="$tmpdir/dds"
+dw "$dds" claimed --issue 7 --note 'lease: 120' --data "$SC" || fail "claimed --data score"
+[ "$(jq -c '.data | {lease_minutes, score, factors}' "$dds/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "claimed score: $(cat "$dds/factory/cbundy__dev-system.jsonl")"
+jq -e '.note == "lease: 120" and (has("score") | not) and (has("factors") | not)' "$dds/cbundy__dev-system.jsonl" >/dev/null || fail "claimed score: old line: $(cat "$dds/cbundy__dev-system.jsonl")"
+# not JSON, or not an object: exit 2, nothing written
+for bad in '[1]' 'x' '"s"' '3'; do
+  ddb="$tmpdir/ddb"
+  rm -rf "$ddb"
+  rc=0
+  dw "$ddb" ready --issue 7 --data "$bad" || rc=$?
+  [ "$rc" = 2 ] || fail "--data $bad: exit $rc, want 2"
+  [ ! -e "$ddb" ] || [ -z "$(find "$ddb" -type f)" ] || fail "--data $bad wrote something"
+done
+# --if-changed suppression still writes nothing
+dw "$dd1" ready --issue 7 --if-changed --data "$FACTS" || fail "--if-changed --data"
+[ "$(wc -l < "$dd1/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed --data wrote an old line"
+[ "$(wc -l < "$dd1/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed --data wrote a new line"
+# --new-only --data: the new line only
+dd3="$tmpdir/dd3"
+dw "$dd3" ready --issue 7 --new-only --data "$FACTS" || fail "--new-only --data"
+[ ! -e "$dd3/cbundy__dev-system.jsonl" ] || fail "--new-only --data wrote the old log"
+[ "$(jq -c '.data' "$dd3/factory/cbundy__dev-system.jsonl")" = "$FACTS" ] || fail "--new-only --data: $(cat "$dd3/factory/cbundy__dev-system.jsonl")"
+# a key the type does not accept, or a wrong value: a miss - old line kept, no new event, one warning, exit 0
+for bad in '{"nope":1}' '{"title":5}' '{"labels":"a"}' '{"parent":0}' '{"lease_minutes":1}'; do
+  ddm="$tmpdir/ddm"
+  rm -rf "$ddm"
+  dw "$ddm" ready --issue 7 --data "$bad" || fail "--data $bad must exit 0"
+  [ "$(wc -l < "$ddm/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--data $bad: the old line must stay"
+  [ ! -e "$ddm/factory" ] || fail "--data $bad: no new event expected"
+  [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "--data $bad: one warning expected: $(cat "$tmpdir/dw.err")"
+done
 
 # --new-only (#825): the new log only, never the old one; .wake touched after the new line
 dn1="$tmpdir/dwn1"
@@ -616,14 +666,14 @@ chmod +x "$fakebin/callum-flow-event" "$fakebin/gh"
 out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
-[ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
+[ "$(cat "$fakebin/event-calls")" = 'ready --issue 9 --if-changed --data {"title":"b","labels":null,"parent":null} --actor watcher' ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
 
 # queue-watch --once (factory loop, v2 SPEC 13.3.4): one read, the same first-sight call
 : > "$fakebin/event-calls"
 out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --once --known 4 2> /dev/null) || fail "queue-watch --once should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue known=4 now=4,9" ] || fail "queue-watch --once stdout: $out"
-[ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch --once should record the new issue as a first sight: $(cat "$fakebin/event-calls")"
+[ "$(cat "$fakebin/event-calls")" = 'ready --issue 9 --if-changed --data {"title":"b","labels":null,"parent":null} --actor watcher' ] || fail "queue-watch --once should record the new issue as a first sight: $(cat "$fakebin/event-calls")"
 
 : > "$fakebin/event-calls"
 rc=0

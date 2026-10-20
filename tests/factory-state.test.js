@@ -396,6 +396,18 @@ test("lapsed claim (#465): a claim only counts as designing while its lease is l
   assert.equal(all.filter((s) => s === "designing").length, 3);
 });
 
+test("factory loop v2: a record closed with why=done (its work had merged already) reads as merged", () => {
+  const i = input("v2");
+  let n = 0;
+  for (const e of i.events || []) {
+    if (e.state === "transition" && e.issue === 103 && e.note.includes("why=merged")) { e.note = e.note.replace("why=merged", "why=done"); n++; }
+  }
+  assert.equal(n, 1, "the fixture's close of 103 was found");
+  const st = issue(derive(i), A, 103);
+  assert.equal(st.stage, "merged");
+  assert.equal(st.v2.why, "done");
+});
+
 test("factory loop v2 (v2 SPEC 3.6, 7.3): the newest transition of the current life places the issue, above the mirror's runs", () => {
   const r = derive(input("v2"));
   const st = (n) => issue(r, A, n);
@@ -549,7 +561,7 @@ test("mapping: the new store's row becomes the common event the old line becomes
 });
 
 test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
-  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read"]) {
+  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read", "prompt_denied", "prompt_waiting"]) {
     const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
     assert.equal(m.type, type);
   }

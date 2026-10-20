@@ -75,7 +75,7 @@ test("a known type is written as one envelope-v1 line to the new log only, and r
   const e = JSON.parse(lines[0]);
   assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
   assert.deepEqual(reader.validateStrict("claimed", 1, e.data), []);
-  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30 } });
+  assert.deepEqual(reader.readEvent(e), { type: "claimed", type_version: 1, data: { lease_minutes: 30, title: null, labels: null, parent: null, score: null, factors: null } });
   assert.match(e.ts, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   assert.equal(e.session_id, null);
   assert.equal(e.issue, 7);
@@ -127,6 +127,25 @@ test("every schema's own example goes through the CLI and reads back (the produc
   }
 });
 
+test("loop_entry: the startup migrate's fields (dev-system#888) are written and validate; an entry without them still does, with the fields read as null", () => {
+  const example = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "loop_entry.v1.json"), "utf8")).examples[0];
+  const migrate = {
+    kind: "task", key: "task:migrate:9", status: "failed", attempts: 1, class: "free", rule: "dev-init",
+    started_at: "2026-10-19T01:02:03.456Z", ended_at: "2026-10-19T01:02:04.456Z", agent_id: "box", wake: "migrate",
+    database: "fdb", from_version: null, to_version: 9, duration_ms: 1000, outcome: "failed", error: "boom",
+  };
+  for (const data of [migrate, example]) {
+    const { r, lines } = native(["--type", "loop_entry", "--data", JSON.stringify(data)]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const e = JSON.parse(lines[0]);
+    assert.deepEqual(reader.validateStrict("loop_entry", 1, e.data), []);
+    assert.equal(reader.readEvent(e).data.outcome ?? null, data.outcome ?? null);
+    assert.equal(reader.readEvent(e).data.database ?? null, data.database ?? null);
+  }
+  assert.notDeepEqual(reader.validateStrict("loop_entry", 1, { ...migrate, outcome: "exploded" }), []);
+});
+
 test("wind_down: a full event is written with no warning and validates; bad ones fail strictly or exit 2", () => {
   const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "wind_down.v1.json"), "utf8")).examples[0];
   const write = (data) => native(["--type", "wind_down", "--data", JSON.stringify(data)]);
@@ -145,6 +164,30 @@ test("wind_down: a full event is written with no warning and validates; bad ones
   assert.deepEqual(bad({ ...good, trigger: null }), []);
   const missing = write(noCut);
   assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.deepEqual(missing.lines, []);
+});
+
+test("main_state: a full event is written and validates; one without green is refused with exit 2", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "main_state.v1.json"), "utf8")).examples[1];
+  const { r, lines } = native(["--type", "main_state", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("main_state", 1, JSON.parse(lines[0]).data), []);
+  const { green: _omit, ...noGreen } = good;
+  const missing = native(["--type", "main_state", "--data", JSON.stringify(noGreen)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /main_state v1: field green is missing/);
+  assert.deepEqual(missing.lines, []);
+});
+
+test("settings_changed: a full event is written and validates; one without who is refused with exit 2", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "settings_changed.v1.json"), "utf8")).examples[0];
+  const { r, lines } = native(["--type", "settings_changed", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("settings_changed", 1, JSON.parse(lines[0]).data), []);
+  const { who: _omit, ...noWho } = good;
+  const missing = native(["--type", "settings_changed", "--data", JSON.stringify(noWho)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /settings_changed v1: field who is missing/);
   assert.deepEqual(missing.lines, []);
 });
 
@@ -243,4 +286,44 @@ test("a log that cannot be written warns and exits 0", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /warning: cannot write .* event not recorded/);
   assert.ok(dir);
+});
+
+test("prompt_denied and prompt_waiting: the companion's own data goes through the native mode and reads back (dev-system#1037)", async () => {
+  const { promptData } = await import(path.join(ROOT, "plugins", "factory-loop-workspace", "hooks", "prompt.ts"));
+  const facts = {
+    life: "ss1x2k", seq: 7, step: "build", attempt: 1, agent: "agent-1", agent_type: "factory-loop:builder", tool: "Bash",
+    slot: "/slot", session: "s1", transcript: "/t.jsonl", why: "rm of a glob", input: "rm -f $D/*", branch: "issue-571", pr: 612,
+  };
+  for (const type of ["prompt_denied", "prompt_waiting"]) {
+    for (const f of [facts, {}]) {
+      const data = promptData(type, f);
+      const { r, lines } = native(["--type", type, "--issue", "571", "--repo", "o/r", "--data", JSON.stringify(data)]);
+      assert.equal(r.status, 0, `${type}: ${r.stderr}`);
+      assert.equal(r.stderr, "", type);
+      const e = JSON.parse(lines[0]);
+      assert.equal(e.type, type);
+      assert.equal(e.issue, 571);
+      assert.deepEqual(reader.validateStrict(type, e.type_version, e.data), [], type);
+      assert.deepEqual(reader.readEvent(e).data, data, type);
+    }
+  }
+});
+
+test("usage: a spend reading is written with no warning through --data and --note; a string spend_usd is refused (dev-system#1114)", () => {
+  const spend = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "usage.v1.json"), "utf8")).examples[1];
+  const { r, lines } = native(["--type", "usage", "--data", JSON.stringify(spend)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "");
+  const e = JSON.parse(lines[0]);
+  assert.deepEqual(reader.validateStrict("usage", 1, e.data), []);
+  assert.deepEqual(reader.readEvent(e).data, spend);
+  const bad = native(["--type", "usage", "--data", JSON.stringify({ ...spend, spend_usd: "42.5" })]);
+  assert.equal(bad.r.status, 2, bad.r.stderr);
+  assert.deepEqual(bad.lines, []);
+  const viaNote = native(["usage", "--note", "auth=api-key spend_usd=42.5 budget_usd=100 budget_resets_at=2026-11-01T00:00:00.000Z source=spend"], { env: { HOME: tmp } });
+  assert.equal(viaNote.r.status, 0, viaNote.r.stderr);
+  const events = viaNote.lines.map((l) => JSON.parse(l)).filter((x) => x.type === "usage");
+  assert.equal(events.length, 1, "the note is dual-written as a usage event");
+  assert.equal(events[0].data.spend_usd, 42.5);
+  assert.deepEqual(reader.validateStrict("usage", 1, events[0].data), []);
 });

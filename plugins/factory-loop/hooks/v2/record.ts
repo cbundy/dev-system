@@ -12,6 +12,7 @@ import { readEvent } from './event-reader'
 import { parseTransition } from './events'
 import type { TransitionEvent } from './events'
 import { lifeAt } from './keys'
+import { partsOfData } from './park-parts'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { IssueRecord, IssueState, WaitCondition } from './types'
 
@@ -148,6 +149,7 @@ function recordOfRow(row: Record<string, string>): { record: IssueRecord; ts: nu
     fixes: d.fixes as number,
     round: d.round as number,
     question: d.question as string | null,
+    parts: partsOfData(d),
     wait: d.wait as WaitCondition[] | null,
     why: why as IssueRecord['why'],
     notes: d.notes as string[],

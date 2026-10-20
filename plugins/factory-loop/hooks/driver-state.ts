@@ -98,6 +98,9 @@ export const S = {
   // dev-restart-self returned (rule H4): the workspace is about to be replaced, so nothing more is
   // started in this module's life, and the next load finds the update done (act.ts updateDone)
   restartAsked: null as Ms | null,
+  // the request R2 wrote for that restart (a wind-down, v2 SPEC 10.11): the loop keeps acting in
+  // wind-down meanwhile and starts nothing; null once it is stale or when no request was written
+  restartRequestAt: null as Ms | null,
   // the store refused the last ledger write (persist); null once one succeeds
   saveProblem: null as string | null,
   // serialized work: ledger saves, the act lock's writes, the hooks that change the ledger, and the
@@ -137,14 +140,14 @@ export const delivered = new Map<string, Ms>()
 export const reportedWakes = new Set<string>()
 // agents whose answer is being handled, when each was first listed with its turn ended (idle or
 // completed), and when each was sent its repair message (act.ts)
-export const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+export const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
 // the loop's own agent types with a repair message of the loop's on its way, and how many: the
 // engine resumes an agent only as a type it offers the model, so the loop offers its hidden types
 // for just that long (repairTo, #559)
 export const resuming = new Map<string, number>()
 
 // ping: an agent of the loop finished (`agent <id>`), a wake was answered (`wake <id>`), an owner
-// control arrived (`owner <op>`).
+// control arrived (`owner <op>` for /factory, `judge <op>` for the control tool).
 export function ping(why: string) {
   S.ask?.('ping', why)
 }

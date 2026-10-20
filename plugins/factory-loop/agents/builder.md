@@ -41,11 +41,21 @@ it; never use run_in_background: your turn ends only with your answer.
 ## Verification
 
 - Run the repo's own lint and test commands (its `CLAUDE.md`, canonical commands) in the
-  foreground and let them finish. When you end your turn the loop runs the repo's gate commands,
-  when the repo sets them, in your slot; while they fail it hands you the failures, and you fix them and end your turn
-  again. CI on the PR is the final gate.
+  foreground and let them finish. When the repo sets gate commands, run only the suites you are
+  changing (as its `CLAUDE.md` names) and not the full commands: when you end your turn the loop
+  runs the gate commands in your slot, and while they fail it hands you the failures, and you fix
+  them and end your turn again. With no gate commands, run the full commands once before you
+  answer. CI on the PR is the final gate.
 - For a bug, write the regression test first and see it fail against the broken code: a test
   that only ever passed proves nothing.
+- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker, `<!-- factory-loop:flake:<hash> -->` in its body), reproduce
+  the flake under load before changing code, then fix the cause (real waits instead of sleeps,
+  wall-clock time, shared state, ordering). Put the stress command, the reproduced failure and
+  the run of consecutive passes in your evidence. Add no retry, skip or raised timeout without a
+  written reason sized to what the test does; `callum-flow-test-weakening` applies. Load the
+  machine inside the command rule with one foreground command that starts the load, records
+  their PIDs, runs the repeated test, and waits on those PIDs before it exits, so no background
+  run is left behind.
 - Fix a test double before trusting it: a fake that ignores what the test checks proves nothing.
 - Build the fixture a guard needs when real data cannot reach it, and show the guard really
   works.

@@ -201,10 +201,11 @@ function answerBlock(place: ScriptPlace, lead: string, example: string, fields: 
 export function gateRule(i: WorkInput): string {
   const lead = "Run the repo's own lint and test commands (CLAUDE.md, canonical commands) in the foreground and let them finish"
   const debugging = "While debugging, run only the suite you are changing, as the repo's CLAUDE.md names, then the full commands once."
+  const subsets = "Run only the suites you are changing, as the repo's CLAUDE.md names, and not the full commands: the loop runs them at the end of your turn."
   const commands = i.gateCommands.map(c => c.replace(/\s+/g, ' ').trim()).filter(c => c !== '')
   if (commands.length === 0) return `${lead}: they must pass before you answer. ${debugging} CI on the PR is the final gate.`
   const list = commands.map(c => `\`${c.replace(/`/g, "'")}\``).join(', then ')
-  return `${lead}. When you end your turn the loop runs ${list} in this slot; while they fail it hands you the failures, and you fix them and end your turn again. ${debugging} CI on the PR is the final gate.`
+  return `${lead}. When you end your turn the loop runs ${list} in this slot; while they fail it hands you the failures, and you fix them and end your turn again. ${subsets} CI on the PR is the final gate.`
 }
 
 const QUALITY =
@@ -224,7 +225,7 @@ export function designPrompt(i: DesignInput): string {
       : []
   const out = [
     ...slotLine(i),
-    `You are the factory loop's designer for issue #${i.issue} (${issueUrl(i)}). You read the issue and the code, and answer with a design brief, a question for the owner, a wait on a condition the loop checks, or a split into smaller issues. The loop posts the brief and makes the issues: you write nothing to GitHub.`,
+    `You are the factory loop's designer for issue #${i.issue} (${issueUrl(i)}). You read the issue and the code, and answer with a design brief, a question for the owner, a wait on a condition the loop checks, a done close when the work is already merged, or a split into smaller issues. The loop posts the brief and makes the issues: you write nothing to GitHub.`,
     '',
     readFirst(),
     readerRules(i),
@@ -240,7 +241,7 @@ export function designPrompt(i: DesignInput): string {
     '',
     `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
     `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
-    'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open.',
+    'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open and a `## Compatibility` section.',
     '',
     ...answerBlock(
       i.place,
@@ -251,13 +252,17 @@ export function designPrompt(i: DesignInput): string {
     '',
     `When the work is blocked only on a fact the loop can check, wait instead of asking: the loop parks nothing, links this issue as blocked by the issues you name, checks each condition itself and resumes your design once every one holds, with a note naming what cleared. Record it the same way:`,
     '{"kind": "wait", "conditions": [{"kind": "issue-closed", "issue": 57}, {"kind": "pr-merged", "pr": 812}, {"kind": "tag-contains", "sha": "35bb655"}], "reason": "<one line: what you wait for and why>", "brief": null}',
-    `conditions: 1 to 8, each an issue that must be closed ({"kind": "issue-closed", "issue": N}) or a pull request that must be merged ({"kind": "pr-merged", "pr": N}); or a release tag that carries a commit ({"kind": "tag-contains", "sha": "<7 to 40 hex>"}: the newest release tag must contain that commit, for example when a change waits until a release ships the commit its readers need, and the loop answers the release itself, so never ask the owner for one); N is at least 1, never #${i.issue} itself, and no condition twice. reason: one line, at most 500 characters. brief: a draft written so far, or null. The answer script checks each condition on GitHub before it records the wait: the sha must be a commit of this repo, this repo must already have a release, and the issue or pull request must exist (and not be a pull request closed unmerged); a wait that could never clear is refused with the reason. Wait only when nothing else is needed from the owner; a choice the owner must make is a question, and never ask the owner to cut a release (the release is decided elsewhere).`,
+    `conditions: 1 to 8, each an issue that must be closed ({"kind": "issue-closed", "issue": N}) or a pull request that must be merged ({"kind": "pr-merged", "pr": N}); or a release tag that carries a commit ({"kind": "tag-contains", "sha": "<7 to 40 hex>"}: the newest release tag must contain that commit, for example when a change waits until a release ships the commit its readers need, and the loop answers the release itself, so never ask the owner for one); N is at least 1, never #${i.issue} itself in this repo, and no condition twice. A tag-contains or issue-closed condition may also name another repo: add "repo": "owner/name" (for example a consumer waiting for a dev-system release: {"kind": "tag-contains", "sha": "<sha>", "repo": "cbundy/dev-system"}); the sha is then a commit of that repo, its newest release is the tag, and the issue is that repo's (no issue link is made for it); a pr-merged condition takes no repo. reason: one line, at most 500 characters. brief: a draft written so far, or null. The answer script checks each condition on GitHub before it records the wait: the sha must be a commit of this repo (or of the repo the condition names), that repo must already have a release, and the issue or pull request must exist (and not be a pull request closed unmerged); a wait that could never clear is refused with the reason. Wait only when nothing else is needed from the owner; a choice the owner must make is a question, and never ask the owner to cut a release (the release is decided elsewhere).`,
+    '',
+    `When the issue's work is already merged on origin/${baseOf(i)} (a pull request merged, or a commit on it) and its Run it, if it has one, is recorded on the issue, answer done: the loop checks the evidence and closes the issue as completed. Record it the same way:`,
+    '{"kind": "done", "evidence": {"pr": 812, "commit": null, "runIt": null}, "reason": "<one line: what shipped and where>", "brief": null}',
+    `evidence: at least one of pr (a pull request of this repo, which must be merged) and commit (7 to 40 hex, which must be on ${baseOf(i)}); runIt, when the issue has a Run it, is the URL of the comment on this issue that records it (https://github.com/${i.repo}/issues/${i.issue}#issuecomment-<digits>), else null. reason: one line, at most 500 characters. The answer script checks the evidence on GitHub and the loop checks it again against origin: work that is only on a branch or in an open pull request is never done, so design it. A closing keyword never goes in the reason.`,
     '',
     `When the issue is too large or risky for one change, split it: the loop makes each child an issue under #${i.issue}, links each to what it waits on, and labels ready the children you mark ready. Record the split the same way, with jq --rawfile for each long text when that is easier:`,
     `{"kind": "split", "brief": "<the plan of the whole: what each child does and in what order>", "reasons": {"why_split": "<...>", "why_count": "<...>", "why_parts": "<...>", "why_order": "<...>"}, "children": [{"key": "a", "title": "<one line>", "why": "<one line>", "body": "<the child's own brief, in the brief's shape, with its ## Rollout>", "blockedBy": [], "ready": true}, {"key": "b", "title": "...", "why": "...", "body": "...", "blockedBy": ["a", "#57"], "ready": true}]}`,
     'reasons: four short, concrete texts (each at most 500 characters) that name what you weighed. why_split: size, the areas touched, an owner decision or spike inside it, risk. why_count: why this many parts, not fewer or more. why_parts: why the boundaries fall where they do. why_order: why the blockedBy order is what it is, or that the parts are independent. Each child has a one-line why (at most 200 characters): what makes it a part of its own. The loop shows them on the issue.',
     'A split child is a whole issue: its ## Rollout (in a child body, and in a brief for an issue that is itself a split child) is merge, or run-it with its own ## Run it, or keep-open only for research, a proposal or a Done-when that needs a person - never because it is part of an epic or a split.',
-    `children: 2 to 10, each key short (lower-case letters, digits, dashes) and unique; blockedBy: the keys of the siblings it waits on, or #<N> for an existing open issue in this repo it waits on (never #${i.issue}, which stays open); ready: false only for a child that carries an open owner decision. Record one answer only, then end your turn.`,
+    `children: 2 to 10, each key short (lower-case letters, digits, dashes) and unique; blockedBy: the keys of the siblings it waits on, or #<N> for an existing open issue in this repo it waits on (never #${i.issue}, which stays open); ready: false only for a child that carries an open owner decision, and then give it a "decision" in the shape of a question answer: {"question": "<the decision as one sentence>", "context": "<optional>", "options": [{"key": "A", "title": "<...>", "detail": "<optional>"}, ...], "recommendation": {"key": "A", "reason": "<...>"}} (options 2 to 6, the rendered text at most 2000 characters; a ready child takes none). The loop claims a not-ready child at once and parks it with that decision for the owner, and resumes its design when the owner answers. Record one answer only, then end your turn.`,
   ]
   return out.join('\n')
 }

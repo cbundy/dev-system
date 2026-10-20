@@ -1,4 +1,4 @@
-// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 36 rows, each
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 38 rows, each
 // naming the states it applies to, the event it takes, a pure guard, the next state and the pure
 // change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
@@ -9,7 +9,8 @@
 // Pure: the time is the caller's `now`, the settings the caller's Config.
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
-import type { EmitState, IssueRecord, IssueState, Row, TableEvent, WaitCondition } from './types'
+import { waitKey } from './sources-waits'
+import type { EmitState, IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -22,7 +23,7 @@ export const LIVE_STATES: readonly IssueState[] = ISSUE_STATES.filter(s => s !==
 // and T15. A step module that gives another one is read as unknown (normalize).
 export const NOT_OK_REASONS: Readonly<Record<IssueState, readonly string[]>> = {
   queued: [],
-  designing: ['question', 'split', 'wait'],
+  designing: ['question', 'split', 'wait', 'done'],
   building: ['cannot', 'no-commit'],
   reviewing: ['changes', 'ci-red', 'conflict'],
   fixing: ['declined', 'unchanged'],
@@ -41,10 +42,12 @@ export type EventData = {
   // a step's result in words: the builder's reason, the findings, the failed checks, the conflict,
   // the guard's FAIL lines
   text?: string
-  // C1: the release tag the tag-contains reads compared against
-  tag?: string
+  // C1: the release tag each tag-contains read compared against, by the condition's waitKey
+  tags?: Record<string, string>
   // a designer's or the triage's question for the owner (T3, X4)
   question?: string
+  // T3, X4: the parts of that question when the agent structured it
+  parts?: ParkParts | null
   // T2: the brief comment's URL, once the loop posted it
   brief?: string
   // T5, T11: the head a writer confirmed on origin
@@ -180,9 +183,13 @@ function lastTwo(r: IssueRecord, e: TableEvent): string {
 const none = () => ({})
 
 // clearedNote: the line a resumed designer reads in its notes, naming each condition that held.
-function clearedNote(wait: readonly WaitCondition[], tag: string | undefined): string {
+function clearedNote(wait: readonly WaitCondition[], tags: Record<string, string> | undefined): string {
   const held = wait.map(c =>
-    c.kind === 'issue-closed' ? `#${c.issue} closed` : c.kind === 'pr-merged' ? `PR #${c.pr} merged` : `release ${tag ?? 'tag'} contains ${c.sha}`,
+    c.kind === 'issue-closed'
+      ? `${c.repo ?? ''}#${c.issue} closed`
+      : c.kind === 'pr-merged'
+        ? `PR #${c.pr} merged`
+        : `release ${tags?.[waitKey(c)] ?? 'tag'}${c.repo === undefined ? '' : ` of ${c.repo}`} contains ${c.sha}`,
   )
   // not ending on "closed": a prompt rewrites a closing keyword at a line's end (prompts.ts neutral)
   return `The loop resumed this: ${held.join(', ')}; every condition holds.`
@@ -211,6 +218,8 @@ function leased(r: IssueRecord): Partial<IssueRecord> {
 // E7 is the fallback, one row per event kind (E7_ROWS).
 const ROWS: readonly Row[] = [
   { id: 'S0', states: [], on: 'ok', next: 'queued', change: none, via: 'claim' },
+  // a split's not-ready child, claimed at once: parked on its open decision (8.7), made by madeRecord too
+  { id: 'S7', states: [], on: 'ok', next: 'parked', change: none, via: 'split-decision' },
   // step results (S3)
   { id: 'T1', states: ['queued'], on: 'ok', when: r => ownStep(r), next: 'resumeTo', change: leased, via: 'lease' },
   { id: 'T2', states: ['designing'], on: 'ok', when: r => ownStep(r), next: 'building', change: (r, e) => ({ brief: dataOf(e).brief ?? r.brief }), via: 'brief' },
@@ -220,7 +229,7 @@ const ROWS: readonly Row[] = [
     on: 'not-ok',
     when: (r, e) => ownStep(r) && e.reason === 'question',
     next: 'parked',
-    change: (_r, e) => ({ question: questionOf(e, 'the designer asks the owner'), resumeTo: 'designing' }),
+    change: (_r, e) => ({ question: questionOf(e, 'the designer asks the owner'), parts: dataOf(e).parts ?? null, resumeTo: 'designing' }),
     via: 'question',
   },
   { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), via: 'split' },
@@ -233,6 +242,7 @@ const ROWS: readonly Row[] = [
     change: (_r, e) => ({ wait: dataOf(e).conditions ?? null, resumeTo: 'designing', notes: own(textOf(e, 'the designer waits on a condition')) }),
     via: 'wait',
   },
+  { id: 'T18', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'done', next: 'closed', change: (_r, e) => ({ why: 'done', notes: own(textOf(e, 'done')) }), via: 'done' },
   { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'build' },
   {
     id: 'T6',
@@ -361,6 +371,7 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => onTriage(r) && (e.choice === 'park' || (e.choice === 'fix' && !fixValid(r, e, c))),
     next: 'parked',
     change: (r, e) => ({
+      parts: e.choice === 'park' ? (dataOf(e).parts ?? null) : null,
       question:
         e.choice === 'park'
           ? questionOf(e, 'the triage asks the owner')
@@ -391,7 +402,7 @@ const ROWS: readonly Row[] = [
     states: ['waiting'],
     on: 'cleared',
     next: 'queued',
-    change: (r, e) => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [], dataOf(e).tag)) }),
+    change: (r, e) => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [], dataOf(e).tags)) }),
     via: 'cleared',
   },
   // the parked state (S6)
@@ -412,7 +423,7 @@ const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE
 
 export const TABLE: readonly Row[] = [...ROWS, ...E7_ROWS]
 
-// The 35 row ids, in the table's order.
+// The row ids, in the table's order.
 export const ROW_IDS: readonly string[] = [...new Set(TABLE.map(r => r.id))]
 
 // laterOf: the later of two GitHub timestamps (ISO strings compare in time order).
@@ -439,7 +450,7 @@ export function normalize(r: IssueRecord, e: TableEvent): TableEvent {
 // Throws when two rows match: the guards are exclusive, so that is a bug the totality test finds.
 export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row {
   const ev = normalize(r, e)
-  const hits = ROWS.filter(row => row.id !== 'S0' && row.on === ev.kind && row.states.includes(r.state) && (row.when === undefined || row.when(r, ev, c)))
+  const hits = ROWS.filter(row => row.id !== 'S0' && row.id !== 'S7' && row.on === ev.kind && row.states.includes(r.state) && (row.when === undefined || row.when(r, ev, c)))
   if (hits.length > 1) throw new Error(`rowFor: ${hits.map(h => h.id).join(', ')} all match ${r.state}/${r.step ?? 'none'} on ${ev.kind}`)
   const hit = hits[0] ?? E7_ROWS.find(row => row.on === ev.kind)
   if (hit === undefined) throw new Error(`rowFor: no row for ${ev.kind}`)
@@ -485,21 +496,35 @@ export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): Is
     cut: entered ? false : r.cut,
     notes: entered ? [] : r.notes,
     question: state === 'parked' ? r.question : null,
+    parts: state === 'parked' ? r.parts : null,
     wait: state === 'waiting' ? r.wait : null,
     why: state === 'closed' ? r.why : null,
     resumeTo: state === 'parked' || state === 'queued' || state === 'waiting' ? r.resumeTo : null,
   }
-  return { ...base, ...row.change(r, ev, now) }
+  const change = row.change(r, ev, now)
+  // parts never outlive the question they belong to
+  return { ...base, ...('question' in change && !('parts' in change) ? { parts: null } : {}), ...change }
 }
 
 // The claim a record is made from (S0, 3.5): the life (the claim's time in base-36 seconds), the
 // branch (an adopted PR's head branch, else issue-<N>), the adopted PR and the others left alone.
-export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[] }
+// park: a split's not-ready child, claimed to park on its open decision (row S7, 8.7).
+export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[]; park?: { question: string; parent: number; parts?: ParkParts | null } }
+
+// The first note of a split child's parked record: park-text.ts reads the parent back from it.
+export const splitParkNote = (parent: number) => `Split from #${parent}: it parked on its open decision.`
 
 // madeRecord: row S0's queued record: a lease leads to designing, or to reviewing for an adopted
 // PR, whose whole diff the review reads (3.5). lives: its life's number since the issue's count
 // last started (lives.ts).
 export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
+  const base = madeQueued(claim, now, lives)
+  if (claim.park === undefined) return base
+  // row S7: parked at once, the designer's step still to come (a resume goes on with designing)
+  return { ...base, state: 'parked', resumeTo: 'designing', step: null, question: claim.park.question, parts: claim.park.parts ?? null, notes: [splitParkNote(claim.park.parent)] }
+}
+
+function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
   const others = claim.others.length === 0 ? [] : [`other open PRs on this issue's branches, left alone: ${claim.others.map(p => `#${p}`).join(', ')}`]
   return {
     issue: claim.issue,
@@ -521,6 +546,7 @@ export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
     fixes: 0,
     round: 0,
     question: null,
+    parts: null,
     wait: null,
     why: null,
     notes: others,
@@ -531,3 +557,4 @@ export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
 
 // S0's row, for the transition that makes a record.
 export const ROW_S0: Row = ROWS[0] as Row
+export const ROW_S7: Row = ROWS[1] as Row

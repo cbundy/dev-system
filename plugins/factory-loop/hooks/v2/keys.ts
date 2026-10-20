@@ -47,6 +47,24 @@ export function gateRunKey(r: RecordRef, startedAtMs: number): string {
   return `${seqKey(r)}/gate/${startedAtMs.toString(36)}`
 }
 
+// mainKey: a change in the state of the default branch, from the last state logged to this one
+// (rules-main.ts): main/<last>/<current>, each a state key (`none` before the first).
+export function mainKey(last: string, current: string): string {
+  return `main/${last}/${current}`
+}
+
+// releasedKey: a release tag logged (rule O4): released:<repo>:<tag>. The tag is the third segment.
+export function releasedKey(repo: string, tag: string): string {
+  return `released:${repo}:${tag}`
+}
+
+// milestoneStateKey: a change in the milestone's reading (rule O5): milestone-state/<fingerprint of the
+// reading>/<base-36 end of the newest done entry, or 0>, so the ledger makes each change once and a
+// reading that comes back is logged again.
+export function milestoneStateKey(fingerprint: string, lastEndedAt: number): string {
+  return `milestone-state/${fingerprint}/${lastEndedAt.toString(36)}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`
@@ -108,6 +126,23 @@ export function rerunKey(r: Life, round: number, runId: string): string {
   return `${lifeKey(r)}/rerun/r${round}/${runId}`
 }
 
+// refusedProbeKey and refusedGoKey: the re-runs of a run GitHub refused to start (rules-refused.ts, 8.5): the
+// probe of period k of a refusal spell, and the one re-run once Actions runs again. Neither matches
+// the round's rerunKey, which stays free for a real failure afterwards.
+export function refusedProbeKey(r: Life, runId: string, k: number): string {
+  return `${lifeKey(r)}/refused/${runId}/p${k}`
+}
+
+export function refusedGoKey(r: Life, runId: string): string {
+  return `${lifeKey(r)}/refused/${runId}/go`
+}
+
+// refusedKeyOf: 'probe' or 'go' for the rest of a refused run's key (after the life), else null.
+export function refusedKeyOf(rest: string): 'probe' | 'go' | null {
+  const m = /^refused\/\d+\/(p\d+|go)$/.exec(rest)
+  return m === null ? null : m[1] === 'go' ? 'go' : 'probe'
+}
+
 // queueKey: Q1's update, by main's head at plan time, or Q2's merge, by the PR's head (9.2, 9.3).
 export function queueKey(r: Life, op: 'update' | 'merge', sha: string): string {
   return `${lifeKey(r)}/queue/${op}/${short(sha)}`
@@ -154,4 +189,22 @@ export function keyParts(key: string): { issue: number; life: string; seq: numbe
 // finds the park's comment (park-text.ts).
 export function hiddenKey(key: string): string {
   return `<!-- factory-loop:${key} -->`
+}
+
+// --- flake bugs (rules-flake-bugs.ts, appendix C) ----------------------------------------------------------
+
+// flakeBugKey: the bug filed for a test, by the first flake of the test in the window.
+export function flakeBugKey(hash: string, firstFlake: string): string {
+  return `flake-bug/${hash}/${firstFlake}`
+}
+
+// flakeCommentKey: the comment (and the body's hidden marker) for one flake of a test on its bug.
+export function flakeCommentKey(hash: string, flake: string): string {
+  return `flake-bug/${hash}/c/${flake}`
+}
+
+// flakeMarker: the marker a flake bug's body carries, which finds it again by the test's hash: the
+// hidden key of `flake:<hash>`.
+export function flakeMarker(hash: string): string {
+  return hiddenKey(`flake:${hash}`)
 }

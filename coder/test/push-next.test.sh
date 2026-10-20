@@ -101,7 +101,7 @@ TEMPLATE_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/../dev-system" && pwd)
 run_case 1 "$PUSH_NEXT"
 expect_rc -eq
 check_invariants
-grep -q "^templates push dev-system-next --directory $TEMPLATE_DIR --yes --variable template_tester_secrets_dir= --variable coder_login_secrets_dir= " "$case/calls" \
+grep -q "^templates push dev-system-next --directory $TEMPLATE_DIR --yes --variable template_tester_secrets_dir= --variable coder_login_secrets_dir= --variable migrator_secrets_dir= " "$case/calls" \
   || fail "push call wrong: $(cat "$case/calls")"
 push_name=$(grep '^templates push' "$case/calls" | sed -E 's/.* --name ([^ ]+).*/\1/')
 if [ "${#push_name}" -gt 64 ] || ! printf '%s' "$push_name" | grep -Eq '^[a-zA-Z0-9]+([_.-][a-zA-Z0-9]+)*$'; then

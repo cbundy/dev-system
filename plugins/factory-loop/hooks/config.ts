@@ -44,6 +44,7 @@ export const DEFAULT_CONFIG: Config = {
   updateBehindRetries: 3,
   ciStallRecheckMs: 15 * MIN,
   blindNoticeAfterMs: 15 * MIN,
+  starvedNoticeAfterMs: 60 * MIN,
   agentTimeoutMs: { designer: 60 * MIN, implementer: 120 * MIN, adjudicator: 30 * MIN, fixer: 120 * MIN },
   wakeTimeoutMs: { judge: 30 * MIN, task: 360 * MIN, tell: 30 * MIN },
   maxAttempts: {
@@ -86,7 +87,8 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
-  eventsSource: 'shadow',
+  // new since #978 (was shadow); `/factory config set eventsSource old` is the way back, taken on the next pass
+  eventsSource: 'new',
   // v2 (v2 SPEC appendix A)
   stateTimeoutMs: {
     design: 45 * MIN,
@@ -102,11 +104,17 @@ export const DEFAULT_CONFIG: Config = {
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,
   prEveryMs: 30_000,
+  mainEveryMs: 5 * MIN,
   maxTriages: 2,
   windDownMinutes: 10,
   minimumReleaseCadenceMs: 6 * 60 * MIN,
   releaseBranchPrefix: null,
   releaseHoldMs: 10 * MIN,
+  releaseInProgressMs: 2 * 60 * MIN,
+  flakeWindowDays: 7,
+  flakeBugMin: 2,
+  flakeBugReadyCap: 2,
+  flakeEpic: null,
   maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
@@ -184,7 +192,7 @@ export function shortDuration(ms: Ms): string {
 
 // Every action kind, for the loaders that read one from text (v2 SPEC 13.6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
-  'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
+  'heartbeat', 'sweep', 'claim', 'close-issue', 'delete-branch', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent',
   'judge', 'task', 'tell', 'title',
   ...V2_ACTION_KINDS,
 ]
@@ -312,6 +320,15 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'maxTriages' || key === 'windDownMinutes') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number')
+      } else if (key === 'flakeWindowDays' || key === 'flakeBugMin') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 1) out[key] = value
+        else bad(raw, value, 'a whole number of at least 1')
+      } else if (key === 'flakeBugReadyCap') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
+        else bad(raw, value, 'a whole number')
+      } else if (key === 'flakeEpic') {
+        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
+        else bad(raw, value, 'an issue number or null')
       } else if (key === 'maxLives') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 1) out[key] = value
         else bad(raw, value, 'a whole number of at least 1')

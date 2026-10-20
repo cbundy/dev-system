@@ -1,0 +1,8 @@
+{"at":"2026-10-20T10:59:29.101Z","plugin":"loop","check":"prepared","slot":"<run>/gate-queue/slot","exitCode":0,"stderr":""}
+{"at":"2026-10-20T10:59:29.115Z","plugin":"loop","check":"prepared","slot":"<run>/gate-queue/slot-572","exitCode":0,"stderr":""}
+{"at":"2026-10-20T10:59:33.152Z","plugin":"loop","check":"spawned","issue":571,"tries":1,"agentId":"a7289f2548672e87c","deny":null}
+{"at":"2026-10-20T10:59:43.145Z","plugin":"loop","check":"spawned","issue":572,"tries":1,"agentId":"aeb4d45d5e2c7840a","deny":null}
+{"at":"2026-10-20T11:08:34.794Z","plugin":"loop","check":"answered","agentId":"a7289f2548672e87c","answer":"done"}
+{"at":"2026-10-20T11:13:34.834Z","plugin":"loop","check":"answered","agentId":"aeb4d45d5e2c7840a","answer":"done"}
+2026-10-20T11:08:34.767Z [INFO] [Stall] agent_completion agentId=a7289f2548672e87c agentType=factory-loop:builder exitPath=completed durationMs=541625 turns=1 finalStopReason=end_turn lastChunkAgeMs=540035 lastToolUseId=none lastToolResultSeen=none
+2026-10-20T11:13:34.830Z [INFO] [Stall] agent_completion agentId=aeb4d45d5e2c7840a agentType=factory-loop:builder exitPath=completed durationMs=831697 turns=1 finalStopReason=end_turn lastChunkAgeMs=829701 lastToolUseId=none lastToolResultSeen=none

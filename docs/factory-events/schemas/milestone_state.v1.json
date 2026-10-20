@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "milestone_state.v1.json",
+  "title": "milestone_state",
+  "description": "The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["milestone_closed", "milestone_open", "oldest_closed_at", "last_tag", "oldest_unreleased_merge_at", "expected", "holding", "hold_reason"],
+  "properties": {
+    "milestone_closed": { "type": "integer", "minimum": 0, "description": "Closed issues in the milestone.", "x-column": true },
+    "milestone_open": { "type": "integer", "minimum": 0, "description": "Open issues in the milestone.", "x-column": true },
+    "oldest_closed_at": { "type": ["string", "null"], "format": "date-time", "description": "When the oldest closed issue in the milestone closed; null when none is closed." },
+    "last_tag": { "type": ["string", "null"], "description": "The newest release tag; null when the repo has none." },
+    "oldest_unreleased_merge_at": { "type": ["string", "null"], "format": "date-time", "description": "When the oldest merged pull request not yet in a release merged; null when none." },
+    "expected": { "enum": ["patch", "minor", "major", null], "description": "The size of the release the unreleased work calls for; null when undecided." },
+    "holding": { "type": "boolean", "description": "true when the newest release task for this milestone ended in hold and no release followed.", "x-column": true },
+    "hold_reason": { "type": ["string", "null"], "maxLength": 200, "description": "Why the judge held; null when not holding." }
+  },
+  "examples": [
+    { "milestone_closed": 3, "milestone_open": 1, "oldest_closed_at": "2026-10-17T10:00:00Z", "last_tag": "v0.61.0", "oldest_unreleased_merge_at": "2026-10-17T09:55:12Z", "expected": "minor", "holding": true, "hold_reason": "an open issue changes the same schema" },
+    { "milestone_closed": 0, "milestone_open": 0, "oldest_closed_at": null, "last_tag": null, "oldest_unreleased_merge_at": null, "expected": null, "holding": false, "hold_reason": null }
+  ]
+}

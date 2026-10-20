@@ -5,7 +5,7 @@ description: >-
   health on a schedule, find problems in its outcomes, file bugs, and step in
   only when the loop cannot help itself. Use when the owner asks a session to
   supervise, babysit or be the foreman for a repo's factory loop.
-version: 0.57.0
+version: 0.71.0
 ---
 
 # Foreman
@@ -28,7 +28,7 @@ make sure the right fix gets made, and keep the owner told.
    lock held by another session.
 2. Every live issue: is its state moving? A record with no step, and the same skip line pass after pass, is
    the thing to explain.
-3. New outcomes since the last check: merges, parks, triage, unknowns, breaker trips, interventions. Read a
+3. New outcomes since the last check: merges, parks, triage, unknowns, breaker trips, interventions (a `who=judge` intervention is the judge's own control op, not the owner's). Read a
    park's question, and look at a merged PR's evidence.
 4. Cost: GitHub API use (`gh api rate_limit`) and pass time.
 
@@ -50,3 +50,9 @@ Never claim, label, merge, or run agents for the loop. Never touch other repos' 
 ## Report
 A short update to the owner after each check that found something, and a daily summary. Lead with what needs
 them, link every issue and PR, and say what is blocked and on what.
+
+The daily summary lists the flake bugs the loop filed (rule F1): how many were filed, readied, held by
+`flakeBugReadyCap`, fixed (closed or merged) and are still open, with a link to each open one and the
+test it is for. Take the counts from the daily-summary query in `docs/metrics.md` section 2d (run it with
+`dev-query --factory`, `-v repo=<owner/name> -v since=<24 hours ago>`), and name each held bug as one the
+owner can ready.

@@ -37,6 +37,7 @@ import { skip, want } from '../foundation'
 import type { Action, LedgerEntry, State } from '../types'
 import { logOnce } from './events'
 import { keyParts, lifeKey, prKey, rerunKey, reviewKey, reviewPrepareKey, short } from './keys'
+import { isRefused, refusedLine } from './refused'
 import { agentStep, lifeEntries, timeoutOf, triggerOf, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import { stalledTell, stopKey } from './rules-entry'
@@ -268,7 +269,12 @@ function reviewer(env: StepEnv, patch: string): StepRead {
 
 // --- the CI half (8.5) ---------------------------------------------------------------------------------------
 
-type Ci = { kind: 'green' } | { kind: 'red'; notes: string[] } | { kind: 'pending'; why: string; own: StepRead | null }
+type Ci =
+  | { kind: 'green' }
+  | { kind: 'red'; notes: string[] }
+  | { kind: 'pending'; why: string; own: StepRead | null }
+  // a check GitHub refused to start (the account's, refused.ts) and none failed: an outside block
+  | { kind: 'refused'; why: string; own: StepRead | null }
 
 const failedWord = (c: CheckRun) => (c.bucket === 'cancel' ? 'was cancelled' : 'failed')
 const checkName = (c: CheckRun) => `CI check "${c.name.replace(/\s+/g, ' ').slice(0, 120)}"`
@@ -280,7 +286,8 @@ export function rerunRefused(e: LedgerEntry): boolean {
 }
 
 // ciHalf: the head's checks: green, red (a check failed after its one re-run, or GitHub refused
-// to re-run it), or pending, with the re-runs running and, when `plan` is set, those it plans.
+// to re-run it), refused (a check GitHub did not start, and none red: held, never red or green, no
+// re-run spent), or pending, with the re-runs running and, when `plan` is set, those it plans.
 // A re-run is retried with backoff on a transient error; one that used up its attempts holds the
 // record as a stalled effect (effect). A re-run whose answer was lost or timed out is awaited, as
 // is a failed one GitHub took anyway (its run shows a check started or ended since): ciWait
@@ -293,6 +300,7 @@ function ciHalf(env: StepEnv, pv: PrView, head: string, plan: boolean): Ci {
   let awaiting = 0
   const pending = pv.checks.filter(c => c.bucket === 'pending')
   const failing = pv.checks.filter(c => c.bucket === 'fail' || c.bucket === 'cancel')
+  const refused = pv.checks.filter(isRefused)
   const runs = new Map<string, CheckRun[]>()
   for (const c of failing) {
     if (c.runId === null) red.push(`${checkName(c)} ${failedWord(c)} on ${short(head)}; it is not a GitHub Actions run, so it was not re-run${c.link === null ? '' : `: ${c.link}`}`)
@@ -334,6 +342,7 @@ function ciHalf(env: StepEnv, pv: PrView, head: string, plan: boolean): Ci {
     if (read !== 'done' && own === null) own = read
   }
   if (red.length > 0) return { kind: 'red', notes: red }
+  if (refused.length > 0) return { kind: 'refused', why: refusedLine('review', head, refused), own }
   if (own !== null || pending.length > 0 || awaiting > 0 || pv.checks.length === 0) {
     const what = pv.checks.length === 0 ? 'no check yet' : `${pending.length} pending, ${awaiting} awaiting a re-run, ${pv.checks.length - pending.length - failing.length} passed or skipped`
     return { kind: 'pending', why: `review: waits for CI on ${short(head)} (${what})`, own }
@@ -457,7 +466,9 @@ export const reviewStep: StepPlan = env => {
   }
   if (seen.kind === 'green') return result({ kind: 'ok', data: { patch, pr } }, trigger)
   const ci = ciHalf(env, pv, head, true)
-  if (ci.kind === 'pending' && ci.own !== null) return ci.own
+  if ((ci.kind === 'pending' || ci.kind === 'refused') && ci.own !== null) return ci.own
+  // an outside block (the account's): not bounded by ciStartMs or ciRunMs, no github-wait unknown
+  if (seen.kind === 'refused') return held(seen.why)
   const wait = ciWait(env, pv, head, patch)
   if (wait !== null) return result(unknownOf(ctx, r, null, 'github-wait', wait), fact(`github-wait:${pr}@${head}/r${r.round}`))
   return held(seen.why)

@@ -19,7 +19,9 @@
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
 # 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
 # The winner removes `ready`, assigns @me and logs `callum-flow-event claimed`
-# with the note `lease: <minutes>`. It adds no label: the claim is the comment
+# with the note `lease: <minutes>` and, as --data, the issue's title, labels (without `ready`) and
+# parent from the comments read, plus the score and factors of CALLUM_FLOW_CLAIM_SCORE when set and
+# valid (an older callum-flow-event that answers exit 2 gets the call again without it). It adds no label: the claim is the comment
 # and its events, and the factory loop's `factory:*` labels show the state
 # (docs/factory-loop/v2/SPEC.md 3.6).
 # --heartbeat: edits this device's live claim comment in place (a `renewed:` line,
@@ -50,7 +52,9 @@
 #
 # Environment: CALLUM_FLOW_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
 # device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
-# CALLUM_FLOW_READY_LABEL (default `ready`); CALLUM_FLOW_CLAIM_EVENTS_SOURCE (old, new (the
+# CALLUM_FLOW_READY_LABEL (default `ready`); CALLUM_FLOW_CLAIM_SCORE (optional JSON
+# {"score": <int>, "factors": [{"name": <text>, "points": <int>}, ...]}: the claim rule's score,
+# logged on the claimed event; an invalid value warns and is ignored, never changes the claim); CALLUM_FLOW_CLAIM_EVENTS_SOURCE (old, new (the
 # default) or shadow: which event store the held rule reads, claim-events.sh),
 # CALLUM_FLOW_SHADOW_WINDOW_SECONDS (default 604800) and CALLUM_FLOW_SHADOW_SETTLE_SECONDS
 # (default 600), the shadow compare's window and settle time; for tests CALLUM_FLOW_GH_BIN,
@@ -118,6 +122,8 @@ iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 # code: 3 means the issue itself is untrusted, anything else non-zero is a failure.
 comments() {
   _cj=$("$READ" --json "$1" --comments) || return $?
+  # the same read also holds the issue's facts: kept for the claimed event (no new API call)
+  printf '%s' "$_cj" | jq -c '.issue // empty' > "$tmp/issue.json" 2>/dev/null || : > "$tmp/issue.json"
   printf '%s' "$_cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'
 }
 
@@ -251,5 +257,39 @@ if ! set_labels; then
   err "cannot update the labels of #$n - claim withdrawn"
   exit 1
 fi
-"$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || err "warning: could not log the claimed event"
+# The claimed event also carries the issue's title, labels (the ready label the claim just removed
+# left out) and parent, from the comments read above (callum-flow-event --data, cbundy/dev-system#870).
+# A writer that does not know --data answers exit 2: the event is then logged again without it.
+facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
+  {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
+   labels: (if (.labels | type) == "array" then [.labels[] | .name | strings | select(. != $ready)] else null end),
+   parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
+     | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' "$tmp/issue.json" 2>/dev/null) || facts=
+# The claim rule's score (CALLUM_FLOW_CLAIM_SCORE), checked here against the shape the translator
+# enforces so a bad value can never turn the claimed event into a translator miss.
+score=
+if [ -n "${CALLUM_FLOW_CLAIM_SCORE-}" ]; then
+  score=$(printf '%s' "$CALLUM_FLOW_CLAIM_SCORE" | jq -cs '
+    select(length == 1) | .[0] | select(type == "object" and (keys | sort) == ["factors", "score"]
+      and (.score | type) == "number" and (.score | floor) == .score
+      and (.factors | type) == "array"
+      and all(.factors[]; type == "object" and (keys | sort) == ["name", "points"]
+        and (.name | type) == "string" and (.name | length) > 0
+        and (.points | type) == "number" and (.points | floor) == .points))' 2>/dev/null) || score=
+  [ -n "$score" ] || err "warning: CALLUM_FLOW_CLAIM_SCORE is not valid - the claim is logged without a score"
+fi
+if [ -n "$score" ]; then
+  [ -n "$facts" ] || facts='{}'
+  facts=$(printf '%s' "$facts" | jq -c --argjson s "$score" '. + $s' 2>/dev/null) || facts=
+fi
+claimed_rc=2
+if [ -n "$facts" ]; then
+  claimed_rc=0
+  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" --data "$facts" >/dev/null 2>&1 || claimed_rc=$?
+fi
+if [ "$claimed_rc" -eq 2 ]; then
+  claimed_rc=0
+  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || claimed_rc=$?
+fi
+[ "$claimed_rc" -eq 0 ] || err "warning: could not log the claimed event"
 exit 0

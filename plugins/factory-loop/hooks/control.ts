@@ -311,7 +311,7 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       }
       return set(
         { updateDue: { reason: op.reason, at: now } },
-        `Update due (${op.reason}): the loop drains, then restarts this workspace once nothing is in flight.`,
+        `Update due (${op.reason}): the loop winds down (up to windDownMinutes), then restarts this workspace.`,
       )
     case 'drop': {
       const v2 = applyDrop(control, op.issue, now)
@@ -522,7 +522,7 @@ export const CONTROL_TOOL: ToolSpec = {
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +
     '(run past the usage tiers up to pct for hours); resume <N...> ["note"] (release what waits on you: ' +
     'unpark issues, the note going to their next step); ' +
-    "retry <N> (clear N's exhausted actions); update [<reason>]|off (drain, then restart this workspace for an " +
+    "retry <N> (clear N's exhausted actions); update [<reason>]|off (wind down, up to windDownMinutes, then restart this workspace for an " +
     'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
     "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
     'trace file, for troubleshooting); stop-now (during a wind-down, stop at once without waiting for what runs, only when the owner asks).',

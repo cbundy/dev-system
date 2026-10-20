@@ -7,11 +7,19 @@ import { readControl, writeControl } from './control'
 import type { Runtime } from './observe'
 import { roleProblem } from './rails'
 import { CUT_ROOM, byteLength, cutLine, isCutLine, traceName, traceRoom } from './trace'
-import type { Action, Ms } from './types'
+import type { Action, Ms, PlanResult, State } from './types'
 import { noteWritten, notingIo } from './v2/store'
 import { append, appendLine, fileIo, killed, v2StoreIo } from './driver-io'
 import { bareState, ensureLedger, hookEnv } from './driver-store'
 import { S, liveV2 } from './driver-state'
+
+// starvedOf: the pass line's `starved`, while the pass is starved: when the spell began (this pass, on its
+// first) and its age in minutes; undefined otherwise, so a spell's start and end show in the log.
+export function starvedOf(result: PlanResult, state: State): { since: string; minutes: number } | undefined {
+  if (result.starved !== true) return undefined
+  const since = state.v2?.starvedSince ?? state.now
+  return { since: new Date(since).toISOString(), minutes: Math.floor((state.now - since) / 60_000) }
+}
 
 // tellError: three passes in a row threw; the owner hears of it once (v2 SPEC 13.10 item 9), from a session
 // that may act: a role the rails refuse tells nothing, as checkRails does.
@@ -75,6 +83,8 @@ export function summaryOf(a: Action) {
     run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
     pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
     reason: a.reason,
+    // a wake action's fields (a tell's since, roots, why...), so the decision log says what it named
+    fields: 'fields' in a && typeof a.fields === 'object' && a.fields !== null ? a.fields : undefined,
   }
 }
 

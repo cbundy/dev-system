@@ -16,6 +16,9 @@ import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { commentBody } from '../hooks/v2/act-state'
 import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-work.mjs'
+import { renderQuestion } from '../hooks/v2/question.mjs'
+import { decisionFallback } from '../hooks/v2/split-decision.mjs'
+import { designOf, legacyDecision } from '../hooks/v2/rules-work'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -36,7 +39,7 @@ const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
 const BIN = `${PLUGIN_ROOT}/bin/factory-answer`
-const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Observability', 'none - no new decision', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
+const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Observability', 'none - no new decision', '', '## Compatibility', 'none - no schema, event or reader change', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
 
 // --- worlds, as v2-state.test.ts builds them ------------------------------------------------------------
 
@@ -77,6 +80,7 @@ const problems = (name: 'design-v2' | 'build' | 'fix', input: unknown, data?: Re
   return c.ok ? [] : c.problems
 }
 
+const FALLBACK = 'This issue was split from #300 and carries an open owner decision. The split did not word it: read the issue, answer in a comment, then resume it.'
 const REASONS = { why_split: 'It spans the loop and the image', why_count: 'Two: one per side', why_parts: 'The image ships on its own', why_order: 'The image waits on the loop' }
 
 describe('the design-v2 contract (8.7)', () => {
@@ -90,8 +94,51 @@ describe('the design-v2 contract (8.7)', () => {
     // texts are kept trimmed
     expect(check('design-v2', { kind: 'split', brief: 'the plan', reasons: { ...REASONS, why_count: '  Two: one per side  ' }, children })).toEqual({
       ok: true,
-      outcome: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children: children.map(c => ({ ...c, body: c.body.trim() })) },
+      outcome: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children: children.map(c => ({ ...c, body: c.body.trim(), decision: c.ready ? null : FALLBACK })) },
     })
+  })
+
+  test('a not-ready child carries a decision, checked as a question answer is and rendered; a ready child takes none', () => {
+    const ready = { key: 'a', title: 'Part one', why: 'The loop side', body: BRIEF, blockedBy: [], ready: true }
+    const waits = (decision?: unknown) => ({ key: 'b', title: 'Part two', why: 'The image side', body: BRIEF, blockedBy: ['a'], ready: false, ...(decision === undefined ? {} : { decision }) })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', reasons: REASONS, children })
+    const decision = { question: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call' }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommendation: { key: 'A', reason: 'Simpler.' } }
+    const out = check('design-v2', split(ready, waits(decision)))
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.outcome.children[0]?.decision).toBeNull()
+    expect(out.outcome.children[1]?.decision).toBe(renderQuestion({ question: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call', detail: null }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommendation: { key: 'A', reason: 'Simpler.' } }))
+    expect(out.outcome.children[1]?.decision).toContain('- [ ] **B** - Two calls')
+    // the checked parts ride with the child: the sentence as given, absent details null
+    expect(out.outcome.children[0]).not.toHaveProperty('decisionParts')
+    expect(out.outcome.children[1]?.decisionParts).toEqual({ decision: 'Which API shape?', context: 'Two callers differ.', options: [{ key: 'A', title: 'One call', detail: null }, { key: 'B', title: 'Two calls', detail: 'More round trips.' }], recommended: 'A', recommendation: 'Simpler.' })
+    // a bare question is the decision alone
+    const bare = check('design-v2', split(ready, waits({ question: 'Which API shape?' })))
+    if (bare.ok) expect(bare.outcome.children[1]?.decision).toBe('Which API shape?')
+    expect(bare.ok).toBe(true)
+    // refused: on a ready child, a bad option key, a rendered text over 2 000 characters, a stray, no question
+    expect(problems('design-v2', split({ ...ready, decision }, waits()))).toEqual(['children[0] (a).decision must be absent or null on a child that is ready: only a child with ready false carries an open owner decision'])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', options: [{ key: 'Z', title: 'x' }, { key: 'B', title: 'y' }] })))).toEqual(['children[1] (b).decision.options[0].key "Z" is not one of A, B, C, D, E, F'])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', context: 'c'.repeat(700), options: [{ key: 'A', title: 'x', detail: 'd'.repeat(300) }, { key: 'B', title: 'y', detail: 'd'.repeat(300) }, { key: 'C', title: 'z', detail: 'd'.repeat(300) }, { key: 'D', title: 'w', detail: 'd'.repeat(300) }, { key: 'E', title: 'v', detail: 'd'.repeat(300) }] })))).toEqual([expect.stringMatching(/^children\[1\] \(b\)\.decision\.question comes to \d+ characters once rendered/)])
+    expect(problems('design-v2', split(ready, waits({ question: 'q', extra: 1 })))).toEqual(['children[1] (b).decision.extra is not a field of a decision (only question, context, options, recommendation)'])
+    expect(problems('design-v2', split(ready, waits({ context: 'no question' })))).toEqual(['children[1] (b).decision.question is required: the decision as one sentence'])
+    expect(problems('design-v2', split(ready, waits('a string')))).toEqual(['children[1] (b).decision must be an object { question, context, options, recommendation }'])
+  })
+
+  test('a not-ready child without a decision still passes: its question is its body\'s Open decisions, cut to 2 000 characters, else a fixed sentence naming the parent', () => {
+    const ready = { key: 'a', title: 'Part one', why: 'The loop side', body: BRIEF, blockedBy: [], ready: true }
+    const waits = (body: string) => ({ key: 'b', title: 'Part two', why: 'The image side', body, blockedBy: ['a'], ready: false })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', reasons: REASONS, children })
+    const decisionOf = (body: string) => {
+      const out = check('design-v2', split(ready, waits(body)))
+      return out.ok ? out.outcome.children[1]?.decision : out.problems
+    }
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n- Which API shape: one call or two?\n\n## Notes\nlater`)).toBe('- Which API shape: one call or two?')
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n${'x'.repeat(2500)}`)).toHaveLength(2000)
+    expect(decisionOf(`${BRIEF}\n\n## Open decisions\n- none`)).toBe(FALLBACK)
+    expect(decisionOf(BRIEF)).toBe(FALLBACK)
+    // the planner holds the same fixed sentence for an answer recorded before `decision` existed
+    expect(legacyDecision(300)).toBe(decisionFallback('none', 300))
   })
 
   test('a blockedBy entry may be #<N>, an existing issue; the issue being split, a malformed reference and a stranger are each refused', () => {
@@ -116,15 +163,36 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
       'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
+      'brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"',
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
-    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait', 'brief is required'])
+    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait, done', 'brief is required'])
     expect(problems('design-v2', 'a brief')).toHaveLength(1)
+  })
+
+  test('a wait condition may name another repo (#981): lower-cased, dropped for the job\'s own repo, refused on a PR or when malformed; the self issue is refused only in the own repo; the same sha in two repos is not twice', () => {
+    const wait = (conditions: unknown[]) => ({ kind: 'wait', conditions, reason: 'why', brief: null })
+    const out = (conditions: unknown[]) => {
+      const c = check('design-v2', wait(conditions))
+      return c.ok ? (c.outcome as { conditions: unknown[] }).conditions : c.problems
+    }
+    expect(out([{ kind: 'tag-contains', sha: '35BB655', repo: 'CBundy/Other' }, { kind: 'issue-closed', issue: 57, repo: 'O/N' }])).toEqual([
+      { kind: 'tag-contains', sha: '35bb655', repo: 'cbundy/other' },
+      { kind: 'issue-closed', issue: 57, repo: 'o/n' },
+    ])
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: REPO.toUpperCase() }, { kind: 'issue-closed', issue: 57, repo: REPO }])).toEqual([{ kind: 'tag-contains', sha: '35bb655' }, { kind: 'issue-closed', issue: 57 }])
+    expect(out([{ kind: 'pr-merged', pr: 4, repo: 'o/n' }])).toEqual(['repo is not a field of conditions[0] (only kind, pr)'])
+    for (const bad of ['o', 'o/n/x', 'o n/x', '/n', 5]) expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: bad }])).toHaveLength(1)
+    expect(out([{ kind: 'issue-closed', issue: 300, repo: REPO }])).toEqual(['conditions[0].issue 300 is the issue itself, which stays open until its work is done, so the wait would never end'])
+    expect(out([{ kind: 'issue-closed', issue: 300, repo: 'o/n' }])).toEqual([{ kind: 'issue-closed', issue: 300, repo: 'o/n' }])
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }, { kind: 'tag-contains', sha: '35bb655', repo: 'a/b' }, { kind: 'tag-contains', sha: '35bb655' }])).toHaveLength(3)
+    expect(out([{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }, { kind: 'tag-contains', sha: '35BB655', repo: 'O/N' }])).toEqual(['conditions[1] repeats tag-contains:o/n@35bb655'])
+    expect(out([{ kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'issue-closed', issue: 5 }])).toEqual(['conditions[1] repeats issue-closed:o/n#5'])
   })
 
   test('a wait names 1 to 8 conditions (an issue closed or a PR merged), one line of reason and optionally a draft; the outcome carries them for a wait alone', () => {
@@ -165,16 +233,47 @@ describe('the design-v2 contract (8.7)', () => {
       'conditions[4] must be an object { kind, issue }, { kind, pr } or { kind, sha }',
     ])
     // stray fields: a PR number on an issue condition, a field of another kind of answer
-    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue)'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue, repo)'])
     expect(problems('design-v2', { ...wait, children: [] })).toEqual(['children must be absent or null unless kind is split'])
-    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)'])
+    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)'])
     // the reason is required, one line, and at most 500 characters
     expect(problems('design-v2', { kind: 'wait', conditions })).toEqual(['reason is required'])
     expect(problems('design-v2', { ...wait, reason: 'two\nlines' })).toEqual(['reason must be one line'])
     expect(problems('design-v2', { ...wait, reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
     expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
-    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait or done'])
+  })
+
+  test('a done close gives its evidence and a one-line reason: the outcome carries them for a done alone, and the summary names the evidence', () => {
+    const done = { kind: 'done', evidence: { pr: 812, commit: 'BD2FEE14', runIt: `https://github.com/${REPO}/issues/300#issuecomment-77` }, reason: '  Shipped in PR 812  ', brief: null }
+    expect(check('design-v2', done)).toEqual({
+      ok: true,
+      outcome: { kind: 'done', brief: null, question: null, evidence: { pr: 812, commit: 'bd2fee14', runIt: `https://github.com/${REPO}/issues/300#issuecomment-77` }, reason: 'Shipped in PR 812', reasons: null, children: [] },
+    })
+    expect(CONTRACTS['design-v2'].summary(done)).toBe('a done close on PR #812')
+    expect(CONTRACTS['design-v2'].summary({ ...done, evidence: { pr: null, commit: 'bd2fee14', runIt: null } })).toBe('a done close on commit bd2fee1')
+    // one of pr and commit is enough, on its own
+    expect(problems('design-v2', { ...done, evidence: { pr: 812 } })).toEqual([])
+    expect(problems('design-v2', { ...done, evidence: { commit: 'bd2fee14' } })).toEqual([])
+    expect(problems('design-v2', { ...done, evidence: { runIt: null } })).toEqual(['evidence needs a merged pr or a commit on the default branch (at least one)'])
+    expect(problems('design-v2', { ...done, evidence: 'PR 812' })).toEqual(['evidence is required for done: { pr, commit, runIt }, at least one of pr and commit'])
+    expect(problems('design-v2', { ...done, reason: 'a'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
+    // a run-it of another issue, or of another repo, is refused; a malformed comment id too
+    expect(problems('design-v2', { ...done, evidence: { pr: 1, runIt: `https://github.com/${REPO}/issues/301#issuecomment-77` } })).toHaveLength(1)
+    expect(problems('design-v2', { ...done, evidence: { pr: 1, runIt: `https://github.com/${REPO}/issues/300#issuecomment-x` } })).toHaveLength(1)
+    // evidence belongs to a done alone
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, evidence: { pr: 1 } })).toEqual(['evidence must be absent or null unless kind is done'])
+  })
+
+  test('a brief must say how it stays compatible: an empty or missing ## Compatibility is refused', () => {
+    const COMPAT = '## Compatibility\nnone - no schema, event or reader change\n\n'
+    const problem = 'brief must have a ## Compatibility section: what changes in a migration, event schema, the event writer or a factory-database reader and why the last 10 minor versions keep working, or "none - no schema, event or reader change"'
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '## Compatibility\n\n') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(COMPAT, '```\n## Compatibility\nnone\n```\n\n') })).toEqual([problem])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF })).toEqual([])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace('none - no schema, event or reader change', '- adds a nullable column to factory.events - every loop of the last 10 minor versions ignores it - the window test (#886)') })).toEqual([])
   })
 
   test('a brief must say what it makes observable: an empty or missing ## Observability is refused', () => {
@@ -358,7 +457,8 @@ describe('the work prompts (prompts-work.ts)', () => {
       expect(p).toContain('push only with `git push origin issue-300`')
       expect(p).toContain(TEST_POLICY)
       expect(p).toContain('When you end your turn the loop runs `npm run lint`, then `npm test` in this slot')
-      expect(p).toContain("While debugging, run only the suite you are changing, as the repo's CLAUDE.md names, then the full commands once.")
+      expect(p).toContain("Run only the suites you are changing, as the repo's CLAUDE.md names, and not the full commands: the loop runs them at the end of your turn. CI on the PR is the final gate.")
+      expect(p).not.toContain('then the full commands once')
     }
     // a repo that sets no gate commands has no stop gate: the writer is not told one backs it
     for (const p of [buildPrompt(input({ gateCommands: [] })), fixPrompt({ ...fixInput(), gateCommands: [' ', ''] })]) {
@@ -548,7 +648,7 @@ const resultOf = (exec: { outcome?: unknown }): StepResult => (exec.outcome as {
 // answered head an ancestor of it or not.
 function origin(branch: string, head: string | null, beyond = 2, ancestor = true): (argv: string[]) => Reply {
   return argv => {
-    if (argv[0] === 'callum-flow-implementer-route') return { stdout: 'opus\n' }
+    if (argv[0] === 'callum-flow-implementer-route' || argv[0] === 'callum-flow-designer-route') return { stdout: 'opus\n' }
     if (argv[1] === 'ls-remote') return { stdout: head === null ? '' : `${head}\trefs/heads/${branch}\n` }
     if (argv[1] === 'rev-list') return { stdout: `${beyond}\n` }
     if (argv[1] === 'merge-base') return { exitCode: ancestor ? 0 : 1 }
@@ -763,15 +863,113 @@ describe('the design step (8.7)', () => {
     const r = rec(320, { state: 'designing', step: 'design' })
     const h = harness(r, () => ({}), [], { issues: [issue(320, { labels: ['model:sonnet', 'ready'] })] })
     await h.spawn('design')
+    // the route printed nothing: the label's model, and the fallback event written
+    expect(h.runs.map(x => x.argv[0])).toEqual(['callum-flow-designer-route', 'callum-flow-event'])
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:designer-v2', model: 'sonnet' })
     expect(h.spawns[0]?.prompt).not.toContain('callum-flow:explorer')
     expect(h.spawns[0]?.prompt).toContain('explore with your own reads')
-    expect(h.runs).toEqual([])
     const { entry: e } = await h.spawn('design')
     h.answer('design', 'design-v2', { kind: 'question', question: 'Which API?' })
     expect(resultOf(await h.atEnd(e))).toMatchObject({ event: 'not-ok', reason: 'question' })
     h.answer('design', 'design-v2', { kind: 'brief', brief: BRIEF })
     expect(resultOf(await h.atEnd(e))).toMatchObject({ event: 'ok', data: { kind: 'brief', brief: BRIEF.trim() } })
+  })
+
+  describe('the designer\'s route', () => {
+    const r = rec(330, { state: 'designing', step: 'design' })
+    const FALLBACK = (model: string) => ['callum-flow-event', '--type', 'designer_routed', '--issue', '330', '--data', JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null })]
+
+    test('the routed alias is the designer\'s model and no fallback is written', async () => {
+      for (const alias of ['opus', 'sonnet']) {
+        const h = harness(r, argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: `${alias}\n` } : {}))
+        await h.spawn('design')
+        expect(h.runs[0]?.argv).toEqual(['callum-flow-designer-route', '330'])
+        expect(h.runs).toHaveLength(1)
+        expect(h.spawns[0]).toMatchObject({ model: alias })
+      }
+    })
+
+    test('a route that fails, throws or prints no alias falls back to the label or the agent, writing one fallback event', async () => {
+      const failures: Array<(argv: string[]) => Reply> = [
+        argv => (argv[0] === 'callum-flow-designer-route' ? { exitCode: 2, stderr: 'usage' } : {}),
+        argv => {
+          if (argv[0] === 'callum-flow-designer-route') throw new Error('spawn ENOENT')
+          return {}
+        },
+        argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: 'sonnet\nopus\n' } : {}),
+        argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: 'bad alias!\n' } : {}),
+      ]
+      for (const reply of failures) {
+        const labelled = harness(r, reply, [], { issues: [issue(330, { labels: ['model:sonnet', 'ready'] })] })
+        await labelled.spawn('design')
+        expect(labelled.spawns[0]?.model).toBe('sonnet')
+        expect(labelled.runs.filter(x => x.argv[0] === 'callum-flow-event').map(x => x.argv)).toEqual([FALLBACK('sonnet')])
+        const plain = harness(r, reply)
+        await plain.spawn('design')
+        expect(plain.spawns[0]?.model ?? null).toBeNull()
+        expect(plain.runs.filter(x => x.argv[0] === 'callum-flow-event').map(x => x.argv)).toEqual([FALLBACK('opus')])
+      }
+    })
+
+    test('a fallback event write that exits 1 or throws still spawns the designer', async () => {
+      for (const ev of [() => ({ exitCode: 1 }), () => { throw new Error('boom') }] as Array<() => Reply>) {
+        const h = harness(r, argv => (argv[0] === 'callum-flow-designer-route' ? { exitCode: 2 } : argv[0] === 'callum-flow-event' ? ev() : {}))
+        await h.spawn('design')
+        expect(h.spawns).toHaveLength(1)
+        expect(h.spawns[0]?.model ?? null).toBeNull()
+      }
+    })
+  })
+
+  // the done close: its evidence checked against origin in the slot (fetch, the PR's merge commit,
+  // is-ancestor of origin/main), and the branch read for the closed entry
+  const DONE = { kind: 'done', evidence: { pr: 812, commit: null, runIt: null }, reason: 'Shipped in PR 812', brief: null }
+  const MERGE = SHA('a')
+  const PR_HEAD = SHA('b')
+  const doneWorld = (over: { pr?: string; ancestor?: number; fetch?: number; branch?: string | null; beyond?: number } = {}) => (argv: string[]): Reply => {
+    if (argv[0] === 'gh') return { stdout: over.pr ?? `${MERGE} ${PR_HEAD}\n` }
+    if (argv[1] === 'fetch') return { exitCode: over.fetch ?? 0 }
+    if (argv[1] === 'merge-base') return { exitCode: over.ancestor ?? 0 }
+    if (argv[1] === 'ls-remote') return { stdout: over.branch === null ? '' : `${over.branch ?? SHA('c')}\trefs/heads/issue-321\n` }
+    if (argv[1] === 'rev-list') return { stdout: `${over.beyond ?? 0}\n` }
+    return {}
+  }
+  const doneResultOf = async (reply: (argv: string[]) => Reply, answer: unknown = DONE) => {
+    const r = rec(321, { state: 'designing', step: 'design' })
+    const h = harness(r, reply)
+    const { entry: e } = await h.spawn('design')
+    h.answer('design', 'design-v2', answer)
+    return { result: resultOf(await h.atEnd(e)), runs: h.runs }
+  }
+
+  test('a done close is not-ok done once its PR\'s merge commit is an ancestor of origin/main; the data carries the evidence, the checked commit and the branch reading', async () => {
+    const { result, runs } = await doneResultOf(doneWorld({ beyond: 0 }))
+    expect(result).toMatchObject({
+      event: 'not-ok',
+      reason: 'done',
+      data: { kind: 'done', evidence: { pr: 812 }, checked: MERGE, mergeCommit: MERGE, prHead: PR_HEAD, branch: { sha: SHA('c'), beyond: 0 }, text: `done: PR #812 (merge ${MERGE.slice(0, 7)})` },
+    })
+    expect(runs.filter(x => x.argv[0] !== 'callum-flow-designer-route' && x.argv[0] !== 'callum-flow-event').map(x => x.argv.slice(0, 2).join(' '))).toEqual(['git fetch', 'gh pr', 'git merge-base', 'git ls-remote', 'git rev-list'])
+    expect(runs.find(x => x.argv[1] === 'merge-base')?.argv).toEqual(['git', 'merge-base', '--is-ancestor', MERGE, 'origin/main'])
+    expect(runs.find(x => x.argv[0] === 'gh')?.argv).toContain('--repo')
+    expect(runs.filter(x => x.argv[0] === 'git' || x.argv[0] === 'gh').every(x => x.cwd === SLOT(321))).toBe(true)
+  })
+
+  test('a done close on a commit checks that commit, and a runIt rides in the notes text; no branch on origin reads as sha null', async () => {
+    const answer = { ...DONE, evidence: { pr: null, commit: 'bd2fee14', runIt: `https://github.com/${REPO}/issues/321#issuecomment-5` } }
+    const { result, runs } = await doneResultOf(doneWorld({ branch: null }), answer)
+    expect(result).toMatchObject({ event: 'not-ok', reason: 'done', data: { checked: 'bd2fee14', branch: { sha: null, beyond: null }, text: `done: commit bd2fee1, https://github.com/${REPO}/issues/321#issuecomment-5` } })
+    expect(runs.some(x => x.argv[0] === 'gh')).toBe(false)
+    expect(runs.find(x => x.argv[1] === 'merge-base')?.argv[3]).toBe('bd2fee14')
+  })
+
+  test('evidence that is not an ancestor of origin/main is a bad answer, so is a PR with no merge commit; a failed read is unknown (cli)', async () => {
+    expect((await doneResultOf(doneWorld({ ancestor: 1 }))).result).toMatchObject({ event: 'unknown', why: 'bad-answer', reason: expect.stringContaining('is not on origin/main') })
+    expect((await doneResultOf(doneWorld({ ancestor: 128 }))).result).toMatchObject({ event: 'unknown', why: 'cli' })
+    expect((await doneResultOf(doneWorld({ pr: `- ${PR_HEAD}\n` }))).result).toMatchObject({ event: 'unknown', why: 'bad-answer', reason: expect.stringContaining('has no merge commit') })
+    expect((await doneResultOf(doneWorld({ fetch: 128 }))).result).toMatchObject({ event: 'unknown', why: 'cli', reason: expect.stringContaining('origin did not read') })
+    const prFails = (argv: string[]): Reply => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'gh: boom' } : doneWorld()(argv))
+    expect((await doneResultOf(prFails)).result).toMatchObject({ event: 'unknown', why: 'cli' })
   })
 })
 
@@ -810,8 +1008,8 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
 
   test('a split makes each child once the siblings it waits on exist, then posts the plan, then closes the record (T4); the parent\'s release lists the children', () => {
     const children = [
-      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: ['a'], ready: false },
-      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true },
+      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: ['a'], ready: false, decision: 'Which API shape?' },
+      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true, decision: null },
       { key: 'c', title: 'Part three', why: 'The image side', body: 'three', blockedBy: [], ready: true },
     ]
     const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children } })
@@ -823,7 +1021,17 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     expect(of(second, 330).map(made)).toEqual([['b', [601]]])
     expect(transitionOf(second, 330)).toBeUndefined()
     const third = plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602)]))
-    const post = of(third, 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    // the regression: the not-ready child is claimed to park on its decision, and only that one, before the plan is posted
+    expect(of(third, 602).map(a => (a.kind === 'claim' ? [a.issue, a.park, a.rule, a.class] : a.kind))).toEqual([[602, { question: 'Which API shape?', parent: 330 }, 'S2', 'free']])
+    expect(third.actions.filter(a => a.kind === 'claim')).toHaveLength(1)
+    expect(of(third, 330).some(a => a.kind === 'comment')).toBe(false)
+    expect(transitionOf(third, 330)).toBeUndefined()
+    const claim = of(third, 602).find(a => a.kind === 'claim')?.key ?? ''
+    expect(claim).toBe(`i602/claim/${lifeOf(NOW)}`)
+    const claimed = done(claim, 'claim', { issue: 602, outcome: { kind: 'claim', result: 'claimed', park: { question: 'Which API shape?', parent: 330 } } })
+    const fourth = plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), claimed]))
+    expect(fourth.actions.some(a => a.kind === 'claim')).toBe(false)
+    const post = of(fourth, 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
     expect(post?.body).toBe(
       [
         'the plan',
@@ -841,14 +1049,30 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
       ].join('\n'),
     )
     const posted = done(entryKey(r, 'comment'), 'comment', { issue: 330, outcome: { kind: 'cli', exit: 0, detail: BRIEF_URL(330) } })
-    const t = transitionOf(plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), posted])), 330)
+    const t = transitionOf(plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), claimed, posted])), 330)
     expect(t).toMatchObject({ row: 'T4', next: { state: 'closed', why: 'split', notes: ['split into #602, #601, #603'] } })
     if (t === undefined) return
-    const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
+    const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), claimed, posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
     expect(of(after, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: REASONS, childWhys: ['The loop side', 'Waits on the owner', 'The image side'] })
     // the design entry gone from the ledger: the release still happens, with null reasons
     const gone = plan(withLedger(world([t.next]), [child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
     expect(of(gone, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: null, childWhys: null })
+  })
+
+  test('a not-ready child\'s checked decision parts ride on its claim\'s park, and a child without them parks with the text alone', () => {
+    const parts = { decision: 'Which API shape?', context: null, options: [{ key: 'A' as const, title: 'One', detail: null }, { key: 'B' as const, title: 'Two', detail: 'More.' }], recommended: 'A' as const, recommendation: 'Simpler.' }
+    const children = [
+      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true, decision: null },
+      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: [], ready: false, decision: 'Which API shape?', decisionParts: parts },
+      { key: 'c', title: 'Part three', why: 'Waits too', body: 'three', blockedBy: [], ready: false, decision: 'Old text' },
+    ]
+    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children } })
+    const child = (key: string, n: number) => done(childKey(r, key), 'split', { issue: 330, outcome: { kind: 'split', child: n } })
+    const p = plan(withLedger(world([r]), [split, child('a', 601), child('b', 602), child('c', 603)]))
+    expect(p.actions.filter(a => a.kind === 'claim').map(a => (a.kind === 'claim' ? [a.issue, a.park] : null))).toEqual([
+      [602, { question: 'Which API shape?', parent: 330, parts }],
+      [603, { question: 'Old text', parent: 330 }],
+    ])
   })
 
   test('an older design answer with no reasons or whys still plans: the comment lists the children as before, the release carries null', () => {
@@ -872,6 +1096,17 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     expect(of(plan(withLedger(world([r]), [split])), 330).map(made)).toEqual([['a', [57]]])
     const a = done(childKey(r, 'a'), 'split', { issue: 330, outcome: { kind: 'split', child: 601 } })
     expect(of(plan(withLedger(world([r]), [split, a])), 330).map(made)).toEqual([['b', [601, 57]]])
+  })
+
+  test('a done close posts nothing in the step: it is not-ok done at once, and T18 closes the record why done, the evidence in its notes', () => {
+    const data = { kind: 'done', brief: null, question: null, children: [], evidence: { pr: 812, commit: null, runIt: null }, reason: 'Shipped', text: 'done: PR #812 (merge aaaaaaa)', checked: SHA('a'), mergeCommit: SHA('a'), prHead: SHA('b'), branch: { sha: SHA('c'), beyond: 0 } }
+    const p = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'done', data })]))
+    expect(of(p, 330).filter(a => a.kind === 'comment')).toEqual([])
+    expect(transitionOf(p, 330)).toMatchObject({ row: 'T18', via: 'done', next: { state: 'closed', why: 'done', notes: ['done: PR #812 (merge aaaaaaa)'] } })
+    expect(designOf(stepDone(r, 'design', { event: 'not-ok', reason: 'done', data }))).toMatchObject({ kind: 'done', evidence: { pr: 812 }, checked: SHA('a'), prHead: SHA('b'), branch: { sha: SHA('c'), beyond: 0 } })
+    // an answer with no evidence is a bad answer
+    const bare = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'done', data: { kind: 'done' } })]))
+    expect(transitionOf(bare, 330)).toMatchObject({ row: 'U2', via: 'unknown:bad-answer' })
   })
 
   test('a design answer with no kind the plan reads goes down the unknown path', () => {

@@ -281,6 +281,48 @@ describe('S0: the record a done claim makes', () => {
   })
 })
 
+// --- S7: a split child parked on its open decision (8.7) ----------------------------------------------------
+
+describe('S7: a done claim that carries a park makes the parked record', () => {
+  const park = { question: 'Which API shape?\n\n#### Options\n\n- [ ] **A** - One call\n- [ ] **B** - Two calls', parent: 300 }
+  const key = claimKey(61, LIFE)
+  const claimed = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'claimed', park } })
+
+  test('the record is parked at once with the question and resumeTo designing; the entry items post the park comment, set the label and tell the owner', () => {
+    const t = transitionOf(plan(withLedger(world([]), [claimed])), 61)
+    expect(t).toMatchObject({ rule: 'S1', row: 'S7', event: 'ok', from: null, trigger: { kind: 'claim', key }, via: 'split-decision' })
+    expect(t?.next).toMatchObject({ issue: 61, life: LIFE, seq: 1, state: 'parked', step: null, resumeTo: 'designing', question: park.question, notes: [expect.stringContaining('#300')] })
+    if (t === undefined) return
+    const entered = plan(withLedger(world([t.next]), [claimed, transitioned(t.next, 'S7', null, 'split-decision')]))
+    const items = of(entered, 61)
+    const comment = items.find(a => a.kind === 'comment')
+    expect(comment).toMatchObject({ on: 'issue', number: 61, body: expect.stringContaining('**Decision needed:** Which API shape?') })
+    expect(comment?.kind === 'comment' ? comment.body : '').toContain('It parked when #300 was split, and a resume goes on with designing.')
+    expect(items.find(a => a.kind === 'label' && a.op === 'set')).toMatchObject({ label: 'factory:parked' })
+    expect(items.find(a => a.kind === 'tell')).toMatchObject({ wake: 'parked', class: 'owner', fields: { issue: '61', from: 'designing' } })
+  })
+
+  test('a resume (the label off, or /factory resume) takes it to queued then designing, the owner\'s answer a note', () => {
+    const t = transitionOf(plan(withLedger(world([]), [claimed])), 61)
+    if (t === undefined) throw new Error('no S7 transition')
+    const parked = { ...t.next, seq: 1, seqAt: NOW - 2 * HOUR, since: NOW - 2 * HOUR }
+    const settled = [claimed, transitioned(parked, 'S7', null, 'split-decision'), done(entryKey(parked, 'event/transition'), 'event', { issue: 61 }), done(entryKey(parked, 'label'), 'label', { issue: 61, endedAt: NOW - 2 * HOUR + MIN }), done(entryKey(parked, 'comment'), 'comment', { issue: 61, endedAt: NOW - 2 * HOUR + 2 * MIN }), done(entryKey(parked, 'tell'), 'tell', { issue: 61, class: 'owner', wake: 'parked' })]
+    const r = plan(withLedger(world([parked], { control: control({ resumed: [{ subject: 'issue:61', at: NOW - MIN, note: 'B, two calls' }] }) }), settled))
+    const queued = transitionOf(r, 61)
+    expect(queued).toMatchObject({ row: 'P1', via: 'unpark:op', next: { state: 'queued', step: 'lease', resumeTo: 'designing', question: null, notes: ['B, two calls'] } })
+    const lease = queued === undefined ? null : rowFor(queued.next, { kind: 'ok' }, CFG)
+    expect(lease).toMatchObject({ id: 'T1', next: 'resumeTo' })
+  })
+
+  test('a lost claim makes no record; a claim without a park still makes S0\'s queued record', () => {
+    const lost = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'lost' } })
+    expect(transitionOf(plan(withLedger(world([]), [lost])), 61)).toBeUndefined()
+    const plain = done(key, 'claim', { issue: 61, outcome: { kind: 'claim', result: 'claimed' } })
+    const t = transitionOf(plan(withLedger(world([]), [plain])), 61)
+    expect(t).toMatchObject({ row: 'S0', via: 'claim', next: { state: 'queued', step: 'lease', resumeTo: null, question: null } })
+  })
+})
+
 // --- entry actions (4.5) ------------------------------------------------------------------------------------
 
 describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
@@ -441,6 +483,83 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(checks([read('merge'), closed(key, 139, true), closed(`${key}/up`, 140, true), closed(`${key}/up/up`, 141, true)])).toEqual([])
     // a null parent ends the chain
     expect(checks([read('merge'), { ...closed(key, 139, true), outcome: { kind: 'close-tracker', parent: null, closed: true, open: [] } }])).toEqual([])
+  })
+
+  describe('a done close (T18): the work was already merged (8.7, 4.5)', () => {
+    const SHA = (c: string) => c.repeat(40).slice(0, 40)
+    const designing = rec(90, { state: 'designing', step: 'design' })
+    const closedRec = rec(90, { state: 'closed', step: null, why: 'done', seq: 4, seqAt: NOW - MIN, since: NOW - MIN, notes: ['done: PR #812 (merge aaaaaaa)'] })
+    const answer = (branch: { sha: string | null; beyond: number | null }, over: Record<string, unknown> = {}) =>
+      stepDone(designing, 'design', {
+        event: 'not-ok',
+        reason: 'done',
+        data: { kind: 'done', brief: null, question: null, children: [], evidence: { pr: 812, commit: null, runIt: `https://github.com/${REPO}/issues/90#issuecomment-5` }, reason: 'Shipped in PR 812', text: 'done: PR #812', checked: SHA('a'), mergeCommit: SHA('a'), prHead: SHA('b'), branch, ...over },
+      })
+    const at = (extra: LedgerEntry[], data = answer({ sha: SHA('c'), beyond: 0 })) => withLedger(world([closedRec]), [data, transitioned(closedRec, 'T18', 'designing', 'done'), ...extra])
+    const close = (status: LedgerEntry['status'] = 'done') => done(followKey(closedRec, 'close-issue'), 'close-issue', { issue: 90, status })
+
+    test('the closed entry clears the labels, posts one comment with the evidence, the reason and the branch line, then closes the issue as completed and logs closed; it tells the owner once', () => {
+      const r = plan(at([]))
+      expect(kinds(r, 90)).toEqual(['event transition', 'label clear', 'comment', 'close-issue', 'tell'])
+      const comment = of(r, 90).find(a => a.kind === 'comment')
+      expect(comment).toMatchObject({ key: entryKey(closedRec, 'comment'), on: 'issue', number: 90 })
+      const body = (comment as { body: string }).body
+      expect(body).toContain('PR #812 (merge aaaaaaa)')
+      expect(body).toContain(`run it: https://github.com/${REPO}/issues/90#issuecomment-5`)
+      expect(body).toContain('Reason: Shipped in PR 812')
+      expect(body).toContain('`issue-90` is deleted from origin, since it has no commit beyond the default branch')
+      expect(body).not.toMatch(/\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#\d+/i)
+      // a closing keyword in the designer's reason links nothing once the executor posts it
+      const worded = plan(at([], answer({ sha: SHA('c'), beyond: 0 }, { reason: 'Closes #12 and fixes #13' })))
+      expect(commentBody((of(worded, 90).find(x => x.kind === 'comment') as { body: string }).body, 'k')).toContain('Reason: Closing #12 and fixing #13')
+      expect(of(r, 90).find(a => a.kind === 'close-issue')).toMatchObject({ key: followKey(closedRec, 'close-issue'), issue: 90, logClosed: true })
+      expect(of(r, 90).find(a => a.kind === 'tell')).toMatchObject({ wake: 'done', fields: { issue: '90', branch: 'deleted' } })
+    })
+
+    test('the branch is deleted, leased on the head read, only once the close is done and only when it has no commit beyond main or is the evidence PR\'s head', () => {
+      const deletes = (extra: LedgerEntry[], data?: LedgerEntry) => of(plan(at(extra, data)), 90).filter(a => a.kind === 'delete-branch')
+      expect(deletes([])).toEqual([])
+      expect(deletes([close('running')])).toEqual([])
+      expect(deletes([close()])).toEqual([expect.objectContaining({ key: followKey(closedRec, 'delete-branch'), branch: 'issue-90', sha: SHA('c') })])
+      // its head is the merged PR's head, whatever it holds beyond main
+      expect(deletes([close()], answer({ sha: SHA('b'), beyond: 3 }))).toEqual([expect.objectContaining({ sha: SHA('b') })])
+      // its own commits: kept, and the comment and the tell say so
+      const own = plan(at([close()], answer({ sha: SHA('c'), beyond: 3 })))
+      expect(of(own, 90).filter(a => a.kind === 'delete-branch')).toEqual([])
+      expect((of(own, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('is kept, since it has 3 commits of its own beyond the default branch')
+      expect(of(own, 90).find(a => a.kind === 'tell')).toMatchObject({ fields: { branch: 'kept' } })
+      // not read beyond main: kept
+      expect(deletes([close()], answer({ sha: SHA('c'), beyond: null }))).toEqual([])
+      // no branch on origin: nothing to delete
+      const absent = plan(at([close()], answer({ sha: null, beyond: null })))
+      expect(of(absent, 90).filter(a => a.kind === 'delete-branch')).toEqual([])
+      expect((of(absent, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('origin has no branch issue-90')
+      // the design answer can no longer be read: the close still runs, no branch is deleted
+      const lost = plan(withLedger(world([closedRec]), [transitioned(closedRec, 'T18', 'designing', 'done'), close()]))
+      expect(kinds(lost, 90)).toEqual(['event transition', 'label clear', 'comment', 'close-tracker', 'tell'])
+      expect((of(lost, 90).find(a => a.kind === 'comment') as { body: string }).body).toContain('no branch is deleted')
+    })
+
+    test('a split child that was the last open one has its tracker checked after the close, the chain going up as a merge\'s does', () => {
+      const key = followKey(closedRec, 'close-tracker')
+      const checks = (extra: LedgerEntry[]) => plan(at(extra)).actions.filter(a => a.kind === 'close-tracker').map(a => [a.key, a.issue])
+      expect(checks([])).toEqual([])
+      expect(checks([close('running')])).toEqual([])
+      expect(checks([close()])).toEqual([[key, 90]])
+      expect(checks([close(), done(key, 'close-tracker', { issue: 90, outcome: { kind: 'close-tracker', parent: 139, closed: true, open: [] } })])).toEqual([[`${key}/up`, 139]])
+    })
+
+    test('the issue shows closed once the loop closed it: no E2 reads a closed done record', () => {
+      const s = withLedger(world([closedRec], {}, { reads: { 90: { open: false, at: NOW, state: null } as never } }), [transitioned(closedRec, 'T18', 'designing', 'done'), close()])
+      expect(transitionOf(plan(s), 90)).toBeUndefined()
+    })
+
+    test('an issue blocked by the done issue is claimable once its blockedBy reads 0 (rules-claim.ts)', () => {
+      const blocked = (blockedBy: number) => plan(world([], { queue: [91], issues: [issue(91, { blockedBy })] }))
+      expect(blocked(1).actions.filter(a => a.kind === 'claim')).toEqual([])
+      expect(said(blocked(1), 91)).toContain('blocked by 1 open issue')
+      expect(blocked(0).actions.filter(a => a.kind === 'claim').map(a => a.issue)).toEqual([91])
+    })
   })
 
   test('a merged issue whose rollout read keep-open while open issues wait on it tells the owner once; nothing else does', () => {
@@ -857,6 +976,26 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
     expect(of(r, 133).filter(a => a.kind === 'link')).toEqual([expect.objectContaining({ kind: 'link', blocker: 58, key: entryKey(entered, 'link/58') })])
   })
 
+  test('another repo\'s conditions: the texts name the repo, the cleared note names each repo\'s tag, and the own repo\'s texts do not change', () => {
+    const wait = [
+      { kind: 'issue-closed' as const, issue: 57, repo: 'o/n' },
+      { kind: 'tag-contains' as const, sha: '35bb655', repo: 'o/n' },
+      { kind: 'tag-contains' as const, sha: '35bb655' },
+    ]
+    const f = rec(134, { state: 'waiting', step: null, wait, resumeTo: 'designing', notes: ['x'], seq: 6, seqAt: waitAt, since: waitAt })
+    const s = (v2: Partial<V2State>) => plan(withLedger(world([f], {}, v2), settled(f)))
+    const all = { waits: { 'issue:o/n#57': { at: NOW - MIN, held: true }, 'tag:o/n@35bb655': { at: NOW - MIN, held: true, tag: 'v1.2.0' }, 'tag:35bb655': { at: NOW - MIN, held: true, tag: 'v0.51.0' } } }
+    expect(transitionOf(s(all), 134)).toMatchObject({ row: 'C1', next: { notes: ['The loop resumed this: o/n#57 closed, release v1.2.0 of o/n contains 35bb655, release v0.51.0 contains 35bb655; every condition holds.'] } })
+    expect(said(s({}), 134)).toEqual(['waiting: for o/n#57 (still open), no release tag of o/n contains 35bb655 yet, no release tag contains 35bb655 yet'])
+    const entered = rec(134, { state: 'waiting', step: null, wait, resumeTo: 'designing', notes: ['x'], seq: 6, seqAt: waitAt, since: waitAt })
+    const r = plan(withLedger(world([entered]), [transitioned(entered, 'T16', 'designing', 'wait')]))
+    const comment = of(r, 134).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    expect(comment?.body).toContain('issue o/n#57 must be closed on GitHub')
+    expect(comment?.body).toContain('release tag of o/n must contain commit 35bb655')
+    expect(comment?.body).toContain('release tag must contain commit 35bb655')
+    expect(of(r, 134).filter(a => a.kind === 'link')).toEqual([])
+  })
+
   test('T16: a designer that answers wait enters waiting at once, with its conditions, no owner tell; its entry posts one comment, links each issue condition and labels factory:waiting', () => {
     const d = rec(131, { state: 'designing', step: 'design', seq: 5, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
     const answer = { kind: 'wait', brief: null, question: null, conditions: WAIT, reason: 'needs #57 and PR #812', reasons: null, children: [] }
@@ -967,6 +1106,55 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
     // the period is a setting
     const short = plan(withLedger(world([at(2)]), settled(w)), { ...CFG, stateTimeoutMs: { ...CFG.stateTimeoutMs, waiting: HOUR } })
     expect(of(short, 130).some(a => a.kind === 'tell' && a.wake === 'waiting')).toBe(true)
+  })
+
+  describe('a condition the loop cannot read (wait-unreadable)', () => {
+    const at = (hours: number, over: Partial<IssueRecord> = {}) => ({ ...w, ...over, since: NOW - hours * HOUR, seqAt: NOW - hours * HOUR })
+    const unread = (key: string, hours: number, why: 'read-failed' | 'no-release') => ({ waitsUnread: { [key]: { since: NOW - hours * HOUR, why } } })
+    const run = (r: IssueRecord, extra: object) => plan(withLedger(world([r], {}, extra), settled(w)))
+    const tells = (p: PlanResult) => of(p, 130).filter(a => a.kind === 'tell')
+
+    test('a PR condition unread a whole period: one owner tell with the reason, no tell(waiting); the record stays waiting', () => {
+      const p = run(at(26), { ...held('issue:57'), ...unread('pr:812', 26, 'read-failed') })
+      expect(tells(p)).toEqual([
+        expect.objectContaining({
+          wake: 'wait-unreadable',
+          rule: 'S6',
+          key: `${entryKey(at(26), 'tell')}/wait-unreadable/1`,
+          fields: { issue: '130', hours: '26', conditions: 'pr:812' },
+          context: [`pr:812: its read has failed since ${new Date(NOW - 26 * HOUR).toISOString()}`],
+        }),
+      ])
+      expect(p.owner).toBe(1)
+      expect(of(p, 130).some(a => a.kind === 'transition')).toBe(false)
+    })
+
+    test('a tag condition on a repo with no release (plant-console#209): the same, naming the repo', () => {
+      const wait = [{ kind: 'tag-contains' as const, sha: '35bb655', repo: 'o/n' }]
+      const p = run(at(26, { wait }), unread('tag:o/n@35bb655', 26, 'no-release'))
+      expect(tells(p)).toEqual([expect.objectContaining({ wake: 'wait-unreadable', fields: expect.objectContaining({ conditions: 'tag:o/n@35bb655' }), context: [expect.stringContaining('no release tag of o/n is known since')] })])
+      expect(p.owner).toBe(1)
+    })
+
+    test('unread for less than the period gives the plain tell(waiting), owner 0; a read condition does too', () => {
+      const p = run(at(26), { ...held('issue:57'), ...unread('pr:812', 10, 'read-failed') })
+      expect(tells(p)).toEqual([expect.objectContaining({ wake: 'waiting', context: ['waiting for PR #812 (not merged yet) (unread: read failing)'] })])
+      expect(p.owner).toBe(0)
+      const read = run(at(26), held('issue:57'))
+      expect(tells(read)).toEqual([expect.objectContaining({ wake: 'waiting' })])
+      expect(read.owner).toBe(0)
+    })
+
+    test('the next period is a new tell; the skip line says why the condition is still open; a held read still clears', () => {
+      const keys = (h: number) => tells(run(at(h), unread('pr:812', h, 'no-release'))).map(a => a.key)
+      expect(new Set([...keys(26), ...keys(50)]).size).toBe(2)
+      expect(keys(26)).toEqual(keys(30))
+      const p = run(at(1), unread('pr:812', 1, 'no-release'))
+      expect(JSON.stringify(p.skipped)).toContain('PR #812 (not merged yet) (unread: no release)')
+      const cleared = run(at(26), { ...held('issue:57', 'pr:812'), ...unread('pr:812', 26, 'read-failed') })
+      expect(of(cleared, 130).some(a => a.kind === 'transition')).toBe(true)
+      expect(tells(cleared)).toEqual([])
+    })
   })
 })
 
@@ -1383,7 +1571,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(problems({ choice: 'retry', reason: 'r', instructions: 'x'.repeat(4001) })).toEqual(['instructions is 4001 characters; at most 4000'])
     expect(problems('retry')).toEqual(['the answer must be one JSON object: {"choice", "reason", and "instructions" or "question"}'])
     expect(V2_CONTRACTS.triage.summary({ choice: 'retry', reason: 'flaky' })).toBe('retry: flaky')
-    expect(triageResult({ choice: 'park', reason: 'r', instructions: null, question: 'which?' })).toEqual({ event: 'ok', reason: 'r', why: null, head: null, choice: 'park', data: { text: 'r', instructions: undefined, question: 'which?' } })
+    expect(triageResult({ choice: 'park', reason: 'r', instructions: null, question: 'which?' })).toEqual({ event: 'ok', reason: 'r', why: null, head: null, choice: 'park', data: { text: 'r', instructions: undefined, question: 'which?', parts: { decision: 'which?', context: null, options: null, recommended: null, recommendation: null } } })
     expect(triageResult({})).toMatchObject({ event: 'unknown', why: 'bad-answer' })
   })
 
@@ -1509,5 +1697,50 @@ describe('the title is a throttle (O1, titleEveryMs)', () => {
     }
     expect(renames).toBeGreaterThan(1)
     expect(renames).toBeLessThanOrEqual(12)
+  })
+})
+
+// --- comment_posted (v2 SPEC 4.5, comment_posted.v1) ---------------------------------------------------------
+
+describe('a park or wait comment logs where it is (comment_posted)', () => {
+  const URL = 'https://github.com/o/r/issues/61#issuecomment-1'
+  const at = NOW - 5 * MIN
+  const parked = rec(61, { state: 'parked', step: null, question: 'Which API shape?', resumeTo: 'designing', seq: 3, seqAt: at, since: at })
+  const waiting = rec(62, { state: 'waiting', step: null, wait: [{ kind: 'issue-closed' as const, issue: 57 }], resumeTo: 'designing', notes: ['x'], seq: 3, seqAt: at, since: at })
+  const entered = (r: IssueRecord) => [transitioned(r, 'T16', 'designing', 'wait')]
+  const comment = (r: IssueRecord, detail?: string, status: 'done' | 'failed' = 'done') =>
+    status === 'done' ? done(entryKey(r, 'comment'), 'comment', { issue: r.issue, outcome: detail === undefined ? { kind: 'cli', exit: 0 } : { kind: 'cli', exit: 0, detail } }) : { ...done(entryKey(r, 'comment'), 'comment', { issue: r.issue }), status: 'failed' as const }
+  const run = (r: IssueRecord, ...more: LedgerEntry[]) => plan(withLedger(world([r]), [...entered(r), ...more]))
+  const posted = (r: IssueRecord, p: PlanResult) => of(p, r.issue).filter(a => a.kind === 'event' && a.event.state === 'comment_posted')
+
+  test('a parked record plans it after the comment, before the tell', () => {
+    const p = run(parked, comment(parked, URL))
+    expect(posted(parked, p)).toEqual([expect.objectContaining({ key: entryKey(parked, 'event/comment-posted'), class: 'free', rule: 'S3', issue: 61, event: { state: 'comment_posted', issue: 61, data: { life: parked.life, seq: 3, to_state: 'parked', comment_url: URL } } })])
+    const k = kinds(p, 61).filter(x => x === 'event comment_posted' || x === 'comment' || x === 'tell')
+    expect(k).toEqual(['event comment_posted', 'tell'])
+  })
+
+  test('a waiting record plans it after the comment, before the links', () => {
+    const p = run(waiting, comment(waiting, URL))
+    expect(posted(waiting, p)).toEqual([expect.objectContaining({ event: expect.objectContaining({ data: { life: waiting.life, seq: 3, to_state: 'waiting', comment_url: URL } }) })])
+    const k = kinds(p, 62).filter(x => x === 'event comment_posted' || x === 'comment' || x === 'link')
+    expect(k).toEqual(['event comment_posted', 'link'])
+  })
+
+  test('nothing while the comment is not done, has no URL, or has one the schema refuses', () => {
+    expect(posted(parked, run(parked))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, URL, 'failed')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, '')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked)))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, 'http://github.com/o/r/issues/61#issuecomment-1')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, 'https://x/ y')))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, `https://${'a'.repeat(493)}`)))).toEqual([])
+    expect(posted(parked, run(parked, comment(parked, `https://${'a'.repeat(492)}`)))).toHaveLength(1)
+  })
+
+  test('once the event entry is done it is planned no more; a seq with no transition entry plans nothing', () => {
+    const p = run(parked, comment(parked, URL), done(entryKey(parked, 'event/comment-posted'), 'event', { issue: 61 }))
+    expect(posted(parked, p)).toEqual([])
+    expect(posted(parked, plan(withLedger(world([parked]), [comment(parked, URL)])))).toEqual([])
   })
 })

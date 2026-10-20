@@ -8,7 +8,8 @@
 //    unless already; a blocker that is closed is skipped (nothing to wait for), one that is a pull
 //    request is refused;
 // 4. it is labelled ready when the designer asked, once every link exists, so S1 claims it only
-//    when its blockers are closed.
+//    when its blockers are closed. A not-ready child gets no label here: plan claims it (rules-work.ts
+//    parkClaim) and the claim parks it on its open decision.
 // The outcome names the child, which the parent's release follow-up lists (rules-entry.ts).
 // Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
@@ -112,22 +113,22 @@ async function run(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_
 }
 
 // ok: a command that must exit 0; its stdout, or the failed attempt.
-async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<{ out: string } | { exec: Exec }> {
+export async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<{ out: string } | { exec: Exec }> {
   const ran = await run(ctx, argv, stdin, timeoutMs)
   if (!ran.ok) return { exec: ran.exec }
   return ran.r.exitCode === 0 ? { out: ran.r.stdout } : { exec: commandFailure(argv, ran.r) }
 }
 
-function failed(summary: string, detail: string): Exec {
+export function failed(summary: string, detail: string): Exec {
   return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: detail.slice(0, 2000) }, summary: clip(summary) }
 }
 
-function refused(why: string): Exec {
+export function refused(why: string): Exec {
   return { status: 'failed', summary: clip(`refused: ${why}`), noRetry: true }
 }
 
 // idOf: an issue's REST id, through the reader.
-async function idOf(ctx: ExecCtx, issue: number): Promise<{ id: number } | { exec: Exec }> {
+export async function idOf(ctx: ExecCtx, issue: number): Promise<{ id: number } | { exec: Exec }> {
   const r = await ok(ctx, ARGV.issueReadArgv(issue))
   if ('exec' in r) return r
   const id = issueId(r.out)
@@ -163,7 +164,7 @@ async function childOf(ctx: ExecCtx, a: SplitAction): Promise<{ number: number; 
 }
 
 // linked: a POST link made unless the read of existing links already holds the id.
-async function linked(ctx: ExecCtx, read: string[], id: number, post: string[]): Promise<{ added: boolean } | { exec: Exec }> {
+export async function linked(ctx: ExecCtx, read: string[], id: number, post: string[]): Promise<{ added: boolean } | { exec: Exec }> {
   const held = await ok(ctx, read)
   if ('exec' in held) return held
   const have = ids(held.out)
@@ -198,7 +199,7 @@ const split: Executor = async (ctx, action) => {
   const how = child.made ? 'made' : 'found'
   const linkedTo = action.blockedBy.filter(n => !skipped.includes(n))
   const after = (linkedTo.length === 0 ? '' : `, blocked by ${linkedTo.map(n => `#${n}`).join(' ')}`) + skipped.map(n => `, #${n} is closed, not linked`).join('')
-  return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ''}`) }
+  return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ', parks on the owner'}`) }
 }
 
 // link: a waiting record's issue linked as blocked by one it waits on (row T16's entry action):
@@ -223,10 +224,10 @@ const link: Executor = async (ctx, action) => {
 
 export const executors: Partial<Record<ActionKind, Executor>> = { split, link }
 
-function clip(text: string): string {
+export function clip(text: string): string {
   return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 3)}...` : text
 }
 
-function message(err: unknown): string {
+export function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }

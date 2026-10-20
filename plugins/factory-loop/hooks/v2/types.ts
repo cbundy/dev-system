@@ -6,11 +6,14 @@
 // constants only: the pure planner imports this, so nothing here may run a command or read a
 // clock.
 import type { PlanCtx } from '../foundation'
+import type { Snapshot } from '../settings-snapshot'
 import type { ActionBase, ActionClass, Config, LedgerEntry, LedgerStatus, Ms, Source } from '../types'
 import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
+import type { FactsShadow } from './sources-facts'
+import type { FlakesRead } from './sources-flakes'
 import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
@@ -23,7 +26,7 @@ export type IssueState = (typeof ISSUE_STATES)[number]
 export const STEP_KINDS = ['lease', 'design', 'build', 'review', 'fix', 'queue', 'triage'] as const
 export type StepKind = (typeof STEP_KINDS)[number]
 
-export const CLOSED_WHYS = ['merged', 'merged-by-hand', 'dropped', 'split', 'closed-on-github', 'claim-lost'] as const
+export const CLOSED_WHYS = ['merged', 'merged-by-hand', 'dropped', 'split', 'closed-on-github', 'claim-lost', 'done'] as const
 export type ClosedWhy = (typeof CLOSED_WHYS)[number]
 
 // The states that hold a slot and count in flight (3.1): designing to merge-queue.
@@ -70,6 +73,18 @@ export const STEP_AGENT: Readonly<Record<AgentStep, `factory-loop:${string}`>> =
 // another repository for issue-closed and tag-contains; absent means the loop's own repo.
 export type WaitCondition = { kind: 'issue-closed'; issue: number; repo?: string } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string; repo?: string }
 
+// The parts of a structured question for the owner (3.2, 11): what the agent gave before the loop
+// rendered them into `question`. `decision` is the one sentence; options are 2 to 6 closed, with a
+// null detail when none was given; `recommended` names one of the options, `recommendation` is why.
+export type OptionKey = 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
+export type ParkParts = {
+  decision: string
+  context: string | null
+  options: { key: OptionKey; title: string; detail: string | null }[] | null
+  recommended: OptionKey | null
+  recommendation: string | null
+}
+
 // The record (3.2). The slot is not a field: a record holds the slot whose lease holder is
 // `factory-loop:<N>:<life>` (10.1).
 export type IssueRecord = {
@@ -109,6 +124,9 @@ export type IssueRecord = {
   round: number
   // parked: the question for the owner
   question: string | null
+  // parked: the parts of that question when an agent structured it, else null (always null in any
+  // other state); `question` is their rendering
+  parts: ParkParts | null
   // waiting: the conditions it waits on, every one of which must hold; null in any other state
   wait: WaitCondition[] | null
   // closed: why
@@ -219,6 +237,8 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
+  // F1: the flake bug filed or found, with what its tell says (rules-flake-bugs.ts)
+  | { kind: 'flake-bug'; issue: number; made: boolean; ready: boolean; test: string; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
   // a close-tracker check: the split parent found (null: the issue is no split child), whether it was closed, and the sub-issues still open
   | { kind: 'close-tracker'; parent: number | null; closed: boolean; open: number[] }
   // leftovers: the patch file a prepare or a free saved the slot's leftovers to (10.2): its uncommitted
@@ -236,7 +256,11 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released'] as const
+// What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
+// body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
+export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
+
 export type V2ActionKind = (typeof V2_ACTION_KINDS)[number]
 
 // What the transition executor re-checks against the live ledger and records before it stores
@@ -276,7 +300,7 @@ export type StepMarker = {
 export type SplitReasons = { why_split: string; why_count: string; why_parts: string; why_order: string }
 
 // A child a designer's split asks for (8.7).
-export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
+export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean; decision: string | null; decisionParts?: ParkParts | null }
 
 export type V2Action =
   // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;
@@ -319,6 +343,10 @@ export type V2Action =
   | (ActionBase & { kind: 'link'; blocker: number })
   // a merged split child's check upward: issue is the one to check from; its split parent is closed when every sub-issue is closed (act-tracker.ts)
   | (ActionBase & { kind: 'close-tracker' })
+  // F1: one bug for a flaky test, found again by its hidden marker or filed; ready: the cap allowed `ready` (rules-flake-bugs.ts)
+  | (ActionBase & { kind: 'flake-bug'; bug: FlakeBugSpec })
+  // O4: log a release tag (callum-flow-released); source: the loop's own release task made it, or the workflow
+  | (ActionBase & { kind: 'released'; tag: string; source: 'loop' | 'workflow' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
@@ -385,22 +413,22 @@ export function labelOf(state: IssueState): FactoryLabel | null {
   return state === 'closed' ? null : FACTORY_LABELS[state].name
 }
 
-// The notice (TELL) kinds v2 adds; the first seven are owner items, which go out before any other
-// wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow'] as const
-export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
+// The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
+// wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, schema-behind, pass-error) stay.
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused'] as const
+export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done', 'flake-bug', 'actions-resumed'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 
 // --- interventions (v2 SPEC 7.2) ---------------------------------------------------------------------
 
-export type InterventionWho = 'person' | 'loop'
+export type InterventionWho = 'person' | 'loop' | 'judge'
 
 // The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
 // and `guard:<what>` take their suffix from the lists above or the op's name.
@@ -422,6 +450,9 @@ export type IssueRead = { at: Ms; open: boolean | null; labels: string[] | null 
 // `tag`: the release tag a tag-contains read compared against, so it is read again only when the tag changes.
 export type WaitRead = { at: Ms; held: boolean; tag?: string }
 
+// A condition the loop cannot read, since when: its read failed, or (tag-contains) its repo has no release tag.
+export type WaitUnread = { since: Ms; why: 'read-failed' | 'no-release' }
+
 // An open release bump PR (sources-release.ts): its branch and GitHub's creation time, which the
 // merge queue's hold window runs from (9.1).
 export type ReleasePr = { pr: number; branch: string; createdAt: Ms }
@@ -435,12 +466,38 @@ export type IssueComment = { body: string; at: Ms; url: string | null }
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).
 export type HeadSeen = { pr: number; at: Ms }
 
-export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs'] as const
+// The newest completed run of a workflow on the default branch (sources-main.ts).
+export type MainRun = { id: number; attempt: number; head: string; event: string; conclusion: string }
+// One active workflow as the main read showed it: its newest completed run (null: none) and whether
+// a newer run is queued or in progress.
+export type MainWorkflow = { id: number; name: string; run: MainRun | null; running: boolean }
+// The newest deployment of an environment at the head, and its newest status (null: none).
+export type MainDeployment = { environment: string; id: number; state: string | null }
+// What one read of the default branch showed (sources-main.ts, the schema main_state.v1): when (ISO, 3 ms digits), the
+// branch and its head, the merged PR the head came from, the workflows and the deployments.
+export type MainReading = { observedAt: string; branch: string; head: string; pr: number | null; workflows: MainWorkflow[]; deployments: MainDeployment[] }
+
+export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs', 'main', 'flakes'] as const
 // What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
 // was read and the "<issue>:<life>:<seq>" of this device's transitions it holds.
 export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
 
 export type V2SourceName = (typeof V2_SOURCES)[number]
+
+// One issue of the blocker tree (sources-blockers.ts): what its single read showed. `blockers` are its
+// open blockers in this repo, `foreign` its open blockers elsewhere (`owner/name#N`, never read);
+// `read` is how its read ended: refused (an untrusted author, exit 3) or failed.
+export type BlockerNode = { open: boolean; labels: string[]; title: string | null; blockers: number[]; foreign: string[]; read: 'ok' | 'refused' | 'failed' }
+
+// The blockers of the queue's blocked issues, read for one starved spell and one 24 h period of it.
+// `nodes` are by issue number; a blocker that has no node was not read (the cap stopped the walk).
+export type BlockerTree = { since: Ms; period: number; readAt: Ms; nodes: Record<number, BlockerNode>; truncated: boolean; error: string | null }
+
+// What S1 says of a pass (rules-claim.ts): `starved` is true when the queue is not empty, nothing is
+// queued or in flight, no owner hold or stopping tier applies and every queue issue was skipped by a claim
+// filter; null when a source failed (unknown). `skips`: each queue issue's filter reason, `blocked`: those
+// skipped for their blockers.
+export type StarvedVerdict = { starved: boolean | null; skips: Map<number, string>; blocked: number[] }
 
 // The State fields v2 adds (2.4), as State.v2: observeV2 reads them every pass; absent in a state
 // built outside a pass.
@@ -460,8 +517,14 @@ export type V2State = {
   // the conditions waiting records wait on, by key (`issue:57`, `pr:812`, `tag:35bb655`): the last read that
   // showed one; a condition with no entry was not read, or its read failed, and stays open
   waits?: Record<string, WaitRead>
+  // the conditions that cannot be read, by key, and since when; absent: none
+  waitsUnread?: Record<string, WaitUnread>
   // the open release bump PRs (sources-release.ts) the merge queue holds for; absent: none read
   releasePrs?: ReleasePrsRead
+  // the default branch as the last read that succeeded showed it (sources-main.ts); absent: none this pass
+  main?: MainReading
+  // the flakes in the window and the open flake bugs (sources-flakes.ts); absent: not read this pass
+  flakes?: FlakesRead
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>
@@ -477,15 +540,26 @@ export type V2State = {
   dualWrite: DualWrite | null
   // the last compare of the record rebuild's two stores (sources-records.ts), as of the pass that made it; absent: none made this load
   recordsShadow?: RecordsShadow
+  // the last compare of the facts' and ledger rebuild's two stores (sources-facts.ts); absent: none made this load
+  factsShadow?: FactsShadow
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead
   // the wind-down request, stop-now file and last status (10.11; wind-down.ts); absent when not read
   windDown?: WindDownRead
+  // when the current starved spell began (the store's `starved:<repo>`); absent: no spell (S1)
+  starvedSince?: Ms
+  // the blocker tree read for the spell and its current period (sources-blockers.ts); absent: not read
+  blockers?: BlockerTree
+  // the settings in force now, the last snapshot kept in the store (null: none valid) and the config ops that landed since (rules-settings.ts); absent: not read
+  settings?: { now: Snapshot; nowAt: Ms; before: Snapshot | null; beforeAt: Ms | null; ops: SettingsOp[] }
 }
 
+// a config op that landed (driver-controls.ts), kept in the store until the snapshot after it
+export type SettingsOp = { key: string; by: 'person' | 'judge'; at: Ms }
+
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
-export type V2Ctx = PlanCtx & { v2: V2State }
+export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict }
 
 // --- what the executors may change beside the ledger (v2 SPEC 3.3, 4.6) -------------------------------
 

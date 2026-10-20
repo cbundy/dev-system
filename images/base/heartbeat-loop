@@ -60,6 +60,16 @@
 #                                    Never /proc/<pid>/cmdline or environ.
 # HEARTBEAT_CGROUP_DIR (default /sys/fs/cgroup) and HEARTBEAT_PROC_DIR (default /proc) are test hooks.
 #
+# Settings snapshot: each running beat also sends a third, separate psql call per target, after that
+# target's stats call: `-- heartbeat config`, an UPDATE of factory.workers.config with the factory
+# loop's settings snapshot heartbeat-state read from $CLAUDE_CONFIG_DIR/factory-loop/<owner>__<name>/
+# settings.json (heartbeat-state --repo; the repo is the one in the row). A null config (no repo, no
+# file, an unreadable, invalid or oversize file) writes NULL, so the row never shows a snapshot that
+# is gone. It is separate for the same reason as the stats: a database without the column rejects
+# only it, logged, masked, as "<target> config write failed", never changing the exit code. The
+# value reaches psql only as a -v variable. The stopped beat sends none and leaves config as it
+# was. Readers judge freshness by config->>'at' (the loop's last observing pass), not by last_seen.
+#
 # The DDL (old target only; guarded by catalog checks, so a repeat takes no exclusive lock) is
 # sent with the first beat of each process and again after a failed beat of that target.
 # SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' to every configured target
@@ -155,7 +165,8 @@ BEGIN
     ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz'),
     ('cpu_pct', 'real'), ('cpu_limit_cores', 'numeric'), ('cpu_quota_set', 'boolean'),
     ('mem_used_bytes', 'bigint'), ('mem_limit_bytes', 'bigint'), ('claude_interactive', 'int'),
-    ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz')
+    ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz'),
+    ('config', 'jsonb')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN
@@ -277,6 +288,12 @@ ON CONFLICT (device) DO UPDATE SET
   chat_active_at = EXCLUDED.chat_active_at, sessions = EXCLUDED.sessions, critical_failures = EXCLUDED.critical_failures,
   push = EXCLUDED.push, interval_s = EXCLUDED.interval_s, started_at = EXCLUDED.started_at,
   last_seen = now();
+SQL
+
+# The first line marks the config call (the tests key their psql stub on it).
+read -r -d '' CONFIG <<'SQL'
+-- heartbeat config
+UPDATE factory.workers SET config = NULLIF(:'config', '')::jsonb WHERE device = :'device';
 SQL
 
 # The first line marks the stats call (the tests key their psql stub on it).
@@ -507,12 +524,26 @@ stats_to() {
   return 0
 }
 
+# config_to LABEL URL: sends the settings snapshot (the psql -v arguments in CONFIG_ARGS) to one
+# database, after its stats call. A failure is logged, masked, and never fails the beat. Always returns 0.
+config_to() {
+  local label=$1 url=$2 out
+  [ "${#CONFIG_ARGS[@]}" -gt 0 ] || return 0
+  if ! out=$(printf '%s\n' "$CONFIG" | run_psql "$url" "${CONFIG_ARGS[@]}" 2>&1); then
+    printf '%s\n' "$out" | mask_secrets >&2
+    echo "heartbeat-loop: $label config write failed" >&2
+    return 0
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
+  return 0
+}
+
 # beat: one upsert per configured target, the agentsview database first, then the factory
 # database. Returns 0 when every configured target succeeded, 1 when any failed and 2 when
 # neither URL is configured.
 beat() {
   local av_url='' fdb_url='' av_ok=0 fdb_ok=0 snap latest_json versions state_wait state_json state in_flight chat_at sessions device
-  local ok=0 failed=0
+  local ok=0 failed=0 repo config
   agentsview_pg_url > /dev/null 2>&1 && av_ok=1
   factory_db_url writer > /dev/null 2>&1 && fdb_ok=1
   if [ "$av_ok" = 0 ] && [ "$fdb_ok" = 0 ]; then
@@ -529,8 +560,9 @@ beat() {
   fi
   state_wait=20
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state_wait=2
-  state_json=$(timeout "$state_wait" "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
-  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null,"sessions":[],"claude_sessions":null}'
+  repo=$(workers_repo)
+  state_json=$(timeout "$state_wait" "$SHARE/heartbeat-state" --repo "$repo" 2>/dev/null) || state_json=''
+  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null,"sessions":[],"claude_sessions":null,"config":null}'
   state=$(jq -r '.state // "idle"' <<< "$state_json")
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state=stopped
   in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
@@ -540,19 +572,22 @@ beat() {
   device=$(jq -r '.device // empty' <<< "$snap")
   [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
   g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
-  ARGS=(-v "device=$device" -v "repo=$(workers_repo)" -v "role=$(g role)" -v "ring=$(g ring)"
+  ARGS=(-v "device=$device" -v "repo=$repo" -v "role=$(g role)" -v "ring=$(g ring)"
     -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)"
     -v "dev_image=$(g dev_image)" -v "template_version=$(g template_version)"
     -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state"
     -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "sessions=$sessions" -v "critical_failures=$(critical_failures)"
     -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)")
   STATS_ARGS=()
+  CONFIG_ARGS=()
   if [ -z "${HEARTBEAT_STOPPING:-}" ]; then
     machine_stats "$state_json"
     STATS_ARGS=(-v "device=$device" -v "state=$state" -v "cpu_pct=$stats_cpu_pct" -v "cpu_limit_cores=$stats_cores"
       -v "cpu_quota_set=$stats_quota_set" -v "mem_used_bytes=$stats_mem_used" -v "mem_limit_bytes=$stats_mem_limit"
       -v "claude_interactive=$stats_interactive" -v "claude_headless=$stats_headless"
       -v "claude_procs=$stats_claude_procs" -v "procs=$stats_procs")
+    config=$(jq -c '.config // empty | select(type == "object")' <<< "$state_json")
+    CONFIG_ARGS=(-v "device=$device" -v "config=$config")
   fi
 
   # the targets are independent: a failure on one never skips or delays the other
@@ -562,6 +597,7 @@ beat() {
       DDL_SENT=1
       ok=1
       stats_to "agentsview database" "$av_url"
+      config_to "agentsview database" "$av_url"
     else
       DDL_SENT=0
       failed=1
@@ -573,6 +609,7 @@ beat() {
     if upsert_to "factory database" "$fdb_url" 0; then
       ok=1
       stats_to "factory database" "$fdb_url"
+      config_to "factory database" "$fdb_url"
     else
       failed=1
     fi

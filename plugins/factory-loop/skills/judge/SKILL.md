@@ -8,7 +8,7 @@ description: >-
   Use whenever a prompt's first line starts with TASK or TELL, when the owner
   gives the factory an instruction, and at the start of an orchestrator
   session the factory loop drives.
-version: 0.57.0
+version: 0.71.0
 ---
 
 # Judge
@@ -74,7 +74,7 @@ the model was involved.
   with a reason. Decide whether to release now, by
   "Release decisions" below. To release, start the release agent and answer
   `done` (reason: the version and why now); to wait, answer `hold` with the reason, which the loop
-  only logs (the next hour's review asks again). You do not do the release steps yourself. Once the release agent reports the release
+  only logs (the next hour's review asks again, and so does one within the hour when a new issue starts waiting). A `done` answer (the release started) quiets the review: the loop sends no release review until a newer tag is seen or `releaseInProgress` (2h) has passed since the answer. A review that comes after the window means the release did not land: check `git tag -l` before starting another. You do not do the release steps yourself. Once the release agent reports the release
   out, do the Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps,
   recording the result on the issue and closing it.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
@@ -181,13 +181,49 @@ Owner items (the title counts them until resolved):
   issues, so the new store is not yet safe to read. Nothing is blocked: the loop still uses the old
   one. Lead with the issues and the first difference, and say that the owner may set
   `/factory config set eventsSource old` to stop the compare reading the new store.
+- `facts-shadow` (keys, differences; detail: the keys, the first difference and the way back): the
+  loop read its facts (the newest reclaim per issue), rebuilt its ledger and listed its logged keys
+  from the old and the new event store and they differ for those keys (`reclaimed:#N`, `ledger:<key>`,
+  `once:<key>`), so the new store is not yet safe to read. Nothing is blocked: the loop still uses
+  the old one. Lead with the first difference, and say that the owner may set
+  `/factory config set eventsSource old` to stop the compare reading the new store.
+- `wait-unreadable` (issue, hours, conditions; detail: one line per condition and why): a waiting
+  issue has a condition the loop cannot read, for a whole waiting period, so it may never clear.
+  The record stays waiting and still clears by itself or by `resume <N>`. Lead with `[DECISION]`:
+  name the issue and why it waits. For a "no release tag of <repo>" line, that repo must cut a
+  release, or the owner resumes or drops the issue; for "its read has failed", the owner checks
+  access to the repo or the number of the issue or PR the condition names.
+- `flake-bug` (bug, flakes, days, decision; detail: the test and what happened to the bug): the loop saw one
+  test flake `flakes` times in `days` days and filed (or found) the bug. `decision=ready` means the loop
+  labelled it `ready` and will claim it; `decision=held` means `flakeBugReadyCap` flake bugs were already
+  ready or in flight, so it waits for the owner to add `ready`. Lead with `[INFO]` for ready and
+  `[DECISION]` for held: link the bug, name the test, and for a held bug say it needs `ready`.
+- `starved` (since, minutes, period, queue, blocked, roots, why; detail: one line per root blocker, most
+  blocking first, then one line per queue issue held by something other than a blocker): the ready queue
+  has been unclaimable with nothing in flight for the whole spell, so the factory is idle. Each root line
+  says what blocks how many ready issues and why the root is not moving. Lead with `[DECISION]`: name the
+  roots, and what the owner can do for each: answer a parked root, run a Run it, make a root `ready`, cut
+  the release a merged change waits on, or close a kept-open issue. A `roots=unread` tell means the
+  blockers could not be read; the lines then give each ready issue's blocker count. It comes again at most
+  once a day while the spell lasts.
+- `actions-refused` (job, run, prs, why; detail: GitHub's message, that it is the account and not the code, and
+  the PRs held): GitHub did not start a CI job because the account's payments failed or its spending limit
+  is reached. The loop holds those PRs with no fixer and no re-run spent, re-runs one refused run every 30
+  minutes, and resumes by itself. Lead with `[ACTION]`: the owner fixes billing or raises the spending limit
+  in GitHub's settings; name the PRs held.
 
 Notices:
+- `actions-resumed` (minutes, pr; detail: the job that started): GitHub starts CI jobs again, so the refusal
+  spell ended and the loop re-runs each refused run once. Lead with `[INFO]`; nothing for the owner to do.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this
   repo, so the released orchestrator is still driving and the loop stays in observe until its
   lock has been gone ten minutes (v2 SPEC 13.11.2). Owner stops that watcher or the old session.
+- `schema-behind` (to, error): the startup migrate (`factory-db-migrate`) failed or timed out, so the
+  factory database's schema is behind this image and the loop stays in observe (v2 SPEC 13.11.2). It
+  comes once per startup. Owner reads the error, fixes the migrator secret or the database, and runs
+  `factory-db-migrate`; the next pass acts by itself once it succeeds.
 - `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
   checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop
@@ -199,6 +235,10 @@ Notices:
 - `wind-down-stale` (requested_at, cap_minutes): a wind-down was requested, the stop never followed
   within its cap plus 5 minutes, and the loop removed the request and works normally again. Say so
   in one line; the owner checks why the stopper did not stop the loop.
+- `done` (issue, branch; detail: the issue's link, the evidence, what became of the branch): the designer
+  found the issue's work already merged and the loop closed it as completed. Say it in one `[INFO]` line:
+  the issue, the evidence (PR or commit), and whether its branch was deleted, kept or absent. Nothing to
+  do; the owner checks only if the evidence looks wrong.
 - `task-timeout` (key): the release task went unanswered and is not retried. Owner says whether to
   redo it.
 
@@ -229,8 +269,8 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `drop <N>`: close the issue's current claim and stop its agents; the issue stays open, and
   re-adding `ready` brings it back.
 - `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.
-- `update [<reason>]` / `update off`: drain, then restart this workspace for an update once
-  nothing is in flight (D-15); off cancels.
+- `update [<reason>]` / `update off`: wind down (up to windDownMinutes), then restart this workspace
+  for an update (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.
 - `trace on|off`: each pass's timing to a local trace file, for troubleshooting (v2 SPEC 13.12.1).
 - `stop-now`: during a wind-down, stop at once without waiting for what still runs; only when the owner asks.

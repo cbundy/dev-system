@@ -213,7 +213,7 @@ test("missing files give idle and no throw", () => {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
   const { out } = run();
-  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 } });
+  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null });
 });
 
 test("an unreadable state.sqlite degrades to the other sources and reports on stderr", () => {
@@ -548,4 +548,66 @@ test("--source new overrides the environment", () => {
   writeNew([nev("merged", 5)]);
   const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" }, { args: ["--source", "new"] });
   assert.deepEqual(out.in_flight, []);
+});
+
+// config: the factory loop's settings snapshot (--repo)
+function writeSettings(folder, content) {
+  const d = path.join(tmp, "claude", "factory-loop", folder);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, "settings.json"), typeof content === "string" ? content : JSON.stringify(content));
+}
+const snap = { v: 1, repo: "owner/name", at: "2026-10-19T08:00:00Z", settings: { a: 1 } };
+
+test("config is the repo's settings.json, parsed", () => {
+  writeSettings("owner__name", snap);
+  const { out, stderr } = run({}, { args: ["--repo", "owner/name"] });
+  assert.deepEqual(out.config, snap);
+  assert.equal(stderr, "");
+});
+
+test("config finds a folder whose case differs from the lowercased repo", () => {
+  writeSettings("Owner__Name", snap);
+  assert.deepEqual(run({}, { args: ["--repo", "owner/name"] }).out.config, snap);
+});
+
+test("config is null with no --repo, and with a missing file or folder (no warning)", () => {
+  writeSettings("owner__name", snap);
+  assert.equal(run().out.config, null);
+  const miss = run({}, { args: ["--repo", "other/repo"] });
+  assert.equal(miss.out.config, null);
+  assert.equal(miss.stderr, "");
+  fs.mkdirSync(path.join(tmp, "claude", "factory-loop", "empty__dir"), { recursive: true });
+  assert.equal(run({}, { args: ["--repo", "empty/dir"] }).out.config, null);
+});
+
+for (const [name, content] of [
+  ["malformed JSON", "{not json"],
+  ["a JSON array", "[1,2]"],
+  ["a JSON scalar", "7"],
+  ["a file over 256 KiB", JSON.stringify({ pad: "x".repeat(256 * 1024) })],
+]) {
+  test(`config is null for ${name}, with one warning and exit 0`, () => {
+    writeSettings("owner__name", content);
+    const { out, stderr } = run({}, { args: ["--repo", "owner/name"] });
+    assert.equal(out.config, null);
+    assert.equal(stderr.match(/heartbeat-state: config: /g).length, 1);
+  });
+}
+
+test("config is null for an unreadable file", { skip: process.getuid && process.getuid() === 0 }, () => {
+  writeSettings("owner__name", snap);
+  fs.chmodSync(path.join(tmp, "claude", "factory-loop", "owner__name", "settings.json"), 0);
+  const { out, stderr } = run({}, { args: ["--repo", "owner/name"] });
+  assert.equal(out.config, null);
+  assert.match(stderr, /heartbeat-state: config: /);
+});
+
+test("--source and --repo are both parsed, in either order", () => {
+  writeSettings("owner__name", snap);
+  writeEvents([ev("claimed", 5)]);
+  const a = run({}, { args: ["--source", "old", "--repo", "owner/name"] });
+  assert.deepEqual(a.out.config, snap);
+  assert.deepEqual(issuesOf(a.out), [5]);
+  const b = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "bogus" }, { args: ["--repo=owner/name", "--source=old"] });
+  assert.deepEqual(b.out.config, snap);
 });

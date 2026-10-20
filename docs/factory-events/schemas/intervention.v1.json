@@ -2,21 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "intervention.v1.json",
   "title": "intervention",
-  "description": "Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.",
+  "description": "Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts. A ci-rerun row carrying flaky records the re-run's result as a second row for the same fact, so it still counts once as an intervention under that key.",
   "x-issue": "optional",
   "type": "object",
   "additionalProperties": false,
   "required": ["who", "cause", "life", "fact", "pr", "detail"],
   "properties": {
-    "who": { "enum": ["person", "loop"], "description": "person: a person did something; loop: the loop had to judge or recover.", "x-column": true },
+    "who": { "enum": ["person", "loop", "judge"], "description": "person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool.", "x-column": true },
     "cause": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$", "description": "What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know.", "x-column": true },
     "life": { "type": ["string", "null"], "pattern": "^[0-9a-z]+$", "description": "The issue's life it happened in, as in transition; null when none applies.", "x-column": true },
     "fact": { "type": ["string", "null"], "description": "The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue.", "x-column": true },
     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The pull request involved, when there is one.", "x-column": true },
+    "flaky": { "type": ["boolean", "null"], "description": "On a ci-rerun row recording the re-run's result: true when the re-run passed on the same head as the failure; false when it failed again. Null otherwise.", "x-column": true },
+    "failed_tests": { "type": ["array", "null"], "items": { "type": "string", "maxLength": 200 }, "maxItems": 20, "description": "The names of the tests that failed in the CI run. Null when none were recorded.", "x-column": true },
+    "failed_jobs": { "type": ["array", "null"], "items": { "type": "string", "maxLength": 200 }, "maxItems": 20, "description": "The names of the CI jobs that failed. Null when none were recorded.", "x-column": true },
+    "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "The commit the CI run was on, when known.", "x-column": true },
     "detail": { "type": "string", "description": "One line for people saying what happened; empty when none was given. Never parse it." }
   },
   "examples": [
     { "who": "person", "cause": "op:drop", "life": null, "fact": "op:drop/i91/mvb4ci14", "pr": null, "detail": "drop 91" },
-    { "who": "loop", "cause": "fix:conflict", "life": "tn075p", "fact": "i73/ltn075p/s7/t", "pr": 83, "detail": "a fixer for a merge conflict on PR #83, from reviewing" }
+    { "who": "judge", "cause": "op:pause", "life": null, "fact": "op:pause/i91/mvb4ci15", "pr": null, "detail": "pause 91" },
+    { "who": "loop", "cause": "fix:conflict", "life": "tn075p", "fact": "i73/ltn075p/s7/t", "pr": 83, "detail": "a fixer for a merge conflict on PR #83, from reviewing" },
+    { "who": "loop", "cause": "ci-rerun", "life": "tn075p", "fact": "i73/ltn075p/ci-rerun/1", "pr": 83, "detail": "ci flake: re-run passed", "flaky": true, "failed_tests": ["tests/cli.test.js > prints help"], "failed_jobs": ["test"], "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff" }
   ]
 }

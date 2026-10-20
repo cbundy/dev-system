@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "settings_changed.v1.json",
+  "title": "settings_changed",
+  "description": "One change in a setting the loop runs on: which setting, its old and new value, the layer the new value came from and who changed it. Count one per fact (the once key, such as settings/maxInFlightIssues/mvb4ci14). The loop writes it (rule N1): each acting pass compares its settings snapshot with the one it kept and logs one event for every setting that differs.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key",
+    "old_value",
+    "new_value",
+    "layer",
+    "who",
+    "fact"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The canonical leaf of the setting, such as maxInFlightIssues, stateTimeoutMs.design or derived.gateConcurrency.",
+      "x-column": true
+    },
+    "old_value": {
+      "description": "The value before the change, any JSON; null when it was unset.",
+      "x-column": true
+    },
+    "new_value": {
+      "description": "The value after the change, any JSON; null when it is now unset.",
+      "x-column": true
+    },
+    "layer": {
+      "enum": [
+        "default",
+        "repo",
+        "workspace",
+        "plugin",
+        "env",
+        "directive",
+        null
+      ],
+      "description": "The source of the new value; null for a derived value.",
+      "x-column": true
+    },
+    "who": {
+      "enum": [
+        "person",
+        "judge",
+        "repo",
+        "plugin"
+      ],
+      "description": "Who made the change: a person, the judge (an operation change), the repo (its own config) or a plugin default change.",
+      "x-column": true
+    },
+    "fact": {
+      "type": "string",
+      "description": "The once key of the change, such as settings/maxInFlightIssues/mvb4ci14.",
+      "x-column": true
+    },
+    "detail": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 500,
+      "description": "A short note on the change."
+    }
+  },
+  "examples": [
+    {
+      "key": "maxInFlightIssues",
+      "old_value": 3,
+      "new_value": 5,
+      "layer": "workspace",
+      "who": "judge",
+      "fact": "settings/maxInFlightIssues/mvb4ci14",
+      "detail": "raised after a quiet week"
+    },
+    {
+      "key": "derived.gateConcurrency",
+      "old_value": null,
+      "new_value": 2,
+      "layer": null,
+      "who": "plugin",
+      "fact": "settings/derived.gateConcurrency/mvb4ci15"
+    }
+  ]
+}

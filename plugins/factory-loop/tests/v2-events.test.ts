@@ -23,8 +23,9 @@ import {
   tokensOf,
 } from '../hooks/v2/events'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
+import { endedOf } from '../hooks/v2/lives'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from '../hooks/v2/types'
-import type { IssueRecord, IssueState, WaitCondition } from '../hooks/v2/types'
+import type { IssueRecord, IssueState, OptionKey, ParkParts, WaitCondition } from '../hooks/v2/types'
 import { NOW } from './fixtures'
 
 // --- a seeded generator, so a failure is reproducible ------------------------------------------------
@@ -56,6 +57,19 @@ function maybe<T>(g: Rng, v: T): T | null {
   return g.next() < 0.3 ? null : v
 }
 
+function parts(g: Rng, max: number): ParkParts {
+  const n = 2 + g.int(5)
+  const options = Array.from({ length: n }, (_, i) => ({ key: 'ABCDEF'[i] as OptionKey, title: text(g, max), detail: maybe(g, text(g, max)) }))
+  const withOptions = g.next() < 0.7
+  return {
+    decision: text(g, max),
+    context: maybe(g, text(g, max)),
+    options: withOptions ? options : null,
+    recommended: withOptions && g.next() < 0.5 ? (options[g.int(n)] as { key: OptionKey }).key : null,
+    recommendation: maybe(g, text(g, max)),
+  }
+}
+
 function record(g: Rng, small: boolean): IssueRecord {
   const state = g.pick(ISSUE_STATES)
   const free = small ? 12 : 400
@@ -79,6 +93,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     fixes: g.int(4),
     round: g.int(6),
     question: maybe(g, text(g, free)),
+    parts: maybe(g, parts(g, free)),
     why: state === 'closed' ? g.pick(CLOSED_WHYS) : null,
     notes: Array.from({ length: g.int(small ? 3 : 8) }, () => text(g, free)),
     prClosedAt: maybe(g, '2026-10-15T09:30:00Z'),
@@ -142,6 +157,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
         fixes: 1,
         round: 1,
         question: null,
+        parts: null,
         why: null,
         notes: ['check ci', 'a,b'],
         prClosedAt: null,
@@ -151,7 +167,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
     }
     expect(eventNote(e)).toBe(
       'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
-        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
+        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
     )
   })
 })
@@ -182,6 +198,7 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       fixes: 0,
       round: 0,
       question: null,
+      parts: null,
       why: null,
       notes: [],
       prClosedAt: null,
@@ -258,7 +275,7 @@ describe('every event events.ts builds parses back to the same fields (property 
         reviewer: g.pick(['adjudicator', 'no-mistakes']),
         answer: `/loop dir/answers/${text(g, 40)}.json`,
       }
-      const iv: InterventionEvent = intervention(g.pick(['person', 'loop'] as const), g.pick(['op:resume', 'unknown:timeout', 'free:load', 'push']), `i5/l${g.int(99)}/s3/t`, text(g, 120), {
+      const iv: InterventionEvent = intervention(g.pick(['person', 'loop', 'judge'] as const), g.pick(['op:resume', 'unknown:timeout', 'free:load', 'push']), `i5/l${g.int(99)}/s3/t`, text(g, 120), {
         issue: maybe(g, 1 + g.int(99)),
         life: maybe(g, 'ss1x2k'),
         pr: maybe(g, 1 + g.int(99)),
@@ -339,6 +356,13 @@ describe('columns and notes per state', () => {
     expect(eventNote(migration)).toBe('reason=reconcile outcome=leave lives=none stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
   })
 
+  test('a closed record with why done round-trips, and its life reads as already merged', () => {
+    const e = transition(rng(11), true)
+    const done: TransitionEvent = { ...e, record: { ...e.record, state: 'closed', why: 'done' } }
+    expect(roundTrip(done)).toEqual(done)
+    expect(endedOf(done.record)).toMatch(/^its work had merged already/)
+  })
+
   test('a note from before the outcome and lives fields reads: a release by its state, with no count; a transition as a first life', () => {
     const old = (state: string) => ({ state, issue: 7, branch: null, pr: null, head: null, note: 'reason=reconcile stage=implementing pr=none checked=x' })
     expect(parseEvent(old('reclaimed'))).toMatchObject({ outcome: 'requeue', lives: null })
@@ -378,6 +402,7 @@ describe('the parser', () => {
       fact: '',
     })
     expect(parseIntervention({ state: 'intervention', issue: null, branch: null, pr: null, head: null, note: 'who=robot cause=x' })).toBeNull()
+    expect(parseIntervention({ state: 'intervention', issue: 7, branch: null, pr: null, head: null, note: 'who=judge cause=op:pause' })?.who).toBe('judge')
   })
 
   test('other states, and the sweep\'s own reclaimed, are not v2 events', () => {

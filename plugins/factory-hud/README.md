@@ -18,7 +18,8 @@ On usage measurements, it shows a toast once per conversation for each threshold
 at 85% or more, 5-hour usage at 90% or more, and 7-day usage at 90% or more.
 
 It only draws, apart from one local file: the session's context window size, which the worker
-heartbeat pushes to the fleet (`sessions` in `factory.workers`). Nothing it shows reaches the
+heartbeat pushes to the fleet (`sessions` in `factory.workers`; the factory loop's
+`factory-loop-workspace` writes the same file on loop workspaces). Nothing it shows reaches the
 conversation, and it never calls a model.
 
 Unlike [`dev-statusline`](../../images/base/README.md#dev-statusline), which only the

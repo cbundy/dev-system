@@ -7,7 +7,7 @@
 #
 # Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
-#          [--if-changed | --new-only]
+#          [--if-changed | --new-only] [--data JSON]
 #        callum-flow-event --path [--repo O/N]
 #        callum-flow-event --new-path [--repo O/N]
 #        callum-flow-event --new-only --new-path [--repo O/N]
@@ -49,6 +49,13 @@
 # usage error (exit 2): the old log is what --if-changed compares against. The capability probe is
 # `--new-only --new-path`: it prints the new path with exit 0, and an older image exits 2 on it.
 #
+# --data JSON (cbundy/dev-system#870) in the old-state mode hands the translator extra payload fields
+# that only the new event carries (ready and claimed: title, labels, parent). The old line is
+# unchanged and gets no new key. JSON that is not an object exits 2 with nothing written. A key the
+# translated type does not accept, or a value of the wrong shape, is a translator miss: the old line
+# is kept, no new event is written, one warning, exit 0. An older writer answers --data with a usage
+# error (exit 2), which callers use to retry without it.
+#
 # --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
 # newest line already in the log for the same subject (the same branch when
 # --branch is given, else the same issue) has the same state, head and note.
@@ -72,6 +79,9 @@
 #   (`renewed`: a claim heartbeat extended the lease; housekeeping, never a stage)
 #   (`implementer_routed`: callum-flow-implementer-route picked the implementer's model; the note
 #   is `model=.. reason=.. bucket=.. pct=..`)
+#   (`usage`: a reading of the usage windows; a spend reading on an API key has the note
+#   `auth=api-key spend_usd=N budget_usd=N|none budget_resets_at=ISO|none source=spend`; a
+#   subscription or unavailable reading may also carry `auth=subscription|api-key`)
 #   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
 #   reason - completed, not_planned or duplicate)
 #   (`loop`: the factory loop's own bookkeeping (docs/factory-loop/DECISIONS.md D-09): agent
@@ -84,15 +94,16 @@
 #   (`reviewed`: one review result; the note must carry verdict= (approve, changes or unknown) and
 #   round=; never a stage, never progress)
 #   (`intervention`: someone had to step in that the plan did not foresee; the note must carry
-#   who= (person or loop) and cause=, and may carry reason=, life= and fact=; --issue is optional
+#   who= (person, loop or judge) and cause=, and may carry reason=, life= and fact=; --issue is optional
 #   (a fleet-level one names none); never a stage, never progress. A rescue the loop cannot see
 #   is recorded by hand: callum-flow-event intervention --issue N --note
 #   'who=person cause=rescue reason=what%20was%20done')
 #   (`prompt_denied`: the factory loop's companion refused a loop agent's tool call, because the
 #   engine would have asked a person nobody watches; `prompt_waiting`: a loop agent is waiting on
-#   such a prompt now. --issue is required; the note is `key=value` tokens (life, seq, step,
-#   attempt, agent, agent_type, tool, input, why, slot, session, transcript), none required;
-#   never a stage, never progress, never final)
+#   such a prompt now. --issue is required; never a stage, never progress, never final. The
+#   current companion writes the native types (--type, --data); the states are kept for older
+#   companions and the history, with a `key=value` note of tokens (life, seq, step, attempt,
+#   agent, agent_type, tool, input, why, slot, session, transcript), none required)
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
@@ -133,7 +144,7 @@ STATES="ready claimed briefed delegated run_started parked verdict fix_requested
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
-  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed | --new-only]" >&2
+  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed | --new-only] [--data JSON]" >&2
   echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "       callum-flow-event --new-path [--repo O/N]" >&2
   echo "       callum-flow-event --new-only --new-path [--repo O/N]" >&2
@@ -256,6 +267,7 @@ actor=${CALLUM_FLOW_ACTOR:-agent}
 repo=${CALLUM_FLOW_REPO-}
 if_changed=
 new_only=
+extra=
 while [ $# -gt 0 ]; do
   if [ "$1" = --new-only ]; then
     new_only=1
@@ -277,6 +289,7 @@ while [ $# -gt 0 ]; do
     --note) note=$2 ;;
     --actor) actor=$2 ;;
     --repo) repo=$2 ;;
+    --data) extra=$2 ;;
     *) usage "unknown option '$1'" ;;
   esac
   shift 2
@@ -315,8 +328,8 @@ case "$state" in
   intervention)
     needs who cause
     case " $note " in
-      *" who=person "* | *" who=loop "*) ;;
-      *) usage "--note for intervention needs who=person or who=loop" ;;
+      *" who=person "* | *" who=loop "* | *" who=judge "*) ;;
+      *) usage "--note for intervention needs who=person, who=loop or who=judge" ;;
     esac
     ;;
 esac
@@ -325,6 +338,9 @@ case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a numb
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 
 command -v jq >/dev/null 2>&1 || { warn "jq not found - event not recorded"; exit 0; }
+if [ -n "$extra" ]; then
+  [ "$(printf '%s' "$extra" | jq -r 'type' 2>/dev/null)" = object ] || usage "--data must be a JSON object"
+fi
 
 repo_file
 
@@ -381,6 +397,7 @@ dual_write() {
   [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - new event not recorded"; return 0; }
   set -- --quiet --ts "$ts_ms"
   [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "$extra" ] || set -- "$@" --data "$extra"
   tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - new event not recorded"; return 0; }
   tr_rc=0
   new=$(printf '%s\n' "$line" | node "$tr_js" "$@" 2>"$tr_err") || tr_rc=$?

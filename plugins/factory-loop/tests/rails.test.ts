@@ -47,12 +47,15 @@ import {
   watcherAlive,
   watcherLockPath,
 } from '../hooks/rails'
-import type { BreakerNotice, Lease, LockIo, PassSource, RailEnv, RailInput, RailIo, Scheduler, UsageReading } from '../hooks/rails'
+import { noticeOf, stale } from '../hooks/driver-store'
+import { schemaRail } from '../hooks/rail-schema'
+import type { BreakerNotice, Lease, LockIo, PassSource, RailEnv, RailNotice, RailInput, RailIo, Scheduler, UsageReading } from '../hooks/rails'
 import type { Action, ActionClass, Tier } from '../hooks/types'
 import { DEVICE, MIN, NOW, OTHER, config, issue, mine, run, state } from './fixtures'
 import { lockCas } from './host'
 
 const CFG = config()
+const HOUR_MS = 60 * MIN
 const REPO = 'cbundy/dev-system'
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
 const LOCK = `${LOOP_DIR}/act.lock`
@@ -510,6 +513,98 @@ function usageIo(reading: UsageReading | Error) {
   }
 }
 
+describe('the schema rail (cbundy/dev-system#888)', () => {
+  const STATUS = '/tmp/dev-factory-db-migrate.json'
+  const at = (ms: number) => new Date(ms).toISOString()
+  const status = (o: Record<string, unknown>) => ({ [STATUS]: JSON.stringify(o) })
+  const failed = (extra: Record<string, unknown> = {}) => ({ outcome: 'failed', at: at(NOW - 5 * MIN), to_version: 12, error: 'connecting as x_migrator failed', ...extra })
+
+  test('no status file passes: no migrator is set up here', async () => {
+    expect(await schemaRail(fakeIo().io, {}, NOW)).toEqual({ reason: null, notice: null })
+    const r = await checkRails(fakeIo().io, input())
+    expect(r).toMatchObject({ act: true, notices: [] })
+  })
+
+  test('migrated and current pass, and the loop acts', async () => {
+    for (const outcome of ['migrated', 'current']) {
+      const r = await checkRails(fakeIo(status({ outcome, at: at(NOW), to_version: 12 })).io, input())
+      expect(r).toMatchObject({ act: true, reasons: [], notices: [] })
+    }
+  })
+
+  test('failed and timed-out refuse with the reason and give one notice keyed on the status time', async () => {
+    for (const outcome of ['failed', 'timed-out']) {
+      const r = await checkRails(fakeIo(status(failed({ outcome }))).io, input())
+      expect(r.act).toBe(false)
+      expect(r.lock).toBeNull()
+      expect(r.reasons).toEqual(['schema: migrate to 12 failed: connecting as x_migrator failed'])
+      expect(r.notices).toEqual([{ kind: 'schema-behind', since: NOW - 5 * MIN, to: '12', error: 'connecting as x_migrator failed' }])
+    }
+    // the same status on a later pass gives the same notice, so the same tell key: told once
+    const a = await checkRails(fakeIo(status(failed())).io, input())
+    const b = await checkRails(fakeIo(status(failed())).io, input({ now: NOW + MIN }))
+    expect(noticeTell(a.notices[0] as RailNotice).key).toBe(noticeTell(b.notices[0] as RailNotice).key)
+    // a later startup's failure is a new tell
+    const c = await checkRails(fakeIo(status(failed({ at: at(NOW + 2 * MIN) }))).io, input({ now: NOW + 3 * MIN }))
+    expect(noticeTell(c.notices[0] as RailNotice).key).not.toBe(noticeTell(a.notices[0] as RailNotice).key)
+  })
+
+  test('a failed status with no usable version or error still refuses', async () => {
+    const r = await schemaRail(fakeIo(status({ outcome: 'timed-out', at: at(NOW), to_version: null, error: null })).io, {}, NOW)
+    expect(r.reason).toBe('schema: migrate to ? failed: timed-out')
+    expect(r.notice).toMatchObject({ kind: 'schema-behind', to: '?' })
+  })
+
+  test('a fresh running status refuses without a notice, a stale one with one', async () => {
+    const fresh = await schemaRail(fakeIo(status({ outcome: 'running', at: at(NOW - 2 * MIN) })).io, {}, NOW)
+    expect(fresh.reason).toMatch(/^schema: the startup migrate is running/)
+    expect(fresh.notice).toBeNull()
+    const stale = await schemaRail(fakeIo(status({ outcome: 'running', at: at(NOW - 11 * MIN) })).io, {}, NOW)
+    expect(stale.reason).toMatch(/^schema: /)
+    expect(stale.notice).toMatchObject({ kind: 'schema-behind', since: NOW - 11 * MIN })
+    // a running record with no time cannot be shown young
+    const undated = await schemaRail(fakeIo(status({ outcome: 'running' })).io, {}, NOW)
+    expect(undated.reason).not.toBeNull()
+    expect(undated.notice).not.toBeNull()
+  })
+
+  test('a file that cannot be parsed, or names no outcome, refuses with a notice; a read that throws too', async () => {
+    for (const text of ['not json', '[]', 'null', '{"outcome":"other"}', '{}']) {
+      const r = await schemaRail(fakeIo({ [STATUS]: text }).io, {}, NOW)
+      expect(r.reason).toMatch(/^schema: /)
+      expect(r.notice).toMatchObject({ kind: 'schema-behind' })
+    }
+    const io: RailIo = {
+      readFile: async () => {
+        throw new Error('EACCES')
+      },
+      cmd: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    }
+    expect((await schemaRail(io, {}, NOW)).reason).toMatch(/^schema: /)
+  })
+
+  test('DEV_FACTORY_DB_MIGRATE_STATUS names the file', async () => {
+    const files = { '/x/status.json': JSON.stringify(failed()) }
+    const env = { ...ENV, DEV_FACTORY_DB_MIGRATE_STATUS: '/x/status.json' }
+    expect((await checkRails(fakeIo(files).io, input({ env }))).act).toBe(false)
+    expect((await checkRails(fakeIo(files).io, input())).act).toBe(true)
+  })
+
+  test('the refusal comes after the heartbeat guard, and a session the role refuses tells nothing', async () => {
+    const r = await checkRails(fakeIo(status(failed()), world({ csv: beats([OTHER, 30]) })).io, input())
+    expect(r.reasons.map(x => x.split(':')[0])).toEqual(['heartbeat', 'schema'])
+    const roleless = await checkRails(fakeIo(status(failed())).io, input({ env: { ...ENV, DEV_ROLE: 'dev' } }))
+    expect(roleless.notices).toEqual([])
+  })
+
+  test('recovery: once the status says migrated the next pass acts with no other step', async () => {
+    const files = status(failed())
+    expect((await checkRails(fakeIo(files).io, input())).act).toBe(false)
+    files[STATUS] = JSON.stringify({ outcome: 'migrated', at: at(NOW + MIN), to_version: 12 })
+    expect((await checkRails(fakeIo(files).io, input({ now: NOW + 2 * MIN }))).act).toBe(true)
+  })
+})
+
 describe('the usage pre-check (v2 SPEC 13.10 item 7)', () => {
   test('each tier refuses the classes it forbids, and only those', () => {
     const refused: Record<Tier, ActionClass[]> = {
@@ -662,5 +757,19 @@ describe('notices as tell wakes (v2 SPEC 13.9.2)', () => {
       fields: { kind: 'ping' },
     })
     expect(noticeTell({ kind: 'old-watcher', pid: '4242', since: NOW })).toMatchObject({ key: `tell:old-watcher:${NOW}`, fields: { pid: '4242' } })
+    expect(noticeTell({ kind: 'schema-behind', since: NOW, to: '12', error: 'boom' })).toEqual({
+      ...base,
+      wake: 'schema-behind',
+      key: `tell:schema-behind:${NOW}`,
+      reason: 'tell schema-behind',
+      fields: { to: '12', error: 'boom' },
+    })
+  })
+
+  test('the schema-behind notice survives the store, and stays until its tell ended', () => {
+    const n: RailNotice = { kind: 'schema-behind', since: NOW, to: '12', error: 'boom' }
+    expect(noticeOf(JSON.parse(JSON.stringify(n)))).toEqual(n)
+    expect(noticeOf({ kind: 'schema-behind', since: NOW, to: 12, error: 'boom' })).toBeNull()
+    expect(stale(n, { heartbeat: null, watcher: null }, NOW + HOUR_MS)).toBe(false)
   })
 })

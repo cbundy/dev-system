@@ -90,7 +90,13 @@ failure), then `test: N failed` and exit non-zero. `scripts/test.sh` owns the sl
 order, the currently empty serial list, and the shared per-run environment block. That
 block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`,
 `NO_MISTAKES_HOME`, `NM_PUSH_STATE_DIR` and `AGENTSVIEW_DATA_DIR` each point to an empty
-temporary directory, which is checked after the suites and removed on exit.
+temporary directory, which is checked after the suites and removed on exit. The sandbox also keeps tests
+off the workspace's real databases: `DEV_SECRETS_DIR`, `DEV_WORKSPACE_SECRETS_DIR` and
+`DEV_MIGRATOR_SECRETS_DIR` point at missing folders inside it, the database URL variables are unset, and
+a `psql` guard (`scripts/test-db-guard`) first on PATH refuses a connection to a host of the real
+configured URLs (read once at setup, only hostnames kept) even when a test scrubs its env. A refusal is
+recorded and the run prints `FAIL test isolation: non-test database <host> (<caller>)` (counted in the same
+one failure).
 The sandbox also gives the database tests a real PostgreSQL (`scripts/test-pg.sh`). When
 `FACTORY_TEST_PG_ADMIN_URL` is set (CI's `postgres:17` service) the run uses that server; otherwise it
 starts a private cluster from the highest `/usr/lib/postgresql/*/bin`, on a unix socket only, and stops and
@@ -98,7 +104,29 @@ removes it on exit. Each test makes its own `factory_test_*` database with the r
 `images/base/factory-db-bootstrap` (`factory_test_db_new` in shell, `tests/lib/factory-db.js` in node) and
 drops it afterwards; a leftover database or role prints `FAIL test isolation: database|role <name>` and fails
 the run. With no server and no binaries the database tests skip and the summary line says so, unless
-`TEST_REQUIRE_POSTGRES=1` (CI), where the run fails.
+`TEST_REQUIRE_POSTGRES=1` (CI), where the run fails. `tests/schema-compat.test.js` also needs the release tags (a full clone, not a shallow one); without them it skips, and `TEST_REQUIRE_TAGS=1` (CI checks out with `fetch-depth: 0`) makes a shallow clone or no tags a failure.
+
+One full run per machine: a full run (no ids, a `TEST_SHARD` run included) takes an exclusive
+`flock` on `<lock dir>/lock` (`scripts/test-lock.sh`) after `--list` and the id, `TEST_SHARD` and
+`TEST_JOBS` checks and before the sandbox and PostgreSQL setup. The lock dir is
+`TEST_LOCK_DIR`, default `/tmp/callum-dev-system-test`. A second full run prints one line,
+`test: waiting for another full run (pid <P>, <checkout dir>) to finish`, and waits (the holder
+writes its pid and checkout dir into the lock file). The wait is a background `flock` the script
+`wait`s on, so SIGINT and SIGTERM exit at once (130, 143). flock releases the lock when the holder
+exits however it exits, and the job pool and the PostgreSQL server run with the descriptor closed,
+so a process a test leaves behind cannot keep it. A run started from inside another run
+(`TEST_LOCK_HELD=<lock dir>`, exported by the outer run) neither locks nor registers, so the
+gate's own tests that run `test.sh` cannot deadlock on it. Without `flock` on PATH a full run runs
+unlocked and its summary line says so. On a machine where the factory's `gateConcurrency` auto is 2
+or more (16 or more CPUs), a second stop gate in this repo waits inside `test.sh`, and that wait counts in its
+`gate_run` `run_ms` and the gate timeout.
+
+Every non-nested run (subsets included) also registers as `<lock dir>/<pid>`, removed on exit;
+entries of dead pids are ignored and removed. With `TEST_JOBS` unset, the pool size is
+`max(1, floor(cpus / live runs))` counting itself, computed once at start (`cpus` is
+`scripts/test-pool.sh --cpus`), and when that is below `cpus` the node job also gets
+`--test-concurrency=<share>` (`TEST_NODE_CONCURRENCY`, read by `scripts/test-job.sh`). An explicit
+`TEST_JOBS` wins. A full run alone behaves as before.
 
 Subset mode, for debugging: `npm test -- <id>...` (that is, `sh scripts/test.sh <id>...`) runs only
 the named jobs, with the same sandbox, PostgreSQL setup, `TEST_JOBS` pool, failure output and

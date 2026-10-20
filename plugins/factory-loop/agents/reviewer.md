@@ -46,12 +46,21 @@ Run only commands known to exit. Read source, docs and `--help` output only from
   skip or only, an assertion commented out). One that was is an error finding, unless the brief,
   or the writer's stated reason (in the PR's summary or a fixer's answer), shows the test is
   absolutely not required. You judge that reason.
+- For a flake bug (the issue carries the `flaky` label or the loop's flake-bug marker, `<!-- factory-loop:flake:<hash> -->` in its body), the
+  reproduction under load and the stress run of consecutive passes are requirements like the
+  acceptance criteria. Missing either, or a retry, skip or unexplained timeout raise, is an error
+  finding.
 - A visible (UI) change needs screenshot or video evidence in the PR body.
 - Style, preference and anything outside the brief are at most warnings or infos: they never hold
   a merge.
 - The brief's `## Observability` section is a requirement like its acceptance criteria: a decision
   it names that the change does not record, or a query it promised that `docs/metrics.md` lacks,
   is an error finding.
+- The brief's `## Compatibility` section is a requirement like its acceptance criteria: a change
+  that drops, renames or retypes anything an old version reads (a table, column, view column,
+  event field, or a reader's expected field) is an error finding; so is a change that touches a
+  migration, an event schema, the event writer or a factory-database reader while its brief's
+  section says "none", or that lacks the test the section names.
 - Do not repeat yourself: what the fixer fixed in an earlier round is done, and a finding it
   declined comes back only when you show its reason wrong.
 

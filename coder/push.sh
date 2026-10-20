@@ -51,6 +51,7 @@ case "$name" in
     plugins=
     refs_win=false
     wind_down_minutes=0
+    migrator=none
     ;;
   orchestrator)
     role=orchestrator
@@ -68,6 +69,7 @@ case "$name" in
     plugins=
     refs_win=false
     wind_down_minutes=0
+    migrator=none
     ;;
   orchestrator-loop)
     role=orchestrator
@@ -87,6 +89,8 @@ case "$name" in
     refs_win=true
     # The loop is wound down for up to 10 minutes on a stop (coder/dev-system/wind-down.sh).
     wind_down_minutes=10
+    # Keeps terraform.tfvars' migrator_secrets_dir: only the loop's workspaces migrate the factory database.
+    migrator=tfvars
     ;;
   *) usage ;;
 esac
@@ -114,6 +118,7 @@ set -- templates push "$name" --directory "$TEMPLATE_DIR" --yes \
   --variable "$(csv "default_plugins=$plugins")" \
   --variable "$(csv "default_plugin_refs_win=$refs_win")" \
   --variable "$(csv "wind_down_minutes=$wind_down_minutes")"
+[ "$migrator" != none ] || set -- "$@" --variable "$(csv "migrator_secrets_dir=")"
 version_name_sh="$(dirname "$0")/version-name.sh"
 version=$("$version_name_sh" "$TEMPLATE_DIR")
 message=$("$version_name_sh" --message push.sh "$TEMPLATE_DIR")

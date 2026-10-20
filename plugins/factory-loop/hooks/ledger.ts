@@ -88,6 +88,7 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
   if (action.maxAttempts !== undefined) entry.maxAttempts = action.maxAttempts
   if (action.kind === 'judge' || action.kind === 'task' || action.kind === 'tell') {
     entry.wake = action.wake
+    if (action.loopData !== undefined) entry.loopData = action.loopData
     if (session !== '') entry.session = session
   }
   return { ledger: put(ledger, entry), entry, prev }

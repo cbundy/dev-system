@@ -82,7 +82,7 @@ export function sourceOf(
   return 'default'
 }
 
-function originOf(file: Record<string, unknown>, key: string): Source {
+export function originOf(file: Record<string, unknown>, key: string): Source {
   return typeof file[key] === 'string' && file[key] !== '' ? 'workspace' : 'plugin'
 }
 
@@ -159,6 +159,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       [
         ...render({ label: 'mode', value: c.mode, source: view.modeFrom, note: MODE_NOTE[c.mode] }),
         ...render(ms('passEveryMs')),
+        ...render(ms('mainEveryMs')),
         ...render({ label: 'plugin', value: view.pluginVersion }),
         ...render({ label: 'device', value: view.device === '' ? '(none)' : view.device, source: view.deviceFrom }),
       ],
@@ -192,6 +193,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(ms('minimumReleaseCadenceMs')),
         ...render(row('releaseBranchPrefix', 'releaseBranchPrefix', c.releaseBranchPrefix ?? 'none')),
         ...render(row('releaseHold', 'releaseHoldMs', c.releaseHoldMs === 0 ? 'off' : shortDuration(c.releaseHoldMs))),
+        ...render(row('releaseInProgress', 'releaseInProgressMs', c.releaseInProgressMs === 0 ? 'off' : shortDuration(c.releaseInProgressMs))),
         ...render({ label: 'stateTimeout', value: '', source: from, ...(from === 'mixed' && changed.length > 0 ? { note: changed.join('; ') } : {}) }),
         clip(`    ${compact.slice(0, half).join(' ')}`),
         clip(`    ${compact.slice(half).join(' ')}`),

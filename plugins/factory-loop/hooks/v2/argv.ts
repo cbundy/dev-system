@@ -125,6 +125,11 @@ export function childReadyArgv(repo: string, child: number, readyLabel: string):
   return ['gh', 'issue', 'edit', String(child), '--repo', repo, '--add-label', readyLabel]
 }
 
+// A flake bug's two labels, each add idempotent: the flaky label and the repo's priority label.
+export function flakeLabelsArgv(repo: string, issue: number, flaky: string, priority: string): string[] {
+  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', flaky, '--add-label', priority]
+}
+
 // The open issues by trusted authors, whole, through the reader: a child made before a retry is
 // found again by the hidden key in its body.
 export function openIssuesArgv(): string[] {
@@ -169,9 +174,61 @@ export function prRunsArgv(repo: string, head: string): string[] {
   return ['gh', 'api', `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`]
 }
 
+// The latest jobs of a run, to tell a job GitHub did not start from one that failed (sources-prs.ts jobsOf).
+export function runJobsArgv(repo: string, runId: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=100`]
+}
+
+// A check run's annotations (the job id is its check run id): GitHub says why it did not start a job there.
+export function checkRunAnnotationsArgv(repo: string, jobId: string): string[] {
+  return ['gh', 'api', `repos/${repo}/check-runs/${jobId}/annotations`]
+}
+
+// --- the default branch's state (sources-main.ts, 2.4) ---------------------------------------------------------
+
+// The repo's default branch name.
+export function defaultBranchArgv(repo: string): string[] {
+  return ['gh', 'api', `repos/${repo}`, '--jq', '.default_branch']
+}
+
+// The sha the branch points at.
+export function branchHeadArgv(repo: string, branch: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${branch}`, '--jq', '.sha']
+}
+
+// The pull requests a commit came from.
+export function commitPullsArgv(repo: string, head: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${head}/pulls`]
+}
+
+// The repo's workflows (the caller keeps the active ones).
+export function workflowsArgv(repo: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/workflows?per_page=100`]
+}
+
+// A workflow's newest runs on the branch.
+export function workflowRunsArgv(repo: string, workflow: number, branch: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(branch)}&per_page=10`]
+}
+
+// The deployments of a commit.
+export function deploymentsArgv(repo: string, head: string): string[] {
+  return ['gh', 'api', `repos/${repo}/deployments?sha=${head}&per_page=100`]
+}
+
+// A deployment's newest status.
+export function deploymentStatusArgv(repo: string, deployment: number): string[] {
+  return ['gh', 'api', `repos/${repo}/deployments/${deployment}/statuses?per_page=1`]
+}
+
 // The one re-run of a failed or cancelled check per round: its failed jobs only.
 export function runRerunArgv(repo: string, runId: string): string[] {
   return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]
+}
+
+// The failed jobs' log of a run (flake-names.ts reads the job and test names from it), read before the re-run.
+export function runViewLogFailedArgv(repo: string, runId: string): string[] {
+  return ['gh', 'run', 'view', runId, '--log-failed', '--repo', repo]
 }
 
 // --- the merge queue (9) ---------------------------------------------------------------------------------
@@ -216,6 +273,12 @@ export function beyondBaseArgv(base: string, head: string): string[] {
   return ['git', 'rev-list', '--count', `origin/${base}..${head}`]
 }
 
+// A PR's merge commit and head, as GitHub reports them: two shas on one line, the merge commit
+// empty when the PR is not merged.
+export function prMergeArgv(repo: string, pr: number): string[] {
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'mergeCommit,headRefOid', '--jq', '[.mergeCommit.oid // "-", .headRefOid] | join(" ")']
+}
+
 // Whether a commit is the head or one of its ancestors: exit 0 yes, 1 no.
 export function isAncestorArgv(commit: string, head: string): string[] {
   return ['git', 'merge-base', '--is-ancestor', commit, head]
@@ -226,6 +289,26 @@ export function isAncestorArgv(commit: string, head: string): string[] {
 // The model the builder runs on; the tool logs `implementer_routed` itself.
 export function implementerRouteArgv(issue: number): string[] {
   return ['callum-flow-implementer-route', String(issue)]
+}
+
+// --- the designer's model (7.1) ---------------------------------------------------------------------
+
+// The model the designer runs on; the tool logs `designer_routed` itself.
+export function designerRouteArgv(issue: number): string[] {
+  return ['callum-flow-designer-route', String(issue)]
+}
+
+// The loop's own `designer_routed`, written when the route could not run.
+export function designerFallbackArgv(issue: number, model: string): string[] {
+  return [
+    'callum-flow-event',
+    '--type',
+    'designer_routed',
+    '--issue',
+    String(issue),
+    '--data',
+    JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null }),
+  ]
 }
 
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------

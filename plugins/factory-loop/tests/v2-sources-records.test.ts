@@ -3,6 +3,7 @@
 // load and then hourly, compares the two rebuilds and leaves the records to the old read.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { DEFAULT_CONFIG } from '../hooks/config'
 import { emptyCache } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, State } from '../hooks/types'
@@ -202,6 +203,16 @@ describe('eventsSource old and new (v2 SPEC 3.3)', () => {
     expect(held.runs.filter(r => r.argv[0] === 'dev-query')).toEqual([])
   })
 
+  test('the default: an empty store rebuilds from event_store alone', async () => {
+    const h = harness({ old: { exitCode: 9, stdout: 'must not be read' }, new: SAME.new }, { eventsSource: DEFAULT_CONFIG.eventsSource })
+    const o = await h.pass()
+    expect(h.queries(false)).toEqual([])
+    expect(h.queries(true)).toHaveLength(1)
+    expect(h.queries(true)[0]?.stdin).toContain('factory.event_store')
+    expect([o.v2.sources.store.ok, o.v2.recordsFrom, o.v2.records]).toEqual([true, 'events', [A, B]])
+    expect(o.v2.recordsShadow).toBeUndefined()
+  })
+
   test('new: with an empty store the records rebuild from event_store alone', async () => {
     const h = harness({ old: { exitCode: 9, stdout: 'must not be read' }, new: SAME.new }, { eventsSource: 'new' })
     const o = await h.pass()
@@ -238,5 +249,12 @@ describe('diffRecords', () => {
     expect(diffRecords([A, B], [{ ...A, notes: ['x'] }, B])).toEqual([{ issue: 7, text: '#7 notes: old [], new ["x"]' }])
     expect(diffRecords([A], [A, B])).toEqual([{ issue: 8, text: '#8 record: old absent, new present' }])
     expect(diffRecords([A, B], [B])).toEqual([{ issue: 7, text: '#7 record: old present, new absent' }])
+  })
+
+  test('object key order is no difference, at any depth; array order is', () => {
+    const wait = [{ kind: 'pr-merged', pr: 997 }] as const
+    const reordered = JSON.parse('[{"pr":997,"kind":"pr-merged"}]')
+    expect(diffRecords([{ ...A, wait: [...wait] }], [{ ...A, wait: reordered }])).toEqual([])
+    expect(diffRecords([{ ...A, notes: ['a', 'b'] }], [{ ...A, notes: ['b', 'a'] }])).toEqual([{ issue: 7, text: '#7 notes: old ["a","b"], new ["b","a"]' }])
   })
 })

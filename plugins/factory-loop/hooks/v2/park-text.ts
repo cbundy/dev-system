@@ -30,7 +30,8 @@ export function decisionOf(question: string): string {
 export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via: string | null): string {
   const question = r.question ?? 'none given'
   const options = OPTIONS_HEADING.test(question)
-  const where = from === null ? 'It parked' : `It parked from ${from}${via === null ? '' : ` (${via})`}`
+  const splitFrom = from === null && via === 'split-decision' ? /^Split from #([1-9]\d*)/.exec(r.notes[0] ?? '')?.[1] : undefined
+  const where = splitFrom !== undefined ? `It parked when #${splitFrom} was split` : from === null ? 'It parked' : `It parked from ${from}${via === null ? '' : ` (${via})`}`
   const resumes = r.resumeTo === null ? '' : `, and a resume goes on with ${r.resumeTo}`
   return [
     '### Waiting on the owner',
@@ -49,8 +50,8 @@ export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via:
 // waitWords: one wait condition in words.
 export function waitWords(c: WaitCondition): string {
   // a line must not end on a closing keyword before a reference's number (prompts.ts neutral rewrites it)
-  if (c.kind === 'tag-contains') return `release tag must contain commit ${c.sha}`
-  return c.kind === 'issue-closed' ? `issue #${c.issue} must be closed on GitHub` : `PR #${c.pr} must be merged on GitHub`
+  if (c.kind === 'tag-contains') return `release tag${c.repo === undefined ? '' : ` of ${c.repo}`} must contain commit ${c.sha}`
+  return c.kind === 'issue-closed' ? `issue ${c.repo ?? ''}#${c.issue} must be closed on GitHub` : `PR #${c.pr} must be merged on GitHub`
 }
 
 // waitText: the comment a record posts on the issue when it begins to wait: the conditions, why, and

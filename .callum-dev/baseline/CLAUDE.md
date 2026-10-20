@@ -78,7 +78,9 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
 - **The factory loop.** You are a loop agent when the factory loop started you (your prompt's
   first line is `factory-slot: <path>`) or a loop agent started you. The loop prepared your slot,
   a worktree on the issue's branch, and does the rest: when a builder or fixer ends its turn it
-  runs the repo's gate commands in the slot and hands back any failure; it opens the PR and writes
+  runs the repo's gate commands in the slot and hands back any failure, so a loop agent runs only
+  the subsets it changes and leaves the full gate commands to that stop gate when the repo sets
+  them; it opens the PR and writes
   its title, body, issue link and evidence from your answer; it runs review, waits on CI and
   merges through its own queue. Follow your agent definition and your prompt. Work only in your
   slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,

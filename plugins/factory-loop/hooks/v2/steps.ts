@@ -9,9 +9,11 @@
 //   (types.ts STEP_AGENT) with the answer script on the prompt: agents answer with the script only
 //   (D-74). A spawn refused or failed is a failed attempt, which plan reads as unknown.
 // - An answer ends the step when it is read (10.8): at the agent's turn end, every pass while the
-//   entry runs, and before the agent list marks it lost. A writer's ok is taken only at its turn's
-//   end, so the stop gate has its say first. One repair message goes to an agent that ended its
-//   turn without a valid answer (D-68); a second miss is unknown (bad-answer).
+//   entry runs, and before the agent list marks it lost. A gated writer's (a repo with stop-gate
+//   commands) answer, ok and not-ok alike, is taken only once the companion's log holds the
+//   attempt's settling gate line (steps-gate.ts), so the stop gate has its say first; an ungated
+//   writer's ok is taken only at its turn's end. One repair message goes to an agent that ended
+//   its turn without a valid answer (D-68); a second miss is unknown (bad-answer).
 // - Every read result is a done entry with the outcome { kind: 'step', step, result }, unknown
 //   ones included, so plan reads why; a turn that ended in error, aborted or refused is unknown
 //   (rate-limited for a 429, api for another API error, else agent-dead), unless a valid answer
@@ -23,7 +25,8 @@ import { ANSWER_SCRIPT, answerPath } from '../exec'
 import type { AgentAnswer, Exec, ExecCtx, Executor } from '../exec'
 import { scriptShaped } from '../prompts'
 import type { ScriptPlace } from '../prompts'
-import type { Action, ActionKind, LedgerEntry } from '../types'
+import type { Action, ActionKind, LedgerEntry, Ms } from '../types'
+import { companionGates, gateHoldMs, gateNote, gateSettled, holdNote } from './steps-gate'
 import { STEPS as QUEUE } from './steps-queue'
 import { STEPS as REVIEW } from './steps-review'
 import { STEPS as TRIAGE } from './steps-triage'
@@ -60,14 +63,17 @@ export type StepRecord = {
   data: Record<string, unknown> | null
   answerFile: string
   prompt: string
+  // the repo had stop-gate commands when the attempt was spawned (writers); a record without it
+  // reads the current config
+  gated?: boolean
 }
 
 // One step kind (steps-*.ts). spawn: what to start for this attempt, or why it cannot (a loop
 // bug: the attempt fails, never retried). result: what a checked answer means; a writer's reads
 // its head on origin (10.8), and a failed read is unknown, never not-ok. says: what a checked
 // answer claims of itself, pure and before any read of origin; a writer's module gives it, so its
-// not-ok ends the step when read while its ok waits for the turn's end (a writer's module without
-// it has every answer wait).
+// not-ok ends the step when read while its ok waits for the turn's end, in a repo without stop-gate
+// commands (a writer's module without it has every answer wait there).
 export type StepModule = {
   step: AgentStep
   contract: V2ContractName
@@ -128,6 +134,7 @@ export function parseStepRecord(text: string | null, contracts: StepDeps['contra
       data,
       answerFile: String(o.answerFile),
       prompt: typeof o.prompt === 'string' ? o.prompt : '',
+      ...(typeof o.gated === 'boolean' ? { gated: o.gated } : {}),
     }
   } catch {
     return null
@@ -186,10 +193,10 @@ async function resultOf(ctx: ExecCtx, record: StepRecord, answer: unknown, deps:
   }
 }
 
-// waitsForGate: a writer's answer that says ok (or whose module cannot say) is taken only at its
-// turn's normal end, so the stop gate has its say first (10.6, 10.8). It is decided on the answer
-// itself, before the module reads origin, so nothing runs for it until then.
-function waitsForGate(record: StepRecord, answer: unknown, deps: StepDeps): boolean {
+// waitsForOk: in a repo without stop-gate commands, a writer's answer that says ok (or whose
+// module cannot say) is taken only at its turn's normal end (10.6, 10.8). It is decided on the
+// answer itself, before the module reads origin, so nothing runs for it until then.
+function waitsForOk(record: StepRecord, answer: unknown, deps: StepDeps): boolean {
   if (record.role !== 'writer') return false
   const says = deps.modules[record.step]?.says
   if (says === undefined) return true
@@ -200,26 +207,63 @@ function waitsForGate(record: StepRecord, answer: unknown, deps: StepDeps): bool
   }
 }
 
+// The gate rule's verdict on one valid answer: taken now (with the words its summary adds), or
+// held for the stop gate.
+type Gate = { take: true; note: string } | { take: false }
+
+// gateRule: the one definition of when a writer step's answer is taken (10.8). A gated writer's,
+// ok and not-ok alike, waits for the settling gate line of its attempt (steps-gate.ts); once
+// the hold's bound runs out with none, it is taken anyway. `hold` keeps when each agent's hold
+// began (null: the gate is not consulted: a re-dispatch of a key finding its answer recorded). An
+// ungated writer's ok waits for its turn's end; readers and a writer's not-ok are taken.
+async function gateRule(ctx: ExecCtx, entry: LedgerEntry, record: StepRecord, answer: unknown, atTurnEnd: boolean, hold: Map<string, Ms> | null, deps: StepDeps): Promise<Gate> {
+  const gated = record.role === 'writer' && (record.gated ?? ctx.rt.config.gateCommands.length > 0)
+  if (!gated || hold === null) return !atTurnEnd && waitsForOk(record, answer, deps) ? { take: false } : { take: true, note: !atTurnEnd ? ' (read before its turn ended)' : '' }
+  const id = entry.agentId ?? entry.key
+  const settled = gateSettled(await companionGates(ctx), { issue: record.issue, life: record.life, seq: record.seq, since: entry.startedAt })
+  if ('at' in settled) {
+    hold.delete(id)
+    return { take: true, note: gateNote(settled) }
+  }
+  // a re-run's fail: no agent is left to refuse, so the hold ends and the answer is not taken; the
+  // entry, held from before this load, is then lost and re-run free (10.8)
+  if ((settled as { rerun?: boolean }).rerun === true) {
+    hold.delete(id)
+    return { take: false }
+  }
+  const now = await ctx.io.now()
+  const since = hold.get(id) ?? now
+  hold.set(id, since)
+  if (now - since <= gateHoldMs(ctx.rt.config)) return { take: false }
+  hold.delete(id)
+  return { take: true, note: holdNote(ctx.rt.config) }
+}
+
+// withNote: a summary of at most SUMMARY_MAX that keeps the note whole at its end.
+const withNote = (text: string, note: string): string => (note === '' ? text : `${text.length + note.length > SUMMARY_MAX ? `${text.slice(0, Math.max(0, SUMMARY_MAX - note.length - 3))}...` : text}${note}`)
+
 // stepRecorded: the result of a valid answer already recorded for this entry's attempt, as the
-// Exec that finishes it; null when there is none. Before the turn's end (a pass's read, or an
-// agent the list shows gone), a writer's ok is not taken yet: it waits for the stop gate.
-export async function stepRecorded(ctx: ExecCtx, entry: LedgerEntry, atTurnEnd: boolean, deps: StepDeps = STEP_DEPS): Promise<Exec | null> {
+// Exec that finishes it; null when there is none, or when it is held for the stop gate (a gated
+// writer's, until the attempt's gate line is in the companion's log, or the hold's bound runs
+// out; an ungated writer's ok, before the turn's end). `hold` is when each agent's hold began.
+export async function stepRecorded(ctx: ExecCtx, entry: LedgerEntry, atTurnEnd: boolean, deps: StepDeps = STEP_DEPS, hold: Map<string, Ms> | null = new Map()): Promise<Exec | null> {
   const record = await recordOf(ctx, entry.key, deps)
   if (record === null) return null
   const read = await recordedAnswer(ctx, record, deps)
   if (read === null || 'problem' in read) return null
-  if (!atTurnEnd && waitsForGate(record, read.answer, deps)) return null
+  const gate = await gateRule(ctx, entry, record, read.answer, atTurnEnd, hold, deps)
+  if (!gate.take) return null
   const result = await resultOf(ctx, record, read.answer, deps)
-  return doneWith(record.step, result, `${record.step} #${record.issue}: ${describe(result)}${atTurnEnd ? '' : ' (read before its turn ended)'}`)
+  return doneWith(record.step, result, withNote(`${record.step} #${record.issue}: ${describe(result)}`, gate.note))
 }
 
 // The running agent steps a pass reads the answers of (10.8): each one whose answer is recorded
-// ends when it is read, a writer's ok excepted, which waits for its turn's end. act.ts applies
-// each Exec to the live ledger while its entry still runs as read.
-export async function stepAnswers(entries: readonly LedgerEntry[], ctxOf: (entry: LedgerEntry) => ExecCtx, deps: StepDeps = STEP_DEPS): Promise<{ entry: LedgerEntry; exec: Exec }[]> {
+// ends when it is read, a writer's excepted while it waits for its stop gate (stepRecorded). act.ts
+// applies each Exec to the live ledger while its entry still runs as read.
+export async function stepAnswers(entries: readonly LedgerEntry[], ctxOf: (entry: LedgerEntry) => ExecCtx, deps: StepDeps = STEP_DEPS, hold: Map<string, Ms> = new Map()): Promise<{ entry: LedgerEntry; exec: Exec }[]> {
   const out: { entry: LedgerEntry; exec: Exec }[] = []
   for (const entry of entries.filter(e => e.kind === 'agent-step' && e.status === 'running')) {
-    const exec = await stepRecorded(ctxOf(entry), entry, false, deps)
+    const exec = await stepRecorded(ctxOf(entry), entry, false, deps, hold)
     if (exec !== null) out.push({ entry, exec })
   }
   return out
@@ -232,7 +276,8 @@ function agentTypeOf(text: string | undefined): `${string}:${string}` | null {
 
 // What an agent's turn end gave (act.ts agentAnswered): the Exec to finish the entry with, or,
 // with a problem and a repair message, the one more ask before it (D-68).
-export type StepTaken = { exec: Exec; problem: string | null; repair: string | null; subagentType: `${string}:${string}` }
+// held: a gated writer's answer waits for its stop gate line (exec is then a placeholder, never applied).
+export type StepTaken = { exec: Exec; problem: string | null; repair: string | null; subagentType: `${string}:${string}`; held?: true }
 
 // A rate limit (a 429 or the usage window), as a turn's last words name it: unknown
 // (rate-limited), which plan reads as the outside cause `usage`, a free re-run (5.1). Any other API
@@ -252,7 +297,7 @@ function lostTurn(answer: AgentAnswer): StepResult {
 
 // stepAnswered: an agent step's turn ended. Its final words are saved for the owner and the
 // triage (exec.ts answerPath), then its recorded answer is read.
-export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer, deps: StepDeps = STEP_DEPS): Promise<StepTaken> {
+export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer, deps: StepDeps = STEP_DEPS, hold: Map<string, Ms> = new Map()): Promise<StepTaken> {
   const record = await recordOf(ctx, entry.key, deps)
   const step = record?.step ?? entry.step ?? 'build'
   const subagentType = agentTypeOf(record?.subagentType) ?? STEP_AGENT[step]
@@ -268,14 +313,16 @@ export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: Age
   if (answer.reason !== 'answer') {
     // a valid answer recorded before the turn ended in error is the result (10.8), but a writer's
     // ok, which the stop gate never passed
-    const kept = read !== null && 'answer' in read && !waitsForGate(record, read.answer, deps) ? read : null
+    const kept = read !== null && 'answer' in read && !waitsForOk(record, read.answer, deps) ? read : null
     const result = kept !== null ? await resultOf(ctx, record, kept.answer, deps) : lostTurn(answer)
     const tail = kept !== null ? ` (recorded before its turn ended: ${answer.reason})` : ''
     return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}${tail}`)), problem: null, repair: null, subagentType }
   }
   if (read !== null && 'answer' in read) {
+    const gate = await gateRule(ctx, entry, record, read.answer, true, hold, deps)
+    if (!gate.take) return { exec: refused(`${entry.key}: held for its stop gate`), problem: null, repair: null, subagentType, held: true }
     const result = await resultOf(ctx, record, read.answer, deps)
-    return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}`)), problem: null, repair: null, subagentType }
+    return { exec: note(doneWith(step, result, withNote(`${step} #${record.issue}: ${describe(result)}`, gate.note))), problem: null, repair: null, subagentType }
   }
   const problem = read === null ? 'no answer was recorded with the answer script' : read.problem
   const result = unknownResult('bad-answer', problem)
@@ -298,7 +345,7 @@ export const stepExecutor = (deps: StepDeps = STEP_DEPS): Executor => async (ctx
   const jobFile = jobPathOf(place.file)
   if (jobFile === null || !scriptShaped(place)) return refused(`the answer script or file of ${action.key} is not a plain absolute path`)
   // an answer already recorded for this key is the result (10.8)
-  const earlier = await stepRecorded(ctx, ctx.entry, true, deps)
+  const earlier = await stepRecorded(ctx, ctx.entry, true, deps, null)
   if (earlier !== null) return earlier
   const spawn = await module.spawn(ctx, action, place)
   if (typeof spawn === 'string') return refused(spawn)
@@ -322,6 +369,7 @@ export const stepExecutor = (deps: StepDeps = STEP_DEPS): Executor => async (ctx
     data: spawn.data,
     answerFile: place.file,
     prompt: spawn.prompt,
+    gated: ctx.rt.config.gateCommands.length > 0,
   }
   try {
     await ctx.io.writeFile(jobFile, jobText(job))

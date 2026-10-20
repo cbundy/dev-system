@@ -721,7 +721,7 @@ on every failure:
   agentsview URL): a `WARN` naming both files when none is configured; a `FAIL` when a file is empty or
   unreadable, the server cannot be reached (psql's last line, masked), the role is not the `_writer` /
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
-  version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
+  version is behind (the loop migrates at its next start, or run `factory-db-migrate --strict` / `factory-db-bootstrap --migrate` with the migrator URL; no admin URL) or ahead of the image's; otherwise `OK` with the database,
   role and version. See [docs/factory-db.md](../../docs/factory-db.md);
 - evidence storage, from `callum-flow-evidence-upload --check` in the workspace checkout: `OK` with the
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
@@ -1570,7 +1570,9 @@ and `round=`) and `intervention` (someone had to step in: `who=person|loop` and 
 `--issue` optional) carry their fields as `key=value` tokens in the note, percent-encoded, and
 `reviewed` and `intervention` are never a stage or progress. `prompt_denied` and `prompt_waiting` are
 the factory loop companion's (a loop agent's call refused, or waiting, on a prompt nobody answers):
-`--issue` required, a `key=value` note with no token required, never a stage, progress or final. A rescue the loop cannot see is
+`--issue` required, never a stage, progress or final. The current companion writes the native types
+(`--type`, `--data`); the states are kept for older companions and the history, with a `key=value`
+note and no token required. A rescue the loop cannot see is
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
@@ -1588,6 +1590,7 @@ restart never replays old events; transitions a watcher observes are always logg
 log (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
 `--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` and `callum-flow-claim` then log the event again without it. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
@@ -1740,6 +1743,17 @@ because the merge has already happened; a missed item can be moved by hand with 
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
 `callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
+
+`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]` writes the `released`
+factory event for one release tag. It reads GitHub only through `gh api` (the tag's commit, the `v*` tags,
+the compare with the previous final tag, each PR's body and closing issues, and the GitHub Release for the
+headlines; no Release gives empty headlines), builds the payload with `release-contents.js` (the one rule
+for what a release carried, shipped in `/usr/local/share/dev-system/`) and writes it with
+`callum-flow-event --type released` (override: `CALLUM_FLOW_EVENT_BIN`). A tag whose `released` event is
+already in the factory log is skipped on stderr with its event id (exit 0). `--dry-run` prints the payload
+and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
+2 usage error. The factory loop calls it on each new release tag of a repo with a Next release milestone
+(`--source loop` for a release its own release task cut, else `workflow`).
 For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line
@@ -1824,7 +1838,7 @@ and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assi
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -1872,6 +1886,18 @@ With exactly one argument, `-h` or `--help` prints `usage: callum-flow-implement
 writes nothing to stderr, exits 0 and logs no event, even when `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` is invalid.
 Help is handled before percentage validation. Usage errors (a missing, empty or nonnumeric issue, an invalid
 percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
+
+`callum-flow-designer-route <issue>` prints the model the designer sub-agent runs on for that issue, `opus` (its frontmatter
+model, the control) or `sonnet` (the treatment), so the two can be compared on real numbers (#1040). It is distinct from
+`callum-flow-design-route` above, which picks whether an issue is designed in a session or by a sub-agent; this one picks the
+sub-agent's model. A trusted `model:<alias>` label wins (the owner's pick, left out of the comparison), else
+`CALLUM_FLOW_DESIGNER_SONNET_PCT` (default `0`, a number from 0 to 100; anything else exits 2) sends that percentage of issues
+to `sonnet` by a stable hash (`cksum` of `designer:<owner/repo>#<issue>`, repo lower-cased, mod 100). An unknown repo or
+unreadable labels print `opus` with a warning. Each decision logs a `designer_routed` event (`model`, `reason`
+label|default|hash|fallback, `bucket`, `sonnet_pct`), and the tool is in the synced allow list. Set the share by adding
+`"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }` to the repo's `.claude/settings.json` (the template defines no `env`, so
+`callum-dev update` keeps it). With exactly one argument, `-h` or `--help` prints the usage line on stdout and exits 0 with no
+event, even when the percentage is invalid; usage errors print to stderr, exit 2 and log no event.
 
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
@@ -1998,6 +2024,7 @@ document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-lat
 background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
 `push` (event file and push-marker modification times, the no-mistakes mirror's recorded last push, and
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
+The nullable `config` column (jsonb) holds the settings snapshot of the factory loop (see [Settings snapshot](#settings-snapshot)); neither the UPSERT nor the stats UPDATE writes it. The guarded DDL adds it to an agentsview database that lacks it (migration 0015 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
 intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
 `pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
@@ -2007,6 +2034,19 @@ the factory database gets the UPSERT alone. `dev-init` starts the loop under `/t
 the last beat and state, and fails when either URL is configured and no loop runs.
 `/usr/local/share/dev-system/heartbeat-loop --once` makes one beat and exits 0 only when every configured target
 succeeded.
+
+#### Settings snapshot
+
+Each running beat also sends a third, separate psql call (`-- heartbeat config`) to every target whose UPSERT
+succeeded, after its stats call: `UPDATE factory.workers SET config = ... WHERE device = ...`. The value is the
+`config` that `heartbeat-state --repo <owner/name>` read from
+`$CLAUDE_CONFIG_DIR/factory-loop/<owner>__<name>/settings.json` (default `~/.claude`; the repo is the row's `repo`,
+and a folder differing only in case is found). It is NULL when there is no repo, no file, or the file is
+unreadable, not a JSON object, invalid or over 256 KiB, so the row never shows a snapshot that is gone. It
+reaches psql only as a `-v` variable. A failure (for example a database not yet at migration 0015) is logged,
+masked, as `heartbeat-loop: <target> config write failed`; it never changes the exit code, resends DDL or skips the
+other target. The stopped beat sends none and leaves `config` as it was. Judge a snapshot's freshness by
+`config->>'at'` (the loop's last observing pass), not by `last_seen`.
 
 #### Machine stats
 
@@ -2042,8 +2082,9 @@ trigger function `factory.worker_samples_prune()` (`SECURITY DEFINER`, owned by 
 `agentsview.sessions.id`), `parent_session_id` (null for a top-level session) and `context_window` (null when
 unknown). A top-level session is one Claude Code registers in `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` whose
 process still runs; a sub-agent (`agent-<id>`) is one of its transcripts whose last message is not a finished
-turn. `context_window` is the size the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
-`DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without that mod and
+turn. `context_window` is the size the [factory-loop-workspace](../../plugins/factory-loop-workspace/README.md) plugin
+or the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
+`DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without either plugin and
 for sub-agents. A session is live while it is listed in a row that is not `stale`; the stopped beat lists none.
 `state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
 `completed`, `failed` or `cancelled` and no `superseded` event on this device names it, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
@@ -2070,12 +2111,12 @@ the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metr
 ### factory-db-bootstrap
 
 `factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
-server. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops still use the agentsview
+server, and with `--secrets-dir` / `--migrator-dir` generates the roles' passwords and writes their URL files. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops still use the agentsview
 database, and `dev-query` reads it only with `--factory`. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
 the agentsview database by accident. Running it again changes nothing. The full procedure (provision
-the server, run the bootstrap, place each role's URL as the secret `factory-db-writer-url` or
+the server, run the one bootstrap command, the secret `factory-db-writer-url` or
 `factory-db-reader-url` in `DEV_SECRETS_DIR` (or a workspace's own `DEV_WORKSPACE_SECRETS_DIR`), or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
 password, upgrade the schema) is in [docs/factory-db.md](../../docs/factory-db.md); `dev-doctor` checks
 both URLs (see [`dev-doctor`](#dev-doctor)).
@@ -2085,19 +2126,41 @@ both URLs (see [`dev-doctor`](#dev-doctor)).
 | `NAME_owner` | no | owns the database, the `factory` schema and every object the migrations create; only the bootstrap uses it, through `SET ROLE` |
 | `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
 | `NAME_reader` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT` on every table and view |
+| `NAME_migrator` | yes | `CONNECT` and membership of `NAME_owner` with `SET` but not `INHERIT`; no grant on any factory object. Only `--migrate` uses it |
 
 The roles are named after the database, so several databases (and parallel test databases) share one
 server. Default privileges give later migrations' objects the same grants, and every run re-applies them.
 `CONNECT` and `TEMP` on the database and `CREATE` on schema `public` are revoked from `PUBLIC`.
-`FACTORY_DB_WRITER_PASSWORD` and `FACTORY_DB_READER_PASSWORD`, when set, become the roles' passwords
-(through psql variables); otherwise passwords are left alone.
+Every login role is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. A role that already
+exists is adopted: only the attributes that differ are altered, the migrator's membership options in
+`NAME_owner` are corrected and its memberships in other roles are revoked.
 
+**Passwords and files.** A login role gets a new password in a run when its `FACTORY_DB_WRITER_PASSWORD`,
+`FACTORY_DB_READER_PASSWORD` or `FACTORY_DB_MIGRATOR_PASSWORD` is set (the explicit value wins), or when its
+directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator) and the
+role was created in this run, its URL file is missing there, or the admin is a superuser and the role has no
+password. A generated password is 32 random bytes from `/dev/urandom` in hex. Passwords reach psql only
+through psql variables, and without a directory none is generated. For each role whose password changed and
+whose directory was given, the command writes `factory-db-writer-url` / `factory-db-reader-url` /
+`factory-db-migrator-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
+with the admin URL's host, port and ssl settings. It checks before connecting that it can write there (run
+it with `docker run --user root --entrypoint factory-db-bootstrap` to give files to another UID), touches no
+other file, and a run that changes nothing rewrites nothing. The summary line lists the roles created, the
+new passwords and the files written.
+
+**`--migrate`.** `factory-db-bootstrap --db NAME --migrate` upgrades the schema connected as
+`NAME_migrator`, with the URL from `FACTORY_DB_MIGRATOR_URL` or `--migrator-url-file PATH` (never the admin
+URL). It refuses any other role, a database without `factory.schema_migrations`, and `--admin-url-file`,
+`--secrets-dir` and `--migrator-dir`; it creates no role or database. It runs the same pending migrations and
+grants under the same lock and prints `database NAME migrated as NAME_migrator from schema version A to B`.
+
+Migrations are expand-only, enforced by `npm run lint` ([rules](../../docs/factory-db.md#schema-compatibility)).
 The migrations are `NNNN_<name>.sql` files in `/usr/local/share/dev-system/factory-db/migrations/` (or
 `factory-db/migrations` beside the command in a checkout; `FACTORY_DB_MIGRATIONS_DIR` overrides). Each pending
 one runs in one transaction with its `factory.schema_migrations` row (`version`, `name`, `sha256`,
 `applied_at`), as `NAME_owner`, under a session advisory lock, so two concurrent runs serialise. An applied
 file whose sha256 changed, or a recorded version with no file, is refused by name and version with a
-non-zero exit. On success it prints one line with the database, the three roles and the schema version; on
+non-zero exit. On success it prints one line with the database, the four roles and the schema version; on
 failure one error line naming the step (or the migration file and psql's error). `0001_events_and_workers`
 creates `factory.event_store`, the view `factory.event_log` ([event design](../../docs/factory-events/README.md)),
 and `factory.workers` with its view and notify triggers.

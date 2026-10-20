@@ -17,10 +17,11 @@ export type Repair = (agentId: string, text: string, type: `${string}:${string}`
 
 // What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
 // out before it), 'repair' (unreadable, so the agent was asked once more), 'recorded' (its tool
-// already answered), 'dropped' or 'not ours'. key: its entry; undelivered: why its repair message
+// already answered), 'held' (a gated writer's answer waits for its stop gate line, the entry
+// running on), 'dropped' or 'not ours'. key: its entry; undelivered: why its repair message
 // was not delivered, whole, for the decision log (the entry's summary keeps a clipped copy, #559).
 export type Answered = {
-  result: 'applied' | 'repair' | 'recorded' | 'dropped' | 'not ours'
+  result: 'applied' | 'repair' | 'held' | 'recorded' | 'dropped' | 'not ours'
   why?: string
   key?: string
   repaired?: boolean
@@ -50,7 +51,9 @@ export async function agentAnswered(
   between.repairing.delete(id)
   try {
     // a v2 agent step's answer is read by steps.ts, and is never interim (v2 SPEC 10.8)
-    const step = await stepAnswered(ctxOf(env, state, entry), entry, answer)
+    const step = await stepAnswered(ctxOf(env, state, entry), entry, answer, undefined, between.gateHeld)
+    // a gated writer's turn ended before its stop gate line: the entry runs on until a pass finds it
+    if (step.held === true) return { result: 'held', key: entry.key }
     let exec = step.exec
     const ours = (e: LedgerEntry | undefined): e is LedgerEntry => e !== undefined && e.agentId === id && e.startedAt === entry.startedAt
     const still = () => {

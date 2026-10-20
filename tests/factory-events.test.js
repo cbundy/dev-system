@@ -62,7 +62,7 @@ test("every event example comes back from readEvent valid against its type's cur
 test("the envelope example passes validateStrict and readEvent takes the whole envelope", () => {
   const env = load("envelope.v1.json").examples[0];
   assert.deepEqual(reader.validateStrict("envelope", 1, env), []);
-  assert.deepEqual(reader.readEvent(env), { type: "claimed", type_version: 1, data: { lease_minutes: 120 } });
+  assert.deepEqual(reader.readEvent(env), { type: "claimed", type_version: 1, data: { lease_minutes: 120, title: null, labels: null, parent: null, score: null, factors: null } });
 });
 
 test("readEvent refuses an unknown envelope, type and version with the exact message", () => {
@@ -105,8 +105,8 @@ const shape2 = {
 
 test("readEvent drops unknown fields, and an absent optional field comes back as null", () => {
   const got = reader.readEvent({ type: "claimed", type_version: 1, data: { lease_minutes: 5, extra: true } });
-  assert.deepEqual(got.data, { lease_minutes: 5 });
-  // No real type has an optional field yet: the synthetic catalogue below gives one.
+  assert.deepEqual(got.data, { lease_minutes: 5, title: null, labels: null, parent: null, score: null, factors: null });
+  // An absent optional field (claimed: title, labels, parent) is null; the synthetic catalogue below shows it again.
   const r = reader.createReader({ "t.v1": shape2.v2 }, { t: 1 }, {});
   assert.deepEqual(r.readEvent({ type: "t", type_version: 1, data: { a: 1, b: "x" } }).data, { a: 1, b: "x", c: null });
 });

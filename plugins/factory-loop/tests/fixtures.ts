@@ -34,7 +34,7 @@ export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd
 
 const SOURCES: SourceName[] = ['factory', 'facts', 'runs', 'queue', 'github', 'usage', 'pool', 'milestone']
 
-// eventsSource is old: the tests exercise the old rebuild, and the shadow compare has its own tests
+// eventsSource is pinned to old (the default is new since #978): the stubs answer the old query, the tests exercise the old rebuild, and the shadow compare has its own tests
 // (v2-sources-records.test.ts), which set it
 export function config(over: Partial<Config> = {}): Config {
   return { ...DEFAULT_CONFIG, eventsSource: 'old', ...over }
@@ -103,12 +103,17 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     blockedBy: 0,
     blocking: 0,
     subIssues: 0,
+    blockingList: null,
+    blockersClosedAt: null,
+    parent: null,
+    siblings: null,
     epic: false,
     subIssueList: null,
     brief: null,
     delegatedBrief: null,
     claimLapsedAt: null,
     reclaimedAt: null,
+    readyAt: null,
     ...over,
   }
 }
@@ -242,6 +247,8 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     fixes: r.fixes,
     round: r.round,
     question: r.question,
+    // the parts of a structured park question; absent keys are read as null
+    ...(r.parts === null ? {} : { decision: r.parts.decision, context: r.parts.context, options: r.parts.options, recommended: r.parts.recommended, recommendation: r.parts.recommendation }),
     ...(r.wait === null ? {} : { wait: r.wait }),
     why: r.why,
     notes: r.notes,
@@ -268,3 +275,34 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     ...over,
   }
 }
+
+// The columns of the facts' new-store read (NEW_EVENTS_SQL), and eventRow: one row of it, as dev-query
+// --csv prints it, for an event of `type` with payload `data` at `ts`.
+export const EVENT_HEADER = ['envelope', 'event_id', 'ts', 'type', 'type_version', 'repo', 'device', 'actor', 'session_id', 'issue', 'base_image', 'dev_image', 'template_version', 'plugin_version', 'device_seq', 'data']
+let eventRows = 0
+export function eventRow(type: string, data: Record<string, unknown>, ts: number, over: Record<string, string> = {}): Record<string, string> {
+  eventRows += 1
+  return {
+    envelope: '1',
+    event_id: `00000000-0000-4000-8000-${String(eventRows).padStart(12, '0')}`,
+    ts: new Date(ts).toISOString(),
+    type,
+    type_version: '1',
+    repo: 'cbundy/dev-system',
+    device: DEVICE,
+    actor: 'agent',
+    session_id: '',
+    issue: '',
+    base_image: '',
+    dev_image: '',
+    template_version: '',
+    plugin_version: '',
+    device_seq: String(eventRows),
+    data: JSON.stringify(data),
+    ...over,
+  }
+}
+
+const csvCell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+// eventsCsv: rows as dev-query --csv prints them, in the given columns
+export const eventsCsv = (rows: Record<string, string>[], header: string[] = EVENT_HEADER): string => [header.join(','), ...rows.map(r => header.map(h => csvCell(r[h] ?? '')).join(','))].join('\n') + '\n'

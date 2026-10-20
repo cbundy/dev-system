@@ -71,6 +71,8 @@ export type Facts = {
   answered: Map<string, number>
   // per issue, its newest `reclaimed` event: a sweep or a release gave the claim back (v2 H1)
   reclaimed: Map<number, number>
+  // per issue, its newest `ready` event
+  readyAt: Map<number, number>
 }
 
 // factsOf: what plan reads from the log (v2 SPEC 13.3.3 `facts`).
@@ -83,6 +85,7 @@ export function factsOf(events: FactoryEvent[]): Facts {
     pipeline: new Map(),
     answered: new Map(),
     reclaimed: new Map(),
+    readyAt: new Map(),
   }
   for (const e of events) {
     if (e.state === 'delegated' && e.issue !== null) {
@@ -98,6 +101,8 @@ export function factsOf(events: FactoryEvent[]): Facts {
       facts.superseded.add(e.run)
     } else if (e.state === 'reclaimed' && e.issue !== null) {
       facts.reclaimed.set(e.issue, Math.max(facts.reclaimed.get(e.issue) ?? 0, e.ts))
+    } else if (e.state === 'ready' && e.issue !== null) {
+      facts.readyAt.set(e.issue, Math.max(facts.readyAt.get(e.issue) ?? 0, e.ts))
     }
     if ((e.state === 'verdict' || e.state === 'fix_requested') && e.run !== null) {
       facts.answered.set(e.run, Math.max(facts.answered.get(e.run) ?? 0, e.ts))
@@ -249,9 +254,14 @@ export function deriveLedger(events: FactoryEvent[], device: string): LedgerEntr
 
 // --- the loop's own events (v2 SPEC 13.7.4, 13.7.5, D-09) ------------------------------------------------
 
-// The note stays short enough for one event row; free text (reasons, instructions, verdict
-// lines, the report's summary) is left out: plan needs none of it to rebuild a hold exactly.
+// The note stays short enough for one event row; free text (instructions, verdict lines, the
+// report's summary) is left out: plan needs none of it to rebuild a hold exactly. A wake's reason
+// is the one exception: it is carried as the last token, one line, shortened to fit and dropped
+// before the outcome is (loopNote), for the event log's decision_reason.
 export const LOOP_NOTE_MAX = 500
+const REASON_MAX = 200
+// below this many characters a shortened reason says too little to keep
+const REASON_FLOOR = 20
 
 const STATUSES: readonly LedgerStatus[] = ['running', 'done', 'failed', 'timed-out', 'lost']
 const CLASSES: readonly ActionClass[] = ['free', 'owner', 'drive', 'develop', 'start']
@@ -274,7 +284,10 @@ const yn = (v: boolean) => (v ? 'yes' : 'no')
 // loopNote: a ledger entry as a `loop` event's note: `kind=<kind> key=<key> status=<status>
 // attempts=<n>`, then class, rule, the start and end times, the agent id and wake name when set,
 // and `out=<outcome kind>` with the outcome fields plan reads. The entry's issue, run, PR and
-// head travel in the event's own columns (loopEventArgs).
+// head travel in the event's own columns (loopEventArgs). A wake's non-empty reason ends the note as
+// `reason=<one line, at most 200 characters>`; when the note would pass LOOP_NOTE_MAX the reason is
+// shortened (ending `...`, never inside a percent-encoded sequence), then dropped when fewer than
+// REASON_FLOOR characters fit, and the outcome is dropped only when it is too long without it.
 export function loopNote(entry: LedgerEntry): string {
   const head = [
     `kind=${entry.kind}`,
@@ -288,9 +301,22 @@ export function loopNote(entry: LedgerEntry): string {
   if (entry.endedAt !== null) head.push(`ended=${entry.endedAt}`)
   if (entry.agentId !== undefined) head.push(`agentId=${enc(entry.agentId)}`)
   if (entry.wake !== undefined) head.push(`wake=${enc(entry.wake)}`)
-  const full = [...head, ...outcomeTokens(entry.outcome)].join(' ')
+  const base = [...head, ...outcomeTokens(entry.outcome)].join(' ')
   // too long for one row: the entry is kept without its outcome, as if it had none parsed
-  return full.length <= LOOP_NOTE_MAX ? full : head.join(' ')
+  if (base.length > LOOP_NOTE_MAX) return head.join(' ')
+  const o = entry.outcome
+  if (o === undefined || o.kind !== 'wake' || typeof o.reason !== 'string') return base
+  const line = Array.from(o.reason.replace(/\s+/g, ' ').trim())
+  if (line.length === 0) return base
+  const withReason = (chars: string[], cut: boolean) => `${base} reason=${enc(chars.join('') + (cut ? '...' : ''))}`
+  const whole = line.length <= REASON_MAX ? withReason(line, false) : withReason(line.slice(0, REASON_MAX - 3), true)
+  if (whole.length <= LOOP_NOTE_MAX) return whole
+  // enc grows a character by at most 6, so scan down from the longest cut that could fit
+  for (let n = Math.min(line.length, REASON_MAX - 3) - 1; n >= REASON_FLOOR; n--) {
+    const note = withReason(line.slice(0, n), true)
+    if (note.length <= LOOP_NOTE_MAX) return note
+  }
+  return base
 }
 
 // loopEventArgs: the callum-flow-event arguments that log an entry: its issue, run, PR and head
@@ -302,6 +328,7 @@ export function loopEventArgs(entry: LedgerEntry): string[] {
   if (entry.pr !== null) args.push('--pr', String(entry.pr))
   if (entry.head !== null) args.push('--head', entry.head)
   args.push('--note', loopNote(entry))
+  if (entry.loopData !== undefined) args.push('--data', JSON.stringify(entry.loopData))
   return args
 }
 

@@ -7,6 +7,8 @@
 import type { ActIo, Exec, ExecCtx } from './exec'
 import { parseCsv } from './parse'
 import { tierOf } from './foundation'
+import { schemaRail } from './rail-schema'
+import type { SchemaNotice } from './rail-schema'
 import type { Action, ActionClass, Config, Control, Ms, Tier } from './types'
 
 const SECOND = 1_000
@@ -173,6 +175,8 @@ export type RailEnv = {
   ORCHESTRATOR_WATCH_LOCK_DIR?: string
   XDG_RUNTIME_DIR?: string
   TMPDIR?: string
+  // the startup migrate's status file (rail-schema.ts)
+  DEV_FACTORY_DB_MIGRATE_STATUS?: string
 }
 
 // watcherLockPath: the lock orchestrator-watch.sh takes for a repo, computed as it does:
@@ -327,7 +331,7 @@ export type WatcherSpell = { since: Ms; pid: string; seenAt: Ms }
 export type RailMemory = { heartbeat: Spell | null; watcher: WatcherSpell | null }
 export const EMPTY_RAIL_MEMORY: RailMemory = { heartbeat: null, watcher: null }
 
-export type RailNotice = { kind: 'heartbeat-other'; device: string; since: Ms } | { kind: 'old-watcher'; pid: string; since: Ms }
+export type RailNotice = { kind: 'heartbeat-other'; device: string; since: Ms } | { kind: 'old-watcher'; pid: string; since: Ms } | SchemaNotice
 
 export type RailInput = {
   repo: string
@@ -348,7 +352,7 @@ export type RailInput = {
 export type RailResult = { act: boolean; reasons: string[]; notices: RailNotice[]; memory: RailMemory; lock: LockResult | null }
 
 // checkRails: run at the start of every act-mode pass, before any action, in a fixed order:
-// the role, the old watcher, the heartbeat guard, then the act lock. The first three always run,
+// the role, the old watcher, the heartbeat guard, the schema, then the act lock. The first four always run,
 // so the log names every refusal and each spell is tracked; the lock is taken only when they
 // pass. A session that fails the role check can never act, so it tells nothing.
 export async function checkRails(io: RailIo, input: RailInput): Promise<RailResult> {
@@ -377,6 +381,10 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
   const guard = await heartbeatGuard(io, input.repo, input.device, memory.heartbeat, now)
   if (guard.reason !== null) reasons.push(guard.reason)
   if (guard.notice !== null) notices.push({ kind: 'heartbeat-other', device: guard.notice.device, since: guard.notice.since })
+
+  const schema = await schemaRail(io, env, now)
+  if (schema.reason !== null) reasons.push(schema.reason)
+  if (schema.notice !== null) notices.push(schema.notice)
 
   let lock: LockResult | null = null
   if (reasons.length === 0) {
@@ -552,6 +560,8 @@ export function noticeTell(n: Notice): Action {
       return tell('heartbeat-other', `tell:heartbeat-other:${n.since}`, { device: n.device })
     case 'old-watcher':
       return tell('old-watcher', `tell:old-watcher:${n.since}`, { pid: n.pid })
+    case 'schema-behind':
+      return tell('schema-behind', `tell:schema-behind:${n.since}`, { to: n.to, error: n.error })
     case 'breaker':
       return tell('breaker', `tell:breaker:pings:${n.since}`, { kind: 'ping' })
   }

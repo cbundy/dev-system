@@ -11,18 +11,22 @@ import { holdsLock, recordPass } from './pass-summary'
 import { LOCK_CAS_SCRIPT, actLockPath, checkRails, holdActLock, leaseMsOf, nextPass, noticeTell, parseLease, passEnded, pingsIgnored, requestPass, waitOver } from './rails'
 import type { BreakerNotice, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { keepTitles } from './report'
+import { agentModelsOf, snapshotFrom, snapshotOf, writeSnapshot } from './settings-snapshot'
+import type { Snapshot } from './settings-snapshot'
 import { digestOf } from './state'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
 import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
+import { opsFrom } from './v2/rules-settings'
 import { stateCounts } from './v2/rules-state'
 import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/store'
-import { windDownFiles } from './v2/wind-down-files'
+import { windDownFiles, withRemembered } from './v2/wind-down-files'
+import { windDownOf } from './v2/wind-down'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
-import { closeOrphans, ensureLedger, isMs, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeGet, storeIo, storeSet } from './driver-store'
+import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
-import { clearUpdate, summaryOf, tellError, writeTrace } from './driver-pass-log'
+import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
@@ -85,6 +89,7 @@ export async function railEnv($: EngineInterface): Promise<RailEnv> {
     ORCHESTRATOR_WATCH_LOCK_DIR: await $.env.get('ORCHESTRATOR_WATCH_LOCK_DIR'),
     XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR'),
     TMPDIR: await $.env.get('TMPDIR'),
+    DEV_FACTORY_DB_MIGRATE_STATUS: await $.env.get('DEV_FACTORY_DB_MIGRATE_STATUS'),
   }
 }
 
@@ -168,7 +173,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     const fresh: Notice[] = breaker === null ? rails.notices : [...rails.notices, breaker]
     for (const n of fresh) if (!book.pending.some(p => noticeTell(p).key === noticeTell(n).key)) book.pending.push(n)
     if (breaker !== null) await commandOf(aio, acting(rt), commands)(breakerEventArgv(breaker), { timeoutMs: 60_000 }).catch(() => undefined)
-    if (act && S.restartAsked !== null) {
+    if (act && S.restartAsked !== null && S.restartRequestAt === null) {
       act = false
       railReasons.push(`restart: dev-restart-self asked for a new workspace at ${new Date(S.restartAsked).toISOString()}; nothing acts until it restarts`)
     }
@@ -186,7 +191,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
+    const starved = await storeGet($, keys.starved)
     stored = {
+      starvedSince: isMs(starved) ? starved : null,
       ledger: live.ledger.length > 0 ? live.ledger : null,
       githubBackoffUntil: isMs(backoff) ? backoff : null,
       queueKnown: Array.isArray(known) && known.every(n => typeof n === 'number') ? known : null,
@@ -200,6 +207,27 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
   let state = observed.state
+  // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
+  let snap: Snapshot | null = null
+  let before: Snapshot | null = null
+  try {
+    snap = snapshotOf(
+      rt,
+      state.control,
+      await agentModelsOf(path => text($, path), rt.pluginRoot),
+      { implementerOpusPct: await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT'), designSessionPct: await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT') },
+      state.now,
+    )
+    problems.push(...(await writeSnapshot({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, snap)))
+  } catch (e) {
+    problems.push(`settings snapshot: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  // an acting pass hands the planner the snapshot and the last one kept, with the config ops since (rule N1)
+  if (act && snap !== null && state.v2 !== undefined) {
+    const kept = snapshotFrom(await storeGet($, keys.settings))
+    before = kept?.snap ?? null
+    state = { ...state, v2: { ...state.v2, settings: { now: snap, nowAt: state.now, before, beforeAt: kept?.at ?? null, ops: opsFrom(await storeGet($, keys.settingsOps)) } } }
+  }
   if (act) await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
@@ -252,6 +280,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
         state = { ...state, control: { ...state.control, updateDue: null } }
       }
       // wind-down (v2 SPEC 10.11): the status file of an active one, or a stale request removed
+      state = withRemembered(state, S.restartRequestAt)
+      const winding = windDownOf(state, rt.config)
       problems.push(...(await windDownFiles({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, state, rt.config)))
       const acted = await actPass(env, state, listed, between)
       carve(tr, 'plan', acted.planned.ms)
@@ -260,7 +290,14 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       result = acted.result
       report = acted.report
       S.lastState = state
-      if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) S.restartAsked = state.now
+      // a request that went stale was told by the plan above: the restart never came, so the loop plans normally
+      if (winding.mode === 'stale' && S.restartRequestAt !== null) [S.restartAsked, S.restartRequestAt] = [null, null]
+      const restarted = report.outcomes.find(o => o.kind === 'restart-self' && o.status === 'done')
+      if (restarted !== undefined) {
+        S.restartAsked = state.now
+        const planned = result.actions.find(a => a.key === restarted.key)
+        S.restartRequestAt = planned?.kind === 'restart-self' && planned.windDownAt != null ? planned.windDownAt : null
+      }
       if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
       if (report.killed) await setTitle($, offTitle(rt))
@@ -284,7 +321,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
 
     // notices from outside plan go out once no wake is open, acting or not (v2 SPEC 13.9.2, 13.11.2), until a
     // restart was asked for
-    if (rt.mode === 'act' && S.restartAsked === null) {
+    if (rt.mode === 'act' && (S.restartAsked === null || S.restartRequestAt !== null)) {
       book.pending = book.pending.filter(n => !stale(n, memory, state.now))
       if (book.pending.length > 0 && (act || (await ensureLedger($, rt, problems)))) {
         const nenv: ActEnv = { ...env, rt: acting(rt) }
@@ -314,6 +351,11 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
     const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
+    // the starved spell (S1): it starts on the first starved pass, stands through unknown passes and ends
+    // on the first pass that is not starved
+    if (result.starved === true && stored?.starvedSince == null) await keepInStore(keys.starved, state.now)
+    else if (result.starved === false && stored?.starvedSince != null) await storeDelete($, keys.starved, problems)
+    if (snap !== null) await keepSettings(keepInStore, $, keys, snap, before)
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 
@@ -343,6 +385,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     sources: Object.fromEntries(
       [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
+    starved: starvedOf(result, state),
     counts: { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
     transitions: transitionsOf(result),

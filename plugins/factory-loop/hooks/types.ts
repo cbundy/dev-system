@@ -3,7 +3,7 @@
 // are its. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
-import type { AgentStep, Model, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -55,6 +55,14 @@ export type IssueView = {
   // the open issues waiting on this one, or null if unread
   blocking: number | null
   subIssues: number | null
+  // the open issues of this repo this one blocks, from the read's `blocking` list; null if unread
+  blockingList: number[] | null
+  // the newest closed_at among its listed closed blockers; null if none or unread
+  blockersClosedAt: Ms | null
+  // the parent's number when the parent is in this repo; null if none or unread
+  parent: number | null
+  // the parent's other sub-issues in this repo (itself left out); null if unread
+  siblings: { number: number; open: boolean }[] | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null
   // a tracker's open sub-issues, nested ones included, ascending, from its timeline; read only
@@ -66,6 +74,8 @@ export type IssueView = {
   claimLapsedAt: Ms | null
   // the newest `reclaimed` event of the issue: a sweep or a release gave its claim back (v2 H1)
   reclaimedAt: Ms | null
+  // the newest `ready` event of the issue, or null if none
+  readyAt: Ms | null
 }
 
 export type RunState =
@@ -122,7 +132,8 @@ export type AgentView = { id: string; type: string; status: AgentStatus }
 
 export type Bump = 'patch' | 'minor' | 'major'
 // openIssues: the numbers of the open issue lines (not PRs), in the order listed
-export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null }
+// oldestClosedAt: when the oldest closed issue of the milestone closed (ISO); absent: not read; null: none, the list was full, or the read failed
+export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null; oldestClosedAt?: string | null }
 // ReleaseInfo: the last release tag (null: the repo has no release yet) and when the oldest merge
 // into the default branch since that tag happened (null: unknown or none)
 export type ReleaseInfo = { tag: string | null; oldest: Ms | null }
@@ -171,8 +182,10 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 // model as `judge(report)` and is recorded as { unparsed: true }.
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (v2 SPEC 13.10 item 1)
-  | { kind: 'cli'; exit: number; detail?: string }
-  | { kind: 'claim'; result: 'claimed' | 'lost' }
+  // a done ci-rerun also carries the job and test names its failed jobs' log named, null when none were read (v2 SPEC 8.5)
+  | { kind: 'cli'; exit: number; detail?: string; failedJobs?: string[] | null; failedTests?: string[] | null }
+  // park: the question a not-ready split child parks on and the parent that was split (v2 SPEC 8.7); only on a claimed result
+  | { kind: 'claim'; result: 'claimed' | 'lost'; park?: { question: string; parent: number; parts?: ParkParts | null } }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
   | { kind: 'designer'; unparsed: true }
   | { kind: 'adjudicator'; verdicts: string[]; action: AdjudicatorAction; report: MergeReport | null }
@@ -195,6 +208,7 @@ export type ActionKind =
   | 'sweep'
   | 'claim'
   | 'close-issue'
+  | 'delete-branch'
   | 'release-parent'
   | 'milestone-later'
   | 'restart-self'
@@ -233,6 +247,8 @@ export type LedgerEntry = {
   session?: string
   // the executor's last few words, for the decision log
   summary?: string
+  // the wake's loop_entry payload fields (Action.loopData), written by `callum-flow-event loop --data`
+  loopData?: LoopData
   // a v2 agent step's kind, which the per-issue rate cap counts by (D-24; v2 appendix B)
   step?: AgentStep
   // the key's own attempt cap, when its action set one (a v2 slot op's, appendix B)
@@ -288,6 +304,13 @@ export type Config = {
   // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the window from the PR's opening (0: no hold)
   releaseBranchPrefix: string | null
   releaseHoldMs: Ms
+  // after a release task answered `done` (the judge started a release), no release review is planned until a newer tag is seen or this long has passed since it ended (0: no suppression)
+  releaseInProgressMs: Ms
+  // flake bugs (v2 SPEC 8.5 F1): the window in days, the flakes of one test that file a bug, the open flake bugs ready or in flight that hold a new one back from `ready`, and the epic a bug is linked under (null: none)
+  flakeWindowDays: number
+  flakeBugMin: number
+  flakeBugReadyCap: number
+  flakeEpic: number | null
   // the title is renamed at most this often (O1 is a throttle)
   titleEveryMs: Ms
   // the factory report is built at most this often (#684)
@@ -315,6 +338,8 @@ export type Config = {
   updateBehindRetries: number
   ciStallRecheckMs: Ms
   blindNoticeAfterMs: Ms
+  // a queue starved this long (ready issues, all blocked, nothing in flight) tells the owner (S1)
+  starvedNoticeAfterMs: Ms
   agentTimeoutMs: Record<AgentType, Ms>
   wakeTimeoutMs: Record<WakeKind, Ms>
   maxAttempts: Partial<Record<ActionKind | AgentType, number>>
@@ -346,6 +371,8 @@ export type Config = {
   ciRunMs: Ms
   // a PR's read stands this long, unless something the loop knows makes it due sooner (v2 SPEC 2.4)
   prEveryMs: Ms
+  // the default branch's state is read this often, in act mode, to be logged as main_state (v2 SPEC 2.4, 9.5)
+  mainEveryMs: Ms
   // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
   maxTriages: number
   // minutes a requested wind-down may take before the stop (0: wind-down off; v2 SPEC 10.11)
@@ -372,6 +399,9 @@ export type EventsSource = 'old' | 'new' | 'shadow'
 
 export type WakeKind = 'judge' | 'task' | 'tell'
 
+// The optional loop_entry fields a tell may carry (docs/factory-events/schemas/loop_entry.v1.json).
+export type LoopData = Record<string, string | number | null>
+
 // What every action carries. maxAttempts: the key's own cap, for a kind whose ops differ (v2's
 // slot); otherwise config.maxAttempts holds the kind's.
 export type ActionBase = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null; maxAttempts?: number }
@@ -381,16 +411,23 @@ type Base = ActionBase
 // second this wake name, then key=value fields with no spaces. Context lines follow it in
 // the visible prompt: a mod cannot attach hidden context to its own prompt (v2 SPEC 13.8.1).
 export type Action =
-  | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
+  | (Base & { kind: 'heartbeat' | 'sweep' | 'milestone-later' })
+  // logClosed: a done close also logs the `closed` event (reason completed) once the issue is closed
+  | (Base & { kind: 'close-issue'; logClosed?: boolean })
+  // a done close's branch on origin, deleted only while it still reads sha (a leased delete)
+  | (Base & { kind: 'delete-branch'; branch: string; sha: string })
+  // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
+  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null } })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
-  | (Base & { kind: 'restart-self'; why: string; at: Ms })
+  | (Base & { kind: 'restart-self'; why: string; at: Ms; windDownAt?: Ms | null })
   // rule M7 for a hand merge: read the merged issue's rollout
   | (Base & { kind: 'rollout'; pr: number | null })
   | (Base & { kind: 'stop-agent'; agentId: string; entry: string })
-  | (Base & { kind: WakeKind; wake: string; fields: Record<string, string>; context: string[] })
+  // loopData: payload fields the wake's loop_entry event carries beside its note (a flake bug tell's decision, v2 SPEC 8.5 F1)
+  | (Base & { kind: WakeKind; wake: string; fields: Record<string, string>; context: string[]; loopData?: LoopData })
   | (Base & { kind: 'title'; text: string })
   | V2Action
 
@@ -408,4 +445,6 @@ export type PlanResult = {
   capped: string[]
   // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
+  // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
+  starved?: boolean | null
 }

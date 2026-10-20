@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
 import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
-import { newestTag, readMilestone, waitsOnTag } from '../hooks/observe-milestone'
+import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from '../hooks/observe-milestone'
 import type { MilestoneCache } from '../hooks/observe-milestone'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
@@ -29,11 +29,13 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
+import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
+import { FLAKES_SQL } from '../hooks/v2/sources-flakes'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
-import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
+import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, eventRow, eventsCsv, review, run, state, wakeAnswer } from './fixtures'
 import { issuesRead } from './host'
 
 const REPO = 'cbundy/dev-system'
@@ -122,7 +124,7 @@ describe('parse', () => {
       },
       stripped: 0,
     })
-    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue' })
+    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue', blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
     const two = JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0, blocking: 2 } } })
     expect(parseIssueRead(two)?.blocking).toBe(2)
     expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
@@ -147,6 +149,34 @@ describe('parse', () => {
     for (const bad of ['', '{}', '{"issues":[],"refused":"x","missing":[]}', '{"issues":[{"state":"open"}],"refused":[],"missing":[]}', '{"issues":[],"refused":[1.5],"missing":[]}']) {
       expect(parseIssuesRead(bad)).toBeNull()
     }
+  })
+
+  test('parseIssuesRead maps the blocking, blocked-by and parent lists, and gives null for an older reader and the single read', () => {
+    const node = (number: number, state: string, repo = REPO) => ({ number, repo, state })
+    const base = { number: 45, title: 'T', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 1, blocking: 1 }, sub_issues_summary: { total: 0 } }
+    const closedA = Date.UTC(2026, 0, 2, 3, 4, 5)
+    const closedB = Date.UTC(2026, 5, 1)
+    const full = {
+      ...base,
+      blocking: [node(7, 'open'), node(8, 'closed'), node(9, 'open', 'other/repo')],
+      blocked_by: [{ ...node(3, 'closed'), closed_at: iso(closedA) }, { ...node(4, 'closed', 'other/repo'), closed_at: iso(closedB) }, { ...node(5, 'open'), closed_at: null }],
+      parent: { ...node(12, 'open'), sub_issues: [node(45, 'open'), node(46, 'open'), node(47, 'closed'), node(48, 'open', 'other/repo')] },
+    }
+    const read = parseIssuesRead(JSON.stringify({ issues: [full, { ...base, number: 50 }, { ...base, number: 51, blocked_by: [{ ...node(5, 'open'), closed_at: null }], parent: { ...node(13, 'open', 'other/repo'), sub_issues: [node(51, 'open', 'other/repo')] } }], refused: [], missing: [], stripped: 0 }), REPO)
+    expect(read?.facts.get(45)).toMatchObject({
+      blockingList: [7],
+      blockersClosedAt: Math.max(closedA, closedB),
+      parent: 12,
+      siblings: [{ number: 46, open: true }, { number: 47, open: false }],
+    })
+    // an older reader: no fields at all
+    expect(read?.facts.get(50)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // no closed blocker listed, and a parent in another repo
+    expect(read?.facts.get(51)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // without the repo nothing can be said of this repo's issues
+    expect(parseIssuesRead(JSON.stringify({ issues: [full], refused: [], missing: [] }))?.facts.get(45)).toMatchObject({ blockingList: null, parent: null, siblings: null })
+    // the single read carries none of them
+    expect(parseIssueRead(JSON.stringify({ issue: full }))).toMatchObject({ blockingList: null, parent: null, siblings: null })
   })
 
   test('the newest design brief comment, by its heading', () => {
@@ -352,8 +382,12 @@ describe('parse', () => {
         const { calls, run } = setup({ ...all, ms })
         await readMilestone(cache, o(run, 5000))
         expect(cache.release).toBeUndefined()
-        expect(calls.every((c) => c[0] === 'callum-flow-milestone')).toBe(true)
+        // no full release read (the tag commit and the merges since it); a milestone still gets its tag view and closed list
+        expect(calls.some((c) => c[1] === 'api' || c[1] === 'pr')).toBe(false)
       }
+      const unopted = setup({ ...all, ms: ok('') })
+      await readMilestone({}, o(unopted.run, 5000))
+      expect(unopted.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
       const cache: MilestoneCache = {}
       await readMilestone(cache, o(setup({ ...all, ms: fail() }).run, 5000))
       expect(cache.milestone).toBeUndefined()
@@ -366,11 +400,11 @@ describe('parse', () => {
         const cache: MilestoneCache = {}
         const { calls, run } = setup({ ...all, ms: ok(OPEN) })
         await readMilestone(cache, wanted(run, 5000))
-        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh release view'])
+        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh issue list', 'gh release view'])
         expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
         expect(cache.release).toBeUndefined()
         const none: MilestoneCache = {}
-        const quiet = setup({ ...all, ms: ok(OPEN) })
+        const quiet = setup({ ...all, ms: ok('') })
         await readMilestone(none, o(quiet.run, 5000))
         expect(quiet.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
         expect(none.tag).toBeUndefined()
@@ -408,6 +442,44 @@ describe('parse', () => {
         expect(calls.filter((c) => c[1] === 'release')).toHaveLength(1)
       })
 
+      test('another repo\'s tag: read per repo on the cadence while a record names it, dropped when none does; the loop\'s own tag is not read for it', async () => {
+        const cache: MilestoneCache = {}
+        const calls: string[][] = []
+        const run = async (argv: string[]) => {
+          calls.push(argv)
+          // no milestone, so the loop's own tag is read for no one
+          if (argv[0] === 'callum-flow-milestone') return ok('')
+          const repo = argv[argv.indexOf('--repo') + 1]
+          return repo === 'o/none' ? fail('release not found') : repo === 'o/down' ? fail() : ok(`{"tagName":"tag-of-${repo}"}`)
+        }
+        const at = (now: number, repos: string[]) => readMilestone(cache, { ...o(run, now), tagRepos: repos })
+        await at(5000, ['o/n', 'o/none'])
+        expect(calls.filter(c => c[1] === 'release').map(c => c[c.indexOf('--repo') + 1])).toEqual(['o/n', 'o/none'])
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n', 'o/none': null })
+        expect(cache.tag).toBeUndefined()
+        // inside the cadence nothing is read again; after it, each is
+        calls.length = 0
+        await at(5500, ['o/n', 'o/none'])
+        expect(calls.filter(c => c[1] === 'release')).toHaveLength(0)
+        await at(6000, ['o/n', 'o/none', 'o/down'])
+        expect(calls.filter(c => c[1] === 'release')).toHaveLength(3)
+        // a failed read keeps the last value (here none yet), and a repo no record names is dropped
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n', 'o/none': null })
+        await at(6100, ['o/n'])
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n' })
+        const kept: MilestoneCache = { tags: { 'o/down': { at: 1, value: 'v9' } } }
+        await readMilestone(kept, { ...o(run, 5000), tagRepos: ['o/down'] })
+        expect(repoTags(kept)).toEqual({ 'o/down': 'v9' })
+      })
+
+      test('tagRepos lists the distinct other repos of waiting records; waitsOnTag ignores a condition that names a repo', () => {
+        const foreign = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
+        const records = [{ state: 'waiting', wait: [foreign, { kind: 'issue-closed', repo: 'x/y' }] }, { state: 'waiting', wait: [foreign, { ...foreign, repo: 'a/b' }] }, { state: 'designing', wait: [{ ...foreign, repo: 'z/z' }] }]
+        expect(tagRepos(records)).toEqual(['a/b', 'o/n'])
+        expect(waitsOnTag(records)).toBe(false)
+        expect(waitsOnTag([...records, { state: 'waiting', wait: [{ kind: 'tag-contains', sha: '35bb655' }] }])).toBe(true)
+      })
+
       test('newestTag: the newer of the release read and the tag view; waitsOnTag: waiting records with a tag-contains condition', () => {
         expect(newestTag({})).toBeNull()
         expect(newestTag({ tag: { at: 1, value: 'v1' } })).toBe('v1')
@@ -430,6 +502,56 @@ describe('parse', () => {
       await readMilestone(cache, o(run, 6000))
       expect(calls.length).toBe(n * 2)
       expect(cache.release?.at).toBe(6000)
+    })
+
+    describe('the release log\'s reads: the tag view and the oldest closed issue, whenever the milestone exists', () => {
+      const closedOf = (...at: string[]) => ok(JSON.stringify(at.map((closedAt) => ({ closedAt }))))
+      const withClosed = { ...all, ms: ok(OPEN), list: closedOf('2026-10-18T10:00:00Z', '2026-10-16T08:30:00Z', '2026-10-17T00:00:00Z') }
+
+      test('the tag view runs with a milestone and no tag wait, and not without a milestone', async () => {
+        const cache: MilestoneCache = {}
+        await readMilestone(cache, o(setup(withClosed).run, 5000))
+        expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
+        const none: MilestoneCache = {}
+        await readMilestone(none, o(setup({ ...withClosed, ms: ok('') }).run, 5000))
+        expect(none.tag).toBeUndefined()
+        expect(none.closed).toBeUndefined()
+      })
+
+      test('the oldest closedAt of the milestone\'s closed issues; none, a full list and a failed read cache null', async () => {
+        const argv = setup(withClosed)
+        const cache: MilestoneCache = {}
+        await readMilestone(cache, o(argv.run, 5000))
+        expect(cache.closed).toEqual({ at: 5000, value: '2026-10-16T08:30:00.000Z' })
+        expect(argv.calls.find((c) => c[1] === 'issue')).toEqual(['gh', 'issue', 'list', '--repo', REPO, '--milestone', 'Next release', '--state', 'closed', '--json', 'closedAt', '--limit', '200'])
+        const full = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ closedAt: `2026-10-17T04:${String(i % 60).padStart(2, '0')}:00Z` })))
+        for (const list of [ok('[]'), ok(full), fail(), ok('nope')]) {
+          const c: MilestoneCache = { closed: { at: 1, value: '2026-01-01T00:00:00.000Z' } }
+          await readMilestone(c, o(setup({ ...withClosed, list }).run, 5000))
+          expect(c.closed).toEqual({ at: 5000, value: null })
+        }
+      })
+
+      test('neither GitHub read runs with backoff, and the last readings stay', async () => {
+        const cache: MilestoneCache = { tag: { at: 1, value: 'v0.47.0' }, closed: { at: 1, value: '2026-01-01T00:00:00.000Z' } }
+        const { calls, run } = setup(withClosed)
+        await readMilestone(cache, { ...o(run, 5000), backoff: true })
+        expect(calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+        expect(cache.tag?.value).toBe('v0.47.0')
+        expect(cache.closed?.value).toBe('2026-01-01T00:00:00.000Z')
+      })
+
+      test('the cadence holds both reads between passes', async () => {
+        const cache: MilestoneCache = {}
+        const { calls, run } = setup(withClosed)
+        await readMilestone(cache, o(run, 5000))
+        const n = calls.length
+        await readMilestone(cache, o(run, 5500))
+        expect(calls.length).toBe(n)
+        await readMilestone(cache, o(run, 6000))
+        expect(calls.filter((c) => c[1] === 'issue')).toHaveLength(2)
+        expect(calls.filter((c) => c[1] === 'release')).toHaveLength(2)
+      })
     })
 
     test('a full list is no reading of the oldest', async () => {
@@ -757,6 +879,9 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     const held = entry('tell:merge-hold:550:h', 'tell', { class: 'owner', wake: 'merge-hold', outcome: wakeAnswer('done', { reason: long, instructions: long }) })
     const back = entryFromLoop(logged(held))
     expect(back?.outcome).toEqual(wakeAnswer('done'))
+    // the reason is carried, shortened; the instructions are not
+    expect(loopNote(held)).toContain(' reason=a%20reason%20with')
+    expect(loopNote(held)).not.toContain('instructions')
     // spaces and percent signs in a value are encoded, so a key survives intact
     const odd = entry('judge:report:brief:60:https://x/a b%20', 'judge', { wake: 'report' })
     expect(entryFromLoop(logged(odd))?.key).toBe('judge:report:brief:60:https://x/a b%20')
@@ -768,6 +893,57 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     expect(entryFromLoop(logged(huge))?.outcome).toBeUndefined()
     expect(entryFromLoop({ ...logged(held), note: 'kind=nope key=x status=done attempts=1 class=free started=1' })).toBeNull()
     expect(entryFromLoop({ ...logged(held), state: 'verdict' })).toBeNull()
+  })
+
+  describe('a wake reason', () => {
+    const task = (outcome: Outcome, key = 'task:release:2:none') => entry(key, 'task', { class: 'drive', wake: 'release', outcome })
+    const reasonOf = (note: string) => note.split(' reason=')[1]
+
+    test('is written last as the decoded one line, and rebuilds as null', () => {
+      const e = task(wakeAnswer('hold', { reason: 'not  ready,\n100% sure' }))
+      const note = loopNote(e)
+      expect(note.endsWith(' reason=not%20ready,%20100%25%20sure')).toBe(true)
+      expect(note.indexOf('decision=hold')).toBeLessThan(note.indexOf('reason='))
+      expect(decodeURIComponent(reasonOf(note)!)).toBe('not ready, 100% sure')
+      expect(entryFromLoop(logged(e))?.outcome).toEqual(wakeAnswer('hold'))
+    })
+
+    test('null or empty writes no token', () => {
+      expect(loopNote(task(wakeAnswer('hold')))).not.toContain('reason=')
+      expect(loopNote(task(wakeAnswer('hold', { reason: ' \n ' })))).not.toContain('reason=')
+    })
+
+    test('is cut to 200 characters', () => {
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'x'.repeat(300) })))
+      expect(decodeURIComponent(reasonOf(note)!)).toBe(`${'x'.repeat(197)}...`)
+    })
+
+    test('is shortened to keep the note within the cap, never inside an escape', () => {
+      const e = task(wakeAnswer('hold', { reason: 'a%'.repeat(100) }), `task:release:2:${'k'.repeat(130)}`)
+      const note = loopNote(e)
+      expect(note.length).toBeLessThanOrEqual(LOOP_NOTE_MAX)
+      expect(note).toContain('out=wake decision=hold')
+      const r = reasonOf(note)!
+      expect(r.endsWith('...')).toBe(true)
+      expect(() => decodeURIComponent(r)).not.toThrow()
+      expect(note.length).toBeGreaterThan(LOOP_NOTE_MAX - 4)
+      expect(entryFromLoop(logged(e))?.outcome).toEqual(wakeAnswer('hold'))
+    })
+
+    test('is dropped before the outcome when no room is left', () => {
+      const bare = loopNote(task(wakeAnswer('hold'), `task:release:2:${'k'.repeat(330)}`))
+      expect(bare.length).toBeGreaterThan(LOOP_NOTE_MAX - 30)
+      expect(bare.length).toBeLessThanOrEqual(LOOP_NOTE_MAX)
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'a long reason for the hold' }), `task:release:2:${'k'.repeat(330)}`))
+      expect(note).toBe(bare)
+      expect(note).toContain('out=wake decision=hold')
+    })
+
+    test('the outcome is still dropped for an oversized key', () => {
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'why' }), `task:release:2:${'k'.repeat(450)}`))
+      expect(note).not.toContain('out=')
+      expect(note).not.toContain('reason=')
+    })
   })
 
   test('the arguments that log an entry put its subject in the columns', () => {
@@ -848,6 +1024,10 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     factory: Record<string, unknown>[]
     recent: FactoryEvent[]
     week: FactoryEvent[] | null
+    // the new store's rows for the facts (NEW_EVENTS_SQL), as dev-query prints them; undefined: exit 78
+    newEvents?: Reply
+    // each device's first row in the new store (NEW_FLOORS_SQL); the default has no device and so no floor
+    floors?: Reply
     pipeline: Reply
     queue: Reply
     issues: Record<string, Reply>
@@ -879,12 +1059,15 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     }
     let now = NOW
     const calls: Call[] = []
-    const answer = (argv: string[]): Reply => {
+    const answer = (argv: string[], stdin?: string): Reply => {
       const [cmd, ...args] = argv
       switch (cmd) {
         case 'callum-flow-factory-state':
           return { stdout: factoryJson(world.factory) }
         case 'dev-query':
+          // the facts' read of the new store (v2/sources-facts.ts); no factory URL when the test gives none
+          if (stdin === NEW_EVENTS_SQL) return world.newEvents ?? { exitCode: 78 }
+          if (stdin === NEW_FLOORS_SQL) return world.floors ?? { stdout: 'device,floor\n' }
           if (!args.includes('days=7')) return { stdout: csv(world.recent) }
           return world.week === null ? { exitCode: 1, stderr: 'psql: connection refused' } : { stdout: csv(world.week) }
         case `${TOOLS}/pipeline-watch.sh`:
@@ -913,7 +1096,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       now: async () => now,
       run: async (argv, init) => {
         calls.push({ argv: [...argv], cwd: init.cwd, env: init.env, stdin: init.stdin })
-        const r = argv.includes('--issues') && world.batch !== undefined ? world.batch : ((await issuesRead(argv, answer)) ?? answer(argv))
+        const r = argv.includes('--issues') && world.batch !== undefined ? world.batch : ((await issuesRead(argv, answer)) ?? answer(argv, init.stdin))
         return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
       },
       readFile: async path => world.files[path] ?? null,
@@ -1038,13 +1221,13 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const obs = await h.pass(runtime(), stored({ ledger: kept }))
     expect([obs.ledgerSource, obs.state.ledger]).toEqual(['store', kept])
     // (v2 reads the last 90 days of its own device's events beside, for its dual write)
-    expect(h.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(h.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
 
     const o = host()
     const shadow = await o.pass(runtime({ mode: 'observe' }))
     expect(shadow.ledgerSource).toBe('events')
     expect(shadow.state.ledger.map(e => e.key)).toEqual(['heartbeat:derived', 'sweep:derived'])
-    expect(o.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(o.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
   })
 
   test('a lost store is rebuilt from 7 days of events, once: holds older than the facts window survive', async () => {
@@ -1066,7 +1249,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const h = host({ factory, week: [loop, ...RECENT] })
     const obs = await h.pass(runtime(), stored({ ledger: null }))
     expect(obs.ledgerSource).toBe('events')
-    expect(h.calls.filter(c => c.argv[0] === 'dev-query').map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
+    expect(h.calls.filter(c => c.argv[0] === 'dev-query' && c.stdin !== FLAKES_SQL).map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
       ['days=3', true],
       ['days=7', true],
       ['days=90', false],
@@ -1101,6 +1284,130 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     down.world.week = []
     await down.pass(runtime(), stored({ ledger: null }), NOW + MIN)
     expect(down.commands().filter(c => c.includes('days=7'))).toHaveLength(1)
+  })
+
+  describe('the facts and the ledger rebuild follow eventsSource (v2/sources-facts.ts)', () => {
+    // RECENT's heartbeat (a renewal) and the sweep's close, as the new store holds them
+    const NEW_RECENT = [
+      eventRow('claim_renewed', { lease_minutes: 120 }, NOW - 5 * MIN, { issue: '45' }),
+      eventRow('closed', { reason: 'completed' }, NOW - 5 * MIN, { issue: '3', actor: 'sweep' }),
+    ]
+    const withSource = (eventsSource: 'old' | 'new' | 'shadow') => runtime({ mode: 'observe', config: config({ eventsSource }) })
+    const calls = (h: ReturnType<typeof host>, sql: string) => h.calls.filter(c => c.argv[0] === 'dev-query' && c.stdin === sql)
+    const keys = (o: Observation) => o.state.ledger.map(e => e.key)
+
+    test('old reads factory.events alone, as before', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(withSource('old'))
+      expect(calls(h, NEW_EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+    })
+
+    test('the default reads factory.event_store alone, through the factory database', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(runtime({ mode: 'observe', config: config({ eventsSource: DEFAULT_CONFIG.eventsSource }) }))
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --factory --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+    })
+
+    test('new reads factory.event_store alone, through the factory database, and rebuilds the same ledger', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const o = await h.pass(withSource('new'))
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.join(' '))).toEqual([`dev-query --factory --csv -v repo=${REPO} -v at=${iso(NOW)} -v days=3`])
+      expect([o.state.sources.facts.ok, keys(o), h.cache.factsShadow]).toEqual([true, ['heartbeat:derived', 'sweep:derived'], undefined])
+      // the facts nothing in v2 reads come out empty: the old rows hold a verdict, a review fix and a supersede
+      expect(factsOf(h.cache.events?.value ?? []).verdicts.size).toBe(0)
+    })
+
+    test('new: a row the reader refuses, or no factory URL, leaves the facts not ok and names the event and the source', async () => {
+      const bad = eventRow('claim_renewed', { lease_minutes: 120 }, NOW - 5 * MIN, { issue: '45', type_version: '9' })
+      const h = host({ newEvents: { stdout: eventsCsv([...NEW_RECENT, bad]) } })
+      const o = await h.pass(withSource('new'))
+      expect(o.state.sources.facts.ok).toBe(false)
+      expect(o.state.sources.facts.error).toContain(`event ${bad.event_id}`)
+      expect(o.state.sources.facts.error).toContain('source new')
+      const noUrl = await host().pass(withSource('new'))
+      expect(noUrl.state.sources.facts.ok).toBe(false)
+      expect(noUrl.state.sources.facts.error).toContain('source new')
+    })
+
+    test('shadow decides on old, reads both on the first pass of a load and only old within the hour, and a failing new read never fails the pass', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const first = await h.pass(withSource('shadow'))
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 1])
+      expect([first.state.sources.facts.ok, keys(first)]).toEqual([true, ['heartbeat:derived', 'sweep:derived']])
+      expect(first.state.v2?.factsShadow?.data).toMatchObject({ reader: 'loop-facts', tool: 'factory-loop', compared: 2, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true })
+      await h.pass(withSource('shadow'), undefined, NOW + 30 * MIN)
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 0])
+      expect(h.cache.factsShadow?.at).toBe(NOW)
+      await h.pass(withSource('shadow'), undefined, NOW + 61 * MIN)
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length]).toEqual([1, 1])
+      expect(h.cache.factsShadow?.at).toBe(NOW + 61 * MIN)
+
+      // the new store without a renewal made half an hour ago: the compare counts it, and the pass still uses old
+      const old = ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 30 * MIN })
+      const short = host({ recent: [old], newEvents: { stdout: eventsCsv([]) } })
+      const differing = await short.pass(withSource('shadow'))
+      expect(keys(differing)).toEqual(['heartbeat:derived'])
+      expect(differing.state.v2?.factsShadow?.data).toMatchObject({ differences: 1, live_differences: 1, diff_keys: ['ledger:heartbeat:derived'] })
+
+      // the new read fails (no factory URL): new_ok false, the facts stay ok
+      const down = host()
+      const failed = await down.pass(withSource('shadow'))
+      expect(failed.state.sources.facts.ok).toBe(true)
+      expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
+      expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+    })
+
+    test('shadow reads the device floors once per compare, through the factory database, and a failing read fails the compare alone', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const floorCalls = () => calls(h, NEW_FLOORS_SQL).map(c => c.argv.join(' '))
+      const first = await h.pass(withSource('shadow'))
+      expect(floorCalls()).toEqual([`dev-query --factory --csv -v repo=${REPO}`])
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length, floorCalls().length]).toEqual([1, 1, 1])
+      expect(first.state.v2?.factsShadow?.data).toMatchObject({ new_ok: true, scope_floor: null, out_of_scope: 0 })
+      // no compare within the hour: no floor read
+      await h.pass(withSource('shadow'), undefined, NOW + 30 * MIN)
+      expect(floorCalls()).toHaveLength(0)
+      // old and new make no floor call
+      for (const source of ['old', 'new'] as const) {
+        const other = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+        await other.pass(withSource(source))
+        expect(calls(other, NEW_FLOORS_SQL)).toHaveLength(0)
+      }
+      // a floor read that fails: the compare failed on the new side, the pass and its facts stay ok
+      const down = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) }, floors: { exitCode: 1, stderr: 'boom' } })
+      const failed = await down.pass(withSource('shadow'))
+      expect(failed.state.sources.facts.ok).toBe(true)
+      expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
+      expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+      expect(failed.state.v2?.factsShadow?.data.detail).toContain('source new')
+    })
+
+    test('shadow: the events older than their device floor are no difference, and the data names the floor', async () => {
+      const old = ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 30 * MIN })
+      const floor = iso(NOW - 10 * MIN).replace('.000Z', 'Z')
+      const withFloor = host({ recent: [old], newEvents: { stdout: eventsCsv([]) }, floors: { stdout: `device,floor\n${old.device},${floor}\n` } })
+      const o = await withFloor.pass(withSource('shadow'))
+      expect(keys(o)).toEqual(['heartbeat:derived'])
+      expect(o.state.v2?.factsShadow?.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [], new_ok: true, out_of_scope: 1 })
+      expect(o.state.v2?.factsShadow?.data.scope_floor).toBe(floor.replace('Z', '.000Z'))
+    })
+
+    test('the ledger rebuild of a lost store reads the week from the source eventsSource picks', async () => {
+      const tell = entry('tell:parked:50', 'tell', { class: 'owner', rule: 'H1', issue: 50, wake: 'parked', startedAt: NOW - 5 * DAY, endedAt: NOW - 5 * DAY + MIN })
+      const row = eventRow('loop_entry', { kind: 'tell', key: tell.key, status: 'done', attempts: 1, class: 'owner', rule: 'H1', started_at: iso(NOW - 5 * DAY), ended_at: iso(NOW - 5 * DAY + MIN), agent_id: null, wake: 'parked' }, NOW - 5 * DAY + MIN, { issue: '50' })
+      const h = host({ week: [], newEvents: { stdout: eventsCsv([row]) } })
+      const act = runtime({ config: config({ eventsSource: 'new' }) })
+      const o = await h.pass(act, stored({ ledger: null }))
+      expect(o.ledgerSource).toBe('events')
+      expect(o.state.ledger.find(e => e.key === tell.key)).toEqual({ ...tell, run: null, pr: null, head: null })
+      expect(calls(h, NEW_EVENTS_SQL).map(c => c.argv.find(a => a.startsWith('days=')))).toEqual(['days=3', 'days=7'])
+      expect(calls(h, EVENTS_SQL)).toHaveLength(0)
+    })
   })
 
   test('a GitHub backoff skips the queue and issue reads, their old values kept with their age', async () => {
@@ -1257,6 +1564,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect(i.open).toBe(true)
       expect(i).toEqual(ref.state.issues.find(j => j.number === i.number))
     }
+  })
+
+  test('the open issues a read issue blocks join the next read last, behind every other reason and within the cap, and a closed one is not read (#1004)', async () => {
+    const blocking = (...ns: number[]) => ({ stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: ns.map(number => ({ number, repo: REPO, state: 'open' })) }, stripped: 0 }) })
+    const h = host({ issues: { '--json 45': blocking(900), '--json 900': { stdout: ISSUE(900) } } })
+    const first = await h.pass(runtime(), stored())
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+    expect(first.state.issues.find(i => i.number === 45)?.blockingList).toEqual([900])
+    expect(first.state.issues.find(i => i.number === 114)?.blockingList).toBeNull()
+
+    // the next pass: one call, 900 after the others
+    await h.pass(runtime(), stored(), NOW + 6 * MIN)
+    expect(h.commands().filter(c => c.includes('--issues'))).toHaveLength(1)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+
+    // 900 closed: known closed, it is not read again
+    h.world.issues['--json 900'] = CLOSED(900)
+    await h.pass(runtime(), stored(), NOW + 12 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+    await h.pass(runtime(), stored(), NOW + 18 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+  })
+
+  test('a chain never starves the issues the loop acts on: with twelve other due issues the blocked one is not read (#1004)', async () => {
+    const blocking = { stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: [{ number: 900, repo: REPO, state: 'open' }] }, stripped: 0 }) }
+    const h = host({ issues: { '--json 45': blocking } })
+    await h.pass(runtime(), stored())
+    const queue = Array.from({ length: 14 }, (_, i) => 300 + i)
+    h.world.queue = { stdout: `queue known=none now=${queue.join(',')}
+` }
+    await h.pass(runtime(), stored({ queueKnown: null }), NOW + 6 * MIN)
+    const reads = issueReads(h)
+    expect(reads).toHaveLength(12)
+    expect(reads).not.toContain('900')
   })
 
   test('a failed batched call keeps every last value and marks github not ok; an exit-2 reader falls back to single reads; a refused number is untrusted (#922)', async () => {

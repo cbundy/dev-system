@@ -85,6 +85,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     fixes: 1,
     round: 2,
     question: null,
+    parts: null,
     why: null,
     notes: ['the owner: keep it small'],
     prClosedAt: null,
@@ -163,9 +164,9 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
         true,
       ])
     }
-    expect(V2_ACTION_KINDS).toHaveLength(13)
-    expect(V2_RULES).toHaveLength(21)
-    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow'])
+    expect(V2_ACTION_KINDS).toHaveLength(15)
+    expect(V2_RULES).toHaveLength(25)
+    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused'])
   })
 
   test('the eight labels, one per state but closed, with appendix D\'s colours', () => {
@@ -332,7 +333,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const budgets: number[] = []
     const run = async (argv: string[]) => {
       // the dual-write probe is not a GitHub read (v2-dual-write.test.ts), so this order leaves it out
-      if (argv[0] !== 'callum-flow-event') log.push(argv.join(' '))
+      // nor is the default branch's state, read in act mode on its own cadence (v2-main.test.ts)
+      if (argv[0] !== 'callum-flow-event' && !(argv[0] === 'gh' && argv[1] === 'api')) log.push(argv.join(' '))
       return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: '' }
     }
     const readers: V2Readers = {
@@ -384,7 +386,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     expect(await of({ records: null, heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: true } } })
     expect(await of({ records: [], heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'store', sources: { store: { ok: true } } })
     // only the absent key reads this device's transition events for a rebuild (v2/record.ts)
-    expect(runs.filter(a => a[0] === 'dev-query')).toHaveLength(1)
+    // (the flakes source's own read, `since=`, is no rebuild)
+    expect(runs.filter(a => a[0] === 'dev-query' && !a.some(x => x.startsWith('since=')))).toHaveLength(1)
   })
 
   test('with no store records and no rebuild built yet, there are no records, and a state built outside a pass reads nothing', () => {

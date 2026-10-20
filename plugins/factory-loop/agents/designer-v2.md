@@ -73,6 +73,9 @@ low | medium | high - one line why
 ## Observability
 - each decision the change adds - where it is recorded - the question it answers; or "none - no new decision"
 
+## Compatibility
+- what changes in a migration, event schema, the event writer or a factory-database reader - why every loop version in the 10-minor-version window keeps working - the test that proves it; or "none - no schema, event or reader change"
+
 ## Sequencing
 - what must merge first, or "none"
 
@@ -108,8 +111,28 @@ release or hold, merge or send back. For each one the change adds:
 - a new event type ships whole in its first release: schema, `x-column` view fields and migration
   together, before any producer.
 
-The answer script checks the heading, the Rollout and the Observability section before it records
-the brief.
+`## Compatibility` is required in every brief. It is "none - no schema, event or reader change"
+unless the change touches a migration (`images/base/factory-db/migrations/`), an event schema
+(`docs/factory-events/schemas/`), the event writer (`callum-flow-event`, `factory-event-write.js`)
+or a reader of the factory database (`callum-flow-factory-state`, the `docs/metrics.md` queries,
+the loop's event reads). Otherwise it names what changes, why every loop of the last 10 minor
+releases keeps writing and reading (only adds: new tables, nullable or defaulted columns, view
+columns, indexes; never drops, renames or retypes anything an old version uses), and which test
+proves it. `docs/factory-db.md` defines the window.
+
+The answer script checks the heading, the Rollout and the Observability and the Compatibility
+sections before it records the brief.
+
+## A flake bug
+
+An issue is a flake bug when it carries the `flaky` label or the loop's flake-bug marker, the hidden
+`<!-- factory-loop:flake:<hash> -->` in its body. Its
+brief's acceptance criteria and test plan must require: (1) reproducing the flake under load
+first, meaning the test or its suite run many times while the machine is busy (for example
+alongside two other full `npm test` runs); (2) fixing the cause (real waits instead of sleeps,
+wall-clock time, shared state, ordering); and (3) the same stress run passing many times in a row
+(for example 20 consecutive passes), shown in the answer's evidence. The brief must forbid a
+retry, a skip, or a raised timeout without a written reason sized to what the test does.
 
 ## A question
 
@@ -134,9 +157,13 @@ request merged, or a release must carry a commit. Give `{"kind": "wait", "condit
 that says what you wait for and why, and the `brief` you have so far or null. The loop links this
 issue as blocked by each issue you name, posts one comment that lists the conditions, checks them
 itself without a model, and resumes your design with a note naming what cleared. A tag condition
-is met once the newest release tag contains that commit; it links no issue. The answer script
-checks each condition on GitHub before it records the wait: the sha must be a commit of this repo,
-this repo must already have a release, and the issue or PR must exist (a PR closed unmerged can
+is met once the newest release tag contains that commit; it links no issue. An `issue-closed` or
+`tag-contains` condition may name another repo with `"repo": "owner/name"`: a consumer repo waiting
+on a dev-system release gives `{"kind": "tag-contains", "sha": "<sha>", "repo": "cbundy/dev-system"}`.
+The loop then reads that repo's issue or newest release, and links no issue for another repo's
+issue (the waiting comment names it). A `pr-merged` condition takes no `repo`. The answer script
+checks each condition on GitHub before it records the wait: the sha must be a commit of this repo
+(or of the repo the condition names), that repo must already have a release, and the issue or PR must exist (a PR closed unmerged can
 never be merged); a wait that could never clear is refused with the reason.
 
 Wait when the work is blocked only on one of those fixed, checkable facts. Ask a question when it
@@ -148,6 +175,23 @@ then the writer that emits it) waits until a release tag carries the commit its 
 merge the readers, then wait on `{"kind": "tag-contains", "sha": "<the readers' merge commit>"}`.
 The judge decides the release and the loop resumes you once the tag carries the commit.
 
+## Done
+
+When the issue's work is already merged on the default branch, do not design it again: answer
+with a done close. Give `{"kind": "done", "evidence": {"pr": N, "commit": "<7 to 40 hex>", "runIt": "<url>"}, "reason": "...", "brief": null}`:
+at least one of `pr` (a merged pull request of this repo) and `commit` (a commit on the default
+branch), the others null; `runIt` only when the issue has a Run it, and then the URL of the
+comment on this issue that records it (`https://github.com/<owner>/<repo>/issues/<N>#issuecomment-<digits>`);
+and a `reason` of one line (at most 500 characters) that says what shipped and where. The answer
+script checks the evidence on GitHub (the PR must be merged, the commit on the default branch) and
+refuses what is not; the loop checks it again against origin, and a done answer whose evidence
+does not hold counts as a bad answer. The loop then posts one comment with the evidence and the
+reason, closes the issue as completed, and deletes the issue branch from origin only when it holds
+no commit of its own beyond the default branch (or is the merged PR's head); otherwise it keeps
+it and says so. Never answer done for work that is only on a branch or in an open pull request,
+or for work only partly merged: that is a brief for the rest. Never put a closing keyword in the
+reason.
+
 ## A split
 
 For a large or high-risk issue, do not design it as one unit. Answer with a split: the plan of
@@ -156,8 +200,12 @@ shape (without the date heading, with a `## Rollout` each that follows the rule 
 unless the child has its own `## Run it`, is research or a proposal, or needs a person), the keys of the siblings it is
 blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
 and whether it is ready. A child is not ready only when it carries an open owner
-decision. The loop makes each child an issue under this one, links its `blocked_by`, labels the
-ready ones `ready` once every link exists, and keeps this issue as the tracking epic. The loop closes it once every child is closed.
+decision, and then it has a `decision` in the shape of a question answer: `question` (the decision
+as one sentence) and, optionally, `context`, `options` (2 to 6 of `key` A to F, `title`, `detail`)
+and `recommendation` (`key`, `reason`); the rendered text is at most 2000 characters. A ready child
+takes no `decision`. The loop makes each child an issue under this one, links its `blocked_by`, labels the
+ready ones `ready` once every link exists, claims each not-ready one at once and parks it on its
+`decision` for the owner (your design of it resumes when the owner answers), and keeps this issue as the tracking epic. The loop closes it once every child is closed.
 
 The `reasons` object has exactly four keys, each a short, concrete text (at most 500 characters)
 that names what you weighed: `why_split` (size, the areas touched, an owner decision or spike
