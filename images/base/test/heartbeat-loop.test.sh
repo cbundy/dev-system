@@ -37,6 +37,7 @@ BASH=$(command -v bash)
 ln -s "$ROOT/images/base/agentsview.sh" "$share/agentsview.sh"
 ln -s "$ROOT/images/base/workspace.sh" "$share/workspace.sh"
 ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
+ln -s "$ROOT/images/base/mem-pressure.sh" "$share/mem-pressure.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
@@ -589,6 +590,57 @@ reset
 stats_once > /dev/null 2>&1 || fail "garbage stat files"
 [ -z "$(sarg 1 mem_used_bytes)" ] && [ -z "$(sarg 1 cpu_pct)" ] || fail "garbage must be NULL"
 
+# memory pressure (cbundy/dev-system#1124): memory.events and memory.pressure, the rate against $hbdir/dev-heartbeat.mem
+fake_mem() { # MAX OOM_KILL SOME FULL
+  printf 'low 0\nhigh 0\nmax %s\noom 0\noom_kill %s\n' "$1" "$2" > "$cg/memory.events"
+  printf 'some avg10=%s avg60=0.10 avg300=0.00 total=12345\nfull avg10=%s avg60=0.05 avg300=0.00 total=678\n' "$3" "$4" > "$cg/memory.pressure"
+}
+mem_keys='mem_max_events mem_max_rate_per_min mem_oom_kills mem_psi_some_avg10 mem_psi_full_avg10'
+reset
+rm -f "$hbdir/dev-heartbeat.mem"
+fake_cg 200000 100000 5000000 123456 1000000
+fake_mem 10 2 2.50 1.25
+stats_once > /dev/null 2>&1 || fail "memory pressure beat 1"
+[ "$(sarg 1 mem_max_events)" = 10 ] && [ "$(sarg 1 mem_oom_kills)" = 2 ] || fail "memory.events: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 mem_psi_some_avg10)" = 2.50 ] && [ "$(sarg 1 mem_psi_full_avg10)" = 1.25 ] || fail "memory.pressure: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ -z "$(sarg 1 mem_max_rate_per_min)" ] || fail "the rate must be empty on the first beat"
+[ "$(cut -d' ' -f1 "$hbdir/dev-heartbeat.mem")" = 10 ] || fail "the max reading is saved: $(cat "$hbdir/dev-heartbeat.mem")"
+# the next beat, one minute later by the state file: 30 more max events is 30 a minute (a little less as the real gap is longer)
+printf '%s %s\n' 10 $(($(now_us) - 60000000)) > "$hbdir/dev-heartbeat.mem"
+fake_mem 40 2 2.50 1.25
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "memory pressure beat 2"
+[ "$(sarg 1 mem_max_events)" = 40 ] || fail "second beat max events"
+rate=$(sarg 1 mem_max_rate_per_min)
+case "$rate" in [0-9]*.[0-9][0-9]) ;; *) fail "rate must be a 2 decimal number, got '$rate'" ;; esac
+jq -ne --argjson r "$rate" '$r > 0 and $r <= 30' > /dev/null || fail "rate should be at most 30 a minute and above 0, got $rate"
+# a counter that went down has no rate
+printf '%s %s\n' 100 $(($(now_us) - 60000000)) > "$hbdir/dev-heartbeat.mem"
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "memory pressure reset beat"
+[ -z "$(sarg 1 mem_max_rate_per_min)" ] && [ "$(sarg 1 mem_max_events)" = 40 ] || fail "a counter reset has no rate"
+# the files gone: all five empty and the beat still succeeds
+reset
+fake_cg 200000 100000 5000000 123456 1000000
+rm -f "$hbdir/dev-heartbeat.mem"
+stats_once > /dev/null 2>&1 || fail "beat without memory.events"
+for k in $mem_keys; do
+  grep -qx -- "$k=" "$fakebin/stats-args-1" || fail "$k must be sent empty with no source file: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+done
+[ ! -e "$hbdir/dev-heartbeat.mem" ] || fail "no memory.events: no state file"
+# garbage is no number either
+printf 'max lots\noom_kill x\n' > "$cg/memory.events"
+printf 'some avg10=x\n' > "$cg/memory.pressure"
+reset
+stats_once > /dev/null 2>&1 || fail "garbage memory files"
+for k in $mem_keys; do
+  grep -qx -- "$k=" "$fakebin/stats-args-1" || fail "garbage $k must be empty"
+done
+for k in $mem_keys; do
+  grep -qF -- ":'$k'" "$fakebin/stats-sql-1" || fail "the stats SQL lacks $k"
+done
+rm -f "$hbdir/dev-heartbeat.mem"
+
 # no stats on the stopped beat, and the stopped beat does not touch the stats columns
 reset
 fake_cg 200000 100000 5000000 123456 1000000
@@ -619,6 +671,8 @@ stats_once > /dev/null 2>&1 || rc=$?
 reset
 stats_once > /dev/null 2>&1
 for w in cpu_pct cpu_limit_cores cpu_quota_set mem_used_bytes mem_limit_bytes claude_interactive claude_headless claude_procs "'procs'" stats_at \
+  mem_max_events mem_max_rate_per_min mem_oom_kills mem_psi_some_avg10 mem_psi_full_avg10 \
+  "('mem_max_events', 'bigint')" "ALTER TABLE factory.worker_samples ADD COLUMN IF NOT EXISTS" \
   'CREATE TABLE IF NOT EXISTS factory.worker_samples' 'PRIMARY KEY (device, sampled_at)' 'SECURITY DEFINER SET search_path = factory, pg_temp' \
   'CREATE TRIGGER worker_samples_prune AFTER INSERT ON factory.worker_samples'; do
   grep -qF -- "$w" "$fakebin/psql-sql-1" || fail "the DDL lacks: $w"

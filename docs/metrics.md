@@ -1729,7 +1729,8 @@ Latest machine load per worker (the stats columns are NULL until a worker's firs
 ```sql
 SELECT device, state, stale, cpu_pct, cpu_limit_cores, cpu_quota_set,
        round(mem_used_bytes / 1048576.0) AS mem_used_mib, round(mem_limit_bytes / 1048576.0) AS mem_limit_mib,
-       claude_interactive, claude_headless, claude_procs, procs, stats_at
+       claude_interactive, claude_headless, claude_procs, procs, stats_at,
+       mem_max_events, mem_max_rate_per_min, mem_oom_kills, mem_psi_some_avg10, mem_psi_full_avg10
 FROM factory.workers_status
 ORDER BY stale, device;
 ```
@@ -1740,6 +1741,21 @@ Load trend per device, hourly over the last day (samples are kept 30 days):
 SELECT device, date_trunc('hour', sampled_at) AS hour,
        round(avg(cpu_pct)::numeric, 1) AS cpu_avg, max(cpu_pct) AS cpu_max,
        round(avg(mem_used_bytes) / 1048576.0) AS mem_avg_mib, round(max(mem_used_bytes) / 1048576.0) AS mem_max_mib
+FROM factory.worker_samples
+WHERE sampled_at > now() - interval '1 day'
+GROUP BY device, hour
+ORDER BY device, hour;
+```
+
+Memory pressure per device, hourly over the last day (the rate is how often the container hit its memory
+limit per minute; `psi_full` is the percent of time all tasks stalled on memory, and a rate above 0, any
+OOM kill or `psi_full` of 10 or more means the machine is short of memory; the columns are NULL on cgroup v1):
+
+```sql
+SELECT device, date_trunc('hour', sampled_at) AS hour,
+       max(mem_max_rate_per_min) AS max_rate_per_min,
+       max(mem_psi_full_avg10) AS psi_full_max, round(avg(mem_psi_full_avg10)::numeric, 2) AS psi_full_avg,
+       max(mem_oom_kills) - min(mem_oom_kills) AS oom_kills_growth
 FROM factory.worker_samples
 WHERE sampled_at > now() - interval '1 day'
 GROUP BY device, hour

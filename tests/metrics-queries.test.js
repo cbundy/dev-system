@@ -113,7 +113,7 @@ const RUN_ONLY = [
   "9b. Permission prompts #0",
   "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Main after merge #0", "Main after merge #1",
-  "Workers #0", "Workers #1", "Workers #2", "Workers #3",
+  "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4",
   "Settings #0", "Settings #1",
   "Spend on an API key #0", "Spend on an API key #1",
   "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0",
