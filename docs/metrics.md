@@ -858,6 +858,71 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 ```
 
+### Intake stamp
+
+These queries stay empty until the loop writes `intake_stamp` (one event per stamp attempt of one issue version; `outcome` is `ok`, `failed` or `dropped`).
+
+Stamps per repo and day by `outcome`:
+
+```sql
+SELECT date_trunc('day', ts) AS day, repo, outcome, count(*) AS stamps
+FROM factory.event_log
+WHERE type = 'intake_stamp'
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+```
+
+The `area` mix of `ok` stamps:
+
+```sql
+SELECT repo, area, count(*) AS stamps
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND outcome = 'ok'
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC, 2;
+```
+
+The share of `ok` stamps with `needs_owner` true, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day, count(*) AS ok_stamps,
+  count(*) FILTER (WHERE needs_owner) AS needs_owner,
+  round(100.0 * count(*) FILTER (WHERE needs_owner) / count(*), 1) AS needs_owner_pct
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND outcome = 'ok'
+GROUP BY 1
+ORDER BY 1;
+```
+
+How often the owner overrode a stamp label (a stamp whose `labels_kept` is not empty), over all stamps, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day, count(*) AS stamps,
+  count(*) FILTER (WHERE jsonb_array_length(labels_kept) > 0) AS overridden,
+  round(100.0 * count(*) FILTER (WHERE jsonb_array_length(labels_kept) > 0) / count(*), 1) AS overridden_pct
+FROM factory.event_log
+WHERE type = 'intake_stamp'
+GROUP BY 1
+ORDER BY 1;
+```
+
+The share of `claimed` events per day whose `factors` include `area-factory`, `needs-owner` or `overlap`. It counts claims and complements the per-factor query under "Claim order" (which lists points per factor); `factors` are read from `factory.event_store` as there:
+
+```sql
+SELECT date_trunc('day', c.ts) AS day, count(*) AS claims,
+  count(*) FILTER (WHERE jsonb_typeof(s.data->'factors') = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(s.data->'factors') f
+    WHERE f->>'name' IN ('area-factory', 'needs-owner', 'overlap'))) AS stamp_moved,
+  round(100.0 * count(*) FILTER (WHERE jsonb_typeof(s.data->'factors') = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(s.data->'factors') f
+    WHERE f->>'name' IN ('area-factory', 'needs-owner', 'overlap'))) / count(*), 1) AS stamp_moved_pct
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+WHERE c.type = 'claimed'
+GROUP BY 1
+ORDER BY 1;
+```
+
 ### Split trackers closed by the loop
 
 When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and

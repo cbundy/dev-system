@@ -11,6 +11,7 @@
     "finding_handled": 1,
     "gate_run": 1,
     "implementer_routed": 1,
+    "intake_stamp": 1,
     "intervention": 1,
     "loop_entry": 1,
     "loop_passes": 1,
@@ -609,6 +610,89 @@
         "model",
         "opus_pct",
         "reason"
+      ],
+      "type": "object",
+      "x-issue": "required"
+    },
+    "intake_stamp.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "area": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "dropped": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "labels_kept": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "labels_set": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "dry",
+            "run"
+          ]
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "needs_owner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "dropped",
+            "failed",
+            "ok"
+          ]
+        },
+        "reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "touches": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "area",
+        "dropped",
+        "labels_kept",
+        "labels_set",
+        "mode",
+        "model",
+        "needs_owner",
+        "outcome",
+        "reason",
+        "touches",
+        "version"
       ],
       "type": "object",
       "x-issue": "required"
