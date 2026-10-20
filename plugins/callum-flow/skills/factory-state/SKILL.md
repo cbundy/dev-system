@@ -42,6 +42,8 @@ the issue number in parentheses, and say who has to act on it, especially when i
 3. `flags` on any issue (label or claim disagreeing with GitHub, GitHub state unreadable): these
    are disagreements between sources, not facts about the work.
 
+Per repo, say what its `queue` shows: the top of the claim queue, how old the snapshot is and the blocked reasons. An old snapshot or `n/a` means the loop's queue view is unknown, not empty.
+
 Then one short line per repo on **coverage**, because a gap must never read as idle:
 
 - `pipeline only`: the repo has runs but no factory events, so claims, delegation and queue state
