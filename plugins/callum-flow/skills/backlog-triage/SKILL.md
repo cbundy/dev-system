@@ -10,7 +10,7 @@ description: >-
   caused real trouble, significant observability, lingering epics close to
   done). Use for "triage the backlog", "clean up the issues", "what should we
   prioritise?" or "process my triage choices".
-version: 0.68.0
+version: 0.69.0
 ---
 
 # Backlog triage
