@@ -192,6 +192,11 @@ test("the prelude runs the real wrapper for npm test and npm run lint, and only 
   [status, out, called] = bash("npm test -- tests/x.test.js; echo \"npm test\"; npm ci; env X=1 npm test");
   assert.equal(out, "npm test\n");
   assert.equal(called, "npm test -- tests/x.test.js\nnpm ci\nnpm test\n");
+  // the full gate as an agent runs it: each command of the chain goes through the wrapper
+  [status, out, called] = bash("npm run lint && npm test");
+  assert.equal(status, 0);
+  assert.equal(out.match(/^factory-gate-slot: slot 0 after \d+ ms$/gm).length, 2);
+  assert.equal(called, "npm run lint\nnpm test\n");
   // a held slot refuses the gate command at once and never runs npm
   const holder = await hold(slotDir, 30);
   try {
@@ -204,7 +209,21 @@ test("the prelude runs the real wrapper for npm test and npm run lint, and only 
   }
   const logged = fs.readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.deepEqual(logged.map((l) => [l.cause, l.issue, l.refused, l.command]), [
-    ["agent-gate", 5, false, "command npm test"],
-    ["agent-gate", 5, true, "command npm run lint"],
+    ["agent-gate", 5, false, "npm test"],
+    ["agent-gate", 5, false, "npm run lint"],
+    ["agent-gate", 5, false, "npm test"],
+    ["agent-gate", 5, true, "npm run lint"],
   ]);
+});
+
+test("a missing flock(1) is a usage error that names it, not a refusal", () => {
+  const bin = path.join(dir, `noflock-${n}`);
+  fs.mkdirSync(bin);
+  for (const t of ["sh", "date", "mkdir", "sed", "tr", "sleep", "true"]) {
+    const found = spawnSync("sh", ["-c", `command -v ${t}`], { encoding: "utf8" }).stdout.trim();
+    if (found) fs.symlinkSync(found, path.join(bin, t));
+  }
+  const r = spawnSync("/bin/sh", [WRAPPER, "--dir", fresh(), "--capacity", "1", "--", "true"], { env: { PATH: bin }, encoding: "utf8" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /flock/);
 });

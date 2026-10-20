@@ -45,6 +45,7 @@ case $wait_ms in '' | *[!0-9]*) die "--wait-ms must be a whole number" ;; esac
 for v in "$issue" "$seq"; do
   case $v in *[!0-9]*) die "--issue and --seq must be whole numbers" ;; esac
 done
+command -v flock >/dev/null 2>&1 || die "flock(1) (util-linux) is not on PATH; gate slots cannot be held without it"
 mkdir -p "$dir" || die "cannot make $dir"
 
 now_ms() {
@@ -59,6 +60,7 @@ json_str() {
 # write_log <slot|null> <exit|null> <refused> <ms> <command>
 write_log() {
   [ -n "$log" ] || return 0
+  cmd_text=${5#command }
   at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
   if [ "$3" = true ]; then
     reason="an agent's gate command was refused: no gate slot was free"
@@ -66,7 +68,7 @@ write_log() {
     reason="an agent's gate command ran in gate slot $1"
   fi
   printf '{"at":"%s","issue":%s,"life":"%s","seq":%s,"cause":"agent-gate","reason":"%s","command":"%s","waitMs":%s,"slot":%s,"exit":%s,"ms":%s,"refused":%s}\n' \
-    "$at" "${issue:-null}" "$(json_str "$life")" "${seq:-null}" "$(json_str "$reason")" "$(json_str "$5")" "$waited" "$1" "$2" "$4" "$3" >>"$log" 2>/dev/null
+    "$at" "${issue:-null}" "$(json_str "$life")" "${seq:-null}" "$(json_str "$reason")" "$(json_str "$cmd_text")" "$waited" "$1" "$2" "$4" "$3" >>"$log" 2>/dev/null
   return 0
 }
 
