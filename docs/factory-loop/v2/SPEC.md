@@ -121,7 +121,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | the slot pool's holders, read without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
-| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify), and the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
+| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag whenever the milestone exists (rule O4; also while a stored record waits on a `tag-contains` condition, even when the milestone does not qualify), and a list of the milestone's closed issues (`--json closedAt`, limit 200) for the oldest `closedAt` (null on a full list of 200 or a failed read; rule O5), both skipped in a GitHub backoff; the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | the records are in 3.3 |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records |
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
@@ -2215,6 +2215,18 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   decides whether to cut the release now or `hold` until the next hour, or until an issue the review has not seen starts waiting (the action's reason is then `task release: #N started waiting`), and cuts the release with its standing
   authority (PR #634, `27a13ce`). After a `done` answer (the judge started a release) the loop sends no release review until a newer tag is seen (the tag view's newest tag, else the release read's) or `releaseInProgress` has passed since the task ended; an entry tagged `unknown` ends only by the window, `none` once any tag is known. The suppression records one skip per held pass (rule O3, `release in progress: <key> answered done at <ISO>, tag <tag>; until a newer tag or <ISO>`). A `hold`, `failed` or timed-out task starts none. The key's and field's `tag` is the newest known tag, and `oldest` is omitted when that tag differs from the release read's. "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues.
+- **The release log** has two producers, both opt-in with the Next milestone (a repo without one logs
+  nothing). O4 logs each new release tag (the newest tag the milestone reads hold) once, through
+  `callum-flow-released <tag> --repo R --source <loop|workflow>`: `loop` when the ledger holds a
+  `done`-answered release task keyed on the previous released tag (the tag of the newest done
+  `released` entry, else of the newest done/done release task that differs from the new tag), else
+  `workflow`. The `released` action is keyed `released:<repo>:<tag>` and held in a GitHub backoff. An
+  image without the tool ends it done with a summary, and a usage error (exit 2) is never retried.
+  O5 logs one `milestone_state` event whenever the milestone's reading (closed, open, oldest closed
+  issue, last tag, expected size, holding) differs from the last one logged, keyed
+  `milestone-state/<fingerprint>/<base-36 end of the newest done entry, or 0>`; a reading that comes back is
+  logged again. `holding` and `hold_reason` come from the newest release task when it answered `hold` on
+  the newest tag.
 
   A merged issue that comes back open would hold Next forever (a closed record is absorbing and no
   `ready` label brings it back). Under O3, when the milestone reading (taken after the record closed)
@@ -2462,7 +2474,7 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 | `pool` | `treehouse status --json` from the main checkout: the slots and who holds them. It does no reflog or status read of a slot (2.4 `leases`) | every pass | slot capacity (10.1) |
 | `checkout` | `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, then `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no`, from the main checkout (it takes no index lock and ignores untracked files). A missing origin/HEAD or a failed status is `{ error }`, whose text points at `git remote set-head origin --auto` | `checkoutEveryMs` | the main-checkout tripwire (10.7) |
 | `agents` | `$.agent.list()`, read once per pass, filtered to the ids in the ledger | every pass | lost-agent detection (13.7.5) |
-| `milestone` | `callum-flow-milestone show next` | every `milestoneEveryMs` (10 min) | rule `O3`; absent means not opted in; while it qualifies, `gh` also reads the last release tag and the oldest merge since it (O3 fields) |
+| `milestone` | `callum-flow-milestone show next` | every `milestoneEveryMs` (10 min) | rules `O3`, `O4`, `O5`; absent means not opted in; while it qualifies, `gh` also reads the last release tag and the oldest merge since it (O3 fields); whenever it exists, `gh release view` reads the newest tag and a list of the milestone's closed issues (`--json closedAt`, limit 200) the oldest `closedAt` (null on a full list of 200 or a failed read), both skipped in a GitHub backoff |
 | ledger | act mode: the ledger the module keeps (13.7.1), from `$.store`; when the store holds none, rebuilt from 7 days of events (13.7.5). Observe mode: derived from the device's own events in the `facts` window | every pass | everything |
 | control | `<loop dir>/control.json`, field by field (13.4.3) | every pass | rule `G4` |
 | GitHub backoff | act mode: `$.store` (`backoff:<repo>`) | every pass | 13.10 item 2 |
@@ -3546,7 +3558,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-Twenty-three rules, by id.
+Twenty-five rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3571,6 +3583,8 @@ Twenty-three rules, by id.
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour (or, with waiting issues, one that saw them all), and no `done`-answered release is in progress (`releaseInProgressMs`, skip `release in progress: ...`); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>` (plus `:w<N>.<N>` when issues wait), fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
+| O4 | release logged | the milestone exists and the newest known tag has no done `released:<repo>:<tag>` entry | a free `released` action (`callum-flow-released`), source `loop` or `workflow` (11); held in a GitHub backoff |
+| O5 | milestone state | the milestone exists and its reading differs from the last logged (the newest done `milestone-state/` entry's fingerprint) | a free `event` of `milestone_state`, key `milestone-state/<fingerprint>/<last>` (11) |
 | M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
 | N1 | settings changed | an acting pass whose settings snapshot differs, leaf by leaf, from the one the store kept (`settings:<repo>`); none when no valid snapshot was kept | a free `event` of `settings_changed` per changed leaf, key `settings/<key>/<snapshot time, base36>`, `who` from the config ops since (`settings-ops:<repo>`), then the layer; at most 50 per pass, the rest named in a skip line |
 | F1 | flake bug | the `flakes` source shows a test with `flakeBugMin` flakes in the last `flakeWindowDays` and no open bug carrying its marker; or a flake of a test with an open bug that is not on it; or a `flake-bug` entry done with no tell yet | `flake-bug` (one bug, `ready` only under `flakeBugReadyCap`), a `comment` for each later flake, and `tell(flake-bug)` once per bug (8.5) |
@@ -4148,9 +4162,10 @@ still accepts them in a settings file, and they have no effect.
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
 | `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>` | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
+| `released` | free | `callum-flow-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
 
-14 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
+15 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
 command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other
 ban of the foundation (13.11). `rerun` is banned there otherwise, so `gh run rerun` is allowed
 deliberately, as one argv.
@@ -4172,11 +4187,13 @@ deliberately, as one argv.
 | follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
+| released | `released:<repo>:<tag>` |
+| milestone state | `milestone-state/<fingerprint>/<base-36 end of the newest done entry, or 0>` |
 | main state | `main/<last>/<current>`, each a state key `<head>.<workflows>.<deployments>` (8 hex digits each) or `none` before the first |
 | flake bug | `flake-bug/<hash>/<first flake event id>` (the bug), `flake-bug/<hash>/c/<flake event id>` (a comment on it); its tell `tell:flake-bug:<bug number>` |
 | heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-15 families of the loop's own, plus the foundation's 5.
+17 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 

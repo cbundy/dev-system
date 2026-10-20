@@ -44,6 +44,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'ci-rerun',
   'queue-update',
   'queue-merge',
+  'released',
 ]
 
 // The executor breaker (v2 SPEC 13.11.4): three failures in a row of one kind hold that kind this long.

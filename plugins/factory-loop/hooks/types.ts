@@ -132,7 +132,8 @@ export type AgentView = { id: string; type: string; status: AgentStatus }
 
 export type Bump = 'patch' | 'minor' | 'major'
 // openIssues: the numbers of the open issue lines (not PRs), in the order listed
-export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null }
+// oldestClosedAt: when the oldest closed issue of the milestone closed (ISO); absent: not read; null: none, the list was full, or the read failed
+export type Milestone = { open: number; closed: number; openIssues: number[]; expected: Bump | null; oldestClosedAt?: string | null }
 // ReleaseInfo: the last release tag (null: the repo has no release yet) and when the oldest merge
 // into the default branch since that tag happened (null: unknown or none)
 export type ReleaseInfo = { tag: string | null; oldest: Ms | null }

@@ -286,8 +286,9 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
     const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
     const both = planV2(release, cfg)
-    expect(both.actions.map(a => a.kind)).toEqual(['task', 'title'])
-    expect(both.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: this pass starts task:release:unknown:2026-10-13T03 first' })
+    // the release log (O4, O5) writes beside the review: it holds nothing back
+    expect(both.actions.filter(a => a.rule !== 'O4' && a.rule !== 'O5').map(a => a.kind)).toEqual(['task', 'title'])
+    expect(both.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: this pass starts task:release:unknown:2026-10-13T03, milestone-state/4d0a712f/0 first' })
     const running = entry('task:release:unknown:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
     const after = planV2({ ...release, ledger: [...release.ledger, running] }, cfg)
     expect(after.actions.some(a => a.kind === 'restart-self')).toBe(false)

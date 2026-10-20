@@ -1752,7 +1752,8 @@ for what a release carried, shipped in `/usr/local/share/dev-system/`) and write
 `callum-flow-event --type released` (override: `CALLUM_FLOW_EVENT_BIN`). A tag whose `released` event is
 already in the factory log is skipped on stderr with its event id (exit 0). `--dry-run` prints the payload
 and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
-2 usage error.
+2 usage error. The factory loop calls it on each new release tag of a repo with a Next release milestone
+(`--source loop` for a release its own release task cut, else `workflow`).
 For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line

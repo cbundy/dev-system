@@ -53,6 +53,18 @@ export function mainKey(last: string, current: string): string {
   return `main/${last}/${current}`
 }
 
+// releasedKey: a release tag logged (rule O4): released:<repo>:<tag>. The tag is the third segment.
+export function releasedKey(repo: string, tag: string): string {
+  return `released:${repo}:${tag}`
+}
+
+// milestoneStateKey: a change in the milestone's reading (rule O5): milestone-state/<fingerprint of the
+// reading>/<base-36 end of the newest done entry, or 0>, so the ledger makes each change once and a
+// reading that comes back is logged again.
+export function milestoneStateKey(fingerprint: string, lastEndedAt: number): string {
+  return `milestone-state/${fingerprint}/${lastEndedAt.toString(36)}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`

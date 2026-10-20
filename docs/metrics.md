@@ -1549,9 +1549,10 @@ ORDER BY 1, 3 DESC, 2, 4, 5, 6;
 
 ## 10. Releases
 
-Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
-writes them yet, so the queries return no rows until a producer does. Count a release once by
-`(repo, tag)`.
+Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
+factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, and rule
+O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
+11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
 
 Releases per week and the pull requests each carried:
 
