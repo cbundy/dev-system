@@ -488,6 +488,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(input.factsShadow === undefined ? {} : { factsShadow: input.factsShadow }),
   }
   if (workspace !== undefined) v2.workspace = workspace
+  if (rt.memoryBytes !== undefined) v2.memoryBytes = rt.memoryBytes
   v2.windDown = await readWindDown(input.io, rt, now)
   return { v2, heads: prs.heads }
 }

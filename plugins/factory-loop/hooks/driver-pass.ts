@@ -16,6 +16,7 @@ import type { Snapshot } from './settings-snapshot'
 import { digestOf } from './state'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
+import { effectiveCap } from './v2/capacity'
 import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
 import { opsFrom } from './v2/rules-settings'
@@ -217,6 +218,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       await agentModelsOf(path => text($, path), rt.pluginRoot),
       { implementerOpusPct: await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT'), designSessionPct: await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT') },
       state.now,
+      effectiveCap(rt.config, rt.memoryBytes ?? null, state.v2?.interventions.gates),
     )
     problems.push(...(await writeSnapshot({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, snap)))
   } catch (e) {
@@ -393,6 +395,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
+    cap: result.cap === undefined ? undefined : { effective: result.cap.effective, configured: result.cap.configured, ceiling: result.cap.ceiling, memoryBytes: result.cap.memoryBytes, estimateBytes: result.cap.estimateBytes, estimateSource: result.cap.estimateSource },
     rails: railReasons.length > 0 ? railReasons : undefined,
     ledgerSource: act ? observed.ledgerSource : undefined,
     breaker: breaker === null ? undefined : { since: new Date(breaker.since).toISOString(), until: new Date(breaker.until).toISOString(), passes: breaker.passes },

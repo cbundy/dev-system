@@ -1809,7 +1809,7 @@ agents from its timer (the spike notes, above).
   `treehouse status --json`. It never infers a slot's owner from reflogs.
 - **W1, lease.** A record that needs a slot and has none: a queued record (resumes first, by park
   time, then new claims, by claim time) when the records in designing to merge-queue number fewer
-  than `maxInFlightIssues` (K), free slots exceed `worktreeReserve`, and the tier allows the class
+  than the effective cap (K: `maxInFlightIssues`, or the memory ceiling when that is lower, 13.4.2), free slots exceed `worktreeReserve`, and the tier allows the class
   of the state the lease leads to; or a record in a slot state whose lease vanished (it already
   counts in flight). The action is `slot` op `lease`: `factory-slot lease <N> <life>`, which runs
   `treehouse get --lease --lease-holder factory-loop:<N>:<life> --base <default> --json` and
@@ -2651,8 +2651,24 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `checkoutEveryMs` | `5m` | how often the main-checkout tripwire reads the checkout (10.7) |
 | `slowGapMs` | `10m` | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `maxInFlightIssues` | 3 | a cap on this device's live issues (K, further bounded by the memory ceiling below; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `slotMemoryMiB` | `auto` | the memory one slot is assumed to use, `auto` or a whole number of at least 1 (`next-pass`). `auto` is the p90 (nearest rank) of `memPeakBytes - memStartBytes` over the companion's gate lines of the window that carry both, each run once per (issue, life, seq, startedAt), once at least 3 such runs exist; with fewer it is 3072 MiB (the agent session plus one full stop gate; the plant-console figure of 12.9 GB held 3 at a time without an OOM kill). A set number wins. Shown beside the estimate's source: `setting`, `measured` or `default` |
+| `memoryReserveMiB` | 2048 | the container's memory kept free of slots, a whole number of at least 0 (`next-pass`) |
 | `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
+
+The memory ceiling (`hooks/v2/capacity.ts`). The loop reads the container's memory once per process
+beside the CPU count: the cgroup's `memory.max` in bytes, or `/proc/meminfo` `MemTotal` when that is
+`max` or absent; unreadable is `memoryBytes: null`, which means no ceiling. The ceiling is
+`max(1, floor((memoryBytes - reserve) / estimate))`, and the effective cap is
+`min(maxInFlightIssues, ceiling)`, a null on either side dropping that side (both null: no cap; a
+configured 0 stays 0). The claim rule (S1) and the lease rule (W1) hold to the effective cap; the skip text
+names the bound that held: `capacity: 3 of 3 queued or in flight (memory ceiling: 12.9 GiB, 3.0 GiB per
+slot, measured)` when the ceiling is the lower bound, the text above unchanged when the configured cap is.
+The pass log's `cap` field is `{effective, configured, ceiling, memoryBytes, estimateBytes,
+estimateSource}`. When `maxInFlightIssues` is above the ceiling, the notice `capacity` tells the owner
+once per (configured, ceiling) pair (key `tell:capacity:<configured>:<ceiling>`), naming the memory, the
+reserve, the estimate and its source, and the effective cap. The observe step's PR read budget stays the
+configured cap: it bounds reads of records already held and decides no claim.
 | `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
 | `conflictFixCap` | 5 | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
 | `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
@@ -3429,7 +3445,7 @@ with no doubled or trailing `/` (`contract.mjs` `loopDirOf`):
   directives `serial`, `noNewWork` and `usageOverride` (`{untilPct, expiresAt}` while live, else
   null); `layers` gives the source of each leaf key (`default`, `repo`, `workspace`, `plugin`,
   `env` or `directive`; an object-valued key such as `stateTimeoutMs` is one `parent.sub` key per
-  entry); `derived` holds `gateConcurrency`, `cpus`, the agents' `models` and the two experiment
+  entry); `derived` holds `gateConcurrency`, `cpus`, `memoryBytes` and `effectiveCap` (integers or null; the slot estimate drifts each pass and is not kept), the agents' `models` and the two experiment
   shares (null when unset or unreadable); `problems` is what the loader left out. No secret is
   written. A failed write is a `settings snapshot:` problem in the decision line, never a failed pass;
 - the trace files (`trace-YYYY-MM-DD.jsonl`), in trace mode only, kept under `traceMaxBytes` in
@@ -4233,6 +4249,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `gateTimeoutMs` | `10m` in all | 10.6 |
 | `gateConcurrency` | `auto` (`max(1, floor(cpus / 8))`) | 10.6 |
 | `gateWaitTimeoutMs` | `30m` in all | 10.6 |
+| `slotMemoryMiB`, `memoryReserveMiB` | `auto`, 2048 | 13.4.2 |
 
 The foundation's settings (13.4) also apply: `maxInFlightIssues` (K; default 3), `worktreeReserve`,
 `poolSize`, `reviewFixCap` (`fixCap`), `retryBackoffMs` and `maxAttempts` (for effects),
@@ -4334,6 +4351,7 @@ Notices (TELL kinds), owner items first:
 | `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |
 | `flake-bug` | no | F1: a flake bug was filed (or found) for a test; names the test, its flake count and window, the bug, and whether it was readied or held by `flakeBugReadyCap`, whose owner step is to add `ready` (8.5) |
 | `actions-resumed` | no | 8.5: a job started after a refusal spell opened; the spell ends and the refused runs are re-run once |
+| `capacity` | no | S1: `maxInFlightIssues` is above the memory ceiling (13.4.2); once per (configured, ceiling) pair, naming the memory, the reserve, the estimate and its source, and the effective cap |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
 14 kinds of the loop's own, 9 of them owner items, plus the foundation's.

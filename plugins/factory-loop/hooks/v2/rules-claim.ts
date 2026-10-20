@@ -22,6 +22,7 @@
 // Pure: the time is state.now.
 import { gate, skip, wake, want } from '../foundation'
 import type { IssueView, LedgerEntry, Ms } from '../types'
+import { capOf, capText } from './capacity'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
 import { failedLivesBefore, livesBefore } from './lives'
@@ -253,7 +254,8 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     ...ranked.map((r): [number, string, ScoreResult] => [r.issue, scoreReason(r), { score: r.score, factors: r.factors }]),
   ]
   const held = live.filter(r => r.state !== 'parked' && r.state !== 'waiting').length + inFlight.size
-  const cap = config.maxInFlightIssues
+  const capInfo = capOf(ctx)
+  const cap = capInfo.effective
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
   let started = 0
   // the starved verdict (rules-starved.ts): true while every queue issue ends at a claim filter
@@ -297,7 +299,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     if (control.noNewWork) limit = 'owner: no new work'
     else if (control.only.length > 0 && !only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
     else if (tier === 'stop-new' || tier === 'stop-all') limit = `tier ${tier}`
-    else if (cap !== null && held + started >= cap) limit = `capacity: ${held + started} of ${cap} queued or in flight`
+    else if (cap !== null && held + started >= cap) limit = capText(capInfo, held + started, 'queued or in flight')
     else if (control.serial && held + started > 0) limit = 'owner: one at a time'
     else if (tier === 'slow' && started > 0) limit = 'slow: one claim per pass'
     else if (tier === 'slow' && lastClaim > 0 && state.now - lastClaim < config.slowGapMs) limit = 'slow: too soon after the last claim'

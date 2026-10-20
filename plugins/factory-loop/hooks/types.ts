@@ -4,6 +4,7 @@
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
 import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { CapInfo } from './v2/capacity'
 import type { QueueScoreWeights, ScoreResult } from './v2/score'
 
 export type Ms = number
@@ -400,6 +401,10 @@ export type Config = {
   // for its turn (v2 SPEC 10.6)
   gateConcurrency: 'auto' | number
   gateWaitTimeoutMs: Ms
+  // the memory one slot is assumed to use, in MiB: 'auto' (measured from the gate runs, else a default)
+  // or a whole number of at least 1; and the memory kept free of slots, in MiB (v2/capacity.ts)
+  slotMemoryMiB: 'auto' | number
+  memoryReserveMiB: number
 }
 
 export type AnswerChannel = 'script' | 'tool' | 'text'
@@ -453,6 +458,8 @@ export type PlanResult = {
   capped: string[]
   // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
+  // the cap the pass held claims and leases to; absent: the pass planned no v2 rules
+  cap?: CapInfo
   // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
   starved?: boolean | null
 }

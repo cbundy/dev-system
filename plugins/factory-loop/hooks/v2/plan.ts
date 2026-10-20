@@ -10,6 +10,8 @@
 // be read, the record's, slot and queue rules plan nothing (G2).
 import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } from '../foundation'
 import type { Config, PlanResult, State } from '../types'
+import { capOf, capacityTell } from './capacity'
+import type { CapInfo } from './capacity'
 import { reconcile } from './reconcile'
 import { refusedRules } from './rules-refused'
 import { releaseLogRules } from './rules-release-log'
@@ -36,6 +38,7 @@ export function planV2(state: State, config: Config): PlanResult {
   const wd = windDownOf(state, config)
   let counts: { counts: string; after: string[] } | null = null
   let starved: boolean | null | undefined
+  let cap: CapInfo | undefined
   if (blind) {
     blindPass(base)
   } else if (state.v2 === undefined) {
@@ -67,6 +70,8 @@ export function planV2(state: State, config: Config): PlanResult {
     restartTells(ctx)
     fleetTells(ctx)
     workspaceTell(ctx)
+    capacityTell(ctx)
+    cap = capOf(ctx)
     windDownTells(ctx, wd)
     counts = stateTitle(ctx)
   }
@@ -90,7 +95,7 @@ export function planV2(state: State, config: Config): PlanResult {
   if (titleDue(state, config, title)) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   // the restart ends the session, so it goes after everything else, the title included
   if (restart !== null) actions.push(restart)
-  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap, ...(starved === undefined ? {} : { starved }) }
+  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap, ...(cap === undefined ? {} : { cap }), ...(starved === undefined ? {} : { starved }) }
 }
 
 // What the decision log says of a plan's transitions: the issue, the row, its event, and the

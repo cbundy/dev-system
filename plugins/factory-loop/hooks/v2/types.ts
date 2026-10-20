@@ -16,6 +16,7 @@ import type { FactsShadow } from './sources-facts'
 import type { FlakesRead } from './sources-flakes'
 import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
+import type { CapInfo } from './capacity'
 import type { WorkspaceRead } from './workspace'
 
 // --- states, steps and the record (v2 SPEC 3.1, 3.2) ------------------------------------------------
@@ -419,7 +420,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, schema-behind, pass-error) stay.
 export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused'] as const
-export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done', 'flake-bug', 'actions-resumed'] as const
+export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done', 'flake-bug', 'actions-resumed', 'capacity'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
@@ -548,6 +549,8 @@ export type V2State = {
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead
+  // the container's memory in bytes (config.ts gateLimits); null: not readable; absent: not read (capacity.ts)
+  memoryBytes?: number | null
   // the wind-down request, stop-now file and last status (10.11; wind-down.ts); absent when not read
   windDown?: WindDownRead
   // when the current starved spell began (the store's `starved:<repo>`); absent: no spell (S1)
@@ -562,7 +565,7 @@ export type V2State = {
 export type SettingsOp = { key: string; by: 'person' | 'judge'; at: Ms }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
-export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict }
+export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict; cap?: CapInfo }
 
 // --- what the executors may change beside the ledger (v2 SPEC 3.3, 4.6) -------------------------------
 

@@ -94,6 +94,8 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0) · observe'])
     expect(h.passes()).toHaveLength(1)
     expect(h.last()).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
+    // the cap the pass held to, with the container's memory (the host's 64 GiB) and the estimate behind the ceiling
+    expect(h.last().cap).toEqual({ effective: 3, configured: 3, ceiling: 20, memoryBytes: 64 * 1024 ** 3, estimateBytes: 3072 * 1024 ** 2, estimateSource: 'default' })
     // parked #45 holds a live claim of this device with no record: the ghost is planned for release (R1), and not run
     expect(h.last().actions).toEqual([expect.objectContaining({ kind: 'label', rule: 'R1', issue: 45 })])
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
@@ -1519,11 +1521,15 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect(h.store.get(`settings-ops:${REPO}`)).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', by: 'person' })])
     await clock.advance(61_000)
     const logged = settingsEvents().map(s => JSON.parse(s.argv[s.argv.indexOf('--data') + 1] ?? '{}') as Record<string, unknown>)
-    expect(logged).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' })])
+    // the cap in force follows the setting (the container's memory ceiling is far above it), and that is its own change
+    expect(logged).toEqual([
+      expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' }),
+      expect.objectContaining({ key: 'derived.effectiveCap', old_value: 3, new_value: 7 }),
+    ])
     expect((h.store.get(`settings:${REPO}`) as { settings: Record<string, unknown> }).settings.maxInFlightIssues).toBe(7)
     // the pass after it has no change to log, and the op older than the snapshot is dropped
     await clock.advance(61_000)
-    expect(settingsEvents()).toHaveLength(1)
+    expect(settingsEvents()).toHaveLength(2)
     expect(h.store.get(`settings-ops:${REPO}`)).toEqual([])
   })
 

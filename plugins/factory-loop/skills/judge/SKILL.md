@@ -215,6 +215,9 @@ Owner items (the title counts them until resolved):
 Notices:
 - `actions-resumed` (minutes, pr; detail: the job that started): GitHub starts CI jobs again, so the refusal
   spell ended and the loop re-runs each refused run once. Lead with `[INFO]`; nothing for the owner to do.
+- `capacity` (configured, ceiling, effective): `maxInFlightIssues` is above what the container's memory holds
+  at the per-slot estimate, so the loop holds `effective` issues at once. Lead with `[INFO]`; the owner may
+  raise the container's memory or set `slotMemoryMiB` or `memoryReserveMiB`.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this

@@ -44,7 +44,7 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
       const parked = parkedOf(S.lastState?.v2?.records)
-      const view = viewOf(rt)
+      const view = viewOf(rt, S.lastState?.v2?.interventions.gates)
       const from = agentId === undefined ? { last, parked, view } : { last, agentId, parked, view }
       const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)

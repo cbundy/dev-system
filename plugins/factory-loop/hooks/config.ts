@@ -140,6 +140,8 @@ export const DEFAULT_CONFIG: Config = {
   gateTimeoutMs: 10 * MIN,
   gateConcurrency: 'auto',
   gateWaitTimeoutMs: 30 * MIN,
+  slotMemoryMiB: 'auto',
+  memoryReserveMiB: 2048,
 }
 
 // The CPUs one full stop gate is assumed to use: scripts/test.sh sizes its pool to the whole
@@ -151,16 +153,61 @@ export const GATE_CPUS = 8
 // reads it. Anything but a positive integer counts as 1.
 let cpusRead: Promise<number> | undefined
 
-// gateLimits: what the Runtime carries for the stop gate: the CPU count and the resolved concurrency.
+// The container's memory, read once per process beside the CPU count: one command prints the cgroup's
+// memory.max and /proc/meminfo as JSON (an unreadable file as ""), which parseMemory
+// reads. Anything unreadable is null: no memory ceiling.
+const MEMORY_READ = `const r=p=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};console.log(JSON.stringify({max:r('/sys/fs/cgroup/memory.max'),info:r('/proc/meminfo')}))`
+let memoryRead: Promise<number | null> | undefined
+
+const wholeBytes = (text: string): number | null => {
+  const t = text.trim()
+  if (!/^[0-9]+$/.test(t)) return null
+  const n = Number(t)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+// parseMemory: the container's memory in bytes: the cgroup's memory.max, or /proc/meminfo's MemTotal
+// (kB) when that is `max` or absent. null: neither reads, which means no memory ceiling.
+export function parseMemory(maxText: string | null, meminfoText: string | null): number | null {
+  const max = maxText === null ? null : wholeBytes(maxText)
+  if (max !== null) return max
+  const total = meminfoText?.match(/^MemTotal:\s+([0-9]+)\s*kB\s*$/m)
+  if (total?.[1] === undefined) return null
+  const bytes = Number(total[1]) * 1024
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null
+}
+
+// parseMemoryRead: the output of the one command that prints both files as JSON
+// (`{"max": "...", "info": "..."}`); anything else gives null.
+export function parseMemoryRead(stdout: string): number | null {
+  try {
+    const o: unknown = JSON.parse(stdout)
+    if (typeof o !== 'object' || o === null) return null
+    const { max, info } = o as Record<string, unknown>
+    return parseMemory(typeof max === 'string' ? max : null, typeof info === 'string' ? info : null)
+  } catch {
+    return null
+  }
+}
+
+// readMemory: the container's memory in bytes; null when the command fails or prints nothing readable.
+export function readMemory(run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>): Promise<number | null> {
+  return run(['node', '-e', MEMORY_READ])
+    .then(r => (r.exitCode === 0 ? parseMemoryRead(r.stdout) : null))
+    .catch(() => null)
+}
+
+// gateLimits: what the Runtime carries for the stop gate and the memory ceiling: the CPU count, the resolved concurrency and the container's memory.
 export async function gateLimits(
   run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>,
   config: Pick<Config, 'gateConcurrency'>,
-): Promise<{ cpus: number; gateConcurrency: number }> {
+): Promise<{ cpus: number; gateConcurrency: number; memoryBytes: number | null }> {
   cpusRead ??= run(['node', '-e', 'console.log(os.availableParallelism())'])
     .then(r => (r.exitCode === 0 && /^[1-9][0-9]*$/.test(r.stdout.trim()) ? Number(r.stdout.trim()) : 1))
     .catch(() => 1)
   const cpus = await cpusRead
-  return { cpus, gateConcurrency: resolveGateConcurrency(config.gateConcurrency, cpus) }
+  memoryRead ??= readMemory(run)
+  return { cpus, gateConcurrency: resolveGateConcurrency(config.gateConcurrency, cpus), memoryBytes: await memoryRead }
 }
 
 // resolveGateConcurrency: the whole number of gates that may run at once; `auto` is
@@ -331,6 +378,12 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'gateConcurrency') {
         if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
         else bad(raw, value, 'auto or a whole number of at least 1')
+      } else if (key === 'slotMemoryMiB') {
+        if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
+        else bad(raw, value, 'auto or a whole number of at least 1')
+      } else if (key === 'memoryReserveMiB') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
+        else bad(raw, value, 'a whole number of at least 0')
       } else if (key.endsWith('Model')) {
         if (MODELS.some(m => m === value)) out[key] = value
         else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
