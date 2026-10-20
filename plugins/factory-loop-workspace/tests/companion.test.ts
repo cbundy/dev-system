@@ -669,7 +669,7 @@ describe('prompts nobody answers', () => {
   test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
     // #674: `rm -f $D/*` waited for ever on a prompt nobody answered
     const w = world(on)
-    w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'permission-check' }
+    w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'host' }
     await $.agent.spawn(spawn(BUILD))
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
     const r = await check($, RM)

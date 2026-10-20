@@ -115,7 +115,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | Source | Command | Cadence | Notes |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses. `nomistakes.runs` is optional in that tool, so no-mistakes data can never blind the loop |
-| `facts` | `dev-query` with `EVENTS_SQL` (`eventsSource` `new`: `dev-query --factory` with `NEW_EVENTS_SQL`, 3.3) | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
+| `facts` | `dev-query --factory` with `NEW_EVENTS_SQL` (`eventsSource` `old`: `dev-query` with `EVENTS_SQL`, 3.3) | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
 | `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
@@ -333,7 +333,7 @@ type IssueRecord = {
   carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` parses it with
   `events.ts`. A step in flight is not rebuilt: S2 starts the same attempt again, and an
   agent step first looks for an answer already recorded for its key (10.8).
-- **Source switch.** The setting `eventsSource` (`old`, `new`, `shadow`; default `shadow`; next pass; an
+- **Source switch.** The setting `eventsSource` (`old`, `new`, `shadow`; default `new`; next pass; an
   invalid value is a config problem and reads `old`) picks where the rebuild reads
   (`hooks/v2/sources-records.ts`). `old` reads `factory.events` as above. `new` reads this device's and
   repo's `transition` events from `factory.event_store` (`dev-query --factory --csv`, `NEW_REBUILD_SQL`),
@@ -1265,9 +1265,8 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   stuck issues (query 6). Lead time (query 1) has no `run` stage for v2 issues; its v2 twin uses
   the first `transition` to reviewing.
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
-  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`. Under
-  `eventsSource` `new` it reads them from the new store instead, as `transition.v1` data through the
-  shared reader, and under `shadow` (the default) it reads both and writes a `shadow_read` (3.3). The facts and the ledger rebuild
+  (in `derive.ts`) gains the three states; `record.ts` parses their notes with `events.ts`. By default (`eventsSource` `new`) it reads them from the new store, as `transition.v1` data through the
+  shared reader, `old` is the way back, and under `shadow` (opt-in) it reads both and writes a `shadow_read` (3.3). The facts and the ledger rebuild
   follow the same switch (3.3).
 
 ## 8. Design briefs and review
@@ -2455,7 +2454,7 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 | Source | Command | Cadence | Required for |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
-| `facts` | one `dev-query --csv` call over 3 days of events (`EVENTS_SQL` in `derive.ts`): the latest `delegated` note per live issue, and the v2 states (7.1); from the new store under `eventsSource` `new` (`NEW_EVENTS_SQL`, 3.3) | every pass | v2's facts (2.4) |
+| `facts` | one `dev-query --factory --csv` call over 3 days of events (`NEW_EVENTS_SQL`, 3.3): the latest `delegated` note per live issue, and the v2 states (7.1); from the old log under `eventsSource` `old` (`EVENTS_SQL` in `derive.ts`) | every pass | v2's facts (2.4) |
 | `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
 | `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
 | `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues, and last the open issues the read issues block (`blockingList`) (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |

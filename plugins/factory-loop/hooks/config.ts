@@ -87,7 +87,8 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
-  eventsSource: 'shadow',
+  // new since #978 (was shadow); `/factory config set eventsSource old` is the way back, taken on the next pass
+  eventsSource: 'new',
   // v2 (v2 SPEC appendix A)
   stateTimeoutMs: {
     design: 45 * MIN,

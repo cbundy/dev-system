@@ -1,7 +1,7 @@
 // The facts and the ledger rebuild's read of the event log (docs/factory-loop/v2/SPEC.md 3.3) and its
 // source switch `eventsSource`, the same switch as the record rebuild's (sources-records.ts): `old` reads
-// factory.events (EVENTS_SQL), `new` reads factory.event_store (NEW_EVENTS_SQL), and `shadow` (the
-// default) decides on the old read and compares it with the new one, once per load and then at most
+// factory.events (EVENTS_SQL), `new` reads factory.event_store (NEW_EVENTS_SQL), and `shadow` (opt-in; `new`
+// is the default since #978) decides on the old read and compares it with the new one, once per load and then at most
 // hourly. Four things are compared: the newest `reclaimed` and the newest `ready` per issue
 // (facts.reclaimed, facts.readyAt), the ledger
 // deriveLedger rebuilds for this device, and the once keys v2's `logged` reads. The compare is written

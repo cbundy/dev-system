@@ -772,7 +772,7 @@ compare can be told from one the floor cut most of; the query returns the newest
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
-loop setting `eventsSource` `shadow`, the default, once per load and then at most hourly; `differences` counts issues whose
+loop setting `eventsSource` `shadow` (opt-in; the default is `new`), once per load and then at most hourly; `differences` counts issues whose
 rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` and the newest `ready` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
@@ -1725,7 +1725,7 @@ ORDER BY device;
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
-kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`). Per tool since a given time:
+kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`, written only when set to `shadow`, as the claim tools' are). Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
 
