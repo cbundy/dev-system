@@ -5,7 +5,7 @@ import { GATE_CPUS, resolveGateConcurrency, shortDuration } from '../hooks/confi
 import { configText, sourceOf, viewOf } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
-import { SETTING_EFFECT, checkSetting } from '../hooks/config-keys'
+import { SETTING_EFFECT, checkSetting, editSetting, withoutSetting } from '../hooks/config-keys'
 import { helpText, parseOp, runOp } from '../hooks/control'
 import type { FileIo } from '../hooks/control'
 import { effectiveCap } from '../hooks/v2/capacity'
@@ -31,8 +31,8 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore',
-  'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore', 'intakeStamp', 'intakeAreas',
+  'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'intakeModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -88,6 +88,72 @@ describe('configText', () => {
     expect(fraction.ok ? '' : fraction.error).toContain('queueScore.bug: 1.5 is not a whole number')
     expect(checkSetting('queueScore', 5)).toMatchObject({ ok: false })
     expect(SETTING_EFFECT.queueScore).toBe('next-pass')
+  })
+
+  test('the intake settings (#995): off by default, shown with their sources; the three new weights show', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'intakeStamp')).toContain('off')
+    expect(line(def, 'intakeStamp')).toEndWith(' default')
+    expect(line(def, 'intakeAreas')).toContain('factory, product')
+    expect(line(def, 'intakeModel')).toContain('haiku')
+    expect(def).toContain('areaFactory 20 needsOwner 40 overlap 15')
+    const set = configText(view({}, { intakeStamp: 'on', intakeAreas: ['factory', 'product', 'docs'], queueScore: { overlap: 5 } }), control(), NOW)
+    expect(line(set, 'intakeStamp')).toContain('on')
+    expect(line(set, 'intakeStamp')).toContain('workspace')
+    expect(line(set, 'intakeAreas')).toContain('docs')
+    expect(set).toContain('overlap 5')
+    for (const key of ['intakeStamp', 'intakeModel', 'intakeAreas']) expect(SETTING_EFFECT[key as 'intakeStamp']).toBe('next-pass')
+  })
+
+  test('intakeStamp takes off or on; set then unset reads off again', () => {
+    expect(DEFAULT_CONFIG.intakeStamp).toBe('off')
+    const on = checkSetting('intakeStamp', 'on')
+    expect(on).toMatchObject({ ok: true, key: 'intakeStamp' })
+    const refused = checkSetting('intakeStamp', 'yes')
+    expect(refused).toMatchObject({ ok: false, error: 'intakeStamp: "yes" is not off or on. Not changed.' })
+    expect(loadConfig({ intakeStamp: 'yes' })).toMatchObject({ problems: ['intakeStamp: "yes" is not off or on'], config: { intakeStamp: 'off' } })
+    if (!on.ok) throw new Error('not ok')
+    const edited = editSetting(null, on, 'on')
+    if (!edited.ok) throw new Error('not ok')
+    expect(loadConfig(JSON.parse(edited.text)).config.intakeStamp).toBe('on')
+    expect(loadConfig(withoutSetting(JSON.parse(edited.text), on)).config.intakeStamp).toBe('off')
+  })
+
+  test('intakeAreas: distinct names holding factory and product; anything else is named and left out', () => {
+    expect(loadConfig().config.intakeAreas).toEqual(['factory', 'product'])
+    expect(checkSetting('intakeAreas', ['product', 'factory', 'docs-site'])).toMatchObject({ ok: true })
+    for (const bad of [['factory'], ['factory', 'product', 'factory'], ['factory', 'product', 'Docs'], ['factory', 'product', '1x'], ['factory', 'product', ''], 'factory', ['factory', 'product', 3]]) {
+      const r = loadConfig({ intakeAreas: bad })
+      expect(r.problems).toHaveLength(1)
+      expect(r.problems[0]).toContain('intakeAreas:')
+      expect(r.config.intakeAreas).toEqual(['factory', 'product'])
+      expect(checkSetting('intakeAreas', bad)).toMatchObject({ ok: false })
+    }
+    // the default list is copied, never shared
+    const a = loadConfig().config
+    a.intakeAreas.push('x')
+    expect(loadConfig().config.intakeAreas).toEqual(['factory', 'product'])
+  })
+
+  test('intakeModel: a model, never larger than triageModel; a larger one is named and triageModel is used', () => {
+    expect(loadConfig().config.intakeModel).toBe('haiku')
+    expect(loadConfig({ triageModel: 'sonnet', intakeModel: 'sonnet' })).toMatchObject({ problems: [], config: { intakeModel: 'sonnet' } })
+    const big = loadConfig({ triageModel: 'sonnet' }, { intakeModel: 'opus' })
+    expect(big.problems).toEqual(['intakeModel: opus is larger than triageModel sonnet; sonnet used'])
+    expect(big.config.intakeModel).toBe('sonnet')
+    // fable ranks largest
+    expect(loadConfig({ triageModel: 'opus', intakeModel: 'fable' }).config.intakeModel).toBe('opus')
+    expect(loadConfig({ triageModel: 'fable', intakeModel: 'fable' }).problems).toEqual([])
+    // checked after all layers: a larger triageModel in a later layer lets it stand
+    expect(loadConfig({ triageModel: 'haiku', intakeModel: 'sonnet' }, { triageModel: 'opus' }).problems).toEqual([])
+    expect(loadConfig({ intakeModel: 'gpt' }).problems).toEqual(['intakeModel: "gpt" is not sonnet, opus, haiku or fable'])
+  })
+
+  test('queueScore.areaFactory, needsOwner and overlap are settable one at a time', () => {
+    expect(checkSetting('queueScore.overlap', 5)).toMatchObject({ ok: true, key: 'queueScore', sub: 'overlap' })
+    expect(checkSetting('queueScore.areaFactory', 0)).toMatchObject({ ok: true })
+    expect(checkSetting('queueScore.needsOwner', -1)).toMatchObject({ ok: false })
+    expect(loadConfig({ queueScore: { overlap: 1.5 } }).problems).toHaveLength(1)
   })
 
   test('conflictFixCap defaults to 5, applies on the next pass and shows in the view', () => {

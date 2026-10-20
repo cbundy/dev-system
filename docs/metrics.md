@@ -783,7 +783,7 @@ GROUP BY device;
 S1 names the order a claim came from in its reason: `ready and unblocked (order: owner only)` or
 `(order: owner priority)` for the owner's lists, else `(order: score <n>: <factor> <+/-points>, ...)`
 (`score 0` when no factor scored). The factors are `priority-label`, `bug`, `unblocks`, `closes-epic`,
-`nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`. How many claims each order gave
+`nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, and, only while `intakeStamp` is on and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`. How many claims each order gave
 per day, grouped by the owner tiers and `score`, and which factors put the issues first, from the
 decision log (`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device); a loop
 before the score reads `label priority` and `number`, and groups apart:
@@ -841,6 +841,21 @@ FROM factory.event_log
 WHERE type = 'loop_passes' AND passes > 0
 GROUP BY plugin_version
 ORDER BY min(ts);
+```
+
+Which claims did a stamp factor move, and by how much? One row per factor per day from the `claimed`
+events' `factors`, with the claims it appeared in and its points (`area-factory`, `needs-owner`,
+`overlap`; a stamp factor that scored 0 is not listed, so the count is claims it moved):
+
+```sql
+SELECT date_trunc('day', c.ts) AS day, f->>'name' AS factor, count(*) AS claims, sum((f->>'points')::int) AS points
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+CROSS JOIN LATERAL jsonb_array_elements(s.data->'factors') f
+WHERE c.type = 'claimed' AND jsonb_typeof(s.data->'factors') = 'array'
+  AND f->>'name' IN ('area-factory', 'needs-owner', 'overlap')
+GROUP BY 1, 2
+ORDER BY 1, 2;
 ```
 
 ### Split trackers closed by the loop

@@ -6,6 +6,7 @@
 //
 // Pure: the time is ctx.now, and everything else is passed in.
 import type { IssueView, Ms } from '../types'
+import type { Stamp } from './stamps'
 import { sameLabel } from './types'
 
 // The weights (config.queueScore): whole numbers of at least 0; penalties are magnitudes.
@@ -22,6 +23,17 @@ export type QueueScoreWeights = {
   waitingCap: number
   failedLife: number
   failedLivesCap: number
+  areaFactory: number
+  needsOwner: number
+  overlap: number
+}
+
+// The intake stamp's facts (epic #995), given only while config.intakeStamp is on: the issue's
+// stamp (null: none), and the top-level paths of each live record's pushed head, by issue (a null
+// entry: the read failed; no entry: nothing in flight).
+export type IntakeCtx = {
+  stamp: (n: number) => Stamp | null
+  inFlightPaths: Readonly<Record<number, readonly string[] | null>>
 }
 
 export type ScoreCtx = {
@@ -34,6 +46,8 @@ export type ScoreCtx = {
   blocking: (n: number) => number[] | null
   // the issue's earlier lives that did not end merged, counted from the start of the current count
   failedLives: (n: number) => number
+  // absent: the switch is off, and the intake factors score nothing
+  intake?: IntakeCtx
 }
 
 export type ScoredFactor = { name: string; points: number }
@@ -92,6 +106,18 @@ export const FACTORS: Factor[] = [
     return { name: 'waiting', points: Math.min(ctx.weights.waitingCap, Math.floor((ctx.weights.waitingPerHour * Math.max(0, ctx.now - at)) / HOUR)) }
   },
   (issue, ctx) => ({ name: 'failed-lives', points: -Math.min(ctx.weights.failedLivesCap, ctx.weights.failedLife * ctx.failedLives(issue.number)) }),
+  (issue, ctx) => (ctx.intake === undefined || issue.labels === null || ctx.intake.stamp(issue.number) === null ? null : { name: 'area-factory', points: issue.labels.some(l => sameLabel(l, 'area:factory')) ? ctx.weights.areaFactory : 0 }),
+  (issue, ctx) => (ctx.intake === undefined || issue.labels === null || ctx.intake.stamp(issue.number) === null ? null : { name: 'needs-owner', points: issue.labels.some(l => sameLabel(l, 'needs-decision')) ? -ctx.weights.needsOwner : 0 }),
+  (issue, ctx) => {
+    const stamp = ctx.intake?.stamp(issue.number) ?? null
+    if (ctx.intake === undefined || stamp === null) return null
+    const others = Object.entries(ctx.intake.inFlightPaths).filter(([n]) => Number(n) !== issue.number)
+    // a record whose paths did not read says nothing; with none read the factor is not known
+    const read = others.flatMap(([, paths]) => (paths === null ? [] : [paths]))
+    if (read.length === 0) return null
+    const mine = new Set(stamp.touches.map(t => t.split('/')[0]))
+    return { name: 'overlap', points: read.some(paths => paths.some(p => mine.has(p.split('/')[0]))) ? -ctx.weights.overlap : 0 }
+  },
 ]
 
 // score: the sum of the factors' points, and the factors that scored, in list order.

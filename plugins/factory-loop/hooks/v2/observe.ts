@@ -31,6 +31,9 @@ import type { PrView, PrsRead, PrUnread } from './sources-prs'
 import { readRecords } from './sources-records'
 import type { FactsShadow } from './sources-facts'
 import type { RecordsShadow } from './sources-records'
+import { EMPTY_PATHS, readPaths } from './sources-paths'
+import type { PathsCache } from './sources-paths'
+import type { Stamps } from './stamps'
 import { readWorkspace } from './sources-workspace'
 import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
@@ -72,7 +75,7 @@ export type SourceCtx = {
 // holds none (a rebuild may fill it); error when the store could not be read or holds no stored
 // records under the key, so nothing is known of the records; files: the owner's files as the loop
 // last read or wrote them (7.2), absent or null when none are kept.
-export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; error: string | null }
+export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; stamps?: Stamps; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
 // the last rebuild, the comments read per issue read, the checkout R1's tripwire last settled on
@@ -103,10 +106,12 @@ export type V2Cache = {
   dualWrite: { at: Ms; read: DualWriteRead } | null
   // the flakes and flake bugs F1 reads (sources-flakes.ts)
   flakes: FlakesCache
+  // the top-level paths each pushed head changed, by `<issue> <head>` (sources-paths.ts)
+  paths: PathsCache
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES, paths: EMPTY_PATHS.cache }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -445,6 +450,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   for (const n of [...cache.comments.keys()]) if (!records.some(r => r.issue === n && r.state === 'parked')) cache.comments.delete(n)
   sources.comments = commentsOk ? { ok: true, at: now } : NOT_READ(blocked() ? 'GitHub rate limit' : 'a comment read failed')
 
+  // the paths each live record's pushed head changed (sources-paths.ts): only while intakeStamp is on
+  const inFlight = await readPaths(ctx, cache.paths, blocked)
+  cache.paths = inFlight.cache
+
   const facts = await readers.interventions({ ...ctx, heads: prs.heads })
   sources.interventions = facts.source
 
@@ -480,6 +489,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
     ...(cache.flakes.read === null ? {} : { flakes: cache.flakes.read }),
     changed: cache.changed,
+    ...(rt.config.intakeStamp === 'on' ? { stamps: stored?.stamps ?? {}, inFlightPaths: inFlight.paths } : {}),
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
     checkoutBase: cache.checkoutBase,

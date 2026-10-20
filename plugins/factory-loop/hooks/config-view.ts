@@ -212,6 +212,8 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('skipLabels', 'skipLabels', c.skipLabels.length === 0 ? 'none' : c.skipLabels.join(', '))),
         ...render({ label: 'queueScore', value: '', source: scoreFrom, ...(scoreFrom === 'mixed' && scoreChanged.length > 0 ? { note: scoreChanged.join('; ') } : {}) }),
         ...scoreLines,
+        ...render(row('intakeStamp', 'intakeStamp', c.intakeStamp)),
+        ...render(row('intakeAreas', 'intakeAreas', c.intakeAreas.join(', '))),
       ],
     ],
     [
@@ -237,6 +239,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('reviewer', 'reviewer', c.reviewer)),
         ...render(row('reviewerModel', 'reviewerModel', c.reviewerModel)),
         ...render(row('triageModel', 'triageModel', c.triageModel)),
+        ...render(row('intakeModel', 'intakeModel', c.intakeModel)),
         ...render({ label: 'gateCommands', value: c.gateCommands.length === 0 ? 'none' : '', source: src('gateCommands') }),
         ...c.gateCommands.map(cmd => clip(`    ${cmd}`)),
         ...render(ms('gateTimeoutMs')),

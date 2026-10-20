@@ -37,7 +37,7 @@ before(async () => {
   ({ DEFAULT_CONFIG } = await import(path.join(hooks, "config.ts")));
 });
 
-function drain(facts, weights, factors) {
+function drain(facts, weights, factors, labelsOf = (labels) => labels) {
   const set = new Set(facts.issues.map((i) => i.issue));
   const byNumber = new Map(facts.issues.map((i) => [i.issue, i]));
   const drained = new Set();
@@ -55,7 +55,7 @@ function drain(facts, weights, factors) {
         const sub = f.parent === null ? undefined : facts.subIssues[String(f.parent)];
         const view = {
           number: n,
-          labels: f.labels,
+          labels: labelsOf(f.labels),
           blockingList: blocks(n).filter(isOpen),
           parent: sub === undefined ? null : f.parent,
           siblings: sub === undefined ? null : sub.filter((s) => s !== n).map((s) => ({ number: s, open: isOpen(s) })),
@@ -90,4 +90,11 @@ test("backtest 2: the spike's weights with its size and health factors reproduce
     closesEpic: 25, nearlyClosesEpic: 10, epicStarted: 5, waitingPerHour: 0, failedLife: 0,
   };
   assert.deepEqual(drain(facts, spike, [...FACTORS, size, health]), read("result-all-ready.json").scored);
+});
+
+test("backtest 3: every issue carries area:factory and needs-decision, and the ctx has no intake: the order is backtest 1's", () => {
+  const facts = read("facts.json");
+  // the labels would score +20 and -40 with the switch on; with no intake in the ctx (the switch off) they score nothing
+  const labelled = (labels) => [...(labels ?? []), "area:factory", "needs-decision"];
+  assert.deepEqual(drain(facts, DEFAULT_CONFIG.queueScore, FACTORS, labelled), read("result-this-score.json").scored);
 });

@@ -10,6 +10,7 @@ import { failedLivesBefore } from '../hooks/v2/lives'
 import { releaseKey } from '../hooks/v2/release'
 import { FACTORS, claimableAt, compareRanked, score, scoreReason } from '../hooks/v2/score'
 import type { Factor, QueueScoreWeights, ScoreCtx } from '../hooks/v2/score'
+import type { Stamp } from '../hooks/v2/stamps'
 import { madeRecord } from '../hooks/v2/table'
 import type { IssueRecord } from '../hooks/v2/types'
 import { NOW, entry, issue } from './fixtures'
@@ -134,5 +135,67 @@ describe('failedLivesBefore', () => {
     expect(ghost).toBe(2)
     const rejected = entry(releaseKey(1, life(6), 'reject'), 'label', { issue: 1, rule: 'R1' })
     expect(failedLivesBefore([closed(1, 9, 'dropped'), closed(1, 8, 'dropped')], [rejected, release], 1)).toBe(1)
+  })
+})
+
+// --- the intake stamp's factors (#995) ----------------------------------------------------------------
+
+const STAMP: Stamp = { version: 'v1', area: 'factory', needsOwner: false, touches: ['plugins/factory-loop/hooks'], at: NOW, labels: [] }
+const intake = (stamps: Record<number, Stamp>, inFlightPaths: Record<number, string[] | null> = {}) => ({ stamp: (n: number) => stamps[n] ?? null, inFlightPaths })
+
+describe('the intake factors', () => {
+  test('they are the last three factors', () => {
+    expect(FACTORS).toHaveLength(10)
+  })
+
+  test('area-factory +20, needs-owner -40 and overlap -15 with the switch on; area-factory stacks on bug', () => {
+    const c = ctx({ intake: intake({ 1: STAMP }, { 2: ['docs'] }) })
+    expect(pointsOf(score(issue(1, { labels: ['ready', 'area:factory'] }), c))).toEqual({ 'area-factory': 20 })
+    expect(pointsOf(score(issue(1, { labels: ['ready', 'Area:Factory', 'bug'] }), c))).toEqual({ bug: 25, 'area-factory': 20 })
+    expect(score(issue(1, { labels: ['ready', 'area:factory', 'bug'] }), c).score).toBe(45)
+    expect(pointsOf(score(issue(1, { labels: ['ready', 'needs-decision'] }), c))).toEqual({ 'needs-owner': -40 })
+    // issue 3 has a stamp that touches plugins/, and issue 2 has plugins in flight
+    const o = ctx({ intake: intake({ 3: STAMP }, { 2: ['plugins', 'docs'] }) })
+    expect(pointsOf(score(issue(3, { labels: ['ready'] }), o))).toEqual({ overlap: -15 })
+    expect(scoreReason(score(issue(3, { labels: ['ready', 'area:factory'] }), { ...o, intake: intake({ 3: STAMP }, { 2: ['plugins'] }) }))).toBe('score 5: area-factory +20, overlap -15')
+  })
+
+  test('with intake absent (the switch off) each is null, whatever the labels and stored stamps', () => {
+    const [, , , , , , , area, owner, overlap] = FACTORS as Factor[]
+    const i = issue(1, { labels: ['ready', 'area:factory', 'needs-decision'] })
+    for (const f of [area, owner, overlap]) expect(f?.(i, ctx())).toBeNull()
+    expect(score(i, ctx())).toEqual({ score: 0, factors: [] })
+  })
+
+  test('no stamp, or labels not read: null, never a penalty', () => {
+    const [, , , , , , , area, owner, overlap] = FACTORS as Factor[]
+    const c = ctx({ intake: intake({}, { 2: ['plugins'] }) })
+    const i = issue(1, { labels: ['ready', 'area:factory', 'needs-decision'] })
+    for (const f of [area, owner, overlap]) expect(f?.(i, c)).toBeNull()
+    const stamped = ctx({ intake: intake({ 1: STAMP }, { 2: ['plugins'] }) })
+    expect(area?.(issue(1, { labels: null }), stamped)).toBeNull()
+    expect(owner?.(issue(1, { labels: null }), stamped)).toBeNull()
+  })
+
+  test('overlap ignores the issue\'s own record, counts once across several records, and is null when no other record\'s paths read', () => {
+    const [, , , , , , , , , overlap] = FACTORS as Factor[]
+    const i = issue(1)
+    const own = ctx({ intake: intake({ 1: STAMP }, { 1: ['plugins'] }) })
+    expect(overlap?.(i, own)).toBeNull()
+    const many = ctx({ intake: intake({ 1: STAMP }, { 2: ['plugins'], 3: ['plugins', 'docs'], 4: null }) })
+    expect(overlap?.(i, many)).toEqual({ name: 'overlap', points: -15 })
+    const failed = ctx({ intake: intake({ 1: STAMP }, { 2: null, 3: null }) })
+    expect(overlap?.(i, failed)).toBeNull()
+    const none = ctx({ intake: intake({ 1: STAMP }, {}) })
+    expect(overlap?.(i, none)).toBeNull()
+    // read and disjoint: a zero, so no points
+    expect(overlap?.(i, ctx({ intake: intake({ 1: STAMP }, { 2: ['docs'] }) }))).toEqual({ name: 'overlap', points: 0 })
+    // a deep touch is cut to its first segment
+    expect(overlap?.(i, ctx({ intake: intake({ 1: { ...STAMP, touches: ['docs/a/b.md'] } }, { 2: ['docs'] }) }))).toEqual({ name: 'overlap', points: -15 })
+  })
+
+  test('changed weights are honoured', () => {
+    const c = ctx({ weights: { ...W, areaFactory: 7, needsOwner: 9, overlap: 3 }, intake: intake({ 1: STAMP }, { 2: ['plugins'] }) })
+    expect(pointsOf(score(issue(1, { labels: ['ready', 'area:factory', 'needs-decision'] }), c))).toEqual({ 'area-factory': 7, 'needs-owner': -9, overlap: -3 })
   })
 })

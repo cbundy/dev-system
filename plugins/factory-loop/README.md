@@ -91,7 +91,7 @@ Each change is logged and asks for a pass at once. The ops:
   plugin or directive), read-only; "what is this factory's config?" is answered with it;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order; the rest go by score (highest first), where the `priorityLabel` label (default `priority`) is one factor among bug, what it unblocks, its epic, waiting time and earlier failed lives (weights: `queueScore`);
+- `priority <N...>|off`: claim these first, in order; the rest go by score (highest first), where the `priorityLabel` label (default `priority`) is one factor among bug, what it unblocks, its epic, waiting time and earlier failed lives (weights: `queueScore`); with `intakeStamp` on (off by default) an issue with a stamp also scores `area-factory`, `needs-owner` and `overlap`;
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;

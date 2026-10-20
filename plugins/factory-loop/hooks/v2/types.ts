@@ -18,6 +18,7 @@ import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { CapInfo } from './capacity'
 import type { WorkspaceRead } from './workspace'
+import type { Stamps } from './stamps'
 
 // --- states, steps and the record (v2 SPEC 3.1, 3.2) ------------------------------------------------
 
@@ -532,6 +533,9 @@ export type V2State = {
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>
+  // the intake stamps and each live record's in-flight paths (null: the read failed); present only while intakeStamp is on
+  stamps?: Stamps
+  inFlightPaths?: Record<number, string[] | null>
   interventions: InterventionFacts
   // the onceKeys (events.ts) of this device's events in the pass's read of the event log (the facts
   // read, 2.4, or the rebuild's week): which facts are logged, when a wiped store lost their ledger
