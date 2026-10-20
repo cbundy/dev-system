@@ -879,6 +879,9 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     const held = entry('tell:merge-hold:550:h', 'tell', { class: 'owner', wake: 'merge-hold', outcome: wakeAnswer('done', { reason: long, instructions: long }) })
     const back = entryFromLoop(logged(held))
     expect(back?.outcome).toEqual(wakeAnswer('done'))
+    // the reason is carried, shortened; the instructions are not
+    expect(loopNote(held)).toContain(' reason=a%20reason%20with')
+    expect(loopNote(held)).not.toContain('instructions')
     // spaces and percent signs in a value are encoded, so a key survives intact
     const odd = entry('judge:report:brief:60:https://x/a b%20', 'judge', { wake: 'report' })
     expect(entryFromLoop(logged(odd))?.key).toBe('judge:report:brief:60:https://x/a b%20')
@@ -890,6 +893,57 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     expect(entryFromLoop(logged(huge))?.outcome).toBeUndefined()
     expect(entryFromLoop({ ...logged(held), note: 'kind=nope key=x status=done attempts=1 class=free started=1' })).toBeNull()
     expect(entryFromLoop({ ...logged(held), state: 'verdict' })).toBeNull()
+  })
+
+  describe('a wake reason', () => {
+    const task = (outcome: Outcome, key = 'task:release:2:none') => entry(key, 'task', { class: 'drive', wake: 'release', outcome })
+    const reasonOf = (note: string) => note.split(' reason=')[1]
+
+    test('is written last as the decoded one line, and rebuilds as null', () => {
+      const e = task(wakeAnswer('hold', { reason: 'not  ready,\n100% sure' }))
+      const note = loopNote(e)
+      expect(note.endsWith(' reason=not%20ready,%20100%25%20sure')).toBe(true)
+      expect(note.indexOf('decision=hold')).toBeLessThan(note.indexOf('reason='))
+      expect(decodeURIComponent(reasonOf(note)!)).toBe('not ready, 100% sure')
+      expect(entryFromLoop(logged(e))?.outcome).toEqual(wakeAnswer('hold'))
+    })
+
+    test('null or empty writes no token', () => {
+      expect(loopNote(task(wakeAnswer('hold')))).not.toContain('reason=')
+      expect(loopNote(task(wakeAnswer('hold', { reason: ' \n ' })))).not.toContain('reason=')
+    })
+
+    test('is cut to 200 characters', () => {
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'x'.repeat(300) })))
+      expect(decodeURIComponent(reasonOf(note)!)).toBe(`${'x'.repeat(197)}...`)
+    })
+
+    test('is shortened to keep the note within the cap, never inside an escape', () => {
+      const e = task(wakeAnswer('hold', { reason: 'a%'.repeat(100) }), `task:release:2:${'k'.repeat(130)}`)
+      const note = loopNote(e)
+      expect(note.length).toBeLessThanOrEqual(LOOP_NOTE_MAX)
+      expect(note).toContain('out=wake decision=hold')
+      const r = reasonOf(note)!
+      expect(r.endsWith('...')).toBe(true)
+      expect(() => decodeURIComponent(r)).not.toThrow()
+      expect(note.length).toBeGreaterThan(LOOP_NOTE_MAX - 4)
+      expect(entryFromLoop(logged(e))?.outcome).toEqual(wakeAnswer('hold'))
+    })
+
+    test('is dropped before the outcome when no room is left', () => {
+      const bare = loopNote(task(wakeAnswer('hold'), `task:release:2:${'k'.repeat(330)}`))
+      expect(bare.length).toBeGreaterThan(LOOP_NOTE_MAX - 30)
+      expect(bare.length).toBeLessThanOrEqual(LOOP_NOTE_MAX)
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'a long reason for the hold' }), `task:release:2:${'k'.repeat(330)}`))
+      expect(note).toBe(bare)
+      expect(note).toContain('out=wake decision=hold')
+    })
+
+    test('the outcome is still dropped for an oversized key', () => {
+      const note = loopNote(task(wakeAnswer('hold', { reason: 'why' }), `task:release:2:${'k'.repeat(450)}`))
+      expect(note).not.toContain('out=')
+      expect(note).not.toContain('reason=')
+    })
   })
 
   test('the arguments that log an entry put its subject in the columns', () => {
