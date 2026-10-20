@@ -1518,6 +1518,44 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+### Actions refusal spells
+
+When GitHub does not start a CI job for the account's sake (failed payments, a spending limit), the
+factory loop holds the PRs instead of fixing them and tells the owner once (v2 SPEC 8.5, "Refused
+jobs"). A spell runs from the `actions-refused` tell to the `actions-resumed` notice that names it
+(`tell:actions-resumed:<the tell's key>`). One row per spell started in the window: when it began, when
+it ended (null while open), its minutes, GitHub's message (read from `event_store` as `decision_reason`
+is not a column), and the refused runs and PRs the `ci-refused` interventions counted from ten minutes
+before it opened (the loop logs a run when it first sees it refused, a pass before the tell) to its end.
+The probes and resume re-runs are `ci-refused:probe` and `ci-refused:rerun` interventions, so
+`count(*) FILTER (WHERE cause = 'ci-refused:probe')` over the same span gives the probes a spell took.
+
+```sql
+SELECT s.started_at, s.resumed_at,
+  round(extract(epoch FROM coalesce(s.resumed_at, now()) - s.started_at) / 60) AS minutes,
+  s.reason,
+  count(DISTINCT i.fact) AS refused_runs, count(DISTINCT i.pr) AS prs
+FROM (
+  SELECT o.repo, o.key, o.started_at, o.reason,
+    (SELECT min(r.ts) FROM factory.event_log r
+     WHERE r.type = 'loop_entry' AND r.wake = 'actions-resumed' AND r.repo = o.repo
+       AND r.key = 'tell:actions-resumed:' || o.key) AS resumed_at
+  FROM (
+    SELECT l.repo, l.key, min(l.ts) AS started_at, max(e.data->>'decision_reason') AS reason
+    FROM factory.event_log l
+    JOIN factory.event_store e ON e.event_id = l.event_id
+    WHERE l.type = 'loop_entry' AND l.wake = 'actions-refused' AND l.repo = :'repo'
+    GROUP BY l.repo, l.key
+    HAVING min(l.ts) >= :'since'
+  ) o
+) s
+LEFT JOIN factory.event_log i
+  ON i.repo = s.repo AND i.type = 'intervention' AND i.cause = 'ci-refused'
+ AND i.ts >= s.started_at - interval '10 minutes' AND (s.resumed_at IS NULL OR i.ts <= s.resumed_at)
+GROUP BY s.repo, s.key, s.started_at, s.resumed_at, s.reason
+ORDER BY s.started_at DESC;
+```
+
 ## 9b. Permission prompts
 
 Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):

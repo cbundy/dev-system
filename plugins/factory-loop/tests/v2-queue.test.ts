@@ -19,7 +19,7 @@ import type { SourceCtx } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
 import { RERUN_ATTEMPTS, RERUN_REFUSED } from '../hooks/v2/rules-review'
-import { checksOf, headsOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
+import { checksOf, headsOf, jobIdOf, jobsOf, notStartedOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
@@ -1274,5 +1274,97 @@ describe('the head\'s workflow runs (a run with no job yet is in no gh pr checks
       expect(r.read.prs).toEqual([])
       expect(r.read.unread).toEqual([expect.objectContaining({ pr: 670, why: expect.stringContaining('gh api actions/runs') })])
     }
+  })
+})
+
+// --- refused jobs (sources-prs.ts classifyRefused, v2 SPEC 8.5) -------------------------------------------------
+
+// The real failure of plant-console job 117959454359 (run 39222065849): a failed job with no steps and no
+// runner, whose check run says why.
+const BILLING = 'The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the \'Billing & plans\' section in your settings'
+const REFUSED_JOB = { id: 117959454359, status: 'completed', conclusion: 'failure', runner_id: 0, runner_name: '', steps: [] }
+const ANNOTATIONS = JSON.stringify([{ annotation_level: 'failure', message: BILLING, path: '.github', title: '' }])
+const reply = (stdout: unknown): RunResult => ({ exitCode: 0, stdout: typeof stdout === 'string' ? stdout : JSON.stringify(stdout), stderr: '' })
+
+describe('refused jobs: the pure parsers', () => {
+  test('jobIdOf reads the job from a check link; jobsOf the latest jobs of a run, failing closed', () => {
+    expect(jobIdOf('https://github.com/o/r/actions/runs/39222065849/job/117959454359')).toBe('117959454359')
+    expect(jobIdOf('https://github.com/o/r/actions/runs/39222065849')).toBeNull()
+    expect(jobIdOf(null)).toBeNull()
+    expect(jobsOf(reply({ total_count: 1, jobs: [REFUSED_JOB] }))).toEqual([{ id: '117959454359', failed: true, steps: 0, runnerless: true }])
+    const ran = { id: 5, status: 'completed', conclusion: 'failure', runner_id: 9, runner_name: 'GitHub Actions 9', steps: [{ name: 'a' }] }
+    expect(jobsOf(reply({ total_count: 1, jobs: [ran] }))).toEqual([{ id: '5', failed: true, steps: 1, runnerless: false }])
+    expect(jobsOf(reply({ total_count: 1, jobs: [{ ...REFUSED_JOB, runner_id: null }] }))?.[0]?.runnerless).toBe(true)
+    expect(jobsOf(reply({ total_count: 2, jobs: [REFUSED_JOB] }))).toBeNull()
+    expect(jobsOf(reply('not json'))).toBeNull()
+    expect(jobsOf({ exitCode: 1, stdout: '{}', stderr: 'HTTP 502' })).toBeNull()
+  })
+
+  test('notStartedOf: GitHub\'s own words start the message; anything else, or a read that fails, is not a refusal', () => {
+    expect(notStartedOf(reply(ANNOTATIONS))).toBe(BILLING)
+    expect(notStartedOf(reply([{ message: `The job was not started ${'x'.repeat(300)}` }]))).toHaveLength(200)
+    expect(notStartedOf(reply([{ message: 'Process completed with exit code 1.' }]))).toBeNull()
+    expect(notStartedOf(reply([{ message: 'Invalid matrix expression: the job was not started' }]))).toBeNull()
+    expect(notStartedOf(reply([]))).toBeNull()
+    expect(notStartedOf(reply('{}'))).toBeNull()
+    expect(notStartedOf({ exitCode: 1, stdout: ANNOTATIONS, stderr: '' })).toBeNull()
+  })
+})
+
+describe('refused jobs: the prs source', () => {
+  const RUN = '39222065849'
+  const failedChecks = (job: string, run = RUN) => JSON.stringify([{ name: 'plant-console', state: 'FAILURE', bucket: 'fail', startedAt: '2026-10-20T12:00:00Z', completedAt: '2026-10-20T12:00:03Z', link: `https://github.com/${REPO}/actions/runs/${run}/job/${job}` }])
+  function replies(job: string, jobs: unknown, annotations: Reply, calls: { jobs: number; annotations: number }) {
+    return prReply({ '676': sha('5') }, argv => {
+      if (argv[0] === 'gh' && argv[2] === 'checks') return { exitCode: 1, stdout: failedChecks(job) }
+      if (argv[0] === 'gh' && argv[2]?.includes('/jobs?')) {
+        calls.jobs += 1
+        return typeof jobs === 'string' ? { stdout: jobs } : { stdout: JSON.stringify(jobs) }
+      }
+      if (argv[0] === 'gh' && argv[2]?.includes('/annotations')) {
+        calls.annotations += 1
+        return annotations
+      }
+      return undefined
+    })
+  }
+  const one = rec(76, { state: 'reviewing', step: 'review' })
+  const checkOf = async (ctx: SourceCtx) => (await readPrs(ctx)).read.prs[0]?.checks[0]
+
+  test('a zero-step, runnerless failed job with the billing annotation is refused, with the message; its classification is read once', async () => {
+    const calls = { jobs: 0, annotations: 0 }
+    const jobs = { total_count: 1, jobs: [{ ...REFUSED_JOB, id: 700001 }] }
+    const { ctx, argvs } = sourceCtx([one], replies('700001', jobs, { stdout: ANNOTATIONS }, calls))
+    expect(await checkOf(ctx)).toMatchObject({ bucket: 'refused', refusedWhy: BILLING.length <= 200 ? BILLING : `${BILLING.slice(0, 197)}...`, runId: RUN })
+    expect(argvs).toContainEqual(['gh', 'api', `repos/${REPO}/actions/runs/${RUN}/jobs?filter=latest&per_page=100`])
+    expect(argvs).toContainEqual(['gh', 'api', `repos/${REPO}/check-runs/700001/annotations`])
+    // the next read of the same job asks GitHub nothing more
+    const again = sourceCtx([one], replies('700001', jobs, { stdout: ANNOTATIONS }, calls))
+    expect((await checkOf(again.ctx))?.bucket).toBe('refused')
+    expect(calls).toEqual({ jobs: 1, annotations: 1 })
+  })
+
+  test('a zero-step failure without the annotation (a bad matrix), or a job with steps, stays failed', async () => {
+    const calls = { jobs: 0, annotations: 0 }
+    const matrix = sourceCtx([one], replies('700002', { total_count: 1, jobs: [{ ...REFUSED_JOB, id: 700002 }] }, { stdout: JSON.stringify([{ message: 'Invalid matrix: the job was not started' }]) }, calls))
+    expect((await checkOf(matrix.ctx))?.bucket).toBe('fail')
+    const steps = sourceCtx([one], replies('700003', { total_count: 1, jobs: [{ ...REFUSED_JOB, id: 700003, steps: [{ name: 'test' }], runner_id: 4, runner_name: 'GitHub Actions 4' }] }, { stdout: ANNOTATIONS }, calls))
+    expect((await checkOf(steps.ctx))?.bucket).toBe('fail')
+    // the job with steps asked for no annotations
+    expect(calls.annotations).toBe(1)
+  })
+
+  test('a jobs or annotations read that fails or does not parse leaves the PR unread, never red or green', async () => {
+    const calls = { jobs: 0, annotations: 0 }
+    const jobsDown = sourceCtx([one], prReply({ '676': sha('5') }, argv => (argv[0] === 'gh' && argv[2] === 'checks' ? { exitCode: 1, stdout: failedChecks('700004') } : argv[2]?.includes('/jobs?') ? { exitCode: 1, stderr: 'HTTP 502' } : undefined)))
+    expect((await readPrs(jobsDown.ctx)).read).toMatchObject({ prs: [], unread: [expect.objectContaining({ pr: 676, why: expect.stringContaining('jobs exit 1') })] })
+    const jobs = { total_count: 1, jobs: [{ ...REFUSED_JOB, id: 700005 }] }
+    const down = sourceCtx([one], replies('700005', jobs, { exitCode: 1, stderr: 'HTTP 502' }, calls))
+    expect((await readPrs(down.ctx)).read.unread).toEqual([expect.objectContaining({ pr: 676, why: expect.stringContaining('annotations exit 1') })])
+    const junk = sourceCtx([one], replies('700005', jobs, { stdout: 'not json' }, calls))
+    expect((await readPrs(junk.ctx)).read.unread).toEqual([expect.objectContaining({ why: expect.stringContaining('do not parse') })])
+    // nothing was kept: the next read asks again
+    const ok = sourceCtx([one], replies('700005', jobs, { stdout: ANNOTATIONS }, calls))
+    expect((await checkOf(ok.ctx))?.bucket).toBe('refused')
   })
 })

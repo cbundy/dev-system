@@ -20,7 +20,7 @@
 // then an earlier pass's view stands for it (ctx.kept), with its own read time.
 import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
-import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv, prRunsArgv } from './argv'
+import { checkRunAnnotationsArgv, lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv, prRunsArgv, runJobsArgv } from './argv'
 import type { SourceCtx } from './observe'
 import { excludedOf, queueOf } from './rules-queue'
 import { lifePr } from './rules-review'
@@ -29,11 +29,14 @@ import type { HeadSeen, IssueRecord } from './types'
 export type CheckRun = {
   name: string
   state: string
-  bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel'
+  // refused: a GitHub Actions job GitHub did not start (the account's billing, not the code), see notStartedOf
+  bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel' | 'refused'
   startedAt: number | null
   completedAt: number | null
   runId: string | null
   link: string | null
+  // GitHub's own message for a refused job, clipped to REFUSED_MAX
+  refusedWhy?: string | null
 }
 
 export type PrView = {
@@ -122,6 +125,7 @@ export function pullOf(json: string): Pull | null {
   }
 }
 
+// the buckets `gh pr checks` names; `refused` is the loop's own (classifyRefused)
 const BUCKETS: readonly CheckRun['bucket'][] = ['pass', 'fail', 'pending', 'skipping', 'cancel']
 
 // timeOf: a check's start or end; GitHub gives the zero time for one not started or not done.
@@ -236,6 +240,116 @@ export function withRuns(checks: readonly CheckRun[], runs: readonly WorkflowRun
   return out
 }
 
+// --- refused jobs (docs/factory-loop/v2/SPEC.md 8.5, "Refused jobs") --------------------------------------
+
+export const REFUSED_MAX = 200
+// the start of the annotation GitHub puts on a job it did not start for the account's sake
+const NOT_STARTED = 'The job was not started'
+
+// jobIdOf: the job id in a check's link (.../actions/runs/<run>/job/<job>), which is the id of its
+// check run; null for a link that names no job.
+export function jobIdOf(link: string | null | undefined): string | null {
+  return /\/actions\/runs\/\d+\/job\/(\d+)/.exec(link ?? '')?.[1] ?? null
+}
+
+// A latest job of a run, as far as the classification reads it.
+export type RunJob = { id: string; failed: boolean; steps: number; runnerless: boolean }
+
+// jobsOf: the latest jobs of a run from `gh api repos/R/actions/runs/<run>/jobs?filter=latest&per_page=100`.
+// null when the read fails, does not parse, or lists fewer jobs than total_count (fail closed).
+export function jobsOf(r: RunResult): RunJob[] | null {
+  if (r.exitCode !== 0) return null
+  let o: unknown
+  try {
+    o = JSON.parse(r.stdout)
+  } catch {
+    return null
+  }
+  if (o === null || typeof o !== 'object') return null
+  const { total_count: total, jobs: list } = o as Record<string, unknown>
+  if (!Array.isArray(list) || typeof total !== 'number' || total > list.length) return null
+  const out: RunJob[] = []
+  for (const raw of list) {
+    const x = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    if (typeof x.id !== 'number' || !Number.isInteger(x.id)) return null
+    const runner = x.runner_id === 0 || x.runner_id === null || x.runner_id === undefined
+    const named = typeof x.runner_name === 'string' && x.runner_name !== ''
+    out.push({
+      id: String(x.id),
+      failed: x.status === 'completed' && x.conclusion === 'failure',
+      steps: Array.isArray(x.steps) ? x.steps.length : 1,
+      runnerless: runner && !named,
+    })
+  }
+  return out
+}
+
+// notStartedOf: GitHub's message when a check run's annotations say the job was not started (the
+// account's payments failed or its spending limit is reached), clipped; null when none says so, or
+// the read fails or does not parse (the job then stays failed).
+export function notStartedOf(r: RunResult): string | null {
+  if (r.exitCode !== 0) return null
+  let list: unknown
+  try {
+    list = JSON.parse(r.stdout)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(list)) return null
+  for (const raw of list) {
+    const x = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    const m = typeof x.message === 'string' ? x.message.replace(/\s+/g, ' ').trim() : ''
+    if (m.startsWith(NOT_STARTED)) return m.length > REFUSED_MAX ? `${m.slice(0, REFUSED_MAX - 3)}...` : m
+  }
+  return null
+}
+
+// A job's classification never changes (a re-run makes a new job id): its refusal message, or null
+// when it failed on its own. Kept by repo and job id, like PATCHES.
+const JOBS = new Map<string, string | null>()
+
+type Failed = { why: string }
+
+// classifyRefused: the failed checks of Actions runs, with a job id, that GitHub refused to start
+// (zero steps, no runner, and the annotation "The job was not started ...") become `refused`. One
+// jobs read per run with checks not yet classified, one annotations read per zero-step, runnerless
+// failed job. A read that fails or does not parse fails the PR's read (fail closed: never red,
+// never green on a guess).
+async function classifyRefused(ctx: SourceCtx, checks: CheckRun[]): Promise<CheckRun[] | Failed> {
+  const repo = ctx.rt.repo
+  const fresh = checks.filter(c => c.bucket === 'fail' && c.runId !== null && jobIdOf(c.link) !== null && !JOBS.has(`${repo} ${jobIdOf(c.link)}`))
+  for (const runId of new Set(fresh.map(c => c.runId))) {
+    if (runId === null) continue
+    const w = await ctx.run(runJobsArgv(repo, runId), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+    const jobs = jobsOf(w)
+    if (jobs === null) return { why: `gh api actions/runs/${runId}/jobs exit ${w.exitCode}: ${lastLine(w) || 'the jobs do not read whole'}` }
+    for (const c of fresh.filter(x => x.runId === runId)) {
+      const id = jobIdOf(c.link) ?? ''
+      const job = jobs.find(j => j.id === id)
+      // a job the latest attempt does not list is an older attempt's: failed, and read again next time
+      if (job === undefined) continue
+      if (!job.failed || job.steps > 0 || !job.runnerless) {
+        JOBS.set(`${repo} ${id}`, null)
+        continue
+      }
+      const a = await ctx.run(checkRunAnnotationsArgv(repo, id), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+      if (a.exitCode !== 0) return { why: `gh api check-runs/${id}/annotations exit ${a.exitCode}: ${lastLine(a)}` }
+      let parses = true
+      try {
+        parses = Array.isArray(JSON.parse(a.stdout))
+      } catch {
+        parses = false
+      }
+      if (!parses) return { why: `the annotations of job ${id} do not parse` }
+      JOBS.set(`${repo} ${id}`, notStartedOf(a))
+    }
+  }
+  return checks.map(c => {
+    const why = c.bucket === 'fail' ? JOBS.get(`${repo} ${jobIdOf(c.link)}`) : undefined
+    return why === undefined || why === null ? c : { ...c, bucket: 'refused', refusedWhy: why }
+  })
+}
+
 // shaOf: the head `git ls-remote origin refs/heads/<branch>` prints, or null.
 export function shaOf(stdout: string, branch: string): string | null {
   for (const line of stdout.split('\n')) {
@@ -333,7 +447,9 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
       const w = await ctx.run(prRunsArgv(ctx.rt.repo, pull.head), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
       const runs = runsOf(w)
       if (runs === null) return failed(`gh api actions/runs exit ${w.exitCode}: ${lastLine(w) || 'the workflow runs do not read whole'}`)
-      checks = withRuns(parsed, runs)
+      const classified = await classifyRefused(ctx, withRuns(parsed, runs))
+      if ('why' in classified) return failed(classified.why)
+      checks = classified
     }
     const base = defaultBranch ?? pull.base
     if (pull.head !== null && base !== null) {

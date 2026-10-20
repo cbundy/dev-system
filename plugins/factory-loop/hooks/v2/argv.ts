@@ -174,6 +174,16 @@ export function prRunsArgv(repo: string, head: string): string[] {
   return ['gh', 'api', `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`]
 }
 
+// The latest jobs of a run, to tell a job GitHub did not start from one that failed (sources-prs.ts jobsOf).
+export function runJobsArgv(repo: string, runId: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=100`]
+}
+
+// A check run's annotations (the job id is its check run id): GitHub says why it did not start a job there.
+export function checkRunAnnotationsArgv(repo: string, jobId: string): string[] {
+  return ['gh', 'api', `repos/${repo}/check-runs/${jobId}/annotations`]
+}
+
 // --- the default branch's state (sources-main.ts, 2.4) ---------------------------------------------------------
 
 // The repo's default branch name.

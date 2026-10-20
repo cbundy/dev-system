@@ -25,7 +25,7 @@ import type { LedgerEntry, Ms } from '../types'
 import { decisionOf } from './park-text'
 import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
-import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
+import { factKey, interventionKey, keyParts, lifeAt, refusedRerunOf, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
 import { fromReleaseHold } from './rules-release-hold'
 import { holdOf } from './rules-queue'
@@ -194,7 +194,9 @@ function fromLedger(ctx: V2Ctx): Planned[] {
     const p = keyParts(entry.key)
     const done = entry.status === 'done'
     if (entry.kind === 'ci-rerun' && done && p !== null) {
-      add(entry, 'loop', 'ci-rerun', `a failed check re-run (${p.rest.replace(/^rerun\//, '')})`, p.life)
+      const refused = refusedRerunOf(p.rest)
+      if (refused !== null) add(entry, 'loop', `ci-refused:${refused}`, refused === 'probe' ? `a run GitHub refused to start was re-run to probe whether Actions runs again (${p.rest})` : `a run GitHub refused to start was re-run once Actions ran again (${p.rest})`, p.life)
+      else add(entry, 'loop', 'ci-rerun', `a failed check re-run (${p.rest.replace(/^rerun\//, '')})`, p.life)
     } else if (entry.kind === 'pr' && done && p !== null && /^pr\/body\/a\d+$/.test(p.rest)) {
       add(entry, 'loop', 'queue:linkage', 'the PR body was written again after a linkage FAIL', p.life)
     } else if (entry.kind === 'claim' && done && p !== null && p.rest.startsWith('claim/')) {
