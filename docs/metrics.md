@@ -862,6 +862,53 @@ ORDER BY a.split_at DESC;
 
 The leftover count is the rows with `all_merged AND closed_at IS NULL`.
 
+### Queue snapshots
+
+The loop writes a `queue_snapshot` after each claim pass when its view of the claim queue changed, and as a heartbeat when it did not: the candidates in rank order (first 50) with score, factors, whether the claim rule would take each and, if not, a `why` code, plus the owner's controls. These queries are empty until the loop writes them. The newest queue per repo, with its age in seconds (`candidates` is the JSON list, `rest` counts the candidates past 50 by `why`):
+
+```sql
+SELECT repo, taken_at, reason, considered, free_slots, candidates, rest,
+  extract(epoch FROM (now() - taken_at)) AS age_s
+FROM (
+  SELECT repo, taken_at, reason, considered, free_slots, candidates, rest,
+    row_number() OVER (PARTITION BY repo ORDER BY taken_at DESC, ts DESC) AS n
+  FROM factory.event_log
+  WHERE type = 'queue_snapshot'
+) t
+WHERE n = 1
+ORDER BY repo;
+```
+
+Snapshots per repo and day by `reason`, with the queue changes they folded in (a quiet day is about 100 snapshots, at most about 1,440 plus claims):
+
+```sql
+SELECT repo, date_trunc('day', taken_at) AS day, reason, count(*) AS snapshots, sum(folded) AS folded
+FROM factory.event_log
+WHERE type = 'queue_snapshot' AND taken_at >= :'since'::timestamptz
+GROUP BY repo, date_trunc('day', taken_at), reason
+ORDER BY day, repo, reason;
+```
+
+Do claims follow the queue? For each scored `claimed` event (score read from `factory.event_store`, as in the Claim order block above), the newest `queue_snapshot` of the same repo at or before it, that issue's score in that snapshot's top 50, and whether the two match (null when the issue is not in the top 50 or no snapshot exists):
+
+```sql
+SELECT c.repo, c.issue, c.ts AS claimed_at, (s.data->>'score')::int AS claim_score,
+  q.taken_at AS snapshot_at, q.snapshot_score,
+  (s.data->>'score')::int = q.snapshot_score AS match
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+LEFT JOIN LATERAL (
+  SELECT n.taken_at,
+    (SELECT (e->>'score')::int FROM jsonb_array_elements(n.candidates) e WHERE (e->>'issue')::int = c.issue LIMIT 1) AS snapshot_score
+  FROM factory.event_log n
+  WHERE n.type = 'queue_snapshot' AND n.repo = c.repo AND n.taken_at <= c.ts
+  ORDER BY n.taken_at DESC, n.ts DESC
+  LIMIT 1
+) q ON true
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NULL
+ORDER BY c.ts;
+```
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two

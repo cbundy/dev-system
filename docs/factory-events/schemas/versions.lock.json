@@ -1428,6 +1428,182 @@
     "type": "object",
     "x-issue": "required"
   },
+  "queue_snapshot.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "candidates": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "claimable": {
+              "type": "boolean"
+            },
+            "factors": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "points": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "name",
+                  "points"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "issue": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "rank": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "score": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "why": {
+              "enum": [
+                "blocked",
+                "exhausted",
+                "held",
+                "new_off",
+                "no_slot",
+                "outside_only",
+                "paused",
+                "rejected",
+                "skipped",
+                "tracker",
+                "unknown",
+                "untrusted",
+                "usage_tier",
+                null
+              ]
+            }
+          },
+          "required": [
+            "claimable",
+            "factors",
+            "issue",
+            "rank",
+            "score",
+            "why"
+          ],
+          "type": "object"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "considered": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "folded": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "free_slots": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "owner_new_off": {
+        "type": "boolean"
+      },
+      "owner_only": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "owner_priority": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "owner_serial": {
+        "type": "boolean"
+      },
+      "reason": {
+        "enum": [
+          "changed",
+          "heartbeat"
+        ]
+      },
+      "rest": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "why": {
+              "enum": [
+                "blocked",
+                "exhausted",
+                "held",
+                "new_off",
+                "no_slot",
+                "outside_only",
+                "paused",
+                "rejected",
+                "skipped",
+                "tracker",
+                "unknown",
+                "untrusted",
+                "usage_tier",
+                null
+              ]
+            }
+          },
+          "required": [
+            "count",
+            "why"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "taken_at": {
+        "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "candidates",
+      "considered",
+      "folded",
+      "free_slots",
+      "owner_new_off",
+      "owner_only",
+      "owner_priority",
+      "owner_serial",
+      "reason",
+      "rest",
+      "taken_at"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "ready.v1": {
     "additionalProperties": false,
     "properties": {

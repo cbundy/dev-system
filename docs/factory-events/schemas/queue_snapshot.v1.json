@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "queue_snapshot.v1.json",
+  "title": "queue_snapshot",
+  "description": "The loop's view of the claim queue at the end of one claim pass: the candidates in rank order with each one's score, its factors and whether the claim rule would take it (and if not, why not), the claims left under the in-flight cap and the owner's controls in force. Written when the view changes and as a heartbeat when it does not, so the newest snapshot of a repo shows how fresh the loop's view is. A claim pass's immediate write is reason changed. Written by the factory loop.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taken_at",
+    "reason",
+    "considered",
+    "candidates",
+    "rest",
+    "free_slots",
+    "owner_priority",
+    "owner_only",
+    "owner_serial",
+    "owner_new_off",
+    "folded"
+  ],
+  "properties": {
+    "taken_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+      "description": "When the pass that produced the view ended.",
+      "x-column": true
+    },
+    "reason": {
+      "enum": [
+        "changed",
+        "heartbeat"
+      ],
+      "description": "Why the snapshot was written: changed (the view differs from the last write; a claim pass's immediate write is always this) or heartbeat (unchanged, written to show the loop is alive).",
+      "x-column": true
+    },
+    "considered": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many candidates the claim rule considered this pass: the whole list, before the cap on candidates below.",
+      "x-column": true
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "The first 50 candidates in rank order. why is null exactly when claimable is true.",
+      "x-column": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issue",
+          "rank",
+          "score",
+          "factors",
+          "claimable",
+          "why"
+        ],
+        "properties": {
+          "issue": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The issue number."
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The place in the order, from 1."
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The claim rule's score for the issue; null when it was not scored."
+          },
+          "factors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Each factor that added to the score, with its points, in the rule's order; null when not scored.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "points"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The factor's name."
+                },
+                "points": {
+                  "type": "integer",
+                  "description": "The points the factor added to the score."
+                }
+              }
+            }
+          },
+          "claimable": {
+            "type": "boolean",
+            "description": "Whether the claim rule would take the issue this pass."
+          },
+          "why": {
+            "enum": [
+              "blocked",
+              "skipped",
+              "paused",
+              "outside_only",
+              "no_slot",
+              "new_off",
+              "usage_tier",
+              "rejected",
+              "tracker",
+              "held",
+              "exhausted",
+              "untrusted",
+              "unknown",
+              null
+            ],
+            "description": "Why the claim rule would not take the issue this pass, as a code; null when it would. blocked: blocked by open issues. skipped: a skip label or 'owner: skip'. paused: 'owner: paused'. outside_only: outside the owner's 'only' list. no_slot: no capacity left (the in-flight cap, 'owner: one at a time' or the claims-per-pass limit). new_off: 'owner: no new work'. usage_tier: the usage tier stops new work (stop-new, stop-all) or the slow-tier limits apply. rejected: carries the rejected label. tracker: a tracker (it has sub-issues, or an epic title). held: a live record, a claim in flight, or another device holds it. exhausted: the claim attempts are used up. untrusted: the author is not trusted. unknown: a fact was not read, or the issue read as closed or without the ready label."
+          }
+        }
+      }
+    },
+    "rest": {
+      "type": "array",
+      "description": "The candidates past the first 50, counted by why code (null = claimable). Empty when there are 50 or fewer.",
+      "x-column": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "why",
+          "count"
+        ],
+        "properties": {
+          "why": {
+            "enum": [
+              "blocked",
+              "skipped",
+              "paused",
+              "outside_only",
+              "no_slot",
+              "new_off",
+              "usage_tier",
+              "rejected",
+              "tracker",
+              "held",
+              "exhausted",
+              "untrusted",
+              "unknown",
+              null
+            ],
+            "description": "Why the claim rule would not take the issue this pass, as a code; null when it would. blocked: blocked by open issues. skipped: a skip label or 'owner: skip'. paused: 'owner: paused'. outside_only: outside the owner's 'only' list. no_slot: no capacity left (the in-flight cap, 'owner: one at a time' or the claims-per-pass limit). new_off: 'owner: no new work'. usage_tier: the usage tier stops new work (stop-new, stop-all) or the slow-tier limits apply. rejected: carries the rejected label. tracker: a tracker (it has sub-issues, or an epic title). held: a live record, a claim in flight, or another device holds it. exhausted: the claim attempts are used up. untrusted: the author is not trusted. unknown: a fact was not read, or the issue read as closed or without the ready label."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many candidates past the first 50 have this why code."
+          }
+        }
+      }
+    },
+    "free_slots": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Claims left under maxInFlightIssues this pass; null when the cap is unset.",
+      "x-column": true
+    },
+    "owner_priority": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "The owner's priority list in force; empty when off.",
+      "x-column": true
+    },
+    "owner_only": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "The owner's 'only' list in force; empty when off.",
+      "x-column": true
+    },
+    "owner_serial": {
+      "type": "boolean",
+      "description": "Whether the owner's 'one at a time' control is on.",
+      "x-column": true
+    },
+    "owner_new_off": {
+      "type": "boolean",
+      "description": "Whether the owner's 'no new work' control is on.",
+      "x-column": true
+    },
+    "folded": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many queue changes since the previous write this write folds in; 0 for a heartbeat with no change.",
+      "x-column": true
+    }
+  },
+  "examples": [
+    {
+      "taken_at": "2026-10-20T17:35:00.000Z",
+      "reason": "changed",
+      "considered": 3,
+      "candidates": [
+        {
+          "issue": 1148,
+          "rank": 1,
+          "score": 42,
+          "factors": [
+            {
+              "name": "bug",
+              "points": 25
+            },
+            {
+              "name": "waiting",
+              "points": 17
+            }
+          ],
+          "claimable": true,
+          "why": null
+        },
+        {
+          "issue": 1147,
+          "rank": 2,
+          "score": 10,
+          "factors": [
+            {
+              "name": "waiting",
+              "points": 10
+            }
+          ],
+          "claimable": false,
+          "why": "blocked"
+        },
+        {
+          "issue": 1160,
+          "rank": 3,
+          "score": null,
+          "factors": null,
+          "claimable": false,
+          "why": "unknown"
+        }
+      ],
+      "rest": [],
+      "free_slots": 2,
+      "owner_priority": [],
+      "owner_only": [],
+      "owner_serial": false,
+      "owner_new_off": false,
+      "folded": 3
+    },
+    {
+      "taken_at": "2026-10-20T17:36:00.000Z",
+      "reason": "heartbeat",
+      "considered": 0,
+      "candidates": [],
+      "rest": [],
+      "free_slots": null,
+      "owner_priority": [],
+      "owner_only": [],
+      "owner_serial": false,
+      "owner_new_off": false,
+      "folded": 0
+    }
+  ]
+}
