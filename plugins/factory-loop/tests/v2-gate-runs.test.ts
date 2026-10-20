@@ -362,7 +362,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     await clock.advance(6_000)
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
-    const writes = () => h.events().filter(e => e[1] === '--type')
+    const writes = () => h.events().filter(e => e[1] === '--type' && e[2] === 'gate_run')
     expect(writes()).toHaveLength(2)
     const argv = writes().find(e => (JSON.parse(e[4] ?? '{}') as { queued_behind: number }).queued_behind === 1) as string[]
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'gate_run', '--data'])
@@ -389,7 +389,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     await clock.advance(60_000)
     await clock.advance(60_000)
     await clock.advance(60_000)
-    const writes = h.events().filter(e => e[1] === '--type').map(e => JSON.parse(e[4] ?? '{}') as Record<string, unknown>)
+    const writes = h.events().filter(e => e[1] === '--type' && e[2] === 'gate_run').map(e => JSON.parse(e[4] ?? '{}') as Record<string, unknown>)
     expect(writes).toHaveLength(2)
     const got = writes.find(d => d.result === 'pass')
     expect(got?.flaky).toBe(flaky)

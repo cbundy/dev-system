@@ -8,6 +8,7 @@ import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import { GITHUB_BACKOFF_MS, observe } from './observe'
 import type { Runtime, Stored } from './observe'
 import { holdsLock, recordPass } from './pass-summary'
+import { nextSnapshot, snapshotFailed, takeProblem } from './queue-snapshot'
 import { LOCK_CAS_SCRIPT, actLockPath, checkRails, holdActLock, leaseMsOf, nextPass, noticeTell, parseLease, passEnded, pingsIgnored, requestPass, waitOver } from './rails'
 import type { BreakerNotice, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { keepTitles } from './report'
@@ -257,6 +258,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     return spent(tr, 'persistMs', () => persist($, rt))
   }
   const holds = () => (act ? renew() : Promise.resolve(holding))
+  // a snapshot write that failed since the last pass line is told once, here
+  const late = takeProblem()
+  if (late !== null) problems.push(late)
   const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems }
 
   let report: ActReport | null = null
@@ -312,6 +316,19 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
         if (r !== null && r.exitCode === 0) book.caps.push(key)
       }
       book.caps = book.caps.filter(k => k.endsWith(hour))
+      // the queue the plan saw: one `queue_snapshot` when it changed or on the heartbeat, sent without waiting so it never slows the pass
+      if (!report.killed && result.queue !== undefined) {
+        const claimed = result.actions.some(a => a.kind === 'claim' && a.rule === 'S1')
+        const argv = nextSnapshot(result.queue, state.now, claimed)
+        if (argv !== null) {
+          void commandOf(env.io, rt, commands)(argv, { timeoutMs: 60_000 }).then(
+            r => {
+              if (r.exitCode !== 0) snapshotFailed(`exit ${r.exitCode}`)
+            },
+            (e: unknown) => snapshotFailed(e instanceof Error ? e.message : String(e)),
+          )
+        }
+      }
     } else {
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
