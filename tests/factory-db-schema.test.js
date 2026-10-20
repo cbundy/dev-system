@@ -129,3 +129,14 @@ test("factory.workers and factory.workers_status have config jsonb", opts, (t) =
     assert.equal(type, "jsonb", `${rel}.config`);
   }
 });
+
+test("factory.workers, workers_status and worker_samples have the memory pressure columns", opts, (t) => {
+  const db = createDb(t);
+  const want = { mem_max_events: "bigint", mem_max_rate_per_min: "real", mem_oom_kills: "bigint", mem_psi_some_avg10: "real", mem_psi_full_avg10: "real" };
+  for (const rel of ["workers", "workers_status", "worker_samples"]) {
+    for (const [col, type] of Object.entries(want)) {
+      const got = db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = '${rel}' AND column_name = '${col}'`);
+      assert.equal(got, type, `${rel}.${col}`);
+    }
+  }
+});

@@ -41,6 +41,15 @@ check "dev-doctor warns, without failing, for each /persist dir with no volume b
   done
   echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
   [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
+check "dev-doctor prints one memory line (INFO or WARN) and mem-pressure.sh is installed, when the cgroup has memory.events" in_image '
+  test -f /usr/local/share/dev-system/mem-pressure.sh
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  if [ -r /sys/fs/cgroup/memory.events ] || [ -r /sys/fs/cgroup/memory.pressure ]; then
+    [ "$(echo "$out" | grep -cE "(INFO|WARN) memory: ")" = 1 ] &&
+    echo "$out" | grep -qE "memory: .* MiB / (no limit|[0-9]+ MiB), max events .*OOM kills .*PSI avg10 some .* / full "
+  else
+    ! echo "$out" | grep -q "memory: "
+  fi' --entrypoint ""
 check "dev-doctor WARNs, naming the file, when an event log has fewer lines than its .pushed marker" in_image '
   d=$(mktemp -d); mkdir -p "$d/.pushed"
   printf "%s\n%s\n" a b > "$d/o__r.jsonl"; echo 5 > "$d/.pushed/o__r.jsonl"

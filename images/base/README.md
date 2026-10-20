@@ -2065,6 +2065,11 @@ or skips the other target. The stopped beat sends none and leaves the stats colu
 | `mem_used_bytes`, `mem_limit_bytes` | cgroup `memory.current`, `memory.max` (NULL when `max`). |
 | `claude_interactive`, `claude_headless` | `heartbeat-state`'s `claude_sessions`: live top-level sessions in the registry whose `entrypoint` starts with `sdk-` (`claude -p`) are headless, any other is interactive. |
 | `claude_procs`, `procs` | processes whose `/proc/<pid>/comm` is `claude`, and every pid in `/proc`. |
+| `mem_max_events`, `mem_oom_kills` | cgroup `memory.events`: the `max` count (times the cgroup hit its memory limit) and the `oom_kill` count, both since the cgroup started. |
+| `mem_max_rate_per_min` | `max` events per minute since the previous beat, rounded to 2 decimals. The previous reading is in `$DEV_HEARTBEAT_DIR/dev-heartbeat.mem`. NULL on a process's first beat and after a counter reset. |
+| `mem_psi_some_avg10`, `mem_psi_full_avg10` | the `avg10` of the `some` and `full` lines of cgroup `memory.pressure` (percent of the last 10 s that tasks stalled on memory). |
+
+The memory pressure columns (migration 0020, parsed by `mem-pressure.sh`) are NULL when their file or line is missing or not a number. `dev-doctor` prints one `memory:` line from the same files (used / limit in MiB, `max` events and their rate since the heartbeat's last reading, OOM kills, PSI): INFO when calm, WARN (never FAIL) when the rate is above 0, `oom_kill` is above 0 or PSI `full` avg10 is at or above 10; it reads the heartbeat's state file and never updates it, and prints nothing on cgroup v1.
 
 A value whose source file is missing or unreadable (cgroup v1, no `/proc`) is NULL, never a guess, and never fails
 the beat. The counts never read `/proc/<pid>/cmdline` or `environ`, which can hold secrets and prompts: the
