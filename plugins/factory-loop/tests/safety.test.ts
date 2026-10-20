@@ -620,7 +620,7 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {
-    const own: string[][] = [eventArgv('loop', { note: 'kind=tell key=k status=running' }), capEventArgv('claim:470', NOW), capEventArgv('spawn', NOW)]
+    const own: string[][] = [eventArgv('closed', { reason: 'completed' }, { issue: 470 }), capEventArgv('claim:470', NOW), capEventArgv('spawn', NOW)]
     for (const e of [entry('design:470:1', 'agent-step', { step: 'design' }), entry('tell:x', 'tell', { wake: 'blind' })]) {
       const argv = loopEvent(e)
       if (argv !== null) own.push(argv)

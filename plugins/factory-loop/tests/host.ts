@@ -199,6 +199,15 @@ export function host(on: On, opts: HostOptions = {}) {
     events(): string[][] {
       return seen.filter(s => s.argv[0] === 'callum-flow-event').map(s => s.argv)
     },
+    // the native events logged of one type: `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`
+    native(type: string): { issue: number | null; actor: string | null; data: Record<string, unknown> }[] {
+      return seen
+        .filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === type)
+        .map(s => {
+          const at = (flag: string) => s.argv[s.argv.indexOf(flag) + 1]
+          return { issue: s.argv.includes('--issue') ? Number(at('--issue')) : null, actor: s.argv.includes('--actor') ? (at('--actor') ?? null) : null, data: JSON.parse(at('--data') ?? '{}') as Record<string, unknown> }
+        })
+    },
     ledger(): Stored[] {
       const stored = store.get(`ledger:${REPO}`) as { entries?: unknown[] } | undefined
       return (stored?.entries ?? []) as Stored[]

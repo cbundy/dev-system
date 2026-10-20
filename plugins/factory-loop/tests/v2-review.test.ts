@@ -675,13 +675,15 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
     expect(long).toMatch(/- \.\.\. and \d+ more findings not shown here$/)
   })
 
-  test('the reviewed event carries its verdict, round, patch, counts, reviewer and answer, and its note reads back', () => {
+  test('the reviewed event carries its verdict, round, patch, counts, reviewer and answer as native data, and its old note reads back', () => {
     const r = rec(631)
     const e = reviewedEvent({ issue: 631, branch: 'issue-631', pr: PR, head: HEAD, round: 1, patch: PATCH, reviewer: 'adjudicator', answer: '/cfg/answers/a b.json' }, reviewData(r, 'changes'))
     const argv = eventArgv(e)
-    expect(argv.slice(0, 10)).toEqual(['callum-flow-event', 'reviewed', '--issue', '631', '--branch', 'issue-631', '--pr', String(PR), '--head', HEAD])
-    const note = argv[argv.indexOf('--note') + 1] ?? ''
-    expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note })).toEqual(e)
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'reviewed', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', '631'])
+    expect(JSON.parse(argv[4] ?? '')).toEqual({ branch: 'issue-631', pr: PR, head: HEAD, verdict: 'changes', round: 1, patch: PATCH, errors: 1, warnings: 1, infos: 0, reviewer: 'adjudicator', answer_path: '/cfg/answers/a b.json' })
+    // the old note, which the old source's readers still parse, reads back
+    expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note: eventNote(e) })).toEqual(e)
     expect(e).toMatchObject({ verdict: 'changes', errors: 1, warnings: 1, infos: 0 })
   })
 

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { FactoryEvent } from '../hooks/derive'
 import { eventsFromRows } from '../hooks/derive'
-import { eventArgv, parseTransition } from '../hooks/v2/events'
+import { eventNote, parseTransition } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { lifeOf } from '../hooks/v2/keys'
 import { checkIdsOf, checkNote } from '../hooks/v2/prompts-work'
@@ -200,8 +200,7 @@ describe('the rebuild from the new store (recordsFromNewRows, source new)', () =
   })
 })
 
-// noteOf: the note events.ts writes for a transition, from its own argv.
+// noteOf: the old format's note of a transition (events.ts keeps the builder for the old source).
 function noteOf(e: TransitionEvent): string {
-  const argv = eventArgv(e)
-  return argv[argv.indexOf('--note') + 1] ?? ''
+  return eventNote(e)
 }

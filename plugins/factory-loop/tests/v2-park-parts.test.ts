@@ -6,7 +6,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
 import type { LedgerEntry } from '../hooks/types'
 import { CONTRACTS as TRIAGE } from '../hooks/v2/contracts-triage.mjs'
-import { eventArgv, parseTransition } from '../hooks/v2/events'
+import { eventNote, parseTransition } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { recordOf } from '../hooks/v2/observe'
 import { partsOfData, partsOfStored, partsOfTokens, partsTokens } from '../hooks/v2/park-parts'
@@ -107,10 +107,7 @@ describe('which parks set parts', () => {
 
 describe('the note tokens', () => {
   const event = (parts: ParkParts | null): TransitionEvent => ({ state: 'transition', row: 'T3', from: 'designing', via: 'question', record: { ...base, state: 'parked', resumeTo: 'designing', step: null, question: 'Q', parts } })
-  const noteOf = (e: TransitionEvent) => {
-    const argv = eventArgv(e)
-    return argv[argv.indexOf('--note') + 1] ?? ''
-  }
+  const noteOf = (e: TransitionEvent) => eventNote(e)
   const row = (e: TransitionEvent, note = noteOf(e)) => parseTransition({ state: 'transition', issue: 471, branch: 'issue-471', pr: null, head: null, note })
 
   test('full parts round-trip through the note, texts with spaces, %, = and none included', () => {

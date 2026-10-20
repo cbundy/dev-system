@@ -1,23 +1,14 @@
-// The one seam for every event v2 writes (docs/factory-loop/v2/SPEC.md 7.1): the state, the
-// columns, the note and the argv of `callum-flow-event`, and the note's parser. The `event`
-// executor (act-state.ts), the owner ops' interventions (act-events.ts), the rebuild of records
-// (record.ts) and the migration tool build and read their events here alone, so a later format
-// change touches this module only.
+// The one seam for every event v2 writes (docs/factory-loop/v2/SPEC.md 7.1): the native call of
+// `callum-flow-event` (event-native.ts builds the type and data), and, for the readers that still
+// need them, the old format's note and its parser. The `event` executor (act-state.ts), the owner
+// ops' interventions (act-events.ts) and factory-reconcile build their argv here alone.
 //
-// The format is today's (owner, 2026-10-15; v2 SPEC 15 "v2's events use today's format"): existing
-// `callum-flow-event` states and columns (issue, branch, pr, head; actor for a fixer's verdict),
-// and v2's extra fields as `key=value` tokens in the note, encoded as the `loop` notes are
-// (derive.ts loopNote, enc):
-// - tokens are separated by single spaces, and a value holds no space: `%` and whitespace are
-//   percent-encoded (a list item's `,` too);
-// - a missing value is `none` (a string that is literally `none` is written `%6Eone`), a list is
-//   comma-joined (`none` when empty), a flag is `yes` or `no`;
-// - the identifying tokens come first, free text (a question, notes, a reason, a path) last;
-//   nothing is clipped: each field is bounded where it is made (a record's free text by the
-//   table, a reason by oneLine), so a note carries every field whole.
-// The reused states keep the note today's queries read (`brief <url>`, `review`, `CORRECT: ..`),
-// verbatim; only `abandoned`, which no query parses, gains a `reason=` token, so the metrics can
-// tell a drop, a split, a triage drop and a reconcile release apart (7.3).
+// Since epic #534 v2 writes the new format natively: `callum-flow-event --type <type> --data <json>
+// [--issue N] [--actor A]`, the data the translator (images/base/factory-event-translate.js) made
+// from the old lines. Nothing is written as a note any more. The note builders and the token codec
+// stay for what still reads the old format: the `old` source (parseEvent), the reconcile and plan
+// replay of old logs, and the once keys (eventNote, onceKey, logOnce), which sources-facts.ts
+// also builds from the new rows.
 //
 // Pure: no clock, no command. The executors run eventArgv's argv through ExecCtx.cmd.
 import type { FactoryEvent } from '../derive'
@@ -26,38 +17,21 @@ import type { IssueRecord, IssueState, WaitCondition } from './types'
 import { NONE, dec, enc, str, unstr } from './codec'
 import { partsOfTokens, partsTokens } from './park-parts'
 import { INTERVENTION_WHO, RELEASE_OUTCOMES } from './event-data'
+import { abandonReason, nativeOf, oneLine } from './event-native'
 import type { GateRunData, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, ShadowReadData, TransitionEvent, V2Event } from './event-data'
 
-// an intervention's reason is one line of at most this many characters (7.1)
-export const REASON_MAX = 200
 
 // --- the events ---------------------------------------------------------------------------------
 
 // The event types live in event-data.ts; they are re-exported here so every import from './events' works.
 export * from './event-data'
 export { dec, enc } from './codec'
+export { ABANDON_REASONS, REASON_MAX, abandonReason, oneLine } from './event-native'
+export type { AbandonReason } from './event-native'
 
-export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
-// The states v2 writes, each through this module; the first three are new in callum-flow-event.
+export const REUSED_STATES = ['abandoned', 'merged', 'verdict'] as const
+// The states v2 writes, each through this module.
 export const V2_EVENT_STATES = ['transition', 'reviewed', 'intervention', 'reclaimed', ...REUSED_STATES] as const
-
-// Why an issue was abandoned, as the `reason=` token of the note says it (7.3, claim completion):
-// a drop by the owner (E1), a designer's split (T4), a triage drop (X5), a reconcile release (6.4).
-export const ABANDON_REASONS = ['dropped', 'split', 'triage', 'reconcile', 'other'] as const
-export type AbandonReason = (typeof ABANDON_REASONS)[number]
-
-// abandonReason: a reused `abandoned` event's reason, from its note: a note that already carries
-// a `reason=` token keeps it; else its first word says (`dropped`, `split into ..`, `triage`).
-export function abandonReason(note: string): AbandonReason {
-  const given = tokensOf(note).get('reason')
-  const named = ABANDON_REASONS.find(r => r === given)
-  if (named !== undefined) return named
-  const word = /^\W*(\w+)/.exec(note)?.[1]?.toLowerCase() ?? ''
-  if (word === 'split') return 'split'
-  if (word === 'triage') return 'triage'
-  if (word === 'drop' || word === 'dropped') return 'dropped'
-  return 'other'
-}
 
 // --- the value codec (derive.ts enc, dec) ---------------------------------------------------------
 
@@ -165,12 +139,6 @@ export function eventColumns(e: V2Event): EventColumns {
   }
 }
 
-// The actor the event is logged as: a fixer's dispositions are the fixer's (7.1, section 15);
-// null: the CLI's default.
-export function eventActor(e: V2Event): string | null {
-  return e.state === 'verdict' ? 'fixer' : null
-}
-
 function transitionNote(e: TransitionEvent): string {
   const r = e.record
   return [
@@ -215,12 +183,6 @@ function reviewedNote(e: ReviewedEvent): string {
   ].join(' ')
 }
 
-// oneLine: a reason as one line of at most REASON_MAX characters.
-export function oneLine(text: string): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length <= REASON_MAX ? line : `${line.slice(0, REASON_MAX - 3)}...`
-}
-
 // A ci-rerun's flake row (rules-flakes.ts) also carries flaky, failed_tests, failed_jobs and head, a refused check's row
 // (rules-refused.ts) failed_jobs and head; every
 // other intervention's note is as it always was.
@@ -243,24 +205,6 @@ function releaseNote(e: ReleaseEvent): string {
 function abandonedNote(e: ReusedEvent): string {
   const reason = abandonReason(e.note)
   return [`reason=${reason === 'reconcile' ? 'other' : reason}`, `note=${str(e.note)}`].join(' ')
-}
-
-// splitNote: the note of a v2 split's `abandoned` event, in the token shape the translator reads
-// (factory-event-translate.js shape 3), with the designer's four reasons and each child's why
-// (aligned with the children listed). The old `split into ..` words when the reasons can no longer
-// be read.
-export function splitNote(created: readonly number[], reasons: { why_split: string; why_count: string; why_parts: string; why_order: string } | null, childWhys: readonly string[] | null): string {
-  const words = `split into ${created.join(',')}`
-  if (reasons === null) return words
-  return [
-    'reason=split',
-    `note=${enc(words)}`,
-    `why_split=${enc(reasons.why_split)}`,
-    `why_count=${enc(reasons.why_count)}`,
-    `why_parts=${enc(reasons.why_parts)}`,
-    `why_order=${enc(reasons.why_order)}`,
-    `child_whys=${list(childWhys ?? [])}`,
-  ].join(' ')
 }
 
 // eventNote: the note an event carries.
@@ -289,27 +233,13 @@ export function eventNote(e: V2Event): string {
   }
 }
 
-// eventArgv: `callum-flow-event <state>` for this event: its columns as flags, its actor when it
-// has its own, and its note.
-// With opts.target 'new' it ends with --new-only: the line goes to the new log only (H1's backfill).
-export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
-  // a gate run is a new-format event: its payload is the schema's data, not an old note
-  if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
-  if (e.state === 'settings_changed') return ['callum-flow-event', '--type', 'settings_changed', '--data', JSON.stringify(e.data)]
-  if (e.state === 'main_state') return ['callum-flow-event', '--type', 'main_state', '--data', JSON.stringify(e.data)]
-  if (e.state === 'milestone_state') return ['callum-flow-event', '--type', 'milestone_state', '--data', JSON.stringify(e.data)]
-  if (e.state === 'comment_posted') return ['callum-flow-event', '--type', 'comment_posted', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
-  if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
-  const c = eventColumns(e)
-  const argv = ['callum-flow-event', e.state]
-  if (c.issue !== null) argv.push('--issue', String(c.issue))
-  if (c.branch !== null) argv.push('--branch', c.branch)
-  if (c.pr !== null) argv.push('--pr', String(c.pr))
-  if (c.head !== null) argv.push('--head', c.head)
-  const actor = eventActor(e)
-  if (actor !== null) argv.push('--actor', actor)
-  argv.push('--note', eventNote(e))
-  if (opts?.target === 'new') argv.push('--new-only')
+// eventArgv: `callum-flow-event --type <type> --data <json>` for this event, with its issue and,
+// when it has its own, its actor (a fixer's disposition).
+export function eventArgv(e: V2Event): string[] {
+  const n = nativeOf(e)
+  const argv = ['callum-flow-event', '--type', n.type, '--data', JSON.stringify(n.data)]
+  if (n.issue !== null) argv.push('--issue', String(n.issue))
+  if (n.actor !== null) argv.push('--actor', n.actor)
   return argv
 }
 

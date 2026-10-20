@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG } from '../hooks/config'
 import { emptyCache } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, State } from '../hooks/types'
-import { eventArgv } from '../hooks/v2/events'
+import { eventArgv, eventNote } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { validateStrict } from '../hooks/v2/event-reader'
 import { lifeOf } from '../hooks/v2/keys'
@@ -35,8 +35,7 @@ const csv = (header: string[], rows: Record<string, string>[]) => [header.join('
 // the old rows (factory.events, in REBUILD_SQL's columns) and the new ones (NEW_REBUILD_SQL's) of the same transitions
 function oldRow(r: IssueRecord, ts: number): Record<string, string> {
   const e: TransitionEvent = { state: 'transition', record: r, row: 'T1', from: null, via: 't1' }
-  const argv = eventArgv(e)
-  return { ts: new Date(ts).toISOString(), state: 'transition', issue: String(r.issue), run_id: '', branch: r.branch, pr: r.pr === null ? '' : String(r.pr), head: r.head ?? '', note: argv[argv.indexOf('--note') + 1] ?? '', actor: '', device: DEVICE }
+  return { ts: new Date(ts).toISOString(), state: 'transition', issue: String(r.issue), run_id: '', branch: r.branch, pr: r.pr === null ? '' : String(r.pr), head: r.head ?? '', note: eventNote(e), actor: '', device: DEVICE }
 }
 const OLD_HEADER = ['ts', 'state', 'issue', 'run_id', 'branch', 'pr', 'head', 'note', 'actor', 'device']
 const oldCsv = (list: [IssueRecord, number][]) => csv(OLD_HEADER, list.map(([r, ts]) => oldRow(r, ts)))

@@ -152,9 +152,13 @@ SQL
   pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` no longer log: their
   states (`design_routed`, `superseded`, the watcher's run states and `watcher_error`) have no new type.
   `queue-watch.sh` keeps the old-state call (`ready --if-changed`, which has no native form) until the cutover.
+  The factory loop writes natively too (dev-system#1141): its `transition`, `reviewed`, `intervention`, `requeued`,
+  `abandoned`, `merged`, `closed` and `finding_handled` events (hooks/v2/events.ts, event-native.ts) carry the data
+  `translate()` made from the old lines it wrote before, pinned equal by `tests/factory-loop-v2-events.test.js`; it
+  no longer writes `delegated`, `fix_requested` or `merge_ready`.
   `callum-flow-event <state> ... --new-only` does the same for an old-state call: it builds and
   translates the line as dual write does and appends only the new event (never the old line, so
-  `--if-changed` with it is a usage error); the factory loop's backfill (H1) uses it. `callum-flow-event
+  `--if-changed` with it is a usage error); the loop no longer writes with it. `callum-flow-event
   --new-only --new-path` is its capability probe: it prints the new path with exit 0, and an older image exits 2.
   `callum-flow-event <state> ... --data '<json object>'` (old-state mode, with or without `--new-only`) hands the
   translator extra payload fields that only the new event carries (the old line is unchanged): `ready` and `claimed`

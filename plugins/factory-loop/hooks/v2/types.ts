@@ -175,8 +175,8 @@ export type TriageChoice = (typeof TRIAGE_CHOICES)[number]
 // One event for a record (4.6): its kind and what the row's guard and change read.
 export type TableEvent = { kind: EventKind; reason?: string; cause?: OutsideCause; why?: UnknownWhy; choice?: TriageChoice; data?: unknown }
 
-// The reused event states a seq logs beside its `transition` on entry to a state (4.5, 7.1).
-export const EMIT_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned'] as const
+// The reused event states a seq logs beside its `transition` (4.5, 7.1): a drop's `abandoned`.
+export const EMIT_STATES = ['abandoned'] as const
 export type EmitState = (typeof EMIT_STATES)[number]
 
 // One row of the table (4.6). `rowFor` in table.ts is the only lookup.
@@ -332,7 +332,7 @@ export type V2Action =
   | (ActionBase & { kind: 'comment'; on: 'issue' | 'pr'; number: number; body: string })
   // built only by events.ts (7.1); logged: the event log already holds it (events.ts logOnce), so
   // the executor settles it done with no second write
-  | (ActionBase & { kind: 'event'; event: V2Event; logged?: true; target?: 'new' })
+  | (ActionBase & { kind: 'event'; event: V2Event; logged?: true })
   | (ActionBase & {
       kind: 'pr'
       op: 'ensure' | 'body'

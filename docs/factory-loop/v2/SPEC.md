@@ -564,8 +564,8 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
 and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`) and `conflictFixCap` is 5 (`config.ts`). `maxTriages` is 2. "Step
 states" are designing, building, reviewing, fixing and the merge-queue head. 37 rows. The Events
-column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
-`merge_ready`) is logged by every row that enters the state, T1 included (4.5).
+column names what a row's seq logs. The loop no longer writes a state's own entry event
+(`delegated`, `fix_requested`, `merge_ready`): the `transition` beside it carries the same facts (#1141, 7.1).
 
 **A record is made (S1).**
 
@@ -725,9 +725,6 @@ S3 plans these for the record's current seq until each is done. Keys are
 |---|---|
 | every new seq | `event transition` (first, after a close's `merged`); then, when steps of an earlier seq still run (the life's running agent steps that started before this seq's transition, whatever their key's shape), one `stop-agent` (TaskStop of its agent) for each, and `slot` op `kill` (10.8), all best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
 | a change of state, except to closed | `label` |
-| building | event `delegated --note "brief <url>"` |
-| fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
-| merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. Once the comment is done with a URL, a free `event comment_posted` (key `.../event/comment-posted`; `--type comment_posted --data {life, seq, to_state, comment_url} --issue N`) follows it, before the tell; a comment found with no URL logs none. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
 | waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. Once the comment is done with a URL, a free `event comment_posted` (key `.../event/comment-posted`; `--type comment_posted --data {life, seq, to_state, comment_url} --issue N`) follows it, before the links; a comment found with no URL logs none. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
 | closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, then `close-tracker` (key `.../follow/close-tracker`) when the rollout read `merge` and the `close-issue`, when planned, is done: it checks the issue's split parent (8.7) and, when it closed that tracker, plans the same check for the tracker's own parent (key `.../follow/close-tracker/up`, then `/up/up`: `TRACKER_DEPTH` checks in all); and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. A merge that is later reopened (a revert) is not a closed row follow-up: rule O3 moves it off Next (14.1, Releases). split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note). done: `comment` (key `.../comment`, hidden key, no closing keyword: the evidence, the designer's reason and what becomes of the issue branch), then `close-issue` as completed (key `.../follow/close-issue`, `logClosed`: the executor logs `closed` with reason `completed` after the close), then `delete-branch` (key `.../follow/delete-branch`) once the close is done, then the `close-tracker` chain of a merge (8.7), then `tell(done)`; the branch is deleted only when it exists on origin and either has no commit beyond origin/<base> or its head is the evidence PR's head, by `git push --force-with-lease=refs/heads/<b>:<sha> origin :refs/heads/<b>` (a lease the branch no longer meets is kept as `moved`, an answer, not a failure), and is otherwise kept, which the comment and the tell say |
@@ -768,7 +765,6 @@ type Row = {
   via: string                                      // the transition note's `via` code
 }
 export const TABLE: readonly Row[]
-export const ENTRY_EVENTS: Partial<Record<IssueState, EmitState>>   // a state's entry event (4.5)
 export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exactly one row, or it throws
 ```
 
@@ -1059,11 +1055,22 @@ Whatever the view shows when the tool runs, the same rule applies.
 
 ### 7.1 What v2 emits
 
-**The format.** v2 writes its events in today's format (owner, 2026-10-15; section 15):
-`callum-flow-event` states with their existing fields (issue, run, branch, pr, head, note,
-actor), and v2's extra fields as `key=value` tokens in the note, in the encoding today's `loop`
-notes use (`loopNote` and its inverse `entryFromLoop` in `derive.ts`;
-`docs/metrics.md`, "loop"):
+**The format.** v2 writes its events natively (epic #534; #1141): `callum-flow-event --type <type>
+--data <json> [--issue N] [--actor A]`, the type and data the image translator
+(`images/base/factory-event-translate.js`, `docs/factory-events/translator.md`) made from the old
+lines, field for field. `transition`, `reviewed` and `intervention` keep their names; a release is
+`requeued` or `abandoned`, a drop or split `abandoned`, a merge found afterwards `merged`, a closed
+tracker `closed`, a fixer's disposition `finding_handled` (actor `fixer`). Nothing is written as a
+note any more, and `delegated`, `fix_requested` and `merge_ready`, which the translator skipped as
+covered by the `transition` beside them, are not written at all. `--new-only` is gone: a native call
+writes the new log only, H1's backfill included. The data builders are in `hooks/v2/event-native.ts`
+(one per event kind); `tests/factory-loop-v2-events.test.js` holds each to the translator's output
+for the old line and runs it through the real writer.
+
+The note format below is kept for what still reads the old format: the `old` source and the
+reconcile and plan replay of old logs (`parseEvent`, the token codec), and the once keys
+(`eventNote`, `onceKey`), which the facts read also builds from new rows. It is removed with the
+`old` source (#656).
 
 - Tokens are separated by single spaces. A value holds no spaces: `%` and whitespace are
   percent-encoded (`enc` in `derive.ts`). A missing value is `none`, a list is comma-joined, a
@@ -1079,12 +1086,12 @@ notes use (`loopNote` and its inverse `entryFromLoop` in `derive.ts`;
   and `status=` for `loop` (`images/base/callum-flow-event`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
   `who=` and `cause=`.
-- **One seam.** `hooks/v2/events.ts` builds every event v2 writes: the state, the columns, the
-  note and the argv, and holds the note's parser. The `event` executor and `act-events.ts` call
+- **One seam.** `hooks/v2/events.ts` builds the argv of every event v2 writes (the type and data from
+  `event-native.ts`), and holds the old note's builders and parser. The `event` executor and `act-events.ts` call
   only it, so a later format change touches one module.
 
-Three new states in `callum-flow-event`, whose vocabulary is closed
-(`images/base/callum-flow-event`; the last addition was `loop`, D-09):
+Three states in the old format's vocabulary, which is closed
+(`images/base/callum-flow-event`; the last addition was `loop`, D-09); their native types are the same names:
 
 | State | When | Columns | Note fields |
 |---|---|---|---|
@@ -1119,9 +1126,7 @@ the note today's queries read:
 | `ready` | `queue-watch.sh --once` | unchanged |
 | `reclaimed`, `closed` | `callum-flow-sweep`; R1 for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, its `outcome` (`requeue`, `leave` or `reject`), `lives` (the released life's number; `none` for the migration's), the stage, what was checked, the open PR |
 | `abandoned` | v2 executors; the migration | drop, split, a triage drop, a release out of the factory or a rejection (with the release fields) |
-| `delegated` | entry to building, `--note "brief <url>"` | keeps the metrics' design stage (`docs/metrics.md`, section 1) |
-| `fix_requested` | entry to fixing, `--note review\|ci\|conflict\|triage` | keeps the first-pass query (`docs/metrics.md`, section 2) |
-| `merge_ready` | entry to merge-queue | keeps the merge-ready point of lead time and the waiting split |
+| `delegated`, `fix_requested`, `merge_ready` | no longer written (#1141); the `transition` to building (`brief_url`), fixing (`via`) and merge-queue carries each | the metrics read the transitions |
 | `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md`, section 3) |
 | `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
@@ -3856,13 +3861,17 @@ The first entries are the owner's own decisions; they are settled.
 - **Why:** the first loop grew into a few large files (one planner file of over 2,500 lines). A
   check keeps the loop from doing the same.
 
-### The loop's events use today's format (owner)
+### The loop's events use today's format (owner), superseded for writing by native events
 
 - **Decision:** on 2026-10-15 the owner withdrew the decision to use issue #534's structured
   event format, and the idea of a new database table: "it's going to be too complex to add". The
-  loop writes today's format: existing `callum-flow-event` states and fields, with its extra fields as
+  loop wrote today's format: existing `callum-flow-event` states and fields, with its extra fields as
   `key=value` tokens in the note, encoded as `loop` notes are. `hooks/v2/events.ts` is the one
   seam, so a later format change touches one module (7.1).
+- **Superseded:** epic #534 supersedes it for the write side (#1141): the loop now writes the new
+  format natively, through the same seam (`events.ts`, with the data in `event-native.ts`), so the
+  change touched one module as intended. The read side's note parse stays for the `old` source
+  until #656.
 
 ### The table is data, with one lookup
 
@@ -4107,7 +4116,7 @@ The first entries are the owner's own decisions; they are settled.
 - **Decision:** `transition`, `reviewed`, `intervention` (7.1).
 - **Alternatives:** a new kind per state; carry state changes in `loop` notes.
 - **Why:** `loop` is never a stage (D-09), so state changes need their own kind; reusing
-  `delegated`, `fix_requested`, `merge_ready` and `verdict` keeps every existing query working.
+  `delegated`, `fix_requested`, `merge_ready` and `verdict` kept every existing query working; since #1141 the loop writes the new format natively and the queries read the transitions.
 
 ### No label mirror
 
@@ -4294,7 +4303,7 @@ still accepts them in a settings file, and they have no effect.
 | `transition` | free | re-checks its trigger, stores the record, pings | 3 |
 | `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force` for the nine; op `clear` (3.4); R1's op `requeue`: `--add-label <ready> --remove-label <the eight>`, and op `reject`: `--add-label factory:rejected --remove-label <the eight>` (6.4) | 3 |
 | `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -`; also R1's rejection comment (6.4) | 3 |
-| `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
+| `event` | free | `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`, built only by `events.ts` (7.1), for `transition`, `abandoned`, `requeued`, `merged`, `reviewed`, `finding_handled`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child; a not-ready child gets none: plan claims it with a `park` and row S7 parks it (8.7) | 3 |
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |

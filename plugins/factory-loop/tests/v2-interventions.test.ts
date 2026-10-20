@@ -11,7 +11,7 @@ import { REBUILD_DAYS } from '../hooks/observe'
 import type { Runtime } from '../hooks/observe'
 import type { Action, Control, LedgerEntry, State } from '../hooks/types'
 import { logEvent, logOwnerOp, opInterventions } from '../hooks/v2/act-events'
-import { eventNote, intervention, noteToken } from '../hooks/v2/events'
+import { eventNote, intervention } from '../hooks/v2/events'
 import type { InterventionEvent } from '../hooks/v2/events'
 import { claimKey, factKey, interventionKey, keyParts, reclaimKey, reconcileKey, rerunKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
@@ -909,8 +909,8 @@ describe('the owner\'s files in the pass driver', () => {
     expect(fileIvs(h.last())).toEqual([])
     await clock.advance(60_000)
     expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
-    const iv = h.events().find(e => e[1] === 'intervention' && (e.at(-1) ?? '').includes('cause=config-file'))
-    expect(iv?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20config.json%20mode')
+    const iv = h.native('intervention').find(e => e.data.cause === 'config-file')
+    expect(iv?.data.detail).toContain('settings changed with no op: config.json mode')
     // once
     await clock.advance(60_000)
     expect(fileIvs(h.last())).toEqual([])
@@ -924,7 +924,7 @@ describe('the owner\'s files in the pass driver', () => {
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ mode: 'act', executed: true })
     expect(fileIvs(h.last())).toEqual([])
-    expect(h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))).toHaveLength(1)
+    expect(h.native('intervention').filter(e => e.data.cause === 'config-file')).toHaveLength(1)
   })
 
   // drill run 2 (R2-F1): a new build that adds a setting's default (maxLives) was logged as a
@@ -941,7 +941,7 @@ describe('the owner\'s files in the pass driver', () => {
       files: { '/work/.claude/factory-loop.json': JSON.stringify({ readyLabel: 'from-tree' }) },
       store: { [filesKey(REPO)]: { ...EMPTY_FILES, settings: seenOf(written) } },
     })
-    const logged = () => h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))
+    const logged = () => h.native('intervention').filter(e => e.data.cause === 'config-file')
     const passes = async (n: number) => {
       for (let i = 0; i < n; i += 1) await clock.advance(60_000)
     }
@@ -959,7 +959,7 @@ describe('the owner\'s files in the pass driver', () => {
     origin = { stdout: JSON.stringify({ readyLabel: 'go' }) }
     await passes(6)
     expect(logged()).toHaveLength(1)
-    expect(logged()[0]?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20readyLabel')
+    expect(logged()[0]?.data.detail).toContain('settings changed with no op: readyLabel')
   })
 
   // drill run 2 (R2-F3, R2-F6): an edit back to a version logged before (mode act -> off -> act, a
@@ -970,7 +970,7 @@ describe('the owner\'s files in the pass driver', () => {
     const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
     await $.session.start(START)
     await clock.advance(6_000)
-    const logged = () => h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file')).length
+    const logged = () => h.native('intervention').filter(e => e.data.cause === 'config-file').length
     const byHand = async (cfg: Record<string, unknown>) => {
       h.files.set(path, JSON.stringify(cfg))
       for (let i = 0; i < 3; i += 1) await clock.advance(60_000)
@@ -1008,7 +1008,7 @@ describe('the owner\'s files in the pass driver', () => {
     await clock.advance(6_000)
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
-    expect(h.events().filter(e => e[1] === 'intervention').map(e => noteToken(e.at(-1) ?? '', 'fact'))).toEqual([factOf(fresh)])
+    expect(h.native('intervention').map(e => e.data.fact)).toEqual([factOf(fresh)])
     // the ledger holds the logged one again, settled with no write
     expect(h.entry(interventionKey(factOf(before)))).toMatchObject({ status: 'done', summary: 'intervention already in the event log' })
   })
@@ -1023,20 +1023,20 @@ describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
     const io = {
       run: async (argv: string[], init: { env: Record<string, string> }) => {
         runs.push({ argv, env: init.env })
-        return { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'callum-flow-event: bad note' }
+        return { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'callum-flow-event: bad data' }
       },
     }
     const rt = { cwd: '/work', env: { CALLUM_FLOW_REPO: REPO } } as unknown as Runtime
     const commands: string[] = []
     const env = { io: io as never, rt, commands }
     expect(await logOwnerOp(env, { text: 'drop 571', name: 'drop', issues: [571], at: NOW, by: 'person' })).toEqual([])
-    expect(runs.map(r => r.argv.slice(0, 4))).toEqual([['callum-flow-event', 'intervention', '--issue', '571']])
-    expect(runs[0]?.argv.at(-1)).toBe(`who=person cause=op:drop life=none fact=op:drop/i571/${NOW.toString(36)} reason=drop%20571`)
+    expect(runs.map(r => [...r.argv.slice(0, 3), ...r.argv.slice(5)])).toEqual([['callum-flow-event', '--type', 'intervention', '--issue', '571']])
+    expect(JSON.parse(runs[0]?.argv[4] ?? '')).toEqual({ who: 'person', cause: 'op:drop', life: null, fact: `op:drop/i571/${NOW.toString(36)}`, pr: null, detail: 'drop 571', flaky: null, failed_tests: null, failed_jobs: null, head: null })
     expect(runs[0]?.env).toEqual({ CALLUM_FLOW_REPO: REPO })
     expect(commands.length).toBe(1)
     exit = 2
     const notes = await logOwnerOp(env, { text: 'mode act', name: 'mode', issues: [], at: NOW, by: 'person' })
-    expect(notes).toEqual(['intervention op:mode not logged: callum-flow-event intervention: exit 2: callum-flow-event: bad note'])
+    expect(notes).toEqual(['intervention op:mode not logged: callum-flow-event intervention: exit 2: callum-flow-event: bad data'])
     // the shared writer throws as ExecCtx.event does, with the exit, so an executor never retries a usage error
     const cmd = (argv: string[]) => io.run(argv, { env: {} })
     let thrown: unknown = null
@@ -1044,7 +1044,7 @@ describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
       thrown = e
     })
     expect((thrown as { exitCode?: number }).exitCode).toBe(2)
-    expect(runs.at(-1)?.argv).toEqual(['callum-flow-event', 'verdict', '--issue', '5', '--pr', '9', '--actor', 'fixer', '--note', 'WRONG: r1-2 not a bug'])
+    expect(runs.at(-1)?.argv).toEqual(['callum-flow-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: null, pr: 9, head: null, finding: 'r1-2', outcome: 'declined', detail: 'not a bug' }), '--issue', '5', '--actor', 'fixer'])
   })
 })
 

@@ -18,10 +18,9 @@ import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { decisionOf, parkText, waitText } from './park-text'
-import { fixWhyOf, lifeEntries } from './rules-agent'
+import { lifeEntries } from './rules-agent'
 import { doneItems } from './rules-done'
 import { splitDesignOf } from './rules-work'
-import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, TRACKER_DEPTH, labelOf, resumeStep } from './types'
 import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
 
@@ -95,10 +94,9 @@ function heldByOther(ctx: V2Ctx, r: IssueRecord): boolean {
   return holder !== null && holder !== ctx.state.device
 }
 
-// emitted: an event the seq logs beside `transition`, with the note today's queries read.
-function emitted(ctx: V2Ctx, r: IssueRecord, state: EmitState): Action {
-  const note = state === 'delegated' ? `brief ${r.brief ?? 'none'}` : state === 'fix_requested' ? (fixWhyOf(ctx.state, r) ?? 'review') : state === 'merge_ready' ? `round ${r.round}` : (r.notes[0] ?? state)
-  return { ...base(r, entryKey(r, `event/${state}`), `log ${state}`), kind: 'event', event: { state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note } }
+// emitted: the `abandoned` event a drop logs beside its `transition`.
+function emitted(r: IssueRecord, state: EmitState): Action {
+  return { ...base(r, entryKey(r, `event/${state}`), `log ${state}`), kind: 'event', event: { state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.notes[0] ?? state } }
 }
 
 export { parkText }
@@ -162,7 +160,6 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   const add = (action: Action, soft = false, tell = false) => items.push({ action, soft, tell })
   // a change of state (since moves only with the state, table.ts nextRecord)
   const changed = r.since === r.seqAt
-  const row = t.row === null ? null : (TABLE.find(x => x.id === t.row) ?? null)
   // a merge's `merged` event, when the factory had none at the close, comes before the close's
   // transition (mergedItem)
   if (changed && r.state === 'closed') items.push(...mergedItem(ctx, r))
@@ -181,10 +178,6 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   const labelKey = entryKey(r, 'label')
   if (changed && label !== null) add({ ...base(r, labelKey, `label ${label}`), kind: 'label', op: 'set', label })
   if (changed && r.state === 'closed' && (!heldByOther(ctx, r) || ctx.byKey.has(labelKey))) add({ ...base(r, labelKey, 'a closed record carries no factory label'), kind: 'label', op: 'clear', label: null })
-  // the event of the state a row entered, a same-state entry (X2) included (a seq whose entry the
-  // ledger rebuilt with no row logs none)
-  const entered = row === null || row.next === 'same' ? undefined : ENTRY_EVENTS[r.state]
-  if (entered !== undefined) add(emitted(ctx, r, entered))
   if (changed && r.state === 'parked') {
     add({ ...base(r, entryKey(r, 'comment'), 'the park\'s question on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: parkText(r, t.from, t.via) })
     items.push(...postedItem(ctx, r))
@@ -256,7 +249,7 @@ function trackerItems(ctx: V2Ctx, r: IssueRecord, o: { rollout: string | null; c
 function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   const items: EntryItem[] = []
   const add = (action: Action) => items.push({ action, soft: false, tell: false })
-  if (r.why === 'dropped') add(emitted(ctx, r, 'abandoned'))
+  if (r.why === 'dropped') add(emitted(r, 'abandoned'))
   if (r.why === 'merged' || r.why === 'merged-by-hand') {
     const rolloutKey = followKey(r, 'rollout')
     add({ ...base(r, rolloutKey, 'read the merged issue\'s rollout'), kind: 'rollout', pr: r.pr })

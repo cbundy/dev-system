@@ -10,7 +10,7 @@
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
 import { waitKey } from './sources-waits'
-import type { EmitState, IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
+import type { IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -204,10 +204,6 @@ function clearedNote(wait: readonly WaitCondition[], tags: Record<string, string
 const lifePrOf = (r: IssueRecord, e: TableEvent): number | null => r.pr ?? dataOf(e).pr ?? null
 
 // --- the rows ----------------------------------------------------------------------------------------------
-
-// The event a state logs on entry beside `transition` (4.5): every row that enters the state logs
-// it, a resume's T1 and a same-state entry (X2) included, so a reader counts every entry (7.1).
-export const ENTRY_EVENTS: Readonly<Partial<Record<IssueState, EmitState>>> = { building: 'delegated', fixing: 'fix_requested', 'merge-queue': 'merge_ready' }
 
 // T1 leads where resumeTo says, counting an entry to reviewing as a round and an entry to fixing as
 // a fix, as every other entry to them counts (3.2: round counts entries to reviewing, fixes entries

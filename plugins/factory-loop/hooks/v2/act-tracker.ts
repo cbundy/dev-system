@@ -14,6 +14,7 @@ import type { Exec, ExecCtx, Executor, RunResult } from '../exec'
 import type { Action, ActionKind } from '../types'
 import * as ARGV from './argv'
 import { blockerOf } from './act-split'
+import { closedData } from './event-native'
 
 const SEC = 1000
 const GH_MS = 60 * SEC
@@ -105,7 +106,7 @@ const closeTracker: Executor = async (ctx, action: Action) => {
   // best effort: the close is made, and a retry must not lose the chain upward; the sweep logs the close too
   let logged = ''
   try {
-    await ctx.event('closed', { issue: parent, note: 'completed' })
+    await ctx.event('closed', closedData('completed'), { issue: parent })
   } catch (err) {
     logged = ` (the closed event did not log: ${message(err)})`
   }

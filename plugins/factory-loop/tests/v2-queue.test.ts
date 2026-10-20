@@ -556,18 +556,18 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     expect(queueActions(p)).toEqual([])
   })
 
-  test('the head\'s step starts only once its entry actions are done: its transition event, its label and its merge_ready event', () => {
+  test('the head\'s step starts only once its entry actions are done: its transition event and its label', () => {
     const r = rec(25)
     const t = entry(transitionKey(r), 'transition', { issue: 25, outcome: { kind: 'transition', row: 'T8', event: 'ok', cause: null, from: 'reviewing', to: 'merge-queue', step: 'review', stored: true, via: 'approve' } })
     const first = plan(withLedger(world([r]), [t]))
     expect(queueActions(first)).toEqual([])
-    expect(of(first, 25).map(a => (a.kind === 'event' ? `event ${a.event.state}` : a.kind))).toEqual(['event transition', 'label', 'event merge_ready'])
+    expect(of(first, 25).map(a => (a.kind === 'event' ? `event ${a.event.state}` : a.kind))).toEqual(['event transition', 'label'])
     expect(said(first, 25)).toContain('its transition event of seq 5 is not logged yet')
     const logged = entry(`${transitionKey(r).slice(0, -2)}/event/transition`, 'event', { issue: 25 })
     const second = plan(withLedger(world([r]), [t, logged]))
     expect(queueActions(second)).toEqual([])
     expect(said(second, 25)).toContain('its entry actions run first')
-    const rest = ['label', 'event/merge_ready'].map(a => entry(`${transitionKey(r).slice(0, -2)}/${a}`, a === 'label' ? 'label' : 'event', { issue: 25 }))
+    const rest = [entry(`${transitionKey(r).slice(0, -2)}/label`, 'label', { issue: 25 })]
     expect(queueActions(plan(withLedger(world([r]), [t, logged, ...rest])))).toEqual([expect.objectContaining({ kind: 'queue-merge' })])
   })
 })

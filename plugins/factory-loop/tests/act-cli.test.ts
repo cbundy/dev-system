@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, stepsOf, usageError } from '../hooks/act-cli'
-import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
+import type { ActIo, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, AgentView, LedgerEntry } from '../hooks/types'
 import { DEVICE, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
@@ -44,14 +44,14 @@ type Over = {
   agents?: AgentView[]
   stop?: (agentId: string) => Promise<{ stopped: boolean; error?: string }>
   rename?: (title: string) => Promise<void>
-  event?: (state: string, fields: EventFields) => Promise<void>
+  event?: (type: string, data: Record<string, unknown>, at: { issue: number }) => Promise<void>
 }
 
 // harness: a fake ExecCtx whose commands answer from `replies` in order (a missing reply is a
 // quiet exit 0), recording every command, event, stop and rename.
 function harness(replies: Reply[] = [], over: Over = {}) {
   const calls: Call[] = []
-  const events: { state: string; fields: EventFields }[] = []
+  const events: { type: string; data: Record<string, unknown>; issue: number }[] = []
   const stops: string[] = []
   const titles: string[] = []
   let next = 0
@@ -85,9 +85,9 @@ function harness(replies: Reply[] = [], over: Over = {}) {
       if (reply instanceof Error) throw reply
       return { exitCode: 0, stdout: '', stderr: '', ...reply }
     },
-    event: async (s, fields) => {
-      events.push({ state: s, fields })
-      if (over.event !== undefined) await over.event(s, fields)
+    event: async (type, data, at) => {
+      events.push({ type, data, issue: at.issue })
+      if (over.event !== undefined) await over.event(type, data, at)
     },
     wakeId: () => 'w1',
   }
@@ -270,7 +270,7 @@ describe('a done close: close-issue logs closed, delete-branch is leased (8.7)',
     expect(plain.events).toEqual([])
     const { result, calls, events } = await exec(A.closeDone())
     expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
-    expect(events).toEqual([{ state: 'closed', fields: { issue: 470, note: 'completed' } }])
+    expect(events).toEqual([{ type: 'closed', data: { reason: 'completed' }, issue: 470 }])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed #470' })
     // a close that failed logs nothing
     const failed = await exec(A.closeDone(), [{ exitCode: 1, stderr: 'boom' }])
@@ -299,32 +299,46 @@ describe('a done close: close-issue logs closed, delete-branch is leased (8.7)',
   })
 })
 
+// the data of a split's abandoned event with no reasons read
+const SPLIT = { reason: 'split', split_into: [] as number[], why_split: null, why_count: null, why_parts: null, why_order: null, child_whys: null, stage: null, lives: null, branch: null, pr: null, detail: '' }
+
 describe('release-parent: the label, then the event, stopping at the first failure', () => {
   test('release-parent: the claim label comes off, then `abandoned` notes the split', async () => {
     const { result, calls, events } = await exec(A.releaseParent())
     expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV]])
     expect(calls[0]?.init).toEqual({ timeoutMs: 60_000 })
-    expect(events).toEqual([{ state: 'abandoned', fields: { issue: 470, note: 'split into 471,472' } }])
+    expect(events).toEqual([{ type: 'abandoned', data: { ...SPLIT, split_into: [471, 472], detail: 'split into 471,472' }, issue: 470 }])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'released #470, split into 471,472' })
   })
 
-  test('release-parent with the designer\'s reasons: the note is the token shape the translator reads', async () => {
+  test('release-parent with the designer\'s reasons: the data is what the translator makes of the old token note', async () => {
     const reasons = { why_split: 'It spans two areas', why_count: 'Two: one per area', why_parts: '100% apart', why_order: 'Independent' }
     const action = { ...A.releaseParent(), reasons, childWhys: ['The loop side', 'The image, side'] } as Action
     const { events, result } = await exec(action)
     expect(events).toEqual([
       {
-        state: 'abandoned',
-        fields: {
-          issue: 470,
-          note: 'reason=split note=split%20into%20471,472 why_split=It%20spans%20two%20areas why_count=Two:%20one%20per%20area why_parts=100%25%20apart why_order=Independent child_whys=The%20loop%20side,The%20image%2C%20side',
+        type: 'abandoned',
+        issue: 470,
+        data: {
+          reason: 'split',
+          split_into: [471, 472],
+          why_split: 'It spans two areas',
+          why_count: 'Two: one per area',
+          why_parts: '100% apart',
+          why_order: 'Independent',
+          child_whys: ['The loop side', 'The image, side'],
+          stage: null,
+          lives: null,
+          branch: null,
+          pr: null,
+          detail: 'split into 471,472',
         },
       },
     ])
     expect(result.status).toBe('done')
-    // reasons that could not be read keep the old words
+    // reasons that could not be read name only the children
     const unread = await exec({ ...A.releaseParent(), reasons: null, childWhys: null } as Action)
-    expect(unread.events).toEqual([{ state: 'abandoned', fields: { issue: 470, note: 'split into 471,472' } }])
+    expect(unread.events).toEqual([{ type: 'abandoned', data: { ...SPLIT, split_into: [471, 472], detail: 'split into 471,472' }, issue: 470 }])
   })
 
   test('a failed label edit logs no event; a rate limit is flagged', async () => {
@@ -334,13 +348,13 @@ describe('release-parent: the label, then the event, stopping at the first failu
   })
 
   test('a failed event is failed; its usage exit is never retried', async () => {
-    const usage = Object.assign(new Error('callum-flow-event: unknown state'), { exitCode: 2 })
+    const usage = Object.assign(new Error('callum-flow-event: unknown type'), { exitCode: 2 })
     const { result, calls } = await exec(A.releaseParent(), [], { event: async () => Promise.reject(usage) })
     expect(calls).toHaveLength(1)
     expect(result).toEqual({
       status: 'failed',
-      outcome: { kind: 'cli', exit: 2, detail: 'callum-flow-event: unknown state' },
-      summary: 'event abandoned: callum-flow-event: unknown state',
+      outcome: { kind: 'cli', exit: 2, detail: 'callum-flow-event: unknown type' },
+      summary: 'event abandoned: callum-flow-event: unknown type',
       noRetry: true,
     })
     const other = await exec(A.releaseParent(), [], { event: async () => Promise.reject(new Error('cannot start')) })
