@@ -149,7 +149,31 @@ SELECT coalesce(json_agg(json_build_object(
   'reason', reason, 'lease_minutes', lease_minutes)
   ORDER BY ts, device, type, issue), '[]'::json)
 FROM factory.event_log
-WHERE ts <= :'at'::timestamptz AND ${REPO_FILTER('lower(repo)')};`;
+WHERE ts <= :'at'::timestamptz AND type <> 'queue_snapshot' AND ${REPO_FILTER('lower(repo)')};`;
+
+// The queue snapshots (docs/factory-state.md "Sources"): they never place an issue or count in a
+// repo's coverage, so SQL_EVENT_LOG leaves them out and these two queries read them apart. The first
+// checks for the marker column of migration 0023 (a database before it has no snapshot columns);
+// the second picks each repo's newest snapshot at or before --at, named columns only.
+const SQL_QUEUE_META = `-- fs:queue_meta
+SELECT json_build_object('columns', EXISTS (
+  SELECT 1 FROM information_schema.columns
+  WHERE table_schema = 'factory' AND table_name = 'event_log' AND column_name = 'taken_at'));`;
+
+const SQL_QUEUE = `-- fs:queue
+SELECT coalesce(json_agg(json_build_object(
+  'repo', repo, 'ts', ${T('ts')}, 'taken_at', ${T('taken_at')}, 'reason', reason, 'considered', considered,
+  'candidates', candidates, 'rest', rest, 'free_slots', free_slots, 'owner_priority', owner_priority,
+  'owner_only', owner_only, 'owner_serial', owner_serial, 'owner_new_off', owner_new_off)
+  ORDER BY lower(repo)), '[]'::json)
+FROM (
+  SELECT repo, ts, taken_at, reason, considered, candidates, rest, free_slots, owner_priority,
+         owner_only, owner_serial, owner_new_off,
+         row_number() OVER (PARTITION BY lower(repo) ORDER BY taken_at DESC, ts DESC, device DESC, event_id DESC) AS rn
+  FROM factory.event_log
+  WHERE type = 'queue_snapshot' AND taken_at <= :'at'::timestamptz AND ${REPO_FILTER('lower(repo)')}
+) q
+WHERE rn = 1;`;
 
 const SQL_RUNS = `-- fs:runs
 ${RUN_LINK}
@@ -290,6 +314,8 @@ const NEW_TYPE_NAME = {
 // prompt_waiting): they keep their own name, which
 // no rule above names, so the derivation ignores them, as it ignores the old claim_lost and usage.
 // A type the shapes file lists but this tool has never seen is ignored the same way.
+// `queue_snapshot` is also ignored by name: SQL_EVENT_LOG leaves it out (it is read apart, see
+// SQL_QUEUE), so it never counts in a repo's coverage.
 
 // One factory.event_log row (the new store) to the common shape. A type or version the shapes file
 // does not list as current is refused: a newer writer's event is not read as if it were understood.
@@ -567,9 +593,35 @@ function labelStage(labels) {
   return labels.includes(LABEL_QUEUED) ? 'queued' : null;
 }
 
+// One repo's `queue` key: the top of its newest snapshot, or an n/a that says why there is none.
+function queueFor(queue, row, at) {
+  if (!queue.available) return { 'n/a': queue.reason };
+  if (!row) return { 'n/a': 'no queue_snapshot for this repo at or before --at' };
+  const taken = Date.parse(row.taken_at);
+  return {
+    taken_at: iso(taken),
+    age_minutes: minutesBetween(taken, at),
+    reason: row.reason,
+    considered: row.considered,
+    free_slots: row.free_slots,
+    owner: { priority: row.owner_priority, only: row.owner_only, serial: row.owner_serial, new_off: row.owner_new_off },
+    top: row.candidates.slice(0, 10).map((c) => ({ issue: c.issue, rank: c.rank, score: c.score, claimable: c.claimable, why: c.why })),
+    rest: row.rest,
+  };
+}
+
 // Pure: rows in, the full report out. `github` is null (not read) or { <repo>: { ok, reason, open, states, claims } }.
 function deriveState(input) {
-  const { at, rules, github = null, workers, pipeline = { available: true } } = input;
+  const { at, rules, github = null, workers, pipeline = { available: true }, queue = { available: false, reason: 'not read' } } = input;
+  const queueByRepo = new Map();
+  if (queue.available) {
+    // the newest snapshot of each repo, whatever the order of the rows
+    for (const q of queue.rows) {
+      const key = String(q.repo).toLowerCase();
+      const cur = queueByRepo.get(key);
+      if (!cur || cmp(Date.parse(q.taken_at), Date.parse(cur.taken_at)) > 0 || (Date.parse(q.taken_at) === Date.parse(cur.taken_at) && cmp(Date.parse(q.ts), Date.parse(cur.ts)) > 0)) queueByRepo.set(key, q);
+    }
+  }
   // `eventShape: 'common'` is a loader's output; raw factory.events rows (the fixtures) are mapped here
   const events = normalizeEvents(input.eventShape === 'common' ? input.events : input.events.map(mapOldRow), at);
   const runs = dedupeRuns(input.runs.map((r) => ({ ...r, repo: String(r.repo).toLowerCase() })), at);
@@ -712,6 +764,7 @@ function deriveState(input) {
       issues: live.map(out),
       recent: recent.map(out),
       other_runs: otherRuns,
+      queue: queueFor(queue, queueByRepo.get(repo), at),
     });
   }
   stuckAll.sort((a, b) => cmp(a.repo, b.repo) || a.issue - b.issue);
@@ -787,10 +840,27 @@ function loadEvents(source, base) {
   return rows.map(source === 'new' ? mapEventLogRow : mapOldRow);
 }
 
+// The queue snapshots of the new store (SQL_QUEUE), read after the events. Optional like the
+// workers: a database before migration 0023 or a failed read is an n/a with its reason, not an error.
+function loadQueue(base) {
+  try {
+    const meta = queryJson(SQL_QUEUE_META, {}, 'queue metadata', true);
+    if (!meta.columns) return { available: false, reason: 'factory.event_log has no queue_snapshot columns (the factory database predates migration 0023)' };
+    const rows = queryJson(SQL_QUEUE, base.vars, 'queue snapshots', true);
+    if (!Array.isArray(rows)) throw new InputError('dev-query returned unexpected data');
+    return { available: true, rows };
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    return { available: false, reason: `cannot read the queue snapshot: ${e.message}` };
+  }
+}
+
+const OLD_QUEUE = { available: false, reason: 'the old store has no queue snapshots' };
+
 // Rows in, the full report out: the derivation, then (with --github on) a second pass with the
 // GitHub facts of the first one's issues.
-function buildReport(base, events, opts) {
-  const input = { at: base.at, atSource: base.atSource, events, eventShape: 'common', runs: base.runs, repos: opts.repos, rules: opts.rules, workers: base.workers, pipeline: base.pipeline };
+function buildReport(base, events, opts, queue = OLD_QUEUE) {
+  const input = { at: base.at, atSource: base.atSource, events, eventShape: 'common', runs: base.runs, repos: opts.repos, rules: opts.rules, workers: base.workers, pipeline: base.pipeline, queue };
   let report = deriveState({ ...input, github: null });
   if (opts.github) report = deriveState({ ...input, github: loadGithub(report) });
   return report;
@@ -805,9 +875,11 @@ function buildReport(base, events, opts) {
 //     rows on both sides, so the id still shows through `source`, `pr` and `stage`.
 //  3. an abandoned final's free-text detail: the old note is free text, the new `reason` an enum, so
 //     `abandoned (...)` is reduced to `abandoned`.
+//  4. the repo's `queue`: the old store has no queue snapshots, so only the new side can show one.
 function normalizeForCompare(report) {
   const out = JSON.parse(JSON.stringify(report));
   for (const repo of out.repos || []) {
+    delete repo.queue;
     delete repo.coverage.events;
     delete repo.coverage.last_event_at;
     for (const d of repo.coverage.devices) {
@@ -900,6 +972,17 @@ const dur = (m) => {
   return `${Math.floor(m / 1440)}d`;
 };
 
+function queueLines(q) {
+  if (q['n/a']) return [`queue: n/a: ${q['n/a']}`];
+  const head = `queue (snapshot ${dur(q.age_minutes)} old, ${q.reason})`;
+  const list = (a) => (a.length ? a.map((n) => `#${n}`).join(' ') : 'none');
+  const controls = `queue controls: free slots ${q.free_slots === null ? 'unset' : q.free_slots}, priority ${list(q.owner.priority)}, only ${list(q.owner.only)}, one at a time ${q.owner.serial ? 'on' : 'off'}, no new work ${q.owner.new_off ? 'on' : 'off'}`;
+  if (!q.top.length) return [`${head}: empty`, controls];
+  let line = `${head}: ${q.top.map((c) => `#${c.issue} score ${c.score === null ? '-' : c.score}${c.why === null ? '' : ` (${c.why})`}`).join(', ')}`;
+  if (q.considered > q.top.length) line += `, +${q.considered - q.top.length} more`;
+  return [line, controls];
+}
+
 function renderText(r) {
   const out = [];
   out.push(`Factory state at ${r.at} (${r.at_source})`);
@@ -924,6 +1007,7 @@ function renderText(r) {
     if (c.devices.length) out.push(`devices: ${c.devices.map((d) => `${d.device} (${d.events} events, last ${d.last_event_at})`).join('; ')}`);
     out.push(`live issues by source: mirror ${c.live_issue_sources.mirror}, event ${c.live_issue_sources.event}, github ${c.live_issue_sources.github}`);
     for (const n of c.notes) out.push(`note: ${n}`);
+    out.push(...queueLines(repo.queue));
     const row = (i) => [`#${i.issue}`, i.stage + (i.approximate ? ' (approx)' : ''), dur(i.minutes_in_stage), i.holder, i.run, i.pr ? `#${i.pr}` : null,
       i.stuck ? `STUCK ${i.stuck.rule}` : null, i.source, [i.detail, i.hint, ...i.flags].filter(Boolean).join('; ')];
     const head = ['issue', 'stage', 'in stage', 'holder', 'run', 'pr', 'stuck', 'source', 'detail'];
@@ -958,14 +1042,18 @@ async function main(argv) {
     report = buildReport(base, loadEvents('old', base), opts);
   } else if (opts.source === 'new') {
     const base = loadBase(opts, false);
-    report = buildReport(base, loadEvents('new', base), opts);
+    const events = loadEvents('new', base);
+    report = buildReport(base, events, opts, loadQueue(base));
   } else {
     // shadow: the old answer is printed and decides the exit code; the new read only gets recorded
     const base = loadBase(opts, true);
     report = await factorySource().runShadow({
       tool: 'factory-state',
       old: () => buildReport(base, loadEvents('old', base), opts),
-      new: () => buildReport(base, loadEvents('new', base), opts),
+      new: () => {
+        const events = loadEvents('new', base);
+        return buildReport(base, events, opts, loadQueue(base));
+      },
       normalize: normalizeForCompare,
       repo: opts.repos.length ? opts.repos.join(',') : null,
       args: argv.join(' '),
@@ -993,6 +1081,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_EVENT_LOG, SQL_RUNS, DEFAULT_RULES, STAGES,
+  deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_EVENT_LOG, SQL_QUEUE, SQL_QUEUE_META, SQL_RUNS, DEFAULT_RULES, STAGES,
   mapOldRow, mapEventLogRow, normalizeForCompare,
 };
