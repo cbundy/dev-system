@@ -19,6 +19,7 @@ import type { WindDownRead } from './wind-down'
 import type { CapInfo } from './capacity'
 import type { WorkspaceRead } from './workspace'
 import type { Stamps } from './stamps'
+import type { QueueView } from './queue-view'
 
 // --- states, steps and the record (v2 SPEC 3.1, 3.2) ------------------------------------------------
 
@@ -569,7 +570,7 @@ export type V2State = {
 export type SettingsOp = { key: string; by: 'person' | 'judge'; at: Ms }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
-export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict; cap?: CapInfo }
+export type V2Ctx = PlanCtx & { v2: V2State; starved?: StarvedVerdict; cap?: CapInfo; queue?: QueueView }
 
 // --- what the executors may change beside the ledger (v2 SPEC 3.3, 4.6) -------------------------------
 

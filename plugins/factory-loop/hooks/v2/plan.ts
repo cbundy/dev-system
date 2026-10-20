@@ -12,6 +12,7 @@ import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } 
 import type { Config, PlanResult, State } from '../types'
 import { capOf, capacityTell } from './capacity'
 import type { CapInfo } from './capacity'
+import { finalise } from './queue-view'
 import { reconcile } from './reconcile'
 import { refusedRules } from './rules-refused'
 import { releaseLogRules } from './rules-release-log'
@@ -29,6 +30,7 @@ import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
 import { windDownGuard, windDownOf, windDownTells, windDownTitle } from './wind-down'
 import type { V2Ctx } from './types'
+import type { QueueView } from './queue-view'
 import { workspaceTell } from './workspace'
 
 export function planV2(state: State, config: Config): PlanResult {
@@ -39,6 +41,7 @@ export function planV2(state: State, config: Config): PlanResult {
   let counts: { counts: string; after: string[] } | null = null
   let starved: boolean | null | undefined
   let cap: CapInfo | undefined
+  let queue: QueueView | undefined
   if (blind) {
     blindPass(base)
   } else if (state.v2 === undefined) {
@@ -55,6 +58,7 @@ export function planV2(state: State, config: Config): PlanResult {
       queueRules(ctx)
       starvedRules(ctx)
       starved = ctx.starved?.starved
+      queue = ctx.queue
     } else {
       skip(ctx, 'G2', null, `v2 records not read: ${store.error ?? 'the store failed'}; nothing is released, claimed or started`)
     }
@@ -78,6 +82,7 @@ export function planV2(state: State, config: Config): PlanResult {
   // wind-down (10.11): after every rule ran, one guard drops every start before admission
   windDownGuard(base, wd)
   const actions = admit(base)
+  const queued = queue === undefined ? undefined : finalise(queue, actions)
   const restart = blind ? null : restartOf(base, actions)
   const title = titleOf({
     repo: state.repo,
@@ -95,7 +100,7 @@ export function planV2(state: State, config: Config): PlanResult {
   if (titleDue(state, config, title)) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   // the restart ends the session, so it goes after everything else, the title included
   if (restart !== null) actions.push(restart)
-  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap, ...(cap === undefined ? {} : { cap }), ...(starved === undefined ? {} : { starved }) }
+  return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap, ...(cap === undefined ? {} : { cap }), ...(starved === undefined ? {} : { starved }), ...(queued === undefined ? {} : { queue: queued }) }
 }
 
 // What the decision log says of a plan's transitions: the issue, the row, its event, and the

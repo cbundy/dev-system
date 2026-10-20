@@ -80,6 +80,9 @@ log's `rails` field says why (`executed` says whether a pass acted). An armed ol
 another orchestrator's heartbeat is also told to you, once each time it starts. `/factory mode
 observe` or the `OFF` file stops act mode at the next pass.
 
+An acting pass also writes the claim queue it saw as a `queue_snapshot` event (when it changes, as a
+quarter-hour heartbeat otherwise, and at once on a pass that claims); it never waits on the write.
+
 ## The `/factory` command
 
 `/factory <op>` sets the loop's owner directives from any client, at once, even during a long

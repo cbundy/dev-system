@@ -302,6 +302,37 @@ test("a comment_posted goes through the real writer's native mode: exit 0, no wa
   assert.deepEqual(reader.readEvent(got), { type: "comment_posted", type_version: 1, data });
 });
 
+// A queue_snapshot (hooks/queue-snapshot.ts) is native like gate_run and written for no issue: the real writer
+// takes the argv the loop builds with no warning, and its line matches the strict schema and reads back equal.
+test("a queue_snapshot goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", async () => {
+  const snap = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "queue-snapshot.ts"));
+  const rows = (n) => Array.from({ length: n }, (_, i) => ({ issue: i + 1, rank: i + 1, score: i === 1 ? null : 40 - i, factors: i === 1 ? null : [{ name: "waiting", points: 40 - i }], claimable: i === 0, why: i === 0 ? null : i === 1 ? "unknown" : "blocked" }));
+  for (const [n, reason, folded] of [[0, "heartbeat", 0], [3, "changed", 2], [60, "changed", 1]]) {
+    const view = { rows: rows(n), considered: n, free_slots: n === 0 ? null : 2, priority: [3], only: [], serial: false, noNewWork: false };
+    const data = snap.snapshotData(view, NOW, reason, folded);
+    const argv = snap.snapshotArgv(data);
+    assert.deepEqual(argv, ["callum-flow-event", "--type", "queue_snapshot", "--data", JSON.stringify(data)]);
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "", `queue_snapshot warned: ${r.stderr}`);
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, before + 1, "one line");
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.type, "queue_snapshot");
+    assert.equal(got.issue ?? null, null);
+    assert.deepEqual(got.data, data);
+    assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+    assert.deepEqual(reader.validateStrict("queue_snapshot", 1, got.data), []);
+    assert.deepEqual(reader.readEvent(got), { type: "queue_snapshot", type_version: 1, data });
+  }
+});
+
 // A milestone_state (rules-release-log.ts, O5) is written in the new format alone, for no issue: the real writer takes
 // the argv events.ts builds with no warning, and its line matches the strict schema.
 test("a milestone_state goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", () => {

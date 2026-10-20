@@ -24,6 +24,8 @@ import { gate, skip, wake, want } from '../foundation'
 import type { IssueView, LedgerEntry, Ms } from '../types'
 import { capOf, capText } from './capacity'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
+import { newView, noteRow } from './queue-view'
+import type { Why } from './queue-view'
 import { lifeEntries } from './rules-agent'
 import { failedLivesBefore, livesBefore } from './lives'
 import { claimableAt, compareRanked, score, scoreReason } from './score'
@@ -263,19 +265,25 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   // the starved verdict (rules-starved.ts): true while every queue issue ends at a claim filter
   const verdict: StarvedVerdict = { starved: false, skips: new Map(), blocked: [] }
   let past = false
+  const view = newView(order.length, control.priority, control.only, control.serial, control.noNewWork)
+  // the view's row: the issue's place in the order, its score (null: not read), and why it is not claimed
+  const row = (n: number, scored: ScoreResult, why: string | null, code?: Why) => noteRow(view, n, issues.has(n) ? scored : null, why, code)
   for (const [n, orderText, scored] of order) {
     const record = live.find(r => r.issue === n)
     if (record !== undefined) {
       past = true
       skip(ctx, 'S1', n, `in the factory as ${record.state}`)
+      row(n, scored, `in the factory as ${record.state}`)
       continue
     }
     if (inFlight.has(n) || handled.has(n)) {
       past = true
+      row(n, scored, 'claim in flight', 'held')
       continue
     }
     const why = candidateProblem(ctx, issues.get(n), n)
     if (why !== null) {
+      row(n, scored, why)
       verdict.skips.set(n, why)
       const by = issues.get(n)?.blockedBy
       if (by !== null && by !== undefined && why === blockedWhy(by)) verdict.blocked.push(n)
@@ -289,12 +297,14 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
       // a claim that failed runs again under its own key, until its attempts are used up
       if (gate(ctx, latest.key, 'claim') === 'exhausted') {
         skip(ctx, 'S1', n, `exhausted: ${latest.key}`)
+        row(n, scored, `exhausted: ${latest.key}`)
         want(ctx, wake('tell', 'stalled', `tell:stalled:${latest.key}:${latest.endedAt ?? latest.startedAt}`, 'S1', n, { issue: n, key: latest.key }, [`error: ${latest.summary ?? latest.status}`]))
         continue
       }
       key = latest.key
     } else if (latest !== undefined && claimedOf(latest) === 'lost' && latest.startedAt > (issues.get(n)?.stageSince ?? 0)) {
       skip(ctx, 'S1', n, 'another device holds it')
+      row(n, scored, 'another device holds it')
       continue
     }
     let limit: string | null = null
@@ -309,10 +319,16 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     if (limit !== null) {
       if (limit.startsWith('capacity')) ctx.atCap = true
       skip(ctx, 'S1', n, limit)
+      row(n, scored, limit)
       continue
     }
-    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderText})`, issue: n, score: scored }) === 'go') started += 1
+    const got = want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderText})`, issue: n, score: scored })
+    if (got === 'go') started += 1
+    // a want that is not go is held (running, done), used up (exhausted) or not due (wait); planV2 drops a claim that admission refuses
+    row(n, scored, got === 'go' ? null : 'claim not started', got === 'go' ? undefined : got === 'exhausted' ? 'exhausted' : got === 'wait' ? 'no_slot' : 'held')
   }
+  view.free_slots = cap === null ? null : Math.max(0, cap - held - started)
+  ctx.queue = view
   verdict.starved = state.queue.length > 0 && !past && held === 0 && handled.size === 0 && !control.noNewWork && control.only.length === 0 && tier !== 'stop-new' && tier !== 'stop-all'
   ctx.starved = verdict
 }

@@ -5,6 +5,7 @@
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
 import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 import type { CapInfo } from './v2/capacity'
+import type { QueueView } from './v2/queue-view'
 import type { QueueScoreWeights, ScoreResult } from './v2/score'
 
 export type Ms = number
@@ -466,4 +467,6 @@ export type PlanResult = {
   cap?: CapInfo
   // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
   starved?: boolean | null
+  // S1: the queue as the claim rule saw it, claimable as planned after admission; absent: S1 did not run its queue (v2 SPEC S1)
+  queue?: QueueView
 }
