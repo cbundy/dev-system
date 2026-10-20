@@ -18,6 +18,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
 | [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
+| [`intake_stamp`](#intake_stamp) | v1 | required | One stamp attempt of one issue version: the intake step read the issue body and the loop applied (or dropped) what the stamp answered. |
 | [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
 | [`loop_passes`](#loop_passes) | v1 | none | Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. |
@@ -112,6 +113,7 @@ Example:
 | `agent_id` | string | `loop_entry`, `prompt_denied`, `prompt_waiting` | The agent's id, for an agent step; null otherwise. |
 | `agent_type` | string | `prompt_denied`, `prompt_waiting` | The agent's type, for example Explore or general-purpose; null when unknown. |
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
+| `area` | string | `intake_stamp` | The area the stamp named, or null when there is none. |
 | `attempt` | integer | `prompt_denied`, `prompt_waiting`, `transition` | The attempt of that step; null when unknown. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
 | `auth` | enum | `usage` | Which login the reading was taken under. |
@@ -138,6 +140,7 @@ Example:
 | `decision` | string | `loop_entry`, `transition` | A wake's decision, for example hold or done; null when the wake made none. |
 | `deletions` | integer | `merged` | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `differences` | integer | `shadow_read` | How many keys whose answers differ, with both sides cut at the settle time. |
+| `dropped` | array of string | `intake_stamp` | The answer fields the contract dropped. |
 | `ended_at` | string | `loop_entry` | When it ended; null while running. |
 | `errors` | integer | `loop_passes`, `reviewed` | Of those passes, how many threw. |
 | `fact` | string | `intervention`, `settings_changed` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
@@ -164,6 +167,8 @@ Example:
 | `key` | string | `loop_entry`, `settings_changed` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
+| `labels_kept` | array of string | `intake_stamp` | The labels the loop left alone because the owner had changed them. |
+| `labels_set` | array of string | `intake_stamp` | The labels the loop added. |
 | `layer` | enum | `settings_changed` | The source of the new value; null for a derived value. |
 | `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
 | `life` | string | `comment_posted`, `gate_run`, `intervention`, `prompt_denied`, `prompt_waiting`, `transition` | The life the comment belongs to. |
@@ -176,8 +181,9 @@ Example:
 | `mem_start_bytes` | integer | `gate_run` | The container's memory in use (cgroup memory.current) when the gate started to run, in bytes. Container-wide: at concurrency above 1 it includes other gates. Left out when not read. |
 | `milestone_closed` | integer | `milestone_state` | Closed issues in the milestone. |
 | `milestone_open` | integer | `milestone_state` | Open issues in the milestone. |
-| `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
-| `model` | string | `designer_routed`, `implementer_routed` | The model alias chosen. The control is the designer's frontmatter model (opus); the treatment is sonnet. |
+| `mode` | enum | `intake_stamp`, `loop_passes` | run: the stamp was applied. dry: a dry run. The loop writes only run; dry exists so the type can name a dry run. |
+| `model` | string | `designer_routed`, `implementer_routed`, `intake_stamp` | The model alias chosen. The control is the designer's frontmatter model (opus); the treatment is sonnet. |
+| `needs_owner` | boolean | `intake_stamp` | Whether the stamp says the issue needs the owner, or null when there is no answer. |
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `new_value` | any | `settings_changed` | The value after the change, any JSON; null when it is now unset. |
 | `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
@@ -186,7 +192,7 @@ Example:
 | `old_value` | any | `settings_changed` | The value before the change, any JSON; null when it was unset. |
 | `options` | array of object | `transition` | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
-| `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
+| `outcome` | enum | `finding_handled`, `intake_stamp`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `owner_new_off` | boolean | `queue_snapshot` | Whether the owner's 'no new work' control is on. |
 | `owner_only` | array of integer | `queue_snapshot` | The owner's 'only' list in force; empty when off. |
 | `owner_priority` | array of integer | `queue_snapshot` | The owner's priority list in force; empty when off. |
@@ -204,7 +210,7 @@ Example:
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
-| `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `queue_snapshot`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `intake_stamp`, `queue_snapshot`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `recommendation` | string | `transition` | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
 | `recommended` | enum | `transition` | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
 | `recovered` | boolean | `merged` | true when the loop logged it afterwards because no merged event was recorded at the merge. |
@@ -238,9 +244,11 @@ Example:
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
 | `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
 | `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
+| `touches` | array of string | `intake_stamp` | The top-level paths the stamp says the issue touches. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
+| `version` | string | `intake_stamp` | The hash of the issue body the stamp read. |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, and for the container's gate slots, in milliseconds; 0 when it took both at once or there is no limit. |
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
@@ -547,6 +555,53 @@ Example:
   "reason": "default",
   "bucket": null,
   "opus_pct": 0
+}
+```
+
+## intake_stamp
+
+One stamp attempt of one issue version: the intake step read the issue body and the loop applied (or dropped) what the stamp answered. Count one per (issue, version, attempt).
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: (issue, version, attempt)
+
+### intake_stamp v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `version` | string | required | no | minLength 1 | yes | The hash of the issue body the stamp read. |
+| `mode` | enum | required | no | one of "run", "dry" | yes | run: the stamp was applied. dry: a dry run. The loop writes only run; dry exists so the type can name a dry run. |
+| `outcome` | enum | required | no | one of "ok", "failed", "dropped" | yes | ok: the stamp was applied. failed: the stamp step did not produce an answer. dropped: the answer broke the contract. |
+| `area` | string | required | yes |  | yes | The area the stamp named, or null when there is none. |
+| `needs_owner` | boolean | required | yes |  | yes | Whether the stamp says the issue needs the owner, or null when there is no answer. |
+| `reason` | string | required | yes |  | yes | The one-line needs_owner reason, or null. |
+| `touches` | array of string | required | no |  | yes | The top-level paths the stamp says the issue touches. |
+| `dropped` | array of string | required | no |  | yes | The answer fields the contract dropped. |
+| `labels_set` | array of string | required | no |  | yes | The labels the loop added. |
+| `labels_kept` | array of string | required | no |  | yes | The labels the loop left alone because the owner had changed them. |
+| `model` | string | required | no | minLength 1 | yes | The model alias that stamped. |
+
+Example:
+
+```json
+{
+  "version": "3f2a9c1d",
+  "mode": "run",
+  "outcome": "ok",
+  "area": "factory",
+  "needs_owner": false,
+  "reason": null,
+  "touches": [
+    "plugins",
+    "docs"
+  ],
+  "dropped": [],
+  "labels_set": [
+    "area:factory"
+  ],
+  "labels_kept": [],
+  "model": "sonnet"
 }
 ```
 

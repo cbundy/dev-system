@@ -208,6 +208,19 @@ test("queue_snapshot: a full event is written and validates; one without taken_a
   assert.ok(reader.validateStrict("queue_snapshot", 1, JSON.parse(over.lines[0]).data).some((p) => /candidates.*at most 50 items/.test(p)));
 });
 
+test("intake_stamp: a full event is written and validates; one without version is refused with exit 2; an outcome outside the enum fails strict validation", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "intake_stamp.v1.json"), "utf8")).examples[0];
+  const { r, lines } = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("intake_stamp", 1, JSON.parse(lines[0]).data), []);
+  const { version: _omit, ...noVersion } = good;
+  const missing = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(noVersion)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /intake_stamp v1: field version is missing/);
+  assert.deepEqual(missing.lines, []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...good, outcome: "maybe" }), []);
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });
