@@ -1,0 +1,600 @@
+[
+ {
+  "tool": "callum-flow-claim: claim_lost, held by another device",
+  "old": {
+   "state": "claim_lost",
+   "issue": 7,
+   "note": "held by devB since 2026-10-08T11:30:00Z"
+  },
+  "native": {
+   "type": "claim_lost",
+   "data": {
+    "holder": "devB",
+    "holder_since": "2026-10-08T11:30:00Z",
+    "race": false
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claim_lost, race lost",
+  "old": {
+   "state": "claim_lost",
+   "issue": 7,
+   "note": "race lost to devB"
+  },
+  "native": {
+   "type": "claim_lost",
+   "data": {
+    "holder": "devB",
+    "holder_since": null,
+    "race": true
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claim_lost, race lost, holder unknown",
+  "old": {
+   "state": "claim_lost",
+   "issue": 7,
+   "note": "race lost to another device"
+  },
+  "native": {
+   "type": "claim_lost",
+   "data": {
+    "holder": null,
+    "holder_since": null,
+    "race": true
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claim_renewed",
+  "old": {
+   "state": "renewed",
+   "issue": 7,
+   "note": "lease: 90"
+  },
+  "native": {
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 90
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claimed, no facts",
+  "old": {
+   "state": "claimed",
+   "issue": 7,
+   "note": "lease: 120"
+  },
+  "native": {
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claimed, with facts",
+  "old": {
+   "state": "claimed",
+   "issue": 7,
+   "note": "lease: 120"
+  },
+  "old_data": {
+   "title": "Facts of seven",
+   "labels": [
+    "bug",
+    "enhancement"
+   ],
+   "parent": 3
+  },
+  "native": {
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120,
+    "title": "Facts of seven",
+    "labels": [
+     "bug",
+     "enhancement"
+    ],
+    "parent": 3
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claimed, with facts and score",
+  "old": {
+   "state": "claimed",
+   "issue": 7,
+   "note": "lease: 30"
+  },
+  "old_data": {
+   "title": "Facts of seven",
+   "labels": [
+    "bug",
+    "enhancement"
+   ],
+   "parent": 3,
+   "score": 42,
+   "factors": [
+    {
+     "name": "bug",
+     "points": 25
+    },
+    {
+     "name": "age",
+     "points": 17
+    }
+   ]
+  },
+  "native": {
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 30,
+    "title": "Facts of seven",
+    "labels": [
+     "bug",
+     "enhancement"
+    ],
+    "parent": 3,
+    "score": 42,
+    "factors": [
+     {
+      "name": "bug",
+      "points": 25
+     },
+     {
+      "name": "age",
+      "points": 17
+     }
+    ]
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-claim: claimed, score only (the facts failed to read)",
+  "old": {
+   "state": "claimed",
+   "issue": 7,
+   "note": "lease: 120"
+  },
+  "old_data": {
+   "score": 42,
+   "factors": [
+    {
+     "name": "bug",
+     "points": 25
+    },
+    {
+     "name": "age",
+     "points": 17
+    }
+   ]
+  },
+  "native": {
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120,
+    "score": 42,
+    "factors": [
+     {
+      "name": "bug",
+      "points": 25
+     },
+     {
+      "name": "age",
+      "points": 17
+     }
+    ]
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-sweep: closed with GitHub's reason",
+  "old": {
+   "state": "closed",
+   "issue": 7,
+   "actor": "sweep",
+   "note": "not_planned"
+  },
+  "native": {
+   "type": "closed",
+   "data": {
+    "reason": "not_planned"
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-sweep: closed without a reason",
+  "old": {
+   "state": "closed",
+   "issue": 7,
+   "actor": "sweep",
+   "note": ""
+  },
+  "native": {
+   "type": "closed",
+   "data": {
+    "reason": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-sweep: merged with the head",
+  "old": {
+   "state": "merged",
+   "issue": 7,
+   "actor": "sweep",
+   "pr": 55,
+   "head": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "native": {
+   "type": "merged",
+   "data": {
+    "pr": 55,
+    "branch": null,
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "by": "factory",
+    "recovered": false
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-sweep: merged without the head",
+  "old": {
+   "state": "merged",
+   "issue": 7,
+   "actor": "sweep",
+   "pr": 55
+  },
+  "native": {
+   "type": "merged",
+   "data": {
+    "pr": 55,
+    "branch": null,
+    "head": null,
+    "by": "factory",
+    "recovered": false
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-sweep: requeued, lease expired",
+  "old": {
+   "state": "reclaimed",
+   "issue": 7,
+   "note": "lease expired"
+  },
+  "native": {
+   "type": "requeued",
+   "data": {
+    "reason": "lease-expired",
+    "stage": null,
+    "lives": null,
+    "branch": null,
+    "pr": null,
+    "detail": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-merge: merged",
+  "old": {
+   "state": "merged",
+   "issue": 12,
+   "pr": 7,
+   "branch": "feat/issue-12-x",
+   "head": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "native": {
+   "type": "merged",
+   "data": {
+    "pr": 7,
+    "branch": "feat/issue-12-x",
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "by": "factory",
+    "recovered": false
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-merge: test_weakened, not restored",
+  "old": {
+   "state": "test_weakened",
+   "issue": 12,
+   "pr": 7,
+   "branch": "feat/issue-12-x",
+   "head": "0123456789abcdef0123456789abcdef01234567",
+   "note": "step=ci commit=0123456 restored=no kinds=removed-assertion,warn-only files=tests/a.test.js,tests/b.test.sh"
+  },
+  "native": {
+   "type": "test_weakened",
+   "data": {
+    "branch": "feat/issue-12-x",
+    "pr": 7,
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "commit": "0123456",
+    "restored": false,
+    "kinds": [
+     "removed-assertion",
+     "warn-only"
+    ],
+    "files": [
+     "tests/a.test.js",
+     "tests/b.test.sh"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-merge: test_weakened, restored",
+  "old": {
+   "state": "test_weakened",
+   "issue": 12,
+   "pr": 7,
+   "branch": "feat/issue-12-x",
+   "head": "0123456789abcdef0123456789abcdef01234567",
+   "note": "step=review commit=1234567 restored=yes kinds=skip files=tests/c.test.js"
+  },
+  "native": {
+   "type": "test_weakened",
+   "data": {
+    "branch": "feat/issue-12-x",
+    "pr": 7,
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "commit": "1234567",
+    "restored": true,
+    "kinds": [
+     "skip"
+    ],
+    "files": [
+     "tests/c.test.js"
+    ]
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: untrusted issue refused",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 8,
+   "note": "issue"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "issue",
+    "refused": true,
+    "count": null,
+    "pr": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: untrusted PR refused",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 21,
+   "pr": 21,
+   "note": "pr"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "pr",
+    "refused": true,
+    "count": null,
+    "pr": 21
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: untrusted comment refused",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 7,
+   "note": "comment"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "comment",
+    "refused": true,
+    "count": null,
+    "pr": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: comments stripped",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 7,
+   "note": "comments=3"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "comments",
+    "refused": false,
+    "count": 3,
+    "pr": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: PR comments stripped",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 20,
+   "pr": 20,
+   "note": "comments=3"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "comments",
+    "refused": false,
+    "count": 3,
+    "pr": 20
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: timeline stripped",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 7,
+   "note": "timeline=3"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "timeline",
+    "refused": false,
+    "count": 3,
+    "pr": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-issue-read: list stripped",
+  "old": {
+   "state": "untrusted_stripped",
+   "issue": 2,
+   "note": "list stripped=2"
+  },
+  "native": {
+   "type": "untrusted_stripped",
+   "data": {
+    "source": "list",
+    "refused": false,
+    "count": 2,
+    "pr": null
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-implementer-route: hash bucket",
+  "old": {
+   "state": "implementer_routed",
+   "issue": 506,
+   "note": "model=opus reason=hash bucket=68 pct=69"
+  },
+  "native": {
+   "type": "implementer_routed",
+   "data": {
+    "model": "opus",
+    "reason": "hash",
+    "bucket": 68,
+    "opus_pct": 69
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-implementer-route: no bucket",
+  "old": {
+   "state": "implementer_routed",
+   "issue": 506,
+   "note": "model=sonnet reason=default bucket=- pct=0"
+  },
+  "native": {
+   "type": "implementer_routed",
+   "data": {
+    "model": "sonnet",
+    "reason": "default",
+    "bucket": null,
+    "opus_pct": 0
+   }
+  }
+ },
+ {
+  "tool": "callum-flow-implementer-route: label",
+  "old": {
+   "state": "implementer_routed",
+   "issue": 506,
+   "note": "model=claude-opus-5-5 reason=label bucket=- pct=0"
+  },
+  "native": {
+   "type": "implementer_routed",
+   "data": {
+    "model": "claude-opus-5-5",
+    "reason": "label",
+    "bucket": null,
+    "opus_pct": 0
+   }
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, available, oauth",
+  "old": {
+   "state": "usage",
+   "note": "five_hour=42 resets_at=2026-10-20T15:00:00Z resets_in=3600 seven_day=50 seven_day_resets_at=2026-10-27T10:00:00Z seven_day_resets_in=86400 source=oauth"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, available, statusline",
+  "old": {
+   "state": "usage",
+   "note": "five_hour=3 resets_at=2026-10-20T15:00:00Z resets_in=0 seven_day=100 seven_day_resets_at=2026-10-27T10:00:00Z seven_day_resets_in=5 source=statusline"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, available with auth",
+  "old": {
+   "state": "usage",
+   "note": "five_hour=42 resets_at=2026-10-20T15:00:00Z resets_in=3600 seven_day=50 seven_day_resets_at=2026-10-27T10:00:00Z seven_day_resets_in=86400 source=oauth auth=subscription"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, unavailable, two reasons",
+  "old": {
+   "state": "usage",
+   "note": "usage=unavailable reason=oauth:no-token,statusline:no-snapshot"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, unavailable, one reason",
+  "old": {
+   "state": "usage",
+   "note": "usage=unavailable reason=jq-missing"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, unavailable, no reason",
+  "old": {
+   "state": "usage",
+   "note": "usage=unavailable reason="
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, unavailable with auth",
+  "old": {
+   "state": "usage",
+   "note": "usage=unavailable reason=oauth:network,statusline:stale-901s auth=api-key"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, spend reading",
+  "old": {
+   "state": "usage",
+   "note": "auth=api-key spend_usd=42.5 budget_usd=100 budget_resets_at=2026-11-01T00:00:00.000Z source=spend"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, spend reading, no budget",
+  "old": {
+   "state": "usage",
+   "note": "auth=api-key spend_usd=7 source=spend"
+  }
+ },
+ {
+  "tool": "usage-check.sh: usage, spend reading, budget none",
+  "old": {
+   "state": "usage",
+   "note": "auth=api-key spend_usd=0 budget_usd=none budget_resets_at=none source=spend"
+  }
+ }
+]

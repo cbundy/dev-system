@@ -26,6 +26,8 @@ for t in sed tr cat cksum jq grep sort; do
   ln -s "$p" "$toolbin/$t"
 done
 SH=$(command -v sh)
+EVENT="$SHARE/callum-flow-event"
+realpath=$PATH
 
 cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
@@ -46,10 +48,12 @@ case "$1 $2" in
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 STUB
-cat > "$tmpdir/event" <<'STUB'
+# the event tool: the real callum-flow-event writing to a scratch events directory (the stub dir's ev),
+# or failing when $STUB_DIR/event-fails exists
+cat > "$tmpdir/event" <<STUB
 #!/bin/sh
-echo "$*" >> "${STUB_DIR:?}/events"
-[ ! -f "${STUB_DIR}/event-fails" ] || exit 1
+[ ! -f "\${STUB_DIR:?}/event-fails" ] || exit 1
+CALLUM_EVENTS_DIR="\$STUB_DIR/ev" PATH="$realpath" exec "$SH" "$EVENT" "\$@"
 STUB
 chmod +x "$tmpdir/gh" "$tmpdir/event"
 
@@ -58,7 +62,6 @@ reset() {
   rm -rf "$d"
   mkdir -p "$d"
   : > "$d/labels"
-  : > "$d/events"
 }
 # bucket <issue> [repo]: the expected implementer bucket
 bucket() { printf 'implementer:%s#%s' "${2:-cbundy/dev-system}" "$1" | cksum | { read -r c _; echo $((c % 100)); }; }
@@ -82,14 +85,18 @@ route() {
 expect() {
   [ "$rc" = 0 ] || fail "$5: exit $rc (stderr: $(cat "$tmpdir/err"))"
   [ "$out" = "$1" ] || fail "$5: printed '$out', wanted '$1'"
-  [ "$(grep -c . "$d/events")" = 1 ] || fail "$5: want exactly one event: $(cat "$d/events")"
-  want="implementer_routed --issue ${ISSUE:-506} --note model=$1 reason=$2 bucket=$3 pct=$4"
-  [ "$(cat "$d/events")" = "$want" ] || fail "$5: event '$(cat "$d/events")', wanted '$want'"
+  # the new log holds exactly one implementer_routed event (the issue reader's untrusted_stripped ones do not count)
+  routed=$(cat "$d"/ev/factory/*.jsonl 2> /dev/null | jq -c 'select(.type == "implementer_routed")') || routed=
+  [ "$(printf '%s' "$routed" | grep -c .)" = 1 ] || fail "$5: want exactly one event: $routed"
+  printf '%s' "$routed" | jq -e --argjson n "${ISSUE:-506}" --arg m "$1" --arg r "$2" --arg b "$3" --argjson p "$4" \
+    '.issue == $n and .data == {model: $m, reason: $r, bucket: (if $b == "-" then null else ($b | tonumber) end), opus_pct: $p}' > /dev/null ||
+    fail "$5: event '$routed', wanted model $1 reason $2 bucket $3 pct $4"
+  [ -z "$(cat "$d"/ev/*.jsonl 2> /dev/null)" ] || fail "$5: the old log must stay empty"
 }
 usage_err() {
   [ "$rc" = 2 ] || fail "$1: exit $rc, wanted 2"
   [ -z "$out" ] || fail "$1: printed '$out' on a usage error"
-  [ ! -s "$d/events" ] || fail "$1: logged on a usage error"
+  [ ! -e "$d/ev" ] || fail "$1: logged on a usage error"
 }
 
 # the control is the implementer agent's frontmatter model
@@ -148,7 +155,7 @@ if [ "$below" -lt 80 ] || [ "$below" -gt 120 ]; then
 fi
 
 # stable and case-insensitive on the repo
-reset; route 506 69; first=$out; : > "$d/events"; route 506 69; [ "$out" = "$first" ] || fail "same issue routed differently"
+reset; route 506 69; first=$out; rm -rf "$d/ev"; route 506 69; [ "$out" = "$first" ] || fail "same issue routed differently"
 reset; REPO=CBundy/Dev-System route 506 69; expect opus hash 68 69 "upper-case repo"; REPO=''
 reset; REPO=none route 506 69; expect opus hash 68 69 "repo from gh when CALLUM_FLOW_REPO is unset"; REPO=''
 
@@ -158,7 +165,7 @@ help_ok() {
   [ "$rc" = 0 ] || fail "$1: exit $rc, wanted 0"
   [ "$out" = "usage: callum-flow-implementer-route <issue>" ] || fail "$1: printed '$out'"
   [ ! -s "$tmpdir/err" ] || fail "$1: wrote to stderr: $(cat "$tmpdir/err")"
-  [ ! -s "$d/events" ] || fail "$1: logged on help"
+  [ ! -e "$d/ev" ] || fail "$1: logged on help"
 }
 reset; route --help 50; help_ok "--help"
 reset; route -h 50; help_ok "-h"
@@ -185,19 +192,18 @@ grep -q warning "$tmpdir/err" || fail "fallback must warn on stderr"
 reset; touch "$d/no-repo"; REPO=none route 506 100; expect sonnet fallback - 100 "unknown repo"; REPO=''
 grep -q CALLUM_FLOW_REPO "$tmpdir/err" || fail "unknown repo must say how to set it"
 
-# the reader logs untrusted_stripped to the same event stub; only the route events matter
-only_route_events() { grep '^implementer_routed' "$d/events" > "$d/e2" || true; mv "$d/e2" "$d/events"; }
+# the reader logs untrusted_stripped to the same event log; only the route events matter (expect filters)
 # trust (cbundy/dev-system#310): labels of an untrusted issue are never read, so a
 # stranger's model:opus label cannot steer the route; the route falls back
 reset; echo model:opus > "$d/labels"; echo '{"login":"mallory","id":999}' > "$d/author"; route 506 0
-only_route_events; expect sonnet fallback - 0 "untrusted issue's model label is ignored"
+expect sonnet fallback - 0 "untrusted issue's model label is ignored"
 reset; echo model:opus > "$d/labels"; echo '{"login":"cbundy","id":42}' > "$d/author"; route 506 0
-only_route_events; expect sonnet fallback - 0 "right login, wrong id"
+expect sonnet fallback - 0 "right login, wrong id"
 reset; echo model:opus > "$d/labels"; TRUSTED='' route 506 0
-only_route_events; expect sonnet fallback - 0 "no trusted list fails closed"
+expect sonnet fallback - 0 "no trusted list fails closed"
 unset TRUSTED
 reset; echo model:opus > "$d/labels"; READ_BIN="$tmpdir/missing-reader" route 506 0
-only_route_events; expect sonnet fallback - 0 "missing reader fails closed"
+expect sonnet fallback - 0 "missing reader fails closed"
 unset READ_BIN
 
 # a failing event script changes nothing

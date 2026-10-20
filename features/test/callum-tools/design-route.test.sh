@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Plain-shell tests for callum-flow-design-route (cbundy/dev-system#288). A stub
-# gh serves a label list and a recording stub stands in for the event script.
+# gh serves a label list and a recording stub stands in for the event script (the tool no longer logs).
 # Hermetic PATH, no network, no Docker.
 set -eu
 
@@ -73,13 +73,11 @@ route() {
   set -e
   out=$(cat "$tmpdir/out")
 }
-# expect <route> <reason> <bucket> <pct> <what>: rc 0, one stdout line, one event
+# expect <route> <reason> <bucket> <pct> <what>: rc 0, one stdout line, no design_routed event (the tool no longer logs)
 expect() {
   [ "$rc" = 0 ] || fail "$5: exit $rc (stderr: $(cat "$tmpdir/err"))"
   [ "$out" = "$1" ] || fail "$5: printed '$out', wanted '$1'"
-  [ "$(grep -c . "$d/events")" = 1 ] || fail "$5: want exactly one event: $(cat "$d/events")"
-  want="design_routed --issue ${ISSUE:-288} --note route=$1 reason=$2 bucket=$3 pct=$4"
-  [ "$(cat "$d/events")" = "$want" ] || fail "$5: event '$(cat "$d/events")', wanted '$want'"
+  ! grep -q 'design_routed' "$d/events" || fail "$5: design_routed logged: $(cat "$d/events")"
 }
 usage_err() {
   [ "$rc" = 2 ] || fail "$1: exit $rc, wanted 2"
@@ -134,26 +132,26 @@ grep -q CALLUM_FLOW_DESIGN_SESSION_PCT "$tmpdir/err" 2>/dev/null || { reset; rou
 reset; touch "$d/gh-fails"; route 288 100; expect subagent fallback - 100 "gh failure"
 grep -q warning "$tmpdir/err" || fail "fallback must warn on stderr"
 
-# the reader logs untrusted_stripped to the same event stub; only the route events matter
-only_route_events() { grep '^design_routed' "$d/events" > "$d/e2" || true; mv "$d/e2" "$d/events"; }
+# the reader logs untrusted_stripped to the same event stub; the route itself logs nothing
 # trust (cbundy/dev-system#310): labels of an untrusted issue are never read, so a
 # stranger's design:session label cannot steer the route; the route falls back
 reset; echo design:session > "$d/labels"; echo '{"login":"mallory","id":999}' > "$d/author"; route 288 0
-only_route_events; expect subagent fallback - 0 "untrusted issue's session label is ignored"
+expect subagent fallback - 0 "untrusted issue's session label is ignored"
 reset; echo design:session > "$d/labels"; echo '{"login":"cbundy","id":42}' > "$d/author"; route 288 0
-only_route_events; expect subagent fallback - 0 "right login, wrong id"
+expect subagent fallback - 0 "right login, wrong id"
 reset; echo design:session > "$d/labels"; TRUSTED='' route 288 0
-only_route_events; expect subagent fallback - 0 "no trusted list fails closed"
+expect subagent fallback - 0 "no trusted list fails closed"
 unset TRUSTED
 reset; echo design:session > "$d/labels"; READ_BIN="$tmpdir/missing-reader" route 288 0
-only_route_events; expect subagent fallback - 0 "missing reader fails closed"
+expect subagent fallback - 0 "missing reader fails closed"
 unset READ_BIN
 reset; echo design:session > "$d/labels"; route 288 100
-only_route_events; expect session label - 100 "trusted issue's label still honoured"
+expect session label - 100 "trusted issue's label still honoured"
 
-# a failing event script changes nothing
+# the tool no longer logs, so a failing event script changes nothing and draws no warning
 reset; touch "$d/event-fails"; route 288 83
 [ "$rc" = 0 ] || fail "event failure changed the exit code ($rc)"
 [ "$out" = session ] || fail "event failure changed the output ('$out')"
+! grep -q 'could not log' "$tmpdir/err" || fail "design-route no longer logs, yet warned: $(cat "$tmpdir/err")"
 
 echo "design-route tests passed"

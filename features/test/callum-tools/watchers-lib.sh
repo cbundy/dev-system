@@ -355,6 +355,11 @@ PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME
 EOF
   chmod +x "$fakebin/callum-flow-event"
 }
+# no_event_log <what>: the real event log (real_event_log) holds nothing, old or new
+no_event_log() {
+  [ ! -e "$evlog" ] || fail "$1: the watcher wrote the old event log: $(cat "$evlog")"
+  [ ! -e "$evdir/factory" ] || fail "$1: the watcher wrote the new event log: $(ls -A "$evdir/factory")"
+}
 # wait_events <pattern> <n>: wait up to 15s for n log lines matching the pattern
 # (the watcher prints a line before it logs it).
 wait_events() {

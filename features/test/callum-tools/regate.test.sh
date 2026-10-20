@@ -2,7 +2,7 @@
 #
 # Plain-shell tests for callum-flow-regate (cbundy/dev-system#489). Real local bare repos
 # serve as origin and as the no-mistakes gate remote; a stub no-mistakes (CALLUM_FLOW_NM_BIN)
-# logs calls and replays the TOON the real CLI prints; a stub callum-flow-event logs events.
+# logs calls and replays the TOON the real CLI prints; a stub callum-flow-event records any call (the tool no longer logs).
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
 
@@ -121,7 +121,7 @@ case "$out" in *archived=none*) fail "archive expected" ;; esac
 [ "$(tip "$WORK" "archive/$B-mirror-$(printf %.8s "$P")")" = "$P" ] || fail "mirror archive must hold the pipeline commit"
 [ "$(tip "$GATE" "$B")" = none ] || fail "gate ref must be deleted"
 [ "$(tip "$ORIGIN" "$B")" = "$(git rev-parse HEAD)" ] || fail "origin must be lease-pushed to HEAD"
-grep -q 'superseded --issue 12 --run RUN1 .*re-gate on' "$NMS/events" || fail "same-branch re-gate logs superseded"
+[ ! -e "$NMS/events" ] || fail "same-branch re-gate logs no event any more: $(cat "$NMS/events")"
 
 # --- an abbreviated sha is accepted too; a different sha is not ------------------------
 mk
@@ -226,7 +226,7 @@ out=$(rg --accept-dropped "$P") || fail "unknown: $out"
 expect "$out" "REGATE new-branch branch=$B-v2 old_branch=$B old_run=RUN1" "unknown code"
 expect "$out" "next:" "next line"
 [ "$(git symbolic-ref --short HEAD)" = "$B-v2" ] || fail "worktree must switch to the new branch"
-grep -q "superseded --issue 12 --run RUN1 --branch $B-v2 --note by $B-v2" "$NMS/events" || fail "superseded event"
+[ ! -e "$NMS/events" ] || fail "new-branch re-gate logs no event any more: $(cat "$NMS/events")"
 mk
 git branch "$B-v2"
 out=$(rg --new-branch --accept-dropped "$P") || fail "new-branch: $out"

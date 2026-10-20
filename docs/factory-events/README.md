@@ -144,7 +144,15 @@ SQL
   event right after the old line (`callum-flow-event --new-path` prints the path; `factory/` is made
   0700). The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
   [--issue N] [--repo O/N] [--actor NAME]`, writes a new event straight to that file and nothing to
-  the old log. `callum-flow-event <state> ... --new-only` does the same for an old-state call: it builds and
+  the old log. The image's tools write natively (dev-system#1140): `callum-flow-claim` (`claimed`,
+  `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`), `callum-flow-merge`
+  (`merged`, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
+  (`implementer_routed`) and `usage-check.sh` (`usage`), each with the type and data `translate()` made from the
+  old line it wrote before ([translator.md](translator.md) has the mapping; `tests/factory-event-native.test.js`
+  pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` no longer log: their
+  states (`design_routed`, `superseded`, the watcher's run states and `watcher_error`) have no new type.
+  `queue-watch.sh` keeps the old-state call (`ready --if-changed`, which has no native form) until the cutover.
+  `callum-flow-event <state> ... --new-only` does the same for an old-state call: it builds and
   translates the line as dual write does and appends only the new event (never the old line, so
   `--if-changed` with it is a usage error); the factory loop's backfill (H1) uses it. `callum-flow-event
   --new-only --new-path` is its capability probe: it prints the new path with exit 0, and an older image exits 2.
@@ -196,7 +204,7 @@ SQL
 4. Write the event with `callum-flow-event --type <type> --data '<json object>' [--issue N]`. The
    writer exits 2 on a missing required field, a wrong JSON type, a missing `--issue` for an
    `x-issue: required` type or a bad option, and writes nothing.
-5. Add a producer fixture to `tests/factory-event-native.test.js`.
+5. Add a producer fixture to `tests/fixtures/factory-events/tool-calls.json` (the old line and the native call; `tests/factory-event-native.test.js` asserts that `translate()` makes the same type and data from the old line).
 
 ## Keeping the docs in step
 

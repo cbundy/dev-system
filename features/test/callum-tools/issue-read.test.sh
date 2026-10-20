@@ -20,7 +20,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname node; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -73,7 +73,10 @@ no_out() { [ ! -s "$tmpdir/out" ] || fail "$1: stdout not empty: $(cat "$tmpdir/
 # $1 = secret text that must appear nowhere in stdout or stderr
 absent() { ! grep -qF -- "$1" "$tmpdir/out" "$tmpdir/err" || fail "$2: '$1' leaked"; }
 present() { grep -qF -- "$1" "$tmpdir/out" || fail "$2: '$1' missing from: $(cat "$tmpdir/out")"; }
-events() { cat "$tmpdir/events"/* 2>/dev/null || true; }
+# events: the new store, the only log the reader writes (callum-flow-event --type untrusted_stripped --data);
+# the old log must stay empty
+events() { cat "$tmpdir/events"/factory/* 2>/dev/null || true; }
+old_events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
 
 reset() {
   rm -rf "$d" "$tmpdir/events"
@@ -156,8 +159,9 @@ for args in '8' '8 --comments' '--json 8'; do
   absent IGNORE-ALL-RULES-BODY "untrusted issue ($args)"
   grep -q 'untrusted author' "$tmpdir/err" || fail "reason missing"
 done
-events | jq -e -s 'length == 3 and all(.[]; .state == "untrusted_stripped" and .issue == 8 and .note == "issue")' > /dev/null \
+events | jq -e -s 'length == 3 and all(.[]; .type == "untrusted_stripped" and .issue == 8 and .data == {source: "issue", refused: true, count: null, pr: null})' > /dev/null \
   || fail "refusals should log untrusted_stripped issue events: $(events)"
+[ -z "$(old_events)" ] || fail "the old log must stay empty: $(old_events)"
 # comments of the untrusted issue are never even fetched
 ! grep -q comments "$d/calls" || fail "fetched comments of an untrusted issue"
 
@@ -192,7 +196,7 @@ present "owner-comment-one" "mixed"; present "owner-comment-two" "mixed"
 present "stripped: 3" "mixed"
 absent STRANGER-INJECTION mixed; absent WRONG-ID-INJECTION mixed; absent DISPLAY-NAME-INJECTION mixed
 absent origin mixed
-events | jq -e -s 'length == 1 and .[0].state == "untrusted_stripped" and .[0].issue == 7 and .[0].note == "comments=3"' > /dev/null \
+events | jq -e -s 'length == 1 and .[0].type == "untrusted_stripped" and .[0].issue == 7 and .[0].data == {source: "comments", refused: false, count: 3, pr: null}' > /dev/null \
   || fail "stripped comments should log comments=3: $(events)"
 # no stripping, no event
 reset
@@ -269,6 +273,7 @@ rc_of "$READ" --comment 56; expect_rc 3 "comment on untrusted issue"; no_out "co
 # untrusted comment on a trusted issue
 jq -n '{id: 57, user: {login: "stranger", id: 99}, body: "STRANGER-SINGLE", created_at: "x", issue_url: "https://api.github.com/repos/o/r/issues/7"}' > "$d/repos_o_r_issues_comments_57.json"
 rc_of "$READ" --comment 57; expect_rc 3 "untrusted comment"; no_out "untrusted comment"; absent STRANGER-SINGLE "untrusted comment"
+events | jq -e -s '[.[] | select(.data.source == "comment") | [.issue, .data]] == [[8, {source: "comment", refused: true, count: null, pr: null}], [7, {source: "comment", refused: true, count: null, pr: null}]]' > /dev/null || fail "refused comment events: $(events)"
 
 # --- --list ----------------------------------------------------------------------
 reset
@@ -282,7 +287,7 @@ rc_of "$READ" --list --label ready
 expect_rc 0 "--list"
 present "#1 mine" "--list"; present "stripped: 2" "--list"
 absent STRANGER-ISSUE list; absent IMPERSONATED list; absent a-pr list
-events | jq -e -s 'length == 1 and .[0].issue == 2 and (.[0].note | startswith("list"))' > /dev/null || fail "list event: $(events)"
+events | jq -e -s 'length == 1 and .[0].issue == 2 and .[0].data == {source: "list", refused: false, count: 2, pr: null}' > /dev/null || fail "list event: $(events)"
 rc_of "$READ" --json --list --label ready
 jq -e '(.issues | length) == 1 and .stripped == 2' "$tmpdir/out" > /dev/null || fail "list json"
 # a label with a space is encoded
@@ -307,12 +312,13 @@ rc_of "$READ" --pr 20 --comments
 expect_rc 0 "--pr --comments"
 for ok in conv-ok rc-ok rev-ok "stripped: 3"; do present "$ok" "--pr --comments"; done
 for bad in CONV-EVIL RC-EVIL REV-EVIL; do absent "$bad" "--pr --comments"; done
-events | jq -e -s 'length == 1 and .[0].issue == 20 and .[0].pr == 20 and .[0].note == "comments=3"' > /dev/null || fail "pr event: $(events)"
+events | jq -e -s 'length == 1 and .[0].issue == 20 and .[0].data == {source: "comments", refused: false, count: 3, pr: 20}' > /dev/null || fail "pr event: $(events)"
 rc_of "$READ" --json --pr 20 --comments
 jq -e '.pr.number == 20 and .stripped == 3 and (.comments | length) == 1 and (.review_comments | length) == 1 and (.reviews | length) == 1' "$tmpdir/out" > /dev/null || fail "pr json"
 # an untrusted PR is refused
 jq -n '{number: 21, title: "EVIL-PR", body: "EVIL-PR-BODY", user: {login: "stranger", id: 99}}' > "$d/repos_o_r_pulls_21.json"
 rc_of "$READ" --pr 21 --comments; expect_rc 3 "untrusted PR"; no_out "untrusted PR"; absent EVIL-PR "untrusted PR"
+events | jq -e -s '[.[] | select(.data.source == "pr") | [.issue, .data]] == [[21, {source: "pr", refused: true, count: null, pr: 21}]]' > /dev/null || fail "refused PR event: $(events)"
 # one of the three comment fetches failing fails the read
 touch "$d/repos_o_r_pulls_20_reviews.fail"
 rc_of "$READ" --pr 20 --comments; expect_rc 1 "reviews failure"; no_out "reviews failure"
@@ -330,7 +336,7 @@ rc_of "$READ" --timeline 7
 expect_rc 0 "--timeline"
 present "labeled cbundy ready" "--timeline"; present "TRUSTED-XREF" "--timeline"; present "stripped: 3" "--timeline"
 absent EVIL-LABEL timeline; absent UNTRUSTED-XREF timeline; absent NO-ACTOR-COMMIT timeline
-events | jq -e -s 'length == 1 and .[0].note == "timeline=3"' > /dev/null || fail "timeline event: $(events)"
+events | jq -e -s 'length == 1 and .[0].data == {source: "timeline", refused: false, count: 3, pr: null}' > /dev/null || fail "timeline event: $(events)"
 rc_of "$READ" --json --timeline 7
 jq -e '(.events | length) == 2 and .stripped == 3' "$tmpdir/out" > /dev/null || fail "timeline json"
 touch "$d/repos_o_r_issues_7_timeline.page2fail"
@@ -427,7 +433,8 @@ absent EVIL-DEP-TITLE "untrusted deps"
 grep -qx 'blocked by #31 open \[enhancement\]' "$tmpdir/out" || fail "untrusted line: $(cat "$tmpdir/out")"
 present "blocked by #33 open [enhancement]" "wrong id"
 present "stripped: 3" "untrusted deps count"
-events | jq -e -s 'length == 1 and .[0].note == "dependencies=3"' > /dev/null || fail "deps event: $(events)"
+# a stripped dependency node has no source in untrusted_stripped: counted, never logged
+[ -z "$(events)" ] || fail "deps: no event expected: $(events)"
 rc_of "$READ" --json 30
 jq -e '.stripped == 3 and all(.blocked_by[]; has("title") | not)' "$tmpdir/out" > /dev/null || fail "untrusted deps json"
 reset
@@ -436,7 +443,7 @@ with_summary 30 '{"total_blocked_by":3}'
 { dep 31 open "$(user stranger 99)" "EVIL-DEP-TITLE"; dep 32 open null "EVIL-DEP-TITLE"; dep 33 open "$(user cbundy 5)" "EVIL-DEP-TITLE"; } | arr > "$d/$DB.json"
 { comment 1 "$OWNER" ok; comment 2 "$(user stranger 99)" EVIL; } | arr > "$d/repos_o_r_issues_30_comments.json"
 rc_of "$READ" 30 --comments
-events | jq -e -s 'length == 1 and .[0].note == "comments=1 dependencies=3"' > /dev/null || fail "mixed event: $(events)"
+[ -z "$(events)" ] || fail "mixed: no event expected (dependency nodes have no source): $(events)"
 
 # zero counts and no summary: no call
 reset
@@ -598,9 +605,7 @@ expect_rc 0 "--issues nested untrusted"
 jq -e '.stripped == 5 and .refused == [] and .issues[0].blocking == [] and .issues[0].blocked_by == []
   and (.issues[0].parent.sub_issues | map(.number) == [45]) and .issues[1].parent == null' "$tmpdir/out" >/dev/null || fail "--issues nested untrusted json: $(cat "$tmpdir/out")"
 for n in 6 7 8 10 90; do grep -qE "(^|[^0-9])$n([^0-9]|$)" "$tmpdir/out" && fail "--issues nested: #$n printed: $(cat "$tmpdir/out")"; done
-[ "$(events | grep -c untrusted_stripped)" = 2 ] || fail "--issues nested: wanted 2 untrusted_stripped events: $(events)"
-events | grep -q 'dependencies=4' || fail "--issues nested: no dependencies=4 note: $(events)"
-events | grep -q 'dependencies=1' || fail "--issues nested: no dependencies=1 note: $(events)"
+[ -z "$(events)" ] || fail "--issues nested: dependency nodes have no source, so no event: $(events)"
 rc_of "$READ" --issues 45,46
 present "stripped: 5" "--issues nested text"
 for n in 6 7 8 10 90; do grep -qE "(^|[^0-9])$n([^0-9]|$)" "$tmpdir/out" && fail "--issues nested text: #$n printed"; done

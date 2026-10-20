@@ -28,7 +28,7 @@
 # the implementer. docs/metrics.md "8. Implementer model comparison" compares them.
 #
 # Every decision is logged once with
-#   callum-flow-event implementer_routed --issue N --note "model=.. reason=.. bucket=.. pct=.."
+#   callum-flow-event --type implementer_routed --issue N --data '{"model":..,"reason":..,"bucket":..,"opus_pct":..}'
 # A logging failure never changes the output or the exit code.
 #
 # Exit codes: 0 routed (including the fallback) or -h | --help (usage on stdout,
@@ -80,7 +80,9 @@ read_labels() {
 }
 
 log() {
-  "$EVENT" implementer_routed --issue "$n" --note "model=$1 reason=$2 bucket=$3 pct=$PCT" >/dev/null 2>&1 ||
+  _d=$(jq -nc --arg m "$1" --arg r "$2" --arg b "$3" --argjson p "$PCT" \
+    '{model: $m, reason: $r, bucket: (if $b == "-" then null else ($b | tonumber) end), opus_pct: $p}') || { err "warning: could not log the implementer_routed event"; return 0; }
+  "$EVENT" --type implementer_routed --issue "$n" --data "$_d" >/dev/null 2>&1 ||
     err "warning: could not log the implementer_routed event"
 }
 decide() { echo "$1"; log "$1" "$2" "$3"; exit 0; }

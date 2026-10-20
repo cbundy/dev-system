@@ -357,3 +357,63 @@ test("usage: a spend reading is written with no warning through --data and --not
   assert.equal(events[0].data.spend_usd, 42.5);
   assert.deepEqual(reader.validateStrict("usage", 1, events[0].data), []);
 });
+
+// The tools write the new events natively (dev-system#1140): for every call shape a tool makes, the
+// type and data are what translate() makes from the old-state line the tool used to write, so no
+// reader of the new store can tell the difference. tests/fixtures/factory-events/tool-calls.json holds
+// each shape: the old line, and the native call as the tool now makes it (for usage, the data comes
+// from the real `usage-check.sh --to-data`). The shell suites of the tools assert the same data
+// from the tools themselves.
+const TRANSLATE = require(path.join(ROOT, "images", "base", "factory-event-translate.js"));
+const USAGE_CHECK = path.join(ROOT, "features", "src", "callum-tools", "usage-check.sh");
+const TOOL_CALLS = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "factory-events", "tool-calls.json"), "utf8"));
+
+function oldLine(old) {
+  return {
+    v: 2, ts: "2026-10-20T12:00:00Z", repo: "cbundy/dev-system", device: "box", session_id: null, actor: "agent", issue: null,
+    run_id: null, branch: null, pr: null, head: null, note: null, event_id: "c2ceb199-8eed-4bc9-a308-37482c6234f5",
+    base_image: null, dev_image: null, template_version: null, plugin_version: null, ...old,
+  };
+}
+
+test("every tool call shape makes the type and data translate() makes from the old line it used to write", () => {
+  assert.ok(TOOL_CALLS.length >= 30, "the fixture covers every tool");
+  for (const c of TOOL_CALLS) {
+    const t = TRANSLATE.translate(oldLine(c.old), c.old_data === undefined ? undefined : { data: c.old_data, ts: null, sessionId: null });
+    assert.ok(t.event, `${c.tool}: the old line translates: ${JSON.stringify(t)}`);
+    let nativeCall = c.native;
+    if (nativeCall === undefined) {
+      const r = spawnSync("/bin/sh", [USAGE_CHECK, "--to-data"], { encoding: "utf8", input: `${c.old.note}\n`, env: { PATH: process.env.PATH, HOME: tmp } });
+      assert.equal(r.status, 0, `${c.tool}: ${r.stderr}`);
+      nativeCall = { type: "usage", data: JSON.parse(r.stdout) };
+    }
+    assert.equal(nativeCall.type, t.event.type, c.tool);
+    assert.deepEqual(nativeCall.data, t.event.data, c.tool);
+    // the real writer takes the native call, validates it strictly and writes that type and data
+    const args = ["--type", nativeCall.type, "--data", JSON.stringify(nativeCall.data)];
+    if (c.old.issue !== undefined) args.push("--issue", String(c.old.issue));
+    if (c.old.actor !== undefined) args.push("--actor", c.old.actor);
+    const { r, lines, old } = native(args);
+    assert.equal(r.status, 0, `${c.tool}: ${r.stderr}`);
+    assert.equal(r.stderr, "", c.tool);
+    assert.deepEqual(old, [], `${c.tool}: nothing goes to the old log`);
+    assert.equal(lines.length, 1, c.tool);
+    const e = JSON.parse(lines[0]);
+    assert.equal(e.type, t.event.type, c.tool);
+    assert.deepEqual(e.data, t.event.data, c.tool);
+    assert.equal(e.issue, t.event.issue, c.tool);
+    assert.equal(e.actor, t.event.actor, c.tool);
+  }
+});
+
+test("the old-state lines of the tools that stopped logging make no new event", () => {
+  // design_routed (callum-flow-design-route), superseded (callum-flow-regate) and the pipeline watcher's states
+  // (parked, merge_ready, ci_stalled, head_mismatch, conflict, failed, watcher_error) are skipped by name
+  for (const state of ["design_routed", "superseded", "parked", "merge_ready", "ci_stalled", "head_mismatch", "conflict", "failed", "watcher_error"]) {
+    const t = TRANSLATE.translate(oldLine({ state, issue: 7, note: "x" }));
+    assert.deepEqual(t, { skip: state }, state);
+  }
+  // a dependency strip of the issue reader is a miss, not an event
+  const t = TRANSLATE.translate(oldLine({ state: "untrusted_stripped", issue: 7, note: "dependencies=3" }));
+  assert.ok(t.miss, JSON.stringify(t));
+});

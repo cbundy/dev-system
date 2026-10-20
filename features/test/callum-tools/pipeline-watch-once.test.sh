@@ -2,7 +2,7 @@
 #
 # Plain-shell tests for pipeline-watch.sh --once (docs/factory-loop/v2/SPEC.md 13.3.4):
 # one poll, one line per branch whose newest run is not completed, step= and pr= in the detail,
-# actionable lines logged as a first sight, fatal errors as exit 1.
+# actionable lines not logged, fatal errors as exit 1.
 # Shared setup, stubs and wait helpers: watchers-lib.sh (read its header for the
 # waiting rules). Every --once call here is a single bounded process, so no wait is needed.
 set -eu
@@ -78,14 +78,9 @@ merge-ready feat/b RUNB pr=12 head=$b_head
 parked feat/a RUNA step=review pr=11 head=aaa" ] || fail "every state: $res"
 ok # one line per run in flight, with step= and pr=
 
-# Actionable lines are logged as a first sight, with the note the watch modes log (no step= or
-# pr=); running and pending are not logged.
-expect_lines "$calls" "failed --branch feat/f --run unknown --head fff --note  --if-changed --actor watcher
-failed --branch feat/x --run RUNX --head xxx --note cancelled --if-changed --actor watcher
-failed --branch feat/c --run RUNC --head ccc --note  --if-changed --actor watcher
-merge_ready --branch feat/b --run RUNB --head $b_head --note  --if-changed --actor watcher
-parked --branch feat/a --run RUNA --head aaa --note  --if-changed --actor watcher"
-ok # actionable lines logged as a first sight, with the watch modes' notes
+# The watcher no longer logs: not one callum-flow-event call, whatever it prints.
+[ ! -s "$calls" ] || fail "--once logged: $(cat "$calls")"
+ok # no actionable line is logged
 
 # --branches restricts the set.
 res=$(once --branches feat/a,feat/r) || fail "--branches: did not exit 0"
@@ -107,9 +102,8 @@ echo "CONFLICTING DIRTY" > "$fakebin/pr-status.txt"
 res=$(once --branches feat/b) || fail "conflict: did not exit 0"
 echo "MERGEABLE CLEAN" > "$fakebin/pr-status.txt"
 [ "$res" = "conflict feat/b RUNB pr=12 head=$b_head" ] || fail "conflict: $res"
-[ "$(tail -n 1 "$calls")" = "conflict --branch feat/b --run RUNB --head $b_head --note  --if-changed --actor watcher" ] ||
-  fail "conflict event: $(tail -n 1 "$calls")"
-ok # pending while mergeability is unknown, conflict with its PR, logged as a first sight
+[ ! -s "$calls" ] || fail "conflict: logged: $(cat "$calls")"
+ok # pending while mergeability is unknown, conflict with its PR
 
 # A head-mismatch keeps its SHAs ahead of pr=.
 g clone -q "$tmpdir/origin.git" "$tmpdir/wt-b" 2>/dev/null
@@ -119,9 +113,8 @@ wt_head=$(g -C "$tmpdir/wt-b" rev-parse HEAD)
 res=$(once --branches feat/b --worktree "feat/b=$tmpdir/wt-b") || fail "head-mismatch: did not exit 0"
 [ "$res" = "head-mismatch feat/b RUNB run=$b_head branch=$b_head worktree=$wt_head pr=12 head=$b_head" ] ||
   fail "head-mismatch: $res"
-[ "$(tail -n 1 "$calls")" = "head_mismatch --branch feat/b --run RUNB --head $b_head --note run=$b_head branch=$b_head worktree=$wt_head --if-changed --actor watcher" ] ||
-  fail "head-mismatch event: $(tail -n 1 "$calls")"
-ok # head-mismatch detail, then pr=, logged as a first sight
+[ ! -s "$calls" ] || fail "head-mismatch: logged: $(cat "$calls")"
+ok # head-mismatch detail, then pr=
 
 # A head-mismatch on a branch no worktree has: no worktree= in its detail.
 g -C "$repo" branch feat/n
@@ -146,15 +139,14 @@ runs_order RUNS RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
 res=$(in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --once --branches feat/s) ||
   fail "ci-stalled: did not exit 0"
 [ "$res" = "ci-stalled feat/s RUNS reason=no-workflow pr=16 head=$b_head" ] || fail "ci-stalled: $res"
-[ "$(tail -n 1 "$calls")" = "ci_stalled --branch feat/s --run RUNS --head $b_head --note reason=no-workflow --if-changed --actor watcher" ] ||
-  fail "ci-stalled event: $(tail -n 1 "$calls")"
+[ ! -s "$calls" ] || fail "ci-stalled: logged: $(cat "$calls")"
 # workflows exist, yet none ran for this PR
 echo 1 > "$fakebin/gh-workflows"
 res=$(in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --once --branches feat/s) ||
   fail "ci-stalled no-checks: did not exit 0"
 rm "$fakebin/gh-workflows"
 [ "$res" = "ci-stalled feat/s RUNS reason=no-checks pr=16 head=$b_head" ] || fail "ci-stalled no-checks: $res"
-ok # ci-stalled reason (no-workflow, no-checks), then pr=, logged as a first sight
+ok # ci-stalled reason (no-workflow, no-checks), then pr=
 
 # A head that cannot be read prints as unknown; a run whose own status cannot be read is pending.
 mkdir -p "$nm_home/logs/RUNQ"
@@ -201,7 +193,7 @@ rm "$fakebin/nm-status-fail-$(u 8)"
 runs_order RUNN RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
 ok # one line for each run state
 
-# 3. The real event log: a repeated --once adds nothing, a new head is logged again.
+# 3. A repeated --once reprints the same line each time and writes no event log at all.
 real_event_log
 mkdir -p "$nm_home/logs/RUNI"
 run_state RUNI feat/issue-201-i parked 5555555555555555555555555555555555555555
@@ -211,12 +203,10 @@ for i in 1 2 3; do
   [ "$res" = "parked feat/issue-201-i RUNI step=review head=5555555555555555555555555555555555555555" ] ||
     fail "replay: $res"
 done
-[ "$(ev_count '"state":"parked"')" = 1 ] || fail "replay: want one parked line: $(cat "$evlog")"
 run_state RUNI feat/issue-201-i parked 6666666666666666666666666666666666666666
 once > /dev/null || fail "replay: new head did not exit 0"
-[ "$(ev_count '"state":"parked"')" = 2 ] || fail "replay: a new head must be logged: $(cat "$evlog")"
-grep -q 'step=' "$evlog" && fail "replay: the log must carry the watch modes' note: $(cat "$evlog")"
-ok # repeated --once calls do not replay events
+no_event_log "--once"
+ok # repeated --once calls write no event log
 
 # 4. A review parked with fixes to decide reads fix_review, not awaiting_approval: its step is
 # still named (the testbed's #11 run, no-mistakes v1.84).
