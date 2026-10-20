@@ -297,7 +297,7 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     expect(run('conflict', ['GUARD mergeable FAIL conflicts with main class=conflict'])).toMatchObject({
       row: 'T9',
       via: 'fix:conflict',
-      next: { state: 'fixing', fixes: 1, notes: [expect.stringContaining('merge origin/main into issue-12')] },
+      next: { state: 'fixing', fixes: 0, conflicts: 1, notes: [expect.stringContaining('merge origin/main into issue-12')] },
     })
     // a guard that could not read fails its try (act-queue.ts): no answer about the PR, so unknown
     const unread = { status: 'failed' as const, failClass: 'read' as const, lines: ['GUARD author FAIL cannot verify the author of PR #612 (reader exit 1) class=read'] }
@@ -392,8 +392,14 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const dirty = plan(world([r], [view(r, { mergeable: 'dirty' })]))
     expect(queueActions(dirty)).toEqual([])
     expect(transitionOf(dirty, 20)).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing' } })
-    // at the fix cap, the conflict parks with the question
-    expect(transitionOf(plan(world([{ ...r, fixes: 3 }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({ row: 'T10', next: { state: 'parked', resumeTo: 'fixing' } })
+    // at the fix cap, a conflict still gets a fixer (other merges caused it: plant-console fix-cap:conflict parks, 2026-10-18)
+    expect(transitionOf(plan(world([{ ...r, fixes: CFG.reviewFixCap }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1 } })
+    // at the conflict cap, the conflict parks with its own question
+    expect(transitionOf(plan(world([{ ...r, conflicts: CFG.conflictFixCap }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({
+      row: 'T10',
+      via: 'fix-cap:conflict',
+      next: { state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('conflicts and red CI after other merges') },
+    })
   })
 
   test('a failed check gets one re-run per round, by its run; failed again after it, the head goes to a fixer with the check\'s name and link (ci-red); no hold for a red main', () => {
@@ -411,6 +417,9 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const again = { ...red, completedAt: NOW - MIN }
     const t = transitionOf(plan(withLedger(world([r], [view(r, { checks: [again] })]), [rerun])), 21)
     expect(t).toMatchObject({ row: 'T9', via: 'fix:ci', next: { state: 'fixing', notes: [`check ci failed after its one re-run (run 9001): ${red.link}`] } })
+    // red CI after the re-run is base-caused in the merge queue: at the fix cap it still gets a fixer, charged to conflicts
+    const atCap = { ...r, fixes: CFG.reviewFixCap }
+    expect(transitionOf(plan(withLedger(world([atCap], [view(r, { checks: [again] })]), [rerun])), 21)).toMatchObject({ row: 'T9', via: 'fix:ci', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1 } })
     // a check with no run to re-run counts at once; a cancelled one is re-run too
     expect(transitionOf(plan(world([r], [view(r, { checks: [{ ...red, runId: null, link: null }] })])), 21)).toMatchObject({ row: 'T9', via: 'fix:ci' })
     expect(of(plan(world([r], [view(r, { checks: [{ ...red, bucket: 'cancel' }] })])), 21).map(a => a.kind)).toContain('ci-rerun')

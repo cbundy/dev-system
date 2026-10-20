@@ -198,6 +198,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       'Limits',
       [
         ...render(row('reviewFixCap', 'reviewFixCap', String(c.reviewFixCap))),
+        ...render(row('conflictFixCap', 'conflictFixCap', String(c.conflictFixCap))),
         ...render(row('maxLives', 'maxLives', String(c.maxLives))),
         ...render(row('maxTriages', 'maxTriages', String(c.maxTriages))),
         ...render(row('windDown', 'windDownMinutes', c.windDownMinutes === 0 ? 'off' : `${c.windDownMinutes}m`)),

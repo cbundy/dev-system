@@ -251,7 +251,8 @@ type IssueRecord = {
   attempt: number              // attempt of that step: 1 or 2 (5.1)
   cut: boolean                 // this attempt already had its one free re-run (U1)
   triages: number              // triage calls in this life, at most maxTriages
-  fixes: number                // entries to fixing in this life, at most fixCap
+  fixes: number                // entries to fixing in this life for a round not caused by other merges, at most fixCap (reviewFixCap)
+  conflicts: number            // entries to fixing in this life for a round caused by other merges (a conflict, or red CI in the merge queue), at most conflictFixCap
   round: number                // entries to reviewing in this life
   question: string | null      // parked: the question for the owner
   parts: ParkParts | null      // parked: the parts of that question when an agent structured it (below); null in any other state
@@ -560,7 +561,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 ### 4.3 The table
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
-and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`). `maxTriages` is 2. "Step
+and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`) and `conflictFixCap` is 5 (`config.ts`). `maxTriages` is 2. "Step
 states" are designing, building, reviewing, fixing and the merge-queue head. 37 rows. The Events
 column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
 `merge_ready`) is logged by every row that enters the state, T1 included (4.5).
@@ -586,8 +587,8 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | T6 | building | not-ok | triages < max | building, step triage | attempt 1; triages +1; cut cleared | transition |
 | T7 | building | not-ok | triages = max | parked | question (the builder's reason); resumeTo building | transition |
 | T8 | reviewing | ok | - | merge-queue | approvedPatch and pr set | transition, `merge_ready` |
-| T9 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; fixes < fixCap | fixing | fixes +1; pr set; findings, failed checks or the conflict to notes | transition, `fix_requested` |
-| T10 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; fixes = fixCap | parked | question (the fix cap, with the findings); resumeTo fixing; pr set | transition |
+| T9 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; the counter of the not-ok's kind is under its cap (a base-caused not-ok, 8.6: conflicts < conflictFixCap; any other: fixes < fixCap) | fixing | that counter +1 (`conflicts` for a base-caused not-ok, else `fixes`); pr set; findings, failed checks or the conflict to notes | transition, `fix_requested` |
+| T10 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; the counter of the not-ok's kind is at its cap | parked | question (the fix cap, or for a base-caused not-ok the cap of rounds for conflicts and red CI after other merges, naming the count; with the findings); resumeTo fixing; pr set | transition |
 | T11 | fixing | ok | - | reviewing | head set; round +1 | transition |
 | T12 | fixing | not-ok | `declined` | reviewing | decline reasons to notes; round +1 | transition |
 | T17 | fixing | not-ok | `unchanged` | reviewing | fixed and decline reasons to notes; round +1; via `unchanged` | transition |
@@ -645,7 +646,7 @@ E7 covers, for example: a late result of a step whose seq has ended; `pr-closed`
 
 | Id | Event | Next | Record change | Events |
 |---|---|---|---|---|
-| P1 | unpark (a parked or waiting record) | queued | resumeTo kept; attempt 1, triages 0, fixes 0, cut cleared; prClosedAt set to the PR's `closedAt` when it is closed, so the resumed step reopens it (8.1); notes += the op's note, or (label route) the owner's tick in the park comment (`Owner chose option A: <title>`, 11) followed by the trusted comments posted after the park comment | transition |
+| P1 | unpark (a parked or waiting record) | queued | resumeTo kept; attempt 1, triages 0, fixes 0, conflicts 0, cut cleared; prClosedAt set to the PR's `closedAt` when it is closed, so the resumed step reopens it (8.1); notes += the op's note, or (label route) the owner's tick in the park comment (`Owner chose option A: <title>`, 11) followed by the trusted comments posted after the park comment | transition |
 
 Interventions (7.2) are not listed per row. `rules-interventions.ts` derives them from each done
 `transition` entry (its row and event) and other facts, so the rows above stay as they are.
@@ -834,7 +835,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   previous attempt's result and its leftovers file, so uncommitted work can be applied and side
   effects are not repeated.
 - **Bounds.** Per life: one free re-run per attempt, at most two attempts of a step per triage
-  grant, `maxTriages` triage calls and `fixCap` fix rounds. An owner resume resets them (P1).
+  grant, `maxTriages` triage calls, `fixCap` fix rounds and `conflictFixCap` conflict rounds. An owner resume resets them (P1).
   Property 7 checks the bound (17.1).
 
 ### 5.2 The triage agent
@@ -844,7 +845,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   Timeout 15 minutes. One repair message on a bad answer (D-68).
 - **Inputs.** Ids and pointers in the prompt; free text is keyword-rewritten (D-56):
   - the issue number and title, the brief URL, the branch, the head and the PR;
-  - the state, the step kind, the attempt, `triages`, `fixes` and `round`;
+  - the state, the step kind, the attempt, `triages`, `fixes`, `conflicts` and `round`;
   - the last two step results: status, the executor's summary, an error excerpt of up to 2 000
     characters, the ledger key, and the paths of their spawn records, answers, stop-gate results
     and leftovers in the loop dir (`spawns/`, `answers/`, `leftovers/`; 13.6.3);
@@ -1517,16 +1518,22 @@ is a new `Reviewer` implementation and a setting, nothing more.
 
 ### 8.6 Rounds and the cap
 
-- `round` counts entries to reviewing in the life. `fixes` counts entries to fixing.
-- Each reviewing, fixing, reviewing cycle adds one fix. At `fixCap` (3; `config.ts`) the next
-  not-ok parks instead (T10).
+- `round` counts entries to reviewing in the life. `fixes` and `conflicts` count entries to fixing.
+- A not-ok is base-caused when other merges caused it: its reason is `conflict` (from reviewing or
+  the merge queue), or `ci-red` from the merge queue (the checks went red after the one re-run, on
+  a head the review had approved). A reviewing `ci-red` and `changes` are the PR's own.
+- Each reviewing, fixing, reviewing cycle adds one to the counter of its kind: `conflicts` for a
+  base-caused not-ok, `fixes` for any other. At that counter's cap (`fixCap` 3, `conflictFixCap` 5;
+  `config.ts`) the next not-ok of that kind parks instead (T10), with the question of its cap. A
+  record at `fixCap` whose next not-ok is base-caused still goes to a fixer. The vias stay
+  `fix:<kind>` and `fix-cap:<kind>`.
 - A fixer that declines every finding sends the PR back to reviewing with its reasons (T12). The
   new round's reviewer judges the declines, and a failed check gets the new round's re-run. That
   costs a round, not a fix.
 - A fixer that pushes nothing but fixed a finding outside the branch (on the PR description or evidence) answers `unchanged`; the PR goes back to reviewing with notes naming each finding (T17), and the answer's evidence is written into the PR body. A `fixed` answer whose origin head did not move stays an unknown bad-answer.
-- An owner resume resets `fixes` (P1).
-- Rounds have no cap of their own. Without outside pushes they are bounded by `fixCap` and
-  `maxTriages` (property 7).
+- An owner resume resets `fixes` and `conflicts` (P1).
+- Rounds have no cap of their own. Without outside pushes they are bounded by `fixCap`,
+  `conflictFixCap` and `maxTriages` (property 7).
 
 ### 8.7 The design brief
 
@@ -1776,8 +1783,9 @@ The owner confirmed this (section 15).
 
 ### 9.7 Fixer rounds
 
-- A conflict or red CI goes to fixing with `fixes + 1` (T9), up to `fixCap`, then the issue parks
-  (T10).
+- A conflict, or red CI in the merge queue, goes to fixing with `conflicts + 1` (T9), up to
+  `conflictFixCap`, then the issue parks (T10). Red CI in review goes with `fixes + 1`, up to
+  `fixCap` (8.6).
 - For a conflict, the fixer merges `origin/<default>` into the branch and resolves it. It never
   rebases or force-pushes (10.4). For red CI it gets the failed checks' names and links and reads
   the logs with `gh run view --log-failed`.
@@ -2616,6 +2624,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `maxInFlightIssues` | 3 | a cap on this device's live issues (K; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
 | `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
+| `conflictFixCap` | 5 | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
 | `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
 | `starvedNoticeAfterMs` | `60m` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
 | `maxAttempts` | claim 3, stop-agent 1, restart-self 1, task and tell 1 (one reminder inside the attempt); heartbeat and sweep 3 each; any other kind 3; v2's step kinds carry their own (appendix A) | then the owner hears of it (`tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
@@ -3756,6 +3765,16 @@ The first entries are the owner's own decisions; they are settled.
 - **Decision:** both, as settings (appendix A).
 - **Why:** 3 review rounds is the review cap the loop has always had, and 2 triages bound a step's unknown path without letting it loop.
 
+### Rounds caused by other merges have their own cap
+
+- **Decision:** a conflict, or red CI in the merge queue, is charged to `conflicts` against
+  `conflictFixCap` (5), not to `fixes` against `reviewFixCap` (3). A reviewing `ci-red` and `changes`
+  stay on `fixes`. The vias stay `fix:<kind>` and `fix-cap:<kind>`; the park question says which cap.
+- **Alternatives:** raise `reviewFixCap`; reset `fixes` when the base moves.
+- **Why:** on busy days other merges conflict a PR again and again while its own review rounds are
+  done, and the shared cap parked PRs the loop could still land (`fix-cap:conflict` parks, 2026-10-18
+  and 19). Own caps keep both bounded. Part of #1089.
+
 ### `In development` is dropped now (owner)
 
 - **Decision:** the loop neither writes nor reads `In development`. The claim, heartbeat, sweep and
@@ -4070,7 +4089,7 @@ The first entries are the owner's own decisions; they are settled.
 
 ### A resume resets the budgets and hears GitHub answers
 
-- **Decision:** P1 resets attempt, triages and fixes, and takes the owner's trusted comments since
+- **Decision:** P1 resets attempt, triages, fixes and conflicts, and takes the owner's trusted comments since
   the park as the note.
 - **Alternatives:** keep the counters; notes only through `/factory`.
 - **Why:** a resume is the owner's decision to try again; #591 showed answers on GitHub must count.
@@ -4114,7 +4133,7 @@ own test.
 6. **One writer.** At most one step per record; never an agent step and a queue action on one
    record at once; no two records share a slot.
 7. **Bounded work.** On any event sequence without outside events (unpark, outside pushes), agent
-   steps per life stay under the bound computed from `fixCap`, `maxTriages` and one free re-run
+   steps per life stay under the bound computed from `fixCap`, `conflictFixCap`, `maxTriages` and one free re-run
    per attempt.
 8. **Head only.** No plan has a `queue-update` or `queue-merge` for a record that is not the head;
    no argv has `--rebase` or a force push; no action makes a branch other than the record's; no

@@ -139,7 +139,7 @@ describe('F1 and an open bug', () => {
 describe('F1 and the ready cap', () => {
   const open = (n: number, ready: boolean): FlakeBug => ({ number: n, hash: `${n}`.repeat(16).slice(0, 16), ready, known: [] })
   const rec = (issue: number, st: IssueRecord['state']): IssueRecord => ({
-    issue, life: 'l1', seq: 1, seqAt: NOW - MIN, state: st, since: NOW - MIN, resumeTo: null, branch: `issue-${issue}`, pr: null, head: null, approvedPatch: null, brief: null, step: null, attempt: 0, cut: false, triages: 0, fixes: 0, round: 0, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
+    issue, life: 'l1', seq: 1, seqAt: NOW - MIN, state: st, since: NOW - MIN, resumeTo: null, branch: `issue-${issue}`, pr: null, head: null, approvedPatch: null, brief: null, step: null, attempt: 0, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 0, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
   })
 
   test('with two open flake bugs ready or in flight, a third test\'s bug is filed without ready', () => {

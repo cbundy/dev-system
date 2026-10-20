@@ -96,6 +96,8 @@ export function triageInput(ctx: ExecCtx, action: AgentStepAction, place: Triage
     triages: r.triages,
     maxTriages: config.maxTriages,
     fixes: r.fixes,
+    conflicts: r.conflicts,
+    conflictFixCap: config.conflictFixCap,
     fixCap: config.reviewFixCap,
     round: r.round,
     brief: r.brief,

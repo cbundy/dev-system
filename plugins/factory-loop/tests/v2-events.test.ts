@@ -91,6 +91,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     cut: g.next() < 0.5,
     triages: g.int(3),
     fixes: g.int(4),
+    conflicts: g.int(6),
     round: g.int(6),
     question: maybe(g, text(g, free)),
     parts: maybe(g, parts(g, free)),
@@ -155,6 +156,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
         cut: false,
         triages: 0,
         fixes: 1,
+        conflicts: 2,
         round: 1,
         question: null,
         parts: null,
@@ -166,7 +168,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
       },
     }
     expect(eventNote(e)).toBe(
-      'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
+      'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 conflicts=2 round=1 why=none ' +
         'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
     )
   })
@@ -196,6 +198,7 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       cut: false,
       triages: 0,
       fixes: 0,
+      conflicts: 0,
       round: 0,
       question: null,
       parts: null,
@@ -205,6 +208,16 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       wait,
       lives: 1,
     },
+  })
+
+  test('conflicts=<n> follows fixes=<n>; a note without the token reads 0, a bad one is no transition', () => {
+    const e = { ...waiting(null), record: { ...waiting(null).record, conflicts: 3 } }
+    const note = eventNote(e)
+    expect(note).toContain(' fixes=0 conflicts=3 round=0')
+    expect(roundTrip(e)).toEqual(e)
+    const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note: note.replace(' conflicts=3', '') }
+    expect(parseTransition(row)?.record.conflicts).toBe(0)
+    for (const bad of ['-1', '1.5', 'x', 'none']) expect(parseTransition({ ...row, note: `${row.note} conflicts=${bad}` })).toBeNull()
   })
 
   test('issue:<n>, pr:<n> and tag:<sha>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {

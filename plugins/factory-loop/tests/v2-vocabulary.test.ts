@@ -83,6 +83,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     cut: false,
     triages: 0,
     fixes: 1,
+    conflicts: 0,
     round: 2,
     question: null,
     parts: null,
@@ -206,6 +207,12 @@ describe('the store\'s records and heads (v2 SPEC 3.3, 2.4)', () => {
     const { lives: _lives, ...uncounted } = record({ lives: 2 })
     expect(recordOf(uncounted)).toEqual(record({ lives: 1 }))
     expect(recordOf({ ...record(), lives: 0 })).toBeNull()
+    // a record stored before the conflict count reads it as none (or null); a bad count does not read
+    const { conflicts: _conflicts, ...unconflicted } = record({ conflicts: 2 })
+    expect(recordOf(unconflicted)).toEqual(record({ conflicts: 0 }))
+    expect(recordOf({ ...record(), conflicts: null })).toEqual(record({ conflicts: 0 }))
+    expect(recordOf({ ...record(), conflicts: 2 })).toEqual(record({ conflicts: 2 }))
+    for (const bad of [-1, 1.5, '1']) expect(recordOf({ ...record(), conflicts: bad })).toBeNull()
   })
 
   test('a stored wait reads back with its repo on issue-closed and tag-contains; without it as before; a repo on pr-merged or a bad repo makes the record unreadable', () => {

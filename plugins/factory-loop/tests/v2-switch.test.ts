@@ -46,6 +46,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     cut: false,
     triages: 0,
     fixes: 0,
+    conflicts: 0,
     round: 0,
     question: null,
     parts: null,

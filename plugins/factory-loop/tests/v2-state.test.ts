@@ -1646,7 +1646,9 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     triages: 1,
     maxTriages: 2,
     fixes: 0,
+    conflicts: 0,
     fixCap: 3,
+    conflictFixCap: 5,
     round: 0,
     brief: BRIEF(150),
     branch: 'issue-150',
@@ -1671,7 +1673,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(p).not.toContain('/tmp')
     // with no slot there is no marker and no scratch folder to name
     expect(triagePrompt(input({ slot: null, scratch: null }))).not.toContain('scratch folder')
-    expect(p).toContain('1 of 2 triage calls, 0 of 3 fix rounds')
+    expect(p).toContain('1 of 2 triage calls, 0 of 3 fix rounds, 0 of 5 conflict rounds')
     expect(p).toContain('file: /l/spawns/x.json')
     expect(p).toContain('- fix: not valid here (the branch has no commits beyond the base)')
     expect(p).toContain(`${PLUGIN_ROOT}/bin/factory-answer --to ${LOOP_DIR}/answers/i150_lx_s6_triage_a1.answer.json <<'JSON'`)

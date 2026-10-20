@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -86,6 +86,12 @@ describe('configText', () => {
     expect(fraction.ok ? '' : fraction.error).toContain('queueScore.bug: 1.5 is not a whole number')
     expect(checkSetting('queueScore', 5)).toMatchObject({ ok: false })
     expect(SETTING_EFFECT.queueScore).toBe('next-pass')
+  })
+
+  test('conflictFixCap defaults to 5, applies on the next pass and shows in the view', () => {
+    expect(DEFAULT_CONFIG.conflictFixCap).toBe(5)
+    expect(SETTING_EFFECT.conflictFixCap).toBe('next-pass')
+    expect(line(configText(view({}, {}), control(), NOW), 'conflictFixCap')).toContain('5')
   })
 
   test('the planner and shadow keys are retired: a file that sets either still loads, each is ignored and shown as a config problem', () => {
