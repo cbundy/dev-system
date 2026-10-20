@@ -92,6 +92,8 @@ describe('snapshotOf', () => {
     expect(t.derived).toEqual({
       gateConcurrency: 2,
       cpus: 16,
+      memoryBytes: null,
+      effectiveCap: null,
       models: { designer: 'opus', builder: 'sonnet', fixer: null, triage: 'sonnet', reviewer: DEFAULT_CONFIG.reviewerModel, adjudicator: null },
       experiment: { implementerOpusPct: 25, designSessionPct: null },
     })

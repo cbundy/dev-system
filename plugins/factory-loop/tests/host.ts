@@ -257,6 +257,11 @@ export function host(on: On, opts: HostOptions = {}) {
     if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('availableParallelism')) {
       return { value: { exitCode: 0, stdout: '8\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    // the container's memory, read once per loop process: 64 GiB, so no test's cap meets the memory ceiling
+    // unless it sets a memory of its own (the command prints memory.max and /proc/meminfo as JSON)
+    if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('memory.max')) {
+      return { value: { exitCode: 0, stdout: `${JSON.stringify({ max: '68719476736\n', info: '' })}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const s: Seen = { argv, env: { ...(e.init?.env ?? {}) }, stdin: e.init?.stdin, cwd: e.init?.cwd }
     seen.push(s)
     const done = (r: Reply) => ({

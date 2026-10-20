@@ -3,6 +3,9 @@
 // reads no file, so it shows what the pass runs with, not what the files say now.
 import { GATE_CPUS, resolveGateConcurrency, shortDuration } from './config'
 import type { Runtime } from './observe'
+import { effectiveCap } from './v2/capacity'
+import type { CapInfo } from './v2/capacity'
+import type { GateLine } from './v2/sources-interventions'
 import type { Config, Control, Ms } from './types'
 
 // Where a value came from. plugin, env and directive are for the few values that have no settings
@@ -19,6 +22,8 @@ export type ConfigView = {
   poolSize: number
   // the container's CPU count the loop read; undefined: not read (a test's, an older pass)
   cpus: number | undefined
+  // the cap the loop holds to, with the container's memory and the slot estimate it came from
+  cap: CapInfo
   repoRaw: Record<string, unknown>
   workspaceRaw: Record<string, unknown>
   problems: readonly string[]
@@ -88,13 +93,14 @@ export function originOf(file: Record<string, unknown>, key: string): Source {
 
 // viewOf: the view of the settings a pass ran with. A Runtime without the provenance fields
 // (a test's, an older pass) reads as every value from its default.
-export function viewOf(rt: Runtime & Partial<ViewInputs>): ConfigView {
+export function viewOf(rt: Runtime & Partial<ViewInputs>, gates?: readonly GateLine[]): ConfigView {
   const file = rt.workspaceRaw ?? {}
   return {
     config: rt.config,
     device: rt.device,
     poolSize: rt.poolSize,
     cpus: rt.cpus,
+    cap: effectiveCap(rt.config, rt.memoryBytes ?? null, gates),
     repoRaw: rt.repoSettings ?? {},
     workspaceRaw: file,
     problems: rt.configProblems,
@@ -129,6 +135,19 @@ function gateConcurrencyText(value: 'auto' | number, cpus: number | undefined, s
   if (value !== 'auto') return `${value} (${source})`
   const n = cpus ?? 1
   return `${resolveGateConcurrency(value, n)} (auto: ${n} CPUs / ${GATE_CPUS})`
+}
+
+const gib = (bytes: number): string => `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+
+// the memory rows of the Capacity group (v2/capacity.ts): what the container holds, the ceiling it gives and the cap in force
+function memoryRows(c: Config, cap: CapInfo, row: (label: string, key: string, value: string, note?: string) => Row): string[] {
+  return [
+    ...render(row('slotMemoryMiB', 'slotMemoryMiB', `${c.slotMemoryMiB === 'auto' ? 'auto' : `${c.slotMemoryMiB} MiB`} (${gib(cap.estimateBytes)}, ${cap.estimateSource})`)),
+    ...render(row('memoryReserveMiB', 'memoryReserveMiB', `${c.memoryReserveMiB} MiB`)),
+    ...render({ label: 'memory', value: cap.memoryBytes === null ? 'not readable: no memory ceiling' : gib(cap.memoryBytes) }),
+    ...render({ label: 'memory ceiling', value: cap.ceiling === null ? 'none' : String(cap.ceiling) }),
+    ...render({ label: 'effective cap', value: cap.effective === null ? 'no cap' : String(cap.effective) }),
+  ]
 }
 
 const MODE_NOTE = { off: 'runs nothing', observe: 'plans and logs only', act: 'does the work' }
@@ -177,6 +196,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       'Capacity',
       [
         ...render(row('maxInFlight', 'maxInFlightIssues', c.maxInFlightIssues === null ? 'no cap' : String(c.maxInFlightIssues))),
+        ...memoryRows(c, view.cap, row),
         ...render({ label: 'poolSize', value: String(view.poolSize), source: typeof view.workspaceRaw.poolSize === 'number' ? 'workspace' : 'default' }),
         ...render(row('worktreeReserve', 'worktreeReserve', String(c.worktreeReserve))),
         ...render(row('maxStarts', 'maxStartsPerPass', String(c.maxStartsPerPass))),

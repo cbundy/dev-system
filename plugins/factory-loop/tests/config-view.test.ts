@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
 import { SETTING_EFFECT, checkSetting } from '../hooks/config-keys'
 import { helpText, parseOp, runOp } from '../hooks/control'
 import type { FileIo } from '../hooks/control'
+import { effectiveCap } from '../hooks/v2/capacity'
 import { MIN, NOW, control } from './fixtures'
 
 // a view over the layers as register's runtime() loads them
@@ -17,6 +18,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
     config: loaded.config,
     device: 'dev-box',
     poolSize: 16,
+    cap: effectiveCap(loaded.config, null, undefined),
     repoRaw: repo,
     workspaceRaw: workspace,
     problems: loaded.problems,
@@ -29,7 +31,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore',
+  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore',
   'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]

@@ -70,6 +70,8 @@ export type Runtime = {
   // resolved from config.gateConcurrency; absent in a test's Runtime: no limit
   cpus?: number
   gateConcurrency?: number
+  // the container's memory in bytes, read once per process (config.ts gateLimits); null: not readable, so no memory ceiling; absent in a test's Runtime
+  memoryBytes?: number | null
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
   // what the repo-local settings file says, no defaults (settings.ts repoLoaded); null: not read

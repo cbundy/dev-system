@@ -33,6 +33,7 @@
 // Pure: the time is state.now.
 import { ALLOWED, gate, skip, want } from '../foundation'
 import type { ActionClass, LedgerEntry, Ms } from '../types'
+import { capOf, capText } from './capacity'
 import { freeKey, keyParts, leaseKey, lifeAt, lifeKey } from './keys'
 import { freeing, leaseOf, lifeEntries } from './rules-agent'
 import { AGENT_STEPS, SLOT_STATES, STATE_STEP, STEP_CLASS } from './types'
@@ -167,6 +168,7 @@ function leases(ctx: V2Ctx): void {
   const vanished = live.filter(r => SLOT_STATES.includes(r.state) && leaseOf(ctx, r) === null)
   const queued = live.filter(r => r.state === 'queued' && leaseOf(ctx, r) === null)
   if (vanished.length === 0 && queued.length === 0) return
+  const cap = capOf(ctx)
   const pool = ctx.state.sources.pool.ok ? ctx.state.pool : null
   // a lease under way holds its place in flight and its slot (nextLease)
   const pending = new Map(queued.concat(vanished).map(r => [r, nextLease(ctx, r)]))
@@ -194,7 +196,7 @@ function leases(ctx: V2Ctx): void {
     let limit: string | null = null
     if (busy !== null) limit = `its slot is gone and ${busy.key} still runs`
     else if (free === null) limit = `the pool's free slots are not known (${ctx.state.sources.pool.error ?? 'not read'})`
-    else if (!lost && config.maxInFlightIssues !== null && flight >= config.maxInFlightIssues) limit = `capacity: ${flight} of ${config.maxInFlightIssues} in flight`
+    else if (!lost && cap.effective !== null && flight >= cap.effective) limit = capText(cap, flight, 'in flight')
     else if (!lost && free <= config.worktreeReserve) limit = `no free worktree: ${free} free, ${config.worktreeReserve} kept in reserve`
     else if (lost && free <= 0) limit = 'no free worktree'
     else limit = tierHolds(ctx, to)

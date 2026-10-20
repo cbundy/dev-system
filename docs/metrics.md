@@ -595,7 +595,8 @@ turn). The test hook `FACTORY_GATE_CGROUP_DIR` names another cgroup directory.
 The reading is container-wide. At concurrency above 1 other gates run in the same container and
 their memory overlaps this one's, so the query groups by `concurrency`: the `concurrency` 1 rows
 are the nearest to one gate's own memory. This is the per-slot estimate the memory cap (#1127)
-uses. A retried write can repeat an event, so each run counts once per (issue, life, seq,
+uses (`slotMemoryMiB: auto`: the p90, nearest rank, of `mem_peak_bytes - mem_start_bytes`, once at
+least 3 runs are in the loop's 6-day companion window, else 3072 MiB). A retried write can repeat an event, so each run counts once per (issue, life, seq,
 started_at). Take percentiles in code.
 
 ```sql
@@ -615,6 +616,19 @@ SELECT repo, concurrency,
 FROM runs
 GROUP BY repo, concurrency
 ORDER BY repo, concurrency;
+```
+
+The loop holds at most `min(maxInFlightIssues, ceiling)` issues, where the ceiling is
+`max(1, floor((memory - memoryReserveMiB) / estimate))` (`memory`: the cgroup's `memory.max`, else
+`/proc/meminfo` MemTotal, read once per process). Each pass line of the decision log carries
+`cap: {effective, configured, ceiling, memoryBytes, estimateBytes, estimateSource}`
+(`estimateSource`: `setting`, `measured` or `default`), so a held issue is told apart: the S1/W1 skip
+text names `memory ceiling` only when the ceiling was the lower bound. When the configured cap is
+above the ceiling the loop tells the owner once per pair (`loop_entry` wake `capacity`).
+
+```sh
+jq -c 'select(.cap != null) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
+jq -c 'select(.cap.ceiling != null and .cap.ceiling < .cap.configured) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
 ```
 
 ## 3. Reviewer false-positive rate

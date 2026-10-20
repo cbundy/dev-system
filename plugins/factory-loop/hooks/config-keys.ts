@@ -88,6 +88,8 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   gateTimeoutMs: 'next-pass',
   gateConcurrency: 'next-pass',
   gateWaitTimeoutMs: 'next-pass',
+  slotMemoryMiB: 'next-pass',
+  memoryReserveMiB: 'next-pass',
   // runtime() reads it from the workspace file every pass
   poolSize: 'next-pass',
 }
