@@ -9,6 +9,7 @@
 import type { ActOutcome } from './act'
 import type { ActIo, RunResult } from './exec'
 import type { Io } from './observe'
+import type { ObserveSplit } from './observe-clock'
 import type { ActionKind, LedgerEntry, LedgerStatus, Ms, PlanResult, Skip, SourceName, Stage, State } from './types'
 
 // A pass's phases in the order they run, each ending where the next begins: setup (the settings,
@@ -337,6 +338,8 @@ export type TraceInput = {
   queuedAt: Ms | null
   wakes: WakeRow[]
   waiting: WaitRow[]
+  // the observe call's wall time and its split (observe-clock.ts)
+  observe?: ObserveSplit
 }
 
 // traceRecord: the pass's record, its log phase ending now: start and end on the loop's clock
@@ -356,6 +359,7 @@ export function traceRecord(input: TraceInput): Record<string, unknown> {
     persistMs: tenth(tr.persistMs),
     eventsMs: tenth(tr.eventsMs),
     lockMs: tenth(tr.lockMs),
+    ...(input.observe === undefined ? {} : { observe: { ms: tenth(input.observe.ms), commandsMs: tenth(input.observe.commandsMs), inProcessMs: tenth(input.observe.inProcessMs) } }),
     sources: sourceRows(input.state, tr.commands, input.made),
     commands: tr.commands,
     actions: actionRows(tr, input.outcomes, input.queuedAt),

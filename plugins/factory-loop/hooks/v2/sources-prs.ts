@@ -9,8 +9,8 @@
 // its patch id (8.4: callum-flow-patch-id <head> <default branch>, kept per head, so it is computed
 // once); main's head on origin when a merge-queue PR is open, for Q1 (9.2); and the time
 // observe first saw each head (heads:<repo>), whose entries go when their PR closes or its record
-// does. Reads go in 2.4's order, the queue's head first, then the other records in reviewing and
-// the merge queue, for at most ctx.prBudget records (K, a budget of its own; none during a GitHub
+// does. Reads start in 2.4's order, up to 4 at once (PR_READ_CONCURRENCY), their results kept in it too: the queue's
+// head first, then the other records in reviewing and the merge queue, for at most ctx.prBudget records (K, a budget of its own; none during a GitHub
 // backoff), and stop at a rate limit met this pass (ctx.limited). A PR whose read fails in any
 // part (the PR, its checks, its workflow runs, its patch id) is left out and listed in `unread` with why (and whether
 // the reader refused it for an untrusted author, exit 3): only its own record waits on it, never
@@ -375,6 +375,9 @@ export function prRecords(records: readonly IssueRecord[], excluded: readonly nu
     })
 }
 
+// The most PR reads in flight at once.
+export const PR_READ_CONCURRENCY = 4
+
 // readPrs: the PRs of the records that have one, main's head when a merge-queue PR is open, and
 // the heads first seen, updated.
 export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: Source; heads: Record<string, HeadSeen> }> {
@@ -388,19 +391,33 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
   const unread: PrUnread[] = []
   let cut: string | undefined
   if (due.length > 0 && ctx.prBudget <= 0) cut = 'GitHub rate limit: no PR is read this pass'
-  for (const r of due.slice(0, Math.max(0, ctx.prBudget))) {
-    if (ctx.limited()) {
-      cut = 'a GitHub rate limit met this pass ended the PR reads'
-      break
+  // up to PR_READ_CONCURRENCY workers take the next record from a shared cursor; each checks the
+  // rate limit before it starts one, and the results are placed by index, so 2.4's order holds
+  const todo = due.slice(0, Math.max(0, ctx.prBudget))
+  const slots: ({ v: Awaited<ReturnType<typeof readOne>> } | undefined)[] = todo.map(() => undefined)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < todo.length && !ctx.limited()) {
+      const i = next++
+      const r = todo[i]!
+      slots[i] = { v: await readOne(ctx, r, defaultBranch).catch((err: unknown) => ({ why: `the PR read threw: ${String(err).slice(0, 200)}`, untrusted: false })) }
     }
-    const v = await readOne(ctx, r, defaultBranch)
+  }
+  await Promise.all(Array.from({ length: Math.min(PR_READ_CONCURRENCY, todo.length) }, worker))
+  todo.forEach((r, i) => {
+    const slot = slots[i]
+    if (slot === undefined) {
+      cut = 'a GitHub rate limit met this pass ended the PR reads'
+      return
+    }
+    const v = slot.v
     if ('why' in v) {
       const since = ctx.unread.find(u => u.pr === r.pr && u.issue === r.issue)?.since ?? now
       unread.push({ pr: r.pr, issue: r.issue, why: v.why, untrusted: v.untrusted, since })
-      continue
+      return
     }
     prs.push(v)
-  }
+  })
   prs.push(...kept)
   let main: PrsRead['main'] = null
   const queued = prs.findIndex(v => v.state === 'open' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))

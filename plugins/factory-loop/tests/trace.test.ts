@@ -151,6 +151,12 @@ describe('trace on', () => {
       expect(ms).toBeLessThanOrEqual(total)
     }
     for (const key of ['persistMs', 'eventsMs', 'lockMs']) expect(typeof t1[key]).toBe('number')
+    // the observe split: the wall time, the part with a read in flight, the rest the loop's own
+    const split = t1.observe as { ms: number; commandsMs: number; inProcessMs: number }
+    expect(Object.keys(split)).toEqual(['ms', 'commandsMs', 'inProcessMs'])
+    for (const v of Object.values(split)) expect(typeof v).toBe('number')
+    expect(split.inProcessMs).toBeGreaterThanOrEqual(0)
+    expect(split.commandsMs).toBeLessThanOrEqual(split.ms)
 
     // every command of the pass, each with the source it read, its time, exit and bytes
     expect(commandsOf(t1)[0]).toMatchObject({ phase: 'setup', cmd: 'agent.list' })

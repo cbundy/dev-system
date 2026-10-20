@@ -15,6 +15,8 @@ import { keepTitles } from './report'
 import { agentModelsOf, snapshotFrom, snapshotOf, writeSnapshot } from './settings-snapshot'
 import type { Snapshot } from './settings-snapshot'
 import { digestOf } from './state'
+import { clocked } from './observe-clock'
+import type { ObserveSplit } from './observe-clock'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
 import { effectiveCap } from './v2/capacity'
@@ -204,10 +206,13 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // A shadow watches another session: this module's own load says nothing about when that
   // session restarted, so the first-pass heartbeat (rule H1) is left to real lease timing.
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
-  const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
+  const clock = clocked(tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents)), () => performance.now())
+  const reads = clock.io
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
   const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
+  const observeStart = performance.now()
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
+  const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
   let state = observed.state
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
   let snap: Snapshot | null = null
@@ -463,6 +468,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       queuedAt,
       wakes: wakes.rows,
       waiting: waitingRows(state, result, ledger, S.waits),
+      observe: observeSplit,
     })
     await writeTrace($, rt, record).catch(() => undefined)
   }
