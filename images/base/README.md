@@ -84,7 +84,7 @@ only signal-terminated sleeps (status above 128) are retried.
 one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
 usage gate. It reads the claude.ai usage endpoint with the logged-in OAuth token, falls back
 to a recent status line snapshot (its `--record` mode is a status line command), and prints
-`usage=unavailable reason=...` when neither answers. It spends no model tokens and runs no
+`usage=unavailable reason=...` when neither answers. It also logs the reading as a native `usage` event (`--to-data` prints the event's data for a line on stdin). It spends no model tokens and runs no
 background process. Only the image ships it, not the deprecated feature.
 
 ## What the image does not own
@@ -1581,8 +1581,8 @@ reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `re
 reads the old file. It needs no network and never fails its caller: a miss, a missing `node` or
 translator, or a crashing translator keeps the old line and prints one `callum-flow-event: warning:`
 line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
-and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
-A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
+and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form until the cutover in #1143; `pipeline-watch.sh` no longer logs; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
+A re-armed queue watcher's first sight of a queued issue (one it did not see change) is logged with
 `--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
 restart never replays old events; transitions a watcher observes are always logged.
 `callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
@@ -1590,7 +1590,7 @@ restart never replays old events; transitions a watcher observes are always logg
 log (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
 `--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
-`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` and `callum-flow-claim` then log the event again without it. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
@@ -1708,9 +1708,9 @@ are leased on the tips the check saw: a commit a live run adds before it stops m
 and ask for a rerun. `--new-branch` (after the live run is
 stopped), a sync recovery or gate-ref deletion that cannot finish, a recovery that moves HEAD, or a code
 with no safe action moves the rebased head to `<branch>-v<N>` (first name free locally, on origin and on
-the gate), logs `superseded` and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
-`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch
-re-gate also logs `superseded`.
+the gate) and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
+`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`. The helper
+logs no event: the event store has no `superseded` type.
 Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. Preflight and
 dropped-commit refusals change nothing, but a later one (a run that did not stop, a refused lease push)
 may leave the run aborted or recovered and the gate ref deleted, with the archives kept. The behind-only
@@ -1735,9 +1735,9 @@ not count). Each commit it cannot see restored prints an advisory `GUARD test-we
 step=<s> files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
 orchestrator sends each one to the adjudicator before merging. After a successful merge
 `callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
-(`docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
+(`callum-flow-event --type test_weakened --data`; `docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
 adds an ERE of extra test paths.
-After the merge and the `merged` event, `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
+After the merge and the `merged` event (`callum-flow-event --type merged --data`; it needs an issue, so with none known the merge still succeeds, a warning says so and no `merged` event is written), `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
 (override: `CALLUM_FLOW_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
 because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
@@ -1797,8 +1797,8 @@ labels, title?}` with the title kept only for a trusted author, an untrusted one
 `stripped`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
 (conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
 stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
-(non-zero, nothing on stdout) and logs an `untrusted_stripped` event with the count, never the
-content. The factory scripts that read issue, PR or comment content go through it and so only
+(non-zero, nothing on stdout) and logs an `untrusted_stripped` event (`callum-flow-event --type untrusted_stripped --data`: source, refused, count, pr) with the count, never the
+content. A stripped dependency node is counted but writes no event, as the type has no source for it. The factory scripts that read issue, PR or comment content go through it and so only
 see trusted content (cbundy/dev-system#310; the agent and skill prose follows in #311, the deny
 hook in #312): `callum-flow-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
 a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author` guard fails a PR
@@ -1834,10 +1834,10 @@ overrides the identity. Without `DEV_GH_TOKEN_FILE` nothing changes.
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
-and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assigns the issue and logs `claimed` with the note `lease: <minutes>`.
+and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since` and `race`), then removes `ready`, assigns the issue and logs `claimed` with `lease_minutes`, the issue's title, labels and parent and, when `CALLUM_FLOW_CLAIM_SCORE` is set and valid, the score and factors (all through `callum-flow-event --type claimed --data`).
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
-[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
+[issue...]` renews this device's claim comments in place and logs one `claim_renewed` event (`lease_minutes`) per comment it actually extended;
 with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
@@ -1849,12 +1849,12 @@ event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as t
 already ended (the shared rule above, over both logs: its last claim event is one that ends it, whichever device logged it, even
 when this device's own log still shows `claimed`; no other event revives an ended claim), or when it has no claim comment.
 A PR merged after the newest claim comment on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`) is a merge
-made outside the factory: the sweep logs `merged --pr <P> [--head <sha>] --actor sweep` whoever holds the claim and however live it is
+made outside the factory: the sweep logs a `merged` event (pr, head when known, by `factory`; actor `sweep`) whoever holds the claim and however live it is
 (checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
-expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
+expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `requeued` event (reason `lease-expired`). The sweep never touches
 any other label: the factory loop is the only writer of its `factory:*` labels. It has no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
-latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
+latest event of `superseded` (an old-log state; nothing writes it any more) is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
@@ -1862,7 +1862,7 @@ reader exits 1 after the rest are swept. Liveness uses GitHub server times; the 
 `callum-flow-design-route <issue>` prints `session` or `subagent`: how an issue is designed (epic #286). The label
 `design:subagent` wins, then `design:session`, else `CALLUM_FLOW_DESIGN_SESSION_PCT` (default `0`, a number from 0 to 100; anything else
 exits 2) sends that percentage of issues to `session` by a stable hash (`cksum` of the lower-cased `<owner/repo>#<issue>` mod 100), so
-every device decides alike. Unreadable labels print `subagent` with a warning. Each call logs a `design_routed` event, and it is in the
+every device decides alike. Unreadable labels print `subagent` with a warning. It logs no event (the event store has no `design_routed` type), and it is in the
 synced allow list. Set the percentage in a repo-owned place, not the synced `.claude/settings.json` keys. Consumer repos create the
 labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
 `gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
@@ -1876,7 +1876,7 @@ lower-cased, mod 100). The `implementer:` salt keeps it independent of the desig
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
 pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
-`implementer_routed` event (`model=.. reason=label|default|hash|fallback bucket=.. pct=..`), and it is in the synced
+`implementer_routed` event (`callum-flow-event --type implementer_routed --data` with `model`, `reason` (`label`, `default`, `hash` or `fallback`), `bucket` and `opus_pct`), and it is in the synced
 allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
 `.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
 share), keep the share fixed while it runs, and read the result with the

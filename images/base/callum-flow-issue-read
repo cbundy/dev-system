@@ -37,8 +37,8 @@
 #   pagination; repo is owner/name, state lower-case). A nested issue by an
 #   untrusted author is left out, its number never printed, and it counts in the
 #   top-level `stripped` (refused + nested; an untrusted parent counts once and
-#   makes `parent` null) with one `untrusted_stripped` event per item
-#   (note dependencies=<k>). A malformed nested node exits 1. An issue by an untrusted author is listed in
+#   makes `parent` null); a stripped nested node writes no event, as `untrusted_stripped` has no
+#   source for it. A malformed nested node exits 1. An issue by an untrusted author is listed in
 #   `refused` and nothing else about it is printed; a number GitHub does not know
 #   (deleted, transferred, a PR) is listed in `missing`. Exit 0 either way; any
 #   other GraphQL error, a transport failure or a malformed response exits 1.
@@ -58,7 +58,8 @@
 # It fails closed: an API error, a pagination failure, a missing user object or
 # unexpected JSON exits non-zero with nothing on stdout. Stripped content never
 # reaches stdout, stderr or a log, only the count. When something is stripped or
-# refused it logs an `untrusted_stripped` event; failing to log changes nothing.
+# refused it logs an `untrusted_stripped` event (`callum-flow-event --type untrusted_stripped --data`
+# with source, refused, count and pr); failing to log changes nothing.
 #
 # Exit codes: 0 ok, 1 failure (API, JSON, trusted list), 2 usage error,
 # 3 the requested issue, PR or comment is by an untrusted author (nothing printed).
@@ -184,16 +185,14 @@ fetch_all() { # path -> one JSON array on stdout, across all pages
 }
 jqf() { jq -r --argjson T "$trusted" "$@"; }
 
-log_stripped() { # issue note [pr]
-  if [ -n "${3-}" ]; then
-    "$EVENT" untrusted_stripped --issue "$1" --pr "$3" --note "$2" >/dev/null 2>&1 || true
-  else
-    "$EVENT" untrusted_stripped --issue "$1" --note "$2" >/dev/null 2>&1 || true
-  fi
+log_stripped() { # issue source refused(true|false) count(number or empty) [pr]
+  _d=$(jq -nc --arg s "$2" --argjson r "$3" --arg c "$4" --arg p "${5-}" \
+    '{source: $s, refused: $r, count: (if $c == "" then null else ($c | tonumber) end), pr: (if $p == "" then null else ($p | tonumber) end)}') || return 0
+  "$EVENT" --type untrusted_stripped --issue "$1" --data "$_d" >/dev/null 2>&1 || true
 }
 
 refuse() { # kind issue [pr]
-  log_stripped "$2" "$1" "${3-}"
+  log_stripped "$2" "$1" true "" "${3-}"
   err "untrusted author"
   exit 3
 }
@@ -361,8 +360,8 @@ case "$mode" in
       | .refused |= sort_by(. as $x | $order | index($x))
       | .missing |= sort_by(. as $x | $order | index($x))
       | . + {stripped: ((.refused | length) + (.nested | map(.n) | add // 0))}') || die "unexpected response for the issues"
-    for _r in $(printf '%s' "$res" | jq -r '.refused[]'); do log_stripped "$_r" issue; done
-    for _r in $(printf '%s' "$res" | jq -r '.nested[] | "\(.issue):\(.n)"'); do log_stripped "${_r%%:*}" "dependencies=${_r#*:}"; done
+    for _r in $(printf '%s' "$res" | jq -r '.refused[]'); do log_stripped "$_r" issue true ""; done
+    # Stripped dependency nodes are counted in the result but not logged: untrusted_stripped has no source for them.
     res=$(printf '%s' "$res" | jq -c 'del(.nested)') || die "unexpected response for the issues"
     ;;
   timeline)
@@ -380,15 +379,13 @@ esac
 stripped=$(printf '%s' "$res" | jq -r .stripped) || die "unexpected response"
 if [ "$stripped" -gt 0 ] 2>/dev/null && [ -n "$logn" ]; then
   case "$mode" in
-    list) log_stripped "$logn" "list stripped=$stripped" ;;
-    timeline) log_stripped "$logn" "timeline=$stripped" ;;
-    pr) log_stripped "$logn" "comments=$stripped" "$logpr" ;;
+    list) log_stripped "$logn" list false "$stripped" ;;
+    timeline) log_stripped "$logn" timeline false "$stripped" ;;
+    pr) log_stripped "$logn" comments false "$stripped" "$logpr" ;;
     *)
       ds=$(printf '%s' "$res" | jq -r '[.blocked_by[], .blocking[] | select(has("title") | not)] | length') || ds=0
-      note=''
-      [ $((stripped - ds)) -le 0 ] || note="comments=$((stripped - ds))"
-      [ "$ds" -le 0 ] || note="${note:+$note }dependencies=$ds"
-      log_stripped "$logn" "$note" ""
+      # only a pure comment count is logged: a dependency node has no source in untrusted_stripped
+      [ "$ds" -gt 0 ] || log_stripped "$logn" comments false "$stripped"
       ;;
   esac
 fi

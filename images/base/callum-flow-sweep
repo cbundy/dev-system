@@ -21,8 +21,8 @@
 # failed central read warns and falls back to the local log; a failed
 # factory-state read adds nothing.
 # Each candidate is read directly, and these rules apply in order:
-#   1. Closed: log `callum-flow-event closed --note <GitHub's state_reason:
-#      completed, not_planned or duplicate> --actor sweep` when its latest
+#   1. Closed: log a `closed` event (`callum-flow-event --type closed`, reason GitHub's state_reason:
+#      completed, not_planned or duplicate; actor sweep) when its latest
 #      event is not final. The pass has no time limit, so the first run is the
 #      backfill. Two devices sweeping before either has pushed can both log
 #      `closed`; consumers count identical consecutive rows once.
@@ -39,14 +39,14 @@
 #      `cross-referenced` timeline event) whose head branch is this issue's
 #      (`issue-<N>`, or `issue-<N>-...`, after any `<prefix>/`; matching is by
 #      branch name, so release or other PRs that merely mention the issue do
-#      not count): log `callum-flow-event merged --pr <P> [--head <sha>] --actor
-#      sweep` and leave it alone. This runs before the lease check, so a claim
+#      not count): log a `merged` event (pr, head when known, by factory; actor
+#      sweep) and leave it alone. This runs before the lease check, so a claim
 #      kept live by renewals still ends; whoever holds the claim. Afterwards the
 #      issue reads as released, so a second run writes nothing.
 #   5. Open, newest claim comment live (server updated_at + the comment's own
 #      `lease:`): left alone.
 #   6. Open, newest claim expired: add `ready`, unassign the claimant, comment
-#      why, and log `callum-flow-event reclaimed`. Across devices a lapsed claim
+#      why, and log a `requeued` event (reason lease-expired). Across devices a lapsed claim
 #      is reclaimed once: the first reclaim ends the claim for every other device.
 # The sweep never adds or removes any other label: the factory loop is the only
 # writer of the `factory:*` labels, and a loop record whose claim lapsed is
@@ -118,7 +118,7 @@ released() { awk -v n="$1" '$1 == n && $3 != "claimed" && $3 != "none" { f = 1 }
 # log_closed N VIEW: log the closed event with GitHub's close reason
 log_closed() {
   reason=$(printf '%s' "$2" | jq -r '.state_reason // empty')
-  "$EVENT" closed --issue "$1" --note "$reason" --actor sweep >/dev/null 2>&1 || err "warning: could not log the closed event for #$1"
+  "$EVENT" --type closed --issue "$1" --actor sweep --data "$(jq -nc --arg r "$reason" '{reason: (if $r == "" then null else $r end)}')" >/dev/null 2>&1 || err "warning: could not log the closed event for #$1"
 }
 
 # The candidates: every issue the log has seen that is not final, and every issue
@@ -211,11 +211,8 @@ for n in $cands; do
     continue
   fi
   if [ "$merged" != 0 ]; then
-    if [ -n "$mhead" ]; then
-      "$EVENT" merged --issue "$n" --pr "$merged" --head "$mhead" --actor sweep >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
-    else
-      "$EVENT" merged --issue "$n" --pr "$merged" --actor sweep >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
-    fi
+    "$EVENT" --type merged --issue "$n" --actor sweep --data "$(jq -nc --argjson pr "$merged" --arg h "$mhead" \
+      '{pr: $pr, branch: null, head: (if $h == "" then null else $h end), by: "factory", recovered: false}')" >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
     continue
   fi
 
@@ -232,6 +229,6 @@ for n in $cands; do
     | "Claim lease expired, so the issue goes back to ready. Device: " + .dev + ". Claimed at: " + .at
       + ". Last renewal: " + $r + ". Lease: " + (.lease | tostring) + " minutes."')
   "$GH" issue comment "$n" --body "$text" >/dev/null || { err "reclaimed #$n but could not comment"; rc=1; }
-  "$EVENT" reclaimed --issue "$n" --note "lease expired" >/dev/null 2>&1 || err "warning: could not log the reclaimed event for #$n"
+  "$EVENT" --type requeued --issue "$n" --data '{"reason":"lease-expired","stage":null,"lives":null,"branch":null,"pr":null,"detail":null}' >/dev/null 2>&1 || err "warning: could not log the reclaimed event for #$n"
 done
 exit "$rc"

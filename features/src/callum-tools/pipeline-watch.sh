@@ -119,13 +119,8 @@
 # normal end and prints nothing. --deadline is rejected in stream mode: the
 # harness's own monitor timeout is the heartbeat there.
 #
-# Event log (cbundy/dev-system#218, #344): every printed line is also logged.
-# A line for a branch the process has not yet seen change - no fingerprint of
-# its own, only a missing or stale --known - is a first sight, e.g. an old
-# failed run reported again by a re-armed watcher. It is printed as always but
-# logged with callum-flow-event --if-changed, so it adds nothing when the log
-# already ends with the same event. A transition seen inside this process (the
-# branch went quiet, or reported another state, since) is always logged.
+# Event log: none. The watcher no longer logs its lines (the event store has no type for the
+# watcher's states or errors that the cutover keeps): it only prints them.
 #
 # --interval <seconds> sets the poll interval (default: the
 # PIPELINE_WATCH_INTERVAL environment variable, else 25).
@@ -173,11 +168,8 @@
 #   parked feat/issue-7-x 01K... step=review pr=12 head=<sha>
 #   head-mismatch feat/issue-8-y 01K... run=<sha> branch=<sha> pr=13 head=<sha>
 #
-# Actionable lines are logged as a first sight (--if-changed) with the note the
-# watch modes log, so the event log keeps the same transitions; running and
-# pending are not logged. Fatal, with exit 1, the reason on stderr and no
-# watcher_error event (the caller polls every minute and reports a failed source
-# itself): `no-mistakes` or `gh` missing from PATH, not inside a git repository,
+# Actionable lines are not logged. Fatal, with exit 1, the reason on stderr (the caller polls
+# every minute and reports a failed source itself): `no-mistakes` or `gh` missing from PATH, not inside a git repository,
 # or `no-mistakes runs` failing, which is a failed source, never "no runs". It
 # takes no option except --branches and --worktree.
 set -eu
@@ -186,15 +178,6 @@ stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 once=
 reported=
-seen= # branches this process has set_known for: their transitions were observed
-
-# record_event <state> [callum-flow-event options]: appends the transition to
-# the factory event log (cbundy/dev-system#218) when callum-flow-event is
-# installed. Best effort: it never changes this script's output or status.
-record_event() {
-  command -v callum-flow-event >/dev/null 2>&1 || return 0
-  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
-}
 
 # Background sleep lets the shell handle watcher signals while waiting.
 # Keep this helper's body aligned across the three watchers: scripts are
@@ -228,7 +211,6 @@ nap_cleanup() {
 fatal() {
   [ -z "$stream" ] || echo "watcher-error $*"
   # --once runs every pass and its caller reports a failed source: no watcher_error each minute
-  [ -n "$once" ] || record_event watcher_error --note "pipeline-watch: $*"
   echo "pipeline-watch.sh: $*" >&2
   reported=1
   exit 1
@@ -239,17 +221,11 @@ fatal() {
 on_exit() {
   rc=$?
   nap_cleanup
-  [ "$rc" -eq 0 ] || [ -n "$reported" ] || {
-    echo "watcher-error exited with status $rc"
-    record_event watcher_error --note "pipeline-watch: exited with status $rc"
-  }
+  [ "$rc" -eq 0 ] || [ -n "$reported" ] || echo "watcher-error exited with status $rc"
 }
 
 usage() {
-  [ -z "$stream" ] || {
-    echo "watcher-error usage${1:+: $1}"
-    record_event watcher_error --note "pipeline-watch: usage${1:+: $1}"
-  }
+  [ -z "$stream" ] || echo "watcher-error usage${1:+: $1}"
   [ -z "${1-}" ] || echo "pipeline-watch.sh: $1" >&2
   echo "usage: pipeline-watch.sh [--branches branch[,branch...]]" \
     "[--stream | --deadline seconds] [--interval seconds]" \
@@ -403,9 +379,6 @@ known_fingerprint() {
 # set_known <branch> <fingerprint>: stream mode's record of the last line
 # printed for a branch, or "none" once the branch is seen non-actionable.
 set_known() {
-  seen="$seen
-$1
-"
   known="$(printf '%s' "$known" | awk -v b="$1" 'index($0, b "=") != 1')
 $1=$2
 "
@@ -684,20 +657,6 @@ poll() {
       extra=
       [ -z "$once" ] || extra=$(once_detail "$state")
       printf '%s %s %s%s%s head=%s\n' "$state" "$branch" "$id" "$detail" "$extra" "${run_sha:-unknown}"
-      # the watcher's states are the log's, with _ for - ("cancelled" is a failed run).
-      # A branch this process has not yet watched change (no fingerprint of its own,
-      # only a missing or stale --known) is a first sight: the event is logged only
-      # if the log does not already end with it (cbundy/dev-system#344).
-      first=
-      case "
-$seen
-" in *"
-$branch
-"*) ;; *) first=--if-changed ;; esac
-      case "$state" in
-        cancelled) record_event failed --branch "$branch" --run "$id" --head "${run_sha:-}" --note "cancelled" $first ;;
-        *) record_event "$(printf '%s' "$state" | tr - _)" --branch "$branch" --run "$id" --head "${run_sha:-}" --note "${detail# }" $first ;;
-      esac
       [ -n "$stream$once" ] || exit 0
       [ -z "$stream" ] || set_known "$branch" "$fingerprint"
     elif [ -n "$once" ]; then

@@ -38,6 +38,11 @@
 # rate_limits in an interactive claude.ai-login session, which is why it is
 # the fallback rather than the primary source.
 #
+# A check (not --record) also writes the reading to the factory event log as a native `usage`
+# event: `callum-flow-event --type usage --actor watcher --data <json>`, best effort. --to-data reads
+# a line like the one above (or the unavailable, auth and spend forms) on stdin and prints that
+# data object, one line of JSON; the event write and the tests use it.
+#
 # Environment: CALLUM_USAGE_STATE (snapshot path, default
 # ${XDG_STATE_HOME:-~/.local/state}/callum-tools/usage.json),
 # CALLUM_USAGE_MAX_AGE, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_SECURESTORAGE_CONFIG_DIR,
@@ -49,13 +54,14 @@ state=${CALLUM_USAGE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/callum-tools/u
 max_age=${CALLUM_USAGE_MAX_AGE:-900}
 
 usage() {
-  echo "usage: usage-check.sh [--record]" >&2
+  echo "usage: usage-check.sh [--record | --to-data]" >&2
   exit 2
 }
 
 case "$#:${1-}" in
   0:) mode=check ;;
   1:--record) mode=record ;;
+  1:--to-data) mode=to-data ;;
   *) usage ;;
 esac
 case "$max_age" in '' | *[!0-9]*) echo "usage-check.sh: CALLUM_USAGE_MAX_AGE must be whole seconds" >&2; exit 2 ;; esac
@@ -75,6 +81,31 @@ def line($src): . as $u
     + " seven_day=\($w.pct) seven_day_resets_at=\($w.at | todate) seven_day_resets_in=\([($w.at - now | floor), 0] | max)"
     + " source=\($src)";
 '
+
+# The reading's line as the `usage` event's data object (callum-flow-event --type usage --data): the
+# unavailable reading with its reasons, the plan reading (five_hour, seven_day) and, when the line
+# carries them, the auth and spend fields. --to-data prints it for a line on stdin.
+# shellcheck disable=SC2016 # jq program text, not shell expansions
+TO_DATA_JQ='    (split(" ") | map(capture("^(?<k>[^=]+)=(?<v>.*)$") | {key: .k, value: .v}) | from_entries) as $t
+    | (if $t.auth != null then {auth: $t.auth} else {} end) as $auth
+    | if $t.usage == "unavailable" then
+        {available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null,
+         seven_day_resets_at: null, source: null, reasons: ($t.reason // "" | split(",") | map(select(. != "")))} + $auth
+      elif $t.source == "spend" then
+        {available: true, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null,
+         seven_day_resets_at: null, source: "spend", reasons: [], auth: $t.auth, spend_usd: ($t.spend_usd | tonumber)}
+        + (if $t.budget_usd != null then {budget_usd: (if $t.budget_usd == "none" then null else ($t.budget_usd | tonumber) end)} else {} end)
+        + (if $t.budget_resets_at != null then {budget_resets_at: (if $t.budget_resets_at == "none" then null else $t.budget_resets_at end)} else {} end)
+      else
+        {available: true, five_hour_pct: ($t.five_hour | tonumber), five_hour_resets_at: $t.resets_at,
+         seven_day_pct: ($t.seven_day | tonumber), seven_day_resets_at: $t.seven_day_resets_at,
+         source: $t.source, reasons: []} + $auth
+      end'
+
+if [ "$mode" = to-data ]; then
+  jq -Rc "$TO_DATA_JQ"
+  exit
+fi
 
 if [ "$mode" = record ]; then
   input=$(cat)
@@ -166,8 +197,10 @@ from_statusline() {
 
 line=$(from_oauth || from_statusline || echo "usage=unavailable reason=${reasons%,}")
 printf '%s\n' "$line"
-# record_event: the factory event log (cbundy/dev-system#218), best effort.
-# Only a check is recorded, not --record, which runs on every status line refresh.
+# The factory event log (cbundy/dev-system#218), best effort: the reading as a native `usage` event
+# (callum-flow-event --type usage --data). Only a check is recorded, not --record, which runs on every
+# status line refresh.
 if command -v callum-flow-event >/dev/null 2>&1; then
-  callum-flow-event usage --actor watcher --note "$line" >/dev/null 2>&1 || :
+  data=$(printf '%s' "$line" | jq -Rc "$TO_DATA_JQ" 2>/dev/null) || data=
+  [ -z "$data" ] || callum-flow-event --type usage --actor watcher --data "$data" >/dev/null 2>&1 || :
 fi

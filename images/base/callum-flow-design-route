@@ -17,20 +17,18 @@
 # If the labels cannot be read it prints `subagent` with a warning on stderr
 # (reason=fallback): design never blocks on routing.
 #
-# Every decision is logged once with
-#   callum-flow-event design_routed --issue N --note "route=.. reason=.. bucket=.. pct=.."
-# A logging failure never changes the output or the exit code.
+# It no longer logs: the event store has no design_routed type, so the decision is printed and nothing
+# else is written.
 #
 # Exit codes: 0 routed (including the fallback), 2 usage error (bad issue, or
-# CALLUM_FLOW_DESIGN_SESSION_PCT not a number from 0 to 100); nothing is logged.
+# CALLUM_FLOW_DESIGN_SESSION_PCT not a number from 0 to 100).
 #
 # Environment: CALLUM_FLOW_DESIGN_SESSION_PCT (default 0), CALLUM_FLOW_REPO
 # (owner/name, default from gh); for tests CALLUM_FLOW_GH_BIN,
-# CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
+# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
-EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 PCT=${CALLUM_FLOW_DESIGN_SESSION_PCT:-0}
 
@@ -59,11 +57,7 @@ read_labels() {
   printf '%s' "$_rj" | jq -r '.issue.labels | if type == "array" then . else error("shape") end | map(.name) | .[]'
 }
 
-log() {
-  "$EVENT" design_routed --issue "$n" --note "route=$1 reason=$2 bucket=$3 pct=$PCT" >/dev/null 2>&1 ||
-    err "warning: could not log the design_routed event"
-}
-decide() { echo "$1"; log "$1" "$2" "$3"; exit 0; }
+decide() { echo "$1"; exit 0; }
 
 repo=${CALLUM_FLOW_REPO-}
 [ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=

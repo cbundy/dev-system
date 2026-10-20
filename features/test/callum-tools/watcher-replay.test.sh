@@ -9,7 +9,8 @@ set -eu
 # shellcheck source=./watchers-lib.sh
 . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/watchers-lib.sh"
 
-# 15. Restarts do not replay old events (cbundy/dev-system#344).
+# 15. Restarts do not replay old events (cbundy/dev-system#344). The pipeline watcher no longer logs at all:
+# the same lines print as always and no event log is written, old or new.
 real_event_log
 
 # a branch whose newest run was cancelled, and one that failed at launch with
@@ -26,26 +27,27 @@ for i in 1 2 3; do
   again=$(single_out fix/issue-181-x) || fail "replay: restart did not exit 0"
   [ "$again" = "$first" ] || fail "replay: restart printed '$again', want '$first'"
 done
-[ "$(ev_count '"state":"failed"')" = 1 ] || fail "replay: want one failed line, got: $(cat "$evlog")"
+no_event_log "replay"
 second=$(single_out feat/issue-147-y) || fail "replay: #147 did not exit 0"
 single_out feat/issue-147-y > /dev/null || fail "replay: #147 restart"
-[ "$(grep -c '"branch":"feat/issue-147-y"' "$evlog")" = 1 ] || fail "replay: want one line for #147 ($second): $(cat "$evlog")"
+case "$second" in "failed feat/issue-147-y "*) ;; *) fail "replay: #147 printed '$second'" ;; esac
+no_event_log "replay #147"
 
 # a changed fact is logged after a restart: the same branch, a new head
 run_state RUNX fix/issue-181-x failed 3333333333333333333333333333333333333333
 changed=$(single_out fix/issue-181-x) || fail "replay: changed head did not exit 0"
-[ "$(grep -c '"branch":"fix/issue-181-x"' "$evlog")" = 2 ] || fail "replay: a new head must be logged ($changed): $(cat "$evlog")"
+case "$changed" in "failed fix/issue-181-x "*) ;; *) fail "replay: a new head must be printed, got '$changed'" ;; esac
+no_event_log "replay, new head"
 
 # stream: restarting with no baseline replays nothing
-before=$(wc -l < "$evlog" | tr -d ' ')
 for i in 1 2; do
   start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches fix/issue-181-x,feat/issue-147-y
   wait_lines "$out" 2
-  wait_polls "$fakebin/nm-polls" 2 # any (wrongly) replayed event is logged by the end of the next whole poll
+  wait_polls "$fakebin/nm-polls" 2 # any (wrongly) logged event is written by the end of the next whole poll
   stop_bg
 done
-[ "$(wc -l < "$evlog" | tr -d ' ')" = "$before" ] || fail "replay: stream restarts added events: $(cat "$evlog")"
+no_event_log "replay: stream restarts"
 
-ok # pipeline-watch single-shot and stream restarts do not replay old events
+ok # pipeline-watch single-shot and stream restarts print as always and log nothing
 
 echo "ok - $passed replay scenarios passed"

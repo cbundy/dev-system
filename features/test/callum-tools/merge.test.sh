@@ -9,6 +9,9 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/merge-guard-lib.sh"
 
+# the new store's log of the test repo (callum-flow-merge writes there only: --type ... --data)
+nlog="$events/factory/o__r.jsonl"
+
 # merge refuses on a worktree head mismatch (moved here from merge-guard.test.sh)
 reset
 git -C "$work" commit -q --allow-empty -m unpushed
@@ -31,9 +34,10 @@ for mode in derived explicit skip; do
   m 7 "$@"
   [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
   case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
-  if ! { [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ]; }; then
+  if ! { [ -f "$st/gh-calls" ] && [ -f "$nlog" ]; }; then
     fail "epic merge or event missing"
   fi
+  [ ! -e "$events/o__r.jsonl" ] || fail "the old log must stay empty: $(cat "$events/o__r.jsonl")"
   passed=$((passed + 1))
 done
 for rollout in run-it keep-open; do
@@ -47,13 +51,22 @@ if ! { [ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ]; }; then
 fi
 passed=$((passed + 1))
 
+# merge with no known issue: the merge succeeds, a warning says so and no merged event is written
+reset; echo 'MATCH #7 expect=closing via=api actual=[12]' > "$st/linkage"; m 7
+[ "$rc" = 0 ] || fail "merge, no issue: exit $rc out=$out err=$(cat "$tmpdir/err")"
+[ -f "$st/gh-calls" ] || fail "merge, no issue: not merged"
+grep -q '^callum-flow-merge: warning: no issue known, merged event not recorded$' "$tmpdir/err" || fail "merge, no issue: no warning: $(cat "$tmpdir/err")"
+[ ! -e "$nlog" ] && [ ! -e "$events/o__r.jsonl" ] || fail "merge, no issue: an event was written: $(cat "$nlog" 2> /dev/null)"
+passed=$((passed + 1))
+
 # merge: pass
 reset; m 7
 [ "$rc" = 0 ] || fail "merge pass: exit $rc out=$out"
 [ -z "$out" ] || fail "default base should not request manual closure: $out"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
-[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
-jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
+[ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "one merged event expected"
+jq -e --arg sha "$SHA" '.type == "merged" and .issue == 12 and .data == {pr: 7, branch: "feat/issue-12-x", head: $sha, by: "factory", recovered: false}' "$nlog" > /dev/null || fail "event: $(cat "$nlog")"
+[ ! -e "$events/o__r.jsonl" ] || fail "the old log must stay empty: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
 
 # merge: milestone tagging (cbundy/dev-system#403) runs once after the merge and never fails it
@@ -63,7 +76,7 @@ passed=$((passed + 1))
 reset; echo 1 > "$st/milestone-rc"; m 7
 [ "$rc" = 0 ] || fail "a failing tag must not fail the merge: $rc $out"
 grep -q '^callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
-[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
+[ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
 passed=$((passed + 1))
 reset; MILESTONE_BIN="$tmpdir/does-not-exist" m 7
 MILESTONE_BIN=''
@@ -86,14 +99,15 @@ reset; printf '%s\n%s\n' "$W1" "$W2" > "$st/weakening"; m 7
 [ "$rc" = 0 ] || fail "merge with weakening: $rc $out"
 grep -q '^GUARD test-weakening WARN ' "$tmpdir/err" || fail "WARN not relayed to stderr: $(cat "$tmpdir/err")"
 [ -f "$st/gh-calls" ] || fail "a WARN must not stop the merge"
-[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 2 ] || fail "two test_weakened events expected: $(cat "$events/o__r.jsonl")"
-jq -e -s --arg sha "$SHA" '.[] | select(.state == "test_weakened") | select(.note == ("step=ci commit=" + ($sha[0:7]) + " restored=no kinds=removed-assertion,warn-only files=tests/a.test.js,tests/b.test.sh")) | select(.pr == 7 and .issue == 12 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1")' "$events/o__r.jsonl" > /dev/null || fail "first test_weakened event: $(cat "$events/o__r.jsonl")"
-jq -e -s '.[] | select(.state == "test_weakened") | select(.note == "step=review commit=1234567 restored=yes kinds=skip files=tests/c.test.js")' "$events/o__r.jsonl" > /dev/null || fail "restored test_weakened event: $(cat "$events/o__r.jsonl")"
+[ "$(jq -s '[.[] | select(.type == "test_weakened")] | length' "$nlog")" = 2 ] || fail "two test_weakened events expected: $(cat "$nlog")"
+jq -e -s --arg sha "$SHA" '.[] | select(.type == "test_weakened") | select(.issue == 12 and .data == {branch: "feat/issue-12-x", pr: 7, head: $sha, commit: $sha[0:7], restored: false, kinds: ["removed-assertion", "warn-only"], files: ["tests/a.test.js", "tests/b.test.sh"]})' "$nlog" > /dev/null || fail "first test_weakened event: $(cat "$nlog")"
+jq -e -s --arg sha "$SHA" '.[] | select(.type == "test_weakened") | select(.data == {branch: "feat/issue-12-x", pr: 7, head: $sha, commit: "1234567", restored: true, kinds: ["skip"], files: ["tests/c.test.js"]})' "$nlog" > /dev/null || fail "restored test_weakened event: $(cat "$nlog")"
+[ ! -e "$events/o__r.jsonl" ] || fail "the old log must stay empty: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
 reset; printf '%s\n' "$W1" > "$st/weakening"; touch "$st/merge-refuse"; m 7
-if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "a refused merge must log no test_weakened event: $rc $(cat "$events/o__r.jsonl" 2> /dev/null)"; fi
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "a refused merge must log no test_weakened event: $rc $(cat "$nlog" 2> /dev/null)"; fi
 reset; m 7
-[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 0 ] || fail "nothing flagged, no event"
+[ "$(jq -s '[.[] | select(.type == "test_weakened")] | length' "$nlog")" = 0 ] || fail "nothing flagged, no event"
 passed=$((passed + 1))
 
 # merge: method override, flag and env
@@ -136,7 +150,7 @@ g 7 --update-behind; [ "$rc" = 0 ] || fail "update-behind for merge: rc=$rc out=
 NEWH=$(origin_b); echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
 m 7
 if [ "$rc" != 0 ] || ! grep -q -- "--match-head-commit $NEWH" "$st/gh-calls"; then fail "merge after update-behind: $rc $out"; fi
-jq -e --arg sha "$NEWH" '.state == "merged" and .head == $sha' "$events/o__r.jsonl" > /dev/null || fail "merged event should carry the new head: $(cat "$events/o__r.jsonl")"
+jq -e --arg sha "$NEWH" '.type == "merged" and .data.head == $sha' "$nlog" > /dev/null || fail "merged event should carry the new head: $(cat "$nlog")"
 passed=$((passed + 1))
 
 echo "merge: $passed groups passed"

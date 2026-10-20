@@ -1,7 +1,9 @@
 #!/bin/sh
 #
 # callum-flow-merge: run callum-flow-merge-guard and, only if every guard
-# passes, squash-merge the PR and log the `merged` event (cbundy/dev-system#219).
+# passes, squash-merge the PR and log the `merged` event (cbundy/dev-system#219), written with
+# `callum-flow-event --type merged --data`. The event needs an issue: when the guard knows none, the
+# merge still succeeds, a warning says so and no `merged` event is written.
 # This is the one command that can merge, so it is allowed only in the main
 # checkout's gitignored .claude/settings.local.json, never in the synced
 # allow list.
@@ -83,7 +85,7 @@ fi
 printf '%s\n' "$out" | grep '^GUARD ' >&2
 v=$(printf '%s\n' "$out" | sed -n 's/^VERIFIED //p' | sed -n 1p)
 get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue) close_issue=$(get close_issue)
+branch=$(get branch) sha=$(get head) issue=$(get issue) close_issue=$(get close_issue)
 [ -n "$sha" ] || { echo "callum-flow-merge: the guard verified no head sha - not merging" >&2; exit 1; }
 
 merge_rc=0
@@ -104,17 +106,20 @@ if [ "$merge_rc" -ne 0 ]; then
   exit 1
 fi
 
-set -- merged --pr "$pr" --branch "$branch" --head "$sha"
-[ -z "$run" ] || set -- "$@" --run "$run"
-[ -z "$issue" ] || set -- "$@" --issue "$issue"
-$EVENT "$@" || echo "callum-flow-merge: warning: merged event not recorded" >&2
+# The merged event needs the issue (the event store refuses one without): with none known, warn and write none.
+if [ -z "$issue" ]; then
+  echo "callum-flow-merge: warning: no issue known, merged event not recorded" >&2
+else
+  $EVENT --type merged --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" \
+    '{pr: $pr, branch: (if $b == "" then null else $b end), head: $h, by: "factory", recovered: false}')" ||
+    echo "callum-flow-merge: warning: merged event not recorded" >&2
+fi
 # milestone tagging never fails a merge that already succeeded
 "$MILESTONE" tag "$pr" ||
   echo "callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it" >&2
 # one test_weakened event per flagged commit (the guard's WEAKENED lines)
 printf '%s\n' "$out" | grep '^WEAKENED ' | while IFS= read -r w_line; do
   w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')
-  w_step=$(printf '%s' "$w_line" | sed 's/.* step=\([^ ]*\) .*/\1/')
   w_restored=$(printf '%s' "$w_line" | sed 's/.* restored=\([^ ]*\) .*/\1/')
   w_files=$(printf '%s' "$w_line" | sed 's/.* files=\(.*\) kinds=.*/\1/')
   w_kinds=$(printf '%s' "$w_line" | sed 's/.* kinds=//')
@@ -122,9 +127,9 @@ printf '%s\n' "$out" | grep '^WEAKENED ' | while IFS= read -r w_line; do
     echo "callum-flow-merge: warning: no issue known, test_weakened event for $(printf %.7s "$w_commit") not recorded" >&2
     continue
   fi
-  set -- test_weakened --pr "$pr" --branch "$branch" --head "$sha" --issue "$issue"
-  [ -z "$run" ] || set -- "$@" --run "$run"
-  $EVENT "$@" --note "step=$w_step commit=$(printf %.7s "$w_commit") restored=$w_restored kinds=$w_kinds files=$w_files" ||
+  $EVENT --type test_weakened --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" \
+    --arg c "$(printf %.7s "$w_commit")" --arg r "$w_restored" --arg k "$w_kinds" --arg f "$w_files" \
+    '{branch: $b, pr: $pr, head: $h, commit: $c, restored: ($r == "yes"), kinds: ($k | split(",")), files: ($f | split(","))}')" ||
     echo "callum-flow-merge: warning: test_weakened event not recorded" >&2
 done
 if [ -n "$close_issue" ]; then

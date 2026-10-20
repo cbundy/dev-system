@@ -680,7 +680,7 @@ rc=0
 out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/pipeline-watch.sh" --stream 2> /dev/null) || rc=$?
 [ "$rc" != 0 ] || fail "pipeline-watch without no-mistakes should fail"
 [ "$out" = "watcher-error no-mistakes not on PATH" ] || fail "pipeline-watch stdout changed: $out"
-grep -q '^watcher_error --note pipeline-watch: no-mistakes not on PATH --actor watcher$' "$fakebin/event-calls" || fail "pipeline-watch should record watcher_error: $(cat "$fakebin/event-calls")"
+[ ! -s "$fakebin/event-calls" ] || fail "pipeline-watch no longer logs, yet called callum-flow-event: $(cat "$fakebin/event-calls")"
 
 # pipeline-watch --once: the same failure is exit 1 and stderr only; its caller reports the failed source
 : > "$fakebin/event-calls"
@@ -698,6 +698,14 @@ printf '{"recorded_at":%s,"rate_limits":{"five_hour":{"used_percentage":41.2,"re
   "$now" "$((now + 3600))" "$((now + 86400))" > "$tmpdir/state/usage.json"
 out=$(PATH="$fakebin:$toolbin" CALLUM_USAGE_STATE="$tmpdir/state/usage.json" HOME="$tmpdir" "$SH" "$SRC/usage-check.sh") || fail "usage-check should exit 0"
 case "$out" in five_hour=42*source=statusline) ;; *) fail "usage-check stdout changed: $out" ;; esac
-grep -qF "usage --actor watcher --note $out" "$fakebin/event-calls" || fail "usage-check should record the line: $(cat "$fakebin/event-calls")"
+want=$(jq -nc --arg a "$(date -u -d "@$((now + 3600))" +%Y-%m-%dT%H:%M:%SZ)" --arg b "$(date -u -d "@$((now + 86400))" +%Y-%m-%dT%H:%M:%SZ)" \
+  '{available: true, five_hour_pct: 42, five_hour_resets_at: $a, seven_day_pct: 50, seven_day_resets_at: $b, source: "statusline", reasons: []}')
+[ "$(cat "$fakebin/event-calls")" = "--type usage --actor watcher --data $want" ] || fail "usage-check should record the reading natively: $(cat "$fakebin/event-calls")"
+
+# no snapshot and no token: the unavailable reading, with its reasons
+: > "$fakebin/event-calls"
+out=$(PATH="$fakebin:$toolbin" CALLUM_USAGE_STATE="$tmpdir/state/none.json" HOME="$tmpdir" CLAUDE_CONFIG_DIR="$tmpdir/noclaude" "$SH" "$SRC/usage-check.sh") || fail "usage-check should exit 0"
+[ "$out" = "usage=unavailable reason=oauth:no-token,statusline:no-snapshot" ] || fail "usage-check unavailable stdout: $out"
+[ "$(cat "$fakebin/event-calls")" = '--type usage --actor watcher --data {"available":false,"five_hour_pct":null,"five_hour_resets_at":null,"seven_day_pct":null,"seven_day_resets_at":null,"source":null,"reasons":["oauth:no-token","statusline:no-snapshot"]}' ] || fail "usage-check should record the unavailable reading: $(cat "$fakebin/event-calls")"
 
 echo "event-log: ok"
