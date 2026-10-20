@@ -530,6 +530,18 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
 });
 
+test("transition conflicts=: the optional conflict-entry count", () => {
+  const base = sample("transition");
+  const before = translate(base).event.data;
+  const r = translate(withNote(base, `${base.note} conflicts=2`));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+  assert.equal(r.event.data.conflicts, 2);
+  assert.equal("conflicts" in before, false, "a note without conflicts= leaves the key out");
+  assert.deepEqual({ ...r.event.data, conflicts: undefined }, { ...before, conflicts: undefined });
+  for (const v of ["x", "-1", "none"]) assert.match(missOf(withNote(base, `${base.note} conflicts=${v}`)), /conflicts=/, v);
+});
+
 test("transition question parts: decision, context, options, recommended, recommendation (dev-system#1064)", () => {
   const base = sample("transition");
   const opts3 = [{ key: "A", title: "One", detail: null }, { key: "B", title: "Two", detail: "More" }, { key: "C", title: "Three", detail: "Even more" }];

@@ -503,6 +503,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "attempt": {"minimum":1,"type":"integer"},
       "branch": {"minLength":1,"type":"string"},
       "brief_url": {"type":["null","string"]},
+      "conflicts": {"minimum":0,"type":["integer","null"]},
       "context": {"maxLength":800,"type":["null","string"]},
       "cut": {"type":"boolean"},
       "decision": {"maxLength":2000,"type":["null","string"]},

@@ -1202,6 +1202,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null | yes | closed: why the life ended (done: its work had already merged); null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
+| `conflicts` | integer | optional | yes | minimum 0 |  | Loop state, for the record rebuild: the entries to fixing in this life caused by a conflict or red CI after other merges. Absent (or null) before the loop counted them; absent is read as 0. |
 | `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |
 
 Example:
@@ -1228,6 +1229,7 @@ Example:
   "triages": 0,
   "fixes": 1,
   "round": 2,
+  "conflicts": 1,
   "question": null,
   "why": null,
   "notes": [],

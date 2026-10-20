@@ -159,6 +159,7 @@ const SPECS = {
     options: opt(nul(OPTIONS)),
     recommended: opt(nul(KEY)),
     recommendation: opt(nul(MAXS(200))),
+    conflicts: opt(nul(I(0))),
     wait: opt(nul(WAIT)),
     why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done")),
     notes: L(S),
@@ -517,10 +518,10 @@ function merged(line) {
   return { pr: colInt(line, "pr"), branch: colStr(line, "branch"), head: colStr(line, "head"), by, recovered };
 }
 
-const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
+const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "conflicts", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
 
 function transition(line) {
-  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
+  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "conflicts", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
   const lives = t.has("lives") ? tInt(t, "lives") : 1;
   const wait = tWait(t);
   const options = tOptions(t);
@@ -554,6 +555,7 @@ function transition(line) {
     lives,
   };
   if (wait !== undefined) ev.wait = wait;
+  if (t.has("conflicts")) ev.conflicts = tInt(t, "conflicts");
   const parts = { decision: tStr(t, "decision"), context: tStr(t, "context"), options, recommended, recommendation: tStr(t, "recommendation") };
   for (const [k, v] of Object.entries(parts)) if (v !== undefined) ev[k] = v;
   return ev;
