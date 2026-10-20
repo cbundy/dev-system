@@ -3,7 +3,7 @@
 // settings, view, snapshot and pass log that carry them.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { DEFAULT_CONFIG, loadConfig, parseMemory, parseMemoryRead, readMemory } from '../hooks/config'
+import { DEFAULT_CONFIG, gateLimits, loadConfig, parseMemory, parseMemoryRead, readMemory } from '../hooks/config'
 import { configText } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { snapshotFrom, snapshotOf } from '../hooks/settings-snapshot'
@@ -53,6 +53,19 @@ describe('parseMemory', () => {
     expect(await readMemory(async () => ({ exitCode: 1, stdout: JSON.stringify({ max: '1073741824' }) }))).toBeNull()
     expect(await readMemory(async () => Promise.reject(new Error('no node')))).toBeNull()
     expect(await readMemory(async argv => ({ exitCode: 0, stdout: argv[0] === 'node' ? JSON.stringify({ max: '1073741824' }) : '' }))).toBe(GIB)
+  })
+
+  test('gateLimits reads the memory once per process, however many times it is called', async () => {
+    let memoryReads = 0
+    const run = async (argv: string[]) => {
+      if (argv[2]?.includes('availableParallelism')) return { exitCode: 0, stdout: '4\n' }
+      memoryReads += 1
+      return { exitCode: 0, stdout: JSON.stringify({ max: '1073741824' }) }
+    }
+    const first = await gateLimits(run, { gateConcurrency: 'auto' })
+    const second = await gateLimits(run, { gateConcurrency: 'auto' })
+    expect(second.memoryBytes).toBe(first.memoryBytes)
+    expect(memoryReads).toBeLessThanOrEqual(1)
   })
 })
 

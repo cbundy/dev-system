@@ -2655,6 +2655,15 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `slotMemoryMiB` | `auto` | the memory one slot is assumed to use, `auto` or a whole number of at least 1 (`next-pass`). `auto` is the p90 (nearest rank) of `memPeakBytes - memStartBytes` over the companion's gate lines of the window that carry both, each run once per (issue, life, seq, startedAt), once at least 3 such runs exist; with fewer it is 3072 MiB (the agent session plus one full stop gate; the plant-console figure of 12.9 GB held 3 at a time without an OOM kill). A set number wins. Shown beside the estimate's source: `setting`, `measured` or `default` |
 | `memoryReserveMiB` | 2048 | the container's memory kept free of slots, a whole number of at least 0 (`next-pass`) |
 | `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
+| `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
+| `conflictFixCap` | 5 | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
+| `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
+| `starvedNoticeAfterMs` | `60m` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
+| `maxAttempts` | claim 3, stop-agent 1, restart-self 1, task and tell 1 (one reminder inside the attempt); heartbeat and sweep 3 each; any other kind 3; v2's step kinds carry their own (appendix A) | then the owner hears of it (`tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
+| `retryBackoffMs` | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
+| `wakeTimeoutMs` | task `6h`, tell `30m` | 13.8 |
+| `queueScore` | priorityLabel 30, bug 25, unblocksDirect 10, unblocksTransitive 5, unblocksCap 40, closesEpic 20, nearlyClosesEpic 10, epicStarted 10, waitingPerHour 2, waitingCap 20, failedLife 10, failedLivesCap 30 | the weights of the claim score (S1, `hooks/v2/score.ts`): whole numbers of at least 0, penalties as positive magnitudes; set one with `/factory config set queueScore.<name> N`; applied `next-pass`. `unblocks` is `min(unblocksCap, unblocksDirect x direct + unblocksTransitive x transitive)`, where transitive walks `state.blockGraph`; `waiting` is `min(waitingCap, floor(waitingPerHour x hours claimable))`; `failed-lives` is `-min(failedLivesCap, failedLife x earlier lives not ended merged)` |
+| `rateCaps` | starts 30, spawns 120, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (13.11.4) |
 
 The memory ceiling (`hooks/v2/capacity.ts`). The loop reads the container's memory once per process
 beside the CPU count: the cgroup's `memory.max` in bytes, or `/proc/meminfo` `MemTotal` when that is
@@ -2669,15 +2678,6 @@ estimateSource}`. When `maxInFlightIssues` is above the ceiling, the notice `cap
 once per (configured, ceiling) pair (key `tell:capacity:<configured>:<ceiling>`), naming the memory, the
 reserve, the estimate and its source, and the effective cap. The observe step's PR read budget stays the
 configured cap: it bounds reads of records already held and decides no claim.
-| `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
-| `conflictFixCap` | 5 | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
-| `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
-| `starvedNoticeAfterMs` | `60m` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
-| `maxAttempts` | claim 3, stop-agent 1, restart-self 1, task and tell 1 (one reminder inside the attempt); heartbeat and sweep 3 each; any other kind 3; v2's step kinds carry their own (appendix A) | then the owner hears of it (`tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
-| `retryBackoffMs` | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
-| `wakeTimeoutMs` | task `6h`, tell `30m` | 13.8 |
-| `queueScore` | priorityLabel 30, bug 25, unblocksDirect 10, unblocksTransitive 5, unblocksCap 40, closesEpic 20, nearlyClosesEpic 10, epicStarted 10, waitingPerHour 2, waitingCap 20, failedLife 10, failedLivesCap 30 | the weights of the claim score (S1, `hooks/v2/score.ts`): whole numbers of at least 0, penalties as positive magnitudes; set one with `/factory config set queueScore.<name> N`; applied `next-pass`. `unblocks` is `min(unblocksCap, unblocksDirect x direct + unblocksTransitive x transitive)`, where transitive walks `state.blockGraph`; `waiting` is `min(waitingCap, floor(waitingPerHour x hours claimable))`; `failed-lives` is `-min(failedLivesCap, failedLife x earlier lives not ended merged)` |
-| `rateCaps` | starts 30, spawns 120, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (13.11.4) |
 
 v2's own keys (the state timeouts, `maxTriages`, the gate commands and the rest) are in appendix A. Time settings take a duration in the files: `60s`, `5m`, `2h`, with the key's `Ms` dropped
 (`passEvery: "60s"`). A plain number still reads as milliseconds. The loader converts them, so
@@ -4354,7 +4354,7 @@ Notices (TELL kinds), owner items first:
 | `capacity` | no | S1: `maxInFlightIssues` is above the memory ceiling (13.4.2); once per (configured, ceiling) pair, naming the memory, the reserve, the estimate and its source, and the effective cap |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
-14 kinds of the loop's own, 9 of them owner items, plus the foundation's.
+15 kinds of the loop's own, 9 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 
