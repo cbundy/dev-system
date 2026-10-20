@@ -27,12 +27,13 @@
 // pass untouched.
 import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
-import { blockText, gateLine, gateRecord, oneLine, runGates, waitedOut } from './gate'
+import { DEFAULT_GATE_WAIT_MS, STALL_DEFAULT_MS, blockText, gateLine, gateRecord, oneLine, runGates, stallBoundMs, waitedOut } from './gate'
 import type { GateResult, Ran } from './gate'
 import { bootMs, gateEntries, isDead, judge, leaseHeld, openGates, pidOf, startMs } from './recover'
 import { recordWindow } from './window'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
+import type { Marker } from './marker'
 import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marker'
 import { PROMPT_NOTIFICATIONS, inputOf, promptData, promptReason, transcriptOf, whyOf } from './prompt'
 import type { Decided, PromptFields } from './prompt'
@@ -50,9 +51,6 @@ const QUICK_MS = 15_000
 // takes a handshake a few beats old as missing (factory-loop hooks/v2/sources-workspace.ts)
 export const HANDSHAKE_EVERY_MS = 60_000
 const HANDSHAKE_PRUNE_DAYS = 7
-// the longest a finished writer waits for its gate's turn when its marker does not say (config.ts
-// gateWaitTimeoutMs)
-const GATE_WAIT_TIMEOUT_MS = 30 * 60_000
 // a queued gate always has a host call in flight, a sleep of this many seconds started again as each
 // ends: the engine gives a hook handler 10 s of budget, which host calls pause and clock ops do not
 const IDLE_S = 5
@@ -310,6 +308,21 @@ async function refusePrompt($: EngineInterface, a: WorkspaceAgent, e: { tool: st
   return { decision: 'deny', reason }
 }
 
+// raiseStall: gives the writer about to start a stall limit that covers its gate's wait and run (10.6).
+// Claude Code reads the variable as the agent starts, so it is set before the spawn goes on. The
+// variable is the session's: a later agent of a smaller bound leaves it as it is. A failure to set
+// it is no reason to refuse the spawn; the gate then runs inside the engine's own limit.
+async function raiseStall($: EngineInterface, marker: Marker): Promise<void> {
+  const bound = stallBoundMs(marker)
+  try {
+    const now = Number(await $.env.get('CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS'))
+    if (bound <= Math.max(STALL_DEFAULT_MS, Number.isFinite(now) ? now : 0)) return
+    await $.env.set('CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS', String(bound))
+  } catch {
+    // the spawn goes on
+  }
+}
+
 // --- the stop gate (10.6) ---------------------------------------------------------------------------
 
 async function runIn($: EngineInterface, slot: string, command: string, budgetMs: number): Promise<Ran> {
@@ -341,14 +354,14 @@ type GateTarget = Pick<WorkspaceAgent, 'slot' | 'gitDir' | 'issue' | 'life' | 's
 // with no limit takes none), then the head and tree, the commands, factory-gate.json and the settling
 // line (with `rerun: true` for the recovery's). ran: false when `cut` said the engine ended the caller
 // while it waited, and no gate ran. A turn always goes back, so a stuck or crashed gate never blocks the others.
-async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string, opts: { rerun?: boolean; cut?: () => boolean } = {}): Promise<{ ran: true; result: GateResult } | { ran: false }> {
+export async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string, opts: { rerun?: boolean; cut?: () => boolean } = {}): Promise<{ ran: true; result: GateResult } | { ran: false }> {
   const rerun = opts.rerun === true
   const limit = a.gateConcurrency
   let turn: Extract<Turn, { ok: true }> | null = null
   let waitMs = 0
   let queuedBehind = 0
   if (limit !== undefined) {
-    const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
+    const cap = a.gateWaitTimeoutMs ?? DEFAULT_GATE_WAIT_MS
     const got = await turns.acquire(limit, {
       now: () => $.clock.now(),
       after: (ms, fn) => $.clock.after(ms, fn),
@@ -376,7 +389,7 @@ async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string,
     if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
     const headBefore = await headSha($, a.slot)
     const cleanBefore = await slotClean($, a.slot)
-    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
+    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now(), ...(opts.cut === undefined ? {} : { cut: opts.cut }) }, a.gateCommands, a.gateTimeoutMs, waitMs)
     const head = await headSha($, a.slot)
     // a head that moved during the run means the tree did too: never clean
     const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
@@ -494,6 +507,7 @@ export const register: Register = on => {
     const marker = parseMarker(await readText($, `${place.gitDir}/${MARKER_FILE}`))
     const why = mismatch(marker, e)
     if (why !== null || marker === null) return { deny: `${ME}: ${why ?? 'no marker'}` }
+    if (marker.role === 'writer' && marker.gateCommands.length > 0) await raiseStall($, marker)
     const r = await next({ ...e, cwd: slot })
     if (r.agentId !== undefined) {
       const { v: _v, ...fields } = marker

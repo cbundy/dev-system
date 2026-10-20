@@ -3,11 +3,17 @@
 // with `factory-slot: <path>` in that folder and maps the agent's id to it; its tool.call hook logs
 // the agent's calls and refuses a Write outside the slot; its classic.SubagentStop hook runs a gate
 // of about 75 s in the slot with $.process.run and blocks the finish while it fails. In the
-// timeout cases it only logs, so the Bash call's own `timeout` shows the agent passed none.
+// gate-queue-bare case it waits 540 s in 5 s host-call slices and then runs a 300 s command, the shape of
+// a queued gate in the companion (hooks/register.ts runStopGate), and logs when each ends or fails.
+// In the timeout cases it only logs, so the Bash call's own `timeout` shows the agent passed none.
 import type { EngineInterface, Register } from 'claude-code'
 
 // fails until done.txt holds the line `fixed`; about 75 s either way
 const GATE = 'sleep 75; if grep -qx fixed done.txt; then echo gate passed; else echo "done.txt must hold exactly the line: fixed. Write it with the Write tool." >&2; exit 2; fi'
+
+// the gate-queue-bare case: PROBE_WAIT_S (540) of waiting in SLICE_S host-call slices (the companion's IDLE_S),
+// then a PROBE_RUN_S (300) command
+const SLICE_S = 5
 
 const slotOf = new Map<string, string>()
 
@@ -29,6 +35,24 @@ function norm(p: string): string {
     else out.push(part)
   }
   return '/' + out.join('/')
+}
+
+// queued: wait, then run, as the companion's runStopGate does for a gate behind another. The run's
+// timeoutMs is its own 600 s, so only the engine can cut it.
+async function queued($: EngineInterface, e: { agent_id: string }, next: (e: never) => Promise<unknown>, slot: string, t0: number) {
+  const waitS = Number((await $.env.get('PROBE_WAIT_S')) ?? 540)
+  const runS = Number((await $.env.get('PROBE_RUN_S')) ?? 300)
+  await log($, 'queue-start', { agentId: e.agent_id, waitS, runS })
+  const secs = async () => Math.round(((await $.clock.now()) - t0) / 1000)
+  try {
+    while ((await $.clock.now()) - t0 < waitS * 1000) await $.process.run(['sleep', String(SLICE_S)], { timeoutMs: SLICE_S * 1000 + 15_000 })
+    await log($, 'queue-waited', { agentId: e.agent_id, secs: await secs() })
+    const ran = await $.process.run(['sh', '-c', `sleep ${runS}; echo ran`], { cwd: slot, timeoutMs: 600_000 })
+    await log($, 'queue-end', { agentId: e.agent_id, exitCode: ran.exitCode, secs: await secs() })
+  } catch (err) {
+    await log($, 'queue-error', { agentId: e.agent_id, error: String(err), secs: await secs() })
+  }
+  return (next as (e: unknown) => Promise<unknown>)(e)
 }
 
 export const register: Register = on => {
@@ -62,6 +86,7 @@ export const register: Register = on => {
     const slot = slotOf.get(e.agent_id) ?? null
     if (slot === null) return next(e)
     const t0 = await $.clock.now()
+    if ((await $.env.get('PROBE_CASE')) === 'gate-queue-bare') return queued($, e, next, slot, t0)
     await log($, 'gate-start', { agentId: e.agent_id, stop_hook_active: e.stop_hook_active, cwd: e.cwd })
     try {
       const ran = await $.process.run(['sh', '-c', GATE], { cwd: slot, timeoutMs: 600_000 })

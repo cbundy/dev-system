@@ -6,6 +6,27 @@
 
 export const TAIL_LINES = 150
 
+// the longest a finished writer waits for its gate's turn when its marker does not say (config.ts
+// gateWaitTimeoutMs)
+export const DEFAULT_GATE_WAIT_MS = 30 * 60_000
+
+// Claude Code ends an async agent that makes no progress for CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS
+// (600000 by default on 2.1.304), aborting the signal of the agent's stop hook, so a gate that waits
+// for its turn and then runs outlives its handler at 10 minutes in all (v2 SPEC 10.6; the gate-queue case
+// of docs/factory-loop/probes/workspace-probe). The companion raises the limit for a writer with gates.
+// (register.ts spells the variable out: the engine wants a literal name in $.env.get and $.env.set)
+// what Claude Code uses when the variable is unset
+export const STALL_DEFAULT_MS = 600_000
+// the room left past a gate's longest wait and run
+export const STALL_MARGIN_MS = 5 * 60_000
+
+// stallBoundMs: how long a writer's stop hook may live: the longest wait for a turn (none without a
+// concurrency limit), the gate's budget and a margin.
+export function stallBoundMs(m: { gateTimeoutMs: number; gateConcurrency?: number; gateWaitTimeoutMs?: number }): number {
+  const wait = m.gateConcurrency === undefined ? 0 : (m.gateWaitTimeoutMs ?? DEFAULT_GATE_WAIT_MS)
+  return wait + m.gateTimeoutMs + STALL_MARGIN_MS
+}
+
 // One command's run: its exit code and its output (standard output then standard error), or the
 // error that kept it from finishing (a timeout, a failure to start).
 export type Ran = { exitCode: number; output: string } | { error: string }
@@ -19,13 +40,17 @@ export type GateIo = {
   // runs one command in the slot within budgetMs
   run: (command: string, budgetMs: number) => Promise<Ran>
   now: () => Promise<number>
+  // whether the engine has cut the hook off (its signal aborted); absent: never known
+  cut?: () => boolean
 }
 
 // The least budget a command is started with; less than this left counts as the budget spent.
 const MIN_BUDGET_MS = 1_000
 
 // runGates: the commands in order, stopping at the first that fails or cannot run.
-export async function runGates(io: GateIo, commands: readonly string[], budgetMs: number): Promise<GateResult> {
+// waitMs: the time the gate waited for its turn before runGates started, so a cut gate says how long
+// the engine let the hook live in all.
+export async function runGates(io: GateIo, commands: readonly string[], budgetMs: number, waitMs = 0): Promise<GateResult> {
   const t0 = await io.now()
   const spent = async () => (await io.now()) - t0
   for (const command of commands) {
@@ -37,10 +62,21 @@ export async function runGates(io: GateIo, commands: readonly string[], budgetMs
     } catch (err) {
       ran = { error: err instanceof Error ? err.message : String(err) }
     }
-    if ('error' in ran) return { result: 'unknown', ms: await spent(), why: `\`${command}\` did not finish: ${oneLine(ran.error)}` }
+    if ('error' in ran) {
+      const ms = await spent()
+      // the engine ended the hook (its bound, not the command's): say so, with the wait and the run
+      if (io.cut?.() === true || /\baborted\b/.test(ran.error)) return { result: 'unknown', ms, why: `\`${command}\` did not finish: ${cutReason(waitMs, ms)} (${oneLine(ran.error)})` }
+      return { result: 'unknown', ms, why: `\`${command}\` did not finish: ${oneLine(ran.error)}` }
+    }
     if (ran.exitCode !== 0) return { result: 'fail', ms: await spent(), command, exitCode: ran.exitCode, tail: tail(ran.output), failedTests: failedTests(ran.output) }
   }
   return { result: 'pass', ms: await spent() }
+}
+
+// cutReason: the engine cut the hook off; the time since the gate started is the wait plus the run.
+export function cutReason(waitMs: number, runMs: number): string {
+  const s = (ms: number) => Math.round(ms / 1000)
+  return `the hook was cut off ${s(waitMs + runMs)} s after the gate started (${s(waitMs)} s waiting, ${s(runMs)} s running)`
 }
 
 const MAX_FAILED = 20
