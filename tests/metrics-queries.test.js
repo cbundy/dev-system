@@ -115,6 +115,7 @@ const RUN_ONLY = [
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
   "Settings #0", "Settings #1",
+  "Spend on an API key #0", "Spend on an API key #1",
   "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0",
 ];
 

@@ -550,13 +550,17 @@ export const SCHEMAS: Record<string, Shape> = {
     "type": "object",
     "x-issue": "none",
     "properties": {
+      "auth": {"enum":["api-key","subscription",null]},
       "available": {"type":"boolean"},
+      "budget_resets_at": {"format":"date-time","type":["null","string"]},
+      "budget_usd": {"minimum":0,"type":["null","number"]},
       "five_hour_pct": {"minimum":0,"type":["integer","null"]},
       "five_hour_resets_at": {"format":"date-time","type":["null","string"]},
       "reasons": {"items":{"type":"string"},"type":"array"},
       "seven_day_pct": {"minimum":0,"type":["integer","null"]},
       "seven_day_resets_at": {"format":"date-time","type":["null","string"]},
-      "source": {"enum":["oauth","statusline",null]},
+      "source": {"enum":["oauth","spend","statusline",null]},
+      "spend_usd": {"minimum":0,"type":["null","number"]},
     },
   },
   "wind_down.v1": {

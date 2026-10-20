@@ -76,6 +76,7 @@ const NE = (v) => typeof v === "string" && v.length > 0;
 const I = (min) => (v) => Number.isInteger(v) && v >= min;
 const E = (...xs) => (v) => xs.includes(v);
 const B = (v) => typeof v === "boolean";
+const NN = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const RX = (re) => (v) => typeof v === "string" && re.test(v);
 const L = (k) => (v) => Array.isArray(v) && v.every(k);
 const L1 = (k) => (v) => L(k)(v) && v.length > 0;
@@ -176,8 +177,12 @@ const SPECS = {
     five_hour_resets_at: nul(S),
     seven_day_pct: nul(I(0)),
     seven_day_resets_at: nul(S),
-    source: nul(E("oauth", "statusline")),
+    source: nul(E("oauth", "statusline", "spend")),
     reasons: L(S),
+    auth: opt(nul(E("subscription", "api-key"))),
+    spend_usd: opt(nul(NN)),
+    budget_usd: opt(nul(NN)),
+    budget_resets_at: opt(nul(S)),
   },
   loop_entry: {
     kind: E("agent-step", "tell", "task"),
@@ -301,6 +306,26 @@ function tInt(t, k, nullable = false) {
   }
   if (!/^\d+$/.test(v) || !Number.isSafeInteger(Number(v))) miss(`bad number ${k}=${v}`);
   return Number(v);
+}
+
+// A non-negative decimal number (`none` is null when allowed); undefined when absent.
+function tNum(t, k, nullable = false) {
+  const v = t.get(k);
+  if (v === undefined) return undefined;
+  if (v === "none") {
+    if (nullable) return null;
+    miss(`bad number ${k}=${v}`);
+  }
+  if (!/^\d+(\.\d+)?$/.test(v) || !Number.isFinite(Number(v))) miss(`bad number ${k}=${v}`);
+  return Number(v);
+}
+
+// An auth value: subscription or api-key; undefined when absent.
+function tAuth(t) {
+  const v = t.get("auth");
+  if (v === undefined) return undefined;
+  if (v !== "subscription" && v !== "api-key") miss(`bad auth=${v}`);
+  return v;
 }
 
 function tBool(t, k) {
@@ -618,17 +643,38 @@ function untrustedStripped(line) {
   return miss(`note matches no untrusted_stripped shape: ${JSON.stringify(note)}`);
 }
 
+// The optional auth key is left out when the token is absent, so today's notes give today's output.
+const withAuth = (data, auth) => (auth === undefined ? data : { ...data, auth });
+
 function usage(line) {
   const note = line.note ?? null;
   if (note !== null && note.startsWith("usage=")) {
-    const t = strictTokens(note, { keep: ["usage", "reason"], need: ["usage", "reason"] });
+    const t = strictTokens(note, { keep: ["usage", "reason", "auth"], need: ["usage", "reason"] });
     if (t.get("usage") !== "unavailable") miss(`usage=${t.get("usage")} is not unavailable`);
-    return { available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: null, reasons: tList(t, "reason") };
+    return withAuth({ available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: null, reasons: tList(t, "reason") }, tAuth(t));
+  }
+  if (note !== null && /(^| )source=spend( |$)/.test(note)) {
+    const t = strictTokens(note, { keep: ["auth", "spend_usd", "budget_usd", "budget_resets_at", "source"], need: ["auth", "spend_usd", "source"] });
+    if (tAuth(t) !== "api-key") miss(`a spend reading needs auth=api-key, not auth=${t.get("auth")}`);
+    const out = {
+      available: true,
+      five_hour_pct: null,
+      five_hour_resets_at: null,
+      seven_day_pct: null,
+      seven_day_resets_at: null,
+      source: "spend",
+      reasons: [],
+      auth: "api-key",
+      spend_usd: tNum(t, "spend_usd"),
+    };
+    if (t.has("budget_usd")) out.budget_usd = tNum(t, "budget_usd", true);
+    if (t.has("budget_resets_at")) out.budget_resets_at = tStr(t, "budget_resets_at");
+    return out;
   }
   // resets_in and seven_day_resets_in are dropped: each is the reset time minus ts
   const keep = ["five_hour", "resets_at", "seven_day", "seven_day_resets_at", "source"];
-  const t = strictTokens(note, { keep, drop: ["resets_in", "seven_day_resets_in"], need: keep });
-  return {
+  const t = strictTokens(note, { keep: [...keep, "auth"], drop: ["resets_in", "seven_day_resets_in"], need: keep });
+  return withAuth({
     available: true,
     five_hour_pct: tInt(t, "five_hour", true),
     five_hour_resets_at: tStr(t, "resets_at"),
@@ -636,7 +682,7 @@ function usage(line) {
     seven_day_resets_at: tStr(t, "seven_day_resets_at"),
     source: tStr(t, "source"),
     reasons: [],
-  };
+  }, tAuth(t));
 }
 
 const V1_LOOP_KINDS = ["spawn", "delegate", "judge"];

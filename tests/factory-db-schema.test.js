@@ -23,8 +23,9 @@ for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
 const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue"]);
+const NUMERICS = new Set(["spend_usd", "budget_usd"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green"]);
-const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at"]);
+const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at"]);
 const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
@@ -37,7 +38,7 @@ test("event_log has the envelope columns, device_seq and each x-column field", o
   assert.equal(new Set(have).size, have.length);
   const types = Object.fromEntries(db.query("SELECT column_name || ' ' || data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log'").split("\n").map((l) => [l.slice(0, l.indexOf(" ")), l.slice(l.indexOf(" ") + 1)]));
   for (const col of lifted) {
-    const type = JSONS.has(col) ? "jsonb" : BOOLS.has(col) ? "boolean" : INTS.has(col) ? "integer" : TIMES.has(col) ? "timestamp with time zone" : "text";
+    const type = JSONS.has(col) ? "jsonb" : BOOLS.has(col) ? "boolean" : INTS.has(col) ? "integer" : NUMERICS.has(col) ? "numeric" : TIMES.has(col) ? "timestamp with time zone" : "text";
     assert.equal(types[col], type, `event_log.${col}`);
   }
   assert.equal(types.ts, "timestamp with time zone");
@@ -94,6 +95,22 @@ test("a parked transition's options read back from event_log as a jsonb array", 
   db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
     VALUES (1, gen_random_uuid(), now(), 'transition', 1, 'o/r', 'd', 'a', 7, 1, $j$${JSON.stringify(ex)}$j$::jsonb)`, "writer");
   assert.equal(db.query("SELECT jsonb_typeof(options) || ' ' || jsonb_array_length(options) || ' ' || (options -> 1 ->> 'title') || ' ' || recommended FROM factory.event_log", "reader"), `array ${ex.options.length} ${ex.options[1].title} ${ex.recommended}`);
+});
+
+test("usage: the spend columns are null for an old reading and the given values for a spend reading", opts, (t) => {
+  const db = createDb(t);
+  const [old, spend] = load("usage.v1.json").examples;
+  assert.equal(old.auth, undefined, "the first example is the old shape");
+  assert.equal(spend.source, "spend");
+  let seq = 0;
+  for (const data of [old, spend]) {
+    seq += 1;
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), now(), 'usage', 1, 'o/r', 'd', 'a', NULL, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  }
+  const read = (n) => db.query(`SELECT concat_ws('|', coalesce(auth, 'null'), coalesce(spend_usd::text, 'null'), coalesce(budget_usd::text, 'null'), coalesce(budget_resets_at::text, 'null')) FROM factory.event_log WHERE device_seq = ${n}`, "reader");
+  assert.equal(read(1), "null|null|null|null");
+  assert.equal(read(2), "api-key|42.5|100|2026-11-01 00:00:00+00");
 });
 
 test("a re-push of the same event_id makes no second row", opts, (t) => {
