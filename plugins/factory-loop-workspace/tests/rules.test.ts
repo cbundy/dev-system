@@ -325,6 +325,25 @@ describe('the stop gate', () => {
     if (spent.result === 'unknown') expect(spent.why).toContain('npm test')
   })
 
+  test('a run the engine cut says so, with the wait and the run; otherwise the plain reason', async () => {
+    const aborted = { error: 'process.run(sh) aborted', ms: 60_000 }
+    // cut() holds: the cut reason, the wait and the run as two numbers
+    const t = io([aborted])
+    const cutIo = { ...t.io, cut: () => true }
+    const cut = await runGates(cutIo, ['npm test'], 600_000, 540_000)
+    if (cut.result !== 'unknown') throw new Error(`expected unknown, got ${cut.result}`)
+    expect(cut.why).toContain('the hook was cut off 600 s after the gate started (540 s waiting, 60 s running)')
+    expect(cut.why).toContain('`npm test`')
+    // cut() does not hold and the error is a plain failure: the plain reason, no cut claim
+    const plain = await runGates({ ...io([{ error: 'spawn sh ENOENT' }]).io, cut: () => false }, ['npm test'], 600_000, 540_000)
+    if (plain.result !== 'unknown') throw new Error('expected unknown')
+    expect(plain.why).toBe('`npm test` did not finish: spawn sh ENOENT')
+    // no cut() at all (the recovery's caller): an engine abort error is still named
+    const abortedOnly = await runGates(io([aborted]).io, ['npm test'], 600_000)
+    if (abortedOnly.result !== 'unknown') throw new Error('expected unknown')
+    expect(abortedOnly.why).toContain('cut off 60 s after the gate started (0 s waiting, 60 s running)')
+  })
+
   test('its record carries the result and the head', () => {
     expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0, clean: null })
     expect(gateRecord({ result: 'unknown', ms: 5, why: 'x' }, null, 0, [])).toMatchObject({ result: 'unknown', why: 'x', head: null })

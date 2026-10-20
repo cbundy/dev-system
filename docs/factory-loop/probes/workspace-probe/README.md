@@ -28,6 +28,8 @@ so no frame of the spawning plugin is open, as in the loop. Each case writes
 | `envset-timer` | `spawner`, `helper` | the same, with `$.env.set` called from a timer, no frame open at all |
 | `gate` | `spawner`, `helper` | the helper's `agent.spawn` starts the agent in its slot from the prompt's `factory-slot:` line, its `tool.call` refuses a write outside the slot, and its `classic.SubagentStop` runs a 75 s gate through `$.process.run`, refuses the first finish and passes the second; then a message resumes the agent, as the loop's repair message does, and the resumed agent is still in its slot and still guarded |
 | `companion` | `loop` (a stand-in named `factory-loop`), `plugins/factory-loop-workspace` | the real companion: the stand-in prepares a git worktree slot with its step marker as `factory-slot prepare` does and spawns `factory-loop:builder` as an agent step; the companion starts it in the slot, gives its Bash call 10 minutes, refuses a write in the main checkout, a push to `main` and `gh pr create` (each logged to `loop/companion.jsonl`), holds the finish until the gate passes, writes `factory-gate.json`, and writes the session's handshake |
+| `gate-queue` | `loop` (stand-in), `plugins/factory-loop-workspace` | two writers, `gateConcurrency` 1 (gates `sleep 540` and `sleep 300`): the second gate waits about 540 s, then runs 300 s, in one stop hook of about 14 minutes. Not in the default set; about 15 minutes: `run.sh <out dir> gate-queue`. `PROBE_COMPANION` names another copy of the companion (the unfixed one, for the before run) |
+| `gate-queue-bare` | `spawner`, `helper` | the same wait (5 s host-call slices) and run in a bare hook, with no companion. Not in the default set |
 
 The `companion` case writes the handshake under the real `CLAUDE_CONFIG_DIR`
 (`factory-loop/workspace/<session>.json`); delete it afterwards on a machine that runs no loop.
@@ -49,6 +51,20 @@ quoted there with its dashes made plain); the sessions' streams and debug logs s
 | Long gate in a second plugin's `SubagentStop` | 75 s gate refused the first finish (exit 2, reason handed to the agent), the agent fixed `done.txt`, the second 75 s gate passed, the turn ended | `evidence/runs-1-gate.jsonl` `gate-start`, `gate-end` (`secs:75`, twice) |
 | A resumed agent (the repair message's route) | `agent.spawn` fired again with `resume` and the slot as its `cwd`; `pwd` was the slot; a write outside it was refused; the gate ran again on its finish | `evidence/runs-3-gate.jsonl` |
 | The real companion | as the `companion` row above says: the spawn admitted with this session's handshake there, `sleep 130` in the foreground (`18:59:25` to `19:01:35`) with no timeout set but the companion's, three refusals logged, the first finish refused by the gate and the second passed | `evidence/runs-5-companion.jsonl`, `runs-5-companion-agent.jsonl` (the agent's tool results and the gate's refusal), `runs-5-companion-log.jsonl`, `runs-5-factory-gate.json` |
+
+### The stall limit of a queued gate (`gate-queue`, Claude Code 2.1.304, 2026-10-20)
+
+A gate that waited for its turn and then ran was cut with `process.run(sh) aborted` 10 minutes after
+the stop hook began, whatever its own clocks said. The bound is the engine's async-agent stall
+watchdog, `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` (600000 by default): an agent with no progress for
+that long is ended and the signal of its stop hook is aborted.
+
+| Run | Result | Evidence |
+|---|---|---|
+| `gate-queue-bare`, 540 s wait then `sleep 300` | op aborted at 600 s (`queue-error`, `secs:600`) | `evidence/runs-6-gate-queue-bare-before.jsonl` |
+| the same with the variable set to 60000 (wait 100 s) | `[AsyncAgent ...] stall watchdog fired after 60000ms with no progress`, hook aborted at 60 s: the variable is the lever | `evidence/runs-6-stall-60s.jsonl` |
+| `gate-queue`, companion without the fix | gate 571 passes at 540 s; gate 572 waits 529 s and is cut 70 s into its run (`exitPath=watchdog_stall`, 600 s) | `evidence/runs-6-gate-queue-before-*.jsonl` |
+| `gate-queue`, companion with the fix (`agent.spawn` sets the variable) | gate 572 waits 530 s, runs 300 s, `gate-pass`; the agent completes after 832 s (`exitPath=completed`) | `evidence/runs-6-gate-queue-after-*.jsonl` |
 
 Seen on the way: a spawn made 4 s after a headless session starts can fail with "no session is
 bound in this process" (`evidence/runs-1-control.jsonl`); the spawner retries it. The loop's first

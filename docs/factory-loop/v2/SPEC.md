@@ -1965,7 +1965,20 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   The wait stays bounded by `gateWaitTimeoutMs`. A handler the engine has cut off runs no gate when
   its turn comes: it gives the turn back and writes nothing. The `.catch`'s `gate-unknown` reason
   names the error: `the stop gate hook failed (<error>)`. The `gateTimeoutMs`
-  budget starts when the gate holds its turn. The turn is given back in a `finally`, whether the
+  budget starts when the gate holds its turn.
+  **The engine's stall limit.** The handler's own budget is not the only bound. Claude Code ends an
+  async agent that makes no progress for `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` (600 000 ms by
+  default on 2.1.304) and aborts the signal of everything running for it, the agent's stop hook
+  included. A queued gate (a wait, then a run) is such a hook, so one that lives past 10 minutes in
+  all was cut with `process.run(sh) aborted`, however its own clocks stood. The companion therefore
+  sets the variable with `$.env.set` in its `agent.spawn` hook, for a writer whose marker lists gate
+  commands, to `gateWaitTimeoutMs` (30 minutes if the marker has none; 0 with no `gateConcurrency`)
+  + `gateTimeoutMs` + 5 minutes, and only upwards: the variable is the session's, so it never lowers
+  a limit already set. Claude Code reads it as the agent starts, so it is set before the spawn goes on.
+  Nothing in a consumer's settings changes. The `gate-queue` case of the workspace probe proves it
+  (below); a gate the engine cuts anyway is recorded as `gate-unknown` whose reason says `the hook
+  was cut off N s after the gate started (W s waiting, R s running)` and not as a failed command.
+  The turn is given back in a `finally`, whether the
   gate passes, fails, is unknown or the hook throws. A wait past `gateWaitTimeoutMs` (30 minutes)
   leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;
   the agent may finish, as with any unknown gate. A gate that waited writes a `gate-wait` line
@@ -2071,7 +2084,10 @@ safeguards remain:
 - **Re-probe.** Two points are proven
   only in nearby shapes: a long `$.process.run` inside a second plugin's `classic.SubagentStop`,
   and `$.env.set` with no hook frame open. The probe stays in the repo and is re-run on each
-  Claude Code upgrade (`docs/factory-loop/probes/workspace-probe/`).
+  Claude Code upgrade (`docs/factory-loop/probes/workspace-probe/`). A third point is the stall
+  limit of 10.6: its `gate-queue` case runs two writers under the real companion, the second
+  gate waiting about 540 s behind the first and then running 300 s, and `gate-queue-bare` shows the
+  same wait and run in a bare hook. They also need the 15-minute run, so they are not in the default set.
 - **Fallbacks**, stated and not built:
   - if the companion's long gate run proves unreliable: the same gate as a classic command hook
     in the companion's `hooks/hooks.json` (`timeout` 900, the gate's own budget 600 s), keyed by

@@ -1,0 +1,7 @@
+{"at":"2026-10-20T10:27:51.841Z","plugin":"spawner","check":"session.start","run":"<run>/gate-queue","probe":"gate-queue","version":"2.1.304"}
+{"at":"2026-10-20T10:27:55.894Z","plugin":"helper","check":"agent.spawn","origin":{"plugin":"workspace-probe-spawner","tier":"user"},"resume":null,"cwdIn":null,"slot":"<run>/gate-queue/slot","agentId":"ac1fe327c125411f3","deny":null}
+{"at":"2026-10-20T10:27:55.898Z","plugin":"spawner","check":"spawned","probe":"gate-queue","tries":1,"agentId":"ac1fe327c125411f3","deny":null}
+{"at":"2026-10-20T10:27:57.749Z","plugin":"helper","check":"queue-start","agentId":"ac1fe327c125411f3","waitS":540,"runS":300}
+{"at":"2026-10-20T10:36:58.025Z","plugin":"helper","check":"queue-waited","agentId":"ac1fe327c125411f3","secs":540}
+{"at":"2026-10-20T10:37:57.792Z","plugin":"helper","check":"queue-error","agentId":"ac1fe327c125411f3","error":"HooksError: workspace-probe-helper: $.process.run(sh) aborted","secs":600}
+{"at":"2026-10-20T10:37:57.804Z","plugin":"spawner","check":"answered","probe":"gate-queue","agentId":"ac1fe327c125411f3","answer":"done"}
