@@ -8,7 +8,7 @@ description: >-
   Use whenever a prompt's first line starts with TASK or TELL, when the owner
   gives the factory an instruction, and at the start of an orchestrator
   session the factory loop drives.
-version: 0.72.0
+version: 0.73.0
 ---
 
 # Judge
