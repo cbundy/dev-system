@@ -26,6 +26,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`milestone_state`](#milestone_state) | v1 | none | The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. |
 | [`prompt_denied`](#prompt_denied) | v1 | required | An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). |
 | [`prompt_waiting`](#prompt_waiting) | v1 | required | An agent stopped on a permission prompt and is waiting for an answer nobody gives (the companion saw Claude Code's notification). |
+| [`queue_snapshot`](#queue_snapshot) | v1 | none | The loop's view of the claim queue at the end of one claim pass: the candidates in rank order with each one's score, its factors and whether the claim rule would take it (and if not, why not), the claims left under the in-flight cap and the owner's controls in force. |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
 | [`released`](#released) | v1 | none | A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
@@ -121,6 +122,7 @@ Example:
 | `budget_resets_at` | string | `usage` | When the budget period resets. |
 | `budget_usd` | number | `usage` | The budget for that period, in dollars. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
+| `candidates` | array of object | `queue_snapshot` | The first 50 candidates in rank order. why is null exactly when claimable is true. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `changed` | string | `main_state` | What changed since the last main_state event of the repo: first, head, workflow or deploy. |
@@ -129,6 +131,7 @@ Example:
 | `commit` | string | `released`, `test_weakened` | The sha the tag points at. |
 | `compared` | integer | `shadow_read` | How many keys were compared. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
+| `considered` | integer | `queue_snapshot` | How many candidates the claim rule considered this pass: the whole list, before the cap on candidates below. |
 | `context` | string | `transition` | parked: the context of the owner's question, set only when an agent structured the question; null otherwise. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
@@ -150,6 +153,8 @@ Example:
 | `flake_test` | string | `loop_entry` | A flake bug tell (wake flake-bug): the exact name of the flaky test; null otherwise. |
 | `flakes` | integer | `loop_entry` | A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise. |
 | `flaky` | boolean | `gate_run`, `intervention` | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
+| `folded` | integer | `queue_snapshot` | How many queue changes since the previous write this write folds in; 0 for a heartbeat with no change. |
+| `free_slots` | integer | `queue_snapshot` | Claims left under maxInFlightIssues this pass; null when the cap is unset. |
 | `from_at` | string | `loop_passes` | The start of the UTC minute summed up, inclusive. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `green` | boolean | `main_state` | true when the newest completed run of every workflow concluded success, skipped or neutral. |
@@ -182,6 +187,10 @@ Example:
 | `options` | array of object | `transition` | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
+| `owner_new_off` | boolean | `queue_snapshot` | Whether the owner's 'no new work' control is on. |
+| `owner_only` | array of integer | `queue_snapshot` | The owner's 'only' list in force; empty when off. |
+| `owner_priority` | array of integer | `queue_snapshot` | The owner's priority list in force; empty when off. |
+| `owner_serial` | boolean | `queue_snapshot` | Whether the owner's 'one at a time' control is on. |
 | `p50_ms` | integer | `loop_passes` | The median duration (nearest rank), in milliseconds; null when there was no pass. |
 | `p90_ms` | integer | `loop_passes` | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
 | `parent` | integer | `claimed`, `ready` | The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read. |
@@ -195,11 +204,12 @@ Example:
 | `question` | string | `transition` | parked: the question for the owner; null otherwise. For people; never parse it. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reader` | string | `shadow_read` | Which reader was compared, an open family such as claim-events. |
-| `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `queue_snapshot`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `recommendation` | string | `transition` | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
 | `recommended` | enum | `transition` | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
 | `recovered` | boolean | `merged` | true when the loop logged it afterwards because no merged event was recorded at the merge. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
+| `rest` | array of object | `queue_snapshot` | The candidates past the first 50, counted by why code (null = claimable). Empty when there are 50 or fewer. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
 | `resume_to` | enum | `transition` | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; when waiting, the state the loop resumes to once every condition in wait holds; null otherwise. |
@@ -221,6 +231,7 @@ Example:
 | `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
+| `taken_at` | string | `queue_snapshot` | When the pass that produced the view ended. |
 | `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
@@ -906,6 +917,87 @@ Example:
   "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
   "branch": "issue-92",
   "pr": null
+}
+```
+
+## queue_snapshot
+
+The loop's view of the claim queue at the end of one claim pass: the candidates in rank order with each one's score, its factors and whether the claim rule would take it (and if not, why not), the claims left under the in-flight cap and the owner's controls in force. Written when the view changes and as a heartbeat when it does not, so the newest snapshot of a repo shows how fresh the loop's view is. A claim pass's immediate write is reason changed. Written by the factory loop.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: not stated
+
+### queue_snapshot v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `taken_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the pass that produced the view ended. |
+| `reason` | enum | required | no | one of "changed", "heartbeat" | yes | Why the snapshot was written: changed (the view differs from the last write; a claim pass's immediate write is always this) or heartbeat (unchanged, written to show the loop is alive). |
+| `considered` | integer | required | no | minimum 0 | yes | How many candidates the claim rule considered this pass: the whole list, before the cap on candidates below. |
+| `candidates` | array of object | required | no | maxItems 50 | yes | The first 50 candidates in rank order. why is null exactly when claimable is true. |
+| `rest` | array of object | required | no |  | yes | The candidates past the first 50, counted by why code (null = claimable). Empty when there are 50 or fewer. |
+| `free_slots` | integer | required | yes | minimum 0 | yes | Claims left under maxInFlightIssues this pass; null when the cap is unset. |
+| `owner_priority` | array of integer | required | no |  | yes | The owner's priority list in force; empty when off. |
+| `owner_only` | array of integer | required | no |  | yes | The owner's 'only' list in force; empty when off. |
+| `owner_serial` | boolean | required | no |  | yes | Whether the owner's 'one at a time' control is on. |
+| `owner_new_off` | boolean | required | no |  | yes | Whether the owner's 'no new work' control is on. |
+| `folded` | integer | required | no | minimum 0 | yes | How many queue changes since the previous write this write folds in; 0 for a heartbeat with no change. |
+
+Example:
+
+```json
+{
+  "taken_at": "2026-10-20T17:35:00.000Z",
+  "reason": "changed",
+  "considered": 3,
+  "candidates": [
+    {
+      "issue": 1148,
+      "rank": 1,
+      "score": 42,
+      "factors": [
+        {
+          "name": "bug",
+          "points": 25
+        },
+        {
+          "name": "waiting",
+          "points": 17
+        }
+      ],
+      "claimable": true,
+      "why": null
+    },
+    {
+      "issue": 1147,
+      "rank": 2,
+      "score": 10,
+      "factors": [
+        {
+          "name": "waiting",
+          "points": 10
+        }
+      ],
+      "claimable": false,
+      "why": "blocked"
+    },
+    {
+      "issue": 1160,
+      "rank": 3,
+      "score": null,
+      "factors": null,
+      "claimable": false,
+      "why": "unknown"
+    }
+  ],
+  "rest": [],
+  "free_slots": 2,
+  "owner_priority": [],
+  "owner_only": [],
+  "owner_serial": false,
+  "owner_new_off": false,
+  "folded": 3
 }
 ```
 

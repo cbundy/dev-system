@@ -71,6 +71,14 @@ left join factory.event_log c on c.repo = :'repo' and c.type = 'comment_posted'
   and c.issue = t.issue and c.life = t.life and c.seq = t.seq
 where t.n = 1 and t.to_state = 'parked';
 SQL
+# the loop's newest queue per repo (empty until the loop writes queue_snapshot events)
+dev-query --factory <<'SQL'
+select repo, taken_at, reason, considered, free_slots, candidates,
+       extract(epoch from (now() - taken_at)) as age_s
+from (select *, row_number() over (partition by repo order by taken_at desc, ts desc) as n
+      from factory.event_log where type = 'queue_snapshot') t
+where n = 1;
+SQL
 # review false positives: declined findings over all handled ones
 dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select outcome, count(*) from factory.event_log

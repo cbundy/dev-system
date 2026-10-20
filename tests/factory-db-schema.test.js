@@ -22,12 +22,12 @@ const lifted = new Set();
 for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
-const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue"]);
+const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue", "considered", "free_slots", "folded"]);
 const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes"]);
 const NUMERICS = new Set(["spend_usd", "budget_usd"]);
-const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered"]);
-const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at"]);
-const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options"]);
+const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off"]);
+const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at", "taken_at"]);
+const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options", "candidates", "rest", "owner_priority", "owner_only"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 

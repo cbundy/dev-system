@@ -191,6 +191,23 @@ test("settings_changed: a full event is written and validates; one without who i
   assert.deepEqual(missing.lines, []);
 });
 
+test("queue_snapshot: a full event is written and validates; one without taken_at is refused with exit 2; a 51st candidate fails strict validation", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "queue_snapshot.v1.json"), "utf8")).examples[0];
+  const { r, lines } = native(["--type", "queue_snapshot", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("queue_snapshot", 1, JSON.parse(lines[0]).data), []);
+  const { taken_at: _omit, ...noTaken } = good;
+  const missing = native(["--type", "queue_snapshot", "--data", JSON.stringify(noTaken)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /queue_snapshot v1: field taken_at is missing/);
+  assert.deepEqual(missing.lines, []);
+  const many = Array.from({ length: 51 }, (_, i) => ({ issue: i + 1, rank: i + 1, score: 0, factors: [], claimable: true, why: null }));
+  const over = native(["--type", "queue_snapshot", "--data", JSON.stringify({ ...good, considered: 51, candidates: many })]);
+  // the native writer checks required fields and JSON types only; the bounds are the strict reader's
+  assert.equal(over.r.status, 0, over.r.stderr);
+  assert.ok(reader.validateStrict("queue_snapshot", 1, JSON.parse(over.lines[0]).data).some((p) => /candidates.*at most 50 items/.test(p)));
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });
