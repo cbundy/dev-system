@@ -78,7 +78,7 @@ const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
 const TOP_KEYS = [
   'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
-  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'spend', 'waste',
+  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'spend', 'waste',
   'pipeline', 'sources',
 ];
 // A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
@@ -96,6 +96,9 @@ class UsageError extends Error {}
 class InputError extends Error {}
 
 const na = (reason) => ({ 'n/a': reason });
+// merges, prs and gaps read the new events' pr, by and recovered fields (docs/metrics.md, 9c).
+const MERGE_SECTIONS = ['merges', 'prs', 'gaps'];
+const MERGE_OLD_NA = "needs the new events' pr, by and recovered fields";
 
 // ---------------------------------------------------------------- arguments
 
@@ -751,6 +754,7 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
   }
   const v2 = computeV2Metrics(evs, win, merged.map((m) => ({ issue: m.issue, t: Date.parse(m.merged_at) })));
+  Object.assign(v2, computeMergeMetrics(evs, win));
   return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, ...v2, mergedAt };
 }
 
@@ -889,6 +893,22 @@ function computeV2Metrics(evs, win, merged) {
     const p = (/^\s*([A-Z]+)\s*:/.exec(e.note || '') || [])[1];
     if (p === 'CORRECT' || p === 'WRONG') calls.push({ e, kind: 'fix', outcome: p === 'CORRECT' ? 'fixed' : 'declined' });
   }
+  // a judge task (a loop_entry of kind task): one call per key, timed by its first row, its outcome
+  // the wake and the status of the key's latest row (by time, then the device's sequence number)
+  const taskRows = new Map();
+  evs.forEach((e, i) => {
+    if (e.state !== 'loop') return;
+    const f = t(e);
+    if (f.kind !== 'task' || !f.key) return;
+    if (!taskRows.has(f.key)) taskRows.set(f.key, []);
+    taskRows.get(f.key).push({ e, f, i });
+  });
+  const bySeq = (a, b) => a.e.t - b.e.t || (a.e.device_seq ?? 0) - (b.e.device_seq ?? 0) || a.i - b.i;
+  for (const rows of taskRows.values()) {
+    rows.sort(bySeq);
+    const last = rows[rows.length - 1].f;
+    calls.push({ e: rows[0].e, kind: 'task', outcome: `${last.wake || 'none'}:${last.status || 'none'}` });
+  }
   const persons = interventions.filter((x) => x.f.who === 'person');
   const overridden = (c) => persons.some((x) => x.issue === c.e.issue && issueOf(x) !== null && x.t > c.e.t && x.t <= c.e.t + OVERRIDE_MS);
   const callsWin = calls.filter((c) => inWin(c.e.t, win));
@@ -991,6 +1011,137 @@ function computeV2Metrics(evs, win, merged) {
     issues: roundRows,
   };
   return { interventions: interventionsOut, judgement_calls, claim_completion, rounds };
+}
+
+// The merges, pull requests and merge gaps of docs/metrics.md 9c, from the new events' `pr`, `by` and
+// `recovered` fields: the same definitions as the saved queries there. A merge is one per (issue, pr)
+// across three signals: a `merged` event, a transition to closed `why=merged-by-hand` and a person
+// intervention `hand-merge`; a signal with no pr takes that of the issue's latest event naming one at
+// or before it.
+const PR_TYPES = new Set(['transition', 'reviewed', 'intervention', 'merged']);
+const HEAD_MOVE_CAUSES = new Set(['queue:patch', 'push']);
+const GAPS_SHOWN = 10;
+
+function computeMergeMetrics(evs, win) {
+  const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
+  const key = (e, f) => {
+    if (e.state === 'transition') return f.life && f.seq !== undefined ? `t|${e.issue}|${f.life}|${f.seq}` : null;
+    if (e.state === 'reviewed') return `r|${e.issue}|${f.round}|${f.patch}`;
+    if (e.state === 'intervention') return f.fact ? `i|${e.issue}|${f.who}|${f.cause}|${f.fact}` : e.event_id || null;
+    return null;
+  };
+  const named = once(
+    evs.filter((e) => PR_TYPES.has(e.state) && issueOf(e) !== null).map((e) => ({ ...e, f: noteTokens(e.note), pr: e.pr === undefined ? null : e.pr })),
+    (e) => key(e, e.f),
+  );
+  const claimed = new Map();
+  for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !claimed.has(e.issue)) claimed.set(e.issue, e.t);
+  const prOf = (s) => {
+    if (s.pr !== null) return s.pr;
+    let best = null;
+    for (const e of named) {
+      if (e.issue !== s.issue || e.pr === null || e.t > s.t) continue;
+      if (best === null || e.t > best.t || (e.t === best.t && e.pr > best.pr)) best = e;
+    }
+    return best ? best.pr : null;
+  };
+  const signals = [];
+  for (const e of named) {
+    if (e.state === 'merged') signals.push({ ...e, hand: e.f.by === 'hand', merged: true });
+    else if (e.state === 'transition' && e.f.to === 'closed' && e.f.why === 'merged-by-hand') signals.push({ ...e, hand: true, merged: false });
+    else if (e.state === 'intervention' && e.f.who === 'person' && e.f.cause === 'hand-merge') signals.push({ ...e, hand: true, merged: false });
+  }
+  const groups = new Map();
+  for (const s of signals) {
+    const pr = prOf(s);
+    const k = `${s.issue}|${pr}`;
+    const g = groups.get(k) || { issue: s.issue, pr, t: s.t, hand: false, recovered: null };
+    g.t = Math.min(g.t, s.t);
+    g.hand = g.hand || s.hand;
+    if (s.merged && s.f.recovered !== undefined && s.f.recovered !== null) g.recovered = g.recovered === true || s.f.recovered === 'true';
+    groups.set(k, g);
+  }
+  const prCmp = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
+  const mine = [...groups.values()].filter((g) => inWin(g.t, win)).sort((a, b) => a.t - b.t || a.issue - b.issue || prCmp(a.pr, b.pr));
+  if (!mine.length) return { merges: na('0 merges in the window'), prs: na('0 merges in the window'), gaps: na('fewer than 2 merges in the window') };
+  const byOf = (g) => (g.hand ? 'hand' : 'factory');
+  const triState = (v) => (v === null ? 2 : v ? 1 : 0);
+
+  const counts = new Map();
+  const days = new Map();
+  const bump = (m, k, row) => {
+    const r = m.get(k) || { ...row, merges: 0 };
+    r.merges++;
+    m.set(k, r);
+  };
+  for (const g of mine) {
+    bump(counts, `${byOf(g)}|${g.recovered}`, { by: byOf(g), recovered: g.recovered });
+    bump(days, `${day(g.t)}|${byOf(g)}|${g.recovered}`, { day: day(g.t), by: byOf(g), recovered: g.recovered });
+  }
+  const order = (a, b) => cmpStr(a.day || '', b.day || '') || cmpStr(a.by, b.by) || triState(a.recovered) - triState(b.recovered);
+  const merges = {
+    total: mine.length,
+    by: [...counts.values()].sort(order).map((r) => ({ by: r.by, recovered: r.recovered, count: r.merges })),
+    per_day: [...days.values()].sort(order).map((r) => ({ day: r.day, by: r.by, recovered: r.recovered, merges: r.merges })),
+    issues: mine.map((g) => ({ issue: g.issue, pr: g.pr, merged_at: iso(g.t), by: byOf(g), recovered: g.recovered })),
+  };
+
+  const rows = mine.map((g) => {
+    const seen = named.filter((e) => e.issue === g.issue && e.t <= g.t && (e.state === 'transition' || e.state === 'reviewed') && g.pr !== null && e.pr === g.pr);
+    const from = Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+    const span = named.filter((e) => e.issue === g.issue && e.t >= from && e.t <= g.t);
+    const prs = new Set(span.filter((e) => e.pr !== null).map((e) => e.pr)).size;
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      pr_open_to_merge_seconds: seen.length ? secs(g.t - Math.min(...seen.map((e) => e.t))) : null,
+      prs,
+      supersedes: Math.max(prs - 1, 0),
+      head_moves: span.filter((e) => e.state === 'intervention' && HEAD_MOVE_CAUSES.has(e.f.cause)).length,
+    };
+  });
+  const prs = {
+    merges: rows.length,
+    pr_open_to_merge_seconds: statsOf(rows.map((r) => r.pr_open_to_merge_seconds).filter((x) => x !== null)),
+    prs: statsOf(rows.map((r) => r.prs)),
+    supersedes: statsOf(rows.map((r) => r.supersedes)),
+    head_moves: statsOf(rows.map((r) => r.head_moves)),
+    issues: rows,
+  };
+
+  if (mine.length < 2) return { merges, prs, gaps: na('fewer than 2 merges in the window') };
+  // state intervals of each issue from its transitions: [seq_at, the next one's); the last has no end
+  const states = new Map();
+  for (const e of named.filter((x) => x.state === 'transition').sort((a, b) => a.t - b.t || Number(a.f.seq) - Number(b.f.seq) || cmpStr(a.f.life || '', b.f.life || ''))) {
+    if (!states.has(e.issue)) states.set(e.issue, []);
+    states.get(e.issue).push({ from: e.t, to: Infinity, state: e.f.to, question: e.f.question === 'yes' });
+  }
+  for (const list of states.values()) list.forEach((s, i) => { if (i + 1 < list.length) s.to = list[i + 1].from; });
+  const pairs = mine.slice(1).map((next, i) => ({ before: mine[i], after: next }));
+  pairs.sort((a, b) => (b.after.t - b.before.t) - (a.after.t - a.before.t) || a.before.t - b.before.t);
+  const gaps = {
+    merges: mine.length,
+    gaps: pairs.slice(0, GAPS_SHOWN).map(({ before, after }) => {
+      const inFlight = [];
+      for (const [issue, list] of [...states].sort((a, b) => a[0] - b[0])) {
+        const held = new Map();
+        let asked = false;
+        for (const s of list) {
+          if (s.state === 'closed' || !(s.from < after.t && s.to > before.t)) continue;
+          held.set(s.state, (held.get(s.state) || 0) + Math.min(s.to, after.t) - Math.max(s.from, before.t));
+          if (s.state === 'parked' && s.question) asked = true;
+        }
+        if (!held.size) continue;
+        const [state] = [...held].sort((a, b) => b[1] - a[1] || cmpStr(a[0], b[0]))[0];
+        inFlight.push({ issue, state, parked_with_question: asked });
+      }
+      return {
+        from: iso(before.t), to: iso(after.t), gap_seconds: secs(after.t - before.t),
+        before: { issue: before.issue, pr: before.pr }, after: { issue: after.issue, pr: after.pr }, in_flight: inFlight,
+      };
+    }),
+  };
+  return { merges, prs, gaps };
 }
 
 // ---------------------------------------------------------------- waste
@@ -1476,6 +1627,7 @@ function evaluate(opts, env = process.env) {
   const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
     { readyTimes: rt.times, leaseMinutes, runLinks: links ? links.byIssue : null });
   if (em && useNew) for (const [k, why] of Object.entries(newMod.NA_METRICS)) em[k] = na(why);
+  if (em && !useNew) for (const k of MERGE_SECTIONS) em[k] = na(MERGE_OLD_NA);
 
   const mains = parsed.filter((f) => f.kind === 'main');
   const subs = parsed.filter((f) => f.kind === 'sub');
@@ -1504,6 +1656,9 @@ function evaluate(opts, env = process.env) {
     judgement_calls: em ? em.judgement_calls : evNa,
     claim_completion: em ? em.claim_completion : evNa,
     rounds: em ? em.rounds : evNa,
+    merges: em ? em.merges : evNa,
+    prs: em ? em.prs : evNa,
+    gaps: em ? em.gaps : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
       rows: computeSpend(parsed, pl.invocations),
       sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
@@ -1613,6 +1768,24 @@ function toMarkdown(r) {
     }) + '\n' +
     table(['merged issue', 'review_rounds', 'fix_rounds', 'in_flight_seconds', 'parked_seconds'],
       x.issues.map((i) => [i.issue, i.review_rounds, i.fix_rounds, i.in_flight_seconds, i.parked_seconds]))));
+  sec('merges', guard(r.merges, (m) =>
+    kv({ merges: m.total }) + '\n' +
+    table(['by', 'recovered', 'merges'], m.by.map((x) => [x.by, x.recovered, x.count])) + '\n' +
+    table(['day', 'by', 'recovered', 'merges'], m.per_day.map((d) => [d.day, d.by, d.recovered, d.merges])) + '\n' +
+    table(['issue', 'pr', 'merged_at', 'by', 'recovered'], m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered]))));
+  sec('prs', guard(r.prs, (p) =>
+    kv({
+      merges: p.merges, 'pr_open_to_merge_seconds.median': p.pr_open_to_merge_seconds.median, 'pr_open_to_merge_seconds.max': p.pr_open_to_merge_seconds.max,
+      'prs.median': p.prs.median, 'prs.max': p.prs.max, 'supersedes.median': p.supersedes.median, 'supersedes.max': p.supersedes.max,
+      'head_moves.median': p.head_moves.median, 'head_moves.max': p.head_moves.max,
+    }) + '\n' +
+    table(['issue', 'pr', 'pr_open_to_merge_seconds', 'prs', 'supersedes', 'head_moves'],
+      p.issues.map((i) => [i.issue, i.pr, i.pr_open_to_merge_seconds, i.prs, i.supersedes, i.head_moves]))));
+  sec('gaps', guard(r.gaps, (g) =>
+    kv({ merges: g.merges, gaps_shown: g.gaps.length }) + '\n' +
+    table(['from', 'to', 'gap_seconds', 'after merge of', 'before merge of', 'in flight (issue:state, ? = parked with a question)'],
+      g.gaps.map((x) => [x.from, x.to, x.gap_seconds, `#${x.before.issue}`, `#${x.after.issue}`,
+        x.in_flight.map((i) => `#${i.issue}:${i.state}${i.parked_with_question ? '?' : ''}`).join(' ') || 'none']))));
   sec('spend', guard(r.spend, (s) =>
     table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +

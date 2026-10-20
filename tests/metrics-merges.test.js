@@ -1,0 +1,126 @@
+// The saved queries of docs/metrics.md "9c. Merges, pull requests and gaps" (cbundy/dev-system#749) and
+// the judge-task rows of section 9's judgement-calls query, run as the reader role on a real PostgreSQL
+// database seeded with tests/fixtures/evaluate/v2/new-events.jsonl, and compared with the numbers
+// callum-flow-evaluate reports from the same file. The fixture's story is in tests/evaluate.test.js.
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { test } = require("node:test");
+
+const { available, createDb } = require("./lib/factory-db.js");
+
+const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
+
+const ROOT = path.join(__dirname, "..");
+const FIXTURE = path.join(__dirname, "fixtures", "evaluate", "v2", "new-events.jsonl");
+const doc = fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8");
+
+// The SQL blocks of a section, by its heading.
+function blocks(heading) {
+  const start = doc.indexOf(`\n${heading}`);
+  assert.ok(start >= 0, `docs/metrics.md has ${heading}`);
+  const rest = doc.slice(start + 1);
+  const end = rest.indexOf("\n## ", 1);
+  return [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
+}
+
+const REPO = "acme/widgets";
+const SINCE = "2026-10-16T00:00:00Z";
+const UNTIL = "2026-10-16T12:00:00Z";
+
+function seed(db) {
+  const lines = fs.readFileSync(FIXTURE, "utf8").split("\n").filter((l) => l !== "");
+  lines.forEach((l, i) => {
+    const e = JSON.parse(l);
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, '${e.event_id}', '${e.ts}', '${e.type}', 1, '${e.repo}', '${e.device}', '${e.actor}', ${e.issue ?? "NULL"}, ${i + 1}, $j$${JSON.stringify(e.data)}$j$::jsonb)`, "writer");
+  });
+  return lines.length;
+}
+
+// rows of a query as JSON, run as the reader with its variables set
+const rows = (db, sql) => {
+  const text = sql.replaceAll(":'repo'", `'${REPO}'`).replaceAll(":'since'", `'${SINCE}'`).trim().replace(/;$/, "");
+  return JSON.parse(db.query(`SELECT coalesce(json_agg(q), '[]'::json) FROM (${text}) q`, "reader"));
+};
+
+const evaluate = () => {
+  const r = spawnSync("node", [path.join(ROOT, "images", "base", "callum-flow-evaluate"), "--repo", REPO, "--since", SINCE, "--until", UNTIL,
+    "--source", "new", "--new-events", FIXTURE], { encoding: "utf8", env: { ...process.env, NO_MISTAKES_HOME: path.join(ROOT, "no-such-dir") } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+
+const ms = (t) => new Date(t).getTime();
+
+test("section 9c's queries give the numbers callum-flow-evaluate reports from the same events", opts, (t) => {
+  const db = createDb(t);
+  assert.ok(seed(db) > 60);
+  const ev = evaluate();
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  assert.equal(q.length, 5);
+
+  // merges per day: the same counts by merged_by and recovered
+  const days = rows(db, q[0]);
+  assert.deepEqual(days.map((r) => [r.day, r.merged_by, r.recovered, r.merges]), ev.merges.per_day.map((d) => [d.day, d.by, d.recovered, d.merges]));
+  assert.equal(days.reduce((a, r) => a + r.merges, 0), 5, "the three signals of #32 are one merge, and the day before the window is left out");
+  assert.deepEqual(days.map((r) => [r.merged_by, r.recovered, r.merges]), [["factory", false, 3], ["hand", true, 1], ["hand", null, 1]]);
+
+  // PR open to merge, pull requests, supersedes and head moves, per merge
+  const open = rows(db, q[1]);
+  const prs = rows(db, q[2]);
+  const heads = rows(db, q[3]);
+  assert.equal(open.length, ev.prs.issues.length);
+  ev.prs.issues.forEach((e, i) => {
+    assert.deepEqual([open[i].issue, open[i].pr, open[i].pr_open_to_merge_seconds], [e.issue, e.pr, e.pr_open_to_merge_seconds], `open ${e.issue}`);
+    assert.deepEqual([prs[i].issue, prs[i].pr, prs[i].prs, prs[i].supersedes], [e.issue, e.pr, e.prs, e.supersedes], `prs ${e.issue}`);
+    assert.deepEqual([heads[i].issue, heads[i].pr, heads[i].head_moves], [e.issue, e.pr, e.head_moves], `heads ${e.issue}`);
+  });
+  assert.deepEqual(open.map((r) => r.pr_open_to_merge_seconds), [1800, 1200, 2640, null, 1800]);
+  assert.deepEqual(prs.map((r) => [r.prs, r.supersedes]), [[1, 0], [2, 1], [1, 0], [0, 0], [1, 0]]);
+  assert.deepEqual(heads.map((r) => r.head_moves), [1, 2, 0, 0, 0], "the queue:patch logged twice counts once");
+
+  // the longest gaps, with the issues in flight
+  const gaps = rows(db, q[4]);
+  assert.deepEqual(gaps.map((g) => [ms(g.gap_from), ms(g.gap_to), g.gap_seconds, g.before_issue, g.before_pr, g.after_issue, g.after_pr, g.in_flight]),
+    ev.gaps.gaps.map((g) => [ms(g.from), ms(g.to), g.gap_seconds, g.before.issue, g.before.pr, g.after.issue, g.after.pr,
+      g.in_flight.map((i) => ({ issue: i.issue, state: i.state, parked_with_question: i.parked_with_question }))]));
+  assert.deepEqual(gaps.map((g) => g.gap_seconds), [10860, 9000, 6540, 4800]);
+  const longest = gaps[0].in_flight;
+  assert.deepEqual(longest.find((i) => i.issue === 36), { issue: 36, state: "building", parked_with_question: true }, "building holds more of the gap than the parked hour");
+  assert.deepEqual(longest.find((i) => i.issue === 38), { issue: 38, state: "building", parked_with_question: false }, "a tie goes to the name that sorts first");
+  assert.ok(!longest.some((i) => [30, 31, 32, 40].includes(i.issue)), "a closed issue is not in flight");
+  assert.equal(gaps[1].in_flight.find((i) => i.issue === 36).parked_with_question, false, "its parked hour is outside this gap");
+});
+
+test("section 9's judgement-calls query counts judge tasks as callum-flow-evaluate does", opts, (t) => {
+  const db = createDb(t);
+  seed(db);
+  const ev = evaluate();
+  const judgement = blocks("## 9. Interventions, judgement calls and claim completion").find((b) => b.includes("WITH calls AS"));
+  assert.ok(judgement, "the judgement-calls block");
+  const tasks = rows(db, judgement).filter((r) => r.kind === "task");
+  assert.deepEqual(tasks.map((r) => [r.kind, r.outcome, r.calls, r.overridden]),
+    ev.judgement_calls.by_kind.filter((k) => k.kind === "task").map((k) => [k.kind, k.outcome, k.count, k.overridden]));
+  assert.deepEqual(tasks.map((r) => [r.outcome, r.calls, r.overridden]), [["merge:done", 1, 0], ["parked:done", 1, 1], ["ready:failed", 1, 0]],
+    "a key with two rows counts once with its latest status; a person within the hour overrides; a task with no issue never is");
+});
+
+test("the 9c comparison bites: a merge changed in the store only is reported", opts, (t) => {
+  const db = createDb(t);
+  seed(db);
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  const before = rows(db, q[0]).map((r) => [r.merged_by, r.recovered, r.merges]);
+  db.query("UPDATE factory.event_store SET data = jsonb_set(data, '{by}', '\"hand\"') WHERE type = 'merged' AND issue = 35", "owner");
+  const after = rows(db, q[0]).map((r) => [r.merged_by, r.recovered, r.merges]);
+  assert.notDeepEqual(after, before);
+  assert.deepEqual(after, [["factory", false, 2], ["hand", false, 1], ["hand", true, 1], ["hand", null, 1]]);
+  // the retried head move is a guard too: a second copy under a new fact is a second move
+  db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+    SELECT envelope, gen_random_uuid(), ts, type, type_version, repo, device, actor, issue, 9999, jsonb_set(data, '{fact}', '"i30/l30/other"')
+    FROM factory.event_store WHERE type = 'intervention' AND data->>'cause' = 'queue:patch' AND issue = 30 LIMIT 1`, "writer");
+  assert.deepEqual(rows(db, q[3]).map((r) => r.head_moves), [2, 2, 0, 0, 0]);
+});

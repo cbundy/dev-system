@@ -195,6 +195,7 @@ Example:
 | `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `recommendation` | string | `transition` | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
 | `recommended` | enum | `transition` | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
+| `recovered` | boolean | `merged` | true when the loop logged it afterwards because no merged event was recorded at the merge. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
@@ -755,7 +756,7 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `branch` | string | required | yes |  | yes | The merged branch, when known. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit that was merged, when known. |
 | `by` | enum | required | no | one of "factory", "hand" | yes | factory: the factory merged it; hand: a person merged it outside the factory. |
-| `recovered` | boolean | required | no |  |  | true when the loop logged it afterwards because no merged event was recorded at the merge. |
+| `recovered` | boolean | required | no |  | yes | true when the loop logged it afterwards because no merged event was recorded at the merge. |
 | `files` | array of string | optional | yes | items: minLength 1 | yes | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
