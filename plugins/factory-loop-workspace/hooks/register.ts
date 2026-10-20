@@ -30,6 +30,8 @@ import type { WorkspaceAgent } from '../types'
 import { DEFAULT_GATE_WAIT_MS, STALL_DEFAULT_MS, blockText, gateLine, gateRecord, oneLine, runGates, stallBoundMs, waitedOut } from './gate'
 import type { GateResult, Ran } from './gate'
 import { bootMs, gateEntries, isDead, judge, leaseHeld, openGates, pidOf, startMs } from './recover'
+import { DEFAULT_CGROUP_DIR, startMemorySampler } from './memory'
+import type { MemFields } from './memory'
 import { recordWindow } from './window'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
@@ -349,6 +351,24 @@ async function slotClean($: EngineInterface, slot: string): Promise<boolean | nu
 // restart cut.
 type GateTarget = Pick<WorkspaceAgent, 'slot' | 'gitDir' | 'issue' | 'life' | 'seq' | 'gateCommands' | 'gateTimeoutMs' | 'loopDir' | 'gateConcurrency' | 'gateWaitTimeoutMs'>
 
+// sampleMemory: the gate's memory sampler over the cgroup files; a failure anywhere gives a sampler
+// that read nothing, never an error (a measurement must not change a gate)
+async function sampleMemory($: EngineInterface): Promise<{ stop: () => Promise<MemFields> }> {
+  const none = { stop: async (): Promise<MemFields> => ({ memStartBytes: null, memPeakBytes: null, memLimitBytes: null, memSamples: 0 }) }
+  try {
+    const dir = (await $.env.get('FACTORY_GATE_CGROUP_DIR')) || DEFAULT_CGROUP_DIR
+    return await startMemorySampler({
+      read: async () => {
+        const [current, max] = await Promise.all([readText($, `${dir}/memory.current`), readText($, `${dir}/memory.max`)])
+        return { current, max }
+      },
+      every: (ms, fn) => $.clock.every(ms, fn),
+    })
+  } catch {
+    return none
+  }
+}
+
 // runStopGate: the one gate run of a stop (the writer's finish) and of the recovery (a re-run), so the two
 // cannot drift: a turn first (10.6; at most gateConcurrency gates run at once in this process, a marker
 // with no limit takes none), then the head and tree, the commands, factory-gate.json and the settling
@@ -385,20 +405,24 @@ export async function runStopGate($: EngineInterface, a: GateTarget, startedAt: 
     turn?.release()
     return { ran: false }
   }
+  let sampler: { stop: () => Promise<MemFields> } | null = null
   try {
     if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
     const headBefore = await headSha($, a.slot)
     const cleanBefore = await slotClean($, a.slot)
+    sampler = await sampleMemory($)
     const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now(), ...(opts.cut === undefined ? {} : { cut: opts.cut }) }, a.gateCommands, a.gateTimeoutMs, waitMs)
     const head = await headSha($, a.slot)
+    const mem = await sampler.stop()
     // a head that moved during the run means the tree did too: never clean
     const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
     const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean)
     await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-    const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean, rerun)
+    const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean, rerun, mem)
     await logLine($, a, line.cause, line.reason, line.fields)
     return { ran: true, result }
   } finally {
+    await sampler?.stop().catch(() => undefined)
     turn?.release()
   }
 }

@@ -23,6 +23,7 @@ for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
 const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue"]);
+const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes"]);
 const NUMERICS = new Set(["spend_usd", "budget_usd"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at"]);
@@ -38,7 +39,7 @@ test("event_log has the envelope columns, device_seq and each x-column field", o
   assert.equal(new Set(have).size, have.length);
   const types = Object.fromEntries(db.query("SELECT column_name || ' ' || data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log'").split("\n").map((l) => [l.slice(0, l.indexOf(" ")), l.slice(l.indexOf(" ") + 1)]));
   for (const col of lifted) {
-    const type = JSONS.has(col) ? "jsonb" : BOOLS.has(col) ? "boolean" : INTS.has(col) ? "integer" : NUMERICS.has(col) ? "numeric" : TIMES.has(col) ? "timestamp with time zone" : "text";
+    const type = JSONS.has(col) ? "jsonb" : BOOLS.has(col) ? "boolean" : INTS.has(col) ? "integer" : BIGINTS.has(col) ? "bigint" : NUMERICS.has(col) ? "numeric" : TIMES.has(col) ? "timestamp with time zone" : "text";
     assert.equal(types[col], type, `event_log.${col}`);
   }
   assert.equal(types.ts, "timestamp with time zone");

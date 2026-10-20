@@ -76,6 +76,10 @@ export type GateLine = {
   hasClean: boolean
   // the names of the tests a failed run reported (null: none, or absent)
   failedTests: string[] | null
+  // the container's memory around the run, in bytes (null: absent, or not a non-negative safe integer)
+  memStartBytes: number | null
+  memPeakBytes: number | null
+  memLimitBytes: number | null
   // the run is the companion's re-run of a gate the loop's restart cut (false: absent), with no agent
   // left to refuse
   rerun: boolean
@@ -201,6 +205,7 @@ export function companionLines(text: string | null, now: Ms): CompanionLine[] {
 export function gateLines(text: string | null, now: Ms): GateLine[] {
   const out: GateLine[] = []
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const bytes = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null)
   for (const { o, at } of windowed(text, now)) {
     const cause = [...GATE_RUN_CAUSES, 'gate-wait' as const].find(c => c === o.cause)
     const issue = natural(o.issue)
@@ -228,6 +233,9 @@ export function gateLines(text: string | null, now: Ms): GateLine[] {
       clean: typeof o.clean === 'boolean' ? o.clean : null,
       hasClean: 'clean' in o,
       failedTests: Array.isArray(o.failedTests) && o.failedTests.every(t => typeof t === 'string') ? (o.failedTests as string[]) : null,
+      memStartBytes: bytes(o.memStartBytes),
+      memPeakBytes: bytes(o.memPeakBytes),
+      memLimitBytes: bytes(o.memLimitBytes),
       rerun: o.rerun === true,
     })
   }

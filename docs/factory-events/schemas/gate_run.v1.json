@@ -19,10 +19,14 @@
     "started_at": { "type": "string", "format": "date-time", "description": "When the gate asked for its turn (before any wait).", "x-column": true },
     "flaky": { "type": ["boolean", "null"], "description": "Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass.", "x-column": true },
     "failed_tests": { "type": ["array", "null"], "items": { "type": "string", "maxLength": 200 }, "maxItems": 20, "description": "The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded.", "x-column": true },
-    "failed_at": { "type": ["string", "null"], "format": "date-time", "description": "On a flaky pass row, when the failed run started. Null otherwise.", "x-column": true }
+    "failed_at": { "type": ["string", "null"], "format": "date-time", "description": "On a flaky pass row, when the failed run started. Null otherwise.", "x-column": true },
+    "mem_start_bytes": { "type": ["integer", "null"], "minimum": 0, "description": "The container's memory in use (cgroup memory.current) when the gate started to run, in bytes. Container-wide: at concurrency above 1 it includes other gates. Left out when not read.", "x-column": true },
+    "mem_peak_bytes": { "type": ["integer", "null"], "minimum": 0, "description": "The highest memory.current sampled (every 5 s, and at the end) while the gate ran, in bytes. Left out when not read.", "x-column": true },
+    "mem_limit_bytes": { "type": ["integer", "null"], "minimum": 0, "description": "The cgroup's memory.max when the gate ran, in bytes; left out when there is no limit or it was not read.", "x-column": true }
   },
   "examples": [
     { "life": "tn0brb", "seq": 6, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 184000, "run_ms": 412000, "concurrency": 1, "queued_behind": 2, "started_at": "2026-10-16T15:49:06.252Z" },
-    { "life": "tn0brb", "seq": 7, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 0, "run_ms": 398000, "concurrency": 1, "queued_behind": 0, "started_at": "2026-10-16T16:05:11.100Z", "flaky": true, "failed_tests": ["tests/cli.test.js > prints help", "tests/db.test.js > connects"], "failed_at": "2026-10-16T15:49:06.252Z" }
+    { "life": "tn0brb", "seq": 7, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 0, "run_ms": 398000, "concurrency": 1, "queued_behind": 0, "started_at": "2026-10-16T16:05:11.100Z", "flaky": true, "failed_tests": ["tests/cli.test.js > prints help", "tests/db.test.js > connects"], "failed_at": "2026-10-16T15:49:06.252Z" },
+    { "life": "tn0brb", "seq": 8, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "result": "pass", "wait_ms": 0, "run_ms": 405000, "concurrency": 2, "queued_behind": 0, "started_at": "2026-10-16T17:00:00.000Z", "mem_start_bytes": 3221225472, "mem_peak_bytes": 5368709120, "mem_limit_bytes": 17179869184 }
   ]
 }

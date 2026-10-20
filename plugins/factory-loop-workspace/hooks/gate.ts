@@ -154,8 +154,9 @@ export function gateLine(
   queuedBehind: number,
   clean: boolean | null,
   rerun = false,
+  mem?: { memStartBytes: number | null; memPeakBytes: number | null; memLimitBytes: number | null; memSamples: number },
 ): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}) }
+  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}), ...(mem === undefined ? {} : mem) }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
   if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode, failedTests: r.failedTests } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }

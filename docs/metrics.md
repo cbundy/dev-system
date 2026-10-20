@@ -571,6 +571,40 @@ FROM bugs b
 LEFT JOIN ended e ON e.repo = b.repo AND e.issue = b.filed_issue;
 ```
 
+## 2e. Gate memory
+
+How much memory a stop gate adds. The workspace companion reads the container's cgroup
+(`memory.current`, `memory.max`) when a gate starts to run, every 5 s while it runs and once when
+it ends, and writes the first reading, the highest one and the limit on the gate's settling line;
+the loop copies them onto the `gate_run` event as `mem_start_bytes`, `mem_peak_bytes` and
+`mem_limit_bytes` (left out when the cgroup could not be read, and on a gate that never got a
+turn). The test hook `FACTORY_GATE_CGROUP_DIR` names another cgroup directory.
+
+The reading is container-wide. At concurrency above 1 other gates run in the same container and
+their memory overlaps this one's, so the query groups by `concurrency`: the `concurrency` 1 rows
+are the nearest to one gate's own memory. This is the per-slot estimate the memory cap (#1127)
+uses. A retried write can repeat an event, so each run counts once per (issue, life, seq,
+started_at). Take percentiles in code.
+
+```sql
+WITH runs AS (
+  SELECT repo, issue, life, seq, started_at,
+    min(concurrency) AS concurrency,
+    min(mem_peak_bytes) - min(mem_start_bytes) AS added_bytes
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND mem_start_bytes IS NOT NULL AND mem_peak_bytes IS NOT NULL
+    AND started_at >= :'since'::timestamptz
+  GROUP BY repo, issue, life, seq, started_at
+)
+SELECT repo, concurrency,
+  count(*)                    AS runs,
+  round(avg(added_bytes))     AS avg_added_bytes,
+  max(added_bytes)            AS max_added_bytes
+FROM runs
+GROUP BY repo, concurrency
+ORDER BY repo, concurrency;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`

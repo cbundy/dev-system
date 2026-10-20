@@ -511,6 +511,27 @@
           "pattern": "^[0-9a-z]+$",
           "type": "string"
         },
+        "mem_limit_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mem_peak_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mem_start_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "queued_behind": {
           "minimum": 0,
           "type": "integer"

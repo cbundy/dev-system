@@ -166,6 +166,9 @@ Example:
 | `lives` | integer | `abandoned`, `requeued`, `transition` | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `max_ms` | integer | `loop_passes` | The longest duration, in milliseconds; null when there was no pass. |
 | `mean_ms` | integer | `loop_passes` | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
+| `mem_limit_bytes` | integer | `gate_run` | The cgroup's memory.max when the gate ran, in bytes; left out when there is no limit or it was not read. |
+| `mem_peak_bytes` | integer | `gate_run` | The highest memory.current sampled (every 5 s, and at the end) while the gate ran, in bytes. Left out when not read. |
+| `mem_start_bytes` | integer | `gate_run` | The container's memory in use (cgroup memory.current) when the gate started to run, in bytes. Container-wide: at concurrency above 1 it includes other gates. Left out when not read. |
 | `milestone_closed` | integer | `milestone_state` | Closed issues in the milestone. |
 | `milestone_open` | integer | `milestone_state` | Open issues in the milestone. |
 | `mode` | enum | `loop_passes` | The loop's mode: off, observe (plans, does not act) or act. |
@@ -488,6 +491,9 @@ One run of the stop gate in a writer's slot finished: the repo's gate commands r
 | `flaky` | boolean | optional | yes |  | yes | Set on a pass row once the loop has checked it. True means the run just before it, in the same issue and life, failed on the same head, and both slots were clean; false means it was checked and is not a flake. Null when not checked or not a pass. |
 | `failed_tests` | array of string | optional | yes | maxItems 20; items: maxLength 200 | yes | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
 | `failed_at` | string | optional | yes | format date-time | yes | On a flaky pass row, when the failed run started. Null otherwise. |
+| `mem_start_bytes` | integer | optional | yes | minimum 0 | yes | The container's memory in use (cgroup memory.current) when the gate started to run, in bytes. Container-wide: at concurrency above 1 it includes other gates. Left out when not read. |
+| `mem_peak_bytes` | integer | optional | yes | minimum 0 | yes | The highest memory.current sampled (every 5 s, and at the end) while the gate ran, in bytes. Left out when not read. |
+| `mem_limit_bytes` | integer | optional | yes | minimum 0 | yes | The cgroup's memory.max when the gate ran, in bytes; left out when there is no limit or it was not read. |
 
 Example:
 

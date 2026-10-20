@@ -106,7 +106,7 @@ const RUN_ONLY = [
   "7a. How waits end #0", "7b. Done closes #0",
   "Split trackers closed by the loop #0", "Split children parked on their open decision #0",
   "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
-  "2d. Flaky tests #0", "2d. Flaky tests #1", "2d. Flaky tests #2", "2d. Flaky tests #3", "2d. Flaky tests #4",
+  "2d. Flaky tests #0", "2d. Flaky tests #1", "2d. Flaky tests #2", "2d. Flaky tests #3", "2d. Flaky tests #4", "2e. Gate memory #0",
   "8b. Designer model comparison #0",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",

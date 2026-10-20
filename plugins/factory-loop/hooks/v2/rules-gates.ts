@@ -97,6 +97,9 @@ export function gateRunOf(line: GateLine, waits: readonly GateLine[]): { data: G
     started_at: startedAt,
   }
   if (line.cause === 'gate-fail' && line.failedTests !== null) data.failed_tests = line.failedTests
+  if (line.memStartBytes !== null) data.mem_start_bytes = line.memStartBytes
+  if (line.memPeakBytes !== null) data.mem_peak_bytes = line.memPeakBytes
+  if (line.memLimitBytes !== null) data.mem_limit_bytes = line.memLimitBytes
   return fits(data) ? { data, startedMs } : null
 }
 
