@@ -153,13 +153,25 @@ GROUP BY repo;
 
 How long the stop gate waited for a turn, and how long it ran, per gate run. The loop writes one
 `gate_run` event for each `gate-pass`, `gate-fail` and `gate-unknown` line of the workspace
-companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
-took one at once or there is no limit), `run_ms` the time the commands ran (0 when they never
+companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn plus the time it waited for one of the container's
+gate slots (v2 SPEC 10.6; 0 when it took both at once or there is no limit), `run_ms` the time the commands ran (0 when they never
 did), `queued_behind` how many gates held a turn or waited ahead when it asked, `concurrency` the
 limit it ran under (null: none), and `started_at` when it asked for its turn. A retried write can
 repeat an event, so each run counts once per (issue, life, seq, started_at). The query reads the
 columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
 rows before a loop with this rule has run.
+
+How often agents' own gate-command runs (`npm test` run by an agent) waited for the container's gate
+slots or were refused by them (the second command gives the per-day counts of runs, waits and refusals). The wrapper writes an `agent-gate` line to the companion's log
+(`<loop dir>/companion.jsonl`) when each ends or is refused; they are not events, so read the file:
+
+```sh
+jq -c 'select(.cause == "agent-gate") | {at, issue, command, waitMs, refused, ms}' <loop dir>/companion.jsonl
+jq -rs '[.[] | select(.cause == "agent-gate")] | group_by(.at[:10])[] | {day: .[0].at[:10], runs: length, waited: map(select(.waitMs > 1000)) | length, refused: map(select(.refused)) | length}' <loop dir>/companion.jsonl
+```
+
+A stop gate's own wait for a container slot is `slotWaitMs` on its settling line, also counted in
+`waitMs`.
 
 A pass row can carry `flaky` (and, when true, `failed_tests` and `failed_at` of the fail it followed)
 and a fail row `failed_tests`; section 2d reads them.

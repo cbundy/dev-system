@@ -12,7 +12,7 @@
     "seq": { "type": "integer", "minimum": 0, "description": "The record's sequence in this life whose writer step ran the gate.", "x-column": true },
     "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "The slot's HEAD commit when the gate ran; null when it could not be read.", "x-column": true },
     "result": { "enum": ["pass", "fail", "unknown"], "description": "pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap).", "x-column": true },
-    "wait_ms": { "type": "integer", "minimum": 0, "description": "How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit.", "x-column": true },
+    "wait_ms": { "type": "integer", "minimum": 0, "description": "How long the gate waited for a turn, and for the container's gate slots, in milliseconds; 0 when it took both at once or there is no limit.", "x-column": true },
     "run_ms": { "type": "integer", "minimum": 0, "description": "How long the gate ran once it held a turn, in milliseconds; 0 when it never ran.", "x-column": true },
     "concurrency": { "type": ["integer", "null"], "minimum": 1, "description": "How many gates could run at once when this one asked for a turn; null when there was no limit.", "x-column": true },
     "queued_behind": { "type": "integer", "minimum": 0, "description": "How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once.", "x-column": true },

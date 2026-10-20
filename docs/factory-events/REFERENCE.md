@@ -242,7 +242,7 @@ Example:
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
-| `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
+| `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, and for the container's gate slots, in milliseconds; 0 when it took both at once or there is no limit. |
 | `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
 | `wake` | string | `loop_entry` | The wake's name, for a tell or task, for example parked; null otherwise. |
 | `who` | enum | `intervention`, `settings_changed` | person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool. |
@@ -494,7 +494,7 @@ One run of the stop gate in a writer's slot finished: the repo's gate commands r
 | `seq` | integer | required | no | minimum 0 | yes | The record's sequence in this life whose writer step ran the gate. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The slot's HEAD commit when the gate ran; null when it could not be read. |
 | `result` | enum | required | no | one of "pass", "fail", "unknown" | yes | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
-| `wait_ms` | integer | required | no | minimum 0 | yes | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
+| `wait_ms` | integer | required | no | minimum 0 | yes | How long the gate waited for a turn, and for the container's gate slots, in milliseconds; 0 when it took both at once or there is no limit. |
 | `run_ms` | integer | required | no | minimum 0 | yes | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `concurrency` | integer | required | yes | minimum 1 | yes | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `queued_behind` | integer | required | no | minimum 0 | yes | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |

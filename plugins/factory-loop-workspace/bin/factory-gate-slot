@@ -1,0 +1,109 @@
+#!/bin/sh
+# factory-gate-slot: runs a command while holding one of the container's gate slots
+# (docs/factory-loop/v2/SPEC.md 10.6, "Turns"). A slot is the file <dir>/<i>.lock for i from 0 to
+# capacity - 1, held through flock(1) on fd 9, so the kernel frees it when the holder dies. The
+# command runs with fd 9 closed, so a daemon it leaves behind never keeps the slot.
+#
+#   factory-gate-slot --dir <slot dir> --capacity N --wait-ms W
+#       [--log <companion.jsonl> --issue N --life L --seq S] -- argv...
+#
+# With a slot it prints `factory-gate-slot: slot <i> after <ms> ms`, runs argv and exits with its exit
+# code. With none free within W ms (0: one round) it prints a `factory-gate-slot: busy: ...` line,
+# runs nothing and exits 75. With --log it appends one `agent-gate` line to the companion's log when
+# the run ends or is refused.
+dir=
+capacity=
+wait_ms=0
+log=
+issue=
+life=
+seq=
+
+die() {
+  echo "factory-gate-slot: $1" >&2
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dir) [ $# -ge 2 ] || die "--dir needs a value"; dir=$2; shift 2 ;;
+    --capacity) [ $# -ge 2 ] || die "--capacity needs a value"; capacity=$2; shift 2 ;;
+    --wait-ms) [ $# -ge 2 ] || die "--wait-ms needs a value"; wait_ms=$2; shift 2 ;;
+    --log) [ $# -ge 2 ] || die "--log needs a value"; log=$2; shift 2 ;;
+    --issue) [ $# -ge 2 ] || die "--issue needs a value"; issue=$2; shift 2 ;;
+    --life) [ $# -ge 2 ] || die "--life needs a value"; life=$2; shift 2 ;;
+    --seq) [ $# -ge 2 ] || die "--seq needs a value"; seq=$2; shift 2 ;;
+    --) shift; break ;;
+    *) die "unknown argument $1" ;;
+  esac
+done
+[ -n "$dir" ] || die "--dir is required"
+[ $# -gt 0 ] || die "no command after --"
+case $capacity in '' | *[!0-9]*) die "--capacity must be a whole number" ;; esac
+case $wait_ms in '' | *[!0-9]*) die "--wait-ms must be a whole number" ;; esac
+[ "$capacity" -ge 1 ] || die "--capacity must be at least 1"
+for v in "$issue" "$seq"; do
+  case $v in *[!0-9]*) die "--issue and --seq must be whole numbers" ;; esac
+done
+command -v flock >/dev/null 2>&1 || die "flock(1) (util-linux) is not on PATH; gate slots cannot be held without it"
+mkdir -p "$dir" || die "cannot make $dir"
+
+now_ms() {
+  ns=$(date +%s%N)
+  echo $((ns / 1000000))
+}
+
+json_str() {
+  printf '%s' "$1" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# write_log <slot|null> <exit|null> <refused> <ms> <command>
+write_log() {
+  [ -n "$log" ] || return 0
+  cmd_text=${5#command }
+  at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  if [ "$3" = true ]; then
+    reason="an agent's gate command was refused: no gate slot was free"
+  else
+    reason="an agent's gate command ran in gate slot $1"
+  fi
+  printf '{"at":"%s","issue":%s,"life":"%s","seq":%s,"cause":"agent-gate","reason":"%s","command":"%s","waitMs":%s,"slot":%s,"exit":%s,"ms":%s,"refused":%s}\n' \
+    "$at" "${issue:-null}" "$(json_str "$life")" "${seq:-null}" "$(json_str "$reason")" "$(json_str "$cmd_text")" "$waited" "$1" "$2" "$4" "$3" >>"$log" 2>/dev/null
+  return 0
+}
+
+start=$(now_ms)
+got=
+while :; do
+  i=0
+  while [ "$i" -lt "$capacity" ]; do
+    exec 9>"$dir/$i.lock"
+    if flock -n 9; then
+      got=$i
+      break
+    fi
+    i=$((i + 1))
+  done
+  [ -n "$got" ] && break
+  waited=$(($(now_ms) - start))
+  [ "$waited" -ge "$wait_ms" ] && break
+  sleep 0.2
+done
+waited=$(($(now_ms) - start))
+
+if [ -z "$got" ]; then
+  exec 9>&-
+  secs=$(((waited + 500) / 1000))
+  echo "factory-gate-slot: busy: the container's $capacity gate slots were all taken for $secs s; run a subset (npm test -- <id>) or leave the full run to the stop gate."
+  cmd=$*
+  write_log null null true 0 "$cmd"
+  exit 75
+fi
+
+echo "factory-gate-slot: slot $got after $waited ms"
+cmd=$*
+ran_from=$(now_ms)
+"$@" 9>&-
+code=$?
+write_log "$got" "$code" false $(($(now_ms) - ran_from)) "$cmd"
+exit "$code"
