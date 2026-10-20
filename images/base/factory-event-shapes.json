@@ -2198,8 +2198,29 @@
     "usage.v1": {
       "additionalProperties": false,
       "properties": {
+        "auth": {
+          "enum": [
+            "api-key",
+            "subscription",
+            null
+          ]
+        },
         "available": {
           "type": "boolean"
+        },
+        "budget_resets_at": {
+          "format": "date-time",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "budget_usd": {
+          "minimum": 0,
+          "type": [
+            "null",
+            "number"
+          ]
         },
         "five_hour_pct": {
           "minimum": 0,
@@ -2238,8 +2259,16 @@
         "source": {
           "enum": [
             "oauth",
+            "spend",
             "statusline",
             null
+          ]
+        },
+        "spend_usd": {
+          "minimum": 0,
+          "type": [
+            "null",
+            "number"
           ]
         }
       },

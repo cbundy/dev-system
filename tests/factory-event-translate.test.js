@@ -673,3 +673,43 @@ test("prompt_denied and prompt_waiting: an unknown token, a tool on a waiting pr
   assert.ok(translate(withNote(w, `input=${"x".repeat(5000)}`)).event);
   assert.match(missOf(withNote(w, "seq=-1")), /bad number seq=-1/);
 });
+
+test("usage: auth on today's two shapes, and the spend shape (dev-system#1114)", () => {
+  const sub = sample("usage", (l) => /^five_hour=/.test(l.note));
+  const unavail = sample("usage", (l) => /^usage=unavailable/.test(l.note));
+  const validate = (d) => assert.deepEqual(reader.validateStrict("usage", 1, d), []);
+  // no auth token: no auth key at all
+  assert.equal("auth" in translate(sub).event.data, false);
+  assert.equal("auth" in translate(unavail).event.data, false);
+  const a = translate(withNote(sub, `${sub.note} auth=subscription`)).event.data;
+  assert.equal(a.auth, "subscription");
+  validate(a);
+  const u = translate(withNote(unavail, `${unavail.note} auth=api-key`)).event.data;
+  assert.equal(u.auth, "api-key");
+  validate(u);
+  const note = "auth=api-key spend_usd=42.5 budget_usd=100 budget_resets_at=2026-11-01T00:00:00.000Z source=spend";
+  const s = translate(withNote(sub, note)).event.data;
+  assert.deepEqual(s, {
+    available: true, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null,
+    source: "spend", reasons: [], auth: "api-key", spend_usd: 42.5, budget_usd: 100, budget_resets_at: "2026-11-01T00:00:00.000Z",
+  });
+  validate(s);
+  const none = translate(withNote(sub, "auth=api-key spend_usd=3 budget_usd=none budget_resets_at=none source=spend")).event.data;
+  assert.deepEqual([none.spend_usd, none.budget_usd, none.budget_resets_at], [3, null, null]);
+  validate(none);
+  const bare = translate(withNote(sub, "auth=api-key spend_usd=0 source=spend")).event.data;
+  assert.equal("budget_usd" in bare, false);
+  validate(bare);
+  for (const [bad, cause] of [
+    [note.replace("spend_usd=42.5", "spend_usd=-1"), /bad number spend_usd=-1/],
+    [note.replace("spend_usd=42.5", "spend_usd=abc"), /bad number spend_usd=abc/],
+    [note.replace("budget_usd=100", "budget_usd=-5"), /bad number budget_usd=-5/],
+    [note.replace("auth=api-key", "auth=other"), /bad auth=other/],
+    [note.replace("auth=api-key", "auth=subscription"), /needs auth=api-key/],
+    [`${note} stray=1`, /unexpected token stray=/],
+    [note.replace("spend_usd=42.5 ", ""), /missing token spend_usd=/],
+    [note.replace("auth=api-key ", ""), /missing token auth=/],
+    [`${sub.note} auth=other`, /bad auth=other/],
+    [`${unavail.note} auth=nope`, /bad auth=nope/],
+  ]) assert.match(missOf(withNote(sub, bad)), cause, bad);
+});

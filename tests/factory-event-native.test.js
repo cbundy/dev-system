@@ -308,3 +308,22 @@ test("prompt_denied and prompt_waiting: the companion's own data goes through th
     }
   }
 });
+
+test("usage: a spend reading is written with no warning through --data and --note; a string spend_usd is refused (dev-system#1114)", () => {
+  const spend = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "usage.v1.json"), "utf8")).examples[1];
+  const { r, lines } = native(["--type", "usage", "--data", JSON.stringify(spend)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "");
+  const e = JSON.parse(lines[0]);
+  assert.deepEqual(reader.validateStrict("usage", 1, e.data), []);
+  assert.deepEqual(reader.readEvent(e).data, spend);
+  const bad = native(["--type", "usage", "--data", JSON.stringify({ ...spend, spend_usd: "42.5" })]);
+  assert.equal(bad.r.status, 2, bad.r.stderr);
+  assert.deepEqual(bad.lines, []);
+  const viaNote = native(["usage", "--note", "auth=api-key spend_usd=42.5 budget_usd=100 budget_resets_at=2026-11-01T00:00:00.000Z source=spend"], { env: { HOME: tmp } });
+  assert.equal(viaNote.r.status, 0, viaNote.r.stderr);
+  const events = viaNote.lines.map((l) => JSON.parse(l)).filter((x) => x.type === "usage");
+  assert.equal(events.length, 1, "the note is dual-written as a usage event");
+  assert.equal(events[0].data.spend_usd, 42.5);
+  assert.deepEqual(reader.validateStrict("usage", 1, events[0].data), []);
+});

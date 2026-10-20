@@ -1779,6 +1779,61 @@ FROM factory.workers_status
 ORDER BY device;
 ```
 
+## Spend on an API key
+
+A `usage` event ([REFERENCE.md](factory-events/REFERENCE.md)) taken on an API key records dollars, not window
+percentages. `auth` says which login the reading was taken under (`subscription` or `api-key`). A spend reading has
+`source` `spend`, `available` true and null window fields; `spend_usd` is the dollars spent in the current budget period,
+`budget_usd` the budget for that period and `budget_resets_at` when the period resets. All four are null on every
+other usage event, and no producer writes them yet.
+
+Spend per day against the budget, per repo and device: the day's last reading, its percent of the budget (null when
+there is no budget) and `spent_that_day`, the day's last spend less the previous day's last spend in the same budget
+period (the same `budget_resets_at`), else the day's own last spend:
+
+```sql
+WITH last_per_day AS (
+  SELECT repo, device, date_trunc('day', ts) AS day, spend_usd, budget_usd, budget_resets_at
+  FROM (
+    SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.device, date_trunc('day', e.ts) ORDER BY e.ts DESC) AS n
+    FROM factory.event_log e
+    WHERE e.type = 'usage' AND e.available AND e.auth = 'api-key' AND e.spend_usd IS NOT NULL
+      AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz) r
+  WHERE n = 1)
+SELECT day::date AS day, repo, device, spend_usd, budget_usd,
+  round(100 * spend_usd / nullif(budget_usd, 0)) AS pct_of_budget,
+  CASE WHEN lag(day) OVER w IS NOT NULL AND lag(budget_resets_at) OVER w IS NOT DISTINCT FROM budget_resets_at
+       THEN spend_usd - lag(spend_usd) OVER w
+       ELSE spend_usd END AS spent_that_day
+FROM last_per_day
+WINDOW w AS (PARTITION BY repo, device ORDER BY day)
+ORDER BY repo, device, day;
+```
+
+Time in each tier while on an API key, per repo and device. The tier is worked out from `100 * spend_usd / budget_usd`
+against the default thresholds 85 / 90 / 95 (slow, stop-new, stop-all); they mirror
+`plugins/factory-loop/hooks/config.ts` (`usageSlowPct`, `usageStopNewPct`, `usageStopAllPct`) and are edited here when
+the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); a
+reading with no spend or no budget counts as `unknown`:
+
+```sql
+SELECT repo, device,
+  CASE WHEN pct IS NULL THEN 'unknown'
+       WHEN pct >= 95 THEN 'stop-all'
+       WHEN pct >= 90 THEN 'stop-new'
+       WHEN pct >= 85 THEN 'slow'
+       ELSE 'normal' END AS tier,
+  sum(held) AS time_in_tier
+FROM (
+  SELECT repo, device, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
+    least(coalesce(lead(ts) OVER (PARTITION BY repo, device ORDER BY ts), now()) - ts, interval '15 minutes') AS held
+  FROM factory.event_log
+  WHERE type = 'usage' AND available AND auth = 'api-key'
+    AND repo = :'repo' AND ts >= :'since'::timestamptz) r
+GROUP BY repo, device, tier
+ORDER BY repo, device, tier;
+```
+
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
