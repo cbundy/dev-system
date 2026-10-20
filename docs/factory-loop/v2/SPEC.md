@@ -1220,7 +1220,7 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
   (`gate-pass`, `gate-fail`, 10.6) is not, and neither is `gate-wait` (a gate that waited for its turn)
-  or `gate-start` (a gate that began, 10.6).
+  or `gate-start` (a gate that began, 10.6), or `agent-gate` (an agent's own gate-command run through the container's gate slots, 10.6).
   The loop reads those gate lines for `gate_run` events (10.6, `rules-gates.ts`), not as interventions.
   The companion writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
@@ -2021,6 +2021,36 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   Nothing in a consumer's settings changes. The `gate-queue` case of the workspace probe proves it
   (below); a gate the engine cuts anyway is recorded as `gate-unknown` whose reason says `the hook
   was cut off N s after the gate started (W s waiting, R s running)` and not as a failed command.
+  **The container's gate slots.** The turns above count the gates of one process; the stop gates and
+  the writers' own gate-command runs (an agent running `npm test` itself) share one container-wide
+  limit besides: `gateConcurrency` slot files `<loop dir>/gate-slots/<i>.lock`. A run holds one
+  through `flock(1)` on an open fd in `plugins/factory-loop-workspace/bin/factory-gate-slot` (POSIX
+  sh), so the kernel frees it when the holder dies, and the wrapper closes that fd for the command
+  it runs, so a daemon the command leaves behind never keeps a slot. The wrapper tries each file
+  with `flock -n`, sleeps briefly and tries again until its `--wait-ms` has passed (0: one round);
+  it prints `factory-gate-slot: slot <i> after <ms> ms` and runs its argv, or prints a `busy` line,
+  runs nothing and exits 75. Given `--log` it appends one `agent-gate` line (`command`, `waitMs`,
+  `slot`, `exit`, `ms`, `refused`) to the companion's log; the loop reads none of it (not an
+  intervention, a gate result or a recovery candidate).
+  *The stop gate* cannot hold one flock across its commands (each is its own `$.process.run`, at most
+  10 minutes), so it takes a slot per command, with no `--log` and a `--wait-ms` of one short slice
+  (5 s). An exit 75 with only the busy line is retried, each retry a new host call so the handler's
+  10 s budget never runs, until the cap (`gateWaitTimeoutMs` less the turn's wait) is used up: then the
+  gate is `gate-unknown` naming the slot wait, never a pass. The wrapper's first line is stripped from
+  the output. The wait is not the gate's time: `runGates` leaves it out of `gateTimeoutMs`. It is in
+  `waitMs` (so `gate_run.wait_ms`), and the settling line and `factory-gate.json` also carry
+  `slotWaitMs` (0 when none; absent for a marker without `gateConcurrency`, which runs exactly as
+  before, with no wrapper).
+  *The agents* get the wrapper through the companion's `tool.call`: with `gateConcurrency` in the
+  marker, a mapped agent's Bash call (a writer's and its children's) starts with a line that defines
+  one shell function per program among the `gateCommands`. The function calls the wrapper when the
+  words of its own call equal the rest of a gate command (`npm test`, also in `npm test 2>&1 | tail`)
+  and goes on to the program otherwise (`npm test -- <id>`, `npm ci`); quoted text never calls it.
+  A gate command with shell syntax or a path program is not wrapped, and the guard still judges the
+  original command. The agent's wait is `max(0, timeout - gateTimeoutMs)` (`timeout` the call's own
+  or 10 minutes), so the wait and the run fit inside the call: at the defaults a busy container
+  refuses at once, and the busy line tells the agent to run a subset or leave the full run to the
+  stop gate.
   The turn is given back in a `finally`, whether the
   gate passes, fails, is unknown or the hook throws. A wait past `gateWaitTimeoutMs` (30 minutes)
   leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;

@@ -11,6 +11,7 @@ import type { Guarded } from '../hooks/guard'
 import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
 import { INPUT_CLIP, clip, inputOf, promptData, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { scratchOk, withScratch } from '../hooks/scratch'
+import { agentWaitMs, gatePrelude, parseSlotLine, runSlotted, slotCommand, slotDir } from '../hooks/slots'
 import { simpleCommands } from '../hooks/shell'
 import { runStopGate } from '../hooks/register'
 import { parseCurrent, parseMax, startMemorySampler } from '../hooks/memory'
@@ -652,6 +653,12 @@ describe('the recovery of a cut gate (10.6)', () => {
   const row = (cause: string, at: number, over: Record<string, unknown> = {}) => JSON.stringify({ at: iso(at), issue: 571, life: 'ss1x2k', seq: 7, cause, ...over })
   const open = (...rows: string[]) => openGates(gateEntries(rows.join('\n'), NOW_MS))
 
+  test('an agent-gate line (an agent\'s own gate run) is no gate entry and closes no open gate', () => {
+    const agent = row('agent-gate', NOW_MS - 1, { command: 'npm test', refused: false })
+    expect(gateEntries(agent, NOW_MS)).toEqual([])
+    expect(open(row('gate-start', NOW_MS - 3, { slot: '/s', gitDir: '/g', process: '1:2' }), agent)).toMatchObject([{ at: NOW_MS - 3 }])
+  })
+
   test('an attempt is open while its newest line is a start or a wait; the newest start is the cut one', () => {
     const s1 = { slot: '/s', gitDir: '/g', process: '1:2', startedAt: 'x' }
     expect(open(row('gate-start', NOW_MS - 3, s1))).toMatchObject([{ issue: 571, life: 'ss1x2k', seq: 7, at: NOW_MS - 3, process: '1:2', slot: '/s', gitDir: '/g' }])
@@ -725,6 +732,7 @@ describe('the stop gate hands runGates the engine\'s cut and the wait (10.6)', (
     const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
     // only the pieces the stop gate touches: a clock with timers, and process.run
     const $ = {
+      plugin: { root: '/plugins/factory-loop-workspace' },
       clock: {
         now: async () => now,
         after: () => ({ cancel: () => undefined }),
@@ -826,5 +834,58 @@ describe('the gate\'s memory sampler', () => {
     expect(r.reads()).toBe(reads)
     expect(out).toMatchObject({ memStartBytes: 1, memPeakBytes: 2, memSamples: 2 })
     expect(await s.stop()).toBe(out)
+  })
+})
+
+describe('the container\'s gate slots (10.6)', () => {
+  const O = { wrapper: '/p/bin/factory-gate-slot', dir: '/l/gate-slots', capacity: 2, waitMs: 0, log: '/l/companion.jsonl', issue: 5, life: 'ab1', seq: 3 }
+
+  test('the slot dir is under the loop dir', () => {
+    expect(slotDir('/l/o__r')).toBe('/l/o__r/gate-slots')
+    expect(slotDir('/l/o__r/')).toBe('/l/o__r/gate-slots')
+  })
+
+  test('an agent\'s wait is what the timeout leaves past the gate\'s budget', () => {
+    expect(agentWaitMs(600_000, 600_000)).toBe(0)
+    expect(agentWaitMs(600_000, 120_000)).toBe(480_000)
+    expect(agentWaitMs(60_000, 600_000)).toBe(0)
+  })
+
+  test('the prelude defines one function per program', () => {
+    const p = gatePrelude(['npm run lint', 'npm test', 'make check'], O) as string
+    expect(p.match(/(?:^|; )\w+\(\) \{/g)).toEqual(['npm() {', '; make() {'])
+    expect(p).not.toContain('\n')
+  })
+
+  test('a gate command with shell syntax or a path program is left out; none left is null', () => {
+    expect(gatePrelude(['npm run lint && npm test', 'echo "x"', './check', 'a;b', 'npm run $X', 'sh -c y > z'], O)).toBeNull()
+    expect(gatePrelude([], O)).toBeNull()
+    expect(gatePrelude(['./check', 'npm test'], O)).toMatch(/^npm\(\)/)
+  })
+
+  test('parseSlotLine reads the slot line, the busy line and plain output', () => {
+    expect(parseSlotLine('factory-gate-slot: slot 1 after 250 ms\nhello\n')).toEqual({ kind: 'slot', slot: 1, ms: 250, rest: 'hello\n' })
+    expect(parseSlotLine('factory-gate-slot: busy: the container\'s 2 gate slots were all taken for 5 s; run a subset\n')).toEqual({ kind: 'busy' })
+    expect(parseSlotLine('hello\n')).toEqual({ kind: 'none' })
+    // a busy line with other output after it is the command's, not a refusal
+    expect(parseSlotLine('factory-gate-slot: busy: x\nmore\n')).toEqual({ kind: 'none' })
+  })
+
+  test('slotCommand quotes the command for sh -c', () => {
+    const text = slotCommand('echo \'a b\'', { wrapper: '/p/w', dir: '/d', capacity: 2, sliceMs: 5000 })
+    expect(text).toBe(String.raw`sh '/p/w' --dir '/d' --capacity 2 --wait-ms 5000 -- sh -c 'echo '\''a b'\'''`)
+  })
+
+  test('runSlotted retries a busy answer, strips the slot line and counts the wait; the cap ends it', async () => {
+    const answers = [{ exitCode: 75, stdout: 'factory-gate-slot: busy: x\n' }, { exitCode: 3, stdout: 'factory-gate-slot: slot 1 after 120 ms\nout\n' }]
+    const state = { capMs: 60_000, waitedMs: 0 }
+    expect(await runSlotted(state, 5_000, async () => answers.shift() as { exitCode: number; stdout: string })).toEqual({ exitCode: 3, output: 'out\n', slotWaitMs: 5_120 })
+    expect(state.waitedMs).toBe(5_120)
+    const capped = { capMs: 10_000, waitedMs: 0 }
+    const r = await runSlotted(capped, 5_000, async () => ({ exitCode: 75, stdout: 'factory-gate-slot: busy: x\n' }))
+    expect(r).toMatchObject({ slotWaitMs: 10_000 })
+    expect('error' in r && r.error).toContain('gate slot')
+    // output that is not the wrapper's goes through
+    expect(await runSlotted({ capMs: 1, waitedMs: 0 }, 5_000, async () => ({ exitCode: 75, stdout: 'other\n' }))).toEqual({ exitCode: 75, output: 'other\n', slotWaitMs: 0 })
   })
 })

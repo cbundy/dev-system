@@ -117,6 +117,22 @@ describe('one gate line, one gate_run', () => {
   })
 })
 
+describe('the agents\' own gate runs (agent-gate, written by factory-gate-slot)', () => {
+  const agent = (over: Record<string, unknown> = {}) => ({ at: NOW - 5 * MIN, issue: N, life: LIFE, seq: 7, cause: 'agent-gate', reason: 'an agent\'s gate command ran in gate slot 0', command: 'npm test', waitMs: 4_000, slot: 0, exit: 0, ms: 90_000, refused: false, ...over })
+
+  test('a line of it is no gate line, no intervention and no gate_run', () => {
+    const t = text(agent(), agent({ slot: null, exit: null, ms: 0, refused: true, reason: 'refused' }))
+    expect(gateLines(t, NOW)).toEqual([])
+    expect(companionLines(t, NOW)).toEqual([])
+    expect(runs(plan(stateOf(t)))).toEqual([])
+  })
+
+  test('among real gate lines it changes none of their gate_runs', () => {
+    const real = line()
+    expect(dataOf(text(agent(), real, agent({ refused: true })))).toEqual(dataOf(text(real)))
+  })
+})
+
 describe('the v0.51.0 companion: no startedAt, no queuedBehind', () => {
   const wait = (over: Record<string, unknown> = {}) => ({ at: NOW - 10 * MIN + 7_000, issue: N, life: LIFE, seq: 7, cause: 'gate-wait', reason: 'waited', waitMs: 7_000, queuedBehind: 2, concurrency: 1, ...over })
 

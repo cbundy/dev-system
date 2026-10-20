@@ -12,7 +12,7 @@ export function scratchOk(scratch: unknown, loopDir: string): scratch is string 
   return scratch.startsWith(root) && scratch.length > root.length
 }
 
-const quoted = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+export const quoted = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
 // withScratch: the Bash command, run with TMPDIR, TMP and TEMP set to the folder. The export is
 // its own line, so the command's text runs unchanged after it, here-documents and multi-line

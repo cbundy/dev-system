@@ -29,7 +29,9 @@ export function stallBoundMs(m: { gateTimeoutMs: number; gateConcurrency?: numbe
 
 // One command's run: its exit code and its output (standard output then standard error), or the
 // error that kept it from finishing (a timeout, a failure to start).
-export type Ran = { exitCode: number; output: string } | { error: string }
+// slotWaitMs: the time it waited for one of the container's gate slots first, which is not the gate's
+// own time (v2 SPEC 10.6).
+export type Ran = { exitCode: number; output: string; slotWaitMs?: number } | { error: string; slotWaitMs?: number }
 
 export type GateResult =
   | { result: 'pass'; ms: number }
@@ -52,7 +54,9 @@ const MIN_BUDGET_MS = 1_000
 // the engine let the hook live in all.
 export async function runGates(io: GateIo, commands: readonly string[], budgetMs: number, waitMs = 0): Promise<GateResult> {
   const t0 = await io.now()
-  const spent = async () => (await io.now()) - t0
+  // the time spent waiting for a container slot is out of the budget
+  let slotWait = 0
+  const spent = async () => (await io.now()) - t0 - slotWait
   for (const command of commands) {
     const left = budgetMs - (await spent())
     if (left < MIN_BUDGET_MS) return { result: 'unknown', ms: await spent(), why: `the gate's budget of ${Math.round(budgetMs / 1000)} s ran out before \`${command}\`` }
@@ -62,6 +66,7 @@ export async function runGates(io: GateIo, commands: readonly string[], budgetMs
     } catch (err) {
       ran = { error: err instanceof Error ? err.message : String(err) }
     }
+    slotWait += ran.slotWaitMs ?? 0
     if ('error' in ran) {
       const ms = await spent()
       // the engine ended the hook (its bound, not the command's): say so, with the wait and the run
@@ -129,8 +134,8 @@ export function blockText(r: Extract<GateResult, { result: 'fail' }>, slot: stri
 
 // gateRecord: the result as factory-gate.json holds it in the slot's git dir, with the slot's HEAD
 // (null: not read), for the decision log and the triage's inputs.
-export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[], waitMs = 0, clean: boolean | null = null): Record<string, unknown> {
-  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms, waitMs, clean }
+export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[], waitMs = 0, clean: boolean | null = null, slotWaitMs?: number): Record<string, unknown> {
+  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms, waitMs: waitMs + (slotWaitMs ?? 0), ...(slotWaitMs === undefined ? {} : { slotWaitMs }), clean }
   if (r.result === 'fail') return { ...base, command: r.command, exitCode: r.exitCode, tail: r.tail, failedTests: r.failedTests }
   if (r.result === 'unknown') return { ...base, why: r.why }
   return base
@@ -140,7 +145,8 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 // next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
 // intervention (v2 SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
 // clean: whether the slot's tree was clean when the gate started and its head did not move during it
-// (null: not known). waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
+// (null: not known). waitMs is the time the gate waited for its turn, plus slotWaitMs, the time it waited for a slot
+// of the container's (absent: the marker has no limit), and concurrency the limit it ran under (null: none).
 // startedAt (ISO, 3 ms digits) is when it asked for its turn, before any wait, and queuedBehind how
 // many held a turn or waited ahead of it then (0: none); the loop writes `gate_run` from these.
 // rerun: the run is the recovery's, of a gate the loop's restart cut, with no agent left to refuse
@@ -155,8 +161,9 @@ export function gateLine(
   clean: boolean | null,
   rerun = false,
   mem?: { memStartBytes: number | null; memPeakBytes: number | null; memLimitBytes: number | null; memSamples: number },
+  slotWaitMs?: number,
 ): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}), ...(mem === undefined ? {} : mem) }
+  const fields = { head, ms: r.ms, waitMs: waitMs + (slotWaitMs ?? 0), ...(slotWaitMs === undefined ? {} : { slotWaitMs }), concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}), ...(mem === undefined ? {} : mem) }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
   if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode, failedTests: r.failedTests } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }

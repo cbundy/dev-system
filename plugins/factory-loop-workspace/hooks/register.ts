@@ -40,6 +40,8 @@ import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marke
 import { PROMPT_NOTIFICATIONS, inputOf, promptData, promptReason, transcriptOf, whyOf } from './prompt'
 import type { Decided, PromptFields } from './prompt'
 import { withScratch } from './scratch'
+import { WRAPPER, agentWaitMs, gatePrelude, runSlotted, slotCommand, slotDir } from './slots'
+import type { SlotState } from './slots'
 import { createTurns } from './turns'
 import type { Turn } from './turns'
 
@@ -327,8 +329,20 @@ async function raiseStall($: EngineInterface, marker: Marker): Promise<void> {
 
 // --- the stop gate (10.6) ---------------------------------------------------------------------------
 
-async function runIn($: EngineInterface, slot: string, command: string, budgetMs: number): Promise<Ran> {
+// the container's slots for one stop gate's commands: the wrapper, the dir, the limit and the wait they share
+type GateSlots = { wrapper: string; dir: string; capacity: number; state: SlotState }
+
+async function runIn($: EngineInterface, slot: string, command: string, budgetMs: number, slots?: GateSlots): Promise<Ran> {
   try {
+    if (slots !== undefined) {
+      // each probe is its own host call (a wait of a short slice), so the handler's budget never runs
+      const sliceMs = IDLE_S * 1000
+      const text = slotCommand(command, { wrapper: slots.wrapper, dir: slots.dir, capacity: slots.capacity, sliceMs })
+      return await runSlotted(slots.state, sliceMs, async () => {
+        const r = await $.process.run(['sh', '-c', `exec 2>&1\n${text}`], { cwd: slot, timeoutMs: Math.min(budgetMs + sliceMs, RUN_MAX_MS) })
+        return { exitCode: r.exitCode, stdout: r.stdout }
+      })
+    }
     const r = await $.process.run(['sh', '-c', `exec 2>&1\n${command}`], { cwd: slot, timeoutMs: Math.min(budgetMs, RUN_MAX_MS) })
     return { exitCode: r.exitCode, output: r.stdout }
   } catch (err) {
@@ -411,14 +425,16 @@ export async function runStopGate($: EngineInterface, a: GateTarget, startedAt: 
     const headBefore = await headSha($, a.slot)
     const cleanBefore = await slotClean($, a.slot)
     sampler = await sampleMemory($)
-    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now(), ...(opts.cut === undefined ? {} : { cut: opts.cut }) }, a.gateCommands, a.gateTimeoutMs, waitMs)
+    const slots: GateSlots | undefined = limit === undefined ? undefined : { wrapper: `${$.plugin.root}/${WRAPPER}`, dir: slotDir(a.loopDir), capacity: limit, state: { capMs: Math.max(0, (a.gateWaitTimeoutMs ?? DEFAULT_GATE_WAIT_MS) - waitMs), waitedMs: 0 } }
+    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs, slots), now: () => $.clock.now(), ...(opts.cut === undefined ? {} : { cut: opts.cut }) }, a.gateCommands, a.gateTimeoutMs, waitMs)
     const head = await headSha($, a.slot)
     const mem = await sampler.stop()
     // a head that moved during the run means the tree did too: never clean
     const clean = cleanBefore === null ? null : head !== headBefore ? false : cleanBefore
-    const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean)
+    const slotWaitMs = slots?.state.waitedMs
+    const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs, clean, slotWaitMs)
     await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-    const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean, rerun, mem)
+    const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind, clean, rerun, mem, slotWaitMs)
     await logLine($, a, line.cause, line.reason, line.fields)
     return { ran: true, result }
   } finally {
@@ -553,7 +569,12 @@ export const register: Register = on => {
     }
     if (e.tool === 'Bash') {
       // the guard judged the agent's own command; what runs has the scratch folder exported first
-      const command = a.scratch !== undefined && typeof input.command === 'string' ? withScratch(input.command, a.scratch) : undefined
+      // and, with the container's gate slots on, the gate commands among its words call the wrapper first
+      const scratched = a.scratch !== undefined && typeof input.command === 'string' ? withScratch(input.command, a.scratch) : undefined
+      const prelude = a.gateConcurrency !== undefined && typeof input.command === 'string'
+        ? gatePrelude(a.gateCommands, { wrapper: `${$.plugin.root}/${WRAPPER}`, dir: slotDir(a.loopDir), capacity: a.gateConcurrency, waitMs: agentWaitMs(e.timeout ?? BASH_TIMEOUT_MS, a.gateTimeoutMs), log: `${a.loopDir}/companion.jsonl`, issue: a.issue, life: a.life, seq: a.seq })
+        : null
+      const command = prelude === null ? scratched : `${prelude}\n${scratched ?? (input.command as string)}`
       if (command !== undefined || e.timeout === undefined) {
         return next({ ...input, ...(command === undefined ? {} : { command }), ...(e.timeout === undefined ? { timeout: BASH_TIMEOUT_MS } : {}) } as unknown as typeof e)
       }
