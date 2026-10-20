@@ -273,7 +273,7 @@ describe('act mode, traced', () => {
     }
     // the rails took the act lock; the claim ran in the act phase
     expect(commandsOf(t).find(c => c.cmd === 'act lock')).toMatchObject({ phase: 'rails', exit: 0 })
-    expect(commandsOf(t).find(c => c.cmd.startsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
+    expect(commandsOf(t).find(c => c.cmd.endsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
     expect(t.lockMs as number).toBeGreaterThanOrEqual(0)
     expect(t.persistMs as number).toBeGreaterThanOrEqual(0)
   })

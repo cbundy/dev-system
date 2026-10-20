@@ -29,7 +29,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
+  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore',
   'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
@@ -57,6 +57,35 @@ describe('configText', () => {
     const set = configText(view({}, { priorityLabel: 'urgent' }), control(), NOW)
     expect(line(set, 'priorityLabel')).toContain('urgent')
     expect(line(set, 'priorityLabel')).toContain('workspace')
+  })
+
+  test('the Claims group shows the queueScore weights with their source; a set weight shows as repo or workspace, mixed when they differ', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'queueScore')).toEndWith(' default')
+    expect(def).toContain('priorityLabel 30 bug 25 unblocksDirect 10')
+    expect(def).toContain('failedLife 10 failedLivesCap 30')
+    const set = configText(view({}, { queueScore: { bug: 40 } }), control(), NOW)
+    expect(set).toContain('bug 40')
+    expect(line(set, 'queueScore')).toContain('mixed')
+    expect(set).toContain('workspace: bug')
+    const all = configText(view({}, { queueScore: Object.fromEntries(Object.keys(DEFAULT_CONFIG.queueScore).map(k => [k, 1])) }), control(), NOW)
+    expect(line(all, 'queueScore')).toEndWith(' workspace')
+    const mixed = configText(view({ queueScore: { epicStarted: 0 } }, { queueScore: { bug: 40 } }), control(), NOW)
+    expect(line(mixed, 'queueScore')).toContain('mixed')
+    expect(mixed).toContain('repo: epicStarted; workspace: bug')
+  })
+
+  test('queueScore.<name> sets one weight: whole numbers of at least 0; an unknown entry, a negative and a fraction are refused', () => {
+    expect(checkSetting('queueScore.bug', 40)).toMatchObject({ ok: true, key: 'queueScore', sub: 'bug' })
+    expect(checkSetting('queueScore.bug', 0)).toMatchObject({ ok: true })
+    expect(checkSetting('queueScore.size', 5)).toMatchObject({ ok: false, error: 'queueScore.size: unknown entry. Not changed.' })
+    const negative = checkSetting('queueScore.bug', -5)
+    expect(negative).toMatchObject({ ok: false })
+    expect(negative.ok ? '' : negative.error).toContain('queueScore.bug: -5 is not a whole number')
+    const fraction = checkSetting('queueScore.bug', 1.5)
+    expect(fraction.ok ? '' : fraction.error).toContain('queueScore.bug: 1.5 is not a whole number')
+    expect(checkSetting('queueScore', 5)).toMatchObject({ ok: false })
+    expect(SETTING_EFFECT.queueScore).toBe('next-pass')
   })
 
   test('the planner and shadow keys are retired: a file that sets either still loads, each is ignored and shown as a config problem', () => {

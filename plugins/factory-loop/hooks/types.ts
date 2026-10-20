@@ -4,6 +4,7 @@
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
 import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { QueueScoreWeights, ScoreResult } from './v2/score'
 
 export type Ms = number
 
@@ -280,6 +281,9 @@ export type State = {
   checkout: Checkout | null
   // what v2 reads besides (v2 SPEC 2.4)
   v2?: V2State
+  // each read issue's open blocked issues, the chain issues outside `issues` too; absent: not read
+  // (the replay harness), and the score's transitive count is 0
+  blockGraph?: Record<number, number[]>
 }
 
 export type Mode = 'off' | 'observe' | 'act'
@@ -346,6 +350,8 @@ export type Config = {
   retryBackoffMs: Ms
   // per rolling hour; merges are never capped (D-24)
   rateCaps: { start: number; spawn: number; wake: number; perIssueKind: number }
+  // the weights of the claim score (v2/score.ts): whole numbers of at least 0, penalties as magnitudes
+  queueScore: QueueScoreWeights
   // act mode without DEV_ROLE=orchestrator, for a testbed (v2 SPEC 13.11.2)
   allowActOutsideOrchestrator: boolean
   // one timing record per pass in trace-YYYY-MM-DD.jsonl (#552); the workspace file's own
@@ -417,7 +423,7 @@ export type Action =
   // a done close's branch on origin, deleted only while it still reads sha (a leased delete)
   | (Base & { kind: 'delete-branch'; branch: string; sha: string })
   // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
-  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null } })
+  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null }; score?: ScoreResult })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })

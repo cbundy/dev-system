@@ -5,6 +5,7 @@
 // through its bans. A v2 executor builds its commands here, never from literals of its own. Every
 // gh command carries --repo, but `gh api`, whose repo is in its path. Pure.
 import type { FactoryLabel } from './types'
+import type { ScoreResult } from './score'
 
 // --- labels (3.4) -----------------------------------------------------------------------------------
 
@@ -313,7 +314,10 @@ export function designerFallbackArgv(issue: number, model: string): string[] {
 
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------
 
-export function claimArgv(issue: number): string[] {
+// A claim with a score (S1) runs under `env CALLUM_FLOW_CLAIM_SCORE=<JSON>`, which the claim tool
+// records on the claimed event; the others run the tool alone.
+export function claimArgv(issue: number, score?: ScoreResult): string[] {
+  if (score !== undefined) return ['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify({ score: score.score, factors: score.factors })}`, 'callum-flow-claim', String(issue)]
   return ['callum-flow-claim', String(issue)]
 }
 

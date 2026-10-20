@@ -393,7 +393,7 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
       const { env, argvs } = envOf()
       env.io.run = async argv => {
         argvs.push([...argv])
-        return argv[0] === 'callum-flow-claim' ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
+        return argv.includes('callum-flow-claim') ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
       }
       return { env, argvs }
     }

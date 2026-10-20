@@ -321,7 +321,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
       { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
     ])
-    expect(line.commands).toContain('callum-flow-claim 470')
+    expect(line.commands).toContain('env CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} callum-flow-claim 470')
     expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adopt', branch: 'issue-470' } })
     expect(JSON.parse(h.files.get(LOCK) ?? '{}')).toMatchObject({ session: SESSION, expiresAt: NOW + 5_000 + 15 * MIN })
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
@@ -370,7 +370,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       expect((line.rails as string[]).join(' | ')).toContain(r.reason)
       // it planned the claim and ran nothing but reads, their events to the sink
       expect((line.actions as { key: string }[]).map(a => a.key)).toContain(CLAIM_KEY)
-      expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim' || s.argv[0] === 'callum-flow-sweep')).toBe(false)
+      expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
       expect(h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state').every(s => s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
       expect(h.titles.at(-1)).toContain('· observe')
       // a session a rail refuses never takes the act lock
@@ -422,7 +422,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv[0] === 'callum-flow-claim') h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+        if (argv.includes('callum-flow-claim')) h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
         return undefined
       },
     })
@@ -495,7 +495,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ updateDue: { at: 777 } })
     expect(h.last()).toMatchObject({ executed: false })
     expect((h.last().rails as string[]).join(' ')).toContain('restart: dev-restart-self asked for a new workspace')
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
   })
 
@@ -521,17 +521,17 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
     expect(h.titles.at(-1)).toContain('winding down')
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.status.json`) ?? '{}')).toMatchObject({ cap_ms: 10 * MIN, running: { steps: [] } })
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
     // the stop script removed the request: still nothing starts, and no status file is written for it
     h.files.delete(`${LOOP_DIR}/wind-down.request`)
     h.files.delete(`${LOOP_DIR}/wind-down.status.json`)
     await clock.advance(60_000)
     expect(h.files.has(`${LOOP_DIR}/wind-down.status.json`)).toBe(false)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     // the restart never came: past the cap and the margin the loop plans normally again
     await clock.advance(16 * MIN)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
     expect(h.events().filter(e => e.some(n => n.includes('wind-down-stale'))).length).toBeGreaterThan(0)
   })
 
@@ -548,7 +548,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
 
   test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (v2 SPEC 13.10 item 2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
     const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -672,7 +672,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       const { run } = factory({
         queue: [470],
         run: argv => {
-          if (argv[0] === 'callum-flow-claim' && h !== undefined) {
+          if (argv.includes('callum-flow-claim') && h !== undefined) {
             h.files.set(LOCK, otherLease(expiresAt))
             atLoss = JSON.stringify(h.store.get(ledgerKey))
           }
@@ -741,7 +741,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     // the queue is read again two minutes after its last read
     await clock.advance(3 * MIN)
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.last().skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
@@ -775,7 +775,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     expect(line).toMatchObject({ mode: 'act', executed: false })
     expect(line.rails as string[]).toContain('ledger: not loaded, so nothing is acted on this pass')
     expect((line.problems as string[]).join(' ')).toContain('ledger: the store could not be read')
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim' || s.argv[0] === 'callum-flow-sweep')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
     expect(h.spawns).toEqual([])
     expect(h.store.has(ledgerKey)).toBe(false)
   })
@@ -792,14 +792,14 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
     ])
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv.includes('callum-flow-claim'))).toBe(false)
     expect((line.problems as string[]).join(' ')).toContain('ledger: not saved, so nothing starts until a save succeeds')
     expect((line.problems as string[]).join(' ')).toContain(`store: ${ledgerKey} could not be written`)
     expect(h.titles.at(-1)).toEndWith(' · error')
     // the store takes it again: the loop acts, and the title clears
     h.failSet = () => false
     await clock.advance(60_000)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
     // the error title started the throttle window: the plan title returns once titleEveryMs has passed
     await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).not.toContain('error')
@@ -813,7 +813,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       queue: [470],
       run: argv => {
         if (argv[0] === 'callum-flow-sweep') seen.sweep = h?.entry('sweep:0')?.status
-        if (argv[0] === 'callum-flow-claim') seen.claim = h?.entry(CLAIM_KEY)?.status
+        if (argv.includes('callum-flow-claim')) seen.claim = h?.entry(CLAIM_KEY)?.status
         return undefined
       },
     })
@@ -829,13 +829,13 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
     // the claim is still running 14 minutes on: the lease runs well past now
     await clock.advance(14 * MIN)
-    expect(h.commands().filter(s => s.argv[0] === 'callum-flow-claim')).toHaveLength(1)
+    expect(h.commands().filter(s => s.argv.includes('callum-flow-claim'))).toHaveLength(1)
     expect(JSON.parse(h.files.get(LOCK) ?? '{}').expiresAt).toBeGreaterThan(clock.now() + 10 * MIN)
     release()
     await clock.settle()
@@ -848,7 +848,7 @@ describe('act mode: a lease taken over during a long step', () => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1150,7 +1150,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     f.w.queue = [470]
     await clock.advance(3 * MIN)
     expect(h.files.has(`${CFG_DIR}/factory-loop/cbundy__other/act.lock`)).toBe(true)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     const lines = (h.files.get(`${CFG_DIR}/factory-loop/cbundy__other/decisions-${iso(NOW).slice(0, 10)}.jsonl`) ?? '').split('\n').filter(l => l !== '')
     expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
@@ -1257,7 +1257,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     // the other device's parked run is not this loop's to drive; the claim is this device's own
     expect((line.actions as { key: string }[]).map(a => a.key)).toEqual([CLAIM_KEY, 'sweep:0'])
     expect(h.spawns).toEqual([])
-    expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
+    expect(h.commands().find(s => s.argv.includes('callum-flow-claim'))?.argv).toEqual(['env', 'CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]}', 'callum-flow-claim', '470'])
   })
 
   test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (v2 SPEC 13.8.2, 13.10 item 8)', ENGINE_TEST, async ($, on) => {
@@ -1322,7 +1322,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ tier: 'stop-all' })
     expect(h.last().skipped).toContainEqual(expect.objectContaining({ issue: 470, why: expect.stringContaining('tier stop-all') }))
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.entry(CLAIM_KEY)).toBeUndefined()
   })
 

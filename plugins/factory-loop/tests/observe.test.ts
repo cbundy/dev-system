@@ -770,6 +770,12 @@ describe('config (v2 SPEC 13.4.2)', () => {
       'trackerTitle: "(" is not a regular expression',
       'colour: unknown setting',
     ])
+    // queueScore: whole numbers of at least 0, an entry at a time
+    const scored = loadConfig({ queueScore: { bug: 40, size: 1, epicStarted: -1, waitingCap: 1.5 } })
+    expect(scored.config.queueScore).toEqual({ ...DEFAULT_CONFIG.queueScore, bug: 40 })
+    expect(scored.problems).toEqual(['queueScore.size: unknown', 'queueScore.epicStarted: -1 is not a whole number', 'queueScore.waitingCap: 1.5 is not a whole number'])
+    expect(loadConfig({ queueScore: { bug: 0 } }).config.queueScore.bug).toBe(0)
+    expect(DEFAULT_CONFIG.queueScore.bug).toBe(25)
     // the defaults themselves are untouched, and later layers win
     expect(DEFAULT_CONFIG.rateCaps.start).toBe(30)
     expect(loadConfig({ slowGap: '5m' }, { slowGapMs: 60_000 }).config.slowGapMs).toBe(60_000)
@@ -1573,6 +1579,9 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(issueReads(h)).toEqual(['45', '114', '470'])
     expect(first.state.issues.find(i => i.number === 45)?.blockingList).toEqual([900])
     expect(first.state.issues.find(i => i.number === 114)?.blockingList).toBeNull()
+    // the block graph holds the read issues' lists (the claim score's transitive count); an unread list has no entry
+    expect(first.state.blockGraph?.[45]).toEqual([900])
+    expect(first.state.blockGraph).not.toHaveProperty('114')
 
     // the next pass: one call, 900 after the others
     await h.pass(runtime(), stored(), NOW + 6 * MIN)

@@ -64,6 +64,8 @@ describe('snapshotOf', () => {
     expect(Object.keys(s.layers).sort()).toEqual([...leaves].sort())
     expect(Object.keys(s.layers)).toContain('rateCaps.start')
     expect(Object.keys(s.layers)).not.toContain('rateCaps')
+    expect(Object.keys(s.layers)).toContain('queueScore.bug')
+    expect(s.settings).toHaveProperty(['queueScore', 'bug'], 25)
   })
 
   test('a mode from the workspace file, and a pool size nobody set', () => {
