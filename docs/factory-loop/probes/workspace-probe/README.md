@@ -66,6 +66,12 @@ that long is ended and the signal of its stop hook is aborted.
 | `gate-queue`, companion without the fix | gate 571 passes at 540 s; gate 572 waits 529 s and is cut 70 s into its run (`exitPath=watchdog_stall`, 600 s) | `evidence/runs-6-gate-queue-before-*.jsonl` |
 | `gate-queue`, companion with the fix (`agent.spawn` sets the variable) | gate 572 waits 530 s, runs 300 s, `gate-pass`; the agent completes after 832 s (`exitPath=completed`) | `evidence/runs-6-gate-queue-after-*.jsonl` |
 
+The two `gate-queue-bare` files were captured under an earlier name of the case (their lines say
+`gate-queue`); `run.sh <out dir> gate-queue-bare` runs the same helper path now. `run.sh` passes the
+environment through, so the 60 s run repeats with
+`PROBE_WAIT_S=100 CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS=60000 run.sh <out dir> gate-queue-bare`
+(`PROBE_RUN_S` sets the command's length, 300 by default).
+
 Seen on the way: a spawn made 4 s after a headless session starts can fail with "no session is
 bound in this process" (`evidence/runs-1-control.jsonl`); the spawner retries it. The loop's first
 pass comes later than that, but a loop agent step spawned that early would fail its attempt and

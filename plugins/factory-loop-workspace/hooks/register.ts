@@ -354,7 +354,7 @@ type GateTarget = Pick<WorkspaceAgent, 'slot' | 'gitDir' | 'issue' | 'life' | 's
 // with no limit takes none), then the head and tree, the commands, factory-gate.json and the settling
 // line (with `rerun: true` for the recovery's). ran: false when `cut` said the engine ended the caller
 // while it waited, and no gate ran. A turn always goes back, so a stuck or crashed gate never blocks the others.
-async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string, opts: { rerun?: boolean; cut?: () => boolean } = {}): Promise<{ ran: true; result: GateResult } | { ran: false }> {
+export async function runStopGate($: EngineInterface, a: GateTarget, startedAt: string, opts: { rerun?: boolean; cut?: () => boolean } = {}): Promise<{ ran: true; result: GateResult } | { ran: false }> {
   const rerun = opts.rerun === true
   const limit = a.gateConcurrency
   let turn: Extract<Turn, { ok: true }> | null = null

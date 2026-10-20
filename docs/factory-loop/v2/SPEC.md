@@ -1974,7 +1974,8 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   sets the variable with `$.env.set` in its `agent.spawn` hook, for a writer whose marker lists gate
   commands, to `gateWaitTimeoutMs` (30 minutes if the marker has none; 0 with no `gateConcurrency`)
   + `gateTimeoutMs` + 5 minutes, and only upwards: the variable is the session's, so it never lowers
-  a limit already set. Claude Code reads it as the agent starts, so it is set before the spawn goes on.
+  a limit already set, and once set it applies to every async agent of the session, the owner's own
+  included: a stalled agent is noticed that much later (45 minutes with the defaults). Claude Code reads it as the agent starts, so it is set before the spawn goes on.
   Nothing in a consumer's settings changes. The `gate-queue` case of the workspace probe proves it
   (below); a gate the engine cuts anyway is recorded as `gate-unknown` whose reason says `the hook
   was cut off N s after the gate started (W s waiting, R s running)` and not as a failed command.
