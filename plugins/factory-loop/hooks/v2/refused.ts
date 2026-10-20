@@ -4,8 +4,13 @@
 // step (rules-review.ts) and the merge queue's head (steps-queue.ts) hold on it, and rules-refused.ts
 // tells the owner and re-runs the refused runs. Pure; kept apart from rules-refused.ts so the two CI
 // halves can import it without a cycle through rules-review.ts.
-import { jobIdOf } from './sources-prs'
 import type { CheckRun } from './sources-prs'
+
+// jobIdOf: the job id in a check's link (.../actions/runs/<run>/job/<job>), which is the id of its
+// check run; null for a link that names no job.
+export function jobIdOf(link: string | null | undefined): string | null {
+  return /\/actions\/runs\/\d+\/job\/(\d+)/.exec(link ?? '')?.[1] ?? null
+}
 
 export const isRefused = (c: CheckRun): boolean => c.bucket === 'refused'
 

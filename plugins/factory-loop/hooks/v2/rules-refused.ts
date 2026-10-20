@@ -14,9 +14,9 @@ import { gate, skip, wake, want } from '../foundation'
 import type { LedgerEntry } from '../types'
 import { intervention, logOnce } from './events'
 import { interventionKey, lifeKey, refusedGoKey, refusedProbeKey } from './keys'
-import { isRefused } from './refused'
-import { excludedOf } from './rules-queue'
-import { jobIdOf, prRecords } from './sources-prs'
+import { isRefused, jobIdOf } from './refused'
+import { excludedOf, queueOf } from './rules-queue'
+import { lifePr } from './rules-review'
 import type { CheckRun, PrView } from './sources-prs'
 import type { IssueRecord, V2Ctx } from './types'
 
@@ -36,7 +36,17 @@ function heldOf(ctx: V2Ctx): Held[] {
   const { records, prs, reads } = ctx.v2
   const excluded = excludedOf(records, ctx.state.control.paused, reads, prs.prs)
   const out: Held[] = []
-  for (const x of prRecords(records, excluded, ctx.state.ledger)) {
+  // the order the prs source reads them in (sources-prs.ts prRecords): the queue's head, then oldest seq first
+  const head = queueOf(records, excluded)[0]
+  const rank = (r: IssueRecord) => (r === head ? 0 : 1)
+  const ordered = records
+    .filter(r => r.state === 'reviewing' || r.state === 'merge-queue')
+    .sort((a, b) => rank(a) - rank(b) || a.seqAt - b.seqAt || a.issue - b.issue)
+    .flatMap(r => {
+      const pr = lifePr(ctx.state.ledger, r)
+      return pr === null ? [] : [{ ...r, pr }]
+    })
+  for (const x of ordered) {
     const view = prs.prs.find(v => v.pr === x.pr && v.issue === x.issue)
     if (view === undefined || view.state !== 'open' || view.head === null) continue
     const checks = view.checks.filter(c => isRefused(c) && c.runId !== null)

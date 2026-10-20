@@ -25,7 +25,7 @@ import type { LedgerEntry, Ms } from '../types'
 import { decisionOf } from './park-text'
 import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
-import { factKey, interventionKey, keyParts, lifeAt, refusedRerunOf, short } from './keys'
+import { factKey, interventionKey, keyParts, lifeAt, refusedKeyOf, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
 import { fromReleaseHold } from './rules-release-hold'
 import { holdOf } from './rules-queue'
@@ -185,6 +185,9 @@ function eraOf(ctx: V2Ctx): Ms | null {
   return era
 }
 
+// the causes of a refused run's re-runs (rules-refused.ts)
+const REFUSED_CAUSE = { probe: 'ci-refused:probe', go: 'ci-refused:rerun' } as const
+
 function fromLedger(ctx: V2Ctx): Planned[] {
   const out: Planned[] = []
   const era = eraOf(ctx)
@@ -194,8 +197,8 @@ function fromLedger(ctx: V2Ctx): Planned[] {
     const p = keyParts(entry.key)
     const done = entry.status === 'done'
     if (entry.kind === 'ci-rerun' && done && p !== null) {
-      const refused = refusedRerunOf(p.rest)
-      if (refused !== null) add(entry, 'loop', `ci-refused:${refused}`, refused === 'probe' ? `a run GitHub refused to start was re-run to probe whether Actions runs again (${p.rest})` : `a run GitHub refused to start was re-run once Actions ran again (${p.rest})`, p.life)
+      const refused = refusedKeyOf(p.rest)
+      if (refused !== null) add(entry, 'loop', REFUSED_CAUSE[refused], refused === 'probe' ? `a run GitHub refused to start was re-run to probe whether Actions runs again (${p.rest})` : `a run GitHub refused to start was re-run once Actions ran again (${p.rest})`, p.life)
       else add(entry, 'loop', 'ci-rerun', `a failed check re-run (${p.rest.replace(/^rerun\//, '')})`, p.life)
     } else if (entry.kind === 'pr' && done && p !== null && /^pr\/body\/a\d+$/.test(p.rest)) {
       add(entry, 'loop', 'queue:linkage', 'the PR body was written again after a linkage FAIL', p.life)

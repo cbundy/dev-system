@@ -137,10 +137,10 @@ export function refusedGoKey(r: Life, runId: string): string {
   return `${lifeKey(r)}/refused/${runId}/go`
 }
 
-// refusedRerunOf: 'probe' or 'rerun' for the rest of a refused re-run's key (after the life), else null.
-export function refusedRerunOf(rest: string): 'probe' | 'rerun' | null {
+// refusedKeyOf: 'probe' or 'go' for the rest of a refused run's key (after the life), else null.
+export function refusedKeyOf(rest: string): 'probe' | 'go' | null {
   const m = /^refused\/\d+\/(p\d+|go)$/.exec(rest)
-  return m === null ? null : m[1] === 'go' ? 'rerun' : 'probe'
+  return m === null ? null : m[1] === 'go' ? 'go' : 'probe'
 }
 
 // queueKey: Q1's update, by main's head at plan time, or Q2's merge, by the PR's head (9.2, 9.3).

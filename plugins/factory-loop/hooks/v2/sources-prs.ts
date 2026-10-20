@@ -20,6 +20,7 @@
 // then an earlier pass's view stands for it (ctx.kept), with its own read time.
 import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
+import { jobIdOf } from './refused'
 import { checkRunAnnotationsArgv, lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv, prRunsArgv, runJobsArgv } from './argv'
 import type { SourceCtx } from './observe'
 import { excludedOf, queueOf } from './rules-queue'
@@ -245,12 +246,6 @@ export function withRuns(checks: readonly CheckRun[], runs: readonly WorkflowRun
 export const REFUSED_MAX = 200
 // the start of the annotation GitHub puts on a job it did not start for the account's sake
 const NOT_STARTED = 'The job was not started'
-
-// jobIdOf: the job id in a check's link (.../actions/runs/<run>/job/<job>), which is the id of its
-// check run; null for a link that names no job.
-export function jobIdOf(link: string | null | undefined): string | null {
-  return /\/actions\/runs\/\d+\/job\/(\d+)/.exec(link ?? '')?.[1] ?? null
-}
 
 // A latest job of a run, as far as the classification reads it.
 export type RunJob = { id: string; failed: boolean; steps: number; runnerless: boolean }
