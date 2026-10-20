@@ -39,7 +39,23 @@ export function abandonReason(note: string): AbandonReason {
   return 'other'
 }
 
-const iso = (ms: number) => new Date(ms).toISOString()
+// iso: epoch milliseconds as ISO 8601 with three millisecond digits (as the translator's msToIso), by
+// calendar arithmetic, so the module reads no clock.
+function iso(ms: number): string {
+  const days = Math.floor(ms / 86_400_000)
+  const rest = ms - days * 86_400_000
+  const z = days + 719_468
+  const era = Math.floor(z / 146_097)
+  const doe = z - era * 146_097
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36_524) - Math.floor(doe / 146_096)) / 365)
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100))
+  const mp = Math.floor((5 * doy + 2) / 153)
+  const day = doy - Math.floor((153 * mp + 2) / 5) + 1
+  const month = mp < 10 ? mp + 3 : mp - 9
+  const year = yoe + era * 400 + (month <= 2 ? 1 : 0)
+  const p = (n: number, w = 2) => String(n).padStart(w, '0')
+  return `${p(year, 4)}-${p(month)}-${p(day)}T${p(Math.floor(rest / 3_600_000))}:${p(Math.floor(rest / 60_000) % 60)}:${p(Math.floor(rest / 1000) % 60)}.${p(rest % 1000, 3)}Z`
+}
 const text = (v: string | null | undefined) => (v === undefined || v === null || v === '' ? null : v)
 
 function waitData(wait: readonly WaitCondition[] | null): Record<string, unknown>[] | null {
