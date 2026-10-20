@@ -124,6 +124,17 @@ describe('O3: the hourly release review (releaseDue, shared with v2)', () => {
     expect(Object.keys(none?.fields ?? {})).toEqual(['closed', 'expected', 'tag', 'oldest', 'cadence'])
   })
 
+  test('a newest tag is the key and tag field; oldest is dropped when it differs from the release read', () => {
+    const oldest = Date.UTC(2026, 9, 12, 8, 30)
+    const s = closed({ release: { tag: 'v1.0.0', oldest } })
+    const moved = releaseDue(s, CFG, [], 'v1.1.0')
+    expect(moved?.key).toBe(`task:release:v1.1.0:${RHOUR}`)
+    expect(Object.entries(moved?.fields ?? {})).toEqual([['closed', 5], ['expected', 'minor'], ['tag', 'v1.1.0'], ['oldest', null], ['cadence', '6h']])
+    const same = releaseDue(s, CFG, [], 'v1.0.0')
+    expect(same).toEqual(releaseDue(s, CFG))
+    expect(same?.fields.oldest).toBe('2026-10-12T08:30:00.000Z')
+  })
+
   test('two milestones at the same count each wake: a new tag, or a later hour', () => {
     const first = done(`task:release:v1.0.0:${RHOUR}`, NOW)
     expect(releaseDue(closed({ release: { tag: 'v1.1.0', oldest: null }, ledger: [...state().ledger, { ...first, startedAt: NOW - 2 * 3_600_000 }] }), CFG)?.key).toBe(`task:release:v1.1.0:${RHOUR}`)

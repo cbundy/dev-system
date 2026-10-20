@@ -963,6 +963,12 @@ How often a release wait triggers a review within the hour (the O3 key carries t
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "O3" and (.reason | test("started waiting"))) | {at: $d.at, key, reason}] | .[] | "\(.at) \(.key) \(.reason)"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+How often, and for how long, a started release quiets the review (first and last pass held, passes held, the entry):
+
+```sh
+jq -rs '[.[] | . as $d | ($d.skipped // [])[] | select(.rule == "O3" and (.why | startswith("release in progress"))) | {at: $d.at, why}] | group_by(.why) | .[] | "\(.[0].at) \(.[-1].at) \(length) \(.[0].why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 A wait the loop cannot read (a failing read, or a tag condition on a repo with no release) raises the owner item
 `wait-unreadable` once per 24 h period, keyed `.../wait-unreadable/<k>`. How many periods each issue hung for, from the decision log
 (the planned action carries the key and the issue; the conditions are in the tell's fields in the ledger):
