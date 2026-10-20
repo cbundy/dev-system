@@ -15,7 +15,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // The new types that keep their own name as the old state, and need no note.
-const SAME = new Set(["ready", "claimed", "claim_lost", "merged", "closed", "implementer_routed", "untrusted_stripped", "usage"]);
+const SAME = new Set(["ready", "claimed", "claim_lost", "closed", "implementer_routed", "untrusted_stripped", "usage"]);
 // A transition into these states is also the old delegated, fix_requested and merge_ready line.
 const SYNTHESIZED = { building: "delegated", fixing: "fix_requested", "merge-queue": "merge_ready" };
 
@@ -24,6 +24,8 @@ const NA_METRICS = {
   waiting: "needs the v1-only run_started and parked events: the new log has neither, so ready-to-merge time cannot be split into pipeline-bound and dispatcher-bound",
   adjudicator_agreement: "pairs verdicts by the v1 run_id, which no new event carries",
 };
+// The sections that read the new events' pr, by and recovered fields; n/a under --source old.
+const MERGE_SECTIONS = ["merges", "prs", "gaps"];
 const NOTES = {
   first_pass: "the v1-only failed event does not exist in the new log: setbacks count fix_requested (a transition to fixing) only",
 };
@@ -55,12 +57,14 @@ function mapEvent(raw) {
     device: raw.device || null,
     repo: raw.repo || null,
     event_id: raw.event_id || null,
+    device_seq: Number.isInteger(raw.device_seq) ? raw.device_seq : null,
+    pr: Number.isInteger(d.pr) ? d.pr : null,
   };
   const rec = (state, note, at = ts) => ({ ...base, state, ts: at, note });
   switch (raw.type) {
     case "transition": {
       const at = iso(get("seq_at")) || ts;
-      const note = tokens({ life: get("life"), seq: get("seq"), row: get("table_row"), from: get("from_state"), to: get("to_state"), via: get("via"), step: get("step"), round: get("round") });
+      const note = tokens({ life: get("life"), seq: get("seq"), row: get("table_row"), from: get("from_state"), to: get("to_state"), via: get("via"), step: get("step"), round: get("round"), why: get("why"), question: get("question") === null ? null : "yes" });
       const out = [rec("transition", note, at)];
       const old = SYNTHESIZED[get("to_state")];
       if (old && get("from_state") !== get("to_state")) out.push(rec(old, null, at));
@@ -70,12 +74,14 @@ function mapEvent(raw) {
       const prefix = get("outcome") === "fixed" ? "CORRECT" : get("outcome") === "declined" ? "WRONG" : null;
       return prefix ? [rec("verdict", `${prefix}: ${get("finding") || "-"}`)] : [];
     }
+    case "merged":
+      return [rec("merged", tokens({ by: get("by"), recovered: get("recovered") }))];
     case "claim_renewed":
       return [rec("renewed", null)];
     case "requeued":
       return [rec("reclaimed", null)];
     case "loop_entry":
-      return [rec("loop", tokens({ kind: get("kind"), key: get("key"), status: get("status") }))];
+      return [rec("loop", tokens({ kind: get("kind"), key: get("key"), status: get("status"), wake: get("wake") }))];
     case "loop_passes":
       return [rec("loop", tokens({ kind: "passes" }))];
     case "intervention":
@@ -138,10 +144,13 @@ function normalize(report) {
   const out = JSON.parse(JSON.stringify(report));
   delete out.sources;
   for (const k of Object.keys(NA_METRICS)) if (k in out) out[k] = "n/a (v1-only input)";
+  // the merges, prs and gaps sections read the new events' pr, by and recovered fields, which the old
+  // log has no equivalent of: n/a under --source old, so a shadow run records no difference for them
+  for (const k of MERGE_SECTIONS) delete out[k];
   if (out.throughput && Array.isArray(out.throughput.issues)) {
     for (const i of out.throughput.issues) for (const f of STAGE_FIELDS) delete i[f];
   }
   return out;
 }
 
-module.exports = { SYNTHESIZED, mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };
+module.exports = { MERGE_SECTIONS, SYNTHESIZED, mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };

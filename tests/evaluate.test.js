@@ -921,8 +921,9 @@ function writeLife(dir) {
 
 const NO_NM = () => path.join(tmp, "no-nm");
 const sectionsFrom = (r) => {
-  // the sources block names the input; the two n/a metrics have no new value; scope.events says which file
-  const { sources, waiting, adjudicator_agreement, window, ...rest } = r;
+  // the sources block names the input; the two n/a metrics have no new value; merges, prs and gaps read
+  // the new events' pr, by and recovered, so they are n/a under old; scope.events says which file
+  const { sources, waiting, adjudicator_agreement, merges, prs, gaps, window, ...rest } = r;
   const { events, ...scope } = window.scope;
   return { ...rest, window: { ...window, scope } };
 };
@@ -979,6 +980,93 @@ test("new source: the local log and a view export give the same report, and it m
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- merges, PRs and gaps (#749, docs/metrics.md 9c): tests/fixtures/evaluate/v2/new-events.jsonl,
+// the new-format events (payload under `data`) of one repo, window 2026-10-16 00:00-12:00Z. #30 is a
+// factory merge (01:50) whose reviewing transition and review are logged twice and whose queue:patch
+// is logged twice; #31 swaps PR 91 for 92 (a push and a queue:patch) and merges at 03:10; #32 is a
+// hand merge seen by a transition (04:59, no pr), an intervention (05:00, no pr) and a recovered
+// merged event (05:10); #34 is a hand merge that never names a pr; #35 merges at 10:30; #39 merged the
+// day before. #36 parks on a question for an hour, #37 builds throughout, #38 holds two states for
+// the same time, #40 is dropped. Judge tasks: k1 (two rows, the later logged first) is overridden by a
+// person within the hour, k2 has no issue and failed, k3 is done.
+const MERGE_ARGS = [...NEW_WINDOW, "--source", "new", "--new-events", path.join(FIX, "v2", "new-events.jsonl")];
+
+test("merges: one per (issue, pr) across the three signals, counted by who merged and whether it was recovered", () => {
+  const m = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).merges;
+  assert.equal(m.total, 5, "#32's three signals are one merge; #39 merged before the window");
+  assert.deepEqual(m.by, [
+    { by: "factory", recovered: false, count: 3 }, { by: "hand", recovered: true, count: 1 }, { by: "hand", recovered: null, count: 1 },
+  ]);
+  assert.deepEqual(m.per_day, [
+    { day: "2026-10-16", by: "factory", recovered: false, merges: 3 }, { day: "2026-10-16", by: "hand", recovered: true, merges: 1 },
+    { day: "2026-10-16", by: "hand", recovered: null, merges: 1 },
+  ]);
+  assert.deepEqual(m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered]), [
+    [30, 90, "2026-10-16T01:50:00.000Z", "factory", false], [31, 92, "2026-10-16T03:10:00.000Z", "factory", false],
+    [32, 93, "2026-10-16T04:59:00.000Z", "hand", true], [34, null, "2026-10-16T08:00:00.000Z", "hand", null],
+    [35, 95, "2026-10-16T10:30:00.000Z", "factory", false],
+  ]);
+});
+
+test("prs: PR open to merge from the first row naming it, PRs per issue, supersedes and head moves, once each", () => {
+  const p = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).prs;
+  assert.deepEqual(p.issues, [
+    { issue: 30, pr: 90, pr_open_to_merge_seconds: 1800, prs: 1, supersedes: 0, head_moves: 1 },
+    { issue: 31, pr: 92, pr_open_to_merge_seconds: 1200, prs: 2, supersedes: 1, head_moves: 2 },
+    { issue: 32, pr: 93, pr_open_to_merge_seconds: 2640, prs: 1, supersedes: 0, head_moves: 0 },
+    { issue: 34, pr: null, pr_open_to_merge_seconds: null, prs: 0, supersedes: 0, head_moves: 0 },
+    { issue: 35, pr: 95, pr_open_to_merge_seconds: 1800, prs: 1, supersedes: 0, head_moves: 0 },
+  ]);
+  assert.deepEqual(p.pr_open_to_merge_seconds, { median: 1800, max: 2640, total: 7440 }, "the merge with no pr is left out");
+  assert.deepEqual([p.prs.max, p.supersedes.max, p.head_moves.max, p.head_moves.median], [2, 1, 2, 0]);
+});
+
+test("gaps: the longest gaps between merges, with the issues in flight, their longest state and a parked question", () => {
+  const g = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).gaps;
+  assert.equal(g.merges, 5);
+  assert.deepEqual(g.gaps.map((x) => [x.gap_seconds, x.before.issue, x.after.issue]), [[10860, 32, 34], [9000, 34, 35], [6540, 31, 32], [4800, 30, 31]]);
+  const flight = (n) => g.gaps[n].in_flight.map((i) => `${i.issue}:${i.state}:${i.parked_with_question}`);
+  // #32 closed at 04:59 and #30, #31, #40 earlier: none in flight; #36 holds building longest though parked an hour
+  assert.deepEqual(flight(0), ["34:building:false", "36:building:true", "37:building:false", "38:building:false"]);
+  assert.deepEqual(flight(1), ["34:building:false", "35:reviewing:false", "36:building:false", "37:building:false", "38:building:false"]);
+  assert.deepEqual(flight(2), ["31:merge-queue:false", "32:reviewing:false", "36:building:false", "37:building:false", "38:queued:false", "40:building:false"]);
+  assert.deepEqual(flight(3), ["30:merge-queue:false", "31:reviewing:false", "37:building:false"]);
+});
+
+test("v2 judgement calls count a judge task once per key: wake and latest status, overridden by a person within the hour", () => {
+  const tasks = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).judgement_calls.by_kind.filter((k) => k.kind === "task");
+  assert.deepEqual(tasks, [
+    { kind: "task", outcome: "merge:done", count: 1, overridden: 0 },
+    { kind: "task", outcome: "parked:done", count: 1, overridden: 1 },
+    { kind: "task", outcome: "ready:failed", count: 1, overridden: 0 },
+  ]);
+});
+
+test("merges, prs and gaps read n/a with a reason: no events, one merge, no merge in the window, and under --source old", () => {
+  const env = { NO_MISTAKES_HOME: NO_NM() };
+  const absent = json([...NEW_WINDOW, "--source", "new", "--new-events", path.join(tmp, "absent.jsonl")], env);
+  for (const k of ["merges", "prs", "gaps"]) assert.match(absent[k]["n/a"], /file not found/, k);
+  const empty = json(["--repo", "acme/widgets", "--since", "2026-10-17T00:00:00Z", "--until", "2026-10-17T12:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
+  for (const k of ["merges", "prs"]) assert.equal(empty[k]["n/a"], "0 merges in the window", k);
+  assert.match(empty.gaps["n/a"], /fewer than 2 merges/);
+  const one = json(["--repo", "acme/widgets", "--since", "2026-10-16T00:00:00Z", "--until", "2026-10-16T02:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
+  assert.equal(one.merges.total, 1);
+  assert.equal(one.prs.issues.length, 1);
+  assert.match(one.gaps["n/a"], /fewer than 2 merges/);
+  const old = json(V2_WINDOW);
+  for (const k of ["merges", "prs", "gaps"]) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
+  const md = run([...MERGE_ARGS, "--format", "markdown"], env).out;
+  assert.match(md, /\| 31 \| 92 \| 1200 \| 2 \| 1 \| 2 \|/);
+  assert.match(md, /\| 2026-10-16T04:59:00.000Z \| 2026-10-16T08:00:00.000Z \| 10860 \| #32 \| #34 \| #34:building #36:building\? #37:building #38:building \|/);
+  assert.match(md, /## gaps/);
+});
+
+test("normalize leaves out merges, prs and gaps, so a shadow run records no difference for them", () => {
+  const { normalize } = require("../images/base/evaluate-new-events.js");
+  const out = normalize({ window: {}, merges: { total: 1 }, prs: { merges: 1 }, gaps: { merges: 2 }, rounds: { merged_issues: 0 } });
+  assert.deepEqual(Object.keys(out).sort(), ["rounds", "window"]);
 });
 
 test("new source: metrics that need a v1-only event read n/a, named in sources, never 0", () => {
