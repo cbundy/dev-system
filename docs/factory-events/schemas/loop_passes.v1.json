@@ -21,10 +21,15 @@
     "idle_mean_ms": { "type": ["integer", "null"], "minimum": 0, "description": "The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none.", "x-column": true },
     "mode": { "enum": ["off", "observe", "act"], "description": "The loop's mode: off, observe (plans, does not act) or act.", "x-column": true },
     "planner": { "enum": ["v1", "v2"], "description": "Which planner the loop ran.", "x-column": true },
-    "pass_every_ms": { "type": "integer", "minimum": 1, "description": "The loop's configured time between passes, in milliseconds.", "x-column": true }
+    "pass_every_ms": { "type": "integer", "minimum": 1, "description": "The loop's configured time between passes, in milliseconds.", "x-column": true },
+    "observe_mean_ms": { "type": ["integer", "null"], "minimum": 0, "description": "The mean wall time of the minute's passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out.", "x-column": true },
+    "observe_commands_mean_ms": { "type": ["integer", "null"], "minimum": 0, "description": "The mean time the passes' observe call had at least one read in flight, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out.", "x-column": true },
+    "observe_in_process_mean_ms": { "type": ["integer", "null"], "minimum": 0, "description": "The mean in-process time of the passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out.", "x-column": true },
+    "observe_in_process_max_ms": { "type": ["integer", "null"], "minimum": 0, "description": "The longest in-process time of any pass's observe call, in milliseconds. Null means no pass in the minute had a measure; older loops leave the field out.", "x-column": true }
   },
   "examples": [
     { "from_at": "2026-10-17T00:46:00.000Z", "to_at": "2026-10-17T00:47:00.000Z", "passes": 5, "acting": 5, "errors": 0, "mean_ms": 9457, "p50_ms": 6384, "p90_ms": 24804, "max_ms": 24804, "acting_mean_ms": 9457, "idle_mean_ms": null, "mode": "act", "planner": "v2", "pass_every_ms": 10000 },
-    { "from_at": "2026-10-17T00:47:00.000Z", "to_at": "2026-10-17T00:48:00.000Z", "passes": 5, "acting": 0, "errors": 0, "mean_ms": 1993, "p50_ms": 1428, "p90_ms": 3037, "max_ms": 3037, "acting_mean_ms": null, "idle_mean_ms": 1993, "mode": "act", "planner": "v2", "pass_every_ms": 10000 }
+    { "from_at": "2026-10-17T00:47:00.000Z", "to_at": "2026-10-17T00:48:00.000Z", "passes": 5, "acting": 0, "errors": 0, "mean_ms": 1993, "p50_ms": 1428, "p90_ms": 3037, "max_ms": 3037, "acting_mean_ms": null, "idle_mean_ms": 1993, "mode": "act", "planner": "v2", "pass_every_ms": 10000 },
+    { "from_at": "2026-10-17T00:48:00.000Z", "to_at": "2026-10-17T00:49:00.000Z", "passes": 5, "acting": 2, "errors": 0, "mean_ms": 4210, "p50_ms": 3900, "p90_ms": 6100, "max_ms": 6100, "acting_mean_ms": 5300, "idle_mean_ms": 3400, "mode": "act", "planner": "v2", "pass_every_ms": 10000, "observe_mean_ms": 2600, "observe_commands_mean_ms": 2300, "observe_in_process_mean_ms": 300, "observe_in_process_max_ms": 520 }
   ]
 }

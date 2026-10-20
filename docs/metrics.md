@@ -2484,6 +2484,31 @@ GROUP BY repo, device, tier
 ORDER BY repo, device, tier;
 ```
 
+## Observe time per pass
+
+A `loop_passes` event ([REFERENCE.md](factory-events/REFERENCE.md)) summarises one UTC minute of the loop's passes. Four
+optional fields split the time of each pass's observe call: `observe_mean_ms` (the mean wall time),
+`observe_commands_mean_ms` (the mean time with at least one read in flight), `observe_in_process_mean_ms` (the mean
+in-process time) and `observe_in_process_max_ms` (the longest in-process time). All four are null when no pass in the
+minute had a measure, and absent from older loops' events. No producer writes them yet (#1134 will).
+
+Per hour, repo and device, the pass-weighted mean of each (`sum(x * passes) / sum(passes)`, so a busy minute counts for
+more than a quiet one) and the longest in-process time, from the minutes that have a measure:
+
+```sql
+SELECT date_trunc('hour', from_at) AS hour, repo, device,
+  sum(passes) AS passes,
+  round(sum(observe_mean_ms::numeric * passes) / sum(passes)) AS observe_ms,
+  round(sum(observe_commands_mean_ms::numeric * passes) / sum(passes)) AS commands_ms,
+  round(sum(observe_in_process_mean_ms::numeric * passes) / sum(passes)) AS in_process_ms,
+  max(observe_in_process_max_ms) AS in_process_max_ms
+FROM factory.event_log
+WHERE type = 'loop_passes' AND observe_mean_ms IS NOT NULL AND passes > 0
+  AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, repo, device
+ORDER BY 1, repo, device;
+```
+
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are

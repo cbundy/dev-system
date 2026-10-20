@@ -187,6 +187,10 @@ Example:
 | `new_ok` | boolean | `shadow_read` | Whether the central read of the new side succeeded. |
 | `new_value` | any | `settings_changed` | The value after the change, any JSON; null when it is now unset. |
 | `notes` | array of string | `transition` | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
+| `observe_commands_mean_ms` | integer | `loop_passes` | The mean time the passes' observe call had at least one read in flight, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_in_process_max_ms` | integer | `loop_passes` | The longest in-process time of any pass's observe call, in milliseconds. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_in_process_mean_ms` | integer | `loop_passes` | The mean in-process time of the passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_mean_ms` | integer | `loop_passes` | The mean wall time of the minute's passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
 | `observed_at` | string | `main_state` | When the loop read the state of the branch: UTC, ISO 8601, exactly three millisecond digits. |
 | `old_ok` | boolean | `shadow_read` | Whether the central read of the old side succeeded. |
 | `old_value` | any | `settings_changed` | The value before the change, any JSON; null when it was unset. |
@@ -720,6 +724,10 @@ Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of 
 | `mode` | enum | required | no | one of "off", "observe", "act" | yes | The loop's mode: off, observe (plans, does not act) or act. |
 | `planner` | enum | required | no | one of "v1", "v2" | yes | Which planner the loop ran. |
 | `pass_every_ms` | integer | required | no | minimum 1 | yes | The loop's configured time between passes, in milliseconds. |
+| `observe_mean_ms` | integer | optional | yes | minimum 0 | yes | The mean wall time of the minute's passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_commands_mean_ms` | integer | optional | yes | minimum 0 | yes | The mean time the passes' observe call had at least one read in flight, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_in_process_mean_ms` | integer | optional | yes | minimum 0 | yes | The mean in-process time of the passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `observe_in_process_max_ms` | integer | optional | yes | minimum 0 | yes | The longest in-process time of any pass's observe call, in milliseconds. Null means no pass in the minute had a measure; older loops leave the field out. |
 
 Example:
 

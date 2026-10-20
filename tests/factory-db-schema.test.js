@@ -22,7 +22,7 @@ const lifted = new Set();
 for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
-const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue", "considered", "free_slots", "folded"]);
+const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue", "considered", "free_slots", "folded"]);
 const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes"]);
 const NUMERICS = new Set(["spend_usd", "budget_usd"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off", "needs_owner"]);
@@ -140,4 +140,20 @@ test("factory.workers, workers_status and worker_samples have the memory pressur
       assert.equal(got, type, `${rel}.${col}`);
     }
   }
+});
+
+test("loop_passes: the observe columns are null for an old minute and the given values for a new one", opts, (t) => {
+  const db = createDb(t);
+  const [old, , fresh] = load("loop_passes.v1.json").examples;
+  assert.equal(old.observe_mean_ms, undefined, "the first example is the old shape");
+  assert.equal(fresh.observe_mean_ms, 2600);
+  let seq = 0;
+  for (const data of [old, fresh]) {
+    seq += 1;
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), now(), 'loop_passes', 1, 'o/r', 'd', 'a', NULL, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  }
+  const read = (n) => db.query(`SELECT concat_ws('|', coalesce(observe_mean_ms::text, 'null'), coalesce(observe_commands_mean_ms::text, 'null'), coalesce(observe_in_process_mean_ms::text, 'null'), coalesce(observe_in_process_max_ms::text, 'null')) FROM factory.event_log WHERE device_seq = ${n}`, "reader");
+  assert.equal(read(1), "null|null|null|null");
+  assert.equal(read(2), "2600|2300|300|520");
 });
