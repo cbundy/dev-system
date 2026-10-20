@@ -285,6 +285,33 @@ export function isAncestorArgv(commit: string, head: string): string[] {
   return ['git', 'merge-base', '--is-ancestor', commit, head]
 }
 
+// --- the in-flight paths (sources-paths.ts) ---------------------------------------------------------
+
+// The base branch on origin, fetched into its remote-tracking ref.
+export function fetchBaseArgv(base: string): string[] {
+  return ['git', 'fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`]
+}
+
+// Whether a commit is here: exit 0 yes.
+export function catFileArgv(sha: string): string[] {
+  return ['git', 'cat-file', '-e', `${sha}^{commit}`]
+}
+
+// A commit brought in from origin by its id.
+export function fetchShaArgv(sha: string): string[] {
+  return ['git', 'fetch', '--quiet', 'origin', sha]
+}
+
+// The commit the head branched from origin's default branch at.
+export function mergeBaseArgv(base: string, head: string): string[] {
+  return ['git', 'merge-base', `refs/remotes/origin/${base}`, head]
+}
+
+// The paths a branch changed since the merge base, one per line, renames as a delete and an add.
+export function diffNamesArgv(mergeBase: string, head: string): string[] {
+  return ['git', 'diff', '--name-only', '--no-renames', `${mergeBase}..${head}`]
+}
+
 // --- the builder's model (7.1) ---------------------------------------------------------------------
 
 // The model the builder runs on; the tool logs `implementer_routed` itself.

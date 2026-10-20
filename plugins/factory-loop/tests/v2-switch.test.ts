@@ -134,6 +134,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
       'triageModel: "Opus" is not sonnet, opus, haiku or fable',
     ])
     expect(bad.config).toMatchObject({ reviewerModel: 'opus', triageModel: 'opus' })
+    expect(loadConfig({ intakeModel: 'Haiku' }).problems).toEqual(['intakeModel: "Haiku" is not sonnet, opus, haiku or fable'])
   })
 
   test('no settings file (a new workspace): v2\'s defaults, K 3 and no problems', () => {

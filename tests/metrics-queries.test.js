@@ -82,7 +82,7 @@ const BANNED = [
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
 // 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
 // The startup migrates and the release hold reasons read loop_entry fields (database, versions, outcome, decision_reason) from event_store: no event_log column lifts them.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0", "Claim order #0", "Queue snapshots #2"]);
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0", "Claim order #0", "Claim order #3", "Queue snapshots #2"]);
 
 function problems(sql, id) {
   const text = strip(sql);
@@ -119,7 +119,7 @@ const RUN_ONLY = [
   "Settings #0", "Settings #1",
   "Spend on an API key #0", "Spend on an API key #1",
   "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0",
-  "Claim order #0", "Claim order #1", "Claim order #2",
+  "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",
   "Queue snapshots #0", "Queue snapshots #1", "Queue snapshots #2",
 ];
 

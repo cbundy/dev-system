@@ -22,6 +22,8 @@ import type { V2Stored } from './observe'
 import { EMPTY_FILES, baseOf, filesFromStore, filesKey, keepFiles, seenOf } from './sources-interventions'
 import type { FileSeen, FilesSeen } from './sources-interventions'
 import { editOf } from './rules-interventions'
+import { readStamps } from './stamps'
+import type { Stamps } from './stamps'
 import type { HeadSeen, IssueRecord, V2Io } from './types'
 
 const ERROR_MAX = 200
@@ -42,6 +44,8 @@ export type V2Live = {
   heads: Record<string, HeadSeen> | null
   // files:<repo>, kept whether or not the records are loaded
   files: FilesSeen | null
+  // stamps:<repo>, read only here (the intake's writer comes later); {} when absent or unreadable
+  stamps: Stamps
   // the workspace config.json as the newest tick that did not act read it, in
   // memory only (noteIdle); null once an acting tick has kept it
   idle: { repo: string; seen: FileSeen } | null
@@ -51,7 +55,7 @@ export type V2Live = {
 }
 
 export function newV2Live(): V2Live {
-  return { repo: '', records: [], absent: true, heads: null, files: null, idle: null, loaded: false, error: 'not loaded yet' }
+  return { repo: '', records: [], absent: true, heads: null, files: null, stamps: {}, idle: null, loaded: false, error: 'not loaded yet' }
 }
 
 // What a read of records:<repo> gave.
@@ -79,6 +83,9 @@ async function readHeads(io: V2StoreIo, repo: string): Promise<Record<string, He
   }
 }
 
+// stampsOf: the stamps as V2Stored carries them: absent when there are none.
+const stampsOf = (stamps: Stamps) => (Object.keys(stamps).length === 0 ? {} : { stamps })
+
 async function readFiles(io: V2StoreIo, repo: string): Promise<FilesSeen | null> {
   try {
     return filesFromStore(await io.get(filesKey(repo)))
@@ -95,6 +102,7 @@ export async function loadV2(live: V2Live, io: V2StoreIo, repo: string): Promise
   live.repo = repo
   live.heads = await readHeads(io, repo)
   live.files = await readFiles(io, repo)
+  live.stamps = await readStamps(io, repo)
   if (!read.ok) {
     live.records = []
     live.absent = false
@@ -111,8 +119,8 @@ export async function loadV2(live: V2Live, io: V2StoreIo, repo: string): Promise
 // storedV2: what an acting pass hands observe: the live copy, loaded again when it is not.
 export async function storedV2(live: V2Live, io: V2StoreIo, repo: string): Promise<V2Stored> {
   if (!live.loaded || live.repo !== repo) await loadV2(live, io, repo)
-  if (!live.loaded) return { records: null, heads: live.heads, files: live.files, error: live.error ?? 'not loaded' }
-  return { records: live.absent ? null : live.records, heads: live.heads, files: live.files, error: null }
+  if (!live.loaded) return { records: null, heads: live.heads, files: live.files, ...stampsOf(live.stamps), error: live.error ?? 'not loaded' }
+  return { records: live.absent ? null : live.records, heads: live.heads, files: live.files, ...stampsOf(live.stamps), error: null }
 }
 
 // readStoredV2: what a pass that does not act hands observe: the store's, read and never written
@@ -121,7 +129,8 @@ export async function readStoredV2(io: V2StoreIo, repo: string): Promise<V2Store
   const read = await readRecords(io, repo)
   const heads = await readHeads(io, repo)
   const files = await readFiles(io, repo)
-  return read.ok ? { records: read.records, heads, files, error: null } : { records: null, heads, files, error: read.error }
+  const stamps = await readStamps(io, repo)
+  return read.ok ? { records: read.records, heads, files, ...stampsOf(stamps), error: null } : { records: null, heads, files, ...stampsOf(stamps), error: read.error }
 }
 
 // keepV2: what an acting pass keeps of v2's reads: the records a lost store was rebuilt into, as

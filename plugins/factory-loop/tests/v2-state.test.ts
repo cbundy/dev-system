@@ -145,6 +145,28 @@ describe('S1: claims', () => {
     expect(claims(plan(urgent, { ...cfg, priorityLabel: 'urgent' })).map(a => a.issue)).toEqual([3, 1, 2])
   })
 
+  test('the intake factors (#995): off, stamps and paths change nothing; on, the reason shows area-factory +20, needs-owner -40 and overlap -15', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.reason])
+    const issues = [issue(1), issue(2, { labels: ['ready', 'area:factory'] }), issue(3, { labels: ['ready', 'needs-decision'] }), issue(4)]
+    const stamp = { version: 'v1', area: 'factory', needsOwner: false, touches: ['plugins/x'], at: NOW, labels: [] }
+    const stamps = { '2': stamp, '3': stamp, '4': stamp }
+    const bare = world([], { queue: [1, 2, 3, 4], issues })
+    const withFacts = world([], { queue: [1, 2, 3, 4], issues }, { stamps, inFlightPaths: { 9: ['plugins'] } })
+    const baseline = plan(bare, cfg)
+    expect(claims(plan(withFacts, cfg))).toEqual(claims(baseline))
+    expect(claims(plan(withFacts, { ...cfg, intakeStamp: 'off' }))).toEqual(claims(baseline))
+    expect(claims(baseline).map(c => c[1])).toEqual(Array(4).fill('ready and unblocked (order: score 0)'))
+    // on: area first, then the unscored, the one held back by overlap and the one that needs the owner last
+    const on = plan(withFacts, { ...cfg, intakeStamp: 'on' })
+    expect(claims(on)).toEqual([
+      [2, 'ready and unblocked (order: score 5: area-factory +20, overlap -15)'],
+      [1, 'ready and unblocked (order: score 0)'],
+      [4, 'ready and unblocked (order: score -15: overlap -15)'],
+      [3, 'ready and unblocked (order: score -55: needs-owner -40, overlap -15)'],
+    ])
+  })
+
   test('the rest go by score: a bug that unblocks outranks a priority label, a tie goes to the oldest claimable then the lowest number; the owner lists stay first; every claim carries its score', () => {
     const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
     const claims = (r: ReturnType<typeof plan>) => r.actions.filter((a): a is Extract<Action, { kind: 'claim' }> => a.kind === 'claim')

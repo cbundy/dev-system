@@ -4,6 +4,7 @@
 // too, and v2's vocabulary (v2/types.ts), which holds constants alone.
 import type { ActionKind, AgentType, AnswerChannel, Config, Control, EventsSource, Ms } from './types'
 import { MODELS, V2_ACTION_KINDS } from './v2/types'
+import type { Model } from './v2/types'
 
 const MIN = 60_000
 
@@ -91,6 +92,9 @@ export const DEFAULT_CONFIG: Config = {
     waitingCap: 20,
     failedLife: 10,
     failedLivesCap: 30,
+    areaFactory: 20,
+    needsOwner: 40,
+    overlap: 15,
   },
   allowActOutsideOrchestrator: false,
   // off: the decision log alone carries each pass's time and trigger (#552)
@@ -133,6 +137,10 @@ export const DEFAULT_CONFIG: Config = {
   flakeEpic: null,
   maxLives: 3,
   triageModel: 'opus',
+  // the intake stamp (#995): off until the owner turns it on; its agent's model, never larger than triageModel; the areas a stamp may name
+  intakeStamp: 'off',
+  intakeModel: 'haiku',
+  intakeAreas: ['factory', 'product'],
   reviewer: 'adjudicator',
   reviewerModel: 'opus',
   // the plugin ships no repo's commands: a repo sets its own (dev-system: npm run lint, npm test)
@@ -295,6 +303,7 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
   const out: Record<string, unknown> = {
     ...d,
     skipLabels: [...d.skipLabels],
+    intakeAreas: [...d.intakeAreas],
     agentTimeoutMs: { ...d.agentTimeoutMs },
     wakeTimeoutMs: { ...d.wakeTimeoutMs },
     stateTimeoutMs: { ...d.stateTimeoutMs },
@@ -384,6 +393,12 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'memoryReserveMiB') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number of at least 0')
+      } else if (key === 'intakeStamp') {
+        if (value === 'off' || value === 'on') out[key] = value
+        else bad(raw, value, 'off or on')
+      } else if (key === 'intakeAreas') {
+        if (validAreas(value)) out[key] = [...value]
+        else bad(raw, value, 'a list of distinct area names (lower case letters, digits and -) that holds factory and product')
       } else if (key.endsWith('Model')) {
         if (MODELS.some(m => m === value)) out[key] = value
         else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
@@ -426,7 +441,34 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       }
     }
   }
-  return { config: out as unknown as Config, problems }
+  const cfg = out as unknown as Config
+  const capped = capIntakeModel(cfg.intakeModel, cfg.triageModel)
+  if (capped !== null) {
+    problems.push(`intakeModel: ${cfg.intakeModel} is larger than triageModel ${cfg.triageModel}; ${cfg.triageModel} used`)
+    cfg.intakeModel = capped
+  }
+  return { config: cfg, problems }
+}
+
+// validAreas: a list of distinct names, each lower case letters, digits and -, starting with a letter,
+// that holds the two areas the intake always knows.
+function validAreas(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(v => typeof v === 'string' && /^[a-z][a-z0-9-]*$/.test(v)) &&
+    new Set(value).size === value.length &&
+    value.includes('factory') &&
+    value.includes('product')
+  )
+}
+
+// MODEL_SIZES: the models from smallest to largest. fable ranks largest, since no smaller size is
+// known for it, which is the conservative reading.
+export const MODEL_SIZES: readonly Model[] = ['haiku', 'sonnet', 'opus', 'fable']
+
+// capIntakeModel: triageModel when the intake model is larger than it; null when it may stand.
+function capIntakeModel(intake: Model, triage: Model): Model | null {
+  return MODEL_SIZES.indexOf(intake) > MODEL_SIZES.indexOf(triage) ? triage : null
 }
 
 function compiles(pattern: string) {

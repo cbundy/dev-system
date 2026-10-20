@@ -390,6 +390,10 @@ export type Config = {
   // queue (v2 SPEC 6.4)
   maxLives: number
   triageModel: Model
+  // the intake stamp (#995): off by default; the model that stamps, never larger than triageModel; the areas a stamp may name (always holding factory and product)
+  intakeStamp: 'off' | 'on'
+  intakeModel: Model
+  intakeAreas: string[]
   // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
   reviewer: string
   reviewerModel: Model

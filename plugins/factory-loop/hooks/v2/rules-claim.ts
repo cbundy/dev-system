@@ -241,6 +241,8 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     held: new Set([...live.map(r => r.issue), ...inFlight]),
     blocking: n => state.blockGraph?.[n] ?? null,
     failedLives: n => failedLivesBefore(ctx.v2.records, state.ledger, n),
+    // the intake stamp's factors, only while the switch is on
+    ...(config.intakeStamp === 'on' ? { intake: { stamp: (n: number) => ctx.v2.stamps?.[String(n)] ?? null, inFlightPaths: ctx.v2.inFlightPaths ?? {} } } : {}),
   }
   const scoredOf = (n: number): ScoreResult => {
     const issue = issues.get(n)

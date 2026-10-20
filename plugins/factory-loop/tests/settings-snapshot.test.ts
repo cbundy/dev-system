@@ -66,6 +66,12 @@ describe('snapshotOf', () => {
     expect(Object.keys(s.layers)).not.toContain('rateCaps')
     expect(Object.keys(s.layers)).toContain('queueScore.bug')
     expect(s.settings).toHaveProperty(['queueScore', 'bug'], 25)
+    // the intake settings and weights (#995)
+    expect(s.settings).toMatchObject({ intakeStamp: 'off', intakeModel: 'haiku', intakeAreas: ['factory', 'product'] })
+    expect(s.settings).toHaveProperty(['queueScore', 'areaFactory'], 20)
+    expect(s.settings).toHaveProperty(['queueScore', 'needsOwner'], 40)
+    expect(s.settings).toHaveProperty(['queueScore', 'overlap'], 15)
+    for (const key of ['intakeStamp', 'intakeModel', 'intakeAreas', 'queueScore.areaFactory', 'queueScore.needsOwner', 'queueScore.overlap']) expect(s.layers[key]).toBe('default')
   })
 
   test('a mode from the workspace file, and a pool size nobody set', () => {
