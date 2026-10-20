@@ -103,6 +103,8 @@ export type Cache = {
   usage?: Timed<Usage>
   milestone?: Timed<Milestone | null>
   release?: Timed<ReleaseInfo>
+  // when the oldest closed issue of the milestone closed (observe-milestone.ts)
+  closed?: Timed<string | null>
   factory?: Timed<Factory>
   events?: Timed<FactoryEvent[]>
   // the last compare of the facts' two stores (v2/sources-facts.ts); absent: none made this load
@@ -126,6 +128,7 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.usage
   delete cache.milestone
   delete cache.release
+  delete cache.closed
   delete cache.factory
   delete cache.events
   delete cache.factsShadow
@@ -426,7 +429,7 @@ export async function observe(
   }
 
   // milestone and, while it qualifies, the last release (observe-milestone.ts)
-  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run, tagWanted: waitsOnTag(v2Stored?.records ?? []), tagRepos: tagRepos(v2Stored?.records ?? []) })
+  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run, tagWanted: waitsOnTag(v2Stored?.records ?? []), tagRepos: tagRepos(v2Stored?.records ?? []), backoff: backoffUntil !== null })
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
 
   // act mode holds GitHub writes and waits while the backoff lasts, and from the pass that met a
@@ -448,7 +451,7 @@ export async function observe(
     usage,
     pool,
     agents,
-    milestone: cache.milestone?.value ?? null,
+    milestone: cache.milestone?.value == null || cache.closed === undefined ? (cache.milestone?.value ?? null) : { ...cache.milestone.value, oldestClosedAt: cache.closed.value },
     release: cache.release?.value ?? null,
     ledger,
     control,

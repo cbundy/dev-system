@@ -256,7 +256,7 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released'] as const
 // What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
 // body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
 export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
@@ -345,6 +345,8 @@ export type V2Action =
   | (ActionBase & { kind: 'close-tracker' })
   // F1: one bug for a flaky test, found again by its hidden marker or filed; ready: the cap allowed `ready` (rules-flake-bugs.ts)
   | (ActionBase & { kind: 'flake-bug'; bug: FlakeBugSpec })
+  // O4: log a release tag (callum-flow-released); source: the loop's own release task made it, or the workflow
+  | (ActionBase & { kind: 'released'; tag: string; source: 'loop' | 'workflow' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
@@ -420,7 +422,7 @@ export type V2Tell = (typeof V2_TELLS)[number]
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'M1', 'F1',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 

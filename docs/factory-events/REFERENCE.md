@@ -770,7 +770,7 @@ Example:
 
 ## milestone_state
 
-The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes. No producer writes it yet.
+The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)
@@ -922,7 +922,7 @@ Example:
 
 ## released
 
-A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device. No producer writes it yet.
+A release tag was cut: the tag, the tag before it, the commit it points at, the pull requests and issues it carried and the headlines of its release notes. Count it once by (repo, tag): the same release can be seen by more than one device.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)

@@ -72,6 +72,8 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
   switch (cmd) {
     case 'callum-flow-rollout':
       return { stdout: 'ROLLOUT run-it source=brief\n' }
+    case 'callum-flow-released':
+      return { stdout: 'released v1.2.0\n' }
     case 'callum-flow-implementer-route':
       return { stdout: 'sonnet\n' }
     case 'callum-flow-designer-route':
@@ -205,6 +207,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'split', key: `${at}/child/b`, class: 'free', rule: 'S3', parent: 470, child: { key: 'b', title: 'Part two', body: 'Do it', blockedBy: [], ready: false, decision: 'Which API?' }, blockedBy: [] },
   // F1's flake bug (v2 SPEC 8.5): the one action that may add the ready label to an issue it filed itself, and only when the cap allowed it
   { ...base, issue: null, kind: 'flake-bug', key: 'flake-bug/0123456789abcdef/0f0f0f0f-0000-4000-8000-000000000001', class: 'free', rule: 'F1', bug: FLAKE_BUG },
+  // O4's release log (v2 SPEC 11): the image's own tool, with the tag and the repo
+  { ...base, issue: null, kind: 'released', key: `released:${REPO}:v1.2.0`, class: 'free', rule: 'O4', tag: 'v1.2.0', source: 'loop' },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },

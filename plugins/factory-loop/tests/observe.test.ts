@@ -382,8 +382,12 @@ describe('parse', () => {
         const { calls, run } = setup({ ...all, ms })
         await readMilestone(cache, o(run, 5000))
         expect(cache.release).toBeUndefined()
-        expect(calls.every((c) => c[0] === 'callum-flow-milestone')).toBe(true)
+        // no full release read (the tag commit and the merges since it); a milestone still gets its tag view and closed list
+        expect(calls.some((c) => c[1] === 'api' || c[1] === 'pr')).toBe(false)
       }
+      const unopted = setup({ ...all, ms: ok('') })
+      await readMilestone({}, o(unopted.run, 5000))
+      expect(unopted.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
       const cache: MilestoneCache = {}
       await readMilestone(cache, o(setup({ ...all, ms: fail() }).run, 5000))
       expect(cache.milestone).toBeUndefined()
@@ -396,11 +400,11 @@ describe('parse', () => {
         const cache: MilestoneCache = {}
         const { calls, run } = setup({ ...all, ms: ok(OPEN) })
         await readMilestone(cache, wanted(run, 5000))
-        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh release view'])
+        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh issue list', 'gh release view'])
         expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
         expect(cache.release).toBeUndefined()
         const none: MilestoneCache = {}
-        const quiet = setup({ ...all, ms: ok(OPEN) })
+        const quiet = setup({ ...all, ms: ok('') })
         await readMilestone(none, o(quiet.run, 5000))
         expect(quiet.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
         expect(none.tag).toBeUndefined()
@@ -443,7 +447,8 @@ describe('parse', () => {
         const calls: string[][] = []
         const run = async (argv: string[]) => {
           calls.push(argv)
-          if (argv[0] === 'callum-flow-milestone') return ok(OPEN)
+          // no milestone, so the loop's own tag is read for no one
+          if (argv[0] === 'callum-flow-milestone') return ok('')
           const repo = argv[argv.indexOf('--repo') + 1]
           return repo === 'o/none' ? fail('release not found') : repo === 'o/down' ? fail() : ok(`{"tagName":"tag-of-${repo}"}`)
         }
@@ -497,6 +502,56 @@ describe('parse', () => {
       await readMilestone(cache, o(run, 6000))
       expect(calls.length).toBe(n * 2)
       expect(cache.release?.at).toBe(6000)
+    })
+
+    describe('the release log\'s reads: the tag view and the oldest closed issue, whenever the milestone exists', () => {
+      const closedOf = (...at: string[]) => ok(JSON.stringify(at.map((closedAt) => ({ closedAt }))))
+      const withClosed = { ...all, ms: ok(OPEN), list: closedOf('2026-10-18T10:00:00Z', '2026-10-16T08:30:00Z', '2026-10-17T00:00:00Z') }
+
+      test('the tag view runs with a milestone and no tag wait, and not without a milestone', async () => {
+        const cache: MilestoneCache = {}
+        await readMilestone(cache, o(setup(withClosed).run, 5000))
+        expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
+        const none: MilestoneCache = {}
+        await readMilestone(none, o(setup({ ...withClosed, ms: ok('') }).run, 5000))
+        expect(none.tag).toBeUndefined()
+        expect(none.closed).toBeUndefined()
+      })
+
+      test('the oldest closedAt of the milestone\'s closed issues; none, a full list and a failed read cache null', async () => {
+        const argv = setup(withClosed)
+        const cache: MilestoneCache = {}
+        await readMilestone(cache, o(argv.run, 5000))
+        expect(cache.closed).toEqual({ at: 5000, value: '2026-10-16T08:30:00.000Z' })
+        expect(argv.calls.find((c) => c[1] === 'issue')).toEqual(['gh', 'issue', 'list', '--repo', REPO, '--milestone', 'Next release', '--state', 'closed', '--json', 'closedAt', '--limit', '200'])
+        const full = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ closedAt: `2026-10-17T04:${String(i % 60).padStart(2, '0')}:00Z` })))
+        for (const list of [ok('[]'), ok(full), fail(), ok('nope')]) {
+          const c: MilestoneCache = { closed: { at: 1, value: '2026-01-01T00:00:00.000Z' } }
+          await readMilestone(c, o(setup({ ...withClosed, list }).run, 5000))
+          expect(c.closed).toEqual({ at: 5000, value: null })
+        }
+      })
+
+      test('neither GitHub read runs with backoff, and the last readings stay', async () => {
+        const cache: MilestoneCache = { tag: { at: 1, value: 'v0.47.0' }, closed: { at: 1, value: '2026-01-01T00:00:00.000Z' } }
+        const { calls, run } = setup(withClosed)
+        await readMilestone(cache, { ...o(run, 5000), backoff: true })
+        expect(calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+        expect(cache.tag?.value).toBe('v0.47.0')
+        expect(cache.closed?.value).toBe('2026-01-01T00:00:00.000Z')
+      })
+
+      test('the cadence holds both reads between passes', async () => {
+        const cache: MilestoneCache = {}
+        const { calls, run } = setup(withClosed)
+        await readMilestone(cache, o(run, 5000))
+        const n = calls.length
+        await readMilestone(cache, o(run, 5500))
+        expect(calls.length).toBe(n)
+        await readMilestone(cache, o(run, 6000))
+        expect(calls.filter((c) => c[1] === 'issue')).toHaveLength(2)
+        expect(calls.filter((c) => c[1] === 'release')).toHaveLength(2)
+      })
     })
 
     test('a full list is no reading of the oldest', async () => {

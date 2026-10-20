@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "milestone_state.v1.json",
   "title": "milestone_state",
-  "description": "The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes. No producer writes it yet.",
+  "description": "The state of a repo's release milestone (Next): how much is closed and open, how long the oldest closed work has waited, the last tag, the release size expected and whether the judge is holding the release. Written only when one of these values changes.",
   "x-issue": "none",
   "type": "object",
   "additionalProperties": false,

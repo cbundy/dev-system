@@ -156,6 +156,8 @@ export function eventColumns(e: V2Event): EventColumns {
     case 'shadow_read':
     case 'settings_changed':
       return { issue: null, branch: null, pr: null, head: null }
+    case 'milestone_state':
+      return { issue: null, branch: null, pr: null, head: null }
     case 'main_state':
       return { issue: null, branch: null, pr: e.data.pr, head: e.data.head }
     default:
@@ -270,6 +272,7 @@ export function eventNote(e: V2Event): string {
     case 'settings_changed':
     case 'gate_run':
     case 'main_state':
+    case 'milestone_state':
     case 'comment_posted':
       // no old-format note: the payload is its own JSON (eventArgv)
       return JSON.stringify(e.data)
@@ -288,6 +291,7 @@ export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
   if (e.state === 'settings_changed') return ['callum-flow-event', '--type', 'settings_changed', '--data', JSON.stringify(e.data)]
   if (e.state === 'main_state') return ['callum-flow-event', '--type', 'main_state', '--data', JSON.stringify(e.data)]
+  if (e.state === 'milestone_state') return ['callum-flow-event', '--type', 'milestone_state', '--data', JSON.stringify(e.data)]
   if (e.state === 'comment_posted') return ['callum-flow-event', '--type', 'comment_posted', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
