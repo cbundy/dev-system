@@ -16,7 +16,7 @@ import { opLanded, parkedOf } from './v2/ops'
 import { noteWritten, notingIo } from './v2/store'
 import { ANSWER_TOOL } from './wake'
 import { actIo, acting, configDir, fileIo, killed, runtime, v2StoreIo } from './driver-io'
-import { hookEnv, persist } from './driver-store'
+import { hookEnv, noteConfigOp, persist } from './driver-store'
 import { rearm, request } from './driver-pass'
 import { afterwards, bounded, held, hook, kept, later, lateDrop } from './driver-between'
 import type { OpAnswer } from './driver-between'
@@ -50,6 +50,8 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
+      // a setting a config op changed: the next pass's settings diff says who changed it (rule N1)
+      if (reply.logged !== null && reply.op?.op === 'config' && reply.op.change !== undefined && claim()) await noteConfigOp($, rt.repo, reply.op.change.key, by, now)
       const landed = reply.op === null ? null : opLanded({ mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now, by)
       const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
       const line = (problems: string[]) => ({ control: reply.logged, by, text: said, problems: problems.length > 0 ? problems : undefined })

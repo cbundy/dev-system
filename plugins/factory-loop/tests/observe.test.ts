@@ -29,7 +29,8 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
-import { NEW_EVENTS_SQL } from '../hooks/v2/sources-facts'
+import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
+import { FLAKES_SQL } from '../hooks/v2/sources-flakes'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
@@ -123,7 +124,7 @@ describe('parse', () => {
       },
       stripped: 0,
     })
-    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue' })
+    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue', blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
     const two = JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0, blocking: 2 } } })
     expect(parseIssueRead(two)?.blocking).toBe(2)
     expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
@@ -148,6 +149,34 @@ describe('parse', () => {
     for (const bad of ['', '{}', '{"issues":[],"refused":"x","missing":[]}', '{"issues":[{"state":"open"}],"refused":[],"missing":[]}', '{"issues":[],"refused":[1.5],"missing":[]}']) {
       expect(parseIssuesRead(bad)).toBeNull()
     }
+  })
+
+  test('parseIssuesRead maps the blocking, blocked-by and parent lists, and gives null for an older reader and the single read', () => {
+    const node = (number: number, state: string, repo = REPO) => ({ number, repo, state })
+    const base = { number: 45, title: 'T', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 1, blocking: 1 }, sub_issues_summary: { total: 0 } }
+    const closedA = Date.UTC(2026, 0, 2, 3, 4, 5)
+    const closedB = Date.UTC(2026, 5, 1)
+    const full = {
+      ...base,
+      blocking: [node(7, 'open'), node(8, 'closed'), node(9, 'open', 'other/repo')],
+      blocked_by: [{ ...node(3, 'closed'), closed_at: iso(closedA) }, { ...node(4, 'closed', 'other/repo'), closed_at: iso(closedB) }, { ...node(5, 'open'), closed_at: null }],
+      parent: { ...node(12, 'open'), sub_issues: [node(45, 'open'), node(46, 'open'), node(47, 'closed'), node(48, 'open', 'other/repo')] },
+    }
+    const read = parseIssuesRead(JSON.stringify({ issues: [full, { ...base, number: 50 }, { ...base, number: 51, blocked_by: [{ ...node(5, 'open'), closed_at: null }], parent: { ...node(13, 'open', 'other/repo'), sub_issues: [node(51, 'open', 'other/repo')] } }], refused: [], missing: [], stripped: 0 }), REPO)
+    expect(read?.facts.get(45)).toMatchObject({
+      blockingList: [7],
+      blockersClosedAt: Math.max(closedA, closedB),
+      parent: 12,
+      siblings: [{ number: 46, open: true }, { number: 47, open: false }],
+    })
+    // an older reader: no fields at all
+    expect(read?.facts.get(50)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // no closed blocker listed, and a parent in another repo
+    expect(read?.facts.get(51)).toMatchObject({ blockingList: null, blockersClosedAt: null, parent: null, siblings: null })
+    // without the repo nothing can be said of this repo's issues
+    expect(parseIssuesRead(JSON.stringify({ issues: [full], refused: [], missing: [] }))?.facts.get(45)).toMatchObject({ blockingList: null, parent: null, siblings: null })
+    // the single read carries none of them
+    expect(parseIssueRead(JSON.stringify({ issue: full }))).toMatchObject({ blockingList: null, parent: null, siblings: null })
   })
 
   test('the newest design brief comment, by its heading', () => {
@@ -888,6 +917,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     week: FactoryEvent[] | null
     // the new store's rows for the facts (NEW_EVENTS_SQL), as dev-query prints them; undefined: exit 78
     newEvents?: Reply
+    // each device's first row in the new store (NEW_FLOORS_SQL); the default has no device and so no floor
+    floors?: Reply
     pipeline: Reply
     queue: Reply
     issues: Record<string, Reply>
@@ -927,6 +958,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
         case 'dev-query':
           // the facts' read of the new store (v2/sources-facts.ts); no factory URL when the test gives none
           if (stdin === NEW_EVENTS_SQL) return world.newEvents ?? { exitCode: 78 }
+          if (stdin === NEW_FLOORS_SQL) return world.floors ?? { stdout: 'device,floor\n' }
           if (!args.includes('days=7')) return { stdout: csv(world.recent) }
           return world.week === null ? { exitCode: 1, stderr: 'psql: connection refused' } : { stdout: csv(world.week) }
         case `${TOOLS}/pipeline-watch.sh`:
@@ -1080,13 +1112,13 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const obs = await h.pass(runtime(), stored({ ledger: kept }))
     expect([obs.ledgerSource, obs.state.ledger]).toEqual(['store', kept])
     // (v2 reads the last 90 days of its own device's events beside, for its dual write)
-    expect(h.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(h.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
 
     const o = host()
     const shadow = await o.pass(runtime({ mode: 'observe' }))
     expect(shadow.ledgerSource).toBe('events')
     expect(shadow.state.ledger.map(e => e.key)).toEqual(['heartbeat:derived', 'sweep:derived'])
-    expect(o.commands().filter(c => c.startsWith('dev-query')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
+    expect(o.commands().filter(c => c.startsWith('dev-query') && !c.includes('since=')).map(c => c.match(/days=\d+/)?.[0])).toEqual(['days=3', 'days=90'])
   })
 
   test('a lost store is rebuilt from 7 days of events, once: holds older than the facts window survive', async () => {
@@ -1108,7 +1140,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const h = host({ factory, week: [loop, ...RECENT] })
     const obs = await h.pass(runtime(), stored({ ledger: null }))
     expect(obs.ledgerSource).toBe('events')
-    expect(h.calls.filter(c => c.argv[0] === 'dev-query').map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
+    expect(h.calls.filter(c => c.argv[0] === 'dev-query' && c.stdin !== FLAKES_SQL).map(c => [c.argv.find(a => a.startsWith('days=')), c.stdin === EVENTS_SQL])).toEqual([
       ['days=3', true],
       ['days=7', true],
       ['days=90', false],
@@ -1219,6 +1251,41 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect(failed.state.sources.facts.ok).toBe(true)
       expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
       expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+    })
+
+    test('shadow reads the device floors once per compare, through the factory database, and a failing read fails the compare alone', async () => {
+      const h = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+      const floorCalls = () => calls(h, NEW_FLOORS_SQL).map(c => c.argv.join(' '))
+      const first = await h.pass(withSource('shadow'))
+      expect(floorCalls()).toEqual([`dev-query --factory --csv -v repo=${REPO}`])
+      expect([calls(h, EVENTS_SQL).length, calls(h, NEW_EVENTS_SQL).length, floorCalls().length]).toEqual([1, 1, 1])
+      expect(first.state.v2?.factsShadow?.data).toMatchObject({ new_ok: true, scope_floor: null, out_of_scope: 0 })
+      // no compare within the hour: no floor read
+      await h.pass(withSource('shadow'), undefined, NOW + 30 * MIN)
+      expect(floorCalls()).toHaveLength(0)
+      // old and new make no floor call
+      for (const source of ['old', 'new'] as const) {
+        const other = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) } })
+        await other.pass(withSource(source))
+        expect(calls(other, NEW_FLOORS_SQL)).toHaveLength(0)
+      }
+      // a floor read that fails: the compare failed on the new side, the pass and its facts stay ok
+      const down = host({ newEvents: { stdout: eventsCsv(NEW_RECENT) }, floors: { exitCode: 1, stderr: 'boom' } })
+      const failed = await down.pass(withSource('shadow'))
+      expect(failed.state.sources.facts.ok).toBe(true)
+      expect(keys(failed)).toEqual(['heartbeat:derived', 'sweep:derived'])
+      expect(failed.state.v2?.factsShadow?.data).toMatchObject({ old_ok: true, new_ok: false, compared: 0, differences: 0, diff_keys: [] })
+      expect(failed.state.v2?.factsShadow?.data.detail).toContain('source new')
+    })
+
+    test('shadow: the events older than their device floor are no difference, and the data names the floor', async () => {
+      const old = ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 30 * MIN })
+      const floor = iso(NOW - 10 * MIN).replace('.000Z', 'Z')
+      const withFloor = host({ recent: [old], newEvents: { stdout: eventsCsv([]) }, floors: { stdout: `device,floor\n${old.device},${floor}\n` } })
+      const o = await withFloor.pass(withSource('shadow'))
+      expect(keys(o)).toEqual(['heartbeat:derived'])
+      expect(o.state.v2?.factsShadow?.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [], new_ok: true, out_of_scope: 1 })
+      expect(o.state.v2?.factsShadow?.data.scope_floor).toBe(floor.replace('Z', '.000Z'))
     })
 
     test('the ledger rebuild of a lost store reads the week from the source eventsSource picks', async () => {
@@ -1388,6 +1455,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       expect(i.open).toBe(true)
       expect(i).toEqual(ref.state.issues.find(j => j.number === i.number))
     }
+  })
+
+  test('the open issues a read issue blocks join the next read last, behind every other reason and within the cap, and a closed one is not read (#1004)', async () => {
+    const blocking = (...ns: number[]) => ({ stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: ns.map(number => ({ number, repo: REPO, state: 'open' })) }, stripped: 0 }) })
+    const h = host({ issues: { '--json 45': blocking(900), '--json 900': { stdout: ISSUE(900) } } })
+    const first = await h.pass(runtime(), stored())
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+    expect(first.state.issues.find(i => i.number === 45)?.blockingList).toEqual([900])
+    expect(first.state.issues.find(i => i.number === 114)?.blockingList).toBeNull()
+
+    // the next pass: one call, 900 after the others
+    await h.pass(runtime(), stored(), NOW + 6 * MIN)
+    expect(h.commands().filter(c => c.includes('--issues'))).toHaveLength(1)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+
+    // 900 closed: known closed, it is not read again
+    h.world.issues['--json 900'] = CLOSED(900)
+    await h.pass(runtime(), stored(), NOW + 12 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470', '900'])
+    await h.pass(runtime(), stored(), NOW + 18 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+  })
+
+  test('a chain never starves the issues the loop acts on: with twelve other due issues the blocked one is not read (#1004)', async () => {
+    const blocking = { stdout: JSON.stringify({ issue: { ...JSON.parse(ISSUE(45)).issue, blocking: [{ number: 900, repo: REPO, state: 'open' }] }, stripped: 0 }) }
+    const h = host({ issues: { '--json 45': blocking } })
+    await h.pass(runtime(), stored())
+    const queue = Array.from({ length: 14 }, (_, i) => 300 + i)
+    h.world.queue = { stdout: `queue known=none now=${queue.join(',')}
+` }
+    await h.pass(runtime(), stored({ queueKnown: null }), NOW + 6 * MIN)
+    const reads = issueReads(h)
+    expect(reads).toHaveLength(12)
+    expect(reads).not.toContain('900')
   })
 
   test('a failed batched call keeps every last value and marks github not ok; an exit-2 reader falls back to single reads; a refused number is untrusted (#922)', async () => {

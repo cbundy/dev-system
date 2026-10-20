@@ -7,6 +7,7 @@ import { rateLimited } from '../exec'
 import type { Exec, Executor } from '../exec'
 import type { ActionKind } from '../types'
 import { executors as ci } from './act-ci'
+import { executors as flakeBug } from './act-flake-bug'
 import { executors as pr } from './act-pr'
 import { executors as queue } from './act-queue'
 import { executors as review } from './act-review'
@@ -17,7 +18,7 @@ import { executors as tracker } from './act-tracker'
 import { pollPauseArgv } from './argv'
 import { executors as steps } from './steps'
 
-export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...tracker, ...review, ...ci, ...queue, ...slots, ...steps }
+export const V2_EXECUTORS: Partial<Record<ActionKind, Executor>> = { ...state, ...pr, ...split, ...tracker, ...review, ...ci, ...queue, ...slots, ...steps, ...flakeBug }
 
 // The pauses, in seconds, before an attempt that failed on a GitHub blip runs again (5.1).
 const BLIP_PAUSES_S: readonly number[] = [5, 15]

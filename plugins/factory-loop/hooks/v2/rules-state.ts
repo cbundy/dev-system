@@ -70,7 +70,7 @@ const fact = (f: string): Trigger => ({ kind: 'fact', fact: f })
 
 // ruleOf: the rule id a row's transition is planned under (14.1).
 function ruleOf(row: Row): string {
-  if (row.id === 'S0') return 'S1'
+  if (row.id === 'S0' || row.id === 'S7') return 'S1'
   if (row.id.startsWith('U')) return 'S4'
   if (row.id.startsWith('X')) return 'S5'
   return row.id.startsWith('T') ? 'S3' : 'S6'
@@ -167,7 +167,7 @@ function periodOf(ctx: V2Ctx, r: IssueRecord): Ms {
 
 // openOf: the conditions of a waiting record no read has shown to hold (4.4): a condition not read,
 // or whose read failed or was skipped, is open.
-function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
+export function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
   return (r.wait ?? []).filter(c => ctx.v2.waits?.[waitKey(c)]?.held !== true)
 }
 
@@ -184,7 +184,7 @@ function clearedData(ctx: V2Ctx, r: IssueRecord): { tags: Record<string, string>
 
 // openText: the open conditions in words, for the skip line and E6's tell; a condition the loop
 // cannot read says so.
-function openText(ctx: V2Ctx, open: readonly WaitCondition[]): string {
+export function openText(ctx: V2Ctx, open: readonly WaitCondition[]): string {
   return open
     .map(c => {
       const text =

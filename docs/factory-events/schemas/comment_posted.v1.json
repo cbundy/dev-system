@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comment_posted.v1.json",
+  "title": "comment_posted",
+  "description": "The loop posted a park's question or a wait's conditions on the issue; the event is written once the comment exists. It joins the transition that entered the state by (repo, issue, life, seq). Count one per (repo, issue, life, seq): the same comment can be seen by more than one device. The loop's park and wait entry actions write it (rules-entry.ts).",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["life", "seq", "to_state", "comment_url"],
+  "properties": {
+    "life": { "type": "string", "pattern": "^[0-9a-z]+$", "description": "The life the comment belongs to.", "x-column": true },
+    "seq": { "type": "integer", "minimum": 0, "description": "The seq of the transition whose entry action posted the comment.", "x-column": true },
+    "to_state": { "enum": ["parked", "waiting"], "description": "The state that seq entered.", "x-column": true },
+    "comment_url": { "type": "string", "pattern": "^https://\\S+$", "maxLength": 500, "description": "The comment's URL on GitHub.", "x-column": true }
+  },
+  "examples": [
+    { "life": "ltn4zqo", "seq": 7, "to_state": "parked", "comment_url": "https://github.com/cbundy/plant-console/issues/42#issuecomment-6259542165" },
+    { "life": "ltn4zqo", "seq": 3, "to_state": "waiting", "comment_url": "https://github.com/cbundy/plant-console/issues/42#issuecomment-6259542001" }
+  ]
+}

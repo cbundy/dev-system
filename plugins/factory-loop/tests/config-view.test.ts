@@ -29,7 +29,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
+  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels',
   'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
@@ -105,6 +105,12 @@ describe('configText', () => {
     expect(line(fallback, 'passEvery')).toEndWith(' default')
     expect(fallback.split('Config problems\n')[1]).toContain('passEvery: "soon" is not a duration')
     expect(configText(view({}), control(), NOW).split('Config problems\n')[1]).toBe('  none')
+  })
+
+  test('mainEvery shows its value and source', () => {
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'mainEvery')).toContain('5m')
+    expect(line(def, 'mainEvery')).toEndWith(' default')
   })
 
   test('releaseBranchPrefix and releaseHold show their value and source; a hold of 0 shows off', () => {

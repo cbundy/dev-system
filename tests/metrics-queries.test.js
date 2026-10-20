@@ -81,7 +81,8 @@ const BANNED = [
 // 6b reads `detail`, and the split query `split_into`, fields no event_log column lifts, from factory.event_store; 6b has its own test
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
 // 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0"]);
+// The startup migrates read the loop_entry's migrate fields (database, versions, outcome) from event_store: no event_log column lifts them.
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0"]);
 
 function problems(sql, id) {
   const text = strip(sql);
@@ -100,14 +101,21 @@ const blocks = sqlBlocks(markdown);
 // Blocks that are compared against a frozen old query (SPECS below) and blocks that are only run.
 const RUN_ONLY = [
   "Factory metrics #0", "Fix rounds with no new head #0",
-  "2b. Gate waits #0", "2b. Gate waits #1",
+  "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2", "2b. Gate waits #3",
   "6b. Reader shadow compares #0",
-  "7a. How waits end #0",
-  "Split trackers closed by the loop #0",
-  "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2",
+  "7a. How waits end #0", "7b. Done closes #0",
+  "Split trackers closed by the loop #0", "Split children parked on their open decision #0",
+  "2c. Wind-downs #0", "2c. Wind-downs #1", "2c. Wind-downs #2", "2c. Wind-downs #3",
+  "2d. Flaky tests #0", "2d. Flaky tests #1", "2d. Flaky tests #2", "2d. Flaky tests #3", "2d. Flaky tests #4",
+  "8b. Designer model comparison #0",
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
+  "9b. Permission prompts #0",
+  "10. Releases #0", "10. Releases #1", "10. Releases #2",
+  "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3",
+  "Settings #0", "Settings #1",
+  "Startup schema migrates #0",
 ];
 
 test("every sql block of docs/metrics.md reads only the factory database's views", () => {

@@ -208,13 +208,18 @@ test("the v2 designer has a section on waiting between its question and split se
 
 test("the v2 designer makes every new decision observable, and the reviewer holds the change to it", () => {
   const raw = read("plugins/factory-loop/agents/designer-v2.md");
-  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Sequencing/);
+  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Compatibility\n[^\n]*\n\n## Sequencing/);
   const body = raw.replace(/\s+/g, " ");
   assert.match(body, /prefer optional fields on an existing event type/);
   assert.match(body, /add its query to `docs\/metrics\.md`/);
   assert.match(body, /ships whole in its first release/);
   const review = read("plugins/factory-loop/agents/reviewer.md").replace(/\s+/g, " ");
   assert.match(review, /`## Observability` section is a requirement like its acceptance criteria/);
+  assert.match(body, /none - no schema, event or reader change/);
+  assert.match(body, /10-minor-version window/);
+  assert.match(body, /The answer script checks the heading, the Rollout and the Observability and the Compatibility sections/);
+  assert.match(review, /`## Compatibility` section is a requirement like its acceptance criteria/);
+  assert.match(review, /drops, renames or retypes anything an old version reads/);
 });
 
 test("the v2 designer explores with its own reads: no Agent tool, no explorer, a checklist and an Exploration line (#851)", () => {
@@ -229,4 +234,27 @@ test("the v2 designer explores with its own reads: no Agent tool, no explorer, a
   assert.match(body, /every path and line range the brief cites exists at `origin\/<base>`/);
   const shape = raw.slice(raw.indexOf("## Design brief (designer,"));
   assert.ok(shape.indexOf("Exploration: <") !== -1 && shape.indexOf("Exploration: <") < shape.indexOf("## Acceptance criteria"));
+});
+
+test("the designer, builder and reviewer hold a flake bug to a reproduction under load and a consecutive stress run (#867)", () => {
+  const norm = (f) => read(`plugins/factory-loop/agents/${f}`).replace(/\s+/g, " ");
+  const designer = norm("designer-v2.md");
+  const builder = norm("builder.md");
+  const reviewer = norm("reviewer.md");
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  assert.ok(raw.indexOf("## The brief") < raw.indexOf("## A flake bug") && raw.indexOf("## A flake bug") < raw.indexOf("## A question"), "## A flake bug sits between ## The brief and ## A question");
+  for (const [name, body] of [["designer-v2", designer], ["builder", builder], ["reviewer", reviewer]]) {
+    assert.match(body, /`flaky` label or the loop's flake-bug marker/, name);
+    assert.match(body, /under load/, name);
+  }
+  for (const body of [designer, builder]) {
+    assert.match(body, /real waits instead of sleeps, wall-clock time, shared state, ordering/);
+    assert.match(body, /retry, (a )?skip,? or (a )?raised timeout without a written reason sized to what the test does/);
+  }
+  assert.match(designer, /passing many times in a row \(for example 20 consecutive passes\)/);
+  assert.match(builder, /stress command, the reproduced failure and the run of consecutive passes/);
+  assert.match(builder, /`callum-flow-test-weakening` applies/);
+  assert.match(builder, /starts the load, records their PIDs, runs the repeated test, and waits on those PIDs before it exits/);
+  assert.match(reviewer, /reproduction under load and the stress run of consecutive passes are requirements like the acceptance criteria/);
+  assert.match(reviewer, /a retry, skip or unexplained timeout raise, is an error finding/);
 });

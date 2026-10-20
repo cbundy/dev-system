@@ -10,6 +10,7 @@ import { parseCsv } from '../parse'
 import type { ShadowReadData } from './events'
 import { NEW_REBUILD_SQL, REBUILD_DAYS, REBUILD_SQL, recordsFromEvents, recordsFromNewRows } from './record'
 import type { SourceCtx } from './observe'
+import { sameValue } from './same-value'
 import type { IssueRecord } from './types'
 
 export const SHADOW_READER = 'loop-records'
@@ -28,7 +29,6 @@ export type RecordsCache = { rebuilt: { at: number; records: IssueRecord[] } | n
 
 // --- the compare (pure) -----------------------------------------------------------------------------
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
 // diffRecords: the issues whose records differ, each with its first differing field as
 // `#n field: old X, new Y` (a record only one side holds is `#n record: old present, new absent`).
@@ -43,7 +43,7 @@ export function diffRecords(oldRecords: readonly IssueRecord[], newRecords: read
       out.push({ issue, text: `#${issue} record: old ${a === undefined ? 'absent' : 'present'}, new ${b === undefined ? 'absent' : 'present'}` })
       continue
     }
-    const field = (Object.keys(a) as (keyof IssueRecord)[]).find(k => !same(a[k], b[k]))
+    const field = (Object.keys(a) as (keyof IssueRecord)[]).find(k => !sameValue(a[k], b[k]))
     if (field !== undefined) out.push({ issue, text: `#${issue} ${field}: old ${JSON.stringify(a[field])}, new ${JSON.stringify(b[field])}` })
   }
   return out

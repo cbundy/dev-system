@@ -61,7 +61,7 @@ whose `to_state` is the issue's state: `queued`, `designing`, `building`, `revie
 - `claim_lost` is logged by `callum-flow-claim` on exit 3 (`holder` says who holds the issue, `race`
   whether both devices claimed at once). `claim_renewed` is the lease heartbeat, not progress.
   `test_weakened` is one flagged commit of a merged PR. `implementer_routed` is the model chosen for
-  a build.
+  a build and `designer_routed` the model chosen for a design (reason `hash`, `label` or `fallback`).
 
 The four version columns (`base_image`, `dev_image`, `template_version`, `plugin_version`: what
 `dev-version --json` calls the running base image, dev image, Coder template version and callum-flow
@@ -161,6 +161,9 @@ repeat an event, so each run counts once per (issue, life, seq, started_at). The
 columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
 rows before a loop with this rule has run.
 
+A pass row can carry `flaky` (and, when true, `failed_tests` and `failed_at` of the fail it followed)
+and a fail row `failed_tests`; section 2d reads them.
+
 Take the p50 and p95 of `wait_ms` and `run_ms` per `day` in code (docs/factory-events/README.md:
 percentiles and medians are not SQL); a count and a mean per day are safe in SQL.
 
@@ -198,6 +201,65 @@ FROM (
 ) x
 GROUP BY repo, day
 ORDER BY repo, day DESC;
+```
+
+How often a restart cut a stop gate, and what became of it (v2 SPEC 10.6). The companion re-runs
+a cut gate when its slot's marker still names the attempt (`gate-rerun`) and gives it up
+otherwise (`gate-cut`); each is an `intervention` with that cause. A re-run's outcome is the first
+`gate_run` of the same issue and life that started after that row. A re-run that failed ends the
+held step lost, which shows as a `free:load` intervention. So per repo and day: the re-runs, the
+cuts, and the re-runs by outcome (no outcome yet shows as NULL).
+
+```sql
+SELECT i.repo, i.ts::date AS day, i.cause, g.result, count(*) AS n
+FROM factory.event_log i
+LEFT JOIN LATERAL (
+  SELECT result FROM factory.event_log r
+  WHERE r.type = 'gate_run' AND r.repo = i.repo AND r.issue = i.issue AND r.life = i.life
+    AND r.started_at > i.ts AND i.cause = 'gate-rerun'
+  ORDER BY r.started_at LIMIT 1
+) g ON true
+WHERE i.type = 'intervention' AND i.cause IN ('gate-rerun', 'gate-cut')
+GROUP BY i.repo, i.ts::date, i.cause, g.result
+ORDER BY i.repo, day DESC, i.cause;
+```
+
+Writer steps that ended before their gate (v2 SPEC 10.8). The loop ends a gated build or fix step
+only on that attempt's settling gate line, so after the release that added the rule every row's
+`hold_ms` is zero or more, and `ended_early` is false. A row with `ended_early` true is a step
+that closed while its stop gate still ran or was about to. It joins the done `loop_entry` of a
+build or fix step (its key carries the life and seq) to the `gate_run` events of the same issue,
+life and seq that started at or after the step's `started_at`; a gate's end is its `started_at`
+plus `wait_ms` plus `run_ms`. Count `ended_early` per `day` in code, and take the p50 and p95 of
+`hold_ms` (what the hold added) there too; steps with no gate run give no row.
+
+```sql
+WITH steps AS (
+  SELECT repo, issue, key,
+    substring(key from '^i[0-9]+/l([0-9a-z]+)/s[0-9]+/(?:build|fix)/a[0-9]+$')      AS life,
+    substring(key from '^i[0-9]+/l[0-9a-z]+/s([0-9]+)/(?:build|fix)/a[0-9]+$')::int AS seq,
+    min(started_at) AS started_at, min(ended_at) AS ended_at
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND kind = 'agent-step' AND status = 'done'
+    AND key ~ '^i[0-9]+/l[0-9a-z]+/s[0-9]+/(build|fix)/a[0-9]+$'
+  GROUP BY repo, issue, key
+),
+gates AS (
+  SELECT repo, issue, life, seq, started_at,
+    started_at + (min(wait_ms) + min(run_ms)) * interval '1 millisecond' AS gate_end
+  FROM factory.event_log
+  WHERE type = 'gate_run'
+  GROUP BY repo, issue, life, seq, started_at
+)
+SELECT s.repo, s.issue, s.key, s.ended_at::date AS day, s.ended_at, max(g.gate_end) AS last_gate_end,
+  max(g.gate_end) > s.ended_at AS ended_early,
+  round(extract(epoch FROM s.ended_at - max(g.gate_end)) * 1000)::bigint AS hold_ms
+FROM steps s
+JOIN gates g ON g.repo = s.repo AND g.issue = s.issue AND g.life = s.life AND g.seq = s.seq
+  AND g.started_at >= s.started_at
+WHERE s.ended_at IS NOT NULL
+GROUP BY s.repo, s.issue, s.key, s.ended_at
+ORDER BY s.ended_at DESC;
 ```
 
 ## 2c. Wind-downs
@@ -284,6 +346,231 @@ GROUP BY f.repo, f.device, f.requested_at, f.key, f.issue, f.life, f.step, f.rer
 ORDER BY f.requested_at DESC, f.key;
 ```
 
+(d) Stops by trigger (`restart-self` is the loop's own restart for an update, `coder-stop` a Coder
+stop): the count, the cap share and the mean steps cut. It answers whether the loop's own restarts
+wind down like Coder stops and whether the cap is enough for them:
+
+```sql
+WITH stops AS (
+  SELECT repo, device, requested_at,
+    min(trigger) AS trigger, min(outcome) AS outcome, min(cut_at_stop) AS cut_at_stop
+  FROM factory.event_log
+  WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+  GROUP BY repo, device, requested_at
+)
+SELECT repo, trigger,
+  count(*)                                                        AS stops,
+  round(count(*) FILTER (WHERE outcome = 'cap')::numeric / count(*), 3) AS cap_share,
+  round(avg(cut_at_stop), 2)                                      AS mean_cut_per_stop
+FROM stops
+GROUP BY repo, trigger
+ORDER BY repo, trigger;
+```
+
+## 2d. Flaky tests
+
+Which tests passed on a re-run of the same code, how often, and where. Two events carry it, both
+from the loop. A `gate_run` pass row has `flaky` true when the run just before it, in the same issue
+and life, failed on the same head and both slots were clean; `failed_tests` then holds the names from
+the fail before it and `failed_at` when that run started (`gate_run.v1.json`). A `ci-rerun`
+`intervention` row with `flaky` true records the re-run's result as a second row for the same fact, so
+section 9 still counts the fact once; its `failed_jobs` and `failed_tests` name what failed
+(`intervention.v1.json`). A retried write can repeat a row, so a gate flake counts once per (issue,
+life, seq, started_at) and a CI flake once per (issue, fact). A row with `flaky` false is not a flake.
+The queries read the columns migration 0011 lifted into `factory.event_log` and take
+`-v repo=... -v since=...`; `since` filters on when the flake passed. There are no gate rows until
+its producer (#1026) ships; the CI rows come from the loop's flake rule (v2 SPEC 8.5).
+
+The first query gives one row per flake per test. `source` is `gate` or `ci`; `job` is null for the
+gate and the failed jobs for CI; `test` is null when no name was recorded; `failed_at` is the gate's
+`failed_at`, or for CI the time of the first `ci-rerun` row for the fact; `passed_at` is the flake
+row's time. The second lists each test with its flake count, first and last flake and the issues it
+hit.
+
+```sql
+-- one row per flake per test
+WITH gate AS (
+  -- a gate flake: the flaky pass row, once per (issue, life, seq, started_at) however often it was written
+  SELECT repo, issue, life, seq, started_at, max(head) AS head,
+    min(failed_at) AS failed_at, min(ts) AS passed_at,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), first_rerun AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, min(ts) AS rerun_at
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND repo = :'repo'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), ci AS (
+  -- a CI flake: the ci-rerun row with flaky = true, once per (issue, fact)
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(life) AS life, max(head) AS head,
+    min(ts) AS passed_at,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, repo, issue, life, head, NULL::text AS job, failed_at, passed_at,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', c.repo, c.issue, c.life, c.head,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.jobs) = 'array' THEN c.jobs ELSE '[]'::jsonb END) AS j),
+    f.rerun_at, c.passed_at,
+    CASE WHEN jsonb_typeof(c.tests) = 'array' THEN c.tests ELSE '[]'::jsonb END
+  FROM ci c
+  LEFT JOIN first_rerun f ON f.repo = c.repo AND f.issue IS NOT DISTINCT FROM c.issue AND f.fact = c.fact
+)
+SELECT f.source, f.repo, f.issue, f.life, f.head, f.job, t.test, f.failed_at, f.passed_at
+FROM flakes f
+LEFT JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test) ON true
+ORDER BY f.passed_at DESC, f.source, f.issue, t.test;
+```
+
+```sql
+-- each test per repo: how often it flaked, when, and in how many issues
+WITH gate AS (
+  -- a gate flake: the flaky pass row, once per (issue, life, seq, started_at) however often it was written
+  SELECT repo, issue, life, seq, started_at, max(head) AS head,
+    min(failed_at) AS failed_at, min(ts) AS passed_at,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), first_rerun AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, min(ts) AS rerun_at
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND repo = :'repo'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), ci AS (
+  -- a CI flake: the ci-rerun row with flaky = true, once per (issue, fact)
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(life) AS life, max(head) AS head,
+    min(ts) AS passed_at,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, repo, issue, life, head, NULL::text AS job, failed_at, passed_at,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', c.repo, c.issue, c.life, c.head,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.jobs) = 'array' THEN c.jobs ELSE '[]'::jsonb END) AS j),
+    f.rerun_at, c.passed_at,
+    CASE WHEN jsonb_typeof(c.tests) = 'array' THEN c.tests ELSE '[]'::jsonb END
+  FROM ci c
+  LEFT JOIN first_rerun f ON f.repo = c.repo AND f.issue IS NOT DISTINCT FROM c.issue AND f.fact = c.fact
+)
+SELECT f.repo, t.test, count(*) AS flakes, min(f.passed_at) AS first_flake, max(f.passed_at) AS last_flake,
+  count(DISTINCT f.issue) AS issues
+FROM flakes f
+CROSS JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test)
+GROUP BY f.repo, t.test
+ORDER BY flakes DESC, last_flake DESC, t.test;
+```
+
+The flake bug rule (v2 SPEC 8.5, rule F1) files one bug for a test with at least `flakeBugMin`
+flakes in the last `flakeWindowDays`, and comments on that bug for each later flake. It reads this
+query: one row per flake per test, as the first query counts them, with the event id of the flake's
+first row (the identity a bug's comment is keyed by), the test's name hashed (the first 16 hex digits
+of its sha256, which the bug's marker carries) and the failed jobs of a CI flake. The loop runs it
+with `-v repo=... -v since=...`, `since` being now minus `flakeWindowDays`. The loop's copy of the
+query (`FLAKES_SQL` in `plugins/factory-loop/hooks/v2/sources-flakes.ts`) is held identical to this one
+by `tests/metrics-flakes.test.js`.
+
+```sql
+-- the bug rule's read: one row per flake per test, with the event id and the test's hash
+WITH gate AS (
+  SELECT repo, issue, life, seq, started_at, max(head) AS head, min(ts) AS passed_at,
+    (array_agg(event_id ORDER BY ts, device, device_seq))[1] AS event_id,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, life, seq, started_at
+), ci AS (
+  SELECT repo, issue, coalesce(fact, event_id::text) AS fact, max(head) AS head, min(ts) AS passed_at,
+    (array_agg(event_id ORDER BY ts, device, device_seq))[1] AS event_id,
+    (array_agg(failed_jobs ORDER BY ts, device, device_seq))[1] AS jobs,
+    (array_agg(failed_tests ORDER BY ts, device, device_seq))[1] AS tests
+  FROM factory.event_log
+  WHERE type = 'intervention' AND cause = 'ci-rerun' AND flaky = true AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, issue, coalesce(fact, event_id::text)
+), flakes AS (
+  SELECT 'gate' AS source, event_id, issue, head, passed_at, NULL::text AS job,
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END AS tests
+  FROM gate
+  UNION ALL
+  SELECT 'ci', event_id, issue, head, passed_at,
+    (SELECT string_agg(j, ', ' ORDER BY j)
+       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(jobs) = 'array' THEN jobs ELSE '[]'::jsonb END) AS j),
+    CASE WHEN jsonb_typeof(tests) = 'array' THEN tests ELSE '[]'::jsonb END
+  FROM ci
+)
+SELECT f.event_id, f.source, f.issue, f.head,
+  to_char(f.passed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS passed_at, t.test, f.job,
+  left(encode(sha256(convert_to(t.test, 'UTF8')), 'hex'), 16) AS hash
+FROM flakes f
+CROSS JOIN LATERAL jsonb_array_elements_text(f.tests) AS t(test)
+ORDER BY f.passed_at, f.event_id, t.test;
+```
+
+The rule writes one `loop_entry` tell (`wake` `flake-bug`) for each bug it files. It carries the
+decision (`ready`, or `held` when `flakeBugReadyCap` open flake bugs were already ready or in flight),
+the test (`flake_test`), how many flakes the window held (`flakes`, `window_days`), the first of them
+(`first_flake_at`) and the bug (`filed_issue`). The tell is written when the bug exists, and again as
+it is delivered, so the queries below group by the bug. The first gives the time from a test's first
+flake to its fix merging; the second, the daily summary, counts the bugs filed, readied, held, fixed
+(closed or merged) and still open, and how often the cap held one. A bug closed without a merge
+counts as fixed in the summary and has no row in the first.
+
+```sql
+-- time from a test's first flake to its fix merging, per flake bug
+WITH bugs AS (
+  SELECT repo, filed_issue, max(flake_test) AS flake_test, min(first_flake_at) AS first_flake,
+    min(ts) AS filed_at, bool_or(decision = 'ready') AS readied
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'flake-bug' AND filed_issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'
+  GROUP BY repo, filed_issue
+)
+SELECT b.filed_issue AS bug, b.flake_test, b.first_flake, b.filed_at, b.readied, m.merged_at,
+  m.merged_at - b.first_flake AS first_flake_to_merge
+FROM bugs b
+LEFT JOIN LATERAL (
+  SELECT min(ts) AS merged_at FROM factory.event_log
+  WHERE type = 'merged' AND repo = b.repo AND issue = b.filed_issue
+) m ON true
+ORDER BY b.first_flake, b.filed_issue;
+```
+
+```sql
+-- the daily summary: flake bugs filed, readied, held, fixed and still open
+WITH bugs AS (
+  SELECT repo, filed_issue, min(ts) AS filed_at,
+    bool_or(decision = 'ready') AS readied, bool_or(decision = 'held') AS held
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'flake-bug' AND filed_issue IS NOT NULL AND repo = :'repo'
+  GROUP BY repo, filed_issue
+), ended AS (
+  SELECT repo, issue, min(ts) AS ended_at
+  FROM factory.event_log
+  WHERE type IN ('closed', 'merged') AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY repo, issue
+)
+SELECT count(*) FILTER (WHERE b.filed_at >= :'since') AS filed,
+  count(*) FILTER (WHERE b.filed_at >= :'since' AND b.readied) AS readied,
+  count(*) FILTER (WHERE b.filed_at >= :'since' AND b.held) AS held,
+  count(*) FILTER (WHERE e.ended_at >= :'since') AS fixed,
+  count(*) FILTER (WHERE e.ended_at IS NULL) AS still_open
+FROM bugs b
+LEFT JOIN ended e ON e.repo = b.repo AND e.issue = b.filed_issue;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`
@@ -311,6 +598,36 @@ SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS unchanged_fixes
 FROM factory.event_log
 WHERE type = 'transition' AND table_row = 'T17'
 GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
+### Split children parked on their open decision
+
+A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).
+Per such park this gives how long it waited for the owner and whether the next transition (the owner's
+resume, P1) was followed by the designer's step (T1 to designing). `waited_seconds` is null while the
+child still waits; `resumed_via` is the resume route (`unpark:label` or `unpark:op`). Take the count of rows
+for how many children park, the median of `waited_seconds` for how long, and the share with `designing_at`
+set for how many reach designing. It takes `-v repo=... -v since=...`.
+
+```sql
+WITH tr AS (
+  SELECT repo, issue, life, seq, table_row, to_state, via, seq_at,
+         lead(seq_at) OVER w AS next_at, lead(via) OVER w AS next_via,
+         lead(table_row) OVER w AS next_row, lead(to_state, 2) OVER w AS then_state,
+         lead(seq_at, 2) OVER w AS then_at
+  FROM (SELECT l.repo, l.issue, l.life, l.seq, l.table_row, l.to_state, l.via, l.seq_at,
+          row_number() OVER (PARTITION BY l.repo, l.issue, l.life, l.seq ORDER BY l.ts, l.device, l.device_seq) AS n
+        FROM factory.event_log l
+        WHERE l.type = 'transition' AND l.issue IS NOT NULL AND l.repo = :'repo') x
+  WHERE n = 1
+  WINDOW w AS (PARTITION BY repo, issue ORDER BY seq_at, seq)
+)
+SELECT repo, issue, seq_at AS parked_at, next_via AS resumed_via,
+       extract(epoch FROM next_at - seq_at) AS waited_seconds,
+       CASE WHEN then_state = 'designing' THEN then_at END AS designing_at
+FROM tr
+WHERE table_row = 'S7' AND via = 'split-decision' AND seq_at >= :'since'::timestamptz
+ORDER BY seq_at DESC;
 ```
 
 ## 4. Merges per device
@@ -446,12 +763,17 @@ How often a reader with an old/new source switch (`reader`, such as `claim-event
 sources disagreeing. The command that compares (`tool`) writes one `shadow_read` event per compare,
 not per issue (`shadow_read.v1.json`). `differences` counts keys whose answers differ with both
 sides cut at the settle time, `live_differences` the same on everything read (push lag included),
-and `old_ok` / `new_ok` say whether that side's central read succeeded. A retried write can repeat
+and `old_ok` / `new_ok` say whether that side's central read succeeded. Both compares leave out the events of a
+device older than that device's first event in the new store (its floor): the production new store holds only
+dual-written events, so the old window reaches back before it begins. `scope_floor` is the writing device's floor
+(null when it has none) and `out_of_scope` how many events the floor left out (`loop-facts` only), so a clean
+compare can be told from one the floor cut most of; the query returns the newest `scope_floor` and the summed
+`out_of_scope`. A retried write can repeat
 an event, so each compare counts once per (repo, device, ts). The query reads the columns migration
 0005 lifted into `factory.event_log`, and `detail` (not lifted) from the same event's `data` in
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
 loop setting `eventsSource` `shadow` (opt-in; the default is `new`), once per load and then at most hourly; `differences` counts issues whose
-rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
+rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` and the newest `ready` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
 held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
 event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
@@ -459,10 +781,12 @@ event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS
 before now; the query groups by reader and tool.
 
 ```sql
--- per reader, tool, device and day: compares, differences, failed reads, newest difference detail
+-- per reader, tool, device and day: compares, differences, failed reads, newest difference detail, newest scope floor, events out of scope
 WITH compares AS (
   SELECT e.reader, e.tool, e.device, e.ts, e.differences, e.live_differences, e.old_ok, e.new_ok,
          s.data ->> 'detail' AS detail,
+         s.data ->> 'scope_floor' AS scope_floor,
+         (s.data ->> 'out_of_scope')::int AS out_of_scope,
          row_number() OVER (PARTITION BY e.repo, e.device, e.ts ORDER BY e.event_id) AS dup
   FROM factory.event_log e
   JOIN factory.event_store s ON s.event_id = e.event_id
@@ -480,7 +804,9 @@ SELECT reader, tool, device, date_trunc('day', ts) AS day,
   sum(differences)                                 AS differences,
   sum(live_differences)                            AS live_differences,
   count(*) FILTER (WHERE NOT old_ok OR NOT new_ok) AS failed_reads,
-  max(detail) FILTER (WHERE newest = 1 AND differences > 0) AS newest_detail
+  max(detail) FILTER (WHERE newest = 1 AND differences > 0) AS newest_detail,
+  (array_agg(scope_floor ORDER BY ts DESC) FILTER (WHERE scope_floor IS NOT NULL))[1] AS scope_floor,
+  coalesce(sum(out_of_scope), 0)                   AS out_of_scope
 FROM once
 GROUP BY reader, tool, device, date_trunc('day', ts)
 ORDER BY day DESC, reader, tool, device;
@@ -631,6 +957,12 @@ ORDER BY seq_at DESC;
 Group by `foreign` and `ended_via` for how waits end (`foreign` is true when a condition names another repo, so waits on another repo's release or issue compare with those on the loop's own), and count the rows with a null `ended_at` older than a day for
 waits that look stuck.
 
+How often a release wait triggers a review within the hour (the O3 key carries the waiting set the review saw, the reason names the new issues):
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "O3" and (.reason | test("started waiting"))) | {at: $d.at, key, reason}] | .[] | "\(.at) \(.key) \(.reason)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 A wait the loop cannot read (a failing read, or a tag condition on a repo with no release) raises the owner item
 `wait-unreadable` once per 24 h period, keyed `.../wait-unreadable/<k>`. How many periods each issue hung for, from the decision log
 (the planned action carries the key and the issue; the conditions are in the tell's fields in the ledger):
@@ -640,6 +972,59 @@ jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key
   | {day: ($d.at | tostring | .[0:10]), issue, key}] | unique_by(.key) | group_by(.issue)[]
   | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
+
+### Starved queue
+
+A ready queue the factory cannot touch while nothing is in flight raises the owner item `starved` once the
+spell is `starvedNoticeAfterMs` (default 60 min) old, and again once per 24 h period of it, keyed
+`tell:starved:<since>:<k>`. What each notice named, from the decision log:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:starved:")))
+  | {since: .fields.since, minutes: (.fields.minutes | tonumber), roots: .fields.roots, why: .fields.why}]
+  | unique_by(.since + .roots) | .[] | "\(.since) \(.minutes) min: \(.why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+The pass line carries `starved: {since, minutes}` while a pass is starved, so a spell's start, end and length
+show without the tell:
+
+```sh
+jq -rs 'map(select(.starved != null)) | group_by(.starved.since)[] | "\(.[0].starved.since): \((map(.starved.minutes) | max)) min"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+## 7b. Done closes
+
+The designer answers `done` when an issue's work is already merged (v2 SPEC 8.7): the loop checks the
+evidence, closes the record with `why = 'done'` (row T18, `via` `done`) and closes the issue as completed.
+This lists each issue the loop closed that way, newest first, with the evidence the transition's `notes` hold for
+a person to read (`done: PR #N (merge <sha7>)`, `commit <sha7>`, and the run-it URL when given; never parsed), so a
+count per week is `date_trunc('week', closed_at)` over the rows. A retried write counts once. It takes
+`-v repo=... -v since=...`.
+
+```sql
+-- per done close: when, and on what evidence
+SELECT issue, life, closed_at, evidence
+FROM (SELECT issue, life, seq_at AS closed_at, notes::text AS evidence,
+             row_number() OVER (PARTITION BY repo, issue, life, seq ORDER BY ts, device, device_seq) AS n
+      FROM factory.event_log
+      WHERE type = 'transition' AND why = 'done' AND repo = :'repo' AND seq_at >= :'since'::timestamptz) x
+WHERE n = 1
+ORDER BY closed_at DESC;
+```
+
+What became of each issue's branch: the done close's `delete-branch` entry (key `.../follow/delete-branch`)
+is in the decision log's outcomes, with the summary `deleted issue-N` or `kept issue-N: it moved since it was
+read`. A branch the close kept for its own commits, or that origin did not have, plans no `delete-branch` at all;
+the done comment on the issue and the `done` tell (`fields.branch`: `deleted`, `kept` or `none`) say which:
+
+```sh
+jq -rs '[.[] | (.outcomes // [])[] | select(.key | test("/follow/delete-branch$")) | "\(.key) \(.status): \(.summary)"] | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and .reason == "tell done") | "#\(.issue) branch \(.fields.branch)"] | unique | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+How often a done answer's evidence fails the loop's own check: the design step's unknown with `why` `bad-answer`
+and a reason that starts "the done evidence ..." or "the done answer's PR ...", in the `transition` events'
+notes (the retry) and in the decision log. The answer script's refusals show only in the designer's stderr.
 
 ## 8. Implementer model comparison
 
@@ -750,6 +1135,57 @@ GROUP BY model
 ORDER BY model;
 ```
 
+## 8b. Designer model comparison
+
+The design step runs on the model `callum-flow-designer-route` picks and logs as `designer_routed`;
+when the route cannot run, the loop logs the same event with reason `fallback` and a null
+`sonnet_pct`. Set the share of issues designed by Sonnet with `"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }`
+in the repo's `.claude/settings.json`, and keep it fixed while the comparison runs. Only
+hash-routed issues count: an issue with any other reason, or routed to both models, is left out. A
+timed-out route can leave a tool event and a fallback event for one attempt; the hash-only rule
+excludes both. Each issue is counted from its first `designer_routed`.
+
+- `built_clean`: the first design transition after the route is T2 (to building) with no T3 or T4 before it.
+- `parked_pct`: the share of issues with a T3 question after the route.
+- `splits`: issues with a T4. `waits`: issues with a T16. `merged`: a `merged` event after the route.
+
+```sql
+WITH routed AS (
+  SELECT repo, issue, min(ts) AS routed_at, min(model) AS model
+  FROM factory.event_log
+  WHERE type = 'designer_routed'
+  GROUP BY repo, issue
+  HAVING count(*) FILTER (WHERE reason IS DISTINCT FROM 'hash') = 0
+     AND count(DISTINCT model) = 1
+),
+per_issue AS (
+  SELECT r.model,
+    (SELECT t.table_row FROM factory.event_log t
+      WHERE t.repo = r.repo AND t.issue = r.issue AND t.type = 'transition'
+        AND t.seq_at >= r.routed_at AND t.table_row IN ('T2', 'T3', 'T4', 'T16')
+      ORDER BY t.seq_at, t.seq LIMIT 1) = 'T2'                                      AS built_clean,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T3' AND t.seq_at >= r.routed_at) AS parked,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T4' AND t.seq_at >= r.routed_at) AS split,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'transition' AND t.table_row = 'T16' AND t.seq_at >= r.routed_at) AS waited,
+    EXISTS (SELECT 1 FROM factory.event_log t WHERE t.repo = r.repo AND t.issue = r.issue
+            AND t.type = 'merged' AND t.ts >= r.routed_at)                            AS merged
+  FROM routed r
+)
+SELECT model,
+  count(*)                                                       AS issues,
+  count(*) FILTER (WHERE built_clean)                            AS built_clean,
+  round(100.0 * count(*) FILTER (WHERE parked) / count(*), 1)    AS parked_pct,
+  count(*) FILTER (WHERE split)                                  AS splits,
+  count(*) FILTER (WHERE waited)                                 AS waits,
+  count(*) FILTER (WHERE merged)                                 AS merged
+FROM per_issue
+GROUP BY model
+ORDER BY model;
+```
+
 ## 9. Interventions, judgement calls and claim completion
 
 The factory loop v2's effectiveness, as issue #632 asks for it, from `factory.event_log` alone. Every
@@ -767,7 +1203,8 @@ logged: the loop derives most of them a pass or more after their fact, so a hand
 after the `merged` event. One with no life (an owner op, a hand-recorded rescue, a control-file edit),
 or a life no `transition` names, counts from the first `claimed` to the issue's closing `transition`
 (the first to `closed` since its last claim before the merge; else the merge) plus 30 minutes.
-Fleet-level interventions (no `issue`) attach to no issue.
+Fleet-level interventions (no `issue`) attach to no issue. A `ci-rerun` flake row (2d) shares its
+`fact` with the re-run's first row, so these queries count the pair once.
 
 ```sql
 -- interventions per repo and day, by who and cause; `fleet` counts those that name no issue
@@ -1075,6 +1512,137 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+## 9b. Permission prompts
+
+Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):
+an agent's tool use that the companion denied, and an agent that stopped on a permission prompt nobody
+answers. Neither is a stage or progress. The companion never retries the write, so each row is one
+prompt (one per `event_id`).
+`tool_name`, `tool_input` and `agent_type` are the columns migration 0014 lifted; a `prompt_waiting` has
+no `tool_name` (its notification names none), and its `tool_input` is the notification's message.
+
+One block, two kinds of row told apart by `part`: `daily` is the prompts per repo and day (denied by
+`tool_name` and `agent_type`, and waiting), and `blocked` is the issues with a `prompt_waiting` in the last
+24 hours (issue, `agent_type`, `tool_input`, `ts`). It takes `-v repo=... -v since=...` (the daily part
+only; `blocked` is always the last 24 hours).
+
+```sql
+SELECT 'daily' AS part, repo, date_trunc('day', ts)::date AS day, NULL::int AS issue,
+  tool_name, agent_type, NULL::text AS tool_input, NULL::timestamptz AS ts,
+  count(*) FILTER (WHERE type = 'prompt_denied') AS denied,
+  count(*) FILTER (WHERE type = 'prompt_waiting') AS waiting
+FROM factory.event_log
+WHERE type IN ('prompt_denied', 'prompt_waiting') AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, date_trunc('day', ts)::date, tool_name, agent_type
+UNION ALL
+SELECT 'blocked', repo, NULL::date, issue, NULL::text, agent_type, tool_input, ts, NULL::bigint, NULL::bigint
+FROM factory.event_log
+WHERE type = 'prompt_waiting' AND repo = :'repo' AND ts >= now() - interval '24 hours'
+ORDER BY 1, 3 DESC, 2, 4, 5, 6;
+```
+
+## 10. Releases
+
+Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. Nothing
+writes them yet, so the queries return no rows until a producer does. Count a release once by
+`(repo, tag)`.
+
+Releases per week and the pull requests each carried:
+
+```sql
+SELECT date_trunc('week', ts)::date AS week, repo, tag, previous_tag,
+  jsonb_array_length(prs) AS pr_count, prs
+FROM factory.event_log
+WHERE type = 'released'
+ORDER BY week DESC, ts DESC;
+```
+
+How long Next sat full before each release (from the first milestone with closed work after the
+previous release to the release):
+
+```sql
+WITH rel AS (
+  SELECT repo, tag, min(ts) AS ts,
+    lag(min(ts)) OVER (PARTITION BY repo ORDER BY min(ts)) AS prev_ts
+  FROM factory.event_log
+  WHERE type = 'released'
+  GROUP BY repo, tag
+)
+SELECT r.repo, r.tag, r.ts AS released_at,
+  r.ts - (
+    SELECT min(m.ts) FROM factory.event_log m
+    WHERE m.type = 'milestone_state' AND m.repo = r.repo AND m.milestone_closed > 0
+      AND (r.prev_ts IS NULL OR m.ts > r.prev_ts) AND m.ts <= r.ts
+  ) AS sat_full
+FROM rel r
+ORDER BY r.ts DESC;
+```
+
+How often the judge held, per week (wakes that decided hold, and the milestone states where holding
+turned true):
+
+```sql
+WITH judged AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS wakes_held
+  FROM factory.event_log
+  WHERE type = 'loop_entry' AND wake = 'release' AND decision = 'hold'
+  GROUP BY 1
+), states AS (
+  SELECT ts, holding, lag(holding) OVER (PARTITION BY repo ORDER BY ts) AS was_holding
+  FROM factory.event_log
+  WHERE type = 'milestone_state'
+), turned AS (
+  SELECT date_trunc('week', ts)::date AS week, count(*) AS holds_started
+  FROM states
+  WHERE holding AND coalesce(was_holding, false) = false
+  GROUP BY 1
+)
+SELECT coalesce(j.week, t.week) AS week,
+  coalesce(j.wakes_held, 0) AS wakes_held, coalesce(t.holds_started, 0) AS holds_started
+FROM judged j FULL JOIN turned t ON j.week = t.week
+ORDER BY 1 DESC;
+```
+
+## Main after merge
+
+Reads the `main_state` events. The factory loop writes one (rule M1) when the state of the default
+branch it read differs from the last one it logged; it reads the branch every `mainEveryMs` (5
+minutes) in act mode. Count a state once by `(repo, device, observed_at)`.
+
+Main's newest state per repo:
+
+```sql
+SELECT s.repo, s.branch, s.head, s.pr, s.observed_at, s.green, s.changed
+FROM factory.event_log s
+WHERE s.type = 'main_state'
+  AND s.observed_at = (
+    SELECT max(n.observed_at) FROM factory.event_log n
+    WHERE n.type = 'main_state' AND n.repo = s.repo)
+GROUP BY s.repo, s.branch, s.head, s.pr, s.observed_at, s.green, s.changed
+ORDER BY s.repo;
+```
+
+Did main stay green after each merge? `first_green` is the first state observed at or after the
+merge and `first_observed_at` is when it was observed; `settled_green` is the newest state of that pull request, before main's head moved on. Both
+are null when no state was observed. The join is on `pr`, not `head`: a squash merge's commit on
+main is not the head that `merged` records.
+
+```sql
+SELECT m.repo, m.pr, m.ts AS merged_at,
+  (SELECT f.green FROM factory.event_log f
+    WHERE f.type = 'main_state' AND f.repo = m.repo AND f.pr = m.pr AND f.ts >= m.ts
+    ORDER BY f.observed_at ASC LIMIT 1) AS first_green,
+  (SELECT l.green FROM factory.event_log l
+    WHERE l.type = 'main_state' AND l.repo = m.repo AND l.pr = m.pr
+    ORDER BY l.observed_at DESC LIMIT 1) AS settled_green,
+  (SELECT f.observed_at FROM factory.event_log f
+    WHERE f.type = 'main_state' AND f.repo = m.repo AND f.pr = m.pr AND f.ts >= m.ts
+    ORDER BY f.observed_at ASC LIMIT 1) AS first_observed_at
+FROM factory.event_log m
+WHERE m.type = 'merged' AND m.pr IS NOT NULL
+ORDER BY m.ts DESC;
+```
+
 ## Workers
 
 The [base image's worker heartbeat reference](../images/base/README.md#worker-heartbeat)
@@ -1119,6 +1687,39 @@ FROM factory.worker_samples
 WHERE sampled_at > now() - interval '1 day'
 GROUP BY device, hour
 ORDER BY device, hour;
+```
+
+## Settings
+
+Settings the loop runs on. A `settings_changed` event records one change of one setting (see
+[REFERENCE.md](factory-events/REFERENCE.md)); `factory.workers.config` holds each worker's latest
+settings snapshot, written by each worker's heartbeat (images/base/README.md, "Settings snapshot"). The loop writes
+`settings_changed` (rule N1): each acting pass compares its settings with the last it kept and logs one event per
+setting that differs (at most 50 per pass), with `who` (person, judge, repo or plugin) and the `layer` of the new value
+(null for a derived value such as `derived.gateConcurrency`). The first pass after a start logs none, only keeps the snapshot.
+
+Settings changes over time, newest first (one row per `fact`, the once key; the same change seen by two
+devices counts once):
+
+```sql
+SELECT ts, repo, device, key, layer, who, old_value, new_value
+FROM (
+  SELECT e.*, row_number() OVER (PARTITION BY e.fact ORDER BY e.ts, e.device) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'settings_changed') c
+WHERE n = 1
+ORDER BY ts DESC, key;
+```
+
+Settings in force per worker. `config` is null while a worker has no snapshot (no loop settings file, or one that
+is unreadable, invalid or oversize). Judge how fresh a snapshot is by `config->>'at'`, the loop's last observing
+pass, never by `last_seen`: a worker keeps beating after its loop stops writing the snapshot:
+
+```sql
+SELECT device, repo, config->>'at' AS settings_at,
+  now() - (config->>'at')::timestamptz AS settings_age, config->'settings' AS settings
+FROM factory.workers_status
+ORDER BY device;
 ```
 
 ## Shadow runs (source switch)
@@ -1355,3 +1956,31 @@ either source. A key is `n/a` on its own when its columns are missing.
 
 The 10-minute window and the action list are constants in the script; tune them after real use.
 Idle, re-arm and stale wakes overlap (a re-arm is idle, a stale wake can be idle).
+
+### Startup schema migrates
+
+`factory-db-migrate` (run by `dev-init` before the loop starts, cbundy/dev-system#888) writes one
+`loop_entry` per run that found the migrator secret: a `task` with key `task:migrate:<to_version>`,
+wake `migrate`, status `done`, `failed` or `timed-out`, and the payload fields `database`,
+`from_version`, `to_version`, `duration_ms`, `outcome` (`migrated`, `current`, `failed`,
+`timed-out`) and `error`. They are not columns of `factory.event_log`, so the query reads
+`factory.event_store.data`. It answers when each database moved to each version, how long a migrate
+takes, how often it fails, and how long a database sat behind the newest image: the first attempt,
+the first success, the failed attempts and the time between them, per `database` and `to_version`.
+Take the time a migrate takes (p50, p95) in code from `duration_ms`. A join with
+`factory.schema_migrations.applied_at` (a query against that one database) confirms when the version landed. While a status is
+`failed` or `timed-out` the loop stays in observe and tells the owner once (`TELL schema-behind`).
+
+```sql
+SELECT s.data->>'database' AS database, (s.data->>'to_version')::int AS to_version,
+  min(l.ts) AS first_attempt,
+  min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) AS first_done,
+  count(*) FILTER (WHERE s.data->>'outcome' IN ('failed', 'timed-out')) AS failed_attempts,
+  round(extract(epoch FROM
+    min(l.ts) FILTER (WHERE s.data->>'outcome' IN ('migrated', 'current')) - min(l.ts)) / 60) AS minutes_behind
+FROM factory.event_log l
+JOIN factory.event_store s ON s.event_id = l.event_id
+WHERE l.type = 'loop_entry' AND l.kind = 'task' AND s.data->>'wake' = 'migrate'
+GROUP BY 1, 2
+ORDER BY first_attempt DESC;
+```

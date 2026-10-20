@@ -18,24 +18,36 @@
 // rules-state.ts takes each step's plan from PLANS, over the generic one. Pure.
 import { want } from '../foundation'
 import type { LedgerEntry } from '../types'
-import { childKey, entryKey } from './keys'
+import { childKey, claimKey, entryKey, lifeOf } from './keys'
+import { partsOfAnswer } from './park-parts'
 import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
-import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
+import type { IssueRecord, ParkParts, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
 
 const RULE = 'S2'
 
 // The design answer as the step's result carries it (contracts-work.mjs DesignAnswer).
 type Design = {
-  kind: 'brief' | 'question' | 'split' | 'wait'
+  kind: 'brief' | 'question' | 'split' | 'wait' | 'done'
   brief: string | null
   question: string | null
+  // the designer's question as the owner will see it in parts, null for a ledger entry from before
+  parts: ParkParts | null
   reasons: SplitReasons | null
   children: SplitChild[]
   // a wait: what it waits on and why
   conditions: WaitCondition[]
   reason: string | null
+  // a done close: the evidence, the commit the loop checked, the evidence PR's merge commit, and the
+  // branch as the design step read it (null before the step's check)
+  evidence: DoneEvidence | null
+  checked: string | null
+  mergeCommit: string | null
+  prHead: string | null
+  branch: { sha: string | null; beyond: number | null } | null
 }
+
+export type DoneEvidence = { pr: number | null; commit: string | null; runIt: string | null }
 
 const REASON_KEYS = ['why_split', 'why_count', 'why_parts', 'why_order'] as const
 
@@ -53,17 +65,26 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
   const data = e?.outcome?.kind === 'step' ? e.outcome.result.data : null
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
   const d = data as Partial<Design>
-  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait') return null
+  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait' && d.kind !== 'done') return null
+  const x = data as Record<string, unknown>
+  const ev = x.evidence !== null && typeof x.evidence === 'object' ? (x.evidence as Record<string, unknown>) : null
+  const br = x.branch !== null && typeof x.branch === 'object' ? (x.branch as Record<string, unknown>) : null
   const children = Array.isArray(d.children) ? d.children : []
   const conditions = Array.isArray(d.conditions) ? d.conditions : []
   return {
     kind: d.kind,
     brief: typeof d.brief === 'string' ? d.brief : null,
     question: typeof d.question === 'string' ? d.question : null,
+    parts: typeof x.decision === 'string' ? partsOfAnswer(x.decision, x) : null,
     reasons: reasonsOf(d.reasons),
     children,
     conditions,
     reason: typeof d.reason === 'string' ? d.reason : null,
+    evidence: ev === null ? null : { pr: typeof ev.pr === 'number' ? ev.pr : null, commit: typeof ev.commit === 'string' ? ev.commit : null, runIt: typeof ev.runIt === 'string' ? ev.runIt : null },
+    checked: typeof x.checked === 'string' ? x.checked : null,
+    mergeCommit: typeof x.mergeCommit === 'string' ? x.mergeCommit : null,
+    prHead: typeof x.prHead === 'string' ? x.prHead : null,
+    branch: br === null ? null : { sha: typeof br.sha === 'string' ? br.sha : null, beyond: typeof br.beyond === 'number' ? br.beyond : null },
   }
 }
 
@@ -76,6 +97,20 @@ export function splitDesignOf(ctx: StepEnv['ctx'], r: Pick<IssueRecord, 'issue' 
   for (const e of steps) {
     const d = designOf(e)
     if (d !== null && d.kind === 'split') return d
+  }
+  return null
+}
+
+// doneDesignOf: the done close a life's designer answered (its newest done design step that said
+// done), or null when no entry of the life still holds it. The closed entry reads the evidence and
+// the branch reading from it.
+export function doneDesignOf(ctx: StepEnv['ctx'], r: Pick<IssueRecord, 'issue' | 'life'>): Design | null {
+  const steps = lifeEntries(ctx, r, 'agent-step')
+    .filter(e => e.status === 'done' && e.outcome?.kind === 'step' && e.outcome.step === 'design')
+    .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+  for (const e of steps) {
+    const d = designOf(e)
+    if (d !== null && d.kind === 'done') return d
   }
   return null
 }
@@ -119,17 +154,37 @@ function order(children: readonly SplitChild[]): SplitChild[] {
   return out
 }
 
-// splitPlan: each child made once the siblings it waits on exist, then the parent's comment, then
-// the result.
+// parkClaim: a not-ready child's first claim, planned once the child exists: the claim makes the
+// child's record, parked on its open decision (row S7), so the owner is asked and the child is never
+// silent. A claim of the child the ledger holds already (its key carries the time it was first
+// planned) is the one that is kept; a lost one stays lost.
+// legacyDecision: the question of a not-ready child from a design answer recorded before `decision`
+// existed (the contract, split-decision.mjs, fills it in for every later one). The planner reaches no
+// answer contract (.mjs), so it holds the contract's fixed sentence (a test pins the two together).
+export const legacyDecision = (parent: number) => `This issue was split from #${parent} and carries an open owner decision. The split did not word it: read the issue, answer in a comment, then resume it.`
+
+function parkClaim(env: StepEnv, parent: number, n: number, c: SplitChild): Effect {
+  const { ctx } = env
+  const prefix = claimKey(n, '')
+  const held = ctx.state.ledger.find(e => e.kind === 'claim' && e.key.startsWith(prefix))
+  const key = held?.key ?? claimKey(n, lifeOf(ctx.state.now))
+  const question = typeof c.decision === 'string' && c.decision !== '' ? c.decision : legacyDecision(parent)
+  return effect(env, { kind: 'claim', key, class: 'free', rule: RULE, reason: `claim split child ${c.key} to park it on its open decision`, issue: n, park: { question, parent, ...(c.decisionParts == null ? {} : { parts: c.decisionParts }) } }, `split: claim of child ${c.key}`)
+}
+
+// splitPlan: each child made once the siblings it waits on exist, a not-ready child claimed to park
+// on its decision, then the parent's comment, then the result.
 function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
   const { ctx, r } = env
   const made = new Map<string, number>()
   const waits: StepRead[] = []
+  const claims: Effect[] = []
   for (const c of order(d.children)) {
     const key = childKey(r, c.key)
     const done = childOf(ctx.byKey.get(key))
     if (done !== null) {
       made.set(c.key, done)
+      if (!c.ready) claims.push(parkClaim(env, r.issue, done, c))
       continue
     }
     // a sibling key resolves through the made children, "#<N>" straight to N
@@ -142,11 +197,17 @@ function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
     if ('read' in step) waits.push(step.read)
     else {
       const n = childOf(step.done)
-      if (n !== null) made.set(c.key, n)
+      if (n !== null) {
+        made.set(c.key, n)
+        if (!c.ready) claims.push(parkClaim(env, r.issue, n, c))
+      }
     }
   }
   // a pass that planned a child says nothing more; else the first wait names why
   if (made.size < d.children.length) return waits.find(w => w.kind === 'held' && w.why === '') ?? waits[0] ?? { kind: 'held', why: 'split: its children are being made' }
+  // every not-ready child is claimed before the plan is posted and the parent closes
+  const pending = claims.find(k => 'read' in k)
+  if (pending !== undefined && 'read' in pending) return pending.read
   const list = d.children.map(c => `- #${made.get(c.key)}: ${c.title}${typeof c.why === 'string' && c.why !== '' ? ` - ${c.why}` : ''}${c.ready ? '' : ' (waits on an owner decision)'}`)
   const why = d.reasons === null ? [] : ['', 'Why this split:', `- Why split: ${d.reasons.why_split}`, `- Why this many parts: ${d.reasons.why_count}`, `- Why these parts: ${d.reasons.why_parts}`, `- Why this order: ${d.reasons.why_order}`]
   const body = [d.brief ?? `The designer split #${r.issue} into ${d.children.length} issues.`, ...why, '', 'Split by the factory loop into:', ...list].join('\n')
@@ -165,10 +226,16 @@ export const designPlan: StepPlan = env => {
   const d = designOf(entry)
   if (d === null) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer holds no brief, question or split'), trigger: read.trigger }
   if (d.kind === 'question') {
-    const event: TableEvent = { kind: 'not-ok', reason: 'question', data: { question: d.question ?? 'the designer asks the owner a question it did not word' } }
+    const event: TableEvent = { kind: 'not-ok', reason: 'question', data: { question: d.question ?? 'the designer asks the owner a question it did not word', parts: d.parts } }
     return { kind: 'result', event, trigger: read.trigger }
   }
   if (d.kind === 'split') return splitPlan(env, d, read.trigger)
+  if (d.kind === 'done') {
+    if (d.evidence === null || (d.evidence.pr === null && d.evidence.commit === null)) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the done answer holds no evidence'), trigger: read.trigger }
+    const data = entry?.outcome?.kind === 'step' && entry.outcome.result.data !== null && typeof entry.outcome.result.data === 'object' ? (entry.outcome.result.data as { text?: unknown }) : {}
+    const text = typeof data.text === 'string' ? data.text : 'done: the work is already merged'
+    return { kind: 'result', event: { kind: 'not-ok', reason: 'done', data: { text, evidence: d.evidence } }, trigger: read.trigger }
+  }
   if (d.kind === 'wait') {
     if (d.conditions.length === 0) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer waits on no condition'), trigger: read.trigger }
     const text = d.reason ?? 'the designer waits on a condition'

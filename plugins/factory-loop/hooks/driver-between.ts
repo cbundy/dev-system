@@ -109,9 +109,9 @@ export function bounded($: EngineInterface, work: (claim: Claim) => Promise<OpAn
 }
 
 // actsNow: the loop may start something (a reminder): act mode, no kill switch, and no restart
-// asked for.
+// asked for without a wind-down request (with one the loop keeps acting in wind-down).
 export async function actsNow($: EngineInterface, rt: Runtime): Promise<boolean> {
-  return rt.mode === 'act' && S.restartAsked === null && !(await killed($))
+  return rt.mode === 'act' && (S.restartAsked === null || S.restartRequestAt !== null) && !(await killed($))
 }
 
 // turn.start: a wake's own turn takes its turn id.
@@ -165,11 +165,12 @@ export async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentI
 
 // answerLine: the path an agent's answer at its turn's end took, for its decision-log line: read
 // from the file it recorded with the answer script ('script', #561), with how its entry ended, or
-// asked again ('repair', with why); afterRepair marks an answer that came after the repair
+// asked again ('repair', with why), or held for its stop gate line ('held'); afterRepair marks an answer that came after the repair
 // message, and repairRefused is why one was not delivered, whole (#559).
 export function answerLine(r: Answered): Record<string, unknown> | null {
   if (r.key === undefined) return null
   if (r.result === 'repair') return { key: r.key, answer: 'repair', why: r.why }
+  if (r.result === 'held') return { key: r.key, answer: 'held', why: 'its stop gate line is not in the companion log yet' }
   if (r.result !== 'applied') return null
   const e = live.ledger.find(x => x.key === r.key)
   return {

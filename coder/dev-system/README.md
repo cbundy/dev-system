@@ -71,6 +71,7 @@ privacy defaults are in
 | `claude_auth_volume_name` | empty (off) | Named Docker volume behind the per-workspace **Claude login** choice: workspaces that pick *shared* mount it at `/persist/claude-auth` and share one Claude login, keeping their own history and settings. Empty hides the choice, and every workspace keeps its own login. See [Sharing one Claude login](#sharing-one-claude-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `coder_login_secrets_dir` | empty (off) | Directory on the Docker host holding `coder-session-token` for the opt-in Coder CLI login, mounted read-only at `/run/secrets/dev-system-coder-login` only into workspaces with `coder_login` on. Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `push-next.sh` always pushes it empty. See [Coder CLI login (opt-in)](#coder-cli-login-opt-in). |
+| `migrator_secrets_dir` | empty (off) | Directory on the Docker host holding `factory-db-migrator-url`, mounted read-only at `/run/secrets/dev-system-migrator` into every workspace of the template it is set for, so `dev-init` can run `factory-db-migrate` at start-up (see [docs/factory-db.md](../../docs/factory-db.md)). Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `terraform.tfvars` sets `/etc/dev-system/migrator`; `push.sh` pushes it empty for `dev-system` and `orchestrator` and keeps the value for `orchestrator-loop`, so only the loop's workspaces migrate; `push-next.sh` always pushes it empty. |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
 | `registry_auth_address` | `ghcr.io` | Registry the credentials are for. Only used with `registry_auth_config`. |
 
@@ -307,7 +308,8 @@ workspace ([First-run logins](#first-run-logins)).
   loop starts nothing new, and waits until no step runs, `/factory stop-now` is used, or the cap
   passes (the smaller of the loop's own cap and the template's, counted from the request). It
   records one `wind_down` event per loop (outcome `idle`, `cap`, `now` or `off`), removes the
-  request, status and stop-now files, and gives the heartbeat its `--final` beat. Docker's stop
+  stop-now file (the request and status stay, so the loop starts nothing until the container is
+  gone; the workspace's next start clears them before the loop runs), and gives the heartbeat its `--final` beat. Docker's stop
   grace is the cap plus 60 s (660 s), and the script's own timeout the cap plus 45 s, so a stuck
   script never holds a stop past them; the script always exits 0.
   - **Stop now**: `/factory stop-now`, or by hand `touch
@@ -366,6 +368,11 @@ workspace ([First-run logins](#first-run-logins)).
   workspace's `template_testing` parameter on, that directory is bind-mounted read-only at
   `/run/secrets/dev-system-template-tester` for `push-next.sh`. Every other workspace
   never sees it.
+- **Factory database migrator URL.** With `migrator_secrets_dir` set (only for the
+  `orchestrator-loop` template, by `push.sh`), that directory is bind-mounted read-only at
+  `/run/secrets/dev-system-migrator`; `dev-init` runs `factory-db-migrate` with the
+  `factory-db-migrator-url` in it before the loop starts. `dev-system`, `orchestrator` and
+  `dev-system-next` get no mount.
 - **Coder CLI login token, opt-in.** Only with `coder_login_secrets_dir` set and the
   workspace's `coder_login` parameter on, that directory is bind-mounted read-only at
   `/run/secrets/dev-system-coder-login` and `DEV_CODER_TOKEN_FILE` points at its
@@ -577,7 +584,7 @@ What the owner prepares on a new host before a workspace is created there:
 - The Coder server can `ssh` to the url's user and host without a prompt (key in its ssh
   config, host key in its `known_hosts`).
 - The host directories the template mounts exist with the right owner and mode:
-  `secrets_dir`, `workspace_secrets_dir` and `template_tester_secrets_dir`.
+  `secrets_dir`, `workspace_secrets_dir`, `template_tester_secrets_dir` and, for the loop template, `migrator_secrets_dir`.
 - The host can pull the images, including from ghcr (see [Private images](#private-images)).
 
 Nothing is synced between hosts. The three host directories above are per host, and so are

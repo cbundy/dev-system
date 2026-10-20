@@ -86,7 +86,7 @@ function wakesOf(src) {
 
 test("every wake the hooks emit is in the skill under its kind", () => {
   const emitted = [...Object.values(SOURCES), ...Object.values(V2_SOURCES)].flatMap(wakesOf);
-  for (const name of ["parked", "stalled", "waiting", "workspace", "pass-error", "heartbeat-other", "old-watcher", "breaker", "blind", "runaway"]) {
+  for (const name of ["parked", "stalled", "waiting", "workspace", "pass-error", "heartbeat-other", "old-watcher", "schema-behind", "breaker", "blind", "runaway"]) {
     assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from the hooks`);
   }
   assert.ok(emitted.some((w) => w.kind === "task" && w.name === "release"), "no task release read from the hooks");

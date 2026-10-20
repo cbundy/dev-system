@@ -32,6 +32,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'sweep',
   'rollout',
   'close-issue',
+  'delete-branch',
   'release-parent',
   'milestone-later',
   'label',
@@ -487,9 +488,13 @@ export function isoOf(ms: Ms): string {
   return `${date}T${pad(Math.floor(left / 3_600_000))}:${pad(Math.floor(left / 60_000) % 60)}:${pad(Math.floor(left / 1000) % 60)}.${pad(left % 1000, 3)}Z`
 }
 
-// releaseDue: the review's key and fields (one release task per UTC hour, whatever its key). `waiting`: the issues waiting on a release tag: the review is then due while the milestone has open items or none closed, and its fields name them. `short` is config.ts's shortDuration (this module imports types only; foundation.test.ts holds them together)
+// releaseDue: the review's key and fields (one release task per UTC hour, unless an issue it has not seen starts waiting). `waiting`: the issues waiting on a release tag: the review is then due while the milestone has open items or none closed, its fields name them and its key ends `:w<N>.<N>` (ascending). Inside the hour a further review is due only when `waiting` holds an issue that none of the hour's release keys carries (a key without the suffix saw none); `fresh` names those issues (empty for the hour's first review). `short` is config.ts's shortDuration (this module imports types only; foundation.test.ts holds them together)
 export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State, config: Config, waiting: readonly number[] = []) {
   const hour = (at: number) => isoOf(at).slice(0, 13), tag = r === null ? 'unknown' : (r.tag ?? 'none'), short = (ms: Ms) => ms > 0 && ms % 3_600_000 === 0 ? `${ms / 3_600_000}h` : ms > 0 && ms % 60_000 === 0 ? `${ms / 60_000}m` : ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
-  if (!sources.milestone.ok || m === null || (waiting.length === 0 && (m.open > 0 || m.closed === 0)) || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
-  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : isoOf(r.oldest), cadence: short(config.minimumReleaseCadenceMs), ...(waiting.length > 0 ? { waiting: [...waiting] } : {}) } }
+  if (!sources.milestone.ok || m === null || (waiting.length === 0 && (m.open > 0 || m.closed === 0))) return null
+  const seen = new Set<number>(), thisHour = ledger.filter(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))
+  for (const e of thisHour) for (const n of /:w([\d.]+)$/.exec(e.key)?.[1].split('.') ?? []) seen.add(Number(n))
+  const fresh = thisHour.length === 0 ? [] : waiting.filter(n => !seen.has(n))
+  if (thisHour.length > 0 && fresh.length === 0) return null
+  return { key: `task:release:${tag}:${hour(now)}${waiting.length > 0 ? `:w${waiting.join('.')}` : ''}`, fresh, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : isoOf(r.oldest), cadence: short(config.minimumReleaseCadenceMs), ...(waiting.length > 0 ? { waiting: [...waiting] } : {}) } }
 }

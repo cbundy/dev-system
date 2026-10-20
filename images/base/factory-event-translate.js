@@ -17,7 +17,11 @@
 // CommonJS with no dependencies: callum-flow-event (dual write) and the replay script both use it.
 // Temporary: deleted with the old event path (dev-system#656).
 //
-// CLI: node factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl
+// `opts.data` (CLI --data JSON, dual write only) is an object of extra payload fields merged into the
+// new event's data before the check (ready and claimed: title, labels, parent; dev-system#870). A key
+// the type does not accept, or a value of the wrong shape, is a miss. Replay (no opts) has none.
+//
+// CLI: node factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl
 //   One stderr line per miss and a summary of counts per state (--quiet drops the summary); exit 1 on any miss, else 0.
 
 // --- the token codec (plugins/factory-loop/hooks/v2/events.ts: dec, tokensOf, noteToken) ---------
@@ -75,6 +79,7 @@ const B = (v) => typeof v === "boolean";
 const RX = (re) => (v) => typeof v === "string" && re.test(v);
 const L = (k) => (v) => Array.isArray(v) && v.every(k);
 const L1 = (k) => (v) => L(k)(v) && v.length > 0;
+const FACTOR = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 2 && NE(v.name) && Number.isInteger(v.points);
 const opt = (k) => Object.assign((v) => k(v), { optional: true });
 // A condition: kind and its argument, plus an optional lower-case repo on issue-closed and tag-contains.
 const REPO = RX(/^[a-z0-9._-]+\/[a-z0-9._-]+$/);
@@ -89,12 +94,24 @@ const COND = (v) => {
 };
 const WAIT = (v) => Array.isArray(v) && v.length >= 1 && v.length <= 8 && v.every(COND);
 const HEX = RX(/^[0-9a-f]{7,40}$/);
+// A question option: key A-F, a title of up to 120 characters and an optional detail of up to 300.
+const KEY = E("A", "B", "C", "D", "E", "F");
+const OPTION = (v) => {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const n = Object.keys(v).length - ("detail" in v ? 1 : 0);
+  if (n !== 2 || !KEY(v.key) || !S(v.title) || v.title.length > 120) return false;
+  return !("detail" in v) || v.detail === null || (S(v.detail) && v.detail.length <= 300);
+};
+const OPTIONS = (v) => Array.isArray(v) && v.length >= 2 && v.length <= 6 && v.every(OPTION) && new Set(v.map((o) => o.key)).size === v.length;
+const MAXS = (n) => (v) => S(v) && v.length <= n;
 const ISO = RX(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
 const STATES = ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"];
 
+const TITLE = (v) => S(v) && v.length <= 256;
+
 const SPECS = {
-  ready: {},
-  claimed: { lease_minutes: I(1) },
+  ready: { title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))) },
+  claimed: { lease_minutes: I(1), title: opt(nul(TITLE)), labels: opt(nul(L(S))), parent: opt(nul(I(1))), score: opt(nul(Number.isInteger)), factors: opt(nul(L(FACTOR))) },
   claim_renewed: { lease_minutes: I(1) },
   claim_lost: { holder: nul(S), holder_since: nul(S), race: B },
   requeued: { reason: E("lease-expired", "reconcile"), stage: nul(S), lives: nul(I(1)), branch: nul(S), pr: nul(I(1)), detail: nul(S) },
@@ -136,15 +153,20 @@ const SPECS = {
     fixes: I(0),
     round: I(0),
     question: nul(S),
+    decision: opt(nul(MAXS(2000))),
+    context: opt(nul(MAXS(800))),
+    options: opt(nul(OPTIONS)),
+    recommended: opt(nul(KEY)),
+    recommendation: opt(nul(MAXS(200))),
     wait: opt(nul(WAIT)),
-    why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost")),
+    why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done")),
     notes: L(S),
     pr_closed_at: nul(S),
     lives: I(1),
   },
   reviewed: { branch: NE, pr: I(1), head: HEX, verdict: E("approve", "changes", "unknown"), round: I(1), patch: NE, errors: I(0), warnings: I(0), infos: I(0), reviewer: NE, answer_path: NE },
   finding_handled: { branch: NE, pr: nul(I(1)), head: nul(HEX), finding: NE, outcome: E("fixed", "declined"), detail: S },
-  intervention: { who: E("person", "loop", "judge"), cause: RX(/^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$/), life: nul(RX(/^[0-9a-z]+$/)), fact: nul(S), pr: nul(I(1)), detail: S },
+  intervention: { who: E("person", "loop", "judge"), cause: RX(/^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$/), life: nul(RX(/^[0-9a-z]+$/)), fact: nul(S), pr: nul(I(1)), detail: S, flaky: nul(B), failed_tests: nul(L(S)), failed_jobs: nul(L(S)), head: nul(HEX) },
   implementer_routed: { model: NE, reason: E("label", "default", "hash", "fallback"), bucket: nul(I(0)), opus_pct: I(0) },
   test_weakened: { branch: NE, pr: I(1), head: HEX, commit: HEX, restored: B, kinds: L1(S), files: L1(S) },
   untrusted_stripped: { source: E("issue", "pr", "comment", "comments", "timeline", "list"), refused: B, count: nul(I(0)), pr: nul(I(1)) },
@@ -168,6 +190,45 @@ const SPECS = {
     ended_at: nul(ISO),
     agent_id: nul(S),
     wake: nul(S),
+    // only a tell that decided something (a flake bug, dev-system#866) carries these, by --data
+    decision: opt(nul(S)),
+    decision_reason: opt(nul((v) => S(v) && v.length <= 200)),
+    flake_test: opt(nul((v) => S(v) && v.length <= 512)),
+    flakes: opt(nul(I(0))),
+    window_days: opt(nul(I(1))),
+    first_flake_at: opt(nul(ISO)),
+    filed_issue: opt(nul(I(1))),
+  },
+  prompt_denied: {
+    life: nul(RX(/^[0-9a-z]+$/)),
+    seq: nul(I(0)),
+    step: nul(S),
+    attempt: nul(I(1)),
+    agent_id: nul(S),
+    agent_type: nul(S),
+    tool_name: nul(S),
+    tool_input: nul((v) => S(v) && v.length <= 2000),
+    ask_reason: nul((v) => S(v) && v.length <= 500),
+    slot: nul(S),
+    session: nul(S),
+    transcript: nul(S),
+    branch: nul(S),
+    pr: nul(I(1)),
+  },
+  prompt_waiting: {
+    life: nul(RX(/^[0-9a-z]+$/)),
+    seq: nul(I(0)),
+    step: nul(S),
+    attempt: nul(I(1)),
+    agent_id: nul(S),
+    agent_type: nul(S),
+    tool_name: nul(S),
+    tool_input: nul(S),
+    slot: nul(S),
+    session: nul(S),
+    transcript: nul(S),
+    branch: nul(S),
+    pr: nul(I(1)),
   },
   loop_passes: {
     from_at: ISO,
@@ -188,7 +249,7 @@ const SPECS = {
 };
 
 // The types whose schema says `x-issue: required`: their line must carry an issue.
-const ISSUE_REQUIRED = new Set(["ready", "claimed", "claim_renewed", "claim_lost", "requeued", "closed", "abandoned", "merged", "transition", "reviewed", "finding_handled", "test_weakened", "untrusted_stripped"]);
+const ISSUE_REQUIRED = new Set(["ready", "claimed", "claim_renewed", "claim_lost", "requeued", "closed", "abandoned", "merged", "transition", "reviewed", "finding_handled", "test_weakened", "untrusted_stripped", "prompt_denied", "prompt_waiting"]);
 
 function checkData(type, data) {
   const spec = SPECS[type];
@@ -295,6 +356,21 @@ function tWait(t) {
     }
     return miss(`bad wait=: ${JSON.stringify(item)}`);
   });
+}
+
+// The question options: percent-encoded compact JSON of the option list; `none` is null; absent is undefined.
+function tOptions(t) {
+  const v = t.get("options");
+  if (v === undefined) return undefined;
+  if (v === "none") return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(decodeURIComponent(v));
+  } catch {
+    return miss("bad options=: not percent-encoded JSON");
+  }
+  if (!OPTIONS(parsed)) miss("bad options=: not 2 to 6 closed options with distinct keys A-F and bounded text");
+  return parsed;
 }
 
 // --- the columns ----------------------------------------------------------------------------------
@@ -416,12 +492,15 @@ function merged(line) {
   return { pr: colInt(line, "pr"), branch: colStr(line, "branch"), head: colStr(line, "head"), by, recovered };
 }
 
-const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait"];
+const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
 
 function transition(line) {
-  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => k !== "lives" && k !== "wait") });
+  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
   const lives = t.has("lives") ? tInt(t, "lives") : 1;
   const wait = tWait(t);
+  const options = tOptions(t);
+  const recommended = tStr(t, "recommended");
+  if (recommended !== undefined && recommended !== null && !(options ?? []).some((o) => o.key === recommended)) miss(`bad recommended=${recommended}: not one of the options`);
   const ev = {
     life: tStr(t, "life"),
     seq: tInt(t, "seq"),
@@ -450,6 +529,8 @@ function transition(line) {
     lives,
   };
   if (wait !== undefined) ev.wait = wait;
+  const parts = { decision: tStr(t, "decision"), context: tStr(t, "context"), options, recommended, recommendation: tStr(t, "recommendation") };
+  for (const [k, v] of Object.entries(parts)) if (v !== undefined) ev[k] = v;
   return ev;
 }
 
@@ -488,7 +569,9 @@ function verdict(line) {
 }
 
 function intervention(line) {
-  const t = strictTokens(line.note ?? null, { keep: ["who", "cause", "life", "fact", "reason"], need: ["who", "cause"] });
+  const t = strictTokens(line.note ?? null, { keep: ["who", "cause", "life", "fact", "reason", "flaky", "failed_tests", "failed_jobs", "head"], need: ["who", "cause"] });
+  // A comma list as child_whys is: `none` and a missing token are null.
+  const listN = (k) => (t.get(k) === undefined || t.get(k) === "none" ? null : tList(t, k));
   return {
     who: tStr(t, "who"),
     cause: tStr(t, "cause"),
@@ -496,6 +579,10 @@ function intervention(line) {
     fact: tStrN(t, "fact"),
     pr: colInt(line, "pr"),
     detail: tStr(t, "reason") ?? "",
+    flaky: tBool(t, "flaky") ?? null,
+    failed_tests: listN("failed_tests"),
+    failed_jobs: listN("failed_jobs"),
+    head: tStrN(t, "head"),
   };
 }
 
@@ -591,12 +678,21 @@ function loop(line) {
   if (typeof key === "string" && key.startsWith("cap:") && status === "held") throw new Skip("loop key=cap:* status=held");
   if (V1_LOOP_KINDS.includes(kind)) throw new Skip(`loop kind=${kind}`);
   if (kind === "passes") return { type: "loop_passes", data: passes(line) };
-  // agent= and the v1 outcome tokens out= and decision= are named drops
+  // agent= and out= are named drops. decision= and reason= are known: a kind=task line with out=wake
+  // keeps them as decision and decision_reason; every other line drops them (a flake-bug tell carries
+  // both by --data, so keeping them there would collide).
   const keep = ["kind", "key", "status", "attempts", "class", "rule", "started", "ended", "agentId", "wake"];
-  const t = strictTokens(note, { keep, drop: ["agent", "out", "decision"], need: ["kind", "key", "status", "attempts", "class", "rule", "started"] });
+  const t = strictTokens(note, { keep, drop: ["agent", "out", "decision", "reason"], need: ["kind", "key", "status", "attempts", "class", "rule", "started"] });
+  const wake_ = kind === "task" && t.get("out") === "wake";
+  const outcome = {};
+  if (wake_ && t.has("decision")) {
+    outcome.decision = tStrN(t, "decision");
+    if (outcome.decision !== null && t.has("reason")) outcome.decision_reason = tStrN(t, "reason")?.slice(0, 200) ?? null;
+  }
   return {
     type: "loop_entry",
     data: {
+      ...outcome,
       kind: tStr(t, "kind"),
       key: tStr(t, "key"),
       status: tStr(t, "status"),
@@ -611,8 +707,35 @@ function loop(line) {
   };
 }
 
+// prompt_denied and prompt_waiting: the companion's twelve tokens (none of them required), the
+// columns for branch and pr. agent= is agent_id, tool= is tool_name, input= is tool_input and a
+// denied prompt's why= is ask_reason; a waiting prompt's why= (always none) is a named drop and its
+// tool= must be none, since the notification names no tool.
+function prompt(line, denied) {
+  const keep = ["life", "seq", "step", "attempt", "agent", "agent_type", "tool", "slot", "session", "transcript", "input"];
+  const t = strictTokens(line.note ?? null, denied ? { keep: [...keep, "why"] } : { keep, drop: ["why"] });
+  const data = {
+    life: tStrN(t, "life"),
+    seq: tInt(t, "seq", true) ?? null,
+    step: tStrN(t, "step"),
+    attempt: tInt(t, "attempt", true) ?? null,
+    agent_id: tStrN(t, "agent") || null,
+    agent_type: tStrN(t, "agent_type"),
+    tool_name: tStrN(t, "tool"),
+    tool_input: tStrN(t, "input"),
+    slot: tStrN(t, "slot"),
+    session: tStrN(t, "session"),
+    transcript: tStrN(t, "transcript"),
+    branch: colStr(line, "branch"),
+    pr: colInt(line, "pr"),
+  };
+  if (denied) data.ask_reason = tStrN(t, "why");
+  else if (data.tool_name !== null) miss(`tool=${t.get("tool")} on a waiting prompt: the notification names no tool`);
+  return data;
+}
+
 // Lines that make no new event, skipped by name: the state is the name.
-const SKIPPED_STATES = ["delegated", "fix_requested", "merge_ready", "prompt_denied", "prompt_waiting", "briefed", "design_routed", "run_started", "parked", "failed", "head_mismatch", "conflict", "ci_stalled", "rebased_behind", "superseded", "watcher_error"];
+const SKIPPED_STATES = ["delegated", "fix_requested", "merge_ready", "briefed", "design_routed", "run_started", "parked", "failed", "head_mismatch", "conflict", "ci_stalled", "rebased_behind", "superseded", "watcher_error"];
 
 // The states that translate (some of their lines skip: loop, verdict), each to its handler.
 const MAPPED = {
@@ -635,6 +758,8 @@ const MAPPED = {
   test_weakened: (l) => ({ type: "test_weakened", data: testWeakened(l) }),
   untrusted_stripped: (l) => ({ type: "untrusted_stripped", data: untrustedStripped(l) }),
   usage: (l) => ({ type: "usage", data: usage(l) }),
+  prompt_denied: (l) => ({ type: "prompt_denied", data: prompt(l, true) }),
+  prompt_waiting: (l) => ({ type: "prompt_waiting", data: prompt(l, false) }),
   loop,
 };
 const MAPPED_STATES = Object.keys(MAPPED);
@@ -708,6 +833,11 @@ function translate(input, opts) {
     const handler = MAPPED[state];
     if (handler === undefined) return miss("unknown state");
     const { type, data } = handler(line);
+    if (opts !== undefined && opts !== null && opts.data !== undefined && opts.data !== null) {
+      if (typeof opts.data !== "object" || Array.isArray(opts.data)) miss("--data is not an object");
+      for (const k of Object.keys(opts.data)) if (k in data) miss(`internal: unexpected field ${k}`);
+      Object.assign(data, opts.data);
+    }
     checkData(type, data);
     return { event: envelope(line, type, data, opts) };
   } catch (e) {
@@ -725,6 +855,7 @@ function main(argv) {
   let sessionId;
   let dual = false;
   let quiet = false;
+  let extra;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--ts" && i + 1 < argv.length) {
       ts = argv[++i];
@@ -732,14 +863,22 @@ function main(argv) {
     } else if (argv[i] === "--session-id" && i + 1 < argv.length) {
       sessionId = argv[++i];
       dual = true;
+    } else if (argv[i] === "--data" && i + 1 < argv.length) {
+      try {
+        extra = JSON.parse(argv[++i]);
+      } catch {
+        process.stderr.write("factory-event-translate.js: --data is not JSON\n");
+        return 2;
+      }
+      dual = true;
     } else if (argv[i] === "--quiet") {
       quiet = true;
     } else {
-      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl\n");
+      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
       return 2;
     }
   }
-  const opts = dual ? { ts, sessionId } : undefined;
+  const opts = dual ? { ts, sessionId, data: extra } : undefined;
   const counts = new Map();
   const bump = (state, what) => {
     const c = counts.get(state) ?? { translated: 0, skipped: 0, missed: 0 };

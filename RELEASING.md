@@ -79,6 +79,13 @@ Milestones record what each release contained. The contract is shared with the b
   `--plan X.Y.Z` is the read-only preview the release skill uses.
   Every mode refuses a prerelease version (exit 2); milestones are only for final releases.
 
+What a release carried is one rule, in `images/base/release-contents.js`: the first-parent PRs since the
+previous final tag, the issues they close, the issues they link with `Refs` / `Part of`, and the release
+notes' headlines (the bold title leading each bullet). The technical list, the milestone and the
+`released` factory event (`callum-flow-released`) all read it. A milestone holds the PRs and the closed
+issues. A run-it or keep-open issue may sit in `Later` while its PR is in the release; that is not a
+disagreement.
+
 ## The Dev Container Feature (deprecated, separate cadence)
 
 The feature is deprecated (cbundy/dev-system#89) and gets no new capabilities. A script

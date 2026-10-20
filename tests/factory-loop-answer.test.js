@@ -50,6 +50,16 @@ echo "$*" >> "$STUB_LOG"
 case "$1 $2" in
   "api repos/"*)
     case "$2" in
+      */compare/*)
+        case "\${STUB_COMPARE:-behind}" in
+          behind|identical|ahead|diverged) echo "\${STUB_COMPARE:-behind}"; exit 0 ;;
+          404) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+          neterr) echo "error connecting to api.github.com" >&2; exit 1 ;;
+        esac ;;
+      repos/*/*/*) ;;
+      repos/*/*) echo main; exit 0 ;;
+    esac
+    case "$2" in
       */commits/*) mode="\${STUB_COMMIT:-ok}" ;;
       *) mode="\${STUB_ISSUE:-ok}" ;;
     esac
@@ -68,6 +78,8 @@ case "$1 $2" in
       neterr) echo "error connecting to api.github.com" >&2; exit 1 ;;
     esac ;;
   "pr view")
+    # PR 913 is the shared table's merged PR
+    if [ "$3" = "913" ]; then echo '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}'; exit 0; fi
     case "\${STUB_PR:-ok}" in
       ok) echo '{"state":"OPEN","mergedAt":null}'; exit 0 ;;
       merged) echo '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}'; exit 0 ;;
@@ -502,10 +514,11 @@ test("with no gh on PATH the wait is recorded with the unchecked line", () => {
 });
 
 test("a brief, a question, a split and any other contract make no gh call", () => {
-  const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n";
+  const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n\n## Compatibility\n\nnone - no schema, event or reader change\n";
   for (const answer of [{ kind: "brief", brief }, { kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }]) {
     const r = answerWait(answer);
     assert.deepEqual(r.calls, [], JSON.stringify(answer));
+    if (answer.kind === "brief") assert.equal(r.code, 0, "the brief fixture stays a valid brief");
   }
   fs.rmSync(ghLog, { force: true });
   const g = issue(gate());
@@ -514,6 +527,83 @@ test("a brief, a question, a split and any other contract make no gh call", () =
   const bad = answerWait({ kind: "wait", conditions: [{ kind: "tag-contains", sha: "xyz" }], reason: "r", brief: null });
   assert.equal(bad.code, 1);
   assert.deepEqual(ghCalls(), []);
+});
+
+// A design done answer: the issue's work is merged. The shape is the contract's; the evidence is read
+// on GitHub for the job's repo (hooks/v2/done-check.mjs).
+const doneOf = (evidence, extra = {}) => ({ kind: "done", evidence, reason: "Already shipped in PR 812", brief: null, ...extra });
+const DONE_PR = { pr: 812, commit: null, runIt: null };
+const DONE_COMMIT = { pr: null, commit: "bd2fee14", runIt: null };
+
+test("a done answer with a merged PR, or a commit on the default branch, is recorded", () => {
+  const pr = answerWait(doneOf(DONE_PR), { STUB_PR: "merged" });
+  assert.equal(pr.code, 0, pr.err);
+  assert.match(pr.out, /^factory-answer: recorded your design-v2 answer \(a done close on PR #812\)/);
+  assert.equal(pr.err, "");
+  assert.equal(JSON.parse(fs.readFileSync(pr.file, "utf8")).answer.kind, "done");
+  const commit = answerWait(doneOf(DONE_COMMIT));
+  assert.equal(commit.code, 0, commit.err);
+  assert.match(commit.out, /\(a done close on commit bd2fee1\)/);
+  assert.ok(commit.calls.includes("api repos/cbundy/dev-system --jq .default_branch"), commit.calls.join("|"));
+  assert.ok(commit.calls.includes("api repos/cbundy/dev-system/compare/main...bd2fee14 --jq .status"), commit.calls.join("|"));
+  const same = answerWait(doneOf(DONE_COMMIT), { STUB_COMPARE: "identical" });
+  assert.equal(same.code, 0, same.err);
+});
+
+test("a done answer on a PR that is open, closed unmerged or unknown is refused; nothing is written", () => {
+  for (const [STUB_PR, text] of [["ok", /is open, not merged/], ["closed", /is closed, not merged/], ["none", /does not exist/]]) {
+    const r = answerWait(doneOf(DONE_PR), { STUB_PR });
+    assert.equal(r.code, 1, r.out);
+    assert.match(problemsOf(r.err)[0], text);
+    assert.equal(fs.existsSync(r.file), false);
+  }
+});
+
+test("a done answer on a commit that is not on the default branch is refused", () => {
+  for (const STUB_COMPARE of ["ahead", "diverged"]) {
+    const r = answerWait(doneOf(DONE_COMMIT), { STUB_COMPARE });
+    assert.equal(r.code, 1, r.out);
+    assert.match(problemsOf(r.err)[0], new RegExp(`evidence.commit bd2fee14: bd2fee14 is not on main \\(compare says ${STUB_COMPARE}\\)`));
+    assert.equal(fs.existsSync(r.file), false);
+  }
+  const unknown = answerWait(doneOf(DONE_COMMIT), { STUB_COMPARE: "404" });
+  assert.equal(unknown.code, 1, unknown.out);
+  assert.match(problemsOf(unknown.err)[0], /is not a commit of cbundy\/dev-system/);
+});
+
+test("a done answer the contract refuses is not read on GitHub", () => {
+  const cases = [
+    [doneOf({ pr: null, commit: null, runIt: null }), /needs a merged pr or a commit/],
+    [doneOf({ ...DONE_PR, runIt: "https://github.com/cbundy/dev-system/issues/1#issuecomment-5" }), /evidence.runIt .* must be a comment URL on this issue/],
+    [doneOf(DONE_PR, { extra: 1 }), /extra is not a field/],
+    [doneOf(DONE_PR, { reason: "two\nlines" }), /reason must be one line/],
+    [doneOf(DONE_PR, { reason: null }), /reason is required/],
+  ];
+  for (const [answer, text] of cases) {
+    const r = answerWait(answer, { STUB_PR: "merged" });
+    assert.equal(r.code, 1, r.out);
+    assert.match(problemsOf(r.err).join("\n"), text);
+    assert.deepEqual(r.calls, []);
+  }
+  const own = answerWait(doneOf({ ...DONE_PR, runIt: "https://github.com/cbundy/dev-system/issues/837#issuecomment-123456" }), { STUB_PR: "merged" });
+  assert.equal(own.code, 0, own.err);
+});
+
+test("a gh that cannot decide records the done answer and names the unchecked evidence on stderr", () => {
+  const r = answerWait(doneOf(DONE_COMMIT), { STUB_COMPARE: "neterr" });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(fs.existsSync(r.file), true);
+  assert.match(r.err, /^factory-answer: recorded without checking on GitHub: evidence.commit bd2fee14 \(/);
+});
+
+test("done-check's declaration file names exactly the module's exports", async () => {
+  const mod = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "done-check.mjs")).href);
+  const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", "done-check.d.mts"), "utf8");
+  const declared = [...dts.matchAll(/^export (?:const|function) (\w+)/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(declared, Object.keys(mod).sort());
+  const answer = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "done-answer.mjs")).href);
+  const adts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", "done-answer.d.mts"), "utf8");
+  assert.deepEqual([...adts.matchAll(/^export (?:const|function) (\w+)/gm)].map((m) => m[1]).sort(), Object.keys(answer).sort());
 });
 
 test("wait-check's declaration file names exactly the module's exports", async () => {

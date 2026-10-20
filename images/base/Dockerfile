@@ -248,13 +248,16 @@ COPY --chmod=0755 \
   images/base/callum-flow-fix-linkage \
   images/base/callum-flow-claim \
   images/base/callum-flow-milestone \
+  images/base/callum-flow-released \
   images/base/callum-flow-design-route \
   images/base/callum-flow-implementer-route \
+  images/base/callum-flow-designer-route \
   images/base/callum-flow-issue-read \
   images/base/callum-flow-sweep \
   images/base/callum-flow-evaluate \
   images/base/callum-flow-factory-state \
   images/base/factory-db-bootstrap \
+  images/base/factory-db-migrate \
   images/base/systemctl \
   images/base/callum-flow-evidence-upload \
   /usr/local/bin/
@@ -269,7 +272,7 @@ COPY --chmod=0644 images/base/claim-events.sh /usr/local/share/dev-system/
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/claude-config.sh images/base/agentsview.sh images/base/factory-db.sh \
-  images/base/factory-event-translate.js images/base/factory-source.js images/base/evaluate-new-events.js images/base/factory-event-write.js images/base/factory-event-shapes.json images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
+  images/base/factory-event-translate.js images/base/factory-source.js images/base/evaluate-new-events.js images/base/factory-event-write.js images/base/release-contents.js images/base/factory-event-shapes.json images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
   images/base/gh.sh images/base/exec-hint.sh images/base/plugins.sh images/base/persist.sh images/base/trusted-authors.sh \
   /usr/local/share/dev-system/
 

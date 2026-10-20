@@ -4,7 +4,7 @@
 // ones for shapes with no real example; expected.jsonl is the golden output of the whole corpus.
 "use strict";
 
-const { test, before } = require("node:test");
+const { test, before, describe } = require("node:test");
 const assert = require("node:assert/strict");
 const { register } = require("node:module");
 const { spawnSync } = require("node:child_process");
@@ -60,8 +60,6 @@ const EXPECTED_SKIPS = {
   delegated: 2,
   fix_requested: 3,
   merge_ready: 2,
-  prompt_denied: 1,
-  prompt_waiting: 1,
   briefed: 1,
   design_routed: 1,
   run_started: 1,
@@ -126,7 +124,7 @@ test("coverage: the corpus produces every current type, and every writer state i
   const made = new Set(expected.map((e) => e.type));
   // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
   // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "settings_changed", "designer_routed"]; // the stop gate's runs (#811): written by the loop once a writer exists
   for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
   for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
@@ -204,14 +202,60 @@ test("coverage: every row of translator.md has a corpus line, and each shape is 
   has("loop_passes", (d) => d.acting_mean_ms === null && d.passes > 0, "none for acting_mean_ms");
 });
 
-test("a loop kind=passes line never becomes a loop_entry, and a task line with out= and decision= is dropped to its entry", () => {
+test("a loop kind=passes line never becomes a loop_entry, and a task wake keeps its decision", () => {
   const passesLine = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
   assert.equal(translate(passesLine).event.type, "loop_passes");
   const task = withNote(sample("loop", (l) => /kind=task/.test(l.note ?? "")), "kind=task key=task:release:2:none status=done attempts=1 class=drive rule=O3 started=1792184909172 ended=1792185127762 wake=release out=wake decision=hold agent=x");
   const r = translate(task);
   assert.equal(r.event.type, "loop_entry");
   assert.equal(r.event.data.ended_at, "2026-10-16T21:12:07.762Z");
-  assert.deepEqual(Object.keys(r.event.data).sort(), ["agent_id", "attempts", "class", "ended_at", "key", "kind", "rule", "started_at", "status", "wake"]);
+  assert.equal(r.event.data.decision, "hold");
+  assert.deepEqual(Object.keys(r.event.data).sort(), ["agent_id", "attempts", "class", "decision", "ended_at", "key", "kind", "rule", "started_at", "status", "wake"]);
+});
+
+describe("loop_entry decision and decision_reason", () => {
+  const base = "status=done attempts=1 class=drive rule=O3 started=1792184909172 ended=1792185127762 wake=release";
+  const line = (note) => withNote(sample("loop", (l) => /kind=task/.test(l.note ?? "")), note);
+  const data = (note, opts) => translate(line(note), opts).event.data;
+
+  test("reason is decoded", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=a%20b`);
+    assert.equal(d.decision, "hold");
+    assert.equal(d.decision_reason, "a b");
+  });
+  test("reason is cut to 200 characters", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=${"x".repeat(250)}`);
+    assert.equal(d.decision_reason.length, 200);
+  });
+  test("reason=none is null", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=hold reason=none`);
+    assert.equal(d.decision_reason, null);
+  });
+  test("decision=none is null and carries no reason", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} out=wake decision=none reason=x`);
+    assert.equal(d.decision, null);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("decision without out=wake is dropped", () => {
+    const d = data(`kind=task key=task:release:2:none ${base} decision=hold reason=x`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("a tell drops decision and reason", () => {
+    const d = data(`kind=tell key=tell:x ${base} out=wake decision=ok reason=x`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
+  test("a tell with --data decision still translates and --data wins", () => {
+    const d = data(`kind=tell key=tell:x ${base} out=wake decision=ok reason=x`, { data: { decision: "d", decision_reason: "r" } });
+    assert.equal(d.decision, "d");
+    assert.equal(d.decision_reason, "r");
+  });
+  test("a task with neither token has neither key", () => {
+    const d = data(`kind=task key=task:release:2:none ${base}`);
+    assert.equal("decision" in d, false);
+    assert.equal("decision_reason" in d, false);
+  });
 });
 
 test("passes: a note built by the real passesNote from closeMinute translates to a valid loop_passes", () => {
@@ -274,6 +318,20 @@ test("abandoned shape 3: a split's reason tokens give the new fields, a missing 
   const dropped = translate(withNote(base, "reason=dropped note=x why_split=a")).event.data;
   assert.deepEqual([dropped.why_split, dropped.child_whys], [null, null]);
   assert.match(missOf(withNote(base, `${note} surprise=1`)), /^abandoned: unexpected token surprise=/);
+});
+
+test("intervention: the flake tokens map to the fields, and their absence gives nulls", () => {
+  const base = sample("intervention");
+  const none = translate(withNote(base, "who=loop cause=ci-rerun")).event.data;
+  assert.deepEqual([none.flaky, none.failed_tests, none.failed_jobs, none.head], [null, null, null, null]);
+  const sha = "0821e6a3c0f4b1d2e5a6978877665544332211ff";
+  const r = translate(withNote(base, `who=loop cause=ci-rerun fact=f1 flaky=yes failed_tests=a,b%2Cc failed_jobs=ci head=${sha} reason=x`));
+  assert.deepEqual([r.event.data.flaky, r.event.data.failed_tests, r.event.data.failed_jobs, r.event.data.head], [true, ["a", "b,c"], ["ci"], sha]);
+  assert.deepEqual(reader.validateStrict("intervention", 1, r.event.data), []);
+  const no = translate(withNote(base, "who=loop cause=ci-rerun flaky=no failed_tests=none failed_jobs=none head=none")).event.data;
+  assert.deepEqual([no.flaky, no.failed_tests, no.failed_jobs, no.head], [false, null, null, null]);
+  assert.match(missOf(withNote(base, "who=loop cause=ci-rerun flaky=maybe")), /bad yes\/no flaky=maybe/);
+  assert.match(missOf(withNote(base, "who=loop cause=ci-rerun head=XYZ")), /^intervention:/);
 });
 
 test("misses name their cause and give no event", () => {
@@ -407,6 +465,14 @@ test("CLI: --quiet drops the per-state summary, keeps the miss line and the exit
   assert.equal(cli(["--quiet", "--nope"], "").code, 2);
 });
 
+test("transition why=done translates and validates", () => {
+  const base = sample("transition");
+  const r = translate(withNote(base, base.note.replace("to=queued", "to=closed").replace(/ why=\S+/, " why=done")));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.equal(r.event.data.why, "done");
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+});
+
 test("transition wait=: the waiting state and its condition list (dev-system#836)", () => {
   const base = sample("transition");
   const note = (over) => base.note.replace("to=queued", over);
@@ -433,4 +499,148 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   }
   const bad = ["foo:1", "issue:x", "issue:0", "tag:XYZ", "tag:abc", "issue:1,,pr:2", "", "issue", ...[Array.from({ length: 9 }, (_, i) => `issue:${i + 1}`).join(",")]];
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
+});
+
+test("transition question parts: decision, context, options, recommended, recommendation (dev-system#1064)", () => {
+  const base = sample("transition");
+  const opts3 = [{ key: "A", title: "One", detail: null }, { key: "B", title: "Two", detail: "More" }, { key: "C", title: "Three", detail: "Even more" }];
+  const enc = (v) => encodeURIComponent(JSON.stringify(v));
+  const data = (extra) => {
+    const r = translate(withNote(base, `${base.note} ${extra}`));
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+    return r.event.data;
+  };
+  const d = data(`decision=Pick%20one context=Why%20now options=${enc(opts3)} recommended=B recommendation=It%20is%20simple`);
+  assert.equal(d.decision, "Pick one");
+  assert.equal(d.context, "Why now");
+  assert.deepEqual(d.options, opts3);
+  assert.equal(d.recommended, "B");
+  assert.equal(d.recommendation, "It is simple");
+  const n = data("decision=none context=none options=none recommended=none recommendation=none");
+  for (const k of ["decision", "context", "options", "recommended", "recommendation"]) assert.equal(n[k], null, k);
+  const plain = translate(withNote(base, base.note)).event.data;
+  for (const k of ["decision", "context", "options", "recommended", "recommendation"]) assert.equal(k in plain, false, k);
+  const item = (key, title = "T") => ({ key, title });
+  const badOptions = [
+    "%7Bnot", enc("x"), enc({ A: 1 }), enc([item("A")]), enc(["A", "B", "C", "D", "E", "F", "G"].map((k) => item(k))), enc([item("A"), item("G")]), enc([item("A"), item("A")]),
+    enc([item("A"), item("B", "x".repeat(121))]), enc([item("A"), { ...item("B"), detail: "x".repeat(301) }]), enc([item("A"), { ...item("B"), extra: 1 }]), enc([item("A"), { key: "B" }]),
+  ];
+  for (const o of badOptions) assert.match(missOf(withNote(base, `${base.note} options=${o}`)), /options=/, o);
+  assert.match(missOf(withNote(base, `${base.note} options=${enc([item("A"), item("B")])} recommended=C`)), /recommended=/);
+  assert.match(missOf(withNote(base, `${base.note} options=none recommended=A`)), /recommended=/);
+  assert.match(missOf(withNote(base, `${base.note} recommended=A`)), /recommended=/);
+});
+
+test("--data extras (dev-system#870): ready and claimed events carry title, labels and parent, strictly valid", () => {
+  const facts = { title: "T", labels: ["ready", "bug"], parent: 3 };
+  const opts = { ts: "2026-10-17T01:02:03.456Z", sessionId: null, data: facts };
+  for (const state of ["ready", "claimed"]) {
+    const line = oldLines.find((l) => l.state === state && l.note === (state === "claimed" ? "lease: 120" : null));
+    const base = translate(line).event.data;
+    const r = translate(line, opts);
+    assert.deepEqual(r.event.data, { ...base, ...facts }, state);
+    assert.deepEqual(reader.validateStrict(state, 1, r.event.data), [], state);
+    assert.deepEqual(reader.validateStrict("envelope", 1, r.event), [], state);
+    const nulls = translate(line, { ...opts, data: { title: null, labels: null, parent: null } });
+    assert.deepEqual(reader.validateStrict(state, 1, nulls.event.data), [], state);
+    // replay and a dual write without data give exactly today's payload
+    assert.deepEqual(translate(line, { ts: opts.ts }).event.data, base);
+    assert.deepEqual(translate(line).event.data, base);
+  }
+});
+
+test("--data extras: an unknown key, a key the line already set and a wrong shape are misses naming the field", () => {
+  const ready = oldLines.find((l) => l.state === "ready");
+  const claimed = oldLines.find((l) => l.state === "claimed" && l.note === "lease: 120");
+  const miss = (line, data) => translate(line, { ts: "2026-10-17T01:02:03.456Z", data }).miss;
+  assert.match(miss(ready, { nope: 1 }), /^ready: internal: unexpected field nope/);
+  assert.match(miss(claimed, { lease_minutes: 5 }), /^claimed: internal: unexpected field lease_minutes/);
+  assert.match(miss(ready, { title: 5 }), /^ready: title is not valid/);
+  assert.match(miss(ready, { title: "x".repeat(257) }), /^ready: title is not valid/);
+  assert.match(miss(ready, { labels: "a" }), /^ready: labels is not valid/);
+  assert.match(miss(ready, { labels: [1] }), /^ready: labels is not valid/);
+  assert.match(miss(ready, { parent: 0 }), /^ready: parent is not valid/);
+  assert.match(miss(ready, { parent: "3" }), /^ready: parent is not valid/);
+  assert.match(miss(ready, [1]), /^ready: --data is not an object/);
+  // a type that takes none of them
+  const closed = oldLines.find((l) => l.state === "closed");
+  assert.match(miss(closed, { title: "T" }), /^closed: internal: unexpected field title/);
+});
+
+test("--data extras: score and factors on claimed are strictly valid; wrong shapes are misses naming the field", () => {
+  const line = oldLines.find((l) => l.state === "claimed" && l.note === "lease: 120");
+  const ts = "2026-10-17T01:02:03.456Z";
+  const run = (data) => translate(line, { ts, sessionId: null, data });
+  const base = translate(line).event.data;
+  for (const data of [
+    { score: 42, factors: [{ name: "bug", points: 25 }, { name: "age", points: 17 }] },
+    { score: -3, factors: [] },
+    { score: null, factors: null },
+    { score: 0 },
+  ]) {
+    const r = run(data);
+    assert.deepEqual(r.event.data, { ...base, ...data });
+    assert.deepEqual(reader.validateStrict("claimed", 1, r.event.data), []);
+  }
+  const bad = [
+    [{ score: 1.5 }, "score"],
+    [{ score: "3" }, "score"],
+    [{ factors: [{ name: "", points: 1 }] }, "factors"],
+    [{ factors: [{ name: "a" }] }, "factors"],
+    [{ factors: [{ name: "a", points: 1, x: 1 }] }, "factors"],
+    [{ factors: [{ name: "a", points: 1.5 }] }, "factors"],
+    [{ factors: {} }, "factors"],
+  ];
+  for (const [data, field] of bad) assert.match(run(data).miss, new RegExp(`^claimed: ${field} is not valid`), JSON.stringify(data));
+  const ready = oldLines.find((l) => l.state === "ready");
+  assert.match(translate(ready, { ts, data: { score: 1 } }).miss, /^ready: internal: unexpected field score/);
+});
+
+test("CLI: --data makes it dual write and gives the same event; a foreign key is a miss, not JSON is usage", () => {
+  const line = JSON.stringify(oldLines.find((l) => l.state === "ready"));
+  const facts = { title: "T", labels: ["ready"], parent: null };
+  const r = cli(["--ts", "2026-10-17T01:02:03.456Z", "--data", JSON.stringify(facts)], `${line}\n`);
+  assert.equal(r.code, 0, r.err);
+  const direct = translate(line, { ts: "2026-10-17T01:02:03.456Z", data: facts }).event;
+  assert.deepEqual(JSON.parse(r.out), direct);
+  assert.equal(JSON.parse(r.out).data.title, "T");
+  const alone = cli(["--data", JSON.stringify(facts)], `${line}\n`);
+  assert.equal(alone.code, 0, alone.err);
+  assert.equal(JSON.parse(alone.out).data.title, "T");
+  const foreign = cli(["--data", '{"nope":1}'], `${line}\n`);
+  assert.equal(foreign.code, 1);
+  assert.match(foreign.err, /miss: ready: internal: unexpected field nope/);
+  assert.equal(cli(["--data", "x"], `${line}\n`).code, 2);
+});
+
+test("prompt_denied and prompt_waiting (dev-system#1037): renames, none as null, columns, strictly valid", () => {
+  const full = oldLines.filter((l) => l.state === "prompt_waiting").find((l) => /agent=a2/.test(l.note));
+  const note = "life=ld seq=7 step=build attempt=2 agent=a1 agent_type=Explore tool=Bash slot=/s session=s1 transcript=/t why=rule%20x input=rm%20-f%20$D/*";
+  const denied = translate({ ...full, state: "prompt_denied", note, pr: 612 });
+  assert.deepEqual(denied.event.data, { life: "ld", seq: 7, step: "build", attempt: 2, agent_id: "a1", agent_type: "Explore", tool_name: "Bash", tool_input: "rm -f $D/*", ask_reason: "rule x", slot: "/s", session: "s1", transcript: "/t", branch: "issue-729", pr: 612 });
+  assert.deepEqual(reader.validateStrict("prompt_denied", 1, denied.event.data), []);
+  const waiting = translate(full);
+  assert.equal(waiting.event.data.agent_id, "a20142b8cd21d3b2b");
+  assert.equal(waiting.event.data.tool_name, null);
+  assert.ok(!("ask_reason" in waiting.event.data));
+  assert.deepEqual(reader.validateStrict("prompt_waiting", 1, waiting.event.data), []);
+  // none and an empty agent are null
+  const none = translate({ ...full, state: "prompt_denied", note: "agent= seq=none attempt=none life=none why=none" });
+  assert.equal(none.event.data.agent_id, null);
+  assert.equal(none.event.data.seq, null);
+  assert.equal(none.event.data.ask_reason, null);
+  // no token is required
+  assert.deepEqual(reader.validateStrict("prompt_denied", 1, translate({ ...full, state: "prompt_denied", note: "input=x" }).event.data), []);
+});
+
+test("prompt_denied and prompt_waiting: an unknown token, a tool on a waiting prompt and an over-long input are misses", () => {
+  const w = oldLines.find((l) => l.state === "prompt_waiting");
+  assert.match(missOf(withNote(w, `${w.note} x=1`)), /^prompt_waiting: unexpected token x=/);
+  assert.match(missOf(withNote({ ...w, state: "prompt_denied" }, "tool=Bash why=a x=1")), /^prompt_denied: unexpected token x=/);
+  assert.match(missOf(withNote(w, "tool=Bash input=x")), /^prompt_waiting: tool=Bash on a waiting prompt/);
+  assert.match(missOf(withNote({ ...w, state: "prompt_denied" }, `input=${"x".repeat(2001)}`)), /tool_input is not valid/);
+  // a waiting message is not clipped by the schema
+  assert.ok(translate(withNote(w, `input=${"x".repeat(5000)}`)).event);
+  assert.match(missOf(withNote(w, "seq=-1")), /bad number seq=-1/);
 });

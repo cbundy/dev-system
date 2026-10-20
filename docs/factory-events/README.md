@@ -54,6 +54,23 @@ join factory.event_log r on r.repo = m.repo and r.issue = m.issue and r.type = '
 where m.repo = :'repo' and m.type = 'merged'
 group by m.issue, m.ts;
 SQL
+# an issue's newest title: the newest ready or claimed event with a title
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
+select distinct on (issue) issue, title, labels, parent, ts
+from factory.event_log
+where repo = :'repo' and type in ('ready', 'claimed') and title is not null
+order by issue, ts desc;
+SQL
+# each parked issue's question link: the newest transition per issue, if parked, and its comment
+dev-query --factory -v repo=cbundy/plant-console <<'SQL'
+select t.issue, t.life, t.seq, c.comment_url
+from (select issue, life, seq, to_state,
+             row_number() over (partition by issue order by seq_at desc, seq desc) as n
+      from factory.event_log where repo = :'repo' and type = 'transition') t
+left join factory.event_log c on c.repo = :'repo' and c.type = 'comment_posted'
+  and c.issue = t.issue and c.life = t.life and c.seq = t.seq
+where t.n = 1 and t.to_state = 'parked';
+SQL
 # review false positives: declined findings over all handled ones
 dev-query --factory -v repo=cbundy/plant-console <<'SQL'
 select outcome, count(*) from factory.event_log
@@ -89,18 +106,22 @@ SQL
 - **Bumps roll out in two releases.** The new schema file, the shared reader's upgrade step and
   any view change ship one release before any producer writes the new version. The same holds for
   a new type, so every reader knows it before it appears.
+- **The database keeps a ten-minor-release window.** The schema at any release works for the writers and
+  readers of the last 10 minor releases; migrations are expand-only, enforced by `npm run lint`
+  ([Schema compatibility](../factory-db.md#schema-compatibility)).
 - **Old versions stay readable for good.** The store keeps every version.
 - **The envelope follows the same rules;** a change to it is also a database migration.
 
 ## Field conventions
 
 - **Names.** snake_case. A shared name (`pr`, `branch`, `head`, `life`, `round`) means the same
-  thing in every type, which is what lets the view lift it into one column.
+  thing in every type, which is what lets the view lift it into one column (`decision` is shared between `loop_entry` and `transition`).
 - **Times.** UTC ISO 8601 ending in `Z`, named `*_at` (the envelope uses `ts`). Times the writer
   makes carry exactly three millisecond digits, so they sort as text. Times copied from elsewhere
   (`pr_closed_at`, `holder_since`, the usage reset times) stay exactly as given.
 - **Presence.** A missing value is JSON `null`, never the string `"none"`. **Flat:** scalars, or
-  at most arrays of scalars; no nested objects.
+  at most arrays of scalars; no nested objects. The exception is a bounded list of objects whose schema is closed
+  (`additionalProperties: false`): `wait` and `options`.
 - **Codes.** A closed list is an `enum`. An open family (`cause`, `via`) is a patterned string with
   examples in its description.
 - **Free text** (`detail`, `question`, `notes`) is for people and never parsed. When a reader
@@ -119,6 +140,10 @@ SQL
   translates the line as dual write does and appends only the new event (never the old line, so
   `--if-changed` with it is a usage error); the factory loop's backfill (H1) uses it. `callum-flow-event
   --new-only --new-path` is its capability probe: it prints the new path with exit 0, and an older image exits 2.
+  `callum-flow-event <state> ... --data '<json object>'` (old-state mode, with or without `--new-only`) hands the
+  translator extra payload fields that only the new event carries (the old line is unchanged): `ready` and `claimed`
+  get the issue's `title`, `labels` and `parent` this way. Not an object: exit 2, nothing written. A key the type does
+  not accept is a translator miss (old line kept, no new event, one warning). An older image answers `--data` with exit 2.
   The old line still goes to today's file, and nothing that reads today's file sees the new one: not
   `--if-changed` (which keeps comparing old lines only) or the old shipper's `$DIR/*.jsonl` glob
   (`images/base/event-push-loop:202`). `callum-flow-claim` and `callum-flow-sweep` read both logs under a

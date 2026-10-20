@@ -71,6 +71,8 @@ export type Facts = {
   answered: Map<string, number>
   // per issue, its newest `reclaimed` event: a sweep or a release gave the claim back (v2 H1)
   reclaimed: Map<number, number>
+  // per issue, its newest `ready` event
+  readyAt: Map<number, number>
 }
 
 // factsOf: what plan reads from the log (v2 SPEC 13.3.3 `facts`).
@@ -83,6 +85,7 @@ export function factsOf(events: FactoryEvent[]): Facts {
     pipeline: new Map(),
     answered: new Map(),
     reclaimed: new Map(),
+    readyAt: new Map(),
   }
   for (const e of events) {
     if (e.state === 'delegated' && e.issue !== null) {
@@ -98,6 +101,8 @@ export function factsOf(events: FactoryEvent[]): Facts {
       facts.superseded.add(e.run)
     } else if (e.state === 'reclaimed' && e.issue !== null) {
       facts.reclaimed.set(e.issue, Math.max(facts.reclaimed.get(e.issue) ?? 0, e.ts))
+    } else if (e.state === 'ready' && e.issue !== null) {
+      facts.readyAt.set(e.issue, Math.max(facts.readyAt.get(e.issue) ?? 0, e.ts))
     }
     if ((e.state === 'verdict' || e.state === 'fix_requested') && e.run !== null) {
       facts.answered.set(e.run, Math.max(facts.answered.get(e.run) ?? 0, e.ts))
@@ -302,6 +307,7 @@ export function loopEventArgs(entry: LedgerEntry): string[] {
   if (entry.pr !== null) args.push('--pr', String(entry.pr))
   if (entry.head !== null) args.push('--head', entry.head)
   args.push('--note', loopNote(entry))
+  if (entry.loopData !== undefined) args.push('--data', JSON.stringify(entry.loopData))
   return args
 }
 

@@ -27,6 +27,15 @@ export function requestOf(text: string, mtime: Ms): NonNullable<WindDownRead['re
   return { requestedAt: mtime, iso: new Date(mtime).toISOString(), trigger: null, problem: `wind-down: ${WIND_DOWN_REQUEST} is not a request (needs a requested_at time); treated as a request at its modification time` }
 }
 
+// withRemembered: the state with the request this session wrote for its own restart (R2), when the
+// read found none: the file may be lost (the stop script leaves it in place, #931) while the
+// container still runs, and nothing may start in those seconds. A request read from the file wins.
+export function withRemembered(state: State, requestedAt: Ms | null): State {
+  if (requestedAt === null || state.v2 === undefined || state.v2.windDown?.request != null) return state
+  const request = { requestedAt, iso: new Date(requestedAt).toISOString(), trigger: 'restart-self', problem: null, remembered: true as const }
+  return { ...state, v2: { ...state.v2, windDown: { stopNow: false, previous: null, ...state.v2.windDown, request } } }
+}
+
 // previousOf: the status file's requested_at and started_at, or null.
 export function previousOf(text: string | null): WindDownRead['previous'] {
   if (text === null) return null
@@ -75,6 +84,8 @@ export async function windDownFiles(io: WindDownIo, loopDir: string, state: Stat
   const problems = state.v2?.windDown?.request?.problem != null ? [state.v2.windDown.request.problem] : []
   const paths = windDownPaths(loopDir)
   const active = wd.mode === 'active'
+  // a remembered request has no file: no status file for it (the stop script took the request away)
+  if (active && state.v2?.windDown?.request?.remembered === true) return problems
   const argv = active ? ['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-status', paths.status] : ['rm', '-f', '--', paths.request]
   const init = active ? { stdin: `${JSON.stringify(windDownStatus(state, wd), null, 2)}\n`, timeoutMs: 10_000 } : { timeoutMs: 10_000 }
   try {

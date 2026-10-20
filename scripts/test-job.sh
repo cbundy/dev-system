@@ -22,8 +22,11 @@ trap 'rm -f "$out"' EXIT
 case $id in
   node)
     # The reporter's last line is `node-tests: <total> total, <failed> failed`.
+    # A run sharing the machine (scripts/test-lock.sh) bounds node's own file workers too.
+    conc=""
+    [ -n "${TEST_NODE_CONCURRENCY:-}" ] && conc="--test-concurrency=$TEST_NODE_CONCURRENCY"
     # shellcheck disable=SC2086 # word splitting is the point: test file names have no spaces
-    node --test --test-reporter=./scripts/test-reporter.js ${TEST_NODE_FILES:-tests/*.test.js} > "$out" 2>&1
+    node --test $conc --test-reporter=./scripts/test-reporter.js ${TEST_NODE_FILES:-tests/*.test.js} > "$out" 2>&1
     node_status=$?
     summary=$(tail -n 1 "$out")
     node_total=$(printf '%s\n' "$summary" | sed -n 's/^node-tests: \([0-9][0-9]*\) total, \([0-9][0-9]*\) failed$/\1/p')

@@ -10,7 +10,9 @@ import type { StoreIo } from './ledger'
 import type { Runtime } from './observe'
 import { EMPTY_RAIL_MEMORY, actLockPath, decideLock, leaseMsOf } from './rails'
 import type { Notice, RailMemory } from './rails'
+import type { Snapshot } from './settings-snapshot'
 import type { LedgerEntry, Ms, SourceName, State } from './types'
+import { opsFrom } from './v2/rules-settings'
 import { loadV2 } from './v2/store'
 import { orphanedWakes } from './wake'
 import { actIo, acting, killed, mayWrite, message, text, v2StoreIo, wakeIdAt } from './driver-io'
@@ -18,10 +20,13 @@ import { S, live, liveV2 } from './driver-state'
 
 export const keysOf = (repo: string) => ({
   backoff: `backoff:${repo}`,
+  starved: `starved:${repo}`,
   known: `queue-known:${repo}`,
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
   titles: `titles:${repo}`,
+  settings: `settings:${repo}`,
+  settingsOps: `settings-ops:${repo}`,
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
@@ -135,6 +140,14 @@ export async function storeSet($: EngineInterface, key: string, value: unknown, 
   }
 }
 
+export async function storeDelete($: EngineInterface, key: string, problems: string[]) {
+  try {
+    await $.store.delete(key)
+  } catch (err) {
+    problems.push(`store: ${key} not removed: ${message(err).slice(0, 200)}`)
+  }
+}
+
 export const isMs = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 export function railMemoryFrom(raw: unknown): RailMemory {
@@ -156,6 +169,7 @@ export function noticeOf(raw: unknown): Notice | null {
   if (o === null || !isMs(o.since)) return null
   if (o.kind === 'heartbeat-other' && typeof o.device === 'string') return { kind: o.kind, device: o.device, since: o.since }
   if (o.kind === 'old-watcher' && typeof o.pid === 'string') return { kind: o.kind, pid: o.pid, since: o.since }
+  if (o.kind === 'schema-behind' && typeof o.to === 'string' && typeof o.error === 'string') return { kind: o.kind, to: o.to, error: o.error, since: o.since }
   if (o.kind === 'breaker' && isMs(o.until) && isMs(o.passes)) return { kind: o.kind, since: o.since, until: o.until, passes: o.passes }
   return null
 }
@@ -170,6 +184,8 @@ export function noticesFrom(raw: unknown): NoticeBook {
 // stale: a notice whose spell ended before it could go out says nothing true any more.
 export function stale(n: Notice, memory: RailMemory | null, now: Ms): boolean {
   if (n.kind === 'breaker') return now >= n.until
+  // keyed by the status's own `at`: the ledger's key makes it go out once
+  if (n.kind === 'schema-behind') return false
   if (memory === null) return false
   if (n.kind === 'heartbeat-other') return memory.heartbeat?.since !== n.since
   return memory.watcher?.since !== n.since
@@ -215,4 +231,30 @@ export function bareState(rt: Runtime, now: Ms): State {
     githubBackoffUntil: null,
     checkout: null,
   }
+}
+
+// keepSettings: after an acting pass, the snapshot it ran with is the one kept (rule N1), only when it differs from the
+// kept one but for its time; the config ops older than the snapshot before it are dropped. The ops are read again, since
+// one may have landed while the pass ran.
+export async function keepSettings(
+  keep: (key: string, value: unknown) => Promise<unknown>,
+  $: EngineInterface,
+  keys: ReturnType<typeof keysOf>,
+  snap: Snapshot,
+  before: Snapshot | null,
+) {
+  const same = before !== null && JSON.stringify({ ...before, at: '' }) === JSON.stringify({ ...snap, at: '' })
+  if (!same) await keep(keys.settings, snap)
+  const stored = await storeGet($, keys.settingsOps)
+  const ops = opsFrom(stored)
+  const floor = Date.parse((before ?? snap).at)
+  const kept = ops.filter(o => o.at >= floor)
+  if (Array.isArray(stored) && kept.length !== stored.length) await keep(keys.settingsOps, kept)
+}
+
+// noteConfigOp: a config op that landed, `{key, by, at}` in the store, for the next pass's rule N1 to name who changed the setting
+export async function noteConfigOp($: EngineInterface, repo: string, key: string, by: 'person' | 'judge', at: Ms) {
+  const k = keysOf(repo).settingsOps
+  const problems: string[] = []
+  await storeSet($, k, [...opsFrom(await storeGet($, k)), { key, by, at }], problems)
 }

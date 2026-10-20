@@ -15,11 +15,14 @@ import type { Exec, Executor } from '../exec'
 import { rateLimited } from '../exec'
 import type { ActionKind } from '../types'
 import * as ARGV from './argv'
+import { logFailedNames } from './flake-names'
 import { RERUN_REFUSED } from './rules-review'
 
 // gh's own call: a few seconds; a minute is ample
 const GH_MS = 60_000
 const SUMMARY_MAX = 200
+// the most of the log that is parsed
+const LOG_MAX = 4 * 1024 * 1024
 
 function clip(text: string): string {
   return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 3)}...` : text
@@ -37,10 +40,24 @@ export function refusedBy(stderr: string): string | null {
   return lines.find(l => /cannot be rerun|\bHTTP 4(?!01\b|29\b)\d\d\b/.test(l)) ?? null
 }
 
+// The names of the run's failed jobs and tests, read from its failed jobs' log before the re-run
+// replaces it. Best effort: a read that throws, times out or exits non-zero gives null names, and
+// never changes the re-run.
+async function namesOf(ctx: Parameters<Executor>[0], runId: string): Promise<{ failedJobs: string[] | null; failedTests: string[] | null }> {
+  try {
+    const r = await ctx.cmd(ARGV.runViewLogFailedArgv(ctx.rt.repo, runId), { timeoutMs: GH_MS })
+    if (r.exitCode === 0) return logFailedNames(r.stdout.slice(0, LOG_MAX))
+  } catch {
+    // the names are null
+  }
+  return { failedJobs: null, failedTests: null }
+}
+
 const ciRerun: Executor = async (ctx, action): Promise<Exec> => {
   if (action.kind !== 'ci-rerun') return { status: 'failed', summary: `refused: the ci-rerun executor got a ${action.kind} action`, noRetry: true }
   // a run id is GitHub's number; anything else could be read as an option
   if (!/^[1-9]\d*$/.test(action.runId)) return { status: 'failed', summary: clip(`refused: ${action.runId} is not a run id`), noRetry: true }
+  const names = await namesOf(ctx, action.runId)
   const argv = ARGV.runRerunArgv(ctx.rt.repo, action.runId)
   try {
     const r = await ctx.cmd(argv, { timeoutMs: GH_MS })
@@ -53,7 +70,7 @@ const ciRerun: Executor = async (ctx, action): Promise<Exec> => {
   } catch (err) {
     return { status: 'failed', outcome: { kind: 'cli', exit: NO_EXIT, detail: message(err).slice(0, 2000) }, summary: clip(`${argv.slice(0, 3).join(' ')}: ${message(err)}`) }
   }
-  return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: clip(`re-ran the failed jobs of run ${action.runId} (PR #${action.pr}, round ${action.round})`) }
+  return { status: 'done', outcome: { kind: 'cli', exit: 0, ...names }, summary: clip(`re-ran the failed jobs of run ${action.runId} (PR #${action.pr}, round ${action.round})`) }
 }
 
 export const executors: Partial<Record<ActionKind, Executor>> = { 'ci-rerun': ciRerun }

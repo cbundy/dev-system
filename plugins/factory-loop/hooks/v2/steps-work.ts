@@ -2,7 +2,10 @@
 // (docs/factory-loop/v2/SPEC.md 4.2, 5.1, 7.1, 8.7, 9.7, 10.8): their prompts (prompts-work.ts),
 // their contracts (contracts-work.mjs: design-v2, build, fix) and what an answer means.
 //
-// - design: a brief is ok, a question or a split is not-ok; the plan side (rules-work.ts) posts the
+// - design: runs on the model `callum-flow-designer-route` picks (which logs `designer_routed`),
+//   falling back to the issue's model label or the agent's model when the route fails (the loop
+//   then logs `designer_routed` with reason fallback). A brief is ok, a question or a split is
+//   not-ok; the plan side (rules-work.ts) posts the
 //   brief and makes the split's children before the result counts. A reader: nothing is read on
 //   origin.
 // - build: the builder runs on the model `callum-flow-implementer-route` picks, which also logs
@@ -18,8 +21,9 @@
 //   declined answer is never ok, and `says` and the result always agree. A fix with nothing pushed
 //   that fixed a finding outside the branch (the PR's description or evidence) answers unchanged:
 //   not-ok (unchanged) the same way, its notes naming each finding fixed and each declined (T17).
-// build and fix give `says` (steps.ts StepModule), so a writer's not-ok ends its step when read
-// while its ok waits for the turn's end and the stop gate (10.8).
+// build and fix give `says` (steps.ts StepModule): in a repo without stop-gate commands a writer's
+// not-ok ends its step when read while its ok waits for the turn's end. With them, neither ends
+// the step before the attempt's settling gate line (steps-gate.ts, 10.8).
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry, State } from '../types'
 import * as ARGV from './argv'
@@ -240,7 +244,7 @@ const notOk = (reason: string, data: unknown): StepResult => ({ event: 'not-ok',
 
 function asDesign(answer: unknown): DesignAnswer | null {
   const a = answer as Partial<DesignAnswer> | null
-  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait') ? (a as DesignAnswer) : null
+  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait' || a.kind === 'done') ? (a as DesignAnswer) : null
 }
 
 // designResult: the checked design answer's meaning (8.7), with the answer as the data the plan
@@ -252,10 +256,75 @@ export function designResult(answer: unknown): StepResult {
   // a question's structured parts become the one canonical text the record stores as its question
   if (a.kind === 'question' && a.question !== null) {
     const question = renderQuestion({ ...a, question: a.question })
-    return notOk(a.kind, { ...a, question, text: question })
+    return notOk(a.kind, { ...a, question, decision: a.question, text: question })
   }
   if (a.kind === 'wait') return notOk(a.kind, { ...a, text: a.reason ?? 'the designer waits on a condition' })
+  if (a.kind === 'done') return notOk(a.kind, { ...a, text: doneText(a, null) })
   return notOk(a.kind, { ...a, text: a.kind === 'question' ? a.question : `split into ${a.children.length} children` })
+}
+
+// doneText: the evidence line of a done close, in the transition's notes: `done: PR #N (merge
+// <sha7>)`, `commit <sha7>`, and the runIt URL when given.
+function doneText(a: DesignAnswer, merge: string | null): string {
+  const e = a.evidence
+  const parts: string[] = []
+  if (e?.pr !== null && e?.pr !== undefined) parts.push(`PR #${e.pr}${merge === null ? '' : ` (merge ${merge.slice(0, 7)})`}`)
+  if (e?.commit !== null && e?.commit !== undefined) parts.push(`commit ${e.commit.slice(0, 7)}`)
+  if (e?.runIt !== null && e?.runIt !== undefined) parts.push(e.runIt)
+  return `done: ${parts.join(', ')}`
+}
+
+// mergeCommitOf: the merge commit and the head of the evidence's PR, as GitHub reports them (gh pr
+// view --json mergeCommit,headRefOid), each null when GitHub gives none.
+async function mergeCommitOf(ctx: ExecCtx, slot: string, pr: number): Promise<{ merge: string | null; head: string | null } | { failed: string }> {
+  const argv = ARGV.prMergeArgv(ctx.rt.repo, pr)
+  const r = await git(ctx, argv, slot)
+  if (!r.ok) return { failed: r.why }
+  if (r.exit !== 0) return { failed: failure(r, argv) }
+  const [merge, head] = r.out.trim().split(/\s+/)
+  return { merge: /^[0-9a-f]{40}$/.test(merge ?? '') ? (merge as string) : null, head: /^[0-9a-f]{40}$/.test(head ?? '') ? (head as string) : null }
+}
+
+// doneResult: a done answer, its evidence checked against origin (8.7): the commit, or the evidence
+// PR's merge commit, must be an ancestor of origin/<base>. Anything else is a bad answer, so the
+// designer retries; a read that fails is unknown (cli). The branch reading rides along as data
+// ({ sha, beyond }): the closed entry deletes the branch only from it.
+export async function doneResult(ctx: ExecCtx, record: StepRecord, answer: unknown): Promise<StepResult> {
+  const a = asDesign(answer)
+  if (a === null || a.kind !== 'done' || a.evidence === undefined) return unknownResult('bad-answer', 'the done answer holds no evidence')
+  if (record.slot === null) return unknownResult('cli', 'the design step has no slot to read origin from')
+  const base = baseOf(ctx.state)
+  const fetch = ARGV.fetchArgv()
+  const f = await git(ctx, fetch, record.slot, FETCH_MS)
+  if (!f.ok) return unknownResult('cli', `origin did not read: ${f.why}`)
+  if (f.exit !== 0) return unknownResult('cli', `origin did not read: ${failure(f, fetch)}`)
+  let merge: string | null = null
+  let prHead: string | null = null
+  let checked = a.evidence.commit
+  if (a.evidence.pr !== null) {
+    const m = await mergeCommitOf(ctx, record.slot, a.evidence.pr)
+    if ('failed' in m) return unknownResult('cli', `PR #${a.evidence.pr} did not read: ${m.failed}`)
+    merge = m.merge
+    prHead = m.head
+    if (checked === null) checked = merge
+  }
+  if (checked === null) return unknownResult('bad-answer', `the done answer's PR #${a.evidence.pr} has no merge commit: it is not merged, so the work is not done`)
+  const argv = ARGV.isAncestorArgv(checked, `origin/${base}`)
+  const anc = await git(ctx, argv, record.slot)
+  if (!anc.ok) return unknownResult('cli', `origin did not read: ${anc.why}`)
+  if (anc.exit === 1 || (anc.exit === 128 && /not a valid|bad object|unknown revision/i.test(anc.err))) {
+    return unknownResult('bad-answer', `the done evidence ${checked.slice(0, 12)} is not on origin/${base}: the work is not merged, so answer a brief instead`)
+  }
+  if (anc.exit !== 0) return unknownResult('cli', `origin did not read: ${failure(anc, argv)}`)
+  const read = await originHead(ctx, record.branch, record.slot)
+  if ('failed' in read) return unknownResult('cli', `origin's ${record.branch} did not read: ${read.failed}`)
+  let count: number | null = null
+  if (read.sha !== null) {
+    const c = await beyond(ctx, record.slot, base, read.sha)
+    if ('failed' in c) return unknownResult('cli', `origin's ${record.branch} did not read: ${c.failed}`)
+    count = c.count
+  }
+  return notOk('done', { ...a, text: doneText(a, merge), checked, mergeCommit: merge, prHead, branch: { sha: read.sha, beyond: count } })
 }
 
 // buildResult: a build answer, its head confirmed on origin (10.8).
@@ -337,26 +406,39 @@ const design: StepModule = {
     if (typeof r === 'string') return r
     // a reader applies no leftovers patch: it changes nothing in its slot
     const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
-    return { prompt, model: model(modelLabelOf(ctx.state, r.issue)), data: null }
+    const routedTo = await runRoute(ctx, ARGV.designerRouteArgv(r.issue), 'callum-flow-designer-route ' + r.issue)
+    if (typeof routedTo === 'string' && routedTo.startsWith('ok:')) return { prompt, model: routedTo.slice(3), data: null }
+    const fallback = model(modelLabelOf(ctx.state, r.issue))
+    try {
+      await ctx.cmd(ARGV.designerFallbackArgv(r.issue, fallback ?? 'opus'), { timeoutMs: ROUTE_MS })
+    } catch {
+      // best effort: the design runs either way
+    }
+    return { prompt, model: fallback, data: null }
   },
-  result: async (_ctx, _record, answer) => designResult(answer),
+  result: async (ctx, record, answer) => (asDesign(answer)?.kind === 'done' ? doneResult(ctx, record, answer) : designResult(answer)),
 }
 
-// The builder's model: the route's answer (an issue's model label first, then the comparison's
-// split); the route logs implementer_routed (7.1). A route that fails is the attempt's failure.
-async function routed(ctx: ExecCtx, issue: number): Promise<string> {
-  const argv = ARGV.implementerRouteArgv(issue)
+// Runs a route tool: 'ok:<alias>' for one plain alias, else the failure text.
+async function runRoute(ctx: ExecCtx, argv: string[], name: string): Promise<string> {
   let out: string
   try {
     const r = await ctx.cmd(argv, { timeoutMs: ROUTE_MS })
     if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}: ${(r.stderr.trim() || r.stdout.trim()).split('\n').pop() ?? ''}`)
     out = r.stdout
   } catch (err) {
-    throw new Error(`callum-flow-implementer-route ${issue}: ${err instanceof Error ? err.message : String(err)}`)
+    return `${name}: ${err instanceof Error ? err.message : String(err)}`
   }
   const m = routedModel(out)
-  if (m === null) throw new Error(`callum-flow-implementer-route ${issue} printed no model`)
-  return m
+  return m === null ? `${name} printed no model` : `ok:${m}`
+}
+
+// The builder's model: the route's answer (an issue's model label first, then the comparison's
+// split); the route logs implementer_routed (7.1). A route that fails is the attempt's failure.
+async function routed(ctx: ExecCtx, issue: number): Promise<string> {
+  const r = await runRoute(ctx, ARGV.implementerRouteArgv(issue), `callum-flow-implementer-route ${issue}`)
+  if (!r.startsWith('ok:')) throw new Error(r)
+  return r.slice(3)
 }
 
 const build: StepModule = {

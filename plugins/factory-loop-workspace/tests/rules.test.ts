@@ -3,12 +3,13 @@
 // stop gate's results.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { blockText, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
+import { blockText, failedTests, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
+import { bootMs, gateEntries, isDead, judge, leaseHeld, openGates, pidOf, startMs } from '../hooks/recover'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
 import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
-import { INPUT_CLIP, clip, enc, inputOf, promptNote, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
+import { INPUT_CLIP, clip, inputOf, promptData, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
 import { createTurns } from '../hooks/turns'
@@ -308,6 +309,14 @@ describe('the stop gate', () => {
     expect(text).toContain('line 200')
   })
 
+  test('runGates finds a failure past the 150-line tail', async () => {
+    const output = `FAIL early one\n${Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n')}`
+    const r = await runGates(io([{ exitCode: 1, output }]).io, ['npm test'], 600_000)
+    if (r.result !== 'fail') throw new Error('expected a failure')
+    expect(r.failedTests).toEqual(['early one'])
+    expect(r.tail).not.toContain('early one')
+  })
+
   test('a command that cannot finish, or a budget spent, is unknown and never a pass', async () => {
     const timedOut = await runGates(io([{ error: 'the child was killed after 600000 ms' }]).io, ['npm test'], 600_000)
     expect(timedOut.result).toBe('unknown')
@@ -317,10 +326,41 @@ describe('the stop gate', () => {
   })
 
   test('its record carries the result and the head', () => {
-    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0 })
+    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0, clean: null })
     expect(gateRecord({ result: 'unknown', ms: 5, why: 'x' }, null, 0, [])).toMatchObject({ result: 'unknown', why: 'x', head: null })
     expect(tail('a\nb\nc\n\n', 2)).toBe('b\nc')
   })
+})
+
+describe('failedTests', () => {
+  test('reads the reporter\'s FAIL blocks, not their at and message lines', () => {
+    const out = 'ok 1 - fine\nFAIL parses the marker\n  at tests/a.test.ts:3\n  expected 1 to be 2\nFAIL second one\n  at b\n  FAIL not a test line? \n'
+    expect(failedTests(out)).toEqual(['parses the marker', 'second one', 'not a test line?'])
+  })
+
+  test('reads (fail) lines under the job wrapper, without the wrapper or the duration', () => {
+    const out = 'FAIL plugins/factory-loop (claude plugin validate / test)\n    (pass) x > y [1.68ms]\n    (fail) group > fails here [0.43ms]\n    (fail) slow > one [1.5s]\n'
+    expect(failedTests(out)).toEqual(['group > fails here', 'slow > one'])
+  })
+
+  test('drops the job wrapper of a shell suite and the setup failures, keeps an isolation failure', () => {
+    expect(failedTests('FAIL scripts/x.test.sh\n')).toBeNull()
+    expect(failedTests('FAIL test setup: no postgres\n')).toBeNull()
+    expect(failedTests('FAIL test isolation: database factory_test_x\n')).toEqual(['test isolation: database factory_test_x'])
+  })
+
+  test('strips ANSI codes, drops duplicates, cuts names to 200 and the list to 20', () => {
+    expect(failedTests('\u001b[31mFAIL red one\u001b[0m\nFAIL red one\n')).toEqual(['red one'])
+    expect(failedTests(`FAIL ${'n'.repeat(300)}\n`)).toEqual(['n'.repeat(200)])
+    const many = Array.from({ length: 25 }, (_, i) => `FAIL t${i}`).join('\n')
+    expect(failedTests(many)?.length).toBe(20)
+    expect(failedTests(many)?.[19]).toBe('t19')
+  })
+
+  test('is null when nothing failed', () => {
+    expect(failedTests('all good\n(pass) a [1ms]\n')).toBeNull()
+  })
+
 })
 
 describe('the stop gate\'s waiting', () => {
@@ -330,8 +370,11 @@ describe('the stop gate\'s waiting', () => {
     if (r.result !== 'unknown') throw new Error('expected unknown')
     expect(r.why).toContain('waited 1800 s for a turn')
     expect(gateRecord(r, null, 0, ['npm test'], 1_800_000)).toMatchObject({ result: 'unknown', waitMs: 1_800_000 })
-    expect(gateLine(r, null, 1_800_000, 2, '2026-10-17T10:00:00.000Z', 3)).toMatchObject({ cause: 'gate-unknown', fields: { waitMs: 1_800_000, concurrency: 2, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 3 } })
-    expect(gateLine({ result: 'pass', ms: 1 }, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0).fields).toEqual({ head: 'abc', ms: 1, waitMs: 0, concurrency: null, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 0 })
+    expect(gateLine(r, null, 1_800_000, 2, '2026-10-17T10:00:00.000Z', 3, null)).toMatchObject({ cause: 'gate-unknown', fields: { waitMs: 1_800_000, concurrency: 2, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 3, clean: null } })
+    expect(gateLine({ result: 'pass', ms: 1 }, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0, true).fields).toEqual({ head: 'abc', ms: 1, waitMs: 0, concurrency: null, startedAt: '2026-10-17T10:00:00.000Z', queuedBehind: 0, clean: true })
+    const fail = { result: 'fail' as const, ms: 1, command: 'npm test', exitCode: 1, tail: '', failedTests: ['a'] }
+    expect(gateLine(fail, 'abc', 0, null, '2026-10-17T10:00:00.000Z', 0, true).fields).toMatchObject({ clean: true, failedTests: ['a'] })
+    expect(gateRecord(fail, 'abc', 0, [], 0, false)).toMatchObject({ clean: false, failedTests: ['a'] })
   })
 })
 
@@ -520,11 +563,6 @@ describe('the stop gate\'s turns', () => {
 })
 
 describe('prompts nobody answers', () => {
-  test('enc leaves no space or percent in a value', () => {
-    expect(enc('rm -f $D/* 100%')).toBe('rm%20-f%20$D/*%20100%25')
-    expect(enc('a\nb\tc')).toBe('a%0Ab%09c')
-  })
-
   test('the reason names the rewrite for an rm of a glob under a variable, with the command\'s own variable', () => {
     for (const command of ['rm -f $D/*', 'rm -rf ${OUT}/build/*', 'cd x && rm -f "$DIR"/*.log']) {
       expect(unguardedGlob('Bash', { command })).not.toBeNull()
@@ -544,10 +582,32 @@ describe('prompts nobody answers', () => {
     expect(whyOf({})).toBeNull()
   })
 
-  test('the note has every token, none for the unknown, and a value with no space in it', () => {
-    expect(promptNote({ life: 'ss1x2k', seq: 7, tool: 'Bash', input: 'rm -f $D/*', agent_type: 'none' })).toBe(
-      'life=ss1x2k seq=7 step=none attempt=none agent=none agent_type=%6Eone tool=Bash slot=none session=none transcript=none why=none input=rm%20-f%20$D/*',
-    )
+  test('the denied data has every required key, null for the unknown', () => {
+    expect(promptData('prompt_denied', { life: 'ss1x2k', seq: 7, tool: 'Bash', input: 'rm -f $D/*', agent_type: 'none', agent: '' })).toEqual({
+      life: 'ss1x2k',
+      seq: 7,
+      step: null,
+      attempt: null,
+      agent_id: null,
+      agent_type: 'none',
+      tool_name: 'Bash',
+      tool_input: 'rm -f $D/*',
+      ask_reason: null,
+      slot: null,
+      session: null,
+      transcript: null,
+      branch: null,
+      pr: null,
+    })
+  })
+
+  test('the waiting data has no ask_reason, a null tool_name and a clipped message', () => {
+    const d = promptData('prompt_waiting', { agent: 'a1', tool: 'Bash', why: 'x', input: 'm'.repeat(INPUT_CLIP + 5), branch: 'issue-1', pr: 3 })
+    expect(d).not.toHaveProperty('ask_reason')
+    expect(d).toMatchObject({ agent_id: 'a1', tool_name: null, branch: 'issue-1', pr: 3 })
+    expect(d.tool_input).toHaveLength(INPUT_CLIP)
+    expect(Object.keys(promptData('prompt_waiting', {}))).toHaveLength(13)
+    expect(Object.keys(promptData('prompt_denied', {}))).toHaveLength(14)
   })
 
   test('an input is a Bash command, else JSON, and clipped', () => {
@@ -562,5 +622,72 @@ describe('prompts nobody answers', () => {
     expect(transcriptOf('/c/projects/p/s1.jsonl', 'a1')).toBe('/c/projects/p/s1/subagents/agent-a1.jsonl')
     expect(transcriptOf(undefined, 'a1')).toBeNull()
     expect(transcriptOf('', 'a1')).toBeNull()
+  })
+})
+
+describe('the recovery of a cut gate (10.6)', () => {
+  const NOW_MS = Date.UTC(2026, 9, 15, 12, 0)
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const row = (cause: string, at: number, over: Record<string, unknown> = {}) => JSON.stringify({ at: iso(at), issue: 571, life: 'ss1x2k', seq: 7, cause, ...over })
+  const open = (...rows: string[]) => openGates(gateEntries(rows.join('\n'), NOW_MS))
+
+  test('an attempt is open while its newest line is a start or a wait; the newest start is the cut one', () => {
+    const s1 = { slot: '/s', gitDir: '/g', process: '1:2', startedAt: 'x' }
+    expect(open(row('gate-start', NOW_MS - 3, s1))).toMatchObject([{ issue: 571, life: 'ss1x2k', seq: 7, at: NOW_MS - 3, process: '1:2', slot: '/s', gitDir: '/g' }])
+    expect(open(row('gate-start', NOW_MS - 5, s1), row('gate-fail', NOW_MS - 4), row('gate-start', NOW_MS - 3, { ...s1, process: '3:4' }), row('gate-wait', NOW_MS - 2))).toMatchObject([{ at: NOW_MS - 3, process: '3:4' }])
+    expect(open(row('gate-wait', NOW_MS - 2))).toMatchObject([{ at: NOW_MS - 2, process: null, slot: null }])
+  })
+
+  test('a settling line, a re-run or a cut closes it, another attempt\'s line does not, and nothing past 24 h is read', () => {
+    for (const closing of ['gate-pass', 'gate-fail', 'gate-unknown', 'gate-rerun', 'gate-cut']) expect(open(row('gate-start', NOW_MS - 3), row(closing, NOW_MS - 2))).toEqual([])
+    expect(open(row('gate-start', NOW_MS - 3), row('gate-pass', NOW_MS - 2, { seq: 8 }))).toHaveLength(1)
+    expect(open(row('gate-start', NOW_MS - 25 * 3_600_000))).toEqual([])
+    expect(open('not json', row('gate-start', NOW_MS, { life: 'BAD' }), row('gate-start', NOW_MS, { issue: 0 }), row('guard:write', NOW_MS))).toEqual([])
+  })
+
+  test('a process is dead when /proc gives another id for its pid, or none', () => {
+    const at = NOW_MS
+    expect(isDead({ at, process: '4242:7' }, '4242:7', null)).toBe(false)
+    expect(isDead({ at, process: '4242:7' }, '4242:8', null)).toBe(true)
+    expect(isDead({ at, process: '4242:7' }, undefined, null)).toBe(true)
+    expect(pidOf('4242:7')).toBe('4242')
+    expect(pidOf('x')).toBeNull()
+    expect(pidOf(null)).toBeNull()
+  })
+
+  test('a line with no process is dead only when it predates this process\'s start, which needs /proc/stat', () => {
+    const boot = bootMs('cpu 1\nbtime 1000\n')
+    expect(boot).toBe(1_000_000)
+    const stat = `4242 (a b) S ${'1 '.repeat(18)}500 5`
+    expect(startMs(stat, boot)).toBe(1_005_000)
+    expect(isDead({ at: 1_004_999, process: null }, undefined, 1_005_000)).toBe(true)
+    expect(isDead({ at: 1_005_001, process: null }, undefined, 1_005_000)).toBe(false)
+    expect(isDead({ at: 1, process: null }, undefined, null)).toBe(false)
+    expect(bootMs(null)).toBeNull()
+    expect(startMs(null, boot)).toBeNull()
+  })
+
+  test('the lease is held by this session until it expires', () => {
+    const lock = JSON.stringify({ session: 's1', renewedAt: 1, expiresAt: 100 })
+    expect(leaseHeld(lock, 's1', 99)).toBe(true)
+    expect(leaseHeld(lock, 's1', 100)).toBe(false)
+    expect(leaseHeld(lock, 's2', 50)).toBe(false)
+    expect(leaseHeld('{', 's1', 50)).toBe(false)
+    expect(leaseHeld(null, 's1', 50)).toBe(false)
+  })
+
+  test('judge re-runs only a writer\'s marker that still names the attempt', () => {
+    const g = { issue: 571, life: 'ss1x2k', seq: 7, at: 1, startedAt: null, slot: '/s', gitDir: '/g', process: '1:2' }
+    const m = parseMarker(JSON.stringify({ v: 1, repo: 'o/r', issue: 571, life: 'ss1x2k', seq: 7, step: 'build', role: 'writer', branch: 'b', gateCommands: ['x'], gateTimeoutMs: 1, loopDir: '/l' }))
+    expect(judge(g, m)).toEqual({ rerun: true })
+    expect(judge(g, null)).toMatchObject({ rerun: false })
+    expect(judge({ ...g, slot: null }, m)).toMatchObject({ rerun: false })
+    expect(judge({ ...g, seq: 8 }, m)).toMatchObject({ rerun: false, why: expect.stringContaining('not this attempt') })
+  })
+
+  test('gateLine adds rerun only for a re-run', () => {
+    const pass = { result: 'pass', ms: 1 } as const
+    expect(gateLine(pass, null, 0, null, 'x', 0, true).fields).not.toHaveProperty('rerun')
+    expect(gateLine(pass, null, 0, null, 'x', 0, true, true).fields).toMatchObject({ rerun: true })
   })
 })

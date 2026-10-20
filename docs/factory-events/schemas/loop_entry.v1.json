@@ -17,7 +17,20 @@
     "started_at": { "type": "string", "description": "When this attempt started.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
     "ended_at": { "type": ["string", "null"], "description": "When it ended; null while running.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "x-column": true },
     "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise.", "x-column": true },
-    "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise." }
+    "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise.", "x-column": true },
+    "decision": { "type": ["string", "null"], "description": "A wake's decision, for example hold or done; null when the wake made none.", "x-column": true },
+    "decision_reason": { "type": ["string", "null"], "maxLength": 200, "description": "Why the wake decided as it did; null when it made no decision." },
+    "database": { "type": ["string", "null"], "description": "A schema migrate (task:migrate:<to_version>, wake migrate, written by factory-db-migrate at start-up): the factory database that was migrated." },
+    "from_version": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: the schema version before it; null when unknown (the migrate failed before it was read)." },
+    "to_version": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: the highest migration number the image ships." },
+    "duration_ms": { "type": ["integer", "null"], "minimum": 0, "description": "A schema migrate: how long it took, in milliseconds." },
+    "outcome": { "enum": ["migrated", "current", "failed", "timed-out", null], "description": "A schema migrate: migrated (versions applied), current (nothing to apply), failed or timed-out." },
+    "error": { "type": ["string", "null"], "description": "A schema migrate: the bootstrap's last error line, at most 300 characters; null when it succeeded." },
+    "flake_test": { "type": ["string", "null"], "maxLength": 512, "description": "A flake bug tell (wake flake-bug): the exact name of the flaky test; null otherwise.", "x-column": true },
+    "flakes": { "type": ["integer", "null"], "minimum": 0, "description": "A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise.", "x-column": true },
+    "window_days": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise.", "x-column": true },
+    "first_flake_at": { "type": ["string", "null"], "format": "date-time", "description": "A flake bug tell: when the first flake of the test in the window happened; null otherwise.", "x-column": true },
+    "filed_issue": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the number of the bug the loop filed (or found); null otherwise.", "x-column": true }
   },
   "examples": [
     { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }

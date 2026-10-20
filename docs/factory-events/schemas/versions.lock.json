@@ -142,9 +142,61 @@
   "claimed.v1": {
     "additionalProperties": false,
     "properties": {
+      "factors": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "points": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "points"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
       "lease_minutes": {
         "minimum": 1,
         "type": "integer"
+      },
+      "parent": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "score": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "title": {
+        "maxLength": 256,
+        "type": [
+          "null",
+          "string"
+        ]
       }
     },
     "required": [
@@ -165,6 +217,79 @@
     },
     "required": [
       "reason"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
+  "comment_posted.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "comment_url": {
+        "maxLength": 500,
+        "pattern": "^https://\\S+$",
+        "type": "string"
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": "string"
+      },
+      "seq": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "to_state": {
+        "enum": [
+          "parked",
+          "waiting"
+        ]
+      }
+    },
+    "required": [
+      "comment_url",
+      "life",
+      "seq",
+      "to_state"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
+  "designer_routed.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "bucket": {
+        "maximum": 99,
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "model": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "default",
+          "fallback",
+          "hash",
+          "label"
+        ]
+      },
+      "sonnet_pct": {
+        "maximum": 100,
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "bucket",
+      "model",
+      "reason",
+      "sonnet_pct"
     ],
     "type": "object",
     "x-issue": "required"
@@ -319,6 +444,30 @@
           "null"
         ]
       },
+      "failed_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
       "head": {
         "pattern": "^[0-9a-f]{7,40}$",
         "type": [
@@ -426,6 +575,41 @@
           "string"
         ]
       },
+      "failed_jobs": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "failed_tests": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "maxItems": 20,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "flaky": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{7,40}$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "life": {
         "pattern": "^[0-9a-z]+$",
         "type": [
@@ -481,11 +665,78 @@
           "start"
         ]
       },
+      "database": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "decision": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "decision_reason": {
+        "maxLength": 200,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "duration_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "ended_at": {
         "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
         "type": [
           "null",
           "string"
+        ]
+      },
+      "error": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "filed_issue": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "first_flake_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "flake_test": {
+        "maxLength": 512,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "flakes": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "from_version": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
         ]
       },
       "key": {
@@ -497,6 +748,15 @@
           "agent-step",
           "task",
           "tell"
+        ]
+      },
+      "outcome": {
+        "enum": [
+          "current",
+          "failed",
+          "migrated",
+          "timed-out",
+          null
         ]
       },
       "rule": {
@@ -516,10 +776,24 @@
           "timed-out"
         ]
       },
+      "to_version": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "wake": {
         "type": [
           "null",
           "string"
+        ]
+      },
+      "window_days": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
         ]
       }
     },
@@ -640,6 +914,152 @@
     "type": "object",
     "x-issue": "none"
   },
+  "main_state.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "branch": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "changed": {
+        "pattern": "^[a-z_]+$",
+        "type": "string"
+      },
+      "conclusions": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "deploy_environments": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "deploy_ids": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "deploy_states": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "green": {
+        "type": "boolean"
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{40}$",
+        "type": "string"
+      },
+      "observed_at": {
+        "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+        "type": "string"
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "run_attempts": {
+        "items": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": "array"
+      },
+      "run_events": {
+        "items": {
+          "pattern": "^[a-z_]+$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "run_heads": {
+        "items": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "type": "array"
+      },
+      "run_ids": {
+        "items": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": "array"
+      },
+      "running": {
+        "items": {
+          "type": "boolean"
+        },
+        "type": "array"
+      },
+      "workflow_ids": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "workflows": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "branch",
+      "changed",
+      "conclusions",
+      "deploy_environments",
+      "deploy_ids",
+      "deploy_states",
+      "green",
+      "head",
+      "observed_at",
+      "pr",
+      "run_attempts",
+      "run_events",
+      "run_heads",
+      "run_ids",
+      "running",
+      "workflow_ids",
+      "workflows"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "merged.v1": {
     "additionalProperties": false,
     "properties": {
@@ -707,12 +1127,385 @@
     "type": "object",
     "x-issue": "optional"
   },
+  "milestone_state.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "expected": {
+        "enum": [
+          "major",
+          "minor",
+          "patch",
+          null
+        ]
+      },
+      "hold_reason": {
+        "maxLength": 200,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "holding": {
+        "type": "boolean"
+      },
+      "last_tag": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "milestone_closed": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "milestone_open": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "oldest_closed_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "oldest_unreleased_merge_at": {
+        "format": "date-time",
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "expected",
+      "hold_reason",
+      "holding",
+      "last_tag",
+      "milestone_closed",
+      "milestone_open",
+      "oldest_closed_at",
+      "oldest_unreleased_merge_at"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
+  "prompt_denied.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_id": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "agent_type": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "ask_reason": {
+        "maxLength": 500,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "attempt": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "branch": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "seq": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "session": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "slot": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "step": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_input": {
+        "maxLength": 2000,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_name": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "transcript": {
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "agent_id",
+      "agent_type",
+      "ask_reason",
+      "attempt",
+      "branch",
+      "life",
+      "pr",
+      "seq",
+      "session",
+      "slot",
+      "step",
+      "tool_input",
+      "tool_name",
+      "transcript"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
+  "prompt_waiting.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_id": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "agent_type": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "attempt": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "branch": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "pr": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "seq": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "session": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "slot": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "step": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_input": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "tool_name": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "transcript": {
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "required": [
+      "agent_id",
+      "agent_type",
+      "attempt",
+      "branch",
+      "life",
+      "pr",
+      "seq",
+      "session",
+      "slot",
+      "step",
+      "tool_input",
+      "tool_name",
+      "transcript"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
   "ready.v1": {
     "additionalProperties": false,
-    "properties": {},
+    "properties": {
+      "labels": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "parent": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "title": {
+        "maxLength": 256,
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
     "required": [],
     "type": "object",
     "x-issue": "required"
+  },
+  "released.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "commit": {
+        "pattern": "^[0-9a-f]{7,40}$",
+        "type": "string"
+      },
+      "headlines": {
+        "items": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "issues": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "issues_closed": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "previous_tag": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "prs": {
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "released_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "source": {
+        "enum": [
+          "loop",
+          "manual",
+          "workflow"
+        ]
+      },
+      "tag": {
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "commit",
+      "headlines",
+      "issues",
+      "issues_closed",
+      "previous_tag",
+      "prs",
+      "released_at",
+      "source",
+      "tag"
+    ],
+    "type": "object",
+    "x-issue": "none"
   },
   "requeued.v1": {
     "additionalProperties": false,
@@ -834,6 +1627,56 @@
     "type": "object",
     "x-issue": "required"
   },
+  "settings_changed.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "detail": {
+        "maxLength": 500,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "fact": {
+        "type": "string"
+      },
+      "key": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "layer": {
+        "enum": [
+          "default",
+          "directive",
+          "env",
+          "plugin",
+          "repo",
+          "workspace",
+          null
+        ]
+      },
+      "new_value": {},
+      "old_value": {},
+      "who": {
+        "enum": [
+          "judge",
+          "person",
+          "plugin",
+          "repo"
+        ]
+      }
+    },
+    "required": [
+      "fact",
+      "key",
+      "layer",
+      "new_value",
+      "old_value",
+      "who"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "shadow_read.v1": {
     "additionalProperties": false,
     "properties": {
@@ -869,9 +1712,22 @@
       "old_ok": {
         "type": "boolean"
       },
+      "out_of_scope": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "reader": {
         "pattern": "^[a-z][a-z0-9-]*$",
         "type": "string"
+      },
+      "scope_floor": {
+        "type": [
+          "null",
+          "string"
+        ]
       },
       "settle_seconds": {
         "minimum": 0,
@@ -969,8 +1825,22 @@
           "string"
         ]
       },
+      "context": {
+        "maxLength": 800,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "cut": {
         "type": "boolean"
+      },
+      "decision": {
+        "maxLength": 2000,
+        "type": [
+          "null",
+          "string"
+        ]
       },
       "fixes": {
         "minimum": 0,
@@ -1013,6 +1883,45 @@
         "maxItems": 8,
         "type": "array"
       },
+      "options": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "maxLength": 300,
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "key": {
+              "enum": [
+                "A",
+                "B",
+                "C",
+                "D",
+                "E",
+                "F"
+              ]
+            },
+            "title": {
+              "maxLength": 120,
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "title"
+          ],
+          "type": "object"
+        },
+        "maxItems": 6,
+        "minItems": 2,
+        "type": [
+          "array",
+          "null"
+        ]
+      },
       "pr": {
         "minimum": 1,
         "type": [
@@ -1032,6 +1941,24 @@
         "type": [
           "null",
           "string"
+        ]
+      },
+      "recommendation": {
+        "maxLength": 200,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "recommended": {
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          null
         ]
       },
       "resume_to": {
@@ -1157,6 +2084,7 @@
         "enum": [
           "claim-lost",
           "closed-on-github",
+          "done",
           "dropped",
           "merged",
           "merged-by-hand",

@@ -48,6 +48,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     fixes: 0,
     round: 0,
     question: null,
+    parts: null,
     why: null,
     notes: [],
     prClosedAt: null,
@@ -204,7 +205,7 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     // an issue condition or no waiting record leaves the due rule and fields as they were
     expect(tasks(withRecords([waitingOn(7, 'issue-closed')]))).toEqual([])
     const due = tasks(withRecords([waitingOn(9, 'tag-contains'), waitingOn(7, 'tag-contains'), waitingOn(8, 'issue-closed')]))
-    expect(due).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { tag: 'v1.0.0', waiting: '7,9' } }])
+    expect(due).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03:w7.9', fields: { tag: 'v1.0.0', waiting: '7,9' } }])
     // a record waiting only on another repo's release is not this judge's to answer
     const foreignTag = record({ issue: 6, state: 'waiting', step: null, resumeTo: 'designing', wait: [{ kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }] })
     expect(tasks(withRecords([foreignTag]))).toEqual([])
@@ -213,13 +214,32 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(tasks(withRecords([waitingOn(7, 'tag-contains')], state({ milestone: { open: 0, closed: 0, openIssues: [], expected: null } })))).toHaveLength(1)
     // at most one release task per UTC hour
     const held = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
-    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, ledger: [...open.ledger, held] }))).toEqual([])
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, ledger: [...open.ledger, held] })).map(x => x.key)).toEqual(['task:release:v1.0.0:2026-10-13T03:w7'])
     // a milestone source that is not readable stays no review
     expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, milestone: null }))).toEqual([])
+    // a review that saw #7 holds off the next pass in the hour
+    const saw7 = entry('task:release:v1.0.0:2026-10-13T03:w7', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, ledger: [...open.ledger, saw7] }))).toEqual([])
+  })
+
+  test('O3 (v2): an issue that starts waiting after the hour\'s review makes one more due, with the reason naming it; then nothing', () => {
+    const cfg = config()
+    const open = state({ milestone: { open: 2, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } })
+    const waitingOn = (issue: number) => record({ issue, state: 'waiting', step: null, resumeTo: 'designing', wait: [{ kind: 'tag-contains', sha: '35bb655' }] })
+    const release = (s: State) => planV2(s, cfg).actions.filter(x => x.kind === 'task')
+    const hourly = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
+    const s: State = { ...open, ledger: [...open.ledger, hourly], v2: { ...emptyV2State(NOW), records: [] } }
+    expect(release(s)).toEqual([])
+    const moved: State = { ...s, v2: { ...s.v2, records: [waitingOn(7)] } }
+    expect(release(moved)).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03:w7', rule: 'O3', reason: 'task release: #7 started waiting', fields: { waiting: '7' } }])
+    const rerun = entry('task:release:v1.0.0:2026-10-13T03:w7', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW + 10 * MIN, endedAt: NOW + 11 * MIN })
+    expect(release({ ...moved, now: NOW + 12 * MIN, ledger: [...moved.ledger, rerun] })).toEqual([])
+    // the hour's first review keeps the plain reason
+    expect(release({ ...open, v2: { ...emptyV2State(NOW), records: [waitingOn(7)] } })).toMatchObject([{ reason: 'task release' }])
   })
 
   test('R2 restarts only on a pass that starts nothing else: a release task due in the same pass holds it, and the task\'s run holds it after (v2 SPEC 14.1)', () => {
-    const cfg = config()
+    const cfg = config({ windDownMinutes: 0 })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
     const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
@@ -230,6 +250,22 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const after = planV2({ ...release, ledger: [...release.ledger, running] }, cfg)
     expect(after.actions.some(a => a.kind === 'restart-self')).toBe(false)
     expect(after.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: waiting on task:release:unknown:2026-10-13T03' })
+  })
+
+  test('R2 with wind-down on does not wait for a queue action or the release task, and names them (v2 SPEC 14.1)', () => {
+    const cfg = config()
+    const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
+    expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2', reason: 'update due', windDownAt: NOW })
+    const merge = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    const task = entry('task:release:unknown:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
+    const busy = planV2({ ...quiet, ledger: [...quiet.ledger, merge, task] }, cfg)
+    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-merge:5, task:release:unknown:2026-10-13T03' })
+    // a pass that starts something still holds it
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
+    const both = planV2(release, cfg)
+    expect(both.actions.some(a => a.kind === 'restart-self')).toBe(false)
+    // off: no request
+    expect(planV2(quiet, config({ windDownMinutes: 0 })).actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: null })
   })
 
   test('the v2 planner with no v2 fields read plans no rule, and says why', () => {

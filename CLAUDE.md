@@ -77,7 +77,9 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
 - **The factory loop.** You are a loop agent when the factory loop started you (your prompt's
   first line is `factory-slot: <path>`) or a loop agent started you. The loop prepared your slot,
   a worktree on the issue's branch, and does the rest: when a builder or fixer ends its turn it
-  runs the repo's gate commands in the slot and hands back any failure; it opens the PR and writes
+  runs the repo's gate commands in the slot and hands back any failure, so a loop agent runs only
+  the subsets it changes and leaves the full gate commands to that stop gate when the repo sets
+  them; it opens the PR and writes
   its title, body, issue link and evidence from your answer; it runs review, waits on CI and
   merges through its own queue. Follow your agent definition and your prompt. Work only in your
   slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
@@ -104,8 +106,10 @@ has passed.
 While debugging, run only what you are changing with `npm test -- <id>...`, where an id is
 `node`, a `tests/<name>.test.js` file, a `*.test.sh` suite path or a mod directory (for example
 `npm test -- plugins/factory-loop` or `npm test -- tests/cli.test.js`); it keeps the sandbox,
-PostgreSQL and isolation checks and says it is a subset, not the gate. Then run the gates once at
-the end. Do not run `node --test`, `claude plugin test` or a suite's `sh` directly: they skip the
+PostgreSQL and isolation checks and says it is a subset, not the gate. On the manual path, then run
+the gates once at the end; a loop agent leaves them to the stop gate. A full run (no ids) takes a
+machine-wide lock and waits for any other full run on the machine; subset runs never wait but share
+the CPUs with the runs alive. Do not run `node --test`, `claude plugin test` or a suite's `sh` directly: they skip the
 sandbox and the database tests. `TEST_JOBS` sizes a run.
 
 - `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script
@@ -114,7 +118,8 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
   JavaScript under `bin/`, `plugins/` and `scripts/`, and fails if a generated skill is
   out of date (`scripts/build-skills.js --check`) or the factory event docs, version lock and
   shapes are stale or a schema breaks its rules (`scripts/build-event-docs.js --check`; fix with
-  `npm run build:events`) (`scripts/lint.sh`). The base image
+  `npm run build:events`) or a factory database migration is not expand-only
+  (`scripts/migration-lint.js`; docs/factory-db.md "Schema compatibility") (`scripts/lint.sh`). The base image
   ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
   syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,

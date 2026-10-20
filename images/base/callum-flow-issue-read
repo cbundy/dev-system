@@ -31,7 +31,14 @@
 #   needs a trusted author on the source issue or PR.
 # --issues: the facts of several issues in ONE GraphQL request (chunks of at most 50):
 #   number, title, state, labels, author, dependency and sub-issue counts, no body,
-#   no comments, no dependency lists. An issue by an untrusted author is listed in
+#   no comments, and each item also carries `blocking` [{number, repo, state}],
+#   `blocked_by` [{number, repo, state, closed_at}] and `parent` {number, repo,
+#   sub_issues: [{number, repo, state}]} or null (each list capped at 50, no
+#   pagination; repo is owner/name, state lower-case). A nested issue by an
+#   untrusted author is left out, its number never printed, and it counts in the
+#   top-level `stripped` (refused + nested; an untrusted parent counts once and
+#   makes `parent` null) with one `untrusted_stripped` event per item
+#   (note dependencies=<k>). A malformed nested node exits 1. An issue by an untrusted author is listed in
 #   `refused` and nothing else about it is printed; a number GitHub does not know
 #   (deleted, transferred, a PR) is listed in `missing`. Exit 0 either way; any
 #   other GraphQL error, a transport failure or a malformed response exits 1.
@@ -265,7 +272,7 @@ case "$mode" in
     case "$repo" in */*) ;; *) die "cannot determine the repo owner and name" ;; esac
     owner=${repo%%/*} rname=${repo#*/}
     case "$owner$rname" in *[!A-Za-z0-9._/-]*) die "unexpected repo name '$repo'" ;; esac
-    FRAG='fragment F on Issue { number title state author { __typename login ... on User { databaseId } ... on Bot { databaseId } } labels(first: 100) { totalCount nodes { name } } issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking } subIssuesSummary { total completed } }'
+    FRAG='fragment N on Issue { number state repository { nameWithOwner } author { __typename login ... on User { databaseId } ... on Bot { databaseId } } } fragment F on Issue { number title state author { __typename login ... on User { databaseId } ... on Bot { databaseId } } labels(first: 100) { totalCount nodes { name } } issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking } subIssuesSummary { total completed } blocking(first: 50) { nodes { ...N } } blockedBy(first: 50) { nodes { ...N closedAt } } parent { ...N subIssues(first: 50) { nodes { ...N } } } }'
     parts=''
     rest=$(printf '%s' "$nums" | tr ',' ' ')
     while [ -n "$rest" ]; do
@@ -287,6 +294,13 @@ case "$mode" in
       _o=$("$GH" api graphql -f query="$q" 2>"$_e") && grc=0 || grc=$?
       part=$(printf '%s' "$_o" | jq -c --argjson T "$trusted" --argjson grc "$grc" '
         def bad: error("unexpected response");
+        def au: .author as $a | if ($a | type) == "object" and ($a.login | type) == "string" and ($a.databaseId | type) == "number"
+          then {login: (if $a.__typename == "Bot" then $a.login + "[bot]" else $a.login end), id: $a.databaseId} else null end;
+        def trn: au as $u | $u != null and any($T[]; .login == ($u.login | ascii_downcase) and .id == $u.id);
+        def nodeok: type == "object" and (.number | type) == "number" and (.state | type) == "string"
+          and (.repository | type) == "object" and (.repository.nameWithOwner | type) == "string";
+        def nlist($x): if ($x | type) == "object" and ($x.nodes | type) == "array" and all($x.nodes[]; nodeok) then $x.nodes else bad end;
+        def nsum: {number, repo: .repository.nameWithOwner, state: (.state | ascii_downcase)};
         if type != "object" or (.data | type) != "object" or (.data.repository | type) != "object" then bad else . end
         | (.errors // []) as $e
         | (if ($e | type) != "array" then bad else . end) as $x
@@ -296,7 +310,7 @@ case "$mode" in
         | [$r | to_entries[] | select(.key | test("^i[0-9]+$"))] as $ents
         | if ($ents | length) == 0 then bad else . end
         | if any($nf[]; . as $a | ($r | has($a) | not) or ($r[$a] != null)) then bad else . end
-        | reduce ($ents[]) as $en ({issues: [], refused: [], missing: []};
+        | reduce ($ents[]) as $en ({issues: [], refused: [], missing: [], nested: []};
             ($en.key[1:] | tonumber) as $num
             | $en.value as $v
             | if $v == null then (if ($nf | index($en.key)) != null then .missing += [$num] else bad end)
@@ -306,6 +320,19 @@ case "$mode" in
                     and ($v.labels.totalCount | type) == "number" and $v.labels.totalCount <= ($v.labels.nodes | length)
                     and ($v.issueDependenciesSummary | type) == "object" and ($v.subIssuesSummary | type) == "object"
                   then . else bad end)
+                | nlist($v.blocking) as $bl
+                | nlist($v.blockedBy) as $bb
+                | (if $bb | all(.[]; (.closedAt | type) == "null" or (.closedAt | type) == "string") then . else bad end)
+                | ($v.parent) as $pn
+                | (if $pn == null then null
+                   elif ($pn | nodeok) then {n: $pn, subs: nlist($pn.subIssues)}
+                   else bad end) as $pr
+                | ($bl | map(select(trn))) as $blt
+                | ($bb | map(select(trn))) as $bbt
+                | (if $pr == null then null elif ($pr.n | trn) then {n: $pr.n, subs: ($pr.subs | map(select(trn)))} else false end) as $prt
+                | ((($bl | length) - ($blt | length)) + (($bb | length) - ($bbt | length))
+                    + (if $pr == null then 0 elif $prt == false then 1 else (($pr.subs | length) - ($prt.subs | length)) end)) as $ns
+                | (if $ns > 0 then .nested += [{issue: $num, n: $ns}] else . end)
                 | ($v.author) as $a
                 | (if ($a | type) == "object" and ($a.login | type) == "string" and ($a.databaseId | type) == "number"
                     then {login: (if $a.__typename == "Bot" then $a.login + "[bot]" else $a.login end), id: $a.databaseId}
@@ -313,6 +340,9 @@ case "$mode" in
                 | if $u != null and any($T[]; .login == ($u.login | ascii_downcase) and .id == $u.id)
                   then .issues += [{number: $num, title: $v.title, state: ($v.state | ascii_downcase), labels: ($v.labels.nodes | map({name})),
                       user: $u,
+                      blocking: ($blt | map(nsum)),
+                      blocked_by: ($bbt | map(nsum + {closed_at: .closedAt})),
+                      parent: (if $prt == null or $prt == false then null else ($prt.n | nsum) + {sub_issues: ($prt.subs | map(nsum))} end),
                       issue_dependencies_summary: {blocked_by: $v.issueDependenciesSummary.blockedBy, blocking: $v.issueDependenciesSummary.blocking,
                         total_blocked_by: $v.issueDependenciesSummary.totalBlockedBy, total_blocking: $v.issueDependenciesSummary.totalBlocking},
                       sub_issues_summary: {total: $v.subIssuesSummary.total, completed: $v.subIssuesSummary.completed}}]
@@ -325,13 +355,15 @@ case "$mode" in
     # one object, in the order asked; the count of numbers asked is checked
     res=$(printf '%s' "$parts" | jq -s -c --arg nums "$nums" '
       ($nums | split(",") | map(tonumber)) as $order
-      | {issues: (map(.issues) | add), refused: (map(.refused) | add), missing: (map(.missing) | add)}
+      | {issues: (map(.issues) | add), refused: (map(.refused) | add), missing: (map(.missing) | add), nested: (map(.nested) | add)}
       | if ((.issues | map(.number)) + .refused + .missing | sort) != ($order | sort) then error("count") else . end
       | .issues |= sort_by(.number as $x | $order | index($x))
       | .refused |= sort_by(. as $x | $order | index($x))
       | .missing |= sort_by(. as $x | $order | index($x))
-      | . + {stripped: (.refused | length)}') || die "unexpected response for the issues"
+      | . + {stripped: ((.refused | length) + (.nested | map(.n) | add // 0))}') || die "unexpected response for the issues"
     for _r in $(printf '%s' "$res" | jq -r '.refused[]'); do log_stripped "$_r" issue; done
+    for _r in $(printf '%s' "$res" | jq -r '.nested[] | "\(.issue):\(.n)"'); do log_stripped "${_r%%:*}" "dependencies=${_r#*:}"; done
+    res=$(printf '%s' "$res" | jq -c 'del(.nested)') || die "unexpected response for the issues"
     ;;
   timeline)
     all=$(fetch_all "repos/$repo/issues/$n/timeline") || die "cannot read the timeline of #$n"

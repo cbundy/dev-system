@@ -29,6 +29,27 @@
     "fixes": { "type": "integer", "minimum": 0, "description": "Loop state, for the record rebuild: entries to fixing so far in this life.", "x-column": true },
     "round": { "type": "integer", "minimum": 0, "description": "Entries to reviewing so far in this life: the review round.", "x-column": true },
     "question": { "type": ["string", "null"], "maxLength": 2000, "description": "parked: the question for the owner; null otherwise. For people; never parse it.", "x-column": true },
+    "decision": { "type": ["string", "null"], "maxLength": 2000, "description": "parked: the one-sentence ask of the owner's question, set only when an agent structured the question; null otherwise. Shares the decision column with loop_entry.", "x-column": true },
+    "context": { "type": ["string", "null"], "maxLength": 800, "description": "parked: the context of the owner's question, set only when an agent structured the question; null otherwise.", "x-column": true },
+    "options": {
+      "type": ["array", "null"],
+      "minItems": 2,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "title"],
+        "properties": {
+          "key": { "enum": ["A", "B", "C", "D", "E", "F"], "description": "The option's letter." },
+          "title": { "type": "string", "maxLength": 120, "description": "The option's short title." },
+          "detail": { "type": ["string", "null"], "maxLength": 300, "description": "More about the option; absent or null when there is none." }
+        }
+      },
+      "description": "parked: the options of the owner's question, set only when an agent structured the question; null otherwise.",
+      "x-column": true
+    },
+    "recommended": { "enum": ["A", "B", "C", "D", "E", "F", null], "description": "parked: the key of the recommended option, set only when an agent structured the question; null otherwise.", "x-column": true },
+    "recommendation": { "type": ["string", "null"], "maxLength": 200, "description": "parked: the reason for the recommended option, set only when an agent structured the question; null otherwise.", "x-column": true },
     "wait": {
       "type": ["array", "null"],
       "minItems": 1,
@@ -47,13 +68,14 @@
       },
       "description": "waiting: the conditions the loop re-checks each pass; null otherwise"
     },
-    "why": { "enum": ["merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null], "description": "closed: why the life ended; null otherwise.", "x-column": true },
+    "why": { "enum": ["merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done", null], "description": "closed: why the life ended (done: its work had already merged); null otherwise.", "x-column": true },
     "notes": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 1000 }, "description": "Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them.", "x-column": true },
     "pr_closed_at": { "type": ["string", "null"], "format": "date-time", "description": "Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none." },
     "lives": { "type": "integer", "minimum": 1, "description": "This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum.", "x-column": true }
   },
   "examples": [
     { "life": "tn0brb", "seq": 6, "table_row": "T11", "from_state": "fixing", "to_state": "reviewing", "via": "fix", "seq_at": "2026-10-16T15:59:06.252Z", "state_since": "2026-10-16T15:59:06.252Z", "resume_to": null, "branch": "issue-92-tunnel-token", "pr": 143, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": "review", "attempt": 1, "cut": false, "triages": 0, "fixes": 1, "round": 2, "question": null, "why": null, "notes": [], "pr_closed_at": null, "lives": 1 },
-    { "life": "tn0brb", "seq": 3, "table_row": "W1", "from_state": "building", "to_state": "waiting", "via": "wait", "seq_at": "2026-10-16T16:20:00.000Z", "state_since": "2026-10-16T16:20:00.000Z", "resume_to": "building", "branch": "issue-92-tunnel-token", "pr": null, "head": null, "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": null, "attempt": 1, "cut": false, "triages": 0, "fixes": 0, "round": 0, "question": null, "wait": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "tag-contains", "sha": "35bb655" }, { "kind": "issue-closed", "issue": 12, "repo": "cbundy/dev-system" }], "why": null, "notes": [], "pr_closed_at": null, "lives": 1 }
+    { "life": "tn0brb", "seq": 3, "table_row": "W1", "from_state": "building", "to_state": "waiting", "via": "wait", "seq_at": "2026-10-16T16:20:00.000Z", "state_since": "2026-10-16T16:20:00.000Z", "resume_to": "building", "branch": "issue-92-tunnel-token", "pr": null, "head": null, "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": null, "attempt": 1, "cut": false, "triages": 0, "fixes": 0, "round": 0, "question": null, "wait": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "tag-contains", "sha": "35bb655" }, { "kind": "issue-closed", "issue": 12, "repo": "cbundy/dev-system" }], "why": null, "notes": [], "pr_closed_at": null, "lives": 1 },
+    { "life": "tn0brb", "seq": 4, "table_row": "P1", "from_state": "building", "to_state": "parked", "via": "park", "seq_at": "2026-10-16T17:00:00.000Z", "state_since": "2026-10-16T17:00:00.000Z", "resume_to": "building", "branch": "issue-92-tunnel-token", "pr": null, "head": null, "approved_patch": null, "brief_url": "https://github.com/cbundy/plant-console/issues/92#issuecomment-6219193862", "step": null, "attempt": 1, "cut": false, "triages": 0, "fixes": 0, "round": 0, "question": "Which tunnel token store should the console use?", "decision": "Pick the tunnel token store.", "context": "The console reads the token at boot and the two stores differ in rotation.", "options": [{ "key": "A", "title": "Environment variable", "detail": null }, { "key": "B", "title": "Secrets file", "detail": "Rotated by the deploy job." }, { "key": "C", "title": "Vault", "detail": "Needs a new service." }], "recommended": "B", "recommendation": "It rotates without a restart and needs no new service.", "why": null, "notes": [], "pr_closed_at": null, "lives": 1 }
   ]
 }

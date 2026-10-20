@@ -47,6 +47,12 @@ export function gateRunKey(r: RecordRef, startedAtMs: number): string {
   return `${seqKey(r)}/gate/${startedAtMs.toString(36)}`
 }
 
+// mainKey: a change in the state of the default branch, from the last state logged to this one
+// (rules-main.ts): main/<last>/<current>, each a state key (`none` before the first).
+export function mainKey(last: string, current: string): string {
+  return `main/${last}/${current}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`
@@ -154,4 +160,22 @@ export function keyParts(key: string): { issue: number; life: string; seq: numbe
 // finds the park's comment (park-text.ts).
 export function hiddenKey(key: string): string {
   return `<!-- factory-loop:${key} -->`
+}
+
+// --- flake bugs (rules-flake-bugs.ts, appendix C) ----------------------------------------------------------
+
+// flakeBugKey: the bug filed for a test, by the first flake of the test in the window.
+export function flakeBugKey(hash: string, firstFlake: string): string {
+  return `flake-bug/${hash}/${firstFlake}`
+}
+
+// flakeCommentKey: the comment (and the body's hidden marker) for one flake of a test on its bug.
+export function flakeCommentKey(hash: string, flake: string): string {
+  return `flake-bug/${hash}/c/${flake}`
+}
+
+// flakeMarker: the marker a flake bug's body carries, which finds it again by the test's hash: the
+// hidden key of `flake:<hash>`.
+export function flakeMarker(hash: string): string {
+  return hiddenKey(`flake:${hash}`)
 }

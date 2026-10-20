@@ -8,9 +8,28 @@
   "additionalProperties": false,
   "required": ["lease_minutes"],
   "properties": {
-    "lease_minutes": { "type": "integer", "minimum": 1, "x-column": true, "description": "How long the claim holds without a renewal, in minutes." }
+    "lease_minutes": { "type": "integer", "minimum": 1, "x-column": true, "description": "How long the claim holds without a renewal, in minutes." },
+    "title": { "type": ["string", "null"], "maxLength": 256, "description": "The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title.", "x-column": true },
+    "labels": { "type": ["array", "null"], "items": { "type": "string" }, "description": "The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read.", "x-column": true },
+    "parent": { "type": ["integer", "null"], "minimum": 1, "description": "The parent issue's number when the parent is in the same repo. Null when there is no parent, when the parent is in another repo, or when it was not read.", "x-column": true },
+    "score": { "type": ["integer", "null"], "description": "The claim rule's score for this issue when it was claimed; null or absent when the claim was not scored." },
+    "factors": {
+      "type": ["array", "null"],
+      "description": "Each factor that added to the score, with its points, in the rule's order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "points"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "description": "The factor's name." },
+          "points": { "type": "integer", "description": "The points the factor added to the score." }
+        }
+      }
+    }
   },
   "examples": [
-    { "lease_minutes": 120 }
+    { "lease_minutes": 120 },
+    { "lease_minutes": 120, "title": "Add a title to the ready event", "labels": ["enhancement", "factory:claimed"], "parent": null },
+    { "lease_minutes": 120, "title": "Add a title to the ready event", "labels": ["enhancement", "factory:claimed"], "parent": null, "score": 42, "factors": [{ "name": "bug", "points": 25 }, { "name": "age", "points": 17 }] }
   ]
 }

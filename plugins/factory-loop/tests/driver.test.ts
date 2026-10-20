@@ -28,6 +28,8 @@ const HANDSHAKE = { [handshakePath(`${CFG_DIR}/factory-loop`, SESSION)]: JSON.st
 const host: typeof engineHost = (on, opts = {}) => engineHost(on, { ...opts, files: { ...HANDSHAKE, ...opts.files } })
 
 const settingsRead = (s: Seen) => s.argv[0] === 'git' && (s.argv[1] === 'show' || s.argv[1] === 'symbolic-ref')
+// the pass's own settings.json write (settings-snapshot.ts): not a read of the factory, and it carries no repo env
+const snapshotWrite = (s: Seen) => s.argv[0] === 'sh' && s.argv[3] === 'settings-snapshot'
 
 // the claim of 470 at this clock, under v2's key (v2/keys.ts)
 const CLAIM_KEY = 'i470/claim/tmtsc5'
@@ -97,10 +99,25 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink
-    expect(h.commands().filter(s => !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
-    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !snapshotWrite(s) && !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // the state was recorded for the replay tools
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
+  })
+
+  test('every pass leaves the settings in force in settings.json; a failed write is a problem line, not a failed pass', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/settings.json`) ?? '{}')).toMatchObject({ v: 1, repo: REPO, settings: { mode: 'observe' }, layers: { mode: 'plugin' } })
+    // the file is gone and the write fails the next time: the pass still completes
+    h.files.delete(`${LOOP_DIR}/settings.json`)
+    h.failWrite = path => path.endsWith('/settings.json')
+    await clock.advance(60_000)
+    expect(h.passes()).toHaveLength(2)
+    expect(h.files.has(`${LOOP_DIR}/settings.json`)).toBe(false)
+    expect(JSON.stringify(h.last())).toContain('settings snapshot: write failed')
   })
 
   test('it never keeps a ledger, takes the act lock, spawns or wakes the model', ENGINE_TEST, async ($, on) => {
@@ -266,6 +283,8 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
         return { stdout: '[]' }
       case 'callum-flow-implementer-route':
         return { stdout: 'sonnet\n' }
+      case 'callum-flow-designer-route':
+        return { stdout: 'opus\n' }
       case 'callum-flow-milestone':
         // a closed item in the Next release milestone: the hourly release review is due (rule O3)
         return w.release ? { stdout: 'Next release (v1.0.0)\nExpected: patch\n#469 closed  Done\n' } : undefined
@@ -308,7 +327,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
     // act mode's commands write real events: no sink
     // (the reads of the repo's settings from origin run before the environment is built, and carry none)
-    expect(h.commands().filter(s => !settingsRead(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     expect(h.titles).toEqual(['🔄 dev-system (Q:1 - D:0 - M:0)'])
     // no full states in act mode
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(false)
@@ -325,6 +344,12 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       tell: 'TELL old-watcher id=w',
     },
     { name: "another orchestrator's heartbeat", beats: `device,age_s\n${OTHER},30\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
+    {
+      name: 'a failed startup migrate',
+      files: { '/tmp/dev-factory-db-migrate.json': JSON.stringify({ outcome: 'failed', at: new Date(NOW - 60_000).toISOString(), to_version: 12, error: 'connecting as x_migrator failed' }) },
+      reason: 'schema: migrate to 12 failed: connecting as x_migrator failed',
+      tell: 'TELL schema-behind id=w',
+    },
     {
       name: 'a checkout of another repo',
       run: argv => (argv.join(' ') === 'git remote get-url origin' ? { stdout: 'git@github.com:cbundy/plant-console.git\n' } : undefined),
@@ -456,7 +481,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
     const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
-    const h = host(on, { config: ACT, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    const h = host(on, { config: { ...ACT, windDownMinutes: 0 }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(60_000)
@@ -472,6 +497,42 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect((h.last().rails as string[]).join(' ')).toContain('restart: dev-restart-self asked for a new workspace')
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+  })
+
+  test('R2 with wind-down on: the request is written before the restart, then the loop winds down, starts nothing, and forgets a restart that never came (D-15)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const f = factory()
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', startedAt: NOW - MIN, endedAt: null }),
+    ])
+    const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    const names = h.commands().map(s => (s.argv[0] === 'sh' && s.argv[3] === 'wind-down-request' ? 'write-request' : s.argv[0]))
+    expect(names.filter(n => n === 'write-request' || n === 'dev-restart-self')).toEqual(['write-request', 'dev-restart-self'])
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.request`) ?? '{}')).toMatchObject({ trigger: 'restart-self' })
+    expect(h.entry('restart:777')).toMatchObject({ status: 'done' })
+    // the next pass acts in wind-down: the status file is written and nothing starts
+    f.w.queue = [470]
+    h.files.set(`${LOOP_DIR}/control.json`, JSON.stringify({ updateDue: { reason: 'image', at: 777 } }))
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ executed: true })
+    expect(h.titles.at(-1)).toContain('winding down')
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.status.json`) ?? '{}')).toMatchObject({ cap_ms: 10 * MIN, running: { steps: [] } })
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+    // the stop script removed the request: still nothing starts, and no status file is written for it
+    h.files.delete(`${LOOP_DIR}/wind-down.request`)
+    h.files.delete(`${LOOP_DIR}/wind-down.status.json`)
+    await clock.advance(60_000)
+    expect(h.files.has(`${LOOP_DIR}/wind-down.status.json`)).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    // the restart never came: past the cap and the margin the loop plans normally again
+    await clock.advance(16 * MIN)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.events().filter(e => e.some(n => n.includes('wind-down-stale'))).length).toBeGreaterThan(0)
   })
 
   test('the new workspace finds the restart done before it loaded: the update is done (rule H4)', ENGINE_TEST, async ($, on) => {
@@ -498,6 +559,42 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     await clock.advance(2 * MIN)
     expect(reads()).toBe(before)
     expect(h.titles.at(-1)).toContain('gh wait')
+  })
+
+  test('a starved queue keeps its spell in the store from the first pass, the pass line carries it, and a pass that claims ends it (S1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let blocked = 1
+    let queueDown = false
+    const { run } = factory({
+      queue: [470],
+      run: argv => {
+        if (queueDown && argv[0] === `${TOOLS}/queue-watch.sh`) return { exitCode: 1, stderr: 'boom' }
+        if (argv[0] !== 'callum-flow-issue-read' || argv.slice(1).join(' ') !== '--json 470') return undefined
+        const issue = { number: 470, title: 'The loop acts', state: 'open', labels: [{ name: 'ready' }], issue_dependencies_summary: { blocked_by: blocked }, sub_issues_summary: { total: 0 } }
+        return { stdout: JSON.stringify({ issue, blocked_by: [], blocking: [], stripped: 0 }) }
+      },
+    })
+    const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const since = h.store.get(`starved:${REPO}`)
+    expect(since).toBe(NOW + 5_000)
+    expect(h.last().starved).toEqual({ since: new Date(NOW + 5_000).toISOString(), minutes: 0 })
+    // a second starved pass keeps the spell's start
+    await clock.advance(10 * MIN)
+    expect(h.store.get(`starved:${REPO}`)).toBe(since)
+    expect((h.last().starved as { minutes: number }).minutes).toBeGreaterThanOrEqual(9)
+    // a pass that cannot read the queue knows nothing: the spell stands
+    queueDown = true
+    await clock.advance(2 * MIN)
+    expect(h.last().starved).toBeUndefined()
+    expect(h.store.get(`starved:${REPO}`)).toBe(since)
+    queueDown = false
+    // the blocker clears: the pass claims, and the spell ends
+    blocked = 0
+    await clock.advance(10 * MIN)
+    expect(h.store.has(`starved:${REPO}`)).toBe(false)
+    expect(h.last().starved).toBeUndefined()
   })
 
   test('a rate-cap hold is one loop event per cap per hour (v2 SPEC 13.11.4, D-24)', ENGINE_TEST, async ($, on) => {
@@ -1402,6 +1499,32 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect(h.files.get(`${LOOP_DIR}/control.json`)).toBe(control)
     await clock.advance(61_000)
     expect((await factoryOp($, 'config')).text).toContain('passEvery       5m')
+  })
+
+  test('an acting pass keeps its settings snapshot, and a config op that lands is logged as a person\'s change (rule N1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // the first pass stores the snapshot and logs no change
+    expect(h.store.get(`settings:${REPO}`)).toMatchObject({ v: 1, repo: REPO, settings: { mode: 'act' } })
+    const settingsEvents = () => h.commands().filter(s => s.argv.join(' ').includes('--type settings_changed'))
+    expect(settingsEvents()).toEqual([])
+    expect(h.store.get(`settings-ops:${REPO}`)).toBeUndefined()
+    // a config op that lands is kept for the next pass
+    const r = await factoryOp($, 'config set maxInFlightIssues 7')
+    expect(r.text).toContain('maxInFlightIssues')
+    await clock.settle()
+    expect(h.store.get(`settings-ops:${REPO}`)).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', by: 'person' })])
+    await clock.advance(61_000)
+    const logged = settingsEvents().map(s => JSON.parse(s.argv[s.argv.indexOf('--data') + 1] ?? '{}') as Record<string, unknown>)
+    expect(logged).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' })])
+    expect((h.store.get(`settings:${REPO}`) as { settings: Record<string, unknown> }).settings.maxInFlightIssues).toBe(7)
+    // the pass after it has no change to log, and the op older than the snapshot is dropped
+    await clock.advance(61_000)
+    expect(settingsEvents()).toHaveLength(1)
+    expect(h.store.get(`settings-ops:${REPO}`)).toEqual([])
   })
 
   test('/factory retry clears the issue\'s exhausted entries in the ledger', ENGINE_TEST, async ($, on) => {

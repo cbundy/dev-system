@@ -41,6 +41,7 @@ function designing(over: Partial<IssueRecord> = {}): IssueRecord {
     fixes: 0,
     round: 0,
     question: null,
+    parts: null,
     why: null,
     notes: [],
     prClosedAt: null,

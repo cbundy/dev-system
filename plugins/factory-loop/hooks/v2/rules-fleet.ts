@@ -2,9 +2,10 @@
 // period, and once a record closed, so the claim of a merged or closed issue ends at once), O3 wakes
 // the judge for the release task, R2 restarts for an update, and what used up its attempts with no
 // issue to hold is told to the owner. They keep v1's meaning and keys (v2 SPEC 13.5.3 and 14.1: H2, O3, R2), with
-// v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
-// with nothing else to start (section 15, "Restart without a drain"); a running step it cuts
-// re-runs free (row U1). Pure.
+// v1's drain gone: R2 restarts through a capped wind-down (section 15, "Restart after a capped
+// wind-down") and waits only for a pass with nothing else to start; with windDownMinutes 0 it also
+// waits for a queue action or the release task to finish. A running step it cuts re-runs free
+// (row U1). Pure.
 import { gate, releaseDue, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
@@ -36,11 +37,12 @@ export function fleetRules(ctx: V2Ctx): void {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
-  // an issue that waits on a release tag of this repo makes the review due too: the judge answers that wait
+  // an issue that waits on a release tag of this repo makes the review due too: the judge answers that wait,
+  // and one that starts waiting after the hour's review makes one more due, its reason naming it
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains' && c.repo === undefined)).map(r => r.issue).sort((a, b) => a - b)
   for (const a of reopenedOffNext(ctx)) want(ctx, a)
   const due = releaseDue(state, config, waiting)
-  if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
+  if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
 }
 
 // fleetTells: what used up its attempts with no record to hold (a record's own exhausted effects
@@ -55,7 +57,7 @@ export function fleetTells(ctx: PlanCtx): void {
   }
 }
 
-// The work R2 waits for: a merge-queue action or the release task, running.
+// The work R2 waits for with wind-down off, and names as unwaited-for with it on: a merge-queue action or the release task, running.
 const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || (e.kind === 'task' && e.wake === 'release'))
 
 // restartOf (R2): the restart for an update that is due, last in the pass, once no queue action or
@@ -71,8 +73,11 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
     skip(ctx, 'R2', null, 'wind-down')
     return null
   }
+  // with wind-down on, the restart cuts queue and release work (the stop script and the loop's own
+  // wind-down finish it up to the cap); with it off, it waits as before
+  const windDown = ctx.config.windDownMinutes > 0
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
-  if (holding.length > 0) {
+  if (!windDown && holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
     return null
   }
@@ -90,7 +95,8 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
     return null
   }
   if (g !== 'go') return null
-  return { kind: 'restart-self', key, class: 'free', rule: 'R2', reason: 'update due', issue: null, why: due.reason, at: due.at }
+  const reason = holding.length > 0 ? `update due; the wind-down finishes ${holding.join(', ')}` : 'update due'
+  return { kind: 'restart-self', key, class: 'free', rule: 'R2', reason, issue: null, why: due.reason, at: due.at, windDownAt: windDown ? ctx.state.now : null }
 }
 
 // restartTells: an exhausted restart, told once (rule R2), before the plan's admission.

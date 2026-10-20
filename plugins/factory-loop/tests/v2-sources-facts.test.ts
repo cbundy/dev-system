@@ -8,7 +8,7 @@ import type { FactoryEvent } from '../hooks/derive'
 import { eventArgv, onceKey } from '../hooks/v2/events'
 import { validateStrict } from '../hooks/v2/event-reader'
 import { planV2 } from '../hooks/v2/plan'
-import { compareFacts, eventsFromNewRows, viewOf } from '../hooks/v2/sources-facts'
+import { compareFacts, diffViews, eventsFromNewRows, floorsFromRows, viewOf } from '../hooks/v2/sources-facts'
 import { SETTLE_MS } from '../hooks/v2/sources-records'
 import type { Action, LedgerEntry, State } from '../hooks/types'
 import { emptyCache } from '../hooks/observe'
@@ -36,6 +36,7 @@ const reclaimed = (o: Opts = {}) => pair('reclaimed', 'requeued', { reason: 'lea
 const claimed = (o: Opts = {}) => pair('claimed', 'claimed', { lease_minutes: 120 }, { note: 'lease: 120', ...o })
 const renewed = (o: Opts = {}) => pair('renewed', 'claim_renewed', { lease_minutes: 120 }, { note: 'lease: 120', ...o })
 const merged = (o: Opts = {}) => pair('merged', 'merged', { pr: 47, branch: 'issue-48', head: SHA, by: 'factory', recovered: false }, { col: { pr: 47, branch: 'issue-48', head: SHA }, ...o })
+const readied = (o: Opts = {}) => pair('ready', 'ready', { title: null, labels: null, parent: null }, { actor: 'queue-watch', ...o })
 const swept = (o: Opts = {}) => pair('closed', 'closed', { reason: 'completed' }, { actor: 'sweep', note: 'completed', ...o })
 const tell = (status: 'done' | 'failed', o: Opts = {}) =>
   pair('loop', 'loop_entry', { kind: 'tell', key: 'tell:parked:48', status, attempts: 1, class: 'owner', rule: 'H1', started_at: iso(1792117900000), ended_at: iso(1792117901000), agent_id: null, wake: 'parked' }, {
@@ -70,6 +71,10 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
     ['claimed', claimed(), v => expect([...v.ledger.keys()]).toEqual([`claim:48:derived:${Math.floor(T / 1000) * 1000}`])],
     ['claim_renewed is renewed', renewed(), v => expect([...v.ledger.keys()]).toEqual(['heartbeat:derived'])],
     ['merged', merged(), v => expect([...v.ledger.values()]).toMatchObject([{ key: 'rollout:48', pr: 47 }])],
+    ['ready', readied(), v => {
+      expect([...v.readyAt]).toEqual([[48, Math.floor(T / 1000) * 1000]])
+      expect([...v.ledger.keys()]).toEqual([])
+    }],
     ['closed by the sweep', swept(), v => expect([...v.ledger.keys()]).toEqual(['sweep:derived'])],
     ['loop_entry is a loop event', tell('done'), v => {
       expect(v.ledger.get('tell:parked:48')).toMatchObject({ kind: 'tell', status: 'done', wake: 'parked', startedAt: 1792117900000, endedAt: 1792117901000, issue: 48 })
@@ -82,6 +87,7 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
       check(viewOf(newOf([l]), DEVICE))
       expect(viewOf(newOf([l]), DEVICE)).toEqual(viewOf(oldOf([l]), DEVICE))
       expect(factsOf(newOf([l])).reclaimed).toEqual(factsOf(oldOf([l])).reclaimed)
+      expect(factsOf(newOf([l])).readyAt).toEqual(factsOf(oldOf([l])).readyAt)
       expect(newOf([l]).map(e => onceKey(e))).toEqual(oldOf([l]).map(e => onceKey(e)))
     })
   }
@@ -119,14 +125,35 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
   })
 })
 
+describe('floorsFromRows', () => {
+  test('reads the device and its floor; a row that does not read throws, naming the source new', () => {
+    expect(floorsFromRows([{ device: 'a', floor: '2026-10-17T13:26:02Z' }])).toEqual(new Map([['a', Date.parse('2026-10-17T13:26:02Z')]]))
+    expect(() => floorsFromRows([{ device: 'a', floor: 'x' }])).toThrow('source new')
+    expect(() => floorsFromRows([{ floor: '2026-10-17T13:26:02Z' }])).toThrow('source new')
+  })
+})
+
 describe('compareFacts', () => {
   const base = [reclaimed(), claimed(), intervened('i48/a'), tell('done')]
 
   test('equal sides: nothing differs, and the compare is not empty', () => {
     const c = compareFacts(oldOf(base), newOf(base), DEVICE, NOW, NOW)
-    expect(c.data).toEqual({ reader: 'loop-facts', tool: 'factory-loop', compared: 1 + 3 + 1, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null })
+    expect(c.data).toEqual({ reader: 'loop-facts', tool: 'factory-loop', compared: 1 + 3 + 1, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null, out_of_scope: 0 })
     expect(validateStrict('shadow_read', 1, c.data)).toEqual([])
     expect(c.diffs).toEqual([])
+  })
+
+  test('the newest ready per issue is compared: equal history gives equal readyAt, a ready on one side is the key ready:#N', () => {
+    const history = [readied({ ts: T - MIN }), readied({ ts: T }), readied({ issue: 49, ts: T - 5 * MIN })]
+    expect(factsOf(newOf(history)).readyAt).toEqual(factsOf(oldOf(history)).readyAt)
+    expect(factsOf(newOf(history)).readyAt.get(48)).toBe(Math.floor(T / 1000) * 1000)
+    const equal = compareFacts(oldOf(history), newOf(history), DEVICE, NOW, NOW)
+    expect(equal.data).toMatchObject({ compared: 2, differences: 0 })
+    const c = compareFacts(oldOf(history), newOf(history.slice(0, 2)), DEVICE, NOW, NOW)
+    expect(c.data).toMatchObject({ differences: 1, diff_keys: ['ready:#49'], compared: 2 })
+    // the newest one differs: also a difference
+    const d = compareFacts(oldOf(history), newOf([history[0], history[2]]), DEVICE, NOW, NOW)
+    expect(d.data.diff_keys).toEqual(['ready:#48'])
   })
 
   test('a reclaimed, a ledger and a once-key difference each count, by key', () => {
@@ -138,12 +165,71 @@ describe('compareFacts', () => {
     expect(c.data.detail).toBe(c.diffs[0]?.text)
   })
 
+  describe('the scope floor: history from before a device\'s first new-store event', () => {
+    const FLOOR = T - 5 * MIN
+    const before = (o: Opts = {}) => ({ ...o, ts: FLOOR - 60 * MIN })
+    // the loop device's events from before its floor (old store only) and from the floor on (both)
+    const history = [claimed(before()), merged(before({ issue: 49 })), tell('done', before()), reviewed('/a/old.json', before()), intervened('i48/old', before())]
+    const after = [claimed({ ts: FLOOR + MIN, issue: 50 }), merged({ ts: FLOOR + MIN, issue: 51 }), reviewed('/a/new.json', { ts: FLOOR + MIN })]
+    const floors = new Map([[DEVICE, Math.floor(FLOOR / 1000) * 1000]])
+
+    test('without floors the old history is a difference: the loop\'s claim, rollout, tell and once keys', () => {
+      const c = compareFacts(oldOf([...history, ...after]), newOf(after), DEVICE, NOW, NOW)
+      expect(c.data.differences).toBeGreaterThan(0)
+      expect(c.data.diff_keys.some(k => k.startsWith('ledger:claim:48:derived:'))).toBe(true)
+      expect(c.data).toMatchObject({ scope_floor: null, out_of_scope: 0 })
+    })
+
+    test('with the floor both sides agree: 0 differences, 0 live, the dropped events counted', () => {
+      const c = compareFacts(oldOf([...history, ...after]), newOf(after), DEVICE, NOW, NOW, floors)
+      expect(c.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [], out_of_scope: history.length, scope_floor: iso(Math.floor(FLOOR / 1000) * 1000) })
+      expect(validateStrict('shadow_read', 1, c.data)).toEqual([])
+    })
+
+    test('an event in the floor\'s own second stays on both sides (old whole second, new with milliseconds)', () => {
+      const own = claimed({ ts: Math.floor(FLOOR / 1000) * 1000 + 663 })
+      const c = compareFacts(oldOf([own]), newOf([own]), DEVICE, NOW, NOW, floors)
+      expect(c.data).toMatchObject({ compared: 1, differences: 0, out_of_scope: 0 })
+      // and one that the new store lacks still shows
+      expect(compareFacts(oldOf([own]), newOf([]), DEVICE, NOW, NOW, floors).data.differences).toBe(1)
+    })
+
+    test('a device with no floor keeps its old events, and shows as a difference; events with no device stay', () => {
+      const lone = claimed({ ...before(), device: 'lone' })
+      const own = new Map([[DEVICE, Math.floor(FLOOR / 1000) * 1000]])
+      const c = compareFacts(oldOf([lone]), newOf([]), 'lone', NOW, NOW, own)
+      expect(c.data).toMatchObject({ differences: 1, out_of_scope: 0, scope_floor: null })
+      const nodev = reclaimed({ ...before(), device: '' })
+      expect(compareFacts(oldOf([nodev]), newOf([]), DEVICE, NOW, NOW, own).data.diff_keys).toContain('reclaimed:#48')
+    })
+
+    test('another device\'s floor cuts only that device\'s events, a reclaimed of it too', () => {
+      const other = reclaimed({ ts: FLOOR - 60 * MIN, device: 'someone-else', issue: 52 })
+      const mine = reclaimed({ ts: FLOOR - 60 * MIN, issue: 53 })
+      const both = new Map([...floors, ['someone-else', Math.floor(FLOOR / 1000) * 1000]])
+      const c = compareFacts(oldOf([other, mine]), newOf([]), DEVICE, NOW, NOW, both)
+      expect(c.data.diff_keys).toEqual([])
+      expect(c.data.out_of_scope).toBe(2)
+      // only the other device's floor: this device's reclaimed is a difference again
+      const onlyOther = new Map([['someone-else', Math.floor(FLOOR / 1000) * 1000]])
+      const keys = compareFacts(oldOf([other, mine]), newOf([]), DEVICE, NOW, NOW, onlyOther).data.diff_keys
+      expect(keys).toContain('reclaimed:#53')
+      expect(keys).not.toContain('reclaimed:#52')
+    })
+  })
+
   test('a difference only inside the settle window shows in live_differences, not in differences', () => {
     const recent = claimed({ ts: NOW - SETTLE_MS / 2 })
     const c = compareFacts(oldOf([...base, recent]), newOf(base), DEVICE, NOW, NOW)
     expect(c.data).toMatchObject({ differences: 0, live_differences: 1, diff_keys: [] })
     // outside the window it counts
     expect(compareFacts(oldOf([...base, recent]), newOf(base), DEVICE, NOW + 2 * SETTLE_MS, NOW).data).toMatchObject({ differences: 1, live_differences: 1 })
+  })
+
+  test("the start-up migrate's native-only task:migrate entry is no difference", () => {
+    const migrate = pair('loop', 'loop_entry', { kind: 'task', key: 'task:migrate:12', status: 'done', attempts: 1, class: 'free', rule: 'dev-init', started_at: iso(T), ended_at: iso(T), agent_id: DEVICE, wake: 'migrate', database: 'factory', from_version: 11, to_version: 12, duration_ms: 5, outcome: 'migrated', error: null }, { issue: null })
+    const c = compareFacts(oldOf(base), newOf([...base, migrate]), DEVICE, NOW, NOW)
+    expect(c.data).toMatchObject({ differences: 0, live_differences: 0, diff_keys: [] })
   })
 
   test("other devices' events prove nothing of this device's ledger or once keys", () => {
@@ -200,5 +286,15 @@ describe('the facts shadow in the planner (rules-shadow.ts)', () => {
     expect(tells(await plan(compare(49), [done]))).toEqual([])
     // another set is told again
     expect(tells(await plan(compare(50), [done])).map(a => a.key)).toEqual(['tell:facts-shadow:reclaimed:#48,reclaimed:#50'])
+  })
+})
+
+describe('diffViews', () => {
+  test('a ledger entry that differs only in key order is no difference', () => {
+    const e = { key: 'k', kind: 'event', class: 'record', rule: 'derived', issue: 1, run: null, pr: null, head: null, status: 'done', attempts: 1, startedAt: NOW } as unknown as LedgerEntry
+    const reordered = Object.fromEntries(Object.entries(e).reverse()) as unknown as LedgerEntry
+    const view = (x: LedgerEntry) => ({ reclaimed: new Map<number, number>(), readyAt: new Map<number, number>(), ledger: new Map([['k', x]]), once: new Set<string>() })
+    expect(diffViews(view(e), view(reordered))).toEqual([])
+    expect(diffViews(view(e), view({ ...e, attempts: 2 }))).toHaveLength(1)
   })
 })

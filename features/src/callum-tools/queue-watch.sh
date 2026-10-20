@@ -59,6 +59,10 @@
 # with that event. An issue that joins after the first poll is always logged.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 #
+# Each `ready` event also carries the issue's title, labels and parent (callum-flow-event --data,
+# cbundy/dev-system#870), read from the same listing; a writer without --data (exit 2) is called again
+# without it.
+#
 # --once (docs/factory-loop/v2/SPEC.md 13.3.4) is one read for the
 # factory loop, not a watch: the same listing and trust filtering, no
 # debounce, then one line and exit 0, whether or not the queue changed:
@@ -85,8 +89,30 @@ READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 # the factory event log (cbundy/dev-system#218) when callum-flow-event is
 # installed. Best effort: it never changes this script's output or status.
 record_event() {
+  event_rc=0
   command -v callum-flow-event >/dev/null 2>&1 || return 0
-  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
+  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || event_rc=$?
+}
+
+# record_ready <issue> [--if-changed]: logs the issue's `ready` event with the facts the listing
+# that found it carries (title clipped to 256 characters, label names, the parent's number when the
+# parent is in --repo, else null) as callum-flow-event --data (cbundy/dev-system#870). A writer
+# that does not know --data answers exit 2: the event is then logged again without it, so a ready
+# event is never lost to the new option.
+record_ready() {
+  rr_n=$1
+  shift
+  rr_data=$(printf '%s' "${listed-}" | jq -c --argjson n "$rr_n" --arg repo "$repo" '
+    first(.issues[] | select(.number == $n))
+    | {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
+       labels: (if (.labels | type) == "array" then [.labels[] | .name | strings] else null end),
+       parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
+         | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' 2>/dev/null) || rr_data=
+  if [ -n "$rr_data" ]; then
+    record_event ready --issue "$rr_n" "$@" --data "$rr_data"
+    [ "$event_rc" -eq 2 ] || return 0
+  fi
+  record_event ready --issue "$rr_n" "$@"
 }
 
 # Background sleep lets the shell handle watcher signals while waiting.
@@ -188,22 +214,23 @@ else
   trap nap_cleanup EXIT
 fi
 
-# read_queue: the open, trusted issues carrying the label, sorted and comma
-# separated. Fails on a reader failure or an unexpected reply: a failed poll,
-# never an empty queue.
+# read_queue: sets $current to the open, trusted issues carrying the label, sorted and comma
+# separated, and keeps the listing in $listed (record_ready reads the facts from it). Fails on a
+# reader failure or an unexpected reply: a failed poll, never an empty queue. Not run in a
+# subshell, so both stay set.
 read_queue() {
   listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
-    printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null
+    current=$(printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null)
 }
 
 # --once: one read (see the header), then exit 0.
 if [ -n "$once" ]; then
   command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
   command -v "$READ" >/dev/null 2>&1 || fatal "$READ not on PATH"
-  current=$(read_queue) || fatal "cannot read the queue"
+  read_queue || fatal "cannot read the queue"
   printf 'queue known=%s now=%s\n' "${known:-none}" "${current:-none}"
   for n in $(printf '%s' "$current" | tr ',' ' '); do
-    case ",$known," in *",$n,"*) ;; *) record_event ready --issue "$n" --if-changed ;; esac
+    case ",$known," in *",$n,"*) ;; *) record_ready "$n" --if-changed ;; esac
   done
   exit 0
 fi
@@ -218,7 +245,7 @@ initial=
 polled=
 while :; do
   delay=$interval
-  if current=$(read_queue); then
+  if read_queue; then
     if [ -z "$polled" ]; then
       polled=1
       initial=$current
@@ -239,8 +266,8 @@ while :; do
           *",$n,"*) ;;
           *)
             case ",$initial," in
-              *",$n,"*) record_event ready --issue "$n" --if-changed ;;
-              *) record_event ready --issue "$n" ;;
+              *",$n,"*) record_ready "$n" --if-changed ;;
+              *) record_ready "$n" ;;
             esac
             ;;
         esac

@@ -12,7 +12,7 @@ export type Ran = { exitCode: number; output: string } | { error: string }
 
 export type GateResult =
   | { result: 'pass'; ms: number }
-  | { result: 'fail'; ms: number; command: string; exitCode: number; tail: string }
+  | { result: 'fail'; ms: number; command: string; exitCode: number; tail: string; failedTests: string[] | null }
   | { result: 'unknown'; ms: number; why: string }
 
 export type GateIo = {
@@ -38,9 +38,35 @@ export async function runGates(io: GateIo, commands: readonly string[], budgetMs
       ran = { error: err instanceof Error ? err.message : String(err) }
     }
     if ('error' in ran) return { result: 'unknown', ms: await spent(), why: `\`${command}\` did not finish: ${oneLine(ran.error)}` }
-    if (ran.exitCode !== 0) return { result: 'fail', ms: await spent(), command, exitCode: ran.exitCode, tail: tail(ran.output) }
+    if (ran.exitCode !== 0) return { result: 'fail', ms: await spent(), command, exitCode: ran.exitCode, tail: tail(ran.output), failedTests: failedTests(ran.output) }
   }
   return { result: 'pass', ms: await spent() }
+}
+
+const MAX_FAILED = 20
+const MAX_NAME = 200
+
+// failedTests: the names of the failing tests in a failed command's full output, or null for none.
+// It reads `FAIL <name>` (scripts/test-reporter.js) and `(fail) <name> [<n>ms]` lines (claude plugin
+// test) after the ANSI escapes and leading blanks are gone, and leaves the job wrappers of
+// scripts/test-job.sh and the test setup failures out; `FAIL test isolation: <what>` is kept.
+export function failedTests(output: string): string[] | null {
+  const names: string[] = []
+  for (const raw of output.split('\n')) {
+    // eslint-disable-next-line no-control-regex
+    const line = raw.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').trim()
+    let name: string | null = null
+    let m = /^FAIL (.+)$/.exec(line)
+    if (m !== null) {
+      const n = m[1]!.trim()
+      if (!/^test setup:/.test(n) && !/\(claude plugin validate \/ test\)$/.test(n) && !/^\S+\.test\.sh$/.test(n)) name = n
+    } else if ((m = /^\(fail\) (.+?)(?: \[[0-9.]+ ?m?s\])?$/.exec(line)) !== null) name = m[1]!
+    if (name === null || name === '') continue
+    name = name.slice(0, MAX_NAME)
+    if (!names.includes(name)) names.push(name)
+    if (names.length === MAX_FAILED) break
+  }
+  return names.length === 0 ? null : names
 }
 
 // tail: the last TAIL_LINES lines of an output, without its trailing blank lines.
@@ -67,9 +93,9 @@ export function blockText(r: Extract<GateResult, { result: 'fail' }>, slot: stri
 
 // gateRecord: the result as factory-gate.json holds it in the slot's git dir, with the slot's HEAD
 // (null: not read), for the decision log and the triage's inputs.
-export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[], waitMs = 0): Record<string, unknown> {
-  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms, waitMs }
-  if (r.result === 'fail') return { ...base, command: r.command, exitCode: r.exitCode, tail: r.tail }
+export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[], waitMs = 0, clean: boolean | null = null): Record<string, unknown> {
+  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms, waitMs, clean }
+  if (r.result === 'fail') return { ...base, command: r.command, exitCode: r.exitCode, tail: r.tail, failedTests: r.failedTests }
   if (r.result === 'unknown') return { ...base, why: r.why }
   return base
 }
@@ -77,9 +103,12 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 // gateLine: every run as one line of the companion's log, which outlives factory-gate.json (the
 // next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
 // intervention (v2 SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
-// waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
+// clean: whether the slot's tree was clean when the gate started and its head did not move during it
+// (null: not known). waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
 // startedAt (ISO, 3 ms digits) is when it asked for its turn, before any wait, and queuedBehind how
 // many held a turn or waited ahead of it then (0: none); the loop writes `gate_run` from these.
+// rerun: the run is the recovery's, of a gate the loop's restart cut, with no agent left to refuse
+// (the field is written only then).
 export function gateLine(
   r: GateResult,
   head: string | null,
@@ -87,10 +116,12 @@ export function gateLine(
   concurrency: number | null,
   startedAt: string,
   queuedBehind: number,
+  clean: boolean | null,
+  rerun = false,
 ): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind }
+  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind, clean, ...(rerun ? { rerun: true } : {}) }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
-  if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode } }
+  if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode, failedTests: r.failedTests } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }
 }
 

@@ -25,10 +25,10 @@ import type { IssueView, LedgerEntry, Ms } from '../types'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
 import { livesBefore } from './lives'
-import { ROW_S0, madeRecord } from './table'
+import { ROW_S0, ROW_S7, madeRecord } from './table'
 import type { Claimed } from './table'
 import { REJECTED_LABEL, sameLabel } from './types'
-import type { IssueRecord, V2Ctx } from './types'
+import type { IssueRecord, StarvedVerdict, V2Ctx } from './types'
 
 const FIRST = /^i([1-9]\d*)\/claim\/([0-9a-z]+)$/
 
@@ -47,7 +47,7 @@ export function claimedOf(e: LedgerEntry): Claimed | 'lost' | null {
   if (c === null) return null
   const { issue, life } = c
   const o = e.outcome
-  if (o?.kind === 'claim') return o.result === 'lost' ? 'lost' : { issue, life, branch: `issue-${issue}`, pr: null, others: [] }
+  if (o?.kind === 'claim') return o.result === 'lost' ? 'lost' : { issue, life, branch: `issue-${issue}`, pr: null, others: [], ...(o.park === undefined ? {} : { park: o.park }) }
   if (o?.kind === 'adopt') return { issue, life, branch: o.branch, pr: o.pr, others: [...o.others] }
   return null
 }
@@ -127,15 +127,15 @@ function makeRecords(ctx: V2Ctx): void {
       key: transitionKey(next),
       class: 'free',
       rule: 'S1',
-      reason: `S0: claimed${got.pr === null ? '' : `, PR #${got.pr} adopted`}, life ${next.lives}${back}`,
+      reason: `${next.state === 'parked' ? 'S7: parked on its split decision' : 'S0: claimed'}${got.pr === null ? '' : `, PR #${got.pr} adopted`}, life ${next.lives}${back}`,
       issue: got.issue,
-      row: ROW_S0.id,
+      row: next.state === 'parked' ? ROW_S7.id : ROW_S0.id,
       event: 'ok',
       from: null,
       next,
       trigger: { kind: 'claim', key: e.key },
       cause: null,
-      via: before.afterReject ? 'unreject' : got.pr === null ? 'claim' : 'adopt',
+      via: next.state === 'parked' ? 'split-decision' : before.afterReject ? 'unreject' : got.pr === null ? 'claim' : 'adopt',
     })
   }
 }
@@ -167,6 +167,11 @@ function finishClaims(ctx: V2Ctx): Set<number> {
 // The stages of another device's live work.
 const LIVE_STAGES: readonly string[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
+// blockedWhy: the filter's reason for an issue with this many open blockers.
+function blockedWhy(count: number): string {
+  return `blocked by ${count} open issue${count > 1 ? 's' : ''}`
+}
+
 // candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
 function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
   const { config, state } = ctx
@@ -179,7 +184,7 @@ function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): 
   const skipLabel = issue.labels.find(l => config.skipLabels.some(s => sameLabel(s, l)))
   if (skipLabel !== undefined) return `label ${skipLabel}`
   if (issue.blockedBy === null) return 'blockers unknown'
-  if (issue.blockedBy > 0) return `blocked by ${issue.blockedBy} open issue${issue.blockedBy > 1 ? 's' : ''}`
+  if (issue.blockedBy > 0) return blockedWhy(issue.blockedBy)
   if (issue.subIssues === null) return 'sub-issues unknown'
   if (issue.subIssues > 0) return 'tracker (has sub-issues)'
   if (issue.epic === true) return 'tracker (title)'
@@ -211,6 +216,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   for (const source of ['queue', 'github'] as const) {
     if (!state.sources[source].ok) {
       skip(ctx, 'S1', null, `${source} source unavailable`)
+      ctx.starved = { starved: null, skips: new Map(), blocked: [] }
       return
     }
   }
@@ -235,18 +241,29 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const cap = config.maxInFlightIssues
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
   let started = 0
+  // the starved verdict (rules-starved.ts): true while every queue issue ends at a claim filter
+  const verdict: StarvedVerdict = { starved: false, skips: new Map(), blocked: [] }
+  let past = false
   for (const [n, orderTier] of order) {
     const record = live.find(r => r.issue === n)
     if (record !== undefined) {
+      past = true
       skip(ctx, 'S1', n, `in the factory as ${record.state}`)
       continue
     }
-    if (inFlight.has(n) || handled.has(n)) continue
+    if (inFlight.has(n) || handled.has(n)) {
+      past = true
+      continue
+    }
     const why = candidateProblem(ctx, issues.get(n), n)
     if (why !== null) {
+      verdict.skips.set(n, why)
+      const by = issues.get(n)?.blockedBy
+      if (by !== null && by !== undefined && why === blockedWhy(by)) verdict.blocked.push(n)
       skip(ctx, 'S1', n, why)
       continue
     }
+    past = true
     const latest = firsts.filter(e => e.issue === n).sort((a, b) => a.startedAt - b.startedAt).at(-1)
     let key = claimKey(n, lifeOf(state.now))
     if (latest !== undefined && latest.status !== 'done') {
@@ -277,6 +294,8 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     }
     if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderTier})`, issue: n }) === 'go') started += 1
   }
+  verdict.starved = state.queue.length > 0 && !past && held === 0 && handled.size === 0 && !control.noNewWork && control.only.length === 0 && tier !== 'stop-new' && tier !== 'stop-all'
+  ctx.starved = verdict
 }
 
 // claimRules: S0 for the claims that are done, then S1 finishes the claims that may be held and

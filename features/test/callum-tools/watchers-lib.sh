@@ -232,7 +232,8 @@ case "$1 $2" in
   "api --paginate")
     # queue-watch lists through callum-flow-issue-read, which asks for the REST
     # issue list: pop the first line of queue-seq.txt (the last one repeats);
-    # a FAIL line is a failed call. Numbers are comma separated; an x prefix
+    # a FAIL line is a failed call. Each issue is titled "title N", labelled ready and bug, and has a
+    # same-repo parent N+1000 when N mod 3 is 1, a parent in another repo when it is 2, none when 0. Numbers are comma separated; an x prefix
     # (x307) marks an issue opened by an untrusted author.
     case "$3" in repos/o/r/issues\?*) ;; *) exit 1 ;; esac
     date +%s >> "$d/gh-calls"
@@ -245,7 +246,9 @@ case "$1 $2" in
     printf '%s' "$line" | tr ',' '\n' | jq -R -s -c '
       split("\n") | map(select(. != "")) | map(
         (startswith("x")) as $x | ltrimstr("x") | tonumber as $n
-        | {number: $n, title: "t", body: "b", state: "open", labels: [],
+        | {number: $n, title: "title \($n)", body: "b", state: "open", labels: [{name: "ready"}, {name: "bug"}],
+           parent_issue_url: (if $n % 3 == 1 then "https://api.github.com/repos/o/r/issues/\($n + 1000)"
+             elif $n % 3 == 2 then "https://api.github.com/repos/other/repo/issues/77" else null end),
            user: (if $x then {login: "mallory", id: 999} else {login: "cbundy", id: 13131067} end)})'
     ;;
   *) exit 1 ;;
@@ -341,10 +344,14 @@ quiet_run() {
 real_event_log() {
   evdir="$tmpdir/real-events"
   mkdir -p "$evdir"
+  # the dual write (the new event) needs node, a temp file and the directory tools
+  for t in node mktemp rm mkdir chmod touch; do
+    [ -e "$toolbin/$t" ] || ln -s "$(command -v "$t")" "$toolbin/$t"
+  done
   evlog="$evdir/o__r.jsonl"
   cat > "$fakebin/callum-flow-event" <<EOF
 #!/bin/sh
-PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s exec "$SHARE/callum-flow-event" "\$@"
+PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s DEV_SYSTEM_SHARE="$SHARE" exec "$SHARE/callum-flow-event" "\$@"
 EOF
   chmod +x "$fakebin/callum-flow-event"
 }

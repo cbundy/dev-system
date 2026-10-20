@@ -82,7 +82,7 @@ const V2_STAGE = {
   queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
   'merge-queue': 'ready to merge', parked: 'parked', waiting: 'waiting',
 };
-const V2_MERGED = new Set(['merged', 'merged-by-hand']);
+const V2_MERGED = new Set(['merged', 'merged-by-hand', 'done']);
 const FACTORY_LABEL = 'factory:';
 // an issue the loop rejected at its last life (v2 SPEC 6.4): out of the factory, so not a state
 const LABEL_REJECTED = 'factory:rejected';
@@ -286,7 +286,8 @@ const NEW_TYPE_NAME = {
   requeued: 'reclaimed', claim_renewed: 'renewed', finding_handled: 'verdict', loop_entry: 'loop', loop_passes: 'loop',
 };
 // Types with no old line the derivation reads (claim_lost, gate_run, intervention, reviewed,
-// shadow_read, test_weakened, untrusted_stripped, usage, wind_down): they keep their own name, which
+// shadow_read, test_weakened, untrusted_stripped, usage, wind_down, prompt_denied,
+// prompt_waiting): they keep their own name, which
 // no rule above names, so the derivation ignores them, as it ignores the old claim_lost and usage.
 // A type the shapes file lists but this tool has never seen is ignored the same way.
 

@@ -75,7 +75,7 @@ newest one:
 | `merge-queue` | `ready to merge` |
 | `parked` | `parked` |
 | `waiting` | `waiting` |
-| `closed` | `merged` when its `why` is `merged` or `merged-by-hand`, else `closed without merge` |
+| `closed` | `merged` when its `why` is `merged`, `merged-by-hand` or `done`, else `closed without merge` |
 
 The detail shows the v2 state, the step and the attempt, and time in stage runs from the record's
 own `since`. Only the newest life counts (its `life=` token is the claim's start time): a
@@ -285,7 +285,7 @@ Both reads fill one event shape (type, issue, device, time, PR, branch, the tran
 claim's lease, the closing reason) and one derivation runs over it. On the new side `requeued` is
 `reclaimed`, `claim_renewed` is `renewed`, `finding_handled` is `verdict`, `loop_entry` and `loop_passes` are the
 loop's bookkeeping; `gate_run`, `wind_down`, `reviewed`, `intervention`, `usage`, `untrusted_stripped`,
-`test_weakened`, `claim_lost` and `shadow_read` are ignored by name.
+`test_weakened`, `claim_lost`, `shadow_read`, `prompt_denied` and `prompt_waiting` are ignored by name.
 
 What the shadow comparison leaves out, because the two reports differ there by construction and nowhere else:
 

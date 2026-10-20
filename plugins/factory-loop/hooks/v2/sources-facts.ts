@@ -2,13 +2,18 @@
 // source switch `eventsSource`, the same switch as the record rebuild's (sources-records.ts): `old` reads
 // factory.events (EVENTS_SQL), `new` reads factory.event_store (NEW_EVENTS_SQL), and `shadow` (opt-in; `new`
 // is the default since #978) decides on the old read and compares it with the new one, once per load and then at most
-// hourly. Three things are compared: the newest `reclaimed` per issue (facts.reclaimed), the ledger
+// hourly. Four things are compared: the newest `reclaimed` and the newest `ready` per issue
+// (facts.reclaimed, facts.readyAt), the ledger
 // deriveLedger rebuilds for this device, and the once keys v2's `logged` reads. The compare is written
 // as a `shadow_read` event (reader `loop-facts`) and told to the owner by rules-shadow.ts.
 //
 // The new rows are mapped to the FactoryEvent that factsOf, deriveLedger and onceKey read, with the
 // old state name, so those stay the one code path. A failing new read never fails a pass under
 // `shadow`; under `new` it fails the read, and no row is ever skipped.
+//
+// The production new store holds only dual-written events, so the old read's window reaches back before
+// it begins. The compare therefore reads each device's first new-store time for the repo (NEW_FLOORS_SQL)
+// and leaves out of both sides the events of a device older than its floor (docs/factory-events/replay.md).
 //
 // The facts no v2 path reads (briefs, reviewFixes, verdicts, superseded, answered, pipeline) come out
 // empty under `new`: only runsFromEvents reads them, and only the plan replay and the state digest read
@@ -20,6 +25,7 @@ import type { LedgerEntry } from '../types'
 import { readEvent } from './event-reader'
 import { eventNote, onceKey } from './events'
 import type { ShadowReadData } from './events'
+import { sameValue } from './same-value'
 import { failedShadow, SETTLE_MS, SHADOW_EVERY_MS } from './sources-records'
 import type { Ctx, Read } from './sources-records'
 
@@ -29,7 +35,7 @@ const MAX_KEYS = 50
 // The new types the facts read, each under the old state name the facts code reads: requeued as
 // `reclaimed`, claim_renewed as `renewed`, loop_entry as `loop`. A `closed` event counts only from
 // the sweep, whose actor deriveLedger reads.
-export const FACTS_TYPES = ['requeued', 'claimed', 'claim_renewed', 'merged', 'loop_entry', 'intervention', 'reviewed'] as const
+export const FACTS_TYPES = ['requeued', 'claimed', 'claim_renewed', 'merged', 'loop_entry', 'intervention', 'reviewed', 'ready'] as const
 
 // The dev-query SQL that reads the new store's events for the facts and the ledger rebuild, with the
 // variables repo, at and days (EVENTS_SQL's), over all devices, oldest first, in the columns
@@ -46,6 +52,28 @@ where repo = :'repo'
   and (type in (${FACTS_TYPES.map(t => `'${t}'`).join(', ')}) or (type = 'closed' and actor = 'sweep'))
 order by ts, device, device_seq;
 `
+
+// The dev-query SQL that reads each device's first time in the new store for the repo (variable repo),
+// over every type, cut to whole seconds as the old log stores times: the columns device and floor.
+export const NEW_FLOORS_SQL = `select device,
+  to_char(date_trunc('second', min(ts)) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as floor
+from factory.event_store
+where repo = :'repo' and device is not null
+group by device
+order by device;
+`
+
+// floorsFromRows: the floors of the rows of NEW_FLOORS_SQL, by device, in ms. A row that does not read
+// throws, so the floor read fails (and the compare with it) rather than compare with a partial floor.
+export function floorsFromRows(rows: readonly Record<string, string>[]): Map<string, number> {
+  const floors = new Map<string, number>()
+  for (const row of rows) {
+    const at = Date.parse(row.floor ?? '')
+    if (row.device === undefined || row.device === '' || Number.isNaN(at)) throw new Error(`source new: floor row does not read: ${JSON.stringify(row).slice(0, 150)}`)
+    floors.set(row.device, at)
+  }
+  return floors
+}
 
 // One compare: the data of its `shadow_read` event, and each differing key with its text (ordered:
 // reclaimed, ledger, once), for the owner's tell.
@@ -94,6 +122,8 @@ function eventOfRow(row: Record<string, string>): FactoryEvent {
       return { ...event, state: 'renewed' }
     case 'closed':
       return { ...event, state: 'closed' }
+    case 'ready':
+      return { ...event, state: 'ready' }
     case 'merged':
       return { ...event, state: 'merged', branch: d.branch as string | null, pr: d.pr as number | null, head: d.head as string | null }
     case 'loop_entry': {
@@ -150,9 +180,9 @@ function eventOfRow(row: Record<string, string>): FactoryEvent {
 
 // --- the compare (pure) ---------------------------------------------------------------------------
 
-// What the three compared things hold: the newest `reclaimed` time per issue, the ledger by key, and
-// the once keys.
-export type View = { reclaimed: Map<number, number>; ledger: Map<string, LedgerEntry>; once: Set<string> }
+// What the compared things hold: the newest `reclaimed` and `ready` times per issue, the ledger by key,
+// and the once keys.
+export type View = { reclaimed: Map<number, number>; readyAt: Map<number, number>; ledger: Map<string, LedgerEntry>; once: Set<string> }
 
 // viewOf: the compared things of one side's events. The ledger entries the loop logged lose what the
 // new `loop_entry` does not carry: the outcome and the run, PR and head columns (v2 reads those only
@@ -161,25 +191,31 @@ export function viewOf(events: readonly FactoryEvent[], device: string): View {
   const list = [...events]
   const ledger = new Map<string, LedgerEntry>()
   for (const entry of deriveLedger(list, device)) {
+    // the start-up migrate's record (factory-db-migrate) is written to the new store only, so it is no
+    // difference between the stores
+    if (entry.rule === 'dev-init' && entry.wake === 'migrate') continue
     if (entry.rule === 'derived') ledger.set(entry.key, entry)
     else ledger.set(entry.key, { ...entry, run: null, pr: null, head: null, outcome: undefined })
   }
   const once = new Set(list.flatMap(e => (e.device === null || e.device === device ? (onceKey(e) ?? []) : [])))
-  return { reclaimed: factsOf(list).reclaimed, ledger, once }
+  const facts = factsOf(list)
+  return { reclaimed: facts.reclaimed, readyAt: facts.readyAt, ledger, once }
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 const iso = (ms: number | undefined): string => (ms === undefined ? 'absent' : new Date(ms).toISOString())
 
-function diffViews(a: View, b: View): { key: string; text: string }[] {
+export function diffViews(a: View, b: View): { key: string; text: string }[] {
   const out: { key: string; text: string }[] = []
   for (const issue of [...new Set([...a.reclaimed.keys(), ...b.reclaimed.keys()])].sort((x, y) => x - y)) {
     if (a.reclaimed.get(issue) !== b.reclaimed.get(issue)) out.push({ key: `reclaimed:#${issue}`, text: `#${issue} reclaimed: old ${iso(a.reclaimed.get(issue))}, new ${iso(b.reclaimed.get(issue))}` })
   }
+  for (const issue of [...new Set([...a.readyAt.keys(), ...b.readyAt.keys()])].sort((x, y) => x - y)) {
+    if (a.readyAt.get(issue) !== b.readyAt.get(issue)) out.push({ key: `ready:#${issue}`, text: `#${issue} ready: old ${iso(a.readyAt.get(issue))}, new ${iso(b.readyAt.get(issue))}` })
+  }
   for (const key of [...new Set([...a.ledger.keys(), ...b.ledger.keys()])].sort()) {
     const x = a.ledger.get(key)
     const y = b.ledger.get(key)
-    if (!same(x, y)) out.push({ key: `ledger:${key}`, text: `ledger ${key}: old ${x === undefined ? 'absent' : JSON.stringify(x)}, new ${y === undefined ? 'absent' : JSON.stringify(y)}` })
+    if (!sameValue(x, y)) out.push({ key: `ledger:${key}`, text: `ledger ${key}: old ${x === undefined ? 'absent' : JSON.stringify(x)}, new ${y === undefined ? 'absent' : JSON.stringify(y)}` })
   }
   for (const key of [...new Set([...a.once, ...b.once])].sort()) {
     if (a.once.has(key) !== b.once.has(key)) out.push({ key: `once:${key}`, text: `once ${key}: old ${a.once.has(key) ? 'present' : 'absent'}, new ${b.once.has(key) ? 'present' : 'absent'}` })
@@ -187,15 +223,30 @@ function diffViews(a: View, b: View): { key: string; text: string }[] {
   return out
 }
 
+// inScope: the events a device's floor leaves in. An event of a device with a floor is out when older
+// than it (both are whole seconds, so the floor's own second stays in); an event of a device with no
+// floor, or with no device, stays in.
+const inScope = (floors: ReadonlyMap<string, number>) => (e: FactoryEvent): boolean => {
+  const floor = e.device === null ? undefined : floors.get(e.device)
+  return floor === undefined || e.ts >= floor
+}
+
 // compareFacts: the two sides' events, compared once on everything read (live) and once with both
-// sides cut SETTLE_MS back from now (the differences that count).
-export function compareFacts(oldEvents: readonly FactoryEvent[], newEvents: readonly FactoryEvent[], device: string, now: number, at: number): FactsShadow {
+// sides cut SETTLE_MS back from now (the differences that count). Before that both sides lose the
+// events older than their device's first new-store time (`floors`, by device in ms): history the new
+// store never held. The data names this device's floor and how many events were left out.
+export function compareFacts(oldEvents: readonly FactoryEvent[], newEvents: readonly FactoryEvent[], device: string, now: number, at: number, floors: ReadonlyMap<string, number> = new Map()): FactsShadow {
   const cut = now - SETTLE_MS
+  const keep = inScope(floors)
+  const outOfScope = oldEvents.filter(e => !keep(e)).length + newEvents.filter(e => !keep(e)).length
+  oldEvents = oldEvents.filter(keep)
+  newEvents = newEvents.filter(keep)
+  const floor = floors.get(device)
   const a = viewOf(oldEvents, device)
   const b = viewOf(newEvents, device)
   const live = diffViews(a, b)
   const settled = diffViews(viewOf(oldEvents.filter(e => e.ts <= cut), device), viewOf(newEvents.filter(e => e.ts <= cut), device))
-  const compared = new Set([...a.reclaimed.keys()].map(n => `r${n}`).concat([...b.reclaimed.keys()].map(n => `r${n}`), [...a.ledger.keys(), ...b.ledger.keys()].map(k => `l${k}`), [...a.once, ...b.once].map(k => `o${k}`))).size
+  const compared = new Set([...a.reclaimed.keys()].map(n => `r${n}`).concat([...b.reclaimed.keys()].map(n => `r${n}`), [...a.readyAt.keys(), ...b.readyAt.keys()].map(n => `y${n}`), [...a.ledger.keys(), ...b.ledger.keys()].map(k => `l${k}`), [...a.once, ...b.once].map(k => `o${k}`))).size
   const data: ShadowReadData = {
     reader: FACTS_SHADOW_READER,
     tool: 'factory-loop',
@@ -207,6 +258,8 @@ export function compareFacts(oldEvents: readonly FactoryEvent[], newEvents: read
     new_ok: true,
     settle_seconds: SETTLE_MS / 1000,
     detail: settled[0] === undefined ? null : settled[0].text.slice(0, 500),
+    scope_floor: floor === undefined ? null : new Date(floor).toISOString(),
+    out_of_scope: outOfScope,
   }
   return { at, data, diffs: settled }
 }
@@ -249,6 +302,18 @@ async function readNew(ctx: Ctx, days: number): Promise<Read<FactoryEvent[]>> {
   }
 }
 
+// readFloors: each device's first new-store time for the repo; a failing read fails the compare.
+async function readFloors(ctx: Ctx): Promise<Read<Map<string, number>>> {
+  try {
+    const r = await ctx.run(['dev-query', '--factory', '--csv', '-v', `repo=${ctx.rt.repo}`], NEW_FLOORS_SQL)
+    if (r.exitCode !== 0) return { ok: false, error: `the floor read failed (source new): ${exitFail(r)}` }
+    return { ok: true, value: floorsFromRows(parseCsv(r.stdout)) }
+  } catch (err) {
+    const text = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: `the floor read failed: ${text.includes('source new') ? text : `source new: ${text}`}`.slice(0, 300) }
+  }
+}
+
 // readFacts: the events of the last `days` from the source `eventsSource` picks. With `cache` (the
 // facts read, not the ledger rebuild's) and the source `shadow`, the new store is also read and the
 // two compared into cache.factsShadow on the first call of a load and then at most hourly; that
@@ -261,10 +326,12 @@ export async function readFacts(ctx: Ctx, days: number, cache?: { factsShadow?: 
   if (source !== 'shadow' || cache === undefined) return old
   if (cache.factsShadow !== undefined && now - cache.factsShadow.at < SHADOW_EVERY_MS) return old
   const fresh = await readNew(ctx, days)
-  if (old.ok && fresh.ok) {
-    cache.factsShadow = compareFacts(old.value, fresh.value, rt.device, now, now)
+  const floors = fresh.ok ? await readFloors(ctx) : null
+  if (old.ok && fresh.ok && floors?.ok === true) {
+    cache.factsShadow = compareFacts(old.value, fresh.value, rt.device, now, now, floors.value)
   } else {
-    cache.factsShadow = { at: now, data: failedShadow(FACTS_SHADOW_READER, old.ok ? null : old.error, fresh.ok ? null : fresh.error), diffs: [] }
+    const newError = !fresh.ok ? fresh.error : floors?.ok === false ? floors.error : null
+    cache.factsShadow = { at: now, data: failedShadow(FACTS_SHADOW_READER, old.ok ? null : old.error, newError), diffs: [] }
   }
   return old
 }

@@ -128,17 +128,19 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
 
 ### D-15 The loop restarts its own workspace for an update
 
-- **Decision**: when an update is due, rule R2 runs `dev-restart-self` once no queue action and no
-  release task is in flight, and the loop resumes by itself after the restart (v2 SPEC 14.1).
-  There is no drain: nothing else waits for it. The reconciler says an update is due through
+- **Decision**: when an update is due, rule R2 writes a `restart-self` wind-down request and
+  runs `dev-restart-self`, and the loop resumes by itself after the restart (v2 SPEC 14.1). The
+  wind-down is capped at `windDownMinutes`, so queue actions and the release task finish within the
+  cap; only with `windDownMinutes` 0 does R2 wait for them to finish first. There is no
+  uncapped drain. The reconciler says an update is due through
   control state (`updateDue`): it owns which versions are wanted, and the loop owns when it is
   safe to switch. Whenever the owner wants one, `/factory update` sets it by hand
   (owner, 2026-10-13).
 - **Alternatives**: restarting stays a model or owner action; the reconciler filing an issue for
   the orchestrator to update itself.
 - **Why**: owner, 2026-10-13: the safe moment can be computed, so waiting for a person is
-  needless. Agent steps survive a restart through the ledger, so only a queue action or the
-  release task, which a restart would cut off, needs to finish first.
+  needless. Agent steps survive a restart through the ledger, and the capped wind-down gives a
+  queue action or the release task, which a restart would cut off, time to finish (owner, 2026-10-17).
 
 ### D-16 Owner directives become control state
 
@@ -673,3 +675,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   path is refused. (e) would let a stale file or another agent's answer stand in: the path is
   who answered. Text stays every
   prompt's fallback, so an agent whose script call is refused still answers.
+
+### D-75 The loop stays in observe while the startup schema migrate has failed
+
+- **Decision** (the agent's choice, 2026-10-19; #888): `dev-init` migrates the factory database
+  with `factory-db-migrate` before the loop starts and records the outcome in a status file. A new
+  rail (`hooks/rail-schema.ts`, after the heartbeat guard, before the act lock) reads it. A missing
+  file, `migrated` and `current` pass; `failed`, `timed-out`, a `running` record older than 10
+  minutes and a file that cannot be parsed keep the loop in observe, and all but a young `running`
+  tell the owner once per startup as `TELL schema-behind to=<v> error=<e>` under
+  `tell:schema-behind:<at>` (v2 SPEC 13.9.2, 13.11.2).
+- **Alternatives**: (a) fail `dev-init`; (b) let the loop act and fail on the first write the schema
+  lacks; (c) have the loop run the migrate itself; (d) pass on a missing file only when no
+  migrator secret exists, checking the secret from the rail.
+- **Why**: a loop acting on an old schema writes events and reads views that are not there. (a)
+  would keep the workspace from starting for a database fault, and `dev-init` is best effort by
+  design. (b) leaves partial work. (c) gives a loop session the migrator secret. (d) makes the rail
+  read a secret folder; a missing status file already means nothing ran here.

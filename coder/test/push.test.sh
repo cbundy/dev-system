@@ -76,7 +76,9 @@ expect_calls() {
   [ "${#desc}" -le 128 ] || fail "$t: description is ${#desc} characters, Coder allows 128"
 }
 
-# 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest.
+# 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest. dev-system and
+# orchestrator clear migrator_secrets_dir; orchestrator-loop passes no such variable and keeps
+# terraform.tfvars' value (cbundy/dev-system#888).
 run dev-system
 expect_calls dev-system dev-system /icon/docker.svg \
   role=dev \
@@ -88,7 +90,8 @@ expect_calls dev-system dev-system /icon/docker.svg \
   remote_control_name_format= \
   default_plugins= \
   default_plugin_refs_win=false \
-  wind_down_minutes=0
+  wind_down_minutes=0 \
+  migrator_secrets_dir=
 
 # 2. orchestrator: session mode, resumed, the skill as the startup prompt, the resume
 # nudge (its comma survives coder's CSV parsing because the field is quoted), and an
@@ -104,7 +107,8 @@ expect_calls orchestrator Orchestrator /emojis/1f504.png \
   'remote_control_name_format=🔄 {name} orchestrator' \
   default_plugins= \
   default_plugin_refs_win=false \
-  wind_down_minutes=0
+  wind_down_minutes=0 \
+  migrator_secrets_dir=
 
 # 3. orchestrator-loop: the same session, starting the judge skill, with callum-flow, factory-loop
 # and its companion factory-loop-workspace all pinned to this checkout's package version.

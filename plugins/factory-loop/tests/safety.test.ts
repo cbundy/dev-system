@@ -29,6 +29,7 @@ import { emptyV2State } from '../hooks/v2/observe'
 import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
+import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
@@ -73,6 +74,8 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return { stdout: 'ROLLOUT run-it source=brief\n' }
     case 'callum-flow-implementer-route':
       return { stdout: 'sonnet\n' }
+    case 'callum-flow-designer-route':
+      return { stdout: 'opus\n' }
     case 'treehouse':
       if (args[0] === 'get') return { stdout: `${LEASED}\n` }
       if (args[0] === 'status') return { stdout: JSON.stringify([{ path: SLOT, branch: 'issue-470-x', status: 'available', processes: [] }]) }
@@ -136,7 +139,10 @@ const ACTIONS: Action[] = [
   { ...base, issue: null, kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1' },
   { ...base, issue: null, kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2' },
   { ...base, kind: 'claim', key: 'claim:470:new', class: 'start', rule: 'D1' },
+  // a split's not-ready child, claimed to park on its decision (v2 SPEC 8.7): the same claim argv
+  { ...base, kind: 'claim', key: 'i471/claim/tbq3k0', class: 'free', rule: 'S2', park: { question: 'Which API?', parent: 469 } },
   { ...base, kind: 'close-issue', key: 'close:470', class: 'free', rule: 'M7' },
+  { ...base, kind: 'delete-branch', key: 'delete-branch:470', class: 'free', rule: 'S3', branch: 'issue-470', sha: HEAD },
   { ...base, kind: 'milestone-later', key: 'milestone-later:470', class: 'free', rule: 'M7' },
   { ...base, kind: 'release-parent', key: 'release-parent:470', class: 'free', rule: 'D3', created: [471, 472] },
   { ...base, issue: null, kind: 'restart-self', key: 'restart:7', class: 'free', rule: 'H4', why: 'image', at: 7 },
@@ -171,6 +177,7 @@ const RECORD: IssueRecord = {
   fixes: 0,
   round: 0,
   question: null,
+  parts: null,
   why: null,
   notes: ['use --yes nowhere'],
   prClosedAt: null,
@@ -180,6 +187,7 @@ const RECORD: IssueRecord = {
 // the record's PR as the prs source reads it: the review step reads its head and patch
 const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, baseRef: 'main', checks: [], patch: 'f00dfeed', readAt: NOW }
 const at = `i470/l${LIFE}/s3`
+const FLAKE_BUG = { hash: '0123456789abcdef', test: 'tests/a.test.js > one', title: 'Flaky test: tests/a.test.js > one', body: 'Body --yes', flakeIds: ['0f0f0f0f-0000-4000-8000-000000000001'], ready: true, epic: 864, flakes: 2, windowDays: 7, firstFlakeAt: '2026-10-17T10:11:00.000Z', reason: '0 open flake bugs ready or in flight, under the cap of 2' }
 const V2_ACTIONS: Action[] = [
   { ...base, kind: 'transition', key: `${at}/t`, class: 'free', rule: 'S3', row: 'T2', event: 'ok', from: { issue: 470, life: LIFE, seq: 2 }, next: RECORD, trigger: { kind: 'entry', key: `i470/l${LIFE}/s2/design/a1`, status: 'done', startedAt: NOW - 2 * MIN } },
   { ...base, kind: 'label', key: `${at}/label`, class: 'free', rule: 'S3', op: 'set', label: 'factory:building' },
@@ -193,7 +201,10 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'event', key: `${at}/event/transition`, class: 'free', rule: 'S3', event: { state: 'transition', record: RECORD, row: 'T2', from: 'designing', via: 'ok' } },
   { ...base, kind: 'pr', key: `${at}/pr/ensure`, class: 'free', rule: 'S2', op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 'The work', summary: 'Fixes #999 by --yes', evidence: null, brief: BRIEF },
   { ...base, kind: 'pr', key: `${at}/pr/body/a1`, class: 'free', rule: 'Q2', op: 'body', branch: 'issue-470', base: 'main', pr: 512, title: 'The work', summary: 'x', evidence: 'npm test', brief: BRIEF },
-  { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
+  { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true, decision: null }, blockedBy: [] },
+  { ...base, kind: 'split', key: `${at}/child/b`, class: 'free', rule: 'S3', parent: 470, child: { key: 'b', title: 'Part two', body: 'Do it', blockedBy: [], ready: false, decision: 'Which API?' }, blockedBy: [] },
+  // F1's flake bug (v2 SPEC 8.5): the one action that may add the ready label to an issue it filed itself, and only when the cap allowed it
+  { ...base, issue: null, kind: 'flake-bug', key: 'flake-bug/0123456789abcdef/0f0f0f0f-0000-4000-8000-000000000001', class: 'free', rule: 'F1', bug: FLAKE_BUG },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },
@@ -212,7 +223,7 @@ const V2_ACTIONS: Action[] = [
 // requeue, with every state label off in the same call.
 const STATE_LABEL = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
 const FACTORY = (l: string) => ALL_FACTORY_LABELS.some(x => x.name === l)
-function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean } {
+function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean } {
   const is = (...shape: (string | ((s: string) => boolean))[]) => shape.length === argv.length && shape.every((p, i) => (typeof p === 'string' ? p === argv[i] : p(argv[i] ?? '')))
   const num = (s: string) => /^[1-9]\d*$/.test(s)
   const text = (s: string) => s !== '' && !s.startsWith('-')
@@ -237,6 +248,15 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
         is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
+    case 'flake-bug': {
+      const api = (re: string) => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/${re}$`)
+      if (is('gh', 'issue', 'create', '--repo', REPO, '--title', text, '--body-file', '-')) return { body: true }
+      if (is('gh', 'label', 'create', 'flaky', '--repo', REPO, '--color', c => /^[0-9a-f]{6}$/.test(c), '--description', text, '--force')) return { labels: true }
+      if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', 'flaky', '--add-label', 'priority')) return { labels: true }
+      // the ready label: only when F1 allowed it under the cap (the action says so)
+      if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', READY)) return action.bug.ready ? { labels: true, ready: true } : {}
+      return is('gh', 'api', '--method', 'POST', p => api('sub_issues').test(p), '-F', f => /^sub_issue_id=[1-9]\d*$/.test(f)) || is('gh', 'api', p => api('sub_issues').test(p), '--paginate', '--jq', '.[].id') ? { api: true } : {}
+    }
     case 'link':
       // the blocker's id is read through the reader, the links already there are read (GET, ids
       // only), and one blocked_by link is made
@@ -249,6 +269,11 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
       return is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/sub_issues$`).test(p), '--paginate', '--jq', text) ||
         is('gh', 'issue', 'close', num, '--repo', REPO, '--reason', 'completed', '--comment', text)
         ? { api: true }
+        : {}
+    case 'delete-branch':
+      // the one git push: a delete of the issue's own branch, leased on the head plan read
+      return is('git', 'push', f => f === `--force-with-lease=refs/heads/${action.branch}:${action.sha}`, 'origin', r => r === `:refs/heads/${action.branch}`) && /^[0-9a-f]{7,40}$/.test(action.sha) && /^issue-[1-9]\d*/.test(action.branch)
+        ? { push: true }
         : {}
     case 'ci-rerun':
       return is('gh', 'run', 'rerun', num, '--failed', '--repo', REPO) ? { rerun: true } : {}
@@ -313,10 +338,21 @@ function scriptGit(script: string): string[] {
   return out
 }
 
+// The main source's reads (sources-main.ts): GETs of the repo's own paths, no method, no field, and a
+// --jq of the branch or the sha at most. Nothing writes through them.
+const MAIN_READ_PATH = new RegExp(
+  `^repos/${REPO}(/commits/[^/?]+(/pulls)?|/actions/workflows\\?per_page=100|/actions/workflows/[1-9]\\d*/runs\\?branch=[^&/]+&per_page=10|/deployments\\?sha=[0-9a-f]{40}&per_page=100|/deployments/[1-9]\\d*/statuses\\?per_page=1)?$`,
+)
+function mainRead(args: readonly string[]): boolean {
+  const [verb, path = '', ...rest] = args
+  const jq = rest.length === 0 || (rest.length === 2 && rest[0] === '--jq' && ['.default_branch', '.sha'].includes(rest[1] ?? ''))
+  return verb === 'api' && MAIN_READ_PATH.test(path) && jq
+}
+
 function bans(argv: readonly string[], action?: Action): string[] {
   const out: string[] = []
   const [cmd = '', ...args] = argv
-  const v2 = v2Shape(argv, action)
+  const v2 = cmd === 'gh' && mainRead(args) ? { api: true } : v2Shape(argv, action)
   if (argv.some(a => a === '--yes' || a.startsWith('--yes='))) out.push('--yes')
   if (argv.some(a => (a === 'rerun' && v2.rerun !== true) || a === 'abort')) out.push('rerun/abort')
   if (cmd === 'no-mistakes' && !(args[0] === 'axi' && args[1] === 'respond')) out.push(`no-mistakes ${args.slice(0, 2).join(' ')}`)
@@ -347,7 +383,7 @@ function bans(argv: readonly string[], action?: Action): string[] {
   // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
   const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step')) out.push(`git ${verb}`)
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true)) out.push(`git ${verb}`)
   return out
 }
 
@@ -381,6 +417,14 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['split', ARGV.issueReadArgv(471)],
   ['split', ARGV.subIssuesReadArgv(REPO, 470)],
   ['split', ARGV.blockersReadArgv(REPO, 471)],
+  ['flake-bug', ARGV.openIssuesArgv()],
+  ['flake-bug', ARGV.labelCreateArgv(REPO, { name: 'flaky', color: 'fbca04', description: 'A test that failed and then passed on the same code' })],
+  ['flake-bug', ARGV.issueCreateArgv(REPO, 'Flaky test: x')],
+  ['flake-bug', ARGV.issueReadArgv(601)],
+  ['flake-bug', ARGV.flakeLabelsArgv(REPO, 601, 'flaky', 'priority')],
+  ['flake-bug', ARGV.subIssuesReadArgv(REPO, 864)],
+  ['flake-bug', ARGV.subIssueArgv(REPO, 864, 3_100_601)],
+  ['flake-bug', ARGV.childReadyArgv(REPO, 601, READY)],
   ['close-tracker', ARGV.issueReadArgv(471)],
   ['close-tracker', ARGV.subIssueStatesArgv(REPO, 470)],
   ['close-tracker', ARGV.trackerCloseArgv(REPO, 470, 'Every sub-issue is finished.')],
@@ -388,6 +432,7 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['link', ARGV.blockersReadArgv(REPO, 470)],
   ['link', ARGV.blockedByArgv(REPO, 470, 3_100_201)],
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
+  ['ci-rerun', ARGV.runViewLogFailedArgv(REPO, '18342299123')],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470)],
@@ -450,8 +495,19 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/470/sub_issues`, '-F', 'sub_issue_id=1'], kindAction('link')],
       [['gh', 'api', '--method', 'DELETE', `repos/${REPO}/issues/470/dependencies/blocked_by`, '-F', 'issue_id=1'], kindAction('link')],
       [['gh', 'issue', 'edit', '471', '--repo', REPO, '--add-label', 'ready'], label],
+      // a flake bug is readied only when F1's cap allowed it, and never by another kind
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'ready'], { ...kindAction('flake-bug'), bug: { ...FLAKE_BUG, ready: false } } as Action],
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'ready'], kindAction('comment')],
+      [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'bug'], kindAction('flake-bug')],
+      [['gh', 'label', 'create', 'ready', '--repo', REPO, '--color', 'ffffff', '--description', 'x', '--force'], kindAction('flake-bug')],
       [['gh', 'issue', 'close', '470', '--reason', 'completed', '--comment', 'x'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
+      // the delete is leased, of the issue's own branch, and the only push there is
+      [['git', 'push', 'origin', ':refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force', 'origin', ':refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/main:abc1234', 'origin', ':refs/heads/main'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234', 'origin', 'HEAD:refs/heads/issue-470'], kindAction('delete-branch')],
+      [['git', 'push', '--force-with-lease=refs/heads/issue-470:abc1234', 'origin', ':refs/heads/issue-470'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--failed', '--repo', REPO], label],
       [['no-mistakes', 'rerun'], kindAction('ci-rerun')],
       [['gh', 'pr', 'create', '--repo', REPO, '--base', 'main', '--head', 'issue-470', '--title', 'x', '--body-file', '-', '--yes'], kindAction('pr')],
@@ -601,6 +657,22 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
     for (const argv of [...own, ...seen]) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 
+  test('the main source\'s reads are plain GETs of the repo\'s own paths; a write or another repo is still banned', () => {
+    const reads = [
+      ARGV.defaultBranchArgv(REPO),
+      ARGV.branchHeadArgv(REPO, 'main'),
+      ARGV.commitPullsArgv(REPO, 'a'.repeat(40)),
+      ARGV.workflowsArgv(REPO),
+      ARGV.workflowRunsArgv(REPO, 1001, 'main'),
+      ARGV.deploymentsArgv(REPO, 'a'.repeat(40)),
+      ARGV.deploymentStatusArgv(REPO, 501),
+    ]
+    for (const argv of reads) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+    expect(bans([...ARGV.workflowsArgv(REPO), '--method', 'POST'])).toEqual(['gh api', 'gh without --repo <the repo>'])
+    expect(bans(['gh', 'api', 'repos/other/repo/commits/main', '--jq', '.sha'])).not.toEqual([])
+    expect(bans(['gh', 'api', `repos/${REPO}/actions/runs/1/rerun`])).not.toEqual([])
+  })
+
   test('stop-agent stops only an agent the ledger holds running; any other, an answered one included, is refused before TaskStop', async () => {
     const own = await run({ ...base, kind: 'stop-agent', key: 'stop:agent-own', class: 'free', rule: 'A1', agentId: 'agent-own', entry: 'design:470:1' })
     expect(own).toMatchObject({ status: 'done', stops: ['agent-own'] })
@@ -615,10 +687,15 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
     expect(wrong).toMatchObject({ status: 'failed', argvs: [] })
     const r2 = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:9', class: 'free', rule: 'R2', why: 'x', at: 9 })
     expect(r2).toMatchObject({ status: 'done', argvs: [['dev-restart-self']] })
+    const r2w = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:10', class: 'free', rule: 'R2', why: 'x', at: 10, windDownAt: NOW })
+    expect(r2w).toMatchObject({ status: 'done', argvs: [['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', `${LOOP_DIR}/wind-down.request`], ['dev-restart-self']] })
+    for (const argv of r2w.argvs) expect(bans(argv)).toEqual([])
     const { io, seen } = recorder()
     const w = world()
     const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
     await runActions(env, w.state, ACTIONS)
-    for (const argv of seen.argvs) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+    // the one git push is the delete-branch action's own
+    const deleter = ACTIONS.find(x => x.kind === 'delete-branch')
+    for (const argv of seen.argvs) expect({ argv, bans: bans(argv, argv[1] === 'push' ? deleter : undefined) }).toEqual({ argv, bans: [] })
   })
 })

@@ -15,7 +15,8 @@
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when the
 # factory event docs, version lock or shapes are stale or a schema breaks the authoring or bump
-# rules (`node scripts/build-event-docs.js --check`), when a
+# rules (`node scripts/build-event-docs.js --check`), when a factory database migration is not
+# expand-only (`node scripts/migration-lint.js`; docs/factory-db.md "Schema compatibility"), when a
 # file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
 # whose allowlist is empty), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
@@ -86,6 +87,13 @@ if ! node scripts/build-event-docs.js --check > /dev/null; then
   fail "factory event docs out of date or schemas invalid (see above; run npm run build:events)"
 fi
 
+# Factory database migrations must be expand-only (scripts/migration-lint.js); its hits print
+# on stderr as <file>:<line>: <what>.
+checked=$((checked + 1))
+if ! node scripts/migration-lint.js; then
+  fail "images/base/factory-db/migrations: a migration that is not expand-only (see above; docs/factory-db.md)"
+fi
+
 # The factory loop's size guard (docs/factory-loop/v2/SPEC.md 2.5): no file under its hooks over
 # 600 lines. No hooks file is over it now, so the allowlist (<file>:<cap>, each file capped at its
 # size when listed) stays empty: a new oversized file is split, never listed.
@@ -131,7 +139,7 @@ if command -v terraform >/dev/null 2>&1; then
   # network once for the providers; the plugin cache saves the download on later runs.
   checked=$((checked + 1))
   tf_tmp=$(mktemp -d) || exit 1
-  cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$TF_DIR"/wind-down.sh "$tf_tmp"/
+  cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$TF_DIR"/wind-down.sh "$TF_DIR"/wind-down-start.sh "$tf_tmp"/
   TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
   export TF_PLUGIN_CACHE_DIR
   mkdir -p "$TF_PLUGIN_CACHE_DIR"

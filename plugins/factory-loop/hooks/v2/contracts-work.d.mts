@@ -1,8 +1,9 @@
 // The types of contracts-work.mjs. contract.mjs imports its CONTRACTS.
 import type { V2Contract } from '../contract.mjs'
+import type { DoneEvidence } from './done-answer.mjs'
 import type { QuestionParts } from './question.mjs'
 
-export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait']
+export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait', 'done']
 export const BUILD_RESULTS: readonly ['built', 'cannot']
 export const FIX_RESULTS: readonly ['fixed', 'declined', 'unchanged']
 export const DISPOSITIONS: readonly ['fixed', 'declined']
@@ -32,10 +33,10 @@ export function rolloutReasonOf(brief: string): string | null
 
 // The checked answers: every field present, absent texts null, lists [].
 // blockedBy: sibling keys, or "#<N>" for an existing issue of the repo
-export type DesignChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
+export type DesignChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean; decision: string | null; decisionParts?: ParkParts }
 export type SplitReasons = Record<(typeof REASON_KEYS)[number], string>
 export type WaitCondition = { kind: 'issue-closed'; issue: number; repo?: string } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string; repo?: string }
-// conditions and reason are present for a wait alone
+// conditions and reason are present for a wait; evidence and reason for a done close
 export type DesignAnswer = {
   kind: (typeof DESIGN_KINDS)[number]
   brief: string | null
@@ -44,6 +45,8 @@ export type DesignAnswer = {
   children: DesignChild[]
   conditions?: WaitCondition[]
   reason?: string
+  // a done close: the evidence that the work is merged (with reason)
+  evidence?: DoneEvidence
 } & QuestionParts
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }
 export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string }

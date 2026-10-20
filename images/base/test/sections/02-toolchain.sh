@@ -56,6 +56,10 @@ check "callum-flow-regate is on PATH, shows usage, and exits 2 on a missing --is
 check "callum-flow-milestone is on PATH, shows usage, and exits 2 on a bad subcommand" in_image '
   [ -x "$(command -v callum-flow-milestone)" ] && callum-flow-milestone --help >/dev/null &&
   callum-flow-milestone bogus 2>/dev/null; [ $? = 2 ]'
+check "callum-flow-released is on PATH, shows usage, exits 2 on a bad flag, and release-contents.js loads" in_image '
+  [ -x "$(command -v callum-flow-released)" ] && callum-flow-released --help | grep -q "^usage: callum-flow-released" &&
+  node -e "const r=require(\"/usr/local/share/dev-system/release-contents.js\"); for (const f of [\"previousTag\",\"parseCommit\",\"gitRangeCommits\",\"firstParentChain\",\"prLinks\",\"contents\",\"headlines\"]) if (typeof r[f] !== \"function\") process.exit(1)" &&
+  callum-flow-released --bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-test-weakening is on PATH, exits 2 on bad usage and 1 on an unknown ref" in_image '
   [ -x "$(command -v callum-flow-test-weakening)" ] && callum-flow-test-weakening --bogus 2>/dev/null; [ $? = 2 ] &&
   callum-flow-test-weakening --base nope --head HEAD 2>/dev/null; [ $? = 1 ]'
@@ -73,6 +77,10 @@ check "callum-flow-implementer-route is on PATH and exits 2 on a bad argument an
   [ -x "$(command -v callum-flow-implementer-route)" ] && callum-flow-implementer-route 2>/dev/null; [ $? = 2 ] && callum-flow-implementer-route abc 2>/dev/null; [ $? = 2 ] &&
   CALLUM_FLOW_IMPLEMENTER_OPUS_PCT=abc callum-flow-implementer-route 1 2>/dev/null; [ $? = 2 ] &&
   callum-flow-implementer-route --help >/dev/null'
+check "callum-flow-designer-route is on PATH and exits 2 on a bad argument and on a bad CALLUM_FLOW_DESIGNER_SONNET_PCT, and --help exits 0" in_image '
+  [ -x "$(command -v callum-flow-designer-route)" ] && callum-flow-designer-route 2>/dev/null; [ $? = 2 ] && callum-flow-designer-route abc 2>/dev/null; [ $? = 2 ] &&
+  CALLUM_FLOW_DESIGNER_SONNET_PCT=abc callum-flow-designer-route 1 2>/dev/null; [ $? = 2 ] &&
+  callum-flow-designer-route --help >/dev/null'
 check "callum-flow-issue-read is on PATH, fails closed without CALLUM_FLOW_TRUSTED_AUTHORS and exits 2 on a bad argument" in_image '
   [ -x "$(command -v callum-flow-issue-read)" ] && out=$(env -u CALLUM_FLOW_TRUSTED_AUTHORS CALLUM_FLOW_REPO=o/r callum-flow-issue-read 1 2>&1); [ $? = 1 ] &&
   echo "$out" | grep -q CALLUM_FLOW_TRUSTED_AUTHORS && out=$(CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:1 callum-flow-issue-read --bogus 2>/dev/null); [ $? = 2 ] && [ -z "$out" ]'

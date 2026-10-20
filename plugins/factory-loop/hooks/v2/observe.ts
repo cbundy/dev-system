@@ -11,13 +11,19 @@ import type { FactoryEvent } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import type { LedgerEntry, Ms, Source, State } from '../types'
 import { onceKey } from './events'
+import { partsOfStored } from './park-parts'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
+import { EMPTY_MAIN, readMain } from './sources-main'
+import type { MainCache } from './sources-main'
 import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
 import type { ReleaseCache } from './sources-release'
+import { readBlockers } from './sources-blockers'
 import { readWaits } from './sources-waits'
+import { EMPTY_FLAKES, readFlakesCached } from './sources-flakes'
+import type { FlakesCache } from './sources-flakes'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
@@ -30,7 +36,7 @@ import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
 import { previousOf, requestOf } from './wind-down-files'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
-import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead, WaitUnread } from './types'
+import type { BlockerTree, HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead, WaitUnread } from './types'
 
 const DAY = 86_400_000
 // a closed record goes this long after it closed, as ledger entries do (3.3, v2 SPEC 13.7.1)
@@ -87,14 +93,20 @@ export type V2Cache = {
   waits: Record<string, WaitRead>
   // the conditions that cannot be read (sources-waits.ts)
   waitsUnread: Record<string, WaitUnread>
+  // the blockers of a starved queue, read for one spell and period (sources-blockers.ts)
+  blockers: BlockerTree | null
   // the release bump PRs the merge queue holds for (sources-release.ts)
   release: ReleaseCache
+  // the default branch's state, read in act mode only to be logged (sources-main.ts)
+  main: MainCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
   dualWrite: { at: Ms; read: DualWriteRead } | null
+  // the flakes and flake bugs F1 reads (sources-flakes.ts)
+  flakes: FlakesCache
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, release: EMPTY_RELEASE, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -137,6 +149,8 @@ export function recordOf(raw: unknown): IssueRecord | null {
   if (!isInt(o.attempt, 0) || typeof o.cut !== 'boolean' || !isInt(o.triages, 0) || !isInt(o.fixes, 0) || !isInt(o.round, 0)) return null
   const wait = waitOf(o.wait)
   if (wait === undefined) return null
+  const parts = partsOfStored(o.parts)
+  if (parts === undefined) return null
   if (!strOrNull(o.question) || !Array.isArray(o.notes) || !o.notes.every(isStr) || !strOrNull(o.prClosedAt)) return null
   // a record stored before the field carries no count: its life is read as a first one
   const lives = o.lives === undefined ? 1 : o.lives
@@ -161,6 +175,7 @@ export function recordOf(raw: unknown): IssueRecord | null {
     fixes: o.fixes,
     round: o.round,
     question: o.question,
+    parts,
     wait,
     why,
     notes: [...o.notes],
@@ -272,8 +287,9 @@ export function readOrder(records: readonly IssueRecord[]): number[] {
 // --- one pass's v2 reads ---------------------------------------------------------------------------------
 
 // The source modules' reads, a test's own in place of the real ones.
-export type V2Readers = { prs: typeof readPrs; interventions: typeof readInterventions }
-const READERS: V2Readers = { prs: readPrs, interventions: readInterventions }
+// (`flakes` is optional: a test's readers that name none read no flakes)
+export type V2Readers = { prs: typeof readPrs; interventions: typeof readInterventions; flakes?: typeof readFlakesCached }
+const READERS: V2Readers = { prs: readPrs, interventions: readInterventions, flakes: readFlakesCached }
 
 export type ObserveV2Input = {
   io: Io
@@ -298,6 +314,8 @@ export type ObserveV2Input = {
   // a GitHub backoff holds this pass's reads; limited: a rate limit met this pass ends them
   backoff: boolean
   limited: () => boolean
+  // when the current starved spell began (the store's); none or null: no spell (S1)
+  starvedSince?: Ms | null
   readers?: V2Readers
 }
 
@@ -375,10 +393,23 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.waits = waited.waits
   cache.waitsUnread = waited.unread
 
+  // the blockers of a starved queue (sources-blockers.ts): only while a spell is old enough to tell
+  const starvedSince = input.starvedSince ?? null
+  cache.blockers = await readBlockers(ctx, cache.blockers, starvedSince === null ? null : { since: starvedSince, afterMs: rt.config.starvedNoticeAfterMs }, blocked())
+
   // the release bump PRs the merge queue holds for (sources-release.ts)
   const release = await readReleasePrs(ctx, cache.release)
   cache.release = release.read
   sources.releasePrs = release.source
+
+  // the default branch's state (sources-main.ts): act mode only, on its own cadence
+  const main = await readMain(ctx, cache.main)
+  cache.main = main.read
+  sources.main = main.source
+
+  // the flakes and the open flake bugs (sources-flakes.ts): act mode only, on its own cadence
+  if (readers.flakes !== undefined) cache.flakes = await readers.flakes(ctx, cache.flakes, blocked())
+  sources.flakes = cache.flakes.source ?? { ok: true, at: now }
 
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
@@ -440,7 +471,11 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     prs: prs.read,
     waits: cache.waits,
     waitsUnread: cache.waitsUnread,
+    ...(starvedSince === null ? {} : { starvedSince }),
+    ...(cache.blockers === null ? {} : { blockers: cache.blockers }),
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
+    ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
+    ...(cache.flakes.read === null ? {} : { flakes: cache.flakes.read }),
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
@@ -499,7 +534,7 @@ export function commentsOf(json: string): IssueComment[] | null {
 export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
   const off: Source = { ok: false, at: null, error: 'not read' }
   return {
-    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now } },
+    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now }, releasePrs: { ok: true, at: now }, main: { ok: true, at: now }, flakes: { ok: true, at: now } },
     records,
     recordsFrom: records.length > 0 ? 'store' : 'none',
     heads: {},

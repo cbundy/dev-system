@@ -20,6 +20,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const contents = require("../images/base/release-contents.js");
+const { compareVersions } = contents;
 
 const REPO_ROOT = path.join(__dirname, "..");
 const NOTES_DIR = "release-notes";
@@ -39,7 +41,7 @@ const BULLET = /^- \*\*[^*]+\*\* - \S/;
 
 const core = (v) => v.replace(/^v/, "").split(/[-+]/)[0].split(".").map(BigInt);
 const coreString = (v) => v.replace(/^v/, "").split(/[-+]/)[0];
-const isPrerelease = (v) => /^v?[^-+]+-/.test(v);
+const isPrerelease = (v) => !contents.isFinal(v);
 
 const notesPath = (version) => `${NOTES_DIR}/v${version}.md`;
 const hint = (version) => `write it with the \`release\` skill (.claude/skills/release/SKILL.md)${version ? ` for v${version}` : ""}`;
@@ -118,26 +120,6 @@ function lint(root = REPO_ROOT) {
   return errors;
 }
 
-function compareVersions(a, b) {
-  const [x, y] = [core(a), core(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
-  const pre = (v) => /^v?[^-+]+-([^+]+)/.exec(v)?.[1].split(".");
-  const [p, q] = [pre(a), pre(b)];
-  if (!p || !q) return p ? -1 : q ? 1 : 0;
-  for (let i = 0; i < Math.min(p.length, q.length); i++) {
-    if (p[i] === q[i]) continue;
-    const [pn, qn] = [/^\d+$/.test(p[i]), /^\d+$/.test(q[i])];
-    if (pn && qn) {
-      const [pv, qv] = [BigInt(p[i]), BigInt(q[i])];
-      if (pv !== qv) return pv < qv ? -1 : 1;
-    } else {
-      if (pn !== qn) return pn ? -1 : 1;
-      return p[i] < q[i] ? -1 : 1;
-    }
-  }
-  return p.length - q.length;
-}
-
 function git(root, args) {
   const r = spawnSync("git", args, { cwd: root, encoding: "utf-8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr.trim()}`);
@@ -147,11 +129,7 @@ function git(root, args) {
 // The highest final (non-prerelease) v* tag strictly below the core version of `version`, or
 // null. Release candidates never count, so an rc and its final cover the same range.
 function previousTag(version, root = REPO_ROOT) {
-  const tags = git(root, ["tag", "--list", "v*"]).split("\n").filter((t) => /^v\d+\.\d+\.\d+/.test(t) && SEMVER.test(t.slice(1)) && !isPrerelease(t));
-  const target = coreString(version);
-  const below = tags.filter((t) => compareVersions(t, target) < 0);
-  below.sort(compareVersions);
-  return below.length ? below[below.length - 1] : null;
+  return contents.previousTag(git(root, ["tag", "--list", "v*"]).split("\n"), version);
 }
 
 // The git revision range a release covers: `<prev>..<target>`, where prev defaults to the
@@ -169,15 +147,7 @@ function releaseRange(version, { from, to } = {}, root = REPO_ROOT) {
 // First-parent commits in the release range: [{ subject, body, pr }], pr being the
 // trailing "(#N)" of a squash subject or null.
 function rangeCommits(version, opts = {}, root = REPO_ROOT) {
-  const raw = git(root, ["log", "--first-parent", "--format=%s%x1f%b%x1e", releaseRange(version, opts, root)]);
-  const commits = [];
-  for (const rec of raw.split("\x1e")) {
-    const [subject, body = ""] = rec.replace(/^\n/, "").split("\x1f");
-    if (!subject.trim()) continue;
-    const pr = (/\s\(#(\d+)\)$/.exec(subject.trim()) || [])[1];
-    commits.push({ subject: subject.trim(), body, pr: pr || null });
-  }
-  return commits;
+  return contents.gitRangeCommits(root, releaseRange(version, opts, root));
 }
 
 // The PR numbers merged in the release range, newest first.

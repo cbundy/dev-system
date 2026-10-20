@@ -23,110 +23,19 @@
 import type { FactoryEvent } from '../derive'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { IssueRecord, IssueState, WaitCondition } from './types'
+import { NONE, dec, enc, str, unstr } from './codec'
+import { partsOfTokens, partsTokens } from './park-parts'
+import { INTERVENTION_WHO, RELEASE_OUTCOMES } from './event-data'
+import type { GateRunData, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, ShadowReadData, TransitionEvent, V2Event } from './event-data'
 
 // an intervention's reason is one line of at most this many characters (7.1)
 export const REASON_MAX = 200
 
 // --- the events ---------------------------------------------------------------------------------
 
-// A state change (4.6), and again after a re-claim (4.1): every record field travels with it, so
-// a record can be rebuilt from its newest one (3.3).
-export type TransitionEvent = { state: 'transition'; record: IssueRecord; row: string; from: IssueState | null; via: string }
-
-// One review result (8.3).
-export type ReviewedEvent = {
-  state: 'reviewed'
-  issue: number
-  branch: string
-  pr: number
-  head: string
-  verdict: 'approve' | 'changes' | 'unknown'
-  round: number
-  patch: string
-  errors: number
-  warnings: number
-  infos: number
-  reviewer: string
-  answer: string
-}
-
-export const INTERVENTION_WHO = ['person', 'loop', 'judge'] as const
-
-// One intervention (7.2): who, the cause code, a one-line reason, and the key of the fact it
-// records (its ledger key is iv/<fact>), so readers count it once.
-export type InterventionEvent = {
-  state: 'intervention'
-  who: (typeof INTERVENTION_WHO)[number]
-  cause: string
-  reason: string
-  issue: number | null
-  life: string | null
-  pr: number | null
-  fact: string
-}
-
-// How a release ends (6.4): back in the queue (requeue), out of the factory (leave), or rejected at
-// the issue's last life (reject).
-export const RELEASE_OUTCOMES = ['requeue', 'leave', 'reject'] as const
-
-// A reconcile release (6.4): reclaimed when it puts the issue back in the queue, abandoned when the
-// issue leaves the factory or is rejected. lives: the released life's number since the issue's
-// count last started, null for the migration's.
-export type ReleaseEvent = {
-  state: 'reclaimed' | 'abandoned'
-  issue: number
-  branch: string | null
-  pr: number | null
-  stage: string
-  checked: string
-  reason: 'reconcile'
-  outcome: (typeof RELEASE_OUTCOMES)[number]
-  lives: number | null
-}
-
-// The reused states, each with the meaning it already has (7.1); the note is today's.
-export type ReusedEvent = {
-  state: 'delegated' | 'fix_requested' | 'merge_ready' | 'abandoned' | 'merged' | 'verdict'
-  issue: number
-  branch: string | null
-  pr: number | null
-  head: string | null
-  note: string
-}
-
-// One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by
-// `callum-flow-event --type gate_run --data <json> --issue N`, so it has no note, no old-format
-// line and no parser. rules-gates.ts builds it from the companion's gate lines.
-export type GateRunData = {
-  life: string
-  seq: number
-  head: string | null
-  result: 'pass' | 'fail' | 'unknown'
-  wait_ms: number
-  run_ms: number
-  concurrency: number | null
-  queued_behind: number
-  started_at: string
-}
-export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
-
-// One shadow compare (shadow_read.v1): written in the new format alone, for no issue, by
-// `callum-flow-event --type shadow_read --data <json>`; sources-records.ts builds the data.
-export type ShadowReadData = {
-  reader: string
-  tool: string
-  compared: number
-  differences: number
-  live_differences: number
-  diff_keys: string[]
-  old_ok: boolean
-  new_ok: boolean
-  settle_seconds: number
-  detail: string | null
-}
-export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
-
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent | ShadowReadEvent
+// The event types live in event-data.ts; they are re-exported here so every import from './events' works.
+export * from './event-data'
+export { dec, enc } from './codec'
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -151,33 +60,6 @@ export function abandonReason(note: string): AbandonReason {
 }
 
 // --- the value codec (derive.ts enc, dec) ---------------------------------------------------------
-
-const NONE = 'none'
-
-// enc: a value with no space in it: `%` and whitespace percent-encoded, so URLs stay readable.
-export function enc(v: string): string {
-  return v.replace(/[%\s]/g, c => encodeURIComponent(c))
-}
-
-export function dec(v: string): string {
-  try {
-    return decodeURIComponent(v)
-  } catch {
-    return v
-  }
-}
-
-// A string, or `none` for null. A string that is literally `none` has its first letter encoded,
-// so it reads back as itself.
-function str(v: string | null): string {
-  if (v === null) return NONE
-  return v === NONE ? '%6Eone' : enc(v)
-}
-
-function unstr(v: string | undefined): string | null | undefined {
-  if (v === undefined) return undefined
-  return v === NONE ? null : dec(v)
-}
 
 function num(v: number | null): string {
   return v === null ? NONE : String(v)
@@ -269,8 +151,13 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
     case 'gate_run':
       return { issue: e.issue, branch: null, pr: null, head: e.data.head }
+    case 'comment_posted':
+      return { issue: e.issue, branch: null, pr: null, head: null }
     case 'shadow_read':
+    case 'settings_changed':
       return { issue: null, branch: null, pr: null, head: null }
+    case 'main_state':
+      return { issue: null, branch: null, pr: e.data.pr, head: e.data.head }
     default:
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: 'head' in e ? e.head : null }
   }
@@ -307,6 +194,7 @@ function transitionNote(e: TransitionEvent): string {
     `via=${str(e.via)}`,
     `brief=${str(r.brief)}`,
     `question=${str(r.question)}`,
+    ...partsTokens(r.parts),
     `notes=${list(r.notes)}`,
   ].join(' ')
 }
@@ -330,8 +218,13 @@ export function oneLine(text: string): string {
   return line.length <= REASON_MAX ? line : `${line.slice(0, REASON_MAX - 3)}...`
 }
 
+// A ci-rerun's flake row (rules-flakes.ts) also carries flaky, failed_tests, failed_jobs and head; every
+// other intervention's note is as it always was.
 function interventionNote(e: InterventionEvent): string {
-  return [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`].join(' ')
+  const base = [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`]
+  if (e.flaky === undefined) return base.join(' ')
+  const flaky = e.flaky === null ? NONE : e.flaky ? 'yes' : 'no'
+  return [...base, `flaky=${flaky}`, `failed_tests=${list(e.failed_tests ?? [])}`, `failed_jobs=${list(e.failed_jobs ?? [])}`, `head=${str(e.head ?? null)}`].join(' ')
 }
 
 function releaseNote(e: ReleaseEvent): string {
@@ -374,7 +267,10 @@ export function eventNote(e: V2Event): string {
     case 'reclaimed':
       return releaseNote(e)
     case 'shadow_read':
+    case 'settings_changed':
     case 'gate_run':
+    case 'main_state':
+    case 'comment_posted':
       // no old-format note: the payload is its own JSON (eventArgv)
       return JSON.stringify(e.data)
     case 'abandoned':
@@ -390,6 +286,9 @@ export function eventNote(e: V2Event): string {
 export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   // a gate run is a new-format event: its payload is the schema's data, not an old note
   if (e.state === 'shadow_read') return ['callum-flow-event', '--type', 'shadow_read', '--data', JSON.stringify(e.data)]
+  if (e.state === 'settings_changed') return ['callum-flow-event', '--type', 'settings_changed', '--data', JSON.stringify(e.data)]
+  if (e.state === 'main_state') return ['callum-flow-event', '--type', 'main_state', '--data', JSON.stringify(e.data)]
+  if (e.state === 'comment_posted') return ['callum-flow-event', '--type', 'comment_posted', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]
@@ -433,6 +332,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   const prClosedAt = unstr(t.get('prClosedAt'))
   const notes = unlist(t.get('notes'))
   const wait = unwait(t.get('wait'))
+  const parts = partsOfTokens(k => t.get(k))
   // a note from before the field carries no count: its life is read as a first one
   const lives = t.get('lives') === undefined ? 1 : unnum(t.get('lives'))
   if (typeof life !== 'string' || life === '' || typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null
@@ -443,7 +343,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   if (typeof rowId !== 'string' || via === undefined || brief === undefined || question === undefined) return null
   if (approvedPatch === undefined || prClosedAt === undefined || notes === undefined) return null
   if (typeof lives !== 'number' || !Number.isInteger(lives) || lives < 1) return null
-  if (wait === undefined) return null
+  if (wait === undefined || parts === undefined) return null
   const record: IssueRecord = {
     issue: row.issue,
     life,
@@ -464,6 +364,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     fixes: fixes as number,
     round: round as number,
     question,
+    parts,
     wait,
     why: why as IssueRecord['why'],
     notes,
@@ -509,6 +410,10 @@ export function parseIntervention(row: EventRow): InterventionEvent | null {
   const who = INTERVENTION_WHO.find(w => w === t.get('who'))
   const cause = unstr(t.get('cause'))
   if (who === undefined || typeof cause !== 'string' || cause === '') return null
+  const flakyToken = t.get('flaky')
+  const tests = unlist(t.get('failed_tests'))
+  const jobs = unlist(t.get('failed_jobs'))
+  const head = unstr(t.get('head'))
   return {
     state: 'intervention',
     who,
@@ -518,6 +423,10 @@ export function parseIntervention(row: EventRow): InterventionEvent | null {
     life: unstr(t.get('life')) ?? null,
     pr: row.pr,
     fact: unstr(t.get('fact')) ?? '',
+    ...(flakyToken === undefined ? {} : { flaky: flakyToken === 'yes' ? true : flakyToken === 'no' ? false : null }),
+    ...(tests === undefined ? {} : { failed_tests: tests.length === 0 ? null : tests }),
+    ...(jobs === undefined ? {} : { failed_jobs: jobs.length === 0 ? null : jobs }),
+    ...(head === undefined ? {} : { head }),
   }
 }
 
@@ -569,7 +478,8 @@ export function parseEvent(row: EventRow): V2Event | null {
 // its row read back agree. null for any other event: its ledger key alone logs it once.
 export function onceKey(row: EventRow): string | null {
   const t = tokensOf(row.note)
-  const id = row.state === 'intervention' ? [t.get('cause'), t.get('fact')] : row.state === 'reviewed' ? [t.get('answer')] : []
+  // a flake row (rules-flakes.ts) shares its fact with the ci-rerun row it settles, so it has its own key
+  const id = row.state === 'intervention' ? [t.get('cause'), t.get('fact'), ...(t.has('flaky') ? ['flake'] : [])] : row.state === 'reviewed' ? [t.get('answer')] : []
   if (id.length === 0 || id.some(v => v === undefined || v === NONE)) return null
   return [row.state, row.issue ?? NONE, ...id].join(' ')
 }

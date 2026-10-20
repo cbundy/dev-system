@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "prompt_denied.v1.json",
+  "title": "prompt_denied",
+  "description": "An agent's tool use needed a permission nobody could grant, and the companion denied it (an unattended session cannot answer a prompt). Written by the loop's companion. Not a stage and not progress. The companion never retries the write, so count one per event_id.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "life",
+    "seq",
+    "step",
+    "attempt",
+    "agent_id",
+    "agent_type",
+    "tool_name",
+    "tool_input",
+    "ask_reason",
+    "slot",
+    "session",
+    "transcript",
+    "branch",
+    "pr"
+  ],
+  "properties": {
+    "life": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-z]+$",
+      "description": "Which life of the issue the prompt came in; null when unknown.",
+      "x-column": true
+    },
+    "seq": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "The record's sequence in this life; null when unknown.",
+      "x-column": true
+    },
+    "step": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The step the agent was running, for example build; null when unknown.",
+      "x-column": true
+    },
+    "attempt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "The attempt of that step; null when unknown.",
+      "x-column": true
+    },
+    "agent_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The agent's id; null when the prompt came from no sub-agent.",
+      "x-column": true
+    },
+    "agent_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The agent's type, for example Explore or general-purpose; null when unknown.",
+      "x-column": true
+    },
+    "tool_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Claude Code's tool the prompt was for, for example Bash; null when unknown.",
+      "x-column": true
+    },
+    "tool_input": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2000,
+      "description": "What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown.",
+      "x-column": true
+    },
+    "ask_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 500,
+      "description": "Claude Code's reason, rule and decider for asking, cut at 500 characters; null when unknown."
+    },
+    "slot": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The writer's slot (worktree path) the prompt came from; null when unknown."
+    },
+    "session": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The Claude Code session id; null when unknown."
+    },
+    "transcript": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The path of the session's transcript; null when unknown."
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The issue's branch; null when unknown.",
+      "x-column": true
+    },
+    "pr": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "The issue's PR number; null when it has none yet.",
+      "x-column": true
+    }
+  },
+  "examples": [
+    {
+      "life": "ltn0brb",
+      "seq": 12,
+      "step": "build",
+      "attempt": 1,
+      "agent_id": "a20142b8cd21d3b2b",
+      "agent_type": "general-purpose",
+      "tool_name": "Bash",
+      "tool_input": "git push origin main",
+      "ask_reason": "permission rule: ask Bash(git push:*), decided by the user's settings",
+      "slot": "/work/slots/3/repo",
+      "session": "01MR3Be83yxy3baM8zGwY7jA",
+      "transcript": "/home/user/.claude/projects/repo/01MR3Be83yxy3baM8zGwY7jA.jsonl",
+      "branch": "issue-92",
+      "pr": 101
+    }
+  ]
+}

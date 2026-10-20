@@ -44,15 +44,18 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
+function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; status?: string | 'fail'; heads?: string[]; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node' })
+  mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node', ...opts.env })
   const w = {
     clock,
     session: 's1',
     spawned: [] as { name?: string; cwd?: string; parentAgentId?: string }[],
     calls: [] as Record<string, unknown>[],
     written: new Map<string, string>(),
+    window: 1_000_000 as number | undefined,
+    usageFails: false,
+    windowWrites: [] as string[],
     appended: new Map<string, string>(),
     gateRuns: [] as { command: string; cwd?: string; timeoutMs?: number }[],
     // callum-flow-event's argv, and the engine's own answer to a tool.check
@@ -61,8 +64,12 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     decided: { decision: 'ask' } as Record<string, unknown>,
     ids: 0,
     sleeps: 0,
+    // the files the plugin reads (the marker, /proc, the loop's act lock and companion log), kept as the
+    // engine would: a line appended to the companion log is read back
+    files: undefined as unknown as Map<string, string>,
   }
-  const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT]])
+  const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT], ['/proc/4242/stat', PROC_STAT]])
+  w.files = files
   const gates = [...(opts.gates ?? [])]
   const ran = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -73,7 +80,21 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
   })
+  on('session.usage', () => {
+    if (w.usageFails) throw new Error('no usage')
+    return { value: { startedAt: NOW, context: { window: w.window as number, tokens: 1, percent: 1 }, rateLimits: undefined as never } }
+  })
+  on('fs.write', (_$, e) => {
+    w.windowWrites.push(e.path)
+    w.written.set(e.path, e.text)
+    return { value: undefined }
+  })
   on('fs.exists', ($, e) => ({ value: w.written.has(e.path) }))
+  // the loop dirs under the config dir, and its handshake folder
+  on('fs.list', ($, e) => {
+    if (e.path !== `${CONFIG}/factory-loop`) throw new Error(`ENOENT ${e.path}`)
+    return { value: ['o__r', 'workspace'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })) }
+  })
   on('fs.stat', ($, e) => {
     if (e.path === SLOT || e.path === `${SLOT}/src`) return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }
     // a symlink in the slot that leads out of it
@@ -84,7 +105,8 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     const [cmd, a1, a2] = e.argv
     if (cmd === 'git' && e.argv.includes('--show-toplevel')) return ran(`${SLOT}\n${GIT_DIR}\n${MAIN}/.git\n`)
     if (cmd === 'git' && e.argv.includes('symbolic-ref')) return ran(`${opts.head ?? 'issue-571'}\n`)
-    if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran('4c2d8aa0000000000000000000000000000000ff\n')
+    if (cmd === 'git' && e.argv.at(-1) === '--porcelain') return opts.status === 'fail' ? ran('', 128) : ran(opts.status ?? '')
+    if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran(`${opts.heads?.shift() ?? '4c2d8aa0000000000000000000000000000000ff'}\n`)
     if (cmd === 'find') return ran('')
     // the stop gate's idle slice while it queues: answers after a short real delay, never at once
     if (cmd === 'sleep') {
@@ -107,6 +129,7 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     if (cmd === 'sh' && a1 === '-c' && a2?.includes('cat >>')) {
       const path = e.argv[4] as string
       w.appended.set(path, (w.appended.get(path) ?? '') + (e.init?.stdin ?? ''))
+      files.set(path, (files.get(path) ?? '') + (e.init?.stdin ?? ''))
       return ran('')
     }
     if (cmd === 'sh' && a1 === '-c' && a2?.includes('cat >')) {
@@ -134,11 +157,71 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
 }
 
 const START = { cwd: MAIN, surface: null, isInteractive: false }
-const companionLines = (w: { appended: Map<string, string> }) =>
+const allLines = (w: { appended: Map<string, string> }) =>
   (w.appended.get(`${LOOP_DIR}/companion.jsonl`) ?? '')
     .split('\n')
     .filter(l => l !== '')
     .map(l => JSON.parse(l) as Record<string, unknown>)
+// the lines the plugin wrote, but for the `gate-start` ones (the stop gate's own tests are about the
+// lines after it; the start lines have their own tests below)
+const companionLines = (w: { appended: Map<string, string> }) => allLines(w).filter(l => l.cause !== 'gate-start')
+
+describe('the context window file', () => {
+  const file = (dir: string) => `${dir}/s1`
+  test('session start writes the window under DEV_CONTEXT_WINDOW_DIR, else /tmp/dev-context-window', async ($, on) => {
+    const w = world(on, { env: { DEV_CONTEXT_WINDOW_DIR: '/win' } })
+    await $.session.start(START)
+    expect(w.written.get(file('/win'))).toBe('1000000\n')
+  })
+
+  test('with the env unset it writes /tmp/dev-context-window', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    expect(w.written.get(file('/tmp/dev-context-window'))).toBe('1000000\n')
+  })
+
+  test('the beat writes again only for a changed window or a new session', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await w.clock.advance(60_000)
+    expect(w.windowWrites).toEqual(['/tmp/dev-context-window/s1'])
+    w.window = 200_000
+    await w.clock.advance(60_000)
+    expect(w.written.get(file('/tmp/dev-context-window'))).toBe('200000\n')
+    expect(w.windowWrites).toHaveLength(2)
+    w.session = 's2'
+    await w.clock.advance(60_000)
+    expect(w.written.get('/tmp/dev-context-window/s2')).toBe('200000\n')
+  })
+
+  for (const value of [undefined, 0, -5, 1.5]) {
+    test(`a window of ${value} writes no file, and the handshake is still written`, async ($, on) => {
+      const w = world(on)
+      w.window = value
+      await $.session.start(START)
+      expect(w.windowWrites).toEqual([])
+      expect(w.written.has(`${CONFIG}/factory-loop/workspace/s1.json`)).toBe(true)
+    })
+  }
+
+  test('a usage that throws writes no file, and the handshake is still written', async ($, on) => {
+    const w = world(on)
+    w.usageFails = true
+    await $.session.start(START)
+    expect(w.windowWrites).toEqual([])
+    expect(w.written.has(`${CONFIG}/factory-loop/workspace/s1.json`)).toBe(true)
+  })
+})
+
+describe('the context window file after a reload', () => {
+  test('the first turn after a /reload-plugins records the window', async ($, on) => {
+    const w = world(on)
+    on('turn.start', () => ({ turnId: 't1' }))
+    await $.turn.start({ turnId: 't1', prompt: 'hi' } as never)
+    await w.clock.advance(0)
+    expect(w.written.get('/tmp/dev-context-window/s1')).toBe('1000000\n')
+  })
+})
 
 describe('the handshake', () => {
   test('session start writes this session\'s file, and the beat writes it again for a new session', async ($, on) => {
@@ -371,16 +454,42 @@ describe('the stop gate', () => {
 
   test('every gate run, the refusal and the pass after it, is a line of the companion\'s log', async ($, on) => {
     // drill 8b (R2 run, #30): factory-gate.json kept only the last run, so the refusal was lost
-    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'not ok 3\n' }] })
+    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'FAIL parses the marker\n  at x\n' }] })
     await $.agent.spawn(spawn(BUILD))
     const stop = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
     expect((await $.classic.SubagentStop(stop)).block).toContain('`npm test` exited 1')
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, command: 'npm test', exitCode: 1 },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, clean: true },
     ])
+  })
+
+  for (const [status, clean] of [['', true], [' M a.ts\n', false], ['fail', null]] as const) {
+    test(`the slot's tree is read before the gate: ${JSON.stringify(status)} is clean ${clean}`, async ($, on) => {
+      const w = world(on, { status })
+      await $.agent.spawn(spawn(BUILD))
+      await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+      expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', clean })
+      expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ clean })
+    })
+  }
+
+  test('a head that moved during the gate is never clean', async ($, on) => {
+    const w = world(on, { heads: ['4c2d8aa0000000000000000000000000000000ff', '5d3e9bb0000000000000000000000000000000ee'] })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+    expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-pass', clean: false, head: '5d3e9bb0000000000000000000000000000000ee' })
+  })
+
+  test('a failure names its tests from the full output, past the tail', async ($, on) => {
+    const output = `FAIL first one\n  at x\n${Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')}\n`
+    const w = world(on, { gates: [{ exitCode: 0, output: '' }, { exitCode: 1, output }] })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false })
+    expect(companionLines(w)[0]).toMatchObject({ cause: 'gate-fail', failedTests: ['first one'] })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ failedTests: ['first one'] })
   })
 
   test('a passing gate lets it finish', async ($, on) => {
@@ -554,7 +663,7 @@ const check = ($: Engine, input: Record<string, unknown>) => $.tool.check(input 
 const SESSION_TRANSCRIPT = '/c/projects/p/s1.jsonl'
 const AGENT_TRANSCRIPT = '/c/projects/p/s1/subagents/agent-agent-1.jsonl'
 const RM = { tool: 'Bash', input: { command: 'rm -f $D/*' }, agentId: 'agent-1' }
-const noteOf = (argv: string[]) => Object.fromEntries((argv[argv.indexOf('--note') + 1] ?? '').split(' ').map(t => [t.slice(0, t.indexOf('=')), decodeURIComponent(t.slice(t.indexOf('=') + 1))]))
+const dataOf = (argv: string[]) => JSON.parse(argv[argv.indexOf('--data') + 1] ?? 'null') as Record<string, unknown>
 
 describe('prompts nobody answers', () => {
   test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
@@ -573,22 +682,25 @@ describe('prompts nobody answers', () => {
     expect(reason).toContain('end your step saying what you needed')
     expect(w.events).toHaveLength(1)
     const argv = w.events[0] as string[]
-    expect(argv.slice(0, 2)).toEqual(['callum-flow-event', 'prompt_denied'])
-    expect(argv.join(' ')).toContain('--issue 571 --branch issue-571')
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_denied', '--data'])
+    expect(argv.slice(4 + 1)).toEqual(['--issue', '571', '--repo', argv[argv.indexOf('--repo') + 1]])
+    expect(argv).not.toContain('--note')
     expect(argv).not.toContain('--pr')
-    expect(noteOf(argv)).toEqual({
+    expect(dataOf(argv)).toEqual({
       life: 'ss1x2k',
-      seq: '7',
+      seq: 7,
       step: 'build',
-      attempt: '1',
-      agent: 'agent-1',
+      attempt: 1,
+      agent_id: 'agent-1',
       agent_type: 'factory-loop:builder',
-      tool: 'Bash',
+      tool_name: 'Bash',
+      tool_input: 'rm -f $D/*',
+      ask_reason: expect.stringContaining('rm of a glob under a variable'),
       slot: SLOT,
       session: 's1',
       transcript: AGENT_TRANSCRIPT,
-      why: expect.stringContaining('rm of a glob under a variable'),
-      input: 'rm -f $D/*',
+      branch: 'issue-571',
+      pr: null,
     })
     expect(companionLines(w)).toEqual([expect.objectContaining({ issue: 571, life: 'ss1x2k', seq: 7, cause: 'prompt-denied', reason: expect.stringContaining('Bash: factory-loop-workspace:') })])
   })
@@ -616,7 +728,7 @@ describe('prompts nobody answers', () => {
     const r = (await check($, { tool: 'Bash', input: { command: 'curl https://example.com' }, agentId: 'agent-1' })) as { reason: string }
     expect(r.reason).not.toContain(':?')
     expect(r.reason).not.toContain("Claude Code's own reason")
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ why: 'none', transcript: 'none' })
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ ask_reason: null, transcript: null })
   })
 
   test('a child of the loop agent is denied and logged with its own agent type', async ($, on) => {
@@ -624,7 +736,7 @@ describe('prompts nobody answers', () => {
     await $.agent.spawn(spawn(BUILD))
     await $.agent.spawn(spawn({ subagentType: 'Explore', description: 'look', prompt: 'look around', parentAgentId: 'agent-1' }))
     expect((await check($, { ...RM, agentId: 'agent-2' })).decision).toBe('deny')
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-2', agent_type: 'Explore', step: 'build', attempt: '1' })
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ agent_id: 'agent-2', agent_type: 'Explore', step: 'build', attempt: 1 })
   })
 
   test('the main session and an agent the companion does not know are left to Claude Code', async ($, on) => {
@@ -642,14 +754,14 @@ describe('prompts nobody answers', () => {
     const w = world(on)
     await $.agent.spawn(spawn(BUILD))
     await check($, { tool: 'Bash', input: { command: `echo ${'x'.repeat(5000)}` }, agentId: 'agent-1' })
-    expect(noteOf(w.events[0] as string[]).input).toHaveLength(INPUT_CLIP)
+    expect(dataOf(w.events[0] as string[]).tool_input).toHaveLength(INPUT_CLIP)
     await check($, { tool: 'Write', input: { file_path: '/x', content: 'y'.repeat(5000) }, agentId: 'agent-1' })
-    const input = noteOf(w.events[1] as string[]).input as string
+    const input = dataOf(w.events[1] as string[]).tool_input as string
     expect(input).toHaveLength(INPUT_CLIP)
     expect(input.startsWith('{"file_path":"/x"')).toBe(true)
   })
 
-  test('an image whose callum-flow-event refuses the state still gets the deny and the line', async ($, on) => {
+  test('an image whose callum-flow-event refuses the write still gets the deny and the line', async ($, on) => {
     const w = world(on, { eventExit: 2 })
     await $.agent.spawn(spawn(BUILD))
     expect((await check($, RM)).decision).toBe('deny')
@@ -657,11 +769,12 @@ describe('prompts nobody answers', () => {
     expect(companionLines(w).map(l => l.cause)).toEqual(['prompt-denied'])
   })
 
-  test('a marker with a pr gives --pr, and one without gives none', async ($, on) => {
+  test('a marker with a pr gives pr in the data, and one without gives null', async ($, on) => {
     const w = world(on, { marker: { ...MARKER, pr: 612 } })
     await $.agent.spawn(spawn(BUILD))
     await check($, RM)
-    expect(w.events[0]?.join(' ')).toContain('--pr 612')
+    expect(dataOf(w.events[0] as string[]).pr).toBe(612)
+    expect(w.events[0]).not.toContain('--pr')
   })
 })
 
@@ -674,10 +787,18 @@ describe('permission prompts waiting', () => {
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
     await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toHaveLength(1)
-    expect((w.events[0] as string[]).slice(0, 2)).toEqual(['callum-flow-event', 'prompt_waiting'])
-    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-1', agent_type: 'factory-loop:builder', input: note.message, transcript: AGENT_TRANSCRIPT, tool: 'none', seq: '7' })
+    expect((w.events[0] as string[]).slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_waiting', '--data'])
+    expect(dataOf(w.events[0] as string[])).toMatchObject({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', tool_input: note.message, transcript: AGENT_TRANSCRIPT, tool_name: null, seq: 7, branch: 'issue-571' })
+    expect(dataOf(w.events[0] as string[])).not.toHaveProperty('ask_reason')
     await $.classic.Notification({ ...note, notification_type: 'worker_permission_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toHaveLength(2)
+  })
+
+  test('a message over the clip is cut to 2000 characters', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.Notification({ ...note, message: 'm'.repeat(5000), notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
+    expect(dataOf(w.events[0] as string[]).tool_input).toHaveLength(INPUT_CLIP)
   })
 
   test('no agent, an unmapped one, or another kind of notification logs nothing', async ($, on) => {
@@ -687,5 +808,193 @@ describe('permission prompts waiting', () => {
     await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'someone-else' } as never)
     await $.classic.Notification({ ...note, notification_type: 'idle_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toEqual([])
+  })
+})
+
+describe('the gate-start line and the recovery of a gate a restart cut (10.6)', () => {
+  const STOP = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
+  const iso = (ms: number) => new Date(ms).toISOString()
+  // a process that is gone (nothing under /proc), and the one the world runs as (PROC_STAT)
+  const DEAD = '999:111'
+  const ALIVE = '4242:342070008'
+  const CUT_AT = NOW - 10 * 60_000
+  const start = (over: Record<string, unknown> = {}) => ({ at: iso(CUT_AT), issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-start', reason: 'the stop gate started', startedAt: iso(CUT_AT), slot: SLOT, gitDir: GIT_DIR, process: DEAD, ...over })
+  const wait = (over: Record<string, unknown> = {}) => ({ at: iso(CUT_AT + 30_000), issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-wait', reason: 'waited', waitMs: 30_000, queuedBehind: 1, concurrency: 1, ...over })
+  const text = (...lines: Record<string, unknown>[]) => lines.map(l => `${JSON.stringify(l)}\n`).join('')
+  // the loop's session with its lease (this session is s1), the log, then a session that beats once
+  async function afterRestart($: Engine, w: ReturnType<typeof world>, log: string, lock: unknown = { session: 's1', renewedAt: NOW, expiresAt: NOW + 3_600_000 }) {
+    w.files.set(`${LOOP_DIR}/companion.jsonl`, log)
+    if (lock !== null) w.files.set(`${LOOP_DIR}/act.lock`, JSON.stringify(lock))
+    await $.session.start(START)
+    await beat($, w)
+  }
+  // one minute of the clock: the handshake beat, and the recovery it starts, which has no hook to wait for
+  async function beat($: Engine, w: ReturnType<typeof world>) {
+    await w.clock.advance(60_000)
+    for (let i = 0; i < 30; i++) await new Promise<void>(resolve => setTimeout(resolve, 5))
+  }
+  const causes = (w: ReturnType<typeof world>) => allLines(w).map(l => l.cause)
+
+  test('SubagentStop writes gate-start before its turn, and its startedAt is the settling line\'s', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateConcurrency: 1 } })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop(STOP)
+    const lines = allLines(w)
+    expect(lines.map(l => l.cause)).toEqual(['gate-start', 'gate-pass'])
+    expect(lines[0]).toMatchObject({ issue: 571, life: 'ss1x2k', seq: 7, startedAt: iso(NOW), slot: SLOT, gitDir: GIT_DIR, process: '4242:342070008' })
+    expect(lines[1]).toMatchObject({ startedAt: iso(NOW) })
+    expect(lines[1]).not.toHaveProperty('rerun')
+  })
+
+  test('a reader\'s or an ungated writer\'s stop writes no gate-start', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateCommands: [] } })
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStop(STOP)
+    expect(allLines(w)).toEqual([])
+  })
+
+  test('the issue\'s case: a start and a wait from a dead process, no settling line: one beat re-runs the gate, a second writes nothing more', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start(), wait()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(w.gateRuns.map(g => [g.command, g.cwd])).toEqual([['npm run lint', SLOT], ['npm test', SLOT]])
+    const [rerun, pass] = allLines(w)
+    expect(rerun).toMatchObject({ issue: 571, life: 'ss1x2k', seq: 7, cutStartedAt: iso(CUT_AT), process: DEAD, slot: SLOT, gitDir: GIT_DIR, marker: { issue: 571, life: 'ss1x2k', seq: 7 } })
+    expect(rerun?.reason).toContain(iso(CUT_AT))
+    expect(pass).toMatchObject({ rerun: true, startedAt: iso(NOW + 60_000), clean: true })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass' })
+    await beat($, w)
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(w.gateRuns).toHaveLength(2)
+  })
+
+  test('the #1065 case: a lone gate-start (the gate took its turn at once) is recovered', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true })
+  })
+
+  test('a failing re-run writes gate-fail with rerun: true and blocks nothing', async ($, on) => {
+    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'FAIL parses the marker\n' }] })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-fail'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true, command: 'npm test', exitCode: 1, failedTests: ['parses the marker'] })
+    expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'fail' })
+  })
+
+  test('a re-run uses a turn like a stop gate: it waits behind the limit and logs gate-wait', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, gateConcurrency: 1 } })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true, concurrency: 1 })
+  })
+
+  for (const [what, marker] of [['another seq', { ...MARKER, seq: 8 }], ['another issue', { ...MARKER, issue: 572 }], ['another life', { ...MARKER, life: 'other' }], ['a reader', { ...MARKER, role: 'reader' }], ['no gate commands', { ...MARKER, gateCommands: [] }]] as const) {
+    test(`a marker that names ${what} gives one gate-cut with its why, and no command runs`, async ($, on) => {
+      const w = world(on, { marker })
+      await afterRestart($, w, text(start()))
+      expect(causes(w)).toEqual(['gate-cut'])
+      expect(allLines(w)[0]).toMatchObject({ issue: 571, seq: 7, cutStartedAt: iso(CUT_AT), process: DEAD })
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('a missing marker is a gate-cut that says so', async ($, on) => {
+    const w = world(on)
+    w.files.delete(`${GIT_DIR}/factory-step.json`)
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-cut'])
+    expect(allLines(w)[0]?.reason).toContain('no readable step marker')
+    expect(w.gateRuns).toEqual([])
+  })
+
+  const settle = (cause: string, at: number) => ({ ...wait(), cause, at: iso(at) })
+  const left: [string, string][] = [
+    ['a start line from a live process', text(start({ process: ALIVE }))],
+    ['a settled attempt (gate-pass)', text(start(), settle('gate-pass', CUT_AT + 60_000))],
+    ['a settled attempt (gate-fail)', text(start(), settle('gate-fail', CUT_AT + 60_000))],
+    ['a settled attempt (gate-unknown)', text(start(), settle('gate-unknown', CUT_AT + 60_000))],
+    ['an attempt already re-run', text(start(), settle('gate-rerun', CUT_AT + 60_000))],
+    ['an attempt already cut', text(start(), settle('gate-cut', CUT_AT + 60_000))],
+    ['a refused finish and a live stop after it', text(start(), settle('gate-fail', CUT_AT + 60_000), start({ at: iso(CUT_AT + 120_000), process: ALIVE }))],
+    ['a start line older than 24 h', text(start({ at: iso(NOW - 25 * 3_600_000) }))],
+  ]
+  for (const [what, log] of left) {
+    test(`${what} is left alone`, async ($, on) => {
+      const w = world(on)
+      await afterRestart($, w, log)
+      expect(causes(w)).toEqual([])
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('a fail after a cut start, then a new start from a dead process, is open again', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start(), { ...wait(), cause: 'gate-fail', at: iso(CUT_AT + 60_000) }, start({ at: iso(CUT_AT + 120_000), startedAt: iso(CUT_AT + 120_000) })))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+    expect(allLines(w)[0]?.reason).toContain(iso(CUT_AT + 120_000))
+  })
+
+  for (const [what, lock] of [['another session\'s lease', { session: 'other', renewedAt: NOW, expiresAt: NOW + 3_600_000 }], ['an expired lease of its own', { session: 's1', renewedAt: NOW - 3_600_000, expiresAt: NOW + 1_000 }], ['no lock at all', null]] as const) {
+    test(`a session with ${what} runs nothing`, async ($, on) => {
+      const w = world(on)
+      await afterRestart($, w, text(start()), lock)
+      expect(causes(w)).toEqual([])
+      expect(w.gateRuns).toEqual([])
+    })
+  }
+
+  test('the lock is checked on each beat until it is held: the recovery runs on the beat after the session takes it', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start()), { session: 'other', renewedAt: NOW, expiresAt: NOW + 3_600_000 })
+    expect(causes(w)).toEqual([])
+    w.files.set(`${LOOP_DIR}/act.lock`, JSON.stringify({ session: 's1', renewedAt: NOW, expiresAt: NOW + 3_600_000 }))
+    await beat($, w)
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-pass'])
+  })
+
+  // this process started at btime + 342070008 ticks of 10 ms
+  const BOOT_TO_START_S = 3_420_700
+  const oldLine = () => start({ process: undefined, slot: undefined, gitDir: undefined })
+  test('a line with no process (a companion before it) that predates this process is dead; with no slot named it is cut', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `cpu 1 2 3\nbtime ${Math.floor(NOW / 1000) - BOOT_TO_START_S + 3_000}\n`)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual(['gate-cut'])
+    expect(allLines(w)[0]?.reason).toContain('names no slot')
+  })
+
+  test('a line with no process written after this process started is left alone', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `cpu 1 2 3\nbtime ${Math.floor(NOW / 1000) - BOOT_TO_START_S - 3_000}\n`)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual([])
+  })
+
+  test('a line with no process, when this process\'s start cannot be read, is left alone', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(oldLine()))
+    expect(causes(w)).toEqual([])
+  })
+
+  test('a gate-wait with no start line from a companion before gate-start is cut, as it has no slot', async ($, on) => {
+    const w = world(on)
+    w.files.set('/proc/stat', `btime ${Math.floor(NOW / 1000) + 10_000}\n`)
+    await afterRestart($, w, text(wait()))
+    expect(causes(w)).toEqual(['gate-cut'])
+  })
+
+  test('every candidate of the log is judged: two attempts, one re-run and one cut', async ($, on) => {
+    const w = world(on)
+    await afterRestart($, w, text(start({ issue: 572, seq: 3 }), start()))
+    expect(allLines(w).map(l => [l.cause, l.issue])).toEqual([['gate-cut', 572], ['gate-rerun', 571], ['gate-pass', 571]])
+  })
+
+  test('a gate that cannot run in the re-run is a gate-unknown with rerun: true', async ($, on) => {
+    const w = world(on, { gates: ['timeout'] })
+    await afterRestart($, w, text(start()))
+    expect(causes(w)).toEqual(['gate-rerun', 'gate-unknown'])
+    expect(allLines(w)[1]).toMatchObject({ rerun: true })
   })
 })

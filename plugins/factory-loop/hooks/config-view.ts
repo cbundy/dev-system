@@ -82,7 +82,7 @@ export function sourceOf(
   return 'default'
 }
 
-function originOf(file: Record<string, unknown>, key: string): Source {
+export function originOf(file: Record<string, unknown>, key: string): Source {
   return typeof file[key] === 'string' && file[key] !== '' ? 'workspace' : 'plugin'
 }
 
@@ -159,6 +159,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       [
         ...render({ label: 'mode', value: c.mode, source: view.modeFrom, note: MODE_NOTE[c.mode] }),
         ...render(ms('passEveryMs')),
+        ...render(ms('mainEveryMs')),
         ...render({ label: 'plugin', value: view.pluginVersion }),
         ...render({ label: 'device', value: view.device === '' ? '(none)' : view.device, source: view.deviceFrom }),
       ],

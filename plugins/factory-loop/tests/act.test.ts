@@ -125,7 +125,7 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
   test('every action kind is one a module of the current loop produces: no kind of the v1 planner is left', () => {
     expect([...ACTION_KINDS].sort()).toEqual(
       [
-        'heartbeat', 'sweep', 'claim', 'close-issue', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+        'heartbeat', 'sweep', 'claim', 'close-issue', 'delete-branch', 'release-parent', 'milestone-later', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
         ...V2_ACTION_KINDS,
       ].sort(),
     )
@@ -159,6 +159,18 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
 })
 
 describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
+  test('a split child\'s claim carries its park into the outcome; a lost claim (exit 3) stays lost and carries none', async () => {
+    const park = { question: 'Which API shape?', parent: 300 }
+    const f = fake([])
+    const report = await runActions(f.env, state(), [{ ...claim, park }])
+    expect(report.outcomes).toEqual([expect.objectContaining({ kind: 'claim', status: 'done', summary: 'claimed #470 to park it on its open decision' })])
+    expect(f.env.live.ledger).toMatchObject([{ status: 'done', outcome: { kind: 'claim', result: 'claimed', park } }])
+    const lost = fake([], () => ({ exitCode: 3, stderr: 'callum-flow-claim: held by another device' }))
+    await runActions(lost.env, state(), [{ ...claim, park }])
+    const outcome = lost.env.live.ledger[0]?.outcome
+    expect(outcome).toEqual({ kind: 'claim', result: 'lost' })
+  })
+
   test('start, executor, finish: a claim is done in the ledger, saved, with its outcome', async () => {
     const f = fake([])
     const report = await runActions(f.env, state(), [claim])
@@ -387,7 +399,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   test('an agent whose turn ended with no answer the loop could take is lost on the second pass that lists it idle, as completed, not at its A1 timeout (#560)', async () => {
     const gate = entry('step:review:60:1', 'agent-step', { class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const f = fake([gate])
-    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
     const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
     const listed = { ok: true, agents: [{ id: 'agent-1', status: 'idle' as AgentStatus }] }
     await actPass(f.env, { ...s, now: NOW }, listed, between)
@@ -401,7 +413,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
       const gate = entry('step:review:60:1', 'agent-step', { class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1', reminded: true })
       const f = fake([gate])
       // agentAnswered marks the repair this way when its message went out
-      const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map([['agent-1', NOW]]) }
+      const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map([['agent-1', NOW]]), gateHeld: new Map() }
       const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
       const listed = { ok: true, agents: [{ id: 'agent-1', status: status as AgentStatus }] }
       const at = () => f.env.live.ledger.find(e => e.key === gate.key)?.status
