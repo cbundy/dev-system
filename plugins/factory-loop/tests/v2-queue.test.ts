@@ -20,7 +20,7 @@ import { planV2 } from '../hooks/v2/plan'
 import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
 import { RERUN_ATTEMPTS, RERUN_REFUSED } from '../hooks/v2/rules-review'
 import { jobIdOf } from '../hooks/v2/refused'
-import { checksOf, headsOf, jobsOf, notStartedOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
+import { PR_READ_CONCURRENCY, checksOf, headsOf, jobsOf, notStartedOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
@@ -1058,6 +1058,110 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(r.heads).toEqual({ [sha('1')]: { pr: 670, at: NOW }, [sha('2')]: { pr: 671, at: NOW }, [sha('3')]: { pr: 674, at: NOW } })
     const one = sourceCtx(records, prReply(heads), { prBudget: 1 })
     expect((await readPrs(one.ctx)).read.prs.map(v => v.pr)).toEqual([671])
+  })
+
+  describe('concurrent reads', () => {
+    const several = (n: number) => Array.from({ length: n }, (_, i) => rec(80 + i, { state: 'reviewing', step: 'review', seqAt: NOW - (60 - i) * MIN }))
+    const flush = () => new Promise<void>(r => setTimeout(r, 0))
+    // held: each callum-flow-issue-read reply waits on its own deferred, in the order the reads started
+    function held(records: IssueRecord[], over: Partial<SourceCtx> = {}) {
+      const base = sourceCtx(records, prReply({}), over)
+      const waiting = new Map<number, () => void>()
+      const started: number[] = []
+      let flying = 0
+      let peak = 0
+      const inner = base.ctx.run
+      const ctx: SourceCtx = {
+        ...base.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] !== 'callum-flow-issue-read') return inner(argv, init, ms)
+          const pr = Number(argv[3])
+          started.push(pr)
+          flying++
+          peak = Math.max(peak, flying)
+          await new Promise<void>(release => waiting.set(pr, release))
+          flying--
+          return inner(argv, init, ms)
+        },
+      }
+      return { ctx, waiting, started, peak: () => peak }
+    }
+
+    test('a second read starts before the first ends, never more than PR_READ_CONCURRENCY are in flight, and they start in 2.4\'s order', async () => {
+      expect(PR_READ_CONCURRENCY).toBe(4)
+      const h = held(several(6), { prBudget: 6 })
+      const done = readPrs(h.ctx)
+      await flush()
+      expect(h.started).toEqual([680, 681, 682, 683])
+      // release the first: the next record starts at once
+      h.waiting.get(680)?.()
+      await flush()
+      expect(h.started).toEqual([680, 681, 682, 683, 684])
+      for (const n of [681, 682, 683, 684]) h.waiting.get(n)?.()
+      await flush()
+      h.waiting.get(685)?.()
+      const r = await done
+      expect(h.peak()).toBe(4)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 681, 682, 683, 684, 685])
+      expect(r.source).toEqual({ ok: true, at: NOW })
+    })
+
+    test('replies resolved in reverse order still give prs and unread in 2.4\'s order, and the same as one at a time', async () => {
+      const records = several(4)
+      const reply = prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '682' ? { exitCode: 1, stderr: 'boom' } : undefined))
+      const inner = sourceCtx(records, reply, { prBudget: 4 })
+      const waiting = new Map<number, () => void>()
+      const racing: SourceCtx = {
+        ...inner.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] === 'callum-flow-issue-read') await new Promise<void>(release => waiting.set(Number(argv[3]), release))
+          return inner.ctx.run(argv, init, ms)
+        },
+      }
+      const done = readPrs(racing)
+      await flush()
+      for (const n of [683, 682, 681, 680]) {
+        waiting.get(n)?.()
+        await flush()
+      }
+      const out = await done
+      const serial = await readPrs(sourceCtx(records, reply, { prBudget: 4 }).ctx)
+      expect(out.read.prs.map(v => v.pr)).toEqual([680, 681, 683])
+      expect(out.read.unread?.map(u => u.pr)).toEqual([682])
+      expect(out.read).toEqual(serial.read)
+      expect(out.heads).toEqual(serial.heads)
+    })
+
+    test('a rate limit met after the first record starts nothing new, lets the reads in flight finish, and sets cut', async () => {
+      let limited = false
+      const h = held(several(6), { prBudget: 6, limited: () => limited })
+      const done = readPrs(h.ctx)
+      await flush()
+      expect(h.started).toHaveLength(4)
+      limited = true
+      for (const n of h.started) h.waiting.get(n)?.()
+      const r = await done
+      expect(h.started).toHaveLength(4)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 681, 682, 683])
+      expect(r.read.cut).toBe('a GitHub rate limit met this pass ended the PR reads')
+      expect(r.source.ok).toBe(false)
+    })
+
+    test('one record whose run throws is the only one unread; readPrs never rejects', async () => {
+      const records = several(3)
+      const base = sourceCtx(records, prReply({}), { prBudget: 3 })
+      const ctx: SourceCtx = {
+        ...base.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] === 'callum-flow-issue-read' && argv[3] === '681') throw new Error('spawn failed')
+          return base.ctx.run(argv, init, ms)
+        },
+      }
+      const r = await readPrs(ctx)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 682])
+      expect(r.read.unread?.map(u => u.pr)).toEqual([681])
+      expect(r.read.unread?.[0]?.why).toContain('spawn failed')
+    })
   })
 
   test('a head\'s patch id is computed once, and again when the head moved; one that does not compute leaves that PR alone unread, with why, and the source read', async () => {
