@@ -495,25 +495,26 @@ data "coder_parameter" "coder_login" {
   order        = 14
 }
 
-# Shared or private Claude login (variable claude_auth_volume_name). Coder
-# gives an existing workspace the default on its next update (#268), so every
-# workspace that predates the choice stays private, exactly as before.
+# Shared, private or own-API-key Claude login (variables
+# claude_auth_volume_name and workspace_secrets_dir). Coder gives an existing
+# workspace the default on its next update (#268), so every workspace that
+# predates the choice stays private, exactly as before. The api-key choice
+# needs workspace_secrets_dir: the workspace's Claude reads the key file there.
 data "coder_parameter" "claude_login" {
-  count        = var.claude_auth_volume_name == "" ? 0 : 1
+  count        = (var.claude_auth_volume_name != "" || var.workspace_secrets_dir != "") ? 1 : 0
   name         = "claude_login"
   display_name = "Claude login"
-  description  = "private: this workspace has its own Claude login, as before. shared: it uses the one Claude login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in; its history and settings stay its own. Anyone who can open a shared workspace holds that login, and signing out in one signs out all. Takes effect on the next workspace start."
+  description  = "private: this workspace has its own Claude login, as before. shared: it uses the one Claude login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in; its history and settings stay its own. Anyone who can open a shared workspace holds that login, and signing out in one signs out all. api-key: it uses its own Anthropic API key from the file anthropic-api-key in the workspace's folder on the Docker host, shares nothing and needs no sign-in; Remote Control is off in that mode, so Claude runs headless in the tmux session claude (coder ssh, then tmux attach -t claude). Takes effect on the next workspace start."
   type         = "string"
   default      = "private"
   mutable      = true
   order        = 10
-  option {
-    name  = "Private to this workspace"
-    value = "private"
-  }
-  option {
-    name  = "Shared with other workspaces"
-    value = "shared"
+  dynamic "option" {
+    for_each = local.claude_login_options
+    content {
+      name  = option.value.name
+      value = option.value.value
+    }
   }
 }
 
@@ -636,8 +637,22 @@ locals {
 
   # The shared Claude login (parameter claude_login): Claude keeps its login,
   # and only its login, in the shared volume at /persist/claude-auth.
-  claude_login_shared = try(data.coder_parameter.claude_login[0].value, "private") == "shared"
-  claude_auth_env     = local.claude_login_shared ? ["CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth"] : []
+  claude_login         = try(data.coder_parameter.claude_login[0].value, "private")
+  claude_login_shared  = local.claude_login == "shared"
+  claude_login_api_key = local.claude_login == "api-key"
+  claude_login_options = concat(
+    var.claude_auth_volume_name != "" ? [{ name = "Shared with other workspaces", value = "shared" }] : [],
+    [{ name = "Private to this workspace", value = "private" }],
+    var.workspace_secrets_dir != "" ? [{ name = "This workspace's own Anthropic API key", value = "api-key" }] : [],
+  )
+  claude_auth_env = local.claude_login_shared ? ["CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth"] : []
+
+  # API-key mode: dev-init points Claude's apiKeyHelper at this file (only the
+  # path is set here, never the key).
+  claude_api_key_env = local.claude_login_api_key ? [
+    "DEV_CLAUDE_AUTH=api-key",
+    "DEV_CLAUDE_API_KEY_FILE=/run/secrets/dev-system-workspace/anthropic-api-key",
+  ] : []
 
   # The gh login (parameter gh_login): shared, private or token.
   gh_login        = try(data.coder_parameter.gh_login[0].value, "private")
@@ -933,7 +948,7 @@ resource "docker_container" "workspace" {
   # minute. null (Docker's default) when there is no wind-down.
   destroy_grace_seconds = var.wind_down_minutes > 0 ? var.wind_down_minutes * 60 + 60 : null
   entrypoint            = ["sh", "-c", coder_agent.main.init_script]
-  env                   = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env, local.coder_login_env)
+  env                   = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.claude_api_key_env, local.gh_token_env, local.coder_login_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)

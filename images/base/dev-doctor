@@ -120,7 +120,14 @@ check_login() {
   fi
 }
 
-check_login claude "claude auth login" claude auth status
+# shellcheck source=claude-auth.sh
+. /usr/local/share/dev-system/claude-auth.sh
+if claude_api_key_mode; then
+  claude_api_key_doctor
+else
+  info "Claude auth mode: $(claude auth status --json 2>/dev/null | jq -r 'if .loggedIn == true then .authMethod else "none" end' 2>/dev/null | grep . || echo none)"
+  check_login claude "claude auth login" claude auth status
+fi
 check_login codex "codex login --device-auth" codex login status
 check_login gh "gh auth login, then dev-init" gh auth status
 

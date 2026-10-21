@@ -8,7 +8,8 @@
 # the one-time Remote Control consent (remoteDialogSeen: `claude
 # remote-control` blocks on "Enable Remote Control? (y/n)" without it, and the
 # interactive Claude has a matching dialog; enabling DEV_REMOTE_CONTROL is the
-# consent, cbundy/dev-system#88), the one-time "Try the new fullscreen
+# consent, cbundy/dev-system#88; set but unused in API-key mode, where there is
+# no Remote Control and the trust dialog still needs answering), the one-time "Try the new fullscreen
 # renderer?" prompt (fullscreenUpsellSeenCount, shown while it is below 3) and,
 # if somehow still pending, onboarding.
 # With a second argument of 1 it also accepts the bypass-permissions
