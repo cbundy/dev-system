@@ -138,6 +138,7 @@ export const DEFAULT_CONFIG: Config = {
   maxLives: 3,
   triageModel: 'opus',
   // the intake stamp (#995): off until the owner turns it on; its agent's model, never larger than triageModel; the areas a stamp may name
+  regime: 'factory_loop_v2',
   intakeStamp: 'off',
   intakeModel: 'haiku',
   intakeAreas: ['factory', 'product'],
@@ -393,6 +394,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'memoryReserveMiB') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number of at least 0')
+      } else if (key === 'regime') {
+        if (value === 'factory_loop_v2' || value === 'testbed') out[key] = value
+        else bad(raw, value, 'factory_loop_v2 or testbed')
       } else if (key === 'intakeStamp') {
         if (value === 'off' || value === 'on') out[key] = value
         else bad(raw, value, 'off or on')

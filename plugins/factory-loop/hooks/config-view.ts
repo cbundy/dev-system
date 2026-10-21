@@ -190,6 +190,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(ms('mainEveryMs')),
         ...render({ label: 'plugin', value: view.pluginVersion }),
         ...render({ label: 'device', value: view.device === '' ? '(none)' : view.device, source: view.deviceFrom }),
+        ...render(row('regime', 'regime', c.regime)),
       ],
     ],
     [

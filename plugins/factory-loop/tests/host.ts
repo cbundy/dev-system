@@ -94,6 +94,8 @@ export type HostOptions = {
   // the workspace config file (config.json)
   config?: Record<string, unknown>
   env?: Record<string, string>
+  // the id $.session.id answers (default SESSION); '' is a session with no id
+  session?: string
   files?: Record<string, string>
   store?: Record<string, unknown>
   // answers a command, at once or later; undefined falls through to a quiet exit 0
@@ -310,7 +312,7 @@ export function host(on: On, opts: HostOptions = {}) {
     return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? checkout(argv) ?? {})
   })
   on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage } }))
-  on('session.id', async () => ({ value: SESSION }))
+  on('session.id', async () => ({ value: opts.session ?? SESSION }))
   on('agent.list', async () => (h.failList ? { deny: 'agent list unavailable' } : { value: agents.map(a => ({ ...a })) }))
   on('agent.spawn', async ($, e) => {
     spawns.push({ subagentType: e.subagentType, name: e.name, model: e.model, prompt: e.prompt, description: e.description })

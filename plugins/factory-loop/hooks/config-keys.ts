@@ -82,6 +82,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   flakeEpic: 'next-pass',
   maxLives: 'next-pass',
   triageModel: 'next-pass',
+  regime: 'next-pass',
   intakeStamp: 'next-pass',
   intakeModel: 'next-pass',
   intakeAreas: 'next-pass',

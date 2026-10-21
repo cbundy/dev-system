@@ -31,7 +31,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
-  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore', 'intakeStamp', 'intakeAreas',
+  'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'regime', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore', 'intakeStamp', 'intakeAreas',
   'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'intakeModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
@@ -103,6 +103,26 @@ describe('configText', () => {
     expect(line(set, 'intakeAreas')).toContain('docs')
     expect(set).toContain('overlap 5')
     for (const key of ['intakeStamp', 'intakeModel', 'intakeAreas']) expect(SETTING_EFFECT[key as 'intakeStamp']).toBe('next-pass')
+  })
+
+  test('regime takes factory_loop_v2 or testbed; manual is refused; set then unset reads the default', () => {
+    expect(DEFAULT_CONFIG.regime).toBe('factory_loop_v2')
+    expect(SETTING_EFFECT.regime).toBe('next-pass')
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'regime')).toContain('factory_loop_v2')
+    expect(line(def, 'regime')).toEndWith(' default')
+    const set = configText(view({}, { regime: 'testbed' }), control(), NOW)
+    expect(line(set, 'regime')).toContain('testbed')
+    expect(line(set, 'regime')).toContain('workspace')
+    const testbed = checkSetting('regime', 'testbed')
+    expect(testbed).toMatchObject({ ok: true, key: 'regime' })
+    for (const v of ['manual', 'yes']) expect(checkSetting('regime', v)).toMatchObject({ ok: false, error: `regime: "${v}" is not factory_loop_v2 or testbed. Not changed.` })
+    expect(loadConfig({ regime: 'manual' })).toMatchObject({ problems: ['regime: "manual" is not factory_loop_v2 or testbed'], config: { regime: 'factory_loop_v2' } })
+    if (!testbed.ok) throw new Error('not ok')
+    const edited = editSetting(null, testbed, 'testbed')
+    if (!edited.ok) throw new Error('not ok')
+    expect(loadConfig(JSON.parse(edited.text)).config.regime).toBe('testbed')
+    expect(loadConfig(withoutSetting(JSON.parse(edited.text), testbed)).config.regime).toBe('factory_loop_v2')
   })
 
   test('intakeStamp takes off or on; set then unset reads off again', () => {

@@ -555,3 +555,17 @@ test("the corpus through the real writer: zero misses, and the events are the co
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the loop's environment (FACTORY_REGIME, CLAUDE_SESSION_ID) puts the regime and the loop's session on the envelope", () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-v2-events-regime-"));
+  try {
+    const env = { ...ENV(d), FACTORY_REGIME: "testbed", CLAUDE_SESSION_ID: "loop-session-1" };
+    const r = spawnSync("sh", [EVENT, "intervention", "--issue", "571", "--note", "who=person cause=rescue reason=patched"], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    const e = JSON.parse(linesOf(newLog(d)).pop());
+    assert.equal(e.regime, "testbed");
+    assert.equal(e.session_id, "loop-session-1");
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
