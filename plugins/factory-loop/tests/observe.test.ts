@@ -482,11 +482,12 @@ describe('parse', () => {
       })
 
       test('newestTag: the newer of the release read and the tag view; waitsOnTag: waiting records with a tag-contains condition', () => {
-        expect(newestTag({})).toBeNull()
+        expect(newestTag({})).toBeUndefined()
         expect(newestTag({ tag: { at: 1, value: 'v1' } })).toBe('v1')
         expect(newestTag({ release: { at: 5, value: { tag: 'v2', oldest: null } }, tag: { at: 1, value: 'v1' } })).toBe('v2')
         expect(newestTag({ release: { at: 1, value: { tag: 'v2', oldest: null } }, tag: { at: 5, value: 'v3' } })).toBe('v3')
         expect(newestTag({ release: { at: 1, value: { tag: null, oldest: null } } })).toBeNull()
+        expect(newestTag({ tag: { at: 1, value: null } })).toBeNull()
         const tag = { kind: 'tag-contains', sha: '35bb655' }
         expect(waitsOnTag([{ state: 'waiting', wait: [{ kind: 'issue-closed' }, tag] }])).toBe(true)
         expect(waitsOnTag([{ state: 'designing', wait: [tag] }, { state: 'waiting', wait: [{ kind: 'pr-merged' }] }, { state: 'waiting', wait: null }])).toBe(false)

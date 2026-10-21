@@ -2336,7 +2336,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   O5 logs one `milestone_state` event whenever the milestone's reading (closed, open, oldest closed
   issue, last tag, expected size, holding) differs from the last one logged, keyed
   `milestone-state/<fingerprint>/<base-36 end of the newest done entry, or 0>`; a reading that comes back is
-  logged again. `holding` and `hold_reason` come from the newest release task when it answered `hold` on
+  logged again. O5 waits until a tag read is held; `last_tag` is null only when the reads show no release. `holding` and `hold_reason` come from the newest release task when it answered `hold` on
   the newest tag.
 
   A merged issue that comes back open would hold Next forever (a closed record is absorbing and no

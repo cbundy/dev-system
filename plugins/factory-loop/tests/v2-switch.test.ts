@@ -202,6 +202,14 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(tasks({ ...after, now: NOW + 60 * MIN }).map(x => x.key)).toEqual(['task:release:v1.0.0:2026-10-13T04'])
   })
 
+  test('O3 (v2) with the newest tag known to be the release read\'s tag, the review carries oldest', () => {
+    const cfg = config()
+    const s: State = { ...state({ milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: NOW - 2 * MIN } }), v2: { ...emptyV2State(NOW), tag: 'v1.0.0' } }
+    const t = planV2(s, cfg).actions.filter(x => x.kind === 'task')
+    expect(t).toHaveLength(1)
+    expect(t[0]).toMatchObject({ fields: { oldest: new Date(NOW - 2 * MIN).toISOString() } })
+  })
+
   test('O3 (v2) with records waiting on a release tag: the review is due while the milestone has open items, its fields list the issues, once per UTC hour', () => {
     const cfg = config()
     const waitingOn = (issue: number, kind: 'tag-contains' | 'issue-closed') =>
@@ -291,7 +299,7 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const cfg = config({ windDownMinutes: 0 })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
-    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' }, v2: { ...emptyV2State(NOW), tag: null } }
     const both = planV2(release, cfg)
     // the release log (O4, O5) writes beside the review: it holds nothing back
     expect(both.actions.filter(a => a.rule !== 'O4' && a.rule !== 'O5').map(a => a.kind)).toEqual(['task', 'title'])
