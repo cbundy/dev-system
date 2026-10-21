@@ -169,6 +169,16 @@ describe('I1: settling a run that never ended', () => {
     }
   })
 
+  test('a run whose try a newer body version replaced is stopped at the timeout too, so it cannot hold the cap for good', () => {
+    const old = (n: number, over: Partial<LedgerEntry> = {}) => entry(intakeKey(n, vOf(1)), 'intake-stamp', { issue: n, status: 'running', endedAt: null, startedAt: NOW - STAMP_TIMEOUT_MS - 1, agentId: 'a', class: 'develop', ...over })
+    const newer = { stampTries: tries({ 1: { version: vOf(2), outcome: 'running' } }) }
+    const r = planOf({ issues: [], queue: [], v2: newer, ledger: [old(1), old(2), entry(intakeKey(1, vOf(2)), 'intake-stamp', { issue: 1, status: 'running', endedAt: null, startedAt: NOW - MIN, agentId: 'b', class: 'develop' })] })
+    expect(settles(r.result).map(s => [s[0], s[1], s[2]])).toEqual([[1, vOf(1), 'timeout'], [2, vOf(1), 'timeout']])
+    // a younger replaced run is left alone
+    const young = planOf({ issues: [], queue: [], v2: newer, ledger: [old(1, { startedAt: NOW - MIN }), entry(intakeKey(1, vOf(2)), 'intake-stamp', { issue: 1, status: 'running', endedAt: null, startedAt: NOW - MIN, agentId: 'b', class: 'develop' })] })
+    expect(settles(young.result)).toEqual([])
+  })
+
   test('a settled try (failed) plans no second settle and no new run for that version', () => {
     const r = planOf({ issues: [ready(3)], queue: [3], v2: { stampTries: tries({ 3: { version: vOf(3), outcome: 'failed' } }) }, ledger: [runEntry({ status: 'lost', endedAt: NOW - MIN })] })
     expect(intakeActions(r.result)).toEqual([])
@@ -691,7 +701,7 @@ describe('stamps:<repo>: tries and owned groups', () => {
     expect(live.stampTries['6']?.outcome).toBe('running')
     expect(live.stamps['5']).toEqual(GOOD)
     // null is no change
-    expect(await v2.updateStamps?.(() => null)).toEqual({ changed: false, saved: false })
+    expect(await v2.updateStamps?.(() => null)).toEqual({ changed: false, saved: true })
     // a write the store refuses changes nothing in memory
     fail = true
     expect(await v2.updateStamps?.(raw => withTry(raw, 7, { version: V2, outcome: 'running', at: NOW }))).toEqual({ changed: false, saved: false })

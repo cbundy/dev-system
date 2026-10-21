@@ -308,7 +308,9 @@ export function v2IoOf(live: V2Live, io: V2StoreIo, deps: V2IoDeps): V2Io {
         await io.set(stampsKey(repo), next)
         stored.value = next
       })
-      if (!saved || stored.value === null) return UNCHANGED
+      if (!saved) return UNCHANGED
+      // fn chose no change: nothing to store, and nothing refused
+      if (stored.value === null) return { changed: false, saved: true }
       const kept = stampStoreFromStore(stored.value)
       live.stamps = kept.stamps
       live.stampTries = kept.tries

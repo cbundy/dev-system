@@ -49,12 +49,14 @@ export function intakeRules(ctx: V2Ctx): void {
   if (state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil) return
   const tries = ctx.v2.stampTries ?? {}
   const byKey = new Map(state.ledger.map(e => [e.key, e]))
+  const settled = new Set<string>()
   // a running try whose run is over
   for (const [issue, t] of Object.entries(tries)) {
     if (t.outcome !== 'running') continue
     const n = Number(issue)
     const why = settleWhy(byKey.get(intakeKey(n, t.version)), state.now)
     if (why === null) continue
+    settled.add(intakeKey(n, t.version))
     want(ctx, {
       kind: 'intake-stamp',
       op: 'settle',
@@ -65,6 +67,24 @@ export function intakeRules(ctx: V2Ctx): void {
       issue: n,
       version: t.version,
       why,
+    })
+  }
+  // a running run whose try a newer body version replaced: it still counts toward the cap, so it is stopped
+  // at the timeout too (the settle leaves the newer try alone)
+  for (const e of state.ledger) {
+    const run = e.kind === 'intake-stamp' && e.status === 'running' ? intakeRunOf(e.key) : null
+    if (run === null || settled.has(e.key) || tries[String(run.issue)]?.version === run.version) continue
+    if (settleWhy(e, state.now) !== 'timeout') continue
+    want(ctx, {
+      kind: 'intake-stamp',
+      op: 'settle',
+      key: intakeSettleKey(run.issue, run.version),
+      class: 'free',
+      rule: 'I1',
+      reason: `the stamp of ${run.version}, replaced by a newer body version, did not end: timeout`,
+      issue: run.issue,
+      version: run.version,
+      why: 'timeout',
     })
   }
   const issues = new Map(state.issues.map(i => [i.number, i]))
