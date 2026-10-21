@@ -4,6 +4,7 @@
 // the work as done. The loop's own `loop` events (D-09) carry its ledger entries, so a lost store
 // is rebuilt from them.
 import { ACTION_KINDS } from './config'
+import { iso } from './v2/event-native'
 import type { Factory, FactoryIssue } from './parse'
 import type { ActionClass, Bump, LedgerEntry, LedgerStatus, Outcome, Rollout, RunState, RunView } from './types'
 
@@ -344,8 +345,8 @@ export function loopEntryArgv(entry: LedgerEntry): string[] | null {
     attempts: entry.attempts,
     class: entry.class,
     rule: str(entry.rule),
-    started_at: new Date(entry.startedAt).toISOString(),
-    ended_at: entry.endedAt === null ? null : new Date(entry.endedAt).toISOString(),
+    started_at: iso(entry.startedAt),
+    ended_at: entry.endedAt === null ? null : iso(entry.endedAt),
     agent_id: str(entry.agentId),
     wake: str(entry.wake),
     ...entry.loopData,
