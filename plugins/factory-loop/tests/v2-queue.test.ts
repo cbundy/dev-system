@@ -286,6 +286,24 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     expect(transitionOf(plan(withLedger(merged, [lost])), 11)).toMatchObject({ row: 'T13', next: { why: 'merged' } })
   })
 
+  test('a merge expired off the pass (timed-out) may have merged: a PR reading merged at its head is the queue\'s ok, not a hand merge; an open PR is unknown and no merge starts again', () => {
+    const r = rec(18)
+    const expired = { ...tried(r, 'merge'), status: 'timed-out' as const, outcome: undefined }
+    const merged = plan(withLedger(world([r], [view(r, { state: 'merged', mergedHead: HEAD })]), [expired]))
+    expect(transitionOf(merged, 18)).toMatchObject({ row: 'T13', event: 'ok', next: { why: 'merged' } })
+    const open = plan(withLedger(world([r]), [expired]))
+    expect(queueActions(open)).toEqual([])
+    expect(transitionOf(open, 18)).toMatchObject({ row: 'U2', event: 'unknown' })
+  })
+
+  test('a lost merge (a reload while it ran off the pass) is never started again; an open PR is unknown', () => {
+    const r = rec(19)
+    const lost = { ...tried(r, 'merge'), status: 'lost' as const, outcome: undefined }
+    const open = plan(withLedger(world([r]), [lost]))
+    expect(queueActions(open)).toEqual([])
+    expect(transitionOf(open, 19)).toMatchObject({ row: 'U2', event: 'unknown' })
+  })
+
   test('the guard\'s FAIL classes, one outcome each: policy parks with its lines, patch goes back to review, conflict to a fixer, read is unknown', () => {
     const r = rec(12)
     const run = (cls: GuardClass, lines: string[]) => transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', refusal(lines, cls))])), 12)

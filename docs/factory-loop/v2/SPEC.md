@@ -503,7 +503,7 @@ the next pass (2.4). An issue closed with its PR then closes (E2) and never park
 | `cleared` | the loop | every condition of a waiting record holds, as the `waits` source read them (2.4), none of them failed or skipped |
 | `unpark` | owner | a `/factory resume N` entry newer than the park, or a direct read after the park label write that lacks `factory:parked` (3.4); for a waiting record only the `/factory resume N` entry |
 | `issue-closed` | GitHub | the issue closed, and no loop merge or `close-issue` of this life is done, running or lost |
-| `pr-merged` | GitHub | the record's PR merged at a head that no `queue-merge` entry of this life names (done, running or lost). A merge the loop made is the queue step's `ok` instead |
+| `pr-merged` | GitHub | the record's PR merged at a head that no `queue-merge` entry of this life names (done, running, lost or timed-out). A merge the loop made is the queue step's `ok` instead |
 | `pr-closed` | GitHub | the record's PR is closed unmerged, and its `closedAt` is newer than the record's `prClosedAt` (an edge on GitHub's own timestamp) |
 | `claim-lost` | claims | another device holds a live claim on the issue, or a re-claim exits 3 |
 | `timeout` | the clock | a running step passed its timeout (read as `unknown`), or a waiting state passed its tell period (E6) (4.4) |
@@ -2455,13 +2455,15 @@ every passEveryMs (60 s), or at once when pinged:
 - **Pings.** An agent of the loop finished (`turn.complete` with its `agentId`), the model
   answered a wake (the answer tool or the main loop's `turn.complete`), or an owner control
   arrived (`/factory` or the control tool).
-- **Off the pass.** `heartbeat` and `sweep` run off the pass (`OFF_PASS` in `hooks/act-off.ts`, the
+- **Off the pass.** `heartbeat`, `sweep` and `queue-merge` run off the pass (`OFF_PASS` in `hooks/act-off.ts`, the
   one list a later kind joins): the pass does everything it does for any action up to the saved
   `running` entry (kill switch, act lock, GitHub rate-limit hold, start, pre-check, save), starts the
   command without awaiting it and moves on, so a 40 s sweep no longer makes a 40 s pass. The
   command ends in the hook queue (below), never inside a pass. Planning does not plan its key
   again while the entry runs (the gate returns `running`), so no second sweep or heartbeat starts;
-  a sweep and a heartbeat may run together.
+  a sweep and a heartbeat may run together. A merge never starts twice: a running one is
+  `running` to the gate and to the queue step, and one lost to a reload has used its one attempt, so its
+  outcome is read from the PR (9.3). A restart waits for a running merge (R2).
 - **Between passes.** Hooks feed the ledger as things happen: an agent's answer, a wake's turn
   starting and ending, the answer tool, `/factory retry`, and the end of an off-pass command (13.6.1). They work only in act mode with no
   kill switch, one at a time and in the order their events came, on the same in-memory ledger
@@ -2886,7 +2888,7 @@ only reach the configured repo. The foundation's kinds are these; v2's twelve (`
 An action is awaited in the pass that runs it, with two exceptions. The `title` rename runs off the
 pass through the one title flight (`hooks/title-flight.ts`, 13.9.1): the action starts it and
 reports `running` with `off: true`. And the kinds in `OFF_PASS`
-(`hooks/act-off.ts`: `heartbeat`, `sweep`) are started in the pass, after their running entry is
+(`hooks/act-off.ts`: `heartbeat`, `sweep`, `queue-merge`) are started in the pass, after their running entry is
 saved, and not awaited. The pass reports them with status `running`. Their command runs on an
 untraced `ActIo` and ends in the hook queue, which applies the same `finish` the inline run
 applies (done or failed by exit code, the same summary, `noRetry` and `rateLimited`), only while
@@ -2896,8 +2898,12 @@ then changes nothing in memory and writes nothing); appends one decision-log lin
 (`offPass`: key, kind, status, `ms`, summary, `dropped` when it changed nothing); and pings a
 pass. A rate-limited completion makes the next acting pass set the GitHub backoff as an inline
 one does (13.10 item 2). The engine ends a command at its timeout and exposes no kill handle, so
-each acting pass marks `timed-out` any running off-pass entry older than its kind's timeout plus
-`OFF_PASS_MARGIN_MS` (60 s: the engine's exit and the hook queue), with the summary
+each acting pass marks `timed-out` any running off-pass entry older than its kind's bound plus
+`OFF_PASS_MARGIN_MS` (60 s: the engine's exit and the hook queue); the bound is the CLI timeout for
+`heartbeat` and `sweep`, and for `queue-merge` the executor's longest path, the merge command and the
+PR read-back (`MERGE_BOUND_MS`, 11 min). A timed-out merge may have merged: the queue step counts it
+as one that may have (`mayHaveMerged`), so a PR reading merged at its head is the step's `ok`, never
+the `pr-merged` hand merge, and one that did not merge reads unknown; it is never started again, with the summary
 `timed out: no completion within <n> s`; a completion that arrives after that is dropped. A
 reload marks the running entry `lost` (13.7.5).
 
@@ -3179,7 +3185,7 @@ The store survives a restart: `CLAUDE_CONFIG_DIR` is on `/persist`, which `dev-r
 keeps (FINDINGS check 5). On load:
 
 1. Every `running` CLI entry (no agent id, not a wake) becomes `lost`: its process died with
-   the old session or module. That includes a `sweep` or `heartbeat` running off the pass (13.6.1):
+   the old session or module. That includes a `sweep`, `heartbeat` or `queue-merge` running off the pass (13.6.1):
    its completion, if the old process still delivers one, finds the store another load's and
    changes nothing.
 2. A `running` wake that nobody can answer any more is `lost` at once, with its attempt given
@@ -3753,7 +3759,7 @@ Twenty-five rules, by id.
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
-| R2 | restart | `updateDue` is set, the pass admitted no other action, and (only with `windDownMinutes` 0) no `queue-update`, `queue-merge` or release task runs | `restart-self`, last in the pass; with wind-down on it writes the `restart-self` request first and the wind-down finishes queue and release work up to the cap; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
+| R2 | restart | `updateDue` is set, the pass admitted no other action, and no `queue-merge` runs (whatever `windDownMinutes`), and (only with `windDownMinutes` 0) no `queue-update` or release task runs | `restart-self`, last in the pass; with wind-down on it writes the `restart-self` request first and the wind-down finishes queue and release work up to the cap; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
 | S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then by score, highest first (the claim score, `hooks/v2/score.ts`: the factors `priority-label`, `bug`, `unblocks`, `closes-epic`, `nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, weighted by `queueScore`; and, only while `intakeStamp` is `on` and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`, which are null, never a penalty, when the stamp or the facts they read are missing), ties to the oldest claimable time, then the lowest number; the reason names the order, `owner only`, `owner priority` or `score <n>: <factor> <points>, ...`, and every S1 claim carries its `score` and `factors`, which the claim tool records on the `claimed` event; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0. The pass also gets a starved verdict (`PlanResult.starved`): true when the queue is not empty, no record is queued or in a slot state, no first claim is in flight, `noNewWork` is off, `only` is empty, the tier is not `stop-new` or `stop-all`, and every queue issue was skipped by a claim filter; null when the queue or github source failed. While it is true and the spell (the store's `starved:<repo>`, set on the first starved pass, kept through unknown passes, removed on the first pass that is not starved) is `starvedNoticeAfterMs` old, `tell(starved)` (an owner item, key `tell:starved:<since>:<k>`) names each root blocker found in the `blockers` tree and why it is not moving; it waits, with the skip `starved since <time>: blockers not read yet`, until that period's tree is read; S1 also records the queue view (`hooks/v2/queue-view.ts`): each candidate of the order with its rank, score, factors and a why-code (`blocked`, `skipped`, `paused`, `outside_only`, `no_slot`, `new_off`, `usage_tier`, `rejected`, `tracker`, `held`, `exhausted`, `untrusted`, `unknown`), finalised in `planV2` after admission (a claim admission or wind-down drops is `no_slot`), which the `queue_snapshot` event carries (7.1) |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
@@ -4362,7 +4368,7 @@ still accepts them in a settings file, and they have no effect.
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
-| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>` | 1 per key |
+| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>`, off the pass | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
 | `released` | free | `callum-flow-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
