@@ -636,13 +636,22 @@ test("the lock is free once its holder is SIGKILLed, though a job it started sti
   }
 });
 
-// Peak concurrency of `n` sleeping suites in a fakeRepo run with the given env.
-async function peakSuites(repo, n, env, setup) {
+// Peak concurrency of `n` suites in a fakeRepo run with the given env. Each suite logs "+", waits at a
+// barrier until the log holds `target` "+" lines (the concurrency the case expects), then logs "-". With
+// the pool allowing `target` workers the suites meet however slow the machine is, so the peak is exactly
+// `target`; no sleep decides the overlap. The 30 s deadline is a hang guard for a broken pool that runs
+// fewer than `target` jobs (the assertion then fails with the peak instead of waiting out spawnSync's
+// 120 s timeout). It is never part of a passing run and sits well above the seconds a loaded machine
+// takes to start `target` shell jobs.
+async function peakSuites(repo, n, target, env, setup) {
   const log = path.join(repo.root, "conc");
   for (let i = 0; i < n; i++) {
     fs.writeFileSync(
       path.join(repo.root, "features", "test", "callum-tools", `s${i}.test.sh`),
-      `echo + >> ${log}\nsleep 0.5\necho - >> ${log}\n`,
+      `echo + >> ${log}\n` +
+        `deadline=$(( $(date +%s) + 30 ))\n` +
+        `while [ "$(grep -c '^+$' ${log})" -lt ${target} ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.05; done\n` +
+        `echo - >> ${log}\n`,
     );
   }
   if (setup) setup();
@@ -672,30 +681,34 @@ test("with another live run registered, the pool gets its share of the CPUs; dea
     // Alone: the whole CPU count (node itself adds no suite jobs here, only the shell suites count).
     let repo = fakeRepo({});
     try {
-      const alone = await peakSuites(repo, n, {});
-      assert.ok(alone <= cpus);
+      const alone = await peakSuites(repo, n, cpus, {});
+      assert.ok(alone <= cpus, `alone: peak ${alone} exceeds the bound ${cpus}`);
+      assert.ok(alone >= cpus, `alone: peak ${alone} never reached the bound ${cpus}`);
     } finally {
       repo.cleanup();
     }
     repo = fakeRepo({});
     try {
-      const shared = await peakSuites(repo, n, {}, () => register(repo, sleeper.pid));
-      assert.ok(shared <= Math.max(1, Math.floor(cpus / 2)), `peak ${shared}`);
+      const share = Math.max(1, Math.floor(cpus / 2));
+      const shared = await peakSuites(repo, n, share, {}, () => register(repo, sleeper.pid));
+      assert.ok(shared <= share, `shared: peak ${shared} exceeds the bound ${share}`);
+      assert.ok(shared >= share, `shared: peak ${shared} never reached the bound ${share}`);
     } finally {
       repo.cleanup();
     }
     repo = fakeRepo({});
     try {
-      const ignoreDead = await peakSuites(repo, n, {}, () => register(repo, dead));
-      assert.ok(ignoreDead <= cpus);
+      const ignoreDead = await peakSuites(repo, n, cpus, {}, () => register(repo, dead));
+      assert.ok(ignoreDead <= cpus, `dead entry: peak ${ignoreDead} exceeds the bound ${cpus}`);
+      assert.ok(ignoreDead >= cpus, `dead entry: peak ${ignoreDead} never reached the bound ${cpus}`);
       assert.ok(!fs.existsSync(path.join(repo.env.TEST_LOCK_DIR, dead)), "a dead run's entry is removed");
     } finally {
       repo.cleanup();
     }
     repo = fakeRepo({});
     try {
-      const explicit = await peakSuites(repo, 4, { TEST_JOBS: "3" }, () => register(repo, sleeper.pid));
-      assert.strictEqual(explicit, 3);
+      const explicit = await peakSuites(repo, 4, 3, { TEST_JOBS: "3" }, () => register(repo, sleeper.pid));
+      assert.strictEqual(explicit, 3, `explicit TEST_JOBS=3: peak ${explicit}, bound 3`);
     } finally {
       repo.cleanup();
     }
