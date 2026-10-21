@@ -37,6 +37,8 @@ set -u
 . /usr/local/share/dev-system/persist.sh
 # shellcheck source=gh.sh
 . /usr/local/share/dev-system/gh.sh
+# shellcheck source=claude-auth.sh
+. /usr/local/share/dev-system/claude-auth.sh
 
 log() {
   echo "dev-init: $*" >&2
@@ -819,6 +821,7 @@ adopt_claude_login
 seed_codex_config
 configure_codex_otel
 seed_no_mistakes_model
+setup_claude_api_key
 setup_gh_token
 setup_git_credentials
 sync_repo

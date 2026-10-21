@@ -25,6 +25,9 @@
 # - waits for a claude.ai login (Remote Control does not work with an API key
 #   or a CLAUDE_CODE_OAUTH_TOKEN), polling `claude auth status` and logging a
 #   hint at start and then every few minutes;
+# - with DEV_CLAUDE_AUTH=api-key (claude-auth.sh) waits for the key file instead
+#   and starts interactive Claude headless on that key, without Remote Control
+#   (server mode falls back to this too, and no sessions are restored);
 # - marks the workspace as trusted and Remote Control as accepted, since
 #   nobody is at the terminal to answer the folder trust dialog (shown before
 #   anything else) or the one-time "Enable Remote Control?" prompt;
@@ -93,6 +96,8 @@ set -u
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/exec-hint.sh"
 # shellcheck source=claude-config.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/claude-config.sh"
+# shellcheck source=claude-auth.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/claude-auth.sh"
 
 SESSION=claude
 LOCK=/tmp/dev-remote-control.lock
@@ -185,6 +190,7 @@ login_state() {
 
 # Is claude one of the tools dev-login logs in (DEV_LOGIN_TOOLS)?
 dev_login_claude() {
+  ! claude_api_key_mode || return 1
   case " ${DEV_LOGIN_TOOLS-claude,codex,gh} " in
     *[\ ,]claude[\ ,]*) return 0 ;;
   esac
@@ -236,10 +242,26 @@ wait_for_login() {
   [ -z "$last" ] || log "Claude login found"
 }
 
+# API-key mode: waits until the key file is readable and non-blank, logging the
+# hint once and then every REMIND_EVERY polls. Starts nothing meanwhile.
+wait_for_api_key() {
+  local polls=0 f="${DEV_CLAUDE_API_KEY_FILE:-}" waited=0
+  until claude_api_key_ready; do
+    if [ $((polls % REMIND_EVERY)) -eq 0 ]; then
+      log "Claude API-key mode: ${f:-DEV_CLAUDE_API_KEY_FILE (unset)} is missing, empty or unreadable - provision it on the Docker host (<workspace_secrets_dir>/<owner>/<workspace>/anthropic-api-key); Claude starts as soon as it is readable"
+    fi
+    waited=1
+    polls=$((polls + 1))
+    pause "$POLL"
+  done
+  [ "$waited" = 0 ] || log "Claude API key file found"
+}
+
 # Records the live Remote Control sessions, so a restart can bring back the
 # ones that end gracefully too (dev-remote-sessions, cbundy/dev-system#533).
 # Never fatal and never slow.
 snapshot_sessions() {
+  ! claude_api_key_mode || return 0
   command -v dev-remote-sessions >/dev/null 2>&1 || return 0
   timeout 20 dev-remote-sessions snapshot 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2
   return 0
@@ -248,6 +270,7 @@ snapshot_sessions() {
 # Starts the sessions that were live when the container last stopped, once per
 # container start, in the background so the supervisor never waits on it.
 restore_sessions() {
+  ! claude_api_key_mode || return 0
   command -v dev-remote-sessions >/dev/null 2>&1 || return 0
   (timeout 300 dev-remote-sessions restore 2>&1 | sed 's/^/dev-remote-control: /' >&2) 9>&- &
   return 0
@@ -277,6 +300,7 @@ on_signal() {
 
 supervise() {
   local ws name spawn started ran status session backoff=$BACKOFF_MIN last_snapshot
+  local emode=$MODE headless=0
   local status_file=/tmp/dev-remote-control.status
   local -a args
   trap on_signal TERM INT HUP
@@ -285,9 +309,19 @@ supervise() {
   # is replaced, so exactly one Claude runs.
   tmux kill-session -t "=$SESSION" 2>/dev/null || true
 
+  # API-key mode: Claude runs headless on the key, always as the one
+  # interactive session (server mode needs Remote Control).
+  if claude_api_key_mode; then
+    headless=1
+    if [ "$MODE" = server ]; then
+      emode=session
+      log "Claude API-key mode: server mode needs Remote Control, so starting the headless interactive session instead"
+    fi
+  fi
+
   # Which Remote Control sessions to bring back is decided now, before the
   # worktree prune below, which must not remove their working directories.
-  if command -v dev-remote-sessions >/dev/null 2>&1; then
+  if [ "$headless" = 0 ] && command -v dev-remote-sessions >/dev/null 2>&1; then
     timeout 60 dev-remote-sessions plan 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2
   fi
 
@@ -297,17 +331,21 @@ supervise() {
 
   while :; do
     ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
-    wait_for_login "$(session_name "$ws")"
+    if [ "$headless" = 1 ]; then
+      wait_for_api_key
+    else
+      wait_for_login "$(session_name "$ws")"
+    fi
     # Again: a workspace cloned while waiting (dev-login clones it once gh is
     # logged in) is used straight away; one cloned later, from the next start.
     ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
-    if [ "$MODE" = server ] && [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
+    if [ "$emode" = server ] && [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
       prepare_claude_config "$ws" 1
     else
       prepare_claude_config "$ws"
     fi
     name=$(session_name "$ws")
-    if [ "$MODE" = server ]; then
+    if [ "$emode" = server ]; then
       # An explicit --spawn worktree outside a git repo is an error, which
       # would only restart in a loop until a repo is cloned there.
       spawn=worktree
@@ -321,7 +359,8 @@ supervise() {
         args+=(--permission-mode bypassPermissions)
       fi
     else
-      args=(--remote-control "$name")
+      args=()
+      [ "$headless" = 1 ] || args=(--remote-control "$name")
       if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
         # The flag-level setting skips the one-time bypass consent dialog
         # without changing the persisted settings.
@@ -361,14 +400,18 @@ supervise() {
     if tmux new-session -d -s "$SESSION" -c "$ws" \
       bash -c 'f=$1; shift; . /usr/local/share/dev-system/telemetry.sh; claude "$@"; echo $? > "$f"' \
       bash "$status_file" "${args[@]}" 9>&-; then
-      log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
+      if [ "$headless" = 1 ]; then
+        log "started Claude headless on the API key (no Remote Control) in $ws - attach: $(exec_hint "tmux attach -t $SESSION")"
+      else
+        log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
+      fi
       restore_sessions
       # The first snapshot comes soon, so the new conversation is known as the
       # supervisor's even if the container is killed within the minute.
       last_snapshot=$(($(date +%s) - 50))
       while tmux has-session -t "=$SESSION" 2>/dev/null; do
         pause 2
-        if [ $(($(date +%s) - last_snapshot)) -ge 60 ]; then
+        if [ "$headless" = 0 ] && [ $(($(date +%s) - last_snapshot)) -ge 60 ]; then
           snapshot_sessions
           last_snapshot=$(date +%s)
         fi
@@ -412,7 +455,7 @@ case "$MODE" in
 esac
 
 # The conversation settings only apply to the one interactive session.
-if [ "$MODE" = server ]; then
+if [ "$MODE" = server ] && ! claude_api_key_mode; then
   for var in DEV_REMOTE_CONTROL_RESUME DEV_REMOTE_CONTROL_PROMPT DEV_REMOTE_CONTROL_RESUME_PROMPT DEV_REMOTE_CONTROL_NAME_FORMAT; do
     [ -z "${!var:-}" ] || log "$var is ignored in server mode (session mode only)"
   done

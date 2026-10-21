@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# dev-claude-api-key: Claude's apiKeyHelper in API-key mode
+# (cbundy/dev-system#1113). Prints the first non-blank line of the file given as
+# its argument (trimmed) on stdout, so the key lives only in that file and in
+# Claude's memory. A missing, empty or unreadable file prints one line naming the
+# path (never a key) on stderr and exits 1.
+#
+# Usage: dev-claude-api-key <key-file>
+set -u
+
+f="${1:-}"
+if [ -z "$f" ]; then
+  echo "dev-claude-api-key: usage: dev-claude-api-key <key-file>" >&2
+  exit 2
+fi
+key=""
+if [ -r "$f" ] && [ -f "$f" ]; then
+  key=$(awk 'NF { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$f" 2>/dev/null)
+fi
+if [ -z "$key" ]; then
+  echo "dev-claude-api-key: $f is missing, empty or unreadable" >&2
+  exit 1
+fi
+printf '%s\n' "$key"

@@ -74,6 +74,8 @@ LINK_WAIT=30        # seconds `start` waits for a new attempt's link
 
 # shellcheck source=gh.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/gh.sh"
+# shellcheck source=claude-auth.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/claude-auth.sh"
 # shellcheck source=exec-hint.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/exec-hint.sh"
 
@@ -98,6 +100,8 @@ wanted_tools() {
     esac
   done
   for t in $ALL_TOOLS; do
+    # API-key mode: Claude uses its key file, so there is no claude.ai login to run.
+    [ "$t" = claude ] && claude_api_key_mode && continue
     case "$list" in *" $t "*) echo "$t" ;; esac
   done
 }

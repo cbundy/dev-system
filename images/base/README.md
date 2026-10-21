@@ -199,6 +199,31 @@ holds the shared login, and logging out (`claude auth logout`) in one logs out e
   "target": "/persist/claude-auth" }`; every repo with both shares one login per Docker host.
 - **docker run, compose**: the same variable, plus `-v dev-system-claude-auth:/persist/claude-auth`.
 
+#### Claude API-key mode
+
+A workspace can run Claude on its own Anthropic API key instead of a claude.ai login. The
+runtime sets two variables, never the key:
+
+| Variable | Meaning |
+|---|---|
+| `DEV_CLAUDE_AUTH` | `api-key` turns the mode on. Unset keeps the claude.ai login. |
+| `DEV_CLAUDE_API_KEY_FILE` | The file holding the key (first non-blank line), e.g. `/run/secrets/dev-system-workspace/anthropic-api-key`. |
+
+`dev-init` sets `apiKeyHelper` in `$CLAUDE_CONFIG_DIR/settings.json` (Claude's user
+settings, which every Claude in the workspace reads, sub-agents and `claude -p` included)
+to `/usr/local/bin/dev-claude-api-key <file>`, keeping every other setting. That helper
+prints the file's first non-blank line, so the key lives only in the file and in Claude's
+memory: never an environment variable, an argument, a Terraform value or a log line.
+Leaving the mode removes `apiKeyHelper` again, but only when it is that helper; a helper
+you set yourself stays. `dev-login` does not run a claude.ai login in this mode (codex and
+gh are unchanged), and `dev-doctor` prints the auth mode, fails when the file is missing,
+empty or unreadable or `settings.json` lacks the helper, and notes that Remote Control is
+off by design.
+
+Remote Control rejects API keys, so there is none: Claude runs headless in the tmux
+session `claude`. Reach it with `coder ssh <workspace>`, then `tmux attach -t claude`
+(`docker exec -it <container> tmux attach -t claude` on a plain Docker host).
+
 ### How runtimes should mount it
 
 - **Docker (desktop)**: one named volume per directory. `dev-system-gh` is shared by every
@@ -971,8 +996,19 @@ well under a second instead of hitting the 10s kill timeout.
    `Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it <container> dev-login <code>`
    (see [First-run logins](#first-run-logins) for runtime-specific command hints; when `DEV_LOGIN_PAGE_URL` is set the line names that URL) once, then every 10 checks (5 minutes),
    checking every 30s. It starts Claude as soon as the login appears; no restart needed.
-   An API key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote
-   Control rejects both, and `dev-login` leaves it alone.
+   A login by an API key in the environment or `CLAUDE_CODE_OAUTH_TOKEN` gets its own
+   message, since Remote Control rejects both, and `dev-login` leaves it alone. The
+   supervised API-key mode below is the exception: there the supervisor starts Claude
+   without Remote Control.
+   **API-key mode** (`DEV_CLAUDE_AUTH=api-key`, see
+   [Claude API-key mode](#claude-api-key-mode)): it waits for the key file instead
+   (`Claude API-key mode: <file> is missing, empty or unreadable - provision it on the Docker host (...); Claude starts as soon as it is readable`,
+   once, then every 10 checks), then starts interactive Claude headless in the tmux
+   session `claude` without `--remote-control`, and logs
+   `started Claude headless on the API key (no Remote Control) in <dir> - attach: ...`.
+   Session-mode resume, the fresh marker, the first prompt and skip-permissions behave as
+   usual, `server` mode falls back to this same session, and no Remote Control sessions
+   are snapshotted or restored.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`),
    Remote Control as accepted (`remoteDialogSeen`), the one-time "Try the new fullscreen
@@ -1033,6 +1069,8 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | `DEV_REMOTE_CONTROL_RESTORE_HOURS` | `24` | After a container restart, the other Remote Control sessions that were live at the restart and last seen live within this many hours are resumed, however long they sat idle. `0` turns it off. See [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart). |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
+| `DEV_CLAUDE_AUTH` | unset | `api-key` runs Claude on the key in `DEV_CLAUDE_API_KEY_FILE` through `apiKeyHelper`, headless in tmux, with no Remote Control. See [Claude API-key mode](#claude-api-key-mode). |
+| `DEV_CLAUDE_API_KEY_FILE` | unset | The file holding the Anthropic API key in API-key mode. Only the path is ever set, never the key. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` with `DEV_REPO_URL` set, else the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run (see [Workspace and repo](#workspace-and-repo)). Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
 
 `server` mode ignores the four conversation settings (`_NAME_FORMAT`, `_RESUME`,
