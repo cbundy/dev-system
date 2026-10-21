@@ -46,7 +46,7 @@ export async function configDir($: EngineInterface) {
 // runtime: the settings one pass runs with (v2 SPEC 13.4.1): plugin options, then the workspace
 // file ${CLAUDE_CONFIG_DIR}/factory-loop/config.json, then the repo's .claude/factory-loop.json.
 // env is every command's base environment: the repo, the configured labels (callum-flow-claim
-// and callum-flow-sweep read them), binDir ahead of PATH when the workspace file names one (a
+// and callum-flow-sweep read them), the regime and the loop's session id (callum-flow-event stamps them on every event), binDir ahead of PATH when the workspace file names one (a
 // testbed runs the branch's own CLIs), and the event sink when the mode is not act.
 export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const dir = await configDir($)
@@ -73,13 +73,16 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
+  const session = await $.session.id()
   const env: Record<string, string> = {
     CALLUM_FLOW_REPO: repo,
+    FACTORY_REGIME: config.regime,
     CALLUM_FLOW_READY_LABEL: config.readyLabel,
     CALLUM_FLOW_IN_DEV_LABEL: config.inDevLabel,
   }
   const binDir = str(file.binDir)
   if (binDir !== '') env.PATH = `${binDir}:${(await $.env.get('PATH')) || '/usr/local/bin:/usr/bin:/bin'}`
+  if (session !== '') env.CLAUDE_SESSION_ID = session
   if (sink !== null) env.CALLUM_EVENTS_DIR = sink
   return {
     mode,
@@ -91,7 +94,7 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     loopDir,
     configDir: dir,
     sessionCwd: S.cwd,
-    workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },
+    workspace: { session, process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,

@@ -2656,13 +2656,15 @@ as they do today.
 
 Every command the loop runs gets `CALLUM_FLOW_REPO`, `CALLUM_FLOW_READY_LABEL` and
 `CALLUM_FLOW_IN_DEV_LABEL` from the settings (`callum-flow-claim` and `callum-flow-sweep` read
-the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
+the labels), `FACTORY_REGIME` (the `regime` setting) and, when the session id is not empty, `CLAUDE_SESSION_ID` (the loop's
+session; `callum-flow-event` stamps both on every event), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 
 #### 13.4.2 Settings and defaults
 
 | Key | Default | Meaning |
 |---|---|---|
 | `readyLabel`, `inDevLabel` | `ready`, `in development` | the queue and claim labels (I-03). Labels are lower case for now, and every label comparison ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
+| `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
 | `skipLabels` | `[]` | labels that keep an issue out of rule `S1` (I-92) |
 | `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
@@ -3409,7 +3411,7 @@ session the role check refuses sends no rail notice and no pass-error.
 
 In observe mode no executor runs. The adapters still run read-only CLIs, and some of them log
 events as a side effect (`usage-check.sh`, `callum-flow-issue-read`'s `untrusted_stripped`); the queue is read with the plain reader, which
-logs no `ready` events. Every command a pass that does not act runs (observe mode, or act mode
+logs no `ready` events. Every command the loop runs, in any mode, gets `FACTORY_REGIME` and `CLAUDE_SESSION_ID` (13.4.1), so the events it logs carry the regime and the loop's session. Every command a pass that does not act runs (observe mode, or act mode
 held back by a rail) gets `CALLUM_EVENTS_DIR=<loop dir>/sink-events`, so those lines land in a
 local file that `event-push-loop` never ships. The hooks between passes (agents' answers, wake
 turns, the answer tool, `/factory retry`) do nothing outside act mode, so they log no real event
@@ -4327,6 +4329,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `flakeEpic` | `null` | 8.5: the issue a flake bug is linked under as a sub-issue; null links none. dev-system's `.claude/factory-loop.json` sets 864 |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
+| `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
 | `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order |
 | `intakeModel` | `haiku` | the intake agent's model; when larger than `triageModel` (haiku < sonnet < opus < fable) it is named in the config problems and `triageModel` is used |
 | `intakeAreas` | `["factory", "product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |

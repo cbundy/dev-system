@@ -392,6 +392,8 @@ export type Config = {
   // queue (v2 SPEC 6.4)
   maxLives: number
   triageModel: Model
+  // the regime every event the loop's commands write carries (FACTORY_REGIME); manual is never a value
+  regime: 'factory_loop_v2' | 'testbed'
   // the intake stamp (#995): off by default; the model that stamps, never larger than triageModel; the areas a stamp may name (always holding factory and product)
   intakeStamp: 'off' | 'on'
   intakeModel: Model

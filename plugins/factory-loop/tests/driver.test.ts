@@ -156,6 +156,37 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect(h.seen.filter(s => s.argv.includes('--list')).length).toBe(before)
   })
 
+  test('every command carries the regime and the loop session id, in observe and in act (v2 SPEC 13.4.1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const own = h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state')
+    expect(own.length).toBeGreaterThan(0)
+    expect(own.every(s => s.env.FACTORY_REGIME === 'factory_loop_v2' && s.env.CLAUDE_SESSION_ID === SESSION && s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
+  })
+
+  test('the regime setting reaches the commands; an act pass keeps it without the sink', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470] })
+    const h = host(on, { config: { ...ACT, regime: 'testbed' }, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const cmds = h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s))
+    expect(cmds.length).toBeGreaterThan(0)
+    expect(cmds.every(s => s.env.FACTORY_REGIME === 'testbed' && s.env.CLAUDE_SESSION_ID === SESSION && s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
+  })
+
+  test('a session with no id puts no CLAUDE_SESSION_ID in the environment', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work' }, session: '' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const cmds = h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s))
+    expect(cmds.length).toBeGreaterThan(0)
+    expect(cmds.every(s => s.env.FACTORY_REGIME === 'factory_loop_v2' && !('CLAUDE_SESSION_ID' in s.env))).toBe(true)
+  })
+
   test('a tracker named in only has its timeline read, then its sub-issues (D-35)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const issue40 = { issue: { number: 40, title: 'Epic: the loop', state: 'open', labels: [], sub_issues_summary: { total: 2 } }, stripped: 0 }

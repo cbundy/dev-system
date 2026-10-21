@@ -71,7 +71,8 @@ describe('snapshotOf', () => {
     expect(s.settings).toHaveProperty(['queueScore', 'areaFactory'], 20)
     expect(s.settings).toHaveProperty(['queueScore', 'needsOwner'], 40)
     expect(s.settings).toHaveProperty(['queueScore', 'overlap'], 15)
-    for (const key of ['intakeStamp', 'intakeModel', 'intakeAreas', 'queueScore.areaFactory', 'queueScore.needsOwner', 'queueScore.overlap']) expect(s.layers[key]).toBe('default')
+    expect(s.settings).toMatchObject({ regime: 'factory_loop_v2' })
+    for (const key of ['regime', 'intakeStamp', 'intakeModel', 'intakeAreas', 'queueScore.areaFactory', 'queueScore.needsOwner', 'queueScore.overlap']) expect(s.layers[key]).toBe('default')
   })
 
   test('a mode from the workspace file, and a pool size nobody set', () => {
