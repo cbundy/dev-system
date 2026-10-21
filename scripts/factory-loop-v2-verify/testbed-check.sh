@@ -30,6 +30,16 @@ ls -t $D/workspace/ 2>/dev/null | head -3 | while read f; do echo "$f: $(cat $D/
 echo "now: $(date -u +%FT%TZ)"
 echo "== config"
 cat $D/config.json
+python3 -c "
+import json
+try:
+    r=json.load(open(\"$D/config.json\")).get(\"regime\")
+except Exception:
+    r=None
+if r==\"testbed\": print(\"regime: testbed\")
+elif r is None: print(\"WARNING regime: unset (factory_loop_v2) - set \\\"regime\\\": \\\"testbed\\\"\")
+else: print(\"WARNING regime: %s is refused, read as factory_loop_v2\" % r)
+"
 ls -la $D/OFF 2>/dev/null && echo "KILL SWITCH ON" || echo "kill switch off ($D/OFF absent)"
 echo "== last decision-log lines"
 f=$(ls -t $L/decisions-*.jsonl 2>/dev/null | head -1)

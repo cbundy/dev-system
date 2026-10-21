@@ -19,7 +19,9 @@ Nothing here runs in CI or in `npm test`. The shell scripts and the JavaScript a
   `/persist/claude/factory-loop/cbundy__dev-system-scratch` (decision log, companion log), its
   config is `/persist/claude/factory-loop/config.json`, its events go to
   `/persist/events/cbundy__dev-system-scratch.jsonl`, and `/persist/claude/factory-loop/OFF` is the
-  kill switch. How it was built is in `results/2026-10-15-testbed-setup.md`.
+  kill switch. How it was built is in `results/2026-10-15-testbed-setup.md`. Its config file sets
+  `"regime": "testbed"`, so its events are kept out of the real loops' `factory_loop_v2` numbers; the
+  setting applies on the next pass. The live loops keep the default and need no setting.
 - The live loops (`dev-system-loop`, `plant-console-loop`) are never touched by any of this.
 
 You need the `coder` CLI logged in and `gh` logged in as the repo owner.
@@ -29,7 +31,7 @@ You need the `coder` CLI logged in and `gh` logged in as the repo owner.
 | File | What it does |
 |---|---|
 | `scratch-reset.sh` | Puts the scratch repo back to `drill-base`: closes PRs, strips labels and closes issues, deletes branches, force-moves main, restores protection from `scratch-protection.json`. `--dry-run` previews. Run only while the test loop is off. |
-| `testbed-check.sh` | Read-only health check of the test loop: logins, session, plugin handshake, config, last passes. `testbed-check.sh observe N` switches to observe for N seconds, shows the passes, then back to off. |
+| `testbed-check.sh` | Read-only health check of the test loop: logins, session, plugin handshake, config (with its regime), last passes. `testbed-check.sh observe N` switches to observe for N seconds, shows the passes, then back to off. |
 | `drills/setmode.sh` | Sets the test loop's mode (`off`, `observe`, `act`). |
 | `drills/setpace.sh` | Sets the test loop's pass timer (`10s`, or `default`). |
 | `drills/outside-push.sh` | A person's unrelated push to the scratch repo's main, for the outside-merge drills. |
