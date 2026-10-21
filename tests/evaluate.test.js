@@ -1105,6 +1105,33 @@ test("new source: the mapping drops what a guard needs to drop (a transition twi
   }
 });
 
+test("new source: a line of a type or version the shapes file does not list as current is left out and named in sources", () => {
+  const { normalize, loadNewEvents } = require("../images/base/evaluate-new-events.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-skipped-"));
+  try {
+    const src = path.join(FIX, "v2", "new-events.jsonl");
+    const lines = fs.readFileSync(src, "utf8").split("\n").filter(Boolean);
+    const first = JSON.parse(lines.find((l) => JSON.parse(l).type === "transition"));
+    const extra = [{ ...first, type_version: 2, event_id: "x-1" }, { ...first, type: "mystery", type_version: 1, event_id: "x-2" }];
+    const file = path.join(dir, "e.jsonl");
+    fs.writeFileSync(file, [...lines, ...extra.map((e) => JSON.stringify(e))].join("\n") + "\n");
+    assert.deepEqual(loadNewEvents(file).skipped, [{ type: "mystery", type_version: 1, count: 1 }, { type: "transition", type_version: 2, count: 1 }]);
+    assert.deepEqual(loadNewEvents(src).skipped, []);
+    assert.deepEqual(loadNewEvents(path.join(dir, "absent.jsonl")).skipped, []);
+    const env = { NO_MISTAKES_HOME: NO_NM() };
+    const base = json([...MERGE_ARGS], env);
+    const got = json([...NEW_WINDOW, "--source", "new", "--new-events", file], env);
+    assert.deepEqual(normalize(got), normalize(base), "neither line counts in any metric");
+    assert.deepEqual(got.sources.filter((s) => s.kind === "new-events-skipped"), [
+      { kind: "new-events-skipped", path: "mystery v1", found: false, rows: 1 },
+      { kind: "new-events-skipped", path: "transition v2", found: false, rows: 1 },
+    ]);
+    assert.deepEqual(base.sources.filter((s) => s.kind === "new-events-skipped"), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("default source is new: unset or empty reads the new log, writes no shadow record; --source old and the old variable switch back", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-default-"));
   try {

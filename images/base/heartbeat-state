@@ -78,7 +78,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { resolveSource, runShadow } = require(path.join(__dirname, 'factory-source.js'));
-const { SYNTHESIZED } = require(path.join(__dirname, 'evaluate-new-events.js'));
+const { SYNTHESIZED, currentShapes, isCurrent, skippedList, countSkip } = require(path.join(__dirname, 'evaluate-new-events.js'));
 
 // transition, reviewed, intervention, prompt_denied and prompt_waiting are the v2 loop's bookkeeping: a claim and its release
 // (claimed, merged, abandoned, closed, reclaimed) already say whether an issue is in flight, and an
@@ -197,7 +197,7 @@ const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0
 // readNewEvents(dir, dev, timeoutMs): the parsed new events of <dir>/factory/*.jsonl (regular files
 // only) that are this device's. Read in chunks, with the deadline checked between chunks and lines; it
 // throws "new read timed out after <N> ms" when it passes. A missing folder reads as no events.
-function readNewEvents(dir, dev, timeoutMs) {
+function readNewEvents(dir, dev, timeoutMs, current = null, skipped = null) {
   const deadline = Date.now() + timeoutMs;
   const delay = Number(process.env.HEARTBEAT_TEST_NEW_DELAY_MS) || 0;
   const check = () => {
@@ -218,7 +218,11 @@ function readNewEvents(dir, dev, timeoutMs) {
     if (!line.trim()) return;
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
-    if (ev && ev.device === dev) events.push(ev);
+    if (!ev || ev.device !== dev) return;
+    // an event of a type or version the shapes file does not list as current (a newer writer) is
+    // counted and left out here, never in deriveNew
+    if (current && typeof ev.type === 'string' && !isCurrent(current, ev)) { countSkip(skipped, ev); return; }
+    events.push(ev);
   };
   for (const n of names) {
     const fd = fs.openSync(path.join(root, n), 'r');
@@ -473,7 +477,15 @@ async function main() {
     try { return deriveOld(readOldEvents(dir), dev); } catch (e) { warn(`events: ${e.message}`); return empty; }
   };
   const timeoutMs = intEnv('CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS', 500);
-  const derivedNew = () => deriveNew(readNewEvents(dir, dev, timeoutMs), dev);
+  let skipped = [];
+  const derivedNew = () => {
+    let current = null;
+    try { current = currentShapes(); } catch (e) { warn(`shapes: ${e.message}: reading every version`); }
+    const counts = new Map();
+    const derived = deriveNew(readNewEvents(dir, dev, timeoutMs, current, counts), dev);
+    skipped = skippedList(counts);
+    return derived;
+  };
   let chat = null;
   try { chat = chatActiveAt(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')); } catch (e) { warn(`chat: ${e.message}`); }
   const chatBusy = chat !== null && now - Date.parse(chat) <= CHAT_WINDOW_MS;
@@ -502,12 +514,12 @@ async function main() {
   } catch (e) { warn(`sessions: ${e.message}`); }
   let config = null;
   try { config = readConfig(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), repo); } catch (e) { warn(`config: ${e.message}`); }
-  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts, config })}\n`);
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts, config, skipped_events: source === 'old' ? [] : skipped })}\n`);
 }
 
 const fallback = (e) => {
   warn(e.message);
-  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null })}\n`);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, skipped_events: [] })}\n`);
 };
 
 if (require.main === module) {

@@ -302,6 +302,7 @@ test("CLI: json output equals the pure derivation, passes --at and --repo to the
   assert.equal(a.status, 0, a.stderr);
   assert.equal(a.stdout, b.stdout);
   const want = JSON.parse(JSON.stringify(derive({ ...input("missing-run-started"), repos: [A] }, { queue: OLD_QUEUE })));
+  want.skipped_events = [];
   assert.deepEqual(JSON.parse(a.stdout), want);
   assert.deepEqual(a.calls.filter((c) => c.marker !== "-- fs:meta").map((c) => c.vars), [
     { at: "2026-10-10T12:00:00.000Z", repos: A }, { at: "2026-10-10T12:00:00.000Z", repos: A },
@@ -321,6 +322,7 @@ test("CLI: github facts come from callum-flow-issue-read and match the pure deri
   const r = cli(["--at", "2026-10-10T12:00:00Z", "--format", "json"], {}, "github");
   assert.equal(r.status, 0, r.stderr);
   const want = JSON.parse(JSON.stringify(derive(input("github"), { queue: OLD_QUEUE })));
+  want.skipped_events = [];
   assert.deepEqual(JSON.parse(r.stdout), want);
 });
 
@@ -596,9 +598,9 @@ test("mapping: the new store's row becomes the common event the old line becomes
 });
 
 test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
-  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read", "prompt_denied", "prompt_waiting"]) {
+  for (const type of mod.IGNORED_TYPES) {
     const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
-    assert.equal(m.type, type);
+    assert.equal(m.type, type.startsWith("loop_") ? "loop" : type, "loop_entry and loop_passes map to loop");
   }
   assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "mystery" }), /unknown factory event: mystery v1/);
   assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "claimed", type_version: 2 }), /unknown factory event: claimed v2/);
@@ -628,27 +630,46 @@ test("CLI new: the lease and the stages equal the old path's for the same claims
   assert.deepEqual(b, a);
 });
 
-test("CLI new: an event_log row of an unknown type or version fails with exit 1; shadow prints the old answer and records new_error", () => {
+test("DERIVED_TYPES and IGNORED_TYPES partition the current types of the shapes file", () => {
+  const current = Object.keys(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "images", "base", "factory-event-shapes.json"), "utf8")).current);
+  assert.ok(current.length >= 20);
+  for (const t of current) assert.equal([mod.DERIVED_TYPES, mod.IGNORED_TYPES].filter((set) => set.includes(t)).length, 1, t);
+  for (const t of [...mod.DERIVED_TYPES, ...mod.IGNORED_TYPES]) assert.ok(current.includes(t), `${t} is not a current type`);
+});
+
+test("CLI new: an event_log row of an unknown type or version is left out and named; shadow records no difference", () => {
   const fx = input("v2-waiting");
-  for (const [bad, msg] of [[{ type: "mystery" }, "unknown factory event: mystery v1"], [{ type_version: 2 }, "unknown factory event: claimed v2"]]) {
-    const rows = fx.events.map(toEventLog).filter(Boolean);
-    rows.push({ ...rows.find((r) => r.type === "claimed"), ...bad });
-    const file = withEventLog("bad", rows);
-    const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
-    assert.equal(nu.status, 1);
-    assert.equal(nu.stdout, "");
-    assert.ok(nu.stderr.includes(msg), nu.stderr);
-    fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
-    const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
-    const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
-    assert.equal(sh.status, 0, sh.stderr);
-    assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
-    const rec = shadowRecords();
-    assert.equal(rec.length, 1);
-    assert.equal(rec[0].tool, "factory-state");
-    assert.equal(rec[0].differences, null);
-    assert.ok(rec[0].new_error.includes(msg));
-  }
+  const good = fx.events.map(toEventLog).filter(Boolean);
+  const rows = [...good];
+  const claimed = good.find((r) => r.type === "claimed");
+  rows.push({ ...claimed, type: "mystery" }, { ...claimed, type_version: 2 });
+  const file = withEventLog("bad", rows);
+  const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
+  assert.equal(nu.status, 0, nu.stderr);
+  const report = JSON.parse(nu.stdout);
+  assert.deepEqual(report.skipped_events, [
+    { type: "claimed", type_version: 2, count: 1, derived: true },
+    { type: "mystery", type_version: 1, count: 1, derived: false },
+  ]);
+  const clean = cli([...AT, "--source", "new"], { FS_EVENT_LOG: withEventLog("good", good) }, "v2-waiting");
+  assert.deepEqual(clean.status, 0, clean.stderr);
+  assert.deepEqual(JSON.parse(clean.stdout).skipped_events, []);
+  assert.deepEqual(mod.normalizeForCompare(report), mod.normalizeForCompare(JSON.parse(clean.stdout)));
+  const text = cli(["--at", fx.at, "--github", "off", "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /^skipped events: claimed v2 x1 \(derived\), mystery v1 x1$/m);
+  assert.doesNotMatch(clean.stdout, /skipped events/);
+  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
+  const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
+  const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
+  assert.deepEqual(JSON.parse(old.stdout).skipped_events, []);
+  const rec = shadowRecords();
+  assert.equal(rec.length, 1);
+  assert.equal(rec[0].tool, "factory-state");
+  assert.equal(rec[0].differences, 0);
+  assert.equal(rec[0].new_error, null);
 });
 
 test("CLI shadow: a matching run records zero differences, a seeded difference is recorded by path; the exit follows the old read", () => {

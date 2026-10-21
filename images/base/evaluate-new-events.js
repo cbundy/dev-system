@@ -106,10 +106,44 @@ const transitionKey = (raw) => {
   return d.life !== undefined && d.life !== null && d.seq !== undefined && d.seq !== null ? `${raw.issue}|${d.life}|${d.seq}` : null;
 };
 
-// loadNewEvents(file): { events, reason }. A missing file reads as events null with the reason, as the
-// old loader does; a line that is not JSON is skipped.
+// factory-event-shapes.json is found beside this module, else in $DEV_SYSTEM_SHARE, else in
+// /usr/local/share/dev-system (the image copies it there beside this module).
+let shapeVersions = null;
+function currentShapes() {
+  if (shapeVersions) return shapeVersions;
+  const dirs = [__dirname, process.env.DEV_SYSTEM_SHARE || "/usr/local/share/dev-system"];
+  const hit = dirs.map((d) => path.join(d, "factory-event-shapes.json")).find((f) => fs.existsSync(f));
+  if (!hit) throw new Error(`cannot find factory-event-shapes.json beside the module or in ${dirs[1]}`);
+  shapeVersions = JSON.parse(fs.readFileSync(hit, "utf8")).current;
+  return shapeVersions;
+}
+
+// isCurrent(current, raw): whether the event's (type, type_version) is the pair the shapes file lists.
+// A line with no type_version at all (every writer stamps one, so only a hand-made line lacks it) is
+// not a newer writer's: only its type is checked.
+const isCurrent = (current, raw) => Object.prototype.hasOwnProperty.call(current, raw.type)
+  && (raw.type_version === undefined || current[raw.type] === raw.type_version);
+
+// skippedList(counts): the Map of "type\0version" -> count as [{type, type_version, count}] sorted by type, then version.
+function skippedList(counts) {
+  return [...counts].map(([k, count]) => {
+    const [type, v] = k.split("\0");
+    return { type, type_version: JSON.parse(v), count };
+  }).sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0) || (a.type_version < b.type_version ? -1 : a.type_version > b.type_version ? 1 : 0));
+}
+const countSkip = (counts, raw) => {
+  const k = `${raw.type}\0${JSON.stringify(raw.type_version === undefined ? null : raw.type_version)}`;
+  counts.set(k, (counts.get(k) || 0) + 1);
+};
+
+// loadNewEvents(file): { events, reason, skipped }. A missing file reads as events null with the reason, as the
+// old loader does; a line that is not JSON is skipped. A line whose (type, type_version) is not current
+// in the shapes file (a newer writer) is left out and counted in `skipped`; a current type the metrics do
+// not read is still dropped by mapEvent and is not counted.
 function loadNewEvents(file) {
-  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}` };
+  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}`, skipped: [] };
+  const current = currentShapes();
+  const counts = new Map();
   const seen = new Set();
   const events = [];
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
@@ -118,6 +152,10 @@ function loadNewEvents(file) {
     try {
       raw = JSON.parse(line);
     } catch {
+      continue;
+    }
+    if (raw && typeof raw === "object" && typeof raw.type === "string" && !isCurrent(current, raw)) {
+      countSkip(counts, raw);
       continue;
     }
     if (raw && raw.type === "transition") {
@@ -129,7 +167,7 @@ function loadNewEvents(file) {
     }
     events.push(...mapEvent(raw));
   }
-  return { events, reason: null };
+  return { events, reason: null, skipped: skippedList(counts) };
 }
 
 const localLog = (eventsDir, repo) => path.join(eventsDir || "/persist/events", "factory", `${repo.replace("/", "__")}.jsonl`);
@@ -158,4 +196,4 @@ function normalize(report) {
   return out;
 }
 
-module.exports = { MERGE_SECTIONS, SYNTHESIZED, mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };
+module.exports = { MERGE_SECTIONS, SYNTHESIZED, mapEvent, loadNewEvents, currentShapes, isCurrent, skippedList, countSkip, localLog, normalize, NA_METRICS, NOTES };
