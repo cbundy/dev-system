@@ -27,7 +27,7 @@ const ROOT = path.join(__dirname, "..");
 const MODULE = path.join(ROOT, "images", "base", "factory-event-translate.js");
 const FIXTURES = path.join(__dirname, "fixtures", "factory-events");
 const HOOKS = path.join(ROOT, "plugins", "factory-loop", "hooks");
-const { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES } = require(MODULE);
+const { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, TRANSLATED_TYPES } = require(MODULE);
 
 const jsonl = (file) =>
   fs
@@ -122,11 +122,10 @@ test("each event shares its old line's event_id, and the old line is left untouc
 
 test("coverage: the corpus produces every current type, and every writer state is mapped or skipped by name", () => {
   const made = new Set(expected.map((e) => e.type));
-  // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
-  // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "settings_changed", "designer_routed", "queue_snapshot", "intake_stamp"]; // intake_stamp (#1149): the loop writes it once a producer exists (#1152). queue_snapshot (#1146): the loop writes it, once a producer exists. The stop gate's runs (#811): written by the loop once a writer exists
-  for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
-  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
+  // A schema type outside TRANSLATED_TYPES is new-only: the loop writes it straight to the new log.
+  assert.deepEqual([...made].sort(), [...TRANSLATED_TYPES].sort(), "the corpus produces exactly TRANSLATED_TYPES");
+  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || !TRANSLATED_TYPES.includes(type), `no corpus line produces ${type}`);
+  for (const e of expected) assert.ok(TRANSLATED_TYPES.includes(e.type), `${e.type} is produced but not in TRANSLATED_TYPES`);
   const states = writerStates();
   assert.ok(states.length > 20);
   for (const s of states) assert.ok(MAPPED_STATES.includes(s) || SKIPPED_STATES.includes(s), `callum-flow-event writes ${s}, which the translator neither maps nor skips`);

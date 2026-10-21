@@ -8,12 +8,14 @@
 # line into at most one new event and keeps the line's event_id, so the check matches by event_id,
 # per old state: old lines, skipped (by skip name), expected new events, found, missing (the old
 # event_ids not in the new store) and misses (translator misses, with their reason). New events in
-# the window with no old row are extras, counted per type. Both sides cut at date_trunc('second',
+# the window with no old row are extras, counted per type, except a type the translator never makes
+# (its TRANSLATED_TYPES): that is new-only, counted per type, reported and never failing the check. Both sides cut at date_trunc('second',
 # SINCE) because old ts is to the second and the new ts carries milliseconds.
 #
 # Usage: callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]
 #   --device defaults to callum-flow-event's rule (DEV_MACHINE_NAME, hostname, /etc/hostname);
 #   --repo defaults to every repo; --since defaults to the device's earliest ts in event_store.
+# New-only types (the new store's types outside the translator's mapping) are reported, never fail the check.
 # Exit: 0 only when missing, misses and extras are all zero; 1 when any is not; 2 on a usage
 #   error, an unconfigured or unreachable store, or no new rows for the device and no --since.
 # A transition with via=dual-write and no old row is not an extra: the factory loop's backfill (H1)
@@ -118,7 +120,7 @@ psql_read "$old_url" "$old_sql" > "$tmp/old.jsonl" || die "cannot read factory.e
 read -r -d '' JS <<'NODE'
 const fs = require("node:fs");
 const [trJs, oldFile, newFile, device, repo, since] = process.argv.slice(1);
-const { translate } = require(trJs);
+const { translate, TRANSLATED_TYPES } = require(trJs);
 const lines = fs.readFileSync(oldFile, "utf8").split("\n").filter((l) => l.trim() !== "");
 const newRows = fs.readFileSync(newFile, "utf8").split("\n").filter((l) => l !== "").map((l) => l.split("\t"));
 const newIds = new Map(newRows.map(([id, type]) => [id, type]));
@@ -153,10 +155,15 @@ for (const text of lines) {
   }
 }
 const extras = new Map();
+const newOnly = new Map();
 for (const [id, type] of newIds) {
   if (oldIds.has(id)) continue;
   // H1's backfill (callum-flow-event --new-only) writes a transition with via=dual-write to the new log only, by design
   if (type === "transition" && newVia.get(id) === "dual-write") continue;
+  if (!TRANSLATED_TYPES.includes(type)) {
+    newOnly.set(type, (newOnly.get(type) ?? 0) + 1);
+    continue;
+  }
   if (!extras.has(type)) extras.set(type, []);
   extras.get(type).push(id);
 }
@@ -182,8 +189,13 @@ for (const type of [...extras.keys()].sort()) {
   out.push(`extra ${type}: ${ids.length}`);
   for (const id of ids) out.push(`  extra ${type} ${id}`);
 }
+let newOnlyTotal = 0;
+for (const type of [...newOnly.keys()].sort()) {
+  newOnlyTotal += newOnly.get(type);
+  out.push(`new-only ${type}: ${newOnly.get(type)}`);
+}
 const ok = missing === 0 && misses === 0 && extra === 0;
-out.push(`${ok ? "OK" : "DIFFERENT"}: missing=${missing} misses=${misses} extras=${extra}`);
+out.push(`${ok ? "OK" : "DIFFERENT"}: missing=${missing} misses=${misses} extras=${extra} new-only=${newOnlyTotal}`);
 process.stdout.write(`${out.join("\n")}\n`);
 process.exitCode = ok ? 0 : 1;
 NODE

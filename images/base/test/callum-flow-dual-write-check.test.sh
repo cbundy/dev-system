@@ -161,7 +161,7 @@ check
 [ "$rc" = 0 ] || fail "equal stores should exit 0, got $rc: $(cat "$tmpdir/chk.out")"
 grep -q '^claimed: old=3 skipped=0 expected=3 found=3 missing=0 misses=0$' "$tmpdir/chk.out" || fail "claimed counts: $(cat "$tmpdir/chk.out")"
 grep -q '^transition: old=1 skipped=0 expected=1 found=1 missing=0 misses=0$' "$tmpdir/chk.out" || fail "transition counts: $(cat "$tmpdir/chk.out")"
-grep -q '^OK: missing=0 misses=0 extras=0$' "$tmpdir/chk.out" || fail "OK line: $(cat "$tmpdir/chk.out")"
+grep -q '^OK: missing=0 misses=0 extras=0 new-only=0$' "$tmpdir/chk.out" || fail "OK line: $(cat "$tmpdir/chk.out")"
 echo "ok: mixed states are equal"
 
 # -- 3. a skipped state counts as skipped, never missing
@@ -244,6 +244,23 @@ nov=$(q "$db" "SELECT count(*) FROM factory.event_store WHERE type = 'transition
 check
 grep -q '^extra transition' "$tmpdir/chk.out" && fail "a new-only via=dual-write transition was reported: $(cat "$tmpdir/chk.out")"
 echo "ok: a new-only via=dual-write transition is not an extra"
+
+# -- 8d. a type the translator never makes (gate_run) with no old row is new-only: counted, never an extra
+q "$db" "DELETE FROM factory.event_store WHERE event_id = '11111111-1111-4111-8111-111111111111'" > /dev/null
+q "$db" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) VALUES (1, '33333333-3333-4333-8333-333333333333', now(), 'gate_run', 1, 'acme/widgets', 'dev-box', 'x', 101, '{\"life\":\"l1\",\"seq\":1,\"head\":\"abcdef0\",\"result\":\"pass\",\"wait_ms\":0,\"run_ms\":10,\"concurrency\":1,\"queued_behind\":0,\"started_at\":\"2026-10-18T00:00:00.000Z\"}')" > /dev/null
+check
+[ "$rc" = 0 ] || fail "a new-only gate_run should exit 0, got $rc: $(cat "$tmpdir/chk.out")"
+grep -q '^new-only gate_run: 1$' "$tmpdir/chk.out" || fail "new-only line: $(cat "$tmpdir/chk.out")"
+grep -q '^extra gate_run' "$tmpdir/chk.out" && fail "gate_run reported as extra: $(cat "$tmpdir/chk.out")"
+grep -q '^OK: missing=0 misses=0 extras=0 new-only=1$' "$tmpdir/chk.out" || fail "new-only OK line: $(cat "$tmpdir/chk.out")"
+# a missing translated row still fails, with new-only reported alongside
+victim2=$(q "$db" "SELECT event_id FROM factory.event_store WHERE type = 'ready'")
+q "$db" "DELETE FROM factory.event_store WHERE event_id = '$victim2'" > /dev/null
+check
+[ "$rc" = 1 ] || fail "a missing row beside new-only should exit 1, got $rc: $(cat "$tmpdir/chk.out")"
+grep -q '^DIFFERENT: missing=1 misses=0 extras=0 new-only=1$' "$tmpdir/chk.out" || fail "DIFFERENT line: $(cat "$tmpdir/chk.out")"
+q "$db" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) SELECT 1, '$victim2', now(), 'ready', 1, 'acme/widgets', 'dev-box', 'x', 102, '{}'" > /dev/null
+echo "ok: a new-only type is counted and never fails the check"
 
 # -- 9. an old row the translator misses is reported as a miss
 q "$olddb" "INSERT INTO factory.events (device, repo, seq, ts, state, issue, raw, event_id) VALUES ('dev-box', 'acme/widgets', 900, now(), 'claimed', 77, '{\"state\":\"claimed\",\"repo\":\"acme/widgets\",\"device\":\"dev-box\",\"issue\":77,\"event_id\":\"22222222-2222-4222-8222-222222222222\",\"ts\":\"bad\"}', '22222222-2222-4222-8222-222222222222')" > /dev/null
