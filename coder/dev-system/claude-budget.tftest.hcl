@@ -140,6 +140,9 @@ run "parameters_with_secrets_dir" {
     values = { value = "private" }
   }
 
+  # The coder provider enforces a parameter's validation when a workspace is created, and mock_provider "coder"
+  # replaces the provider, so a value outside the bounds (-1, 0 or 32 for the reset day, -1 for the budget) cannot be
+  # fed in and expected to fail here. The asserts below check the declared bounds instead.
   assert {
     condition     = data.coder_parameter.claude_budget_usd[0].type == "number" && data.coder_parameter.claude_budget_usd[0].default == "0" && data.coder_parameter.claude_budget_usd[0].validation[0].min == 0
     error_message = "claude_budget_usd is a number, default 0, minimum 0"

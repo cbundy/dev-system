@@ -21,7 +21,7 @@ function blocks() {
   const rest = doc.slice(start + 1);
   const end = rest.indexOf("\n## ", 1);
   const found = [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
-  assert.equal(found.length, 2, "the section holds two SQL blocks");
+  assert.equal(found.length, 3, "the section holds three SQL blocks");
   return found;
 }
 
@@ -60,7 +60,7 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
   put("d1", "2026-09-22T10:20:00.000Z", gone("spend:no-session-cost"));
   put("d1", "2026-09-22T10:25:00.000Z", spend(1, 100, R2));
 
-  const [a, b] = blocks();
+  const [a, b, c] = blocks();
   const rowsA = db.query(sub(a, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
   assert.deepEqual(rowsA, [
     ["2026-09-19", "o/a", "d1", "86", "100", "86", "86"],
@@ -81,5 +81,13 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
     ["o/a", "d1", "stop-all", "00:05:00"],
     ["o/a", "d1", "stop-new", "00:55:00"],
     ["o/a", "d1", "unknown", "00:15:00"],
+  ]);
+
+  // reasons: the o/a unavailable readings are no-session-cost x2, bad-tally x1 on d1, and "x" once (09-20 11:30)
+  const rowsC = db.query(sub(c, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|").slice(0, 4));
+  assert.deepEqual(rowsC, [
+    ["o/a", "d1", "spend:no-session-cost", "2"],
+    ["o/a", "d1", "spend:bad-tally", "1"],
+    ["o/a", "d1", "x", "1"],
   ]);
 });

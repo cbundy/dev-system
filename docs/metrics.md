@@ -2575,8 +2575,8 @@ other usage event. The factory loop writes one every `usageEveryMs` while its wo
 unavailable one (`available` false, `auth` `api-key`, one code in `reasons`) and holds new work at `stop-new`:
 `spend:no-budget`, `spend:bad-reset-day`, `spend:no-session-cost`, `spend:bad-tally` or `spend:stale`. The tally sees
 only that loop session and its agents, not other Claude sessions on the same key, and each repo's loop has its own.
-The reason codes are in the event's `reasons` list, which is not a view column, so a breakdown by reason reads the
-event stream, not `factory.event_log`.
+The reason codes are in the event's `reasons` list, which is not a view column, so the breakdown by reason (the last
+query below) reads it from `factory.event_store`.
 
 Spend per day against the budget, per repo and device: the day's last reading, its percent of the budget (null when
 there is no budget) and `spent_that_day`, the day's last spend less the previous day's last spend in the same budget
@@ -2625,6 +2625,21 @@ FROM (
     AND repo = :'repo' AND ts >= :'since'::timestamptz) r
 GROUP BY repo, device, tier
 ORDER BY repo, device, tier;
+```
+
+Why API-key readings were unavailable, per repo, device and reason: one row per code in the event's `reasons` list
+(read from `factory.event_store`, as no `event_log` column lifts it), counted over the unavailable readings. A reading
+with several codes counts once under each. `spend:bad-tally` counts the times the tally was lost and restarted:
+
+```sql
+SELECT e.repo, e.device, r.reason, count(*) AS readings, min(e.ts) AS first_at, max(e.ts) AS last_at
+FROM factory.event_log e
+JOIN factory.event_store s ON s.event_id = e.event_id
+CROSS JOIN LATERAL jsonb_array_elements_text(s.data->'reasons') AS r(reason)
+WHERE e.type = 'usage' AND NOT e.available AND e.auth = 'api-key'
+  AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+GROUP BY e.repo, e.device, r.reason
+ORDER BY e.repo, e.device, readings DESC, r.reason;
 ```
 
 ## Tokens per merged issue
