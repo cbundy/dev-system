@@ -1852,8 +1852,12 @@ A PR merged after the newest claim comment on its own branch (`issue-<N>` or `is
 made outside the factory: the sweep logs a `merged` event (pr, head when known, the PR's size, by `factory`; actor `sweep`) whoever holds the claim and however live it is
 (checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
 expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `requeued` event (reason `lease-expired`). The sweep never touches
-any other label: the factory loop is the only writer of its `factory:*` labels. It has no
-time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
+any other label: the factory loop is the only writer of its `factory:*` labels. Rules 1-6 have no
+time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Rule 7 is bounded: a PR merged into the default branch
+inside the last `CALLUM_FLOW_SWEEP_MERGE_WINDOW_SECONDS` (default 604800) and at least `CALLUM_FLOW_SWEEP_MERGE_SETTLE_SECONDS` ago (default 3600, so another
+device's `merged` event has time to arrive) that no `merged` event names by PR (central `factory.event_log` plus this device's new log) gets a `merged` event
+as actor `sweep`, by hand and recovered, with the issue only when a trusted author wrote the lowest in-repo issue the PR closes. It needs the central store (without it
+the sweep warns once and logs nothing), skips on a read failure with exit 1, and sees merged PRs only: a direct push to the default branch is out of scope. A
 latest event of `superseded` (an old-log state; nothing writes it any more) is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
