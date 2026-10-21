@@ -1188,3 +1188,127 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- --regime and the by_regime breakdowns (docs/metrics.md, "Offline computation"). The events and
+// transcripts are built here from one table, so the local log and the view export are the same events.
+const RG_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-20T00:00:00Z", "--until", "2026-10-21T00:00:00Z"];
+
+function writeRegime(dir) {
+  const ev = (n, ts, type, issue, session, regime, data = {}) => ({
+    envelope: 1, event_id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, ts: `2026-10-20T${ts}:00.000Z`, type, type_version: 1,
+    repo: "acme/widgets", device: "L", actor: "agent", ...(session === undefined ? {} : { session_id: session }),
+    ...(regime === undefined ? {} : { regime }), issue, data,
+  });
+  const events = [
+    ev(1, "10:00", "claimed", 1, "S-tb", "testbed", { lease_minutes: 120 }),
+    ev(2, "10:30", "merged", 1, "S-tb", "testbed", { pr: 11, by: "factory", recovered: false }),
+    ev(3, "11:00", "claimed", 2, "S-sw", "manual", { lease_minutes: 120 }),
+    ev(4, "11:10", "closed", 2, "S-sw", "manual"),
+    ev(5, "12:00", "claimed", 3, "S-sw", "factory_loop_v2", { lease_minutes: 120 }),
+    ev(6, "12:10", "claimed", 4, "S-sw", "factory_loop_v2", { lease_minutes: 120 }),
+    ev(7, "12:30", "merged", 3, "S-sw", "factory_loop_v2", { pr: 13, by: "factory", recovered: false }),
+    ev(8, "13:00", "claimed", 5, undefined, undefined, { lease_minutes: 120 }), // written before regime existed
+    ev(9, "13:30", "merged", 5, null, "", { pr: 15, by: "factory", recovered: false }), // empty regime reads as unknown
+  ];
+  const local = path.join(dir, "ev", "factory", "acme__widgets.jsonl");
+  fs.mkdirSync(path.dirname(local), { recursive: true });
+  fs.writeFileSync(local, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  // a factory.event_log row_to_json export: flat columns, regime and session_id null when unset
+  const view = path.join(dir, "view.jsonl");
+  fs.writeFileSync(view, `${events.map((e, i) => JSON.stringify({ id: i + 1, session_id: null, regime: null, ...e })).join("\n")}\n`);
+  const proj = path.join(dir, "projects", "-rg");
+  const turn = (id, ts) => JSON.stringify({ type: "assistant", timestamp: `2026-10-20T${ts}:00Z`, requestId: id,
+    message: { model: "claude-opus-5-5", usage: { input_tokens: 1, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [] } });
+  const put = (file, lines) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${lines.join("\n")}\n`); };
+  put(path.join(proj, "S-tb.jsonl"), [turn("a1", "10:05"), turn("a2", "10:20")]);
+  put(path.join(proj, "S-tb", "subagents", "agent-x.jsonl"), [turn("b1", "10:10")]);
+  fs.writeFileSync(path.join(proj, "S-tb", "subagents", "agent-x.meta.json"), JSON.stringify({ agentType: "callum-flow:implementer" }));
+  put(path.join(proj, "S-sw.jsonl"), [turn("c1", "10:50"), turn("c2", "11:30"), turn("c3", "12:20")]);
+  put(path.join(proj, "S-none.jsonl"), [turn("d1", "13:00")]);
+  return { local, view, evDir: path.join(dir, "ev"), projects: path.join(dir, "projects", "-rg") };
+}
+
+const rgOf = (r, k) => Object.fromEntries(r[k].by_regime.map((x) => [x.regime, x]));
+const spendTurns = (rows) => Object.fromEntries(rows.map((x) => [`${x.role}|${x.model}`, x.turns]));
+
+test("regime: by_regime breakdowns, attribution through the session, and the filter, on the local log and the view export alike", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-regime-"));
+  try {
+    const f = writeRegime(dir);
+    const env = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: f.evDir };
+    const base = [...RG_WINDOW, "--projects-dir", f.projects];
+    const local = json([...base, "--source", "new"], env);
+    const view = json([...base, "--source", "new", "--new-events", f.view], env);
+    assert.equal(local.window.regime, "all");
+    assert.equal(local.throughput.merged_issues, 3);
+    assert.deepEqual(local.throughput.by_regime, [
+      { regime: "factory_loop_v2", merged_issues: 1, closed_issues: 0, claims: 2 },
+      { regime: "manual", merged_issues: 0, closed_issues: 1, claims: 1 },
+      { regime: "testbed", merged_issues: 1, closed_issues: 0, claims: 1 },
+      { regime: "unknown", merged_issues: 1, closed_issues: 0, claims: 1 },
+    ]);
+    // the view export's null session_id and regime read as unknown; its session-less rows give the same unknown numbers
+    assert.equal(view.throughput.merged_issues, 3);
+    assert.deepEqual(view.throughput.by_regime, local.throughput.by_regime);
+    assert.deepEqual(view.spend.by_regime, local.spend.by_regime);
+    // turns: S-tb and its sub-agent are testbed; S-sw is manual until 12:00 (its first turn, before every event, takes the first regime), then factory_loop_v2; S-none is unknown
+    const spend = Object.fromEntries(local.spend.by_regime.map((g) => [g.regime, spendTurns(g.rows)]));
+    assert.deepEqual(spend, {
+      factory_loop_v2: { "orchestrator|claude-opus-5-5": 1 },
+      manual: { "orchestrator|claude-opus-5-5": 2 },
+      testbed: { "callum-flow:implementer|claude-opus-5-5": 1, "orchestrator|claude-opus-5-5": 2 },
+      unknown: { "orchestrator|claude-opus-5-5": 1 },
+    });
+    assert.deepEqual(local.spend.by_regime.map((g) => g.regime), ["factory_loop_v2", "manual", "testbed", "unknown"]);
+    // the rows across regimes add up to spend.rows
+    const total = {};
+    for (const g of local.spend.by_regime) for (const [k, n] of Object.entries(spendTurns(g.rows))) total[k] = (total[k] || 0) + n;
+    assert.deepEqual(total, spendTurns(local.spend.rows));
+    for (const [regime, want] of Object.entries({
+      factory_loop_v2: [1, 2, 1], manual: [0, 1, 2], testbed: [1, 1, 3], unknown: [1, 1, 1],
+    })) {
+      const r = json([...base, "--source", "new", "--regime", regime], env);
+      assert.equal(r.window.regime, regime);
+      assert.equal(r.throughput.merged_issues, want[0], regime);
+      assert.equal(r.claims.reclaimed, 0);
+      assert.equal(r.per_device[0] ? r.per_device[0].claims : 0, want[1], regime);
+      assert.equal(sum(r.spend.rows.map((x) => x.turns)), want[2], regime);
+      assert.ok(!("by_regime" in r.throughput) && !("by_regime" in r.spend), regime);
+    }
+    // markdown shows the tables; two runs are byte-identical
+    const md = run([...base, "--source", "new", "--format", "markdown"], env);
+    assert.match(md.out, /\| regime \| merged_issues \| closed_issues \| claims \|/);
+    assert.match(md.out, /Spend for regime testbed:/);
+    assert.equal(run([...base, "--source", "new", "--format", "markdown"], env).out, md.out);
+    assert.equal(run([...base, "--source", "new"], env).out, run([...base, "--source", "new"], env).out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function sum(xs) { return xs.reduce((a, b) => a + b, 0); }
+
+test("regime: an unknown or missing value exits 2 with the usage line; old-source records read as unknown", () => {
+  for (const args of [["--regime", "bogus"], ["--regime"]]) {
+    const r = run([...WINDOW, ...args]);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.err, /--regime/);
+    assert.match(r.err, /\[--regime <value>\]/);
+  }
+  const r = json(WINDOW);
+  assert.equal(r.window.regime, "all");
+  assert.deepEqual(r.throughput.by_regime.map((x) => [x.regime, x.merged_issues]), [["unknown", r.throughput.merged_issues]]);
+  assert.deepEqual(r.spend.by_regime.map((g) => g.regime), ["unknown"]);
+  assert.deepEqual(r.spend.by_regime[0].rows, r.spend.rows);
+});
+
+test("regime: pipeline rows count only for unknown; normalize drops both by_regime keys", () => {
+  const inv = [{ step_name: "review", model: "m", model_roundtrips: 3, input_tokens: 1, output_tokens: 2 }];
+  const files = [{ role: "orchestrator", turns: [{ model: "m", regime: "testbed", usage: { input: 1, output: 1, cache_read: 0, cache_creation: 0 } }] }];
+  assert.deepEqual(mod.computeSpend(files, inv, "testbed").map((x) => x.role), ["orchestrator"]);
+  assert.deepEqual(mod.computeSpend(files, inv, "unknown").map((x) => x.role), ["pipeline:review"]);
+  assert.deepEqual(mod.computeSpend(files, inv).map((x) => x.role), ["orchestrator", "pipeline:review"]);
+  const { normalize } = require("../images/base/evaluate-new-events.js");
+  const out = normalize({ throughput: { merged_issues: 1, by_regime: [] }, spend: { rows: [], by_regime: [] } });
+  assert.deepEqual(out, { throughput: { merged_issues: 1 }, spend: { rows: [] } });
+});

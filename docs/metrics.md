@@ -2760,7 +2760,7 @@ jq -s --arg since 2026-10-18T00:00:00Z '
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--events <file>] [--nm-export <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
+[--events <file>] [--nm-export <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/callum-flow-evaluate`)
 computes the numbers of queries 1 to 4, 6, 7 and 9 for a time window from an events file (`--events`,
 default the local event log; a `factory.events` export covers every device), plus token spend, waste
 and pipeline numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It reads the
@@ -2816,6 +2816,26 @@ export is passed (see the skill).
   before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
+
+### Regimes
+
+`--regime <factory_loop_v2|testbed|manual|unknown>` keeps only the events whose `regime` equals the value
+(a null, empty or missing regime is `unknown`; any other value, or none, exits 2 with the usage line). The
+filter runs before pipeline runs are linked and before the event metrics are computed, and `window.regime` says
+which value was given, or `all`. Without the flag, `throughput.by_regime` lists per regime `merged_issues` (the
+throughput derivation on that regime's events), `closed_issues` (distinct issues with a `closed` event in the
+window) and `claims` (`claimed` events in the window), and `spend.by_regime` lists the spend rows of each regime
+(for a role and model they add up to `spend.rows`); both hold exactly the regimes that appear among the window's
+events or attributed turns, sorted by name, and are omitted with `--regime`, where they would repeat the totals.
+
+A transcript turn has no regime of its own. It takes one through the transcript's session (a sub-agent takes its
+parent's): the regime of the latest regime-carrying event of that session at or before the turn's time, the first
+such event's regime for an earlier turn, and `unknown` when no event of the session carries one. Pipeline
+(no-mistakes) invocations have no session, so they are `unknown`. With `--regime R`, `spend.rows` counts only the
+turns attributed to R, and the pipeline rows only when R is `unknown`. `waste`, `pipeline` and
+`sub_agent_model_mismatches` are not filtered by regime. A regime is never guessed from a device, workspace name
+or path. Events written before v0.81.0 carry no `regime` or `session_id` and read as `unknown` and no session.
+The shadow and replay comparisons leave both `by_regime` keys out (the old source's records carry no regime).
 
 ### Reading the new events
 
@@ -2939,6 +2959,8 @@ either source. A key is `n/a` on its own when its columns are missing.
   `analyze-agent-run.ts`.
 - **Tokens**: input, output, cache_read and cache_creation tokens, reported separately; a "wake's
   tokens" is the sum of the four over its turns.
+- **Regime**: a turn's regime comes from its session's events, see "Regimes" above; the `unknown` rule and the
+  attribution apply to every spend row.
 - **Role**: the main session is `orchestrator`; a sub-agent's role is its `agent-<id>.meta.json`
   `agentType`, else `unknown`; pipeline agent invocations are `pipeline:<step_name>`, restricted
   to runs of the repo created in the window (their `turns` are `model_roundtrips`).

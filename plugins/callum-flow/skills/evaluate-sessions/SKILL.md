@@ -36,6 +36,12 @@ callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format 
 callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format markdown > /tmp/eval.md
 ```
 
+Add `--regime <factory_loop_v2|testbed|manual|unknown>` to report one regime only (events of that
+regime, and the turns attributed to it through their session; `waste`, `pipeline` and
+`sub_agent_model_mismatches` are not filtered). Without it, `throughput.by_regime` and `spend.by_regime`
+split the numbers per regime. A null or missing regime is `unknown`, and a regime is never guessed from a
+device or workspace name.
+
 It reads transcripts, the local event log and the no-mistakes database, makes no
 network calls, and needs no flags in a normal workspace. Exit 2 is a bad argument,
 exit 1 a source that exists but could not be read (report that and stop).

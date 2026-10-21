@@ -9,7 +9,12 @@
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
 //          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
 //          [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
-//          [--source old|new|shadow] [--new-events <file>]
+//          [--source old|new|shadow] [--new-events <file>] [--regime <value>]
+//
+// --regime (factory_loop_v2|testbed|manual|unknown) keeps only the events of that regime (a null
+// regime counts as unknown) and the turns attributed to it through their session; without it the
+// report carries throughput.by_regime and spend.by_regime. A regime is never guessed from a device
+// or workspace name.
 //
 // --source picks the event store (cbundy/dev-system#899; docs/factory-events/replay.md, "Source switch"),
 // else CALLUM_FLOW_EVALUATE_SOURCE, else new (the default; old is the way back). old reads the old log (--events, or the default
@@ -76,6 +81,7 @@ const STAGE_STATES = ['ready', 'claimed', 'delegated', 'merge_ready', 'merged'];
 const ISSUE_BRANCH_RE = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/;
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
+const REGIMES = ['factory_loop_v2', 'testbed', 'manual', 'unknown'];
 const TOP_KEYS = [
   'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
   'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'spend', 'waste',
@@ -120,10 +126,14 @@ function parseArgs(argv) {
     else if (a === '--nm-export') o.nmExport = need(i++, a);
     else if (a === '--ready-times') o.readyTimes = need(i++, a);
     else if (a === '--new-events') o.newEvents = need(i++, a);
+    else if (a === '--regime') o.regime = need(i++, a);
     else if (a === '-h' || a === '--help') o.help = true;
     else throw new UsageError(`unknown option '${a}'`);
   }
   if (o.help) return o;
+  if (o.regime !== undefined && !REGIMES.includes(o.regime)) {
+    throw new UsageError(`--regime must be one of ${REGIMES.join(', ')}`);
+  }
   if (!o.repo || !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new UsageError('--repo <owner/name> is required');
   if (!o.since) throw new UsageError('--since <ISO> is required');
   if (!['json', 'markdown'].includes(o.format)) throw new UsageError("--format must be json or markdown");
@@ -138,7 +148,7 @@ function parseArgs(argv) {
 
 const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
   '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>] ' +
-  '[--source old|new|shadow] [--new-events <file>]';
+  '[--source old|new|shadow] [--new-events <file>] [--regime <value>]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -1222,7 +1232,11 @@ function computeWaste(sessions, mergedAt) {
 
 // ---------------------------------------------------------------- spend
 
-function computeSpend(fileTurns, invocations) {
+const turnRegime = (t) => t.regime || 'unknown';
+
+// computeSpend(fileTurns, invocations, regime): with a regime, only the turns attributed to it count, and the
+// pipeline invocations (no session, so unknown) only when the regime is unknown.
+function computeSpend(fileTurns, invocations, regime = null) {
   const rows = new Map();
   const add = (role, model, turns, u) => {
     const k = `${role}\u0000${model}`;
@@ -1234,14 +1248,72 @@ function computeSpend(fileTurns, invocations) {
     r.cache_creation += u.cache_creation;
     rows.set(k, r);
   };
-  for (const f of fileTurns) for (const t of f.turns) add(f.role, t.model || 'unknown', 1, t.usage);
-  for (const i of invocations || []) {
+  for (const f of fileTurns) {
+    for (const t of f.turns) if (regime === null || turnRegime(t) === regime) add(f.role, t.model || 'unknown', 1, t.usage);
+  }
+  for (const i of regime === null || regime === 'unknown' ? invocations || [] : []) {
     add(`pipeline:${i.step_name}`, i.model || 'unknown', i.model_roundtrips || 0, {
       input: i.input_tokens || 0, output: i.output_tokens || 0,
       cache_read: i.cache_read_tokens || 0, cache_creation: i.cache_creation_tokens || 0,
     });
   }
   return [...rows.values()].sort((a, b) => cmpStr(a.role, b.role) || cmpStr(a.model, b.model));
+}
+
+// spend.by_regime: the spend rows of each regime, sorted by regime; for a role and model they add up to spend.rows.
+function computeSpendByRegime(fileTurns, invocations, regimes) {
+  return regimes.map((regime) => ({ regime, rows: computeSpend(fileTurns, invocations, regime) }));
+}
+
+// Sets `regime` on every turn: the regime of the latest regime-carrying event of the turn's session at or
+// before the turn (the first such event's regime for an earlier turn), else unknown. A sub-agent's transcript
+// carries its parent's session. Only the events' own regime is read, never a device or workspace name.
+function attributeTurns(parsed, repoEvents) {
+  const bySession = new Map();
+  repoEvents.forEach((e, i) => {
+    if (typeof e.session_id !== 'string' || !e.session_id || typeof e.regime !== 'string' || !e.regime) return;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) return;
+    if (!bySession.has(e.session_id)) bySession.set(e.session_id, []);
+    bySession.get(e.session_id).push({ t, i, regime: e.regime });
+  });
+  for (const list of bySession.values()) list.sort((a, b) => a.t - b.t || a.i - b.i);
+  for (const f of parsed) {
+    const list = bySession.get(f.session);
+    for (const turn of f.turns) {
+      if (!list) { turn.regime = 'unknown'; continue; }
+      const at = Date.parse(turn.ts);
+      let r = list[0].regime;
+      for (const x of list) { if (x.t <= at) r = x.regime; else break; }
+      turn.regime = r;
+    }
+  }
+}
+
+// throughput.by_regime: per regime the merged issues (the throughput derivation), the distinct issues closed
+// and the claims in the window, from that regime's events.
+// The regimes the spend breakdown lists: those of the window's events and turns, plus unknown when a pipeline
+// invocation has to land somewhere.
+function spendRegimes(parsed, repoEvents, win, invocations) {
+  const set = new Set([
+    ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+    ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+  ]);
+  if ((invocations || []).length) set.add('unknown');
+  return [...set].sort(cmpStr);
+}
+
+function throughputByRegime(repoEvents, win, regimes, ctx) {
+  return regimes.map((regime) => {
+    const evs = repoEvents.filter((e) => (e.regime || 'unknown') === regime);
+    const inW = evs.filter((e) => inWin(Date.parse(e.ts), win));
+    return {
+      regime,
+      merged_issues: computeEventMetrics(evs, win, ctx).throughput.merged_issues,
+      closed_issues: new Set(inW.filter((e) => e.state === 'closed' && e.issue !== null && e.issue !== undefined).map((e) => e.issue)).size,
+      claims: inW.filter((e) => e.state === 'claimed').length,
+    };
+  });
 }
 
 // Sub-agents whose transcript model differs from the model the Agent call requested.
@@ -1610,7 +1682,9 @@ function evaluate(opts, env = process.env) {
   sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
 
   const haveTr = tr.foundDirs.length > 0;
-  const repoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  const allRepoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  attributeTurns(parsed, allRepoEvents); // from every event of the session, before the regime filter
+  const repoEvents = opts.regime === undefined ? allRepoEvents : allRepoEvents.filter((e) => (e.regime || 'unknown') === opts.regime);
   const links = nm.reason ? null : linkRuns(nm.runs, repoEvents);
   const pl = computePipeline(nm, win, links ? links.linked : new Set());
   let rt = { times: null };
@@ -1626,6 +1700,13 @@ function evaluate(opts, env = process.env) {
   const leaseMinutes = Number(env.CALLUM_FLOW_LEASE_MINUTES) > 0 ? Number(env.CALLUM_FLOW_LEASE_MINUTES) : 120;
   const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
     { readyTimes: rt.times, leaseMinutes, runLinks: links ? links.byIssue : null });
+  if (em && opts.regime === undefined) {
+    const regimes = [...new Set([
+      ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+      ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+    ])].sort(cmpStr);
+    em.throughput.by_regime = throughputByRegime(repoEvents, win, regimes, { readyTimes: rt.times, leaseMinutes, runLinks: null });
+  }
   if (em && useNew) for (const [k, why] of Object.entries(newMod.NA_METRICS)) em[k] = na(why);
   if (em && !useNew) for (const k of MERGE_SECTIONS) em[k] = na(MERGE_OLD_NA);
 
@@ -1635,6 +1716,7 @@ function evaluate(opts, env = process.env) {
     window: {
       since: iso(win.since),
       until: iso(win.until),
+      regime: opts.regime === undefined ? 'all' : opts.regime,
       sessions: mains.filter((f) => f.inWindow).length,
       sub_agents: subs.filter((f) => f.inWindow).length,
       pipeline_runs: nm.reason ? 'n/a' : pl.pipeline.runs,
@@ -1660,7 +1742,8 @@ function evaluate(opts, env = process.env) {
     prs: em ? em.prs : evNa,
     gaps: em ? em.gaps : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
-      rows: computeSpend(parsed, pl.invocations),
+      rows: computeSpend(parsed, pl.invocations, opts.regime === undefined ? null : opts.regime),
+      ...(opts.regime === undefined ? { by_regime: computeSpendByRegime(parsed, pl.invocations, spendRegimes(parsed, repoEvents, win, pl.invocations)) } : {}),
       sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
     },
     waste: haveTr ? computeWaste(mains, em ? em.mergedAt : null) : na('no transcripts'),
@@ -1715,7 +1798,8 @@ function toMarkdown(r) {
   sec('throughput', guard(r.throughput, (t) =>
     kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
     table(['issue', 'merged_at', 'ready_source', 'run_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
-      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
+      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total])) +
+    (t.by_regime ? '\nBy regime:\n\n' + table(['regime', 'merged_issues', 'closed_issues', 'claims'], t.by_regime.map((x) => [x.regime, x.merged_issues, x.closed_issues, x.claims])) : '')));
   sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
   sec('review', guard(r.review, (v) =>
     kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
@@ -1791,7 +1875,9 @@ function toMarkdown(r) {
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
     (s.sub_agent_model_mismatches['n/a'] ? naLine(s.sub_agent_model_mismatches)
       : 'Sub-agents on a model other than requested:\n\n' + table(['session', 'role', 'requested', 'actual'],
-        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')])))));
+        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')]))) +
+    (s.by_regime || []).map((g) => `\nSpend for regime ${g.regime}:\n\n` + table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
+      g.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation]))).join('')));
   sec('waste', guard(r.waste, (w) =>
     table(['wake kind', 'count'], WAKE_KINDS.map((k) => [k, w.wakes[k]])) + '\n' +
     table(['category', 'count', 'tokens'], [
@@ -1868,7 +1954,7 @@ async function main(argv, env = process.env) {
 }
 
 module.exports = {
-  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend,
+  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend, computeSpendByRegime, attributeTurns,
   modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
 };
 
