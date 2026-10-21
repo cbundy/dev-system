@@ -1885,6 +1885,26 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+
+### Readers behind the loop
+
+The loop reads `skipped_events` from the image's report (see "Readers behind the writers"). A skipped
+derived event makes the pass blind (rule G2): the pass's skip line carries the error and `tell(blind)` carries
+it as `error`. How often and how long a lagging image stopped the loop, and for which types:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:blind:")))
+  | {since: .fields.since, error: .fields.error}] | unique_by(.since) | .[] | "\(.since) \(.error)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+Only non-derived skips keep the loop working and raise the owner item `reader-behind`, once per set of types:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:reader-behind:")))
+  | {day: ($d.at | tostring | .[0:10]), types: .fields.types, count: .fields.count}]
+  | unique_by(.types) | .[] | "\(.day) \(.types) (\(.count))"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ### Actions refusal spells
 
 When GitHub does not start a CI job for the account's sake (failed payments, a spending limit), the
@@ -3072,7 +3092,7 @@ list as current, and counts it, instead of failing the read. See what was skippe
 `callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the derivation reads
 that type, so the view may be incomplete), and
 `callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
-(`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`.
+(`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`. The loop's reaction is in "Readers behind the loop".
 
 ### Scope and the fleet-wide no-mistakes export
 

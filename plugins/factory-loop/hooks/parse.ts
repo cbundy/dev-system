@@ -37,12 +37,35 @@ export type FactoryIssue = {
   github: { open: boolean | null; labels: string[] | null } | null
 }
 
-export type Factory = { at: number; issues: FactoryIssue[] }
+// An event type the image's readers skipped (the report's top-level skipped_events): `derived` when
+// the derivation behind the report left it out.
+export type SkippedEvent = { type: string; version: number; count: number; derived: boolean }
+export type Factory = { at: number; issues: FactoryIssue[]; skipped: SkippedEvent[] }
+
+// skippedOf: the report's skipped_events; [] when absent (an older image) or not an array, and a
+// malformed entry is dropped.
+function skippedOf(raw: unknown): SkippedEvent[] {
+  if (!Array.isArray(raw)) return []
+  const out: SkippedEvent[] = []
+  for (const e of raw as Record<string, unknown>[]) {
+    if (e === null || typeof e !== 'object') continue
+    if (typeof e.type !== 'string' || !Number.isInteger(e.type_version) || typeof e.count !== 'number') continue
+    out.push({ type: e.type, version: e.type_version as number, count: e.count, derived: e.derived === true })
+  }
+  return out
+}
+
+// derivedSkipError: why a report whose derivation skipped events is not read, or null when none was.
+export function derivedSkipError(skipped: SkippedEvent[]): string | null {
+  const d = skipped.filter(s => s.derived)
+  if (d.length === 0) return null
+  return `the image's readers are older than this loop: skipped derived events ${d.map(s => `${s.type} v${s.version} x${s.count}`).join(', ')}`
+}
 
 // parseFactoryState: the repo's live and recently ended issues, or null when the document is
 // not a factory-state report for that repo.
 export function parseFactoryState(json: string, repo: string): Factory | null {
-  let doc: { at?: unknown; repos?: { repo?: unknown; issues?: unknown[]; recent?: unknown[] }[] }
+  let doc: { at?: unknown; skipped_events?: unknown; repos?: { repo?: unknown; issues?: unknown[]; recent?: unknown[] }[] }
   try {
     doc = JSON.parse(json)
   } catch {
@@ -81,7 +104,7 @@ export function parseFactoryState(json: string, repo: string): Factory | null {
   }
   take(entry.issues, false)
   take(entry.recent, true)
-  return { at, issues }
+  return { at, issues, skipped: skippedOf(doc.skipped_events) }
 }
 
 // --- dev-query --csv ---------------------------------------------------------------------

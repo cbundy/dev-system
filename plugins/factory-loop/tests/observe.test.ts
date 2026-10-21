@@ -55,8 +55,8 @@ const pl = (s: RunState, branch: string, run: string, over: Partial<PipelineRun>
   ...over,
 })
 
-function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = []) {
-  return JSON.stringify({ at: iso(NOW), at_source: '--at', repos: [{ repo: REPO, issues, recent }] })
+function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], extra: Record<string, unknown> = {}) {
+  return JSON.stringify({ at: iso(NOW), at_source: '--at', ...extra, repos: [{ repo: REPO, issues, recent }] })
 }
 const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) => ({
   issue: n,
@@ -103,6 +103,22 @@ describe('parse', () => {
     ])
     expect(parseFactoryState(json, 'other/repo')).toBeNull()
     expect(parseFactoryState('not json', REPO)).toBeNull()
+  })
+
+  test('factory-state: skipped_events map type_version to version; absent, malformed or non-array give none', () => {
+    const skipped = (v: unknown) => parseFactoryState(factoryJson([], [], v === undefined ? {} : { skipped_events: v }), REPO)?.skipped
+    expect(skipped([{ type: 'mystery', type_version: 1, count: 3, derived: false }, { type: 'transition', type_version: 3, count: 4, derived: true }])).toEqual([
+      { type: 'mystery', version: 1, count: 3, derived: false },
+      { type: 'transition', version: 3, count: 4, derived: true },
+    ])
+    // an older image prints no field
+    expect(skipped(undefined)).toEqual([])
+    expect(skipped('x')).toEqual([])
+    expect(skipped({ type: 'a' })).toEqual([])
+    // a bad entry is dropped; derived is true only when it is true
+    expect(
+      skipped([{ type: 'a', type_version: '1', count: 1 }, { type: 7, type_version: 1, count: 1 }, { type: 'b', type_version: 1.5, count: 1 }, { type: 'c', type_version: 1, count: '2' }, null, { type: 'd', type_version: 2, count: 5, derived: 'true' }]),
+    ).toEqual([{ type: 'd', version: 2, count: 5, derived: false }])
   })
 
   test('CSV: quoted commas, quotes and newlines survive', () => {
@@ -1765,6 +1781,28 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // closed, it is not read again
     await h.pass(runtime(), kept, NOW + 6 * MIN)
     expect(issueReads(h)).toEqual(['45', '114', '470'])
+  })
+
+  test('a derived skip makes the factory source fail and is not cached; a non-derived skip is kept', async () => {
+    const report = (skipped: unknown[]) => factoryJson([fsIssue(45, 'parked', { run: 'R45' })], [], { skipped_events: skipped })
+    const ioOf = (stdout: string): Io => ({
+      now: async () => NOW,
+      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      readFile: async () => null,
+      sessionLimits: async () => [],
+      agents: async () => [],
+    })
+    const old = parseFactoryState(factoryJson([]), REPO)!
+    const cache = emptyCache()
+    cache.repo = REPO
+    cache.factory = { at: NOW - 5 * MIN, value: old }
+    const derived = await observe(ioOf(report([{ type: 'transition', type_version: 3, count: 4, derived: true }, { type: 'x', type_version: 2, count: 1, derived: true }])), runtime(), cache, NOW, null, null, stored())
+    expect(derived.state.sources.factory.ok).toBe(false)
+    expect(derived.state.sources.factory.error).toBe("the image's readers are older than this loop: skipped derived events transition v3 x4, x v2 x1")
+    expect(cache.factory?.value).toBe(old)
+    const kept = await observe(ioOf(report([{ type: 'mystery', type_version: 1, count: 3, derived: false }])), runtime(), cache, NOW, null, null, stored())
+    expect(kept.state.sources.factory.ok).toBe(true)
+    expect(cache.factory?.value.skipped).toEqual([{ type: 'mystery', version: 1, count: 3, derived: false }])
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {

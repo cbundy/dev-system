@@ -190,7 +190,7 @@ export function blindPass(ctx: PlanCtx): void {
   const since = state.sources.factory.at
   skip(ctx, 'G2', null, `factory source unavailable${state.sources.factory.error ? `: ${state.sources.factory.error}` : ''}`)
   if (since === null || state.now - since >= config.blindNoticeAfterMs) {
-    want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never' }))
+    want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never', error: state.sources.factory.error?.slice(0, 300) ?? null }))
   }
 }
 

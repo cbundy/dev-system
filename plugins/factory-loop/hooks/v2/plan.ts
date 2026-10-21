@@ -27,6 +27,7 @@ import { queueRules } from './rules-queue'
 import { settingsRules } from './rules-settings'
 import { slotRules } from './rules-slots'
 import { starvedRules } from './rules-starved'
+import { readerRules } from './rules-reader'
 import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
 import { windDownGuard, windDownOf, windDownTells, windDownTitle } from './wind-down'
@@ -65,6 +66,7 @@ export function planV2(state: State, config: Config): PlanResult {
     } else {
       skip(ctx, 'G2', null, `v2 records not read: ${store.error ?? 'the store failed'}; nothing is released, claimed or started`)
     }
+    readerRules(ctx)
     interventionRules(ctx)
     settingsRules(ctx)
     flakeRules(ctx)
