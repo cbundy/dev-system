@@ -59,6 +59,8 @@ function mapEvent(raw) {
     event_id: raw.event_id || null,
     device_seq: Number.isInteger(raw.device_seq) ? raw.device_seq : null,
     pr: Number.isInteger(d.pr) ? d.pr : null,
+    regime: typeof raw.regime === "string" && raw.regime !== "" ? raw.regime : null,
+    session_id: typeof raw.session_id === "string" && raw.session_id !== "" ? raw.session_id : null,
   };
   const rec = (state, note, at = ts) => ({ ...base, state, ts: at, note });
   switch (raw.type) {
@@ -147,6 +149,9 @@ function normalize(report) {
   // the merges, prs and gaps sections read the new events' pr, by and recovered fields, which the old
   // log has no equivalent of: n/a under --source old, so a shadow run records no difference for them
   for (const k of MERGE_SECTIONS) delete out[k];
+  // by_regime has no counterpart under the old source, whose records carry no regime
+  if (out.throughput && typeof out.throughput === "object") delete out.throughput.by_regime;
+  if (out.spend && typeof out.spend === "object") delete out.spend.by_regime;
   if (out.throughput && Array.isArray(out.throughput.issues)) {
     for (const i of out.throughput.issues) for (const f of STAGE_FIELDS) delete i[f];
   }

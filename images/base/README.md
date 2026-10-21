@@ -1602,7 +1602,7 @@ event's old-format line `v` is 2. After the append it touches `/persist/events/.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
-[--source old|new|shadow] [--new-events <file>]`
+[--source old|new|shadow] [--new-events <file>] [--regime <value>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
