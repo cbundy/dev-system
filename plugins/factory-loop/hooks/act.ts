@@ -10,7 +10,7 @@
 // executor, with a recording fake. The layer that plans is v2/plan.ts (v2 SPEC 2.3).
 import { cliExecutors } from './act-cli'
 import { mergeExecutors } from './act-merge'
-import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
+import type { ActIo, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { GITHUB_V2, turnEnded } from './foundation'
 import { changedEntries, finish, loopEvent, reconcileAgents, start } from './ledger'
 import type { Runtime } from './observe'
@@ -68,26 +68,19 @@ export function commandOf(io: ActIo, rt: Runtime, log: string[]): ExecCtx['cmd']
   }
 }
 
-// eventArgv: `callum-flow-event <state>` with the fields as its flags.
-export function eventArgv(state: string, f: EventFields): string[] {
-  const argv = ['callum-flow-event', state]
-  if (f.issue !== undefined && f.issue !== null) argv.push('--issue', String(f.issue))
-  if (f.run !== undefined && f.run !== null) argv.push('--run', f.run)
-  if (f.branch !== undefined && f.branch !== null) argv.push('--branch', f.branch)
-  if (f.pr !== undefined && f.pr !== null) argv.push('--pr', String(f.pr))
-  if (f.head !== undefined && f.head !== null) argv.push('--head', f.head)
-  if (f.note !== undefined && f.note !== null) argv.push('--note', f.note)
-  return argv
+// eventArgv: `callum-flow-event --type <type> --data <json> --issue N`.
+export function eventArgv(type: string, data: Record<string, unknown>, at: { issue: number }): string[] {
+  return ['callum-flow-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(at.issue)]
 }
 
 // eventOf: ExecCtx.event. callum-flow-event exits non-zero only on a usage error (2); the error
 // carries the exit as `exitCode`, which the executors read to never retry it.
 export function eventOf(cmd: ExecCtx['cmd']): ExecCtx['event'] {
-  return async (state, fields) => {
-    const r = await cmd(eventArgv(state, fields), { timeoutMs: EVENT_TIMEOUT_MS })
+  return async (type, data, at) => {
+    const r = await cmd(eventArgv(type, data, at), { timeoutMs: EVENT_TIMEOUT_MS })
     if (r.exitCode === 0) return
     const why = r.stderr.trim().split('\n').pop() ?? ''
-    throw Object.assign(new Error(`callum-flow-event ${state}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
+    throw Object.assign(new Error(`callum-flow-event ${type}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
   }
 }
 

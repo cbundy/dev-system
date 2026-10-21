@@ -1,5 +1,6 @@
-// The event action's target (cbundy/dev-system#825): H1's backfill writes the new log only, so
-// eventArgv adds --new-only for target 'new' and the event executor passes the target through.
+// The event action has no target (cbundy/dev-system#1141): every event the loop builds is a native
+// call, which writes the new log only, so H1's backfill needs no --new-only and eventArgv takes no
+// option. The event executor runs the argv events.ts builds, as it is.
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { ExecCtx } from '../hooks/exec'
@@ -14,32 +15,25 @@ const LIFE = lifeOf(NOW)
 const record = madeRecord({ issue: 7, life: LIFE, branch: 'issue-7', pr: null, others: [] }, NOW)
 const ev = { state: 'transition' as const, record, row: 'H1', from: null, via: 'dual-write' as const }
 
-describe('eventArgv target', () => {
-  test('target new ends with --new-only; no target, and every other event, has no such flag', () => {
-    const plain = eventArgv(ev)
-    expect(plain).not.toContain('--new-only')
-    expect(plain[1]).toBe('transition')
-    expect(eventArgv(ev, {})).toEqual(plain)
-    const newOnly = eventArgv(ev, { target: 'new' })
-    expect(newOnly[newOnly.length - 1]).toBe('--new-only')
-    expect(newOnly.slice(0, -1)).toEqual(plain)
+describe('eventArgv has no target', () => {
+  test('a transition is a native call with its issue and no --new-only, --note or column flag', () => {
+    const argv = eventArgv(ev)
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'transition', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', '7'])
+    for (const flag of ['--new-only', '--note', '--branch', '--pr', '--head']) expect(argv).not.toContain(flag)
+    expect(eventArgv.length).toBe(1)
   })
 })
 
 describe('the event executor', () => {
-  const act = (target?: 'new'): Extract<Action, { kind: 'event' }> =>
-    ({ kind: 'event', key: 'dual-write:7', class: 'free', rule: 'H1', reason: 'r', issue: 7, event: ev, ...(target === undefined ? {} : { target }) }) as never
-  async function argvOf(a: Extract<Action, { kind: 'event' }>): Promise<string[]> {
+  const act: Extract<Action, { kind: 'event' }> = { kind: 'event', key: 'dual-write:7', class: 'free', rule: 'H1', reason: 'r', issue: 7, event: ev } as never
+  test('runs the argv events.ts builds, and a refusal is a failure never retried', async () => {
     const seen: string[][] = []
-    const ctx = { cmd: async (argv: string[]) => (seen.push(argv), { exitCode: 0, stdout: '', stderr: '' }) } as unknown as ExecCtx
-    const r = await executors.event?.(ctx, a)
+    const ok = { cmd: async (argv: string[]) => (seen.push(argv), { exitCode: 0, stdout: '', stderr: '' }) } as unknown as ExecCtx
+    const r = await executors.event?.(ok, act)
     expect(r?.status).toBe('done')
-    expect(seen).toHaveLength(1)
-    return seen[0] as string[]
-  }
-  test('target new runs callum-flow-event with --new-only; without a target it writes both logs as before', async () => {
-    expect(await argvOf(act('new'))).toEqual(eventArgv(ev, { target: 'new' }))
-    expect(await argvOf(act())).toEqual(eventArgv(ev))
-    expect(await argvOf(act())).not.toContain('--new-only')
+    expect(seen).toEqual([eventArgv(ev)])
+    const refused = { cmd: async () => ({ exitCode: 2, stdout: '', stderr: 'callum-flow-event: unknown type' }) } as unknown as ExecCtx
+    expect(await executors.event?.(refused, act)).toMatchObject({ status: 'failed', noRetry: true })
   })
 })

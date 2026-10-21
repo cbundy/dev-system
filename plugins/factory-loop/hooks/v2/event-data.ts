@@ -60,9 +60,9 @@ export type ReleaseEvent = {
   lives: number | null
 }
 
-// The reused states, each with the meaning it already has (7.1); the note is today's.
+// The reused states, each with the meaning it already has (7.1); the note is read for its payload (event-native.ts).
 export type ReusedEvent = {
-  state: 'delegated' | 'fix_requested' | 'merge_ready' | 'abandoned' | 'merged' | 'verdict'
+  state: 'abandoned' | 'merged' | 'verdict'
   issue: number
   branch: string | null
   pr: number | null

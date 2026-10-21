@@ -145,16 +145,14 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
     expect(f.env.commands).toEqual(['treehouse return /slot', 'git switch b'])
   })
 
-  test('an event is callum-flow-event with its fields as flags; a failure throws with its exit code', async () => {
-    expect(eventArgv('delegated', { issue: 470, note: 'brief u' })).toEqual(['callum-flow-event', 'delegated', '--issue', '470', '--note', 'brief u'])
-    expect(eventArgv('verdict', { issue: 470, run: 'R', branch: 'b', pr: 5, head: 'h', note: 'n' })).toEqual([
-      'callum-flow-event', 'verdict', '--issue', '470', '--run', 'R', '--branch', 'b', '--pr', '5', '--head', 'h', '--note', 'n',
-    ])
-    const f = fake([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown state' }))
+  test('an event is callum-flow-event with its type, data and issue; a failure throws with its exit code', async () => {
+    expect(eventArgv('closed', { reason: 'completed' }, { issue: 470 })).toEqual(['callum-flow-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '470'])
+    const f = fake([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown type' }))
     const event = eventOf(commandOf(f.env.io, f.env.rt, f.env.commands))
-    const err = await event('nope', {}).then(() => null, (e: unknown) => e as Error & { exitCode?: number })
+    const err = await event('nope', {}, { issue: 1 }).then(() => null, (e: unknown) => e as Error & { exitCode?: number })
     expect(err?.exitCode).toBe(2)
-    expect(err?.message).toContain('unknown state')
+    expect(err?.message).toContain('unknown type')
+    expect(f.env.commands.at(-1)).toContain('--type nope --data {} --issue 1')
   })
 })
 

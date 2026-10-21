@@ -203,7 +203,7 @@ const comment: Executor = async (ctx, action) => {
 const event: Executor = async (ctx, action) => {
   if (action.kind !== 'event') return refused(`the event executor got a ${action.kind} action`)
   if (action.logged === true) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `${action.event.state} already in the event log` }
-  const argv = eventArgv(action.event, { target: action.target })
+  const argv = eventArgv(action.event)
   const ran = await run(ctx, argv, EVENT_MS)
   if (!ran.ok) return ran.exec
   if (ran.r.exitCode === 0) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `logged ${action.event.state}` }

@@ -66,6 +66,7 @@ const { register } = require('node:module')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { isDeepStrictEqual } = require('node:util')
 
 const ME = 'factory-reconcile'
 const USAGE = `usage: ${ME} --repo <owner/name> [--device <name>] [--checkout <dir>] [--loop-dir <dir>] [--act <N>... | --act all]
@@ -694,25 +695,26 @@ async function act(report, which, ctx) {
 
 const recent = (facts, at) => facts !== undefined && [facts.head, facts.tree].some((t) => t !== null && at - t < BUSY_MS)
 
-// argvRow: an event's argv (events.ts eventArgv) as its line in the log reads: its state, its
-// columns and its note.
+// argvRow: an event's argv (events.ts eventArgv) as the new log's line reads: its type, its issue
+// and its data.
 function argvRow(argv) {
   const flag = (name) => {
-    const i = argv.indexOf(name, 2)
+    const i = argv.indexOf(name, 1)
     return i === -1 || i + 1 >= argv.length ? null : argv[i + 1]
   }
   const num = (v) => (v === null ? null : Number(v))
-  return { state: argv[1], issue: num(flag('--issue')), branch: flag('--branch'), pr: num(flag('--pr')), head: flag('--head'), note: flag('--note') }
+  const data = flag('--data')
+  return { type: flag('--type'), issue: num(flag('--issue')), data: data === null ? null : JSON.parse(data) }
 }
 
 // logEvent: one event through callum-flow-event (events.ts built its argv); null when its line is
-// in the log, else why not. callum-flow-event exits 0 when its write fails (it never fails its
-// caller), so the log is read: its path (--path), its size before, and a line after that with the
-// event's state, issue and note. env: more environment for the CLI (the readiness check's scratch
-// log).
+// in the new log, else why not. callum-flow-event exits 0 when its write fails (it never fails its
+// caller), so the log is read: its path (--new-only --new-path), its size before, and a line after
+// that with the event's type, issue and data. env: more environment for the CLI (the readiness
+// check's scratch log).
 function logEvent(ctx, repo, argv, env = {}) {
   const opts = { env: { CALLUM_FLOW_REPO: repo, CALLUM_FLOW_ACTOR: ACTOR, ...env } }
-  const where = ctx.io.run('event', ['--path', '--repo', repo], opts)
+  const where = ctx.io.run('event', ['--new-only', '--new-path', '--repo', repo], opts)
   const file = where.stdout.trim()
   if (where.code !== 0 || !path.isAbsolute(file)) return `the event log's path not read: ${why(where)}`
   const before = sizeOf(file)
@@ -743,7 +745,7 @@ function loggedSince(file, offset, row) {
   return text.split('\n').some((line) => {
     try {
       const e = JSON.parse(line)
-      return e.state === row.state && (e.issue ?? null) === row.issue && (e.note ?? null) === row.note
+      return e.type === row.type && (e.issue ?? null) === row.issue && isDeepStrictEqual(e.data, row.data)
     } catch {
       return false
     }
@@ -765,28 +767,32 @@ function keepUnlogged(ctx, repo, argvs) {
 }
 
 // actReady: null when --act may run, else why not. Every event it writes must be one the
-// factory's readers count (6.4, 7.1, 7.2): hooks/v2/events.ts writes a release's fields and an
-// intervention's as note tokens and reads them back (U4 fills it), and the callum-flow-event in
-// use logs an `intervention`, tried against a scratch log so nothing reaches the real one.
+// factory's readers count (6.4, 7.1, 7.2): hooks/v2/events.ts builds a release's and an
+// intervention's native data (type and fields, as the translator makes them), and the
+// callum-flow-event in use logs an `intervention`, tried against a scratch log so nothing reaches
+// the real one.
 function actReady(h, io, repo, at) {
-  if (typeof h.events.parseEvent !== 'function') return 'hooks/v2/events.ts has no note parser yet (U4 fills it)'
+  if (typeof h.events.eventArgv !== 'function') return 'hooks/v2/events.ts has no event argv builder'
   const sample = { issue: 1, claim: h.keys.lifeOf(at), outcome: 'leave', lives: null, stage: 'designing', checked: 'a check of the note encoding', branch: 'issue-1', pr: 2 }
   const read = (e) => {
     try {
-      return h.events.parseEvent(argvRow(h.events.eventArgv(e)))
+      return argvRow(h.events.eventArgv(e))
     } catch {
       return null
     }
   }
   const rel = h.release.releaseEvent(sample)
   const relBack = read(rel)
-  if (relBack === null || relBack.state !== rel.state || relBack.reason !== 'reconcile' || relBack.outcome !== rel.outcome || relBack.stage !== rel.stage || relBack.checked !== rel.checked || relBack.pr !== rel.pr) {
-    return "hooks/v2/events.ts does not read back a release's fields (reason, outcome, stage, what was checked, PR)"
+  const relType = rel.state === 'reclaimed' ? 'requeued' : 'abandoned'
+  const relReason = rel.outcome === 'reject' ? 'rejected' : 'reconcile'
+  const d = relBack === null ? null : relBack.data
+  if (d === null || relBack.type !== relType || relBack.issue !== rel.issue || d.reason !== relReason || d.stage !== rel.stage || d.detail !== rel.checked || d.pr !== rel.pr) {
+    return "hooks/v2/events.ts does not build a release's fields (reason, stage, what was checked, PR)"
   }
   const iv = h.release.releaseIntervention(sample, 'person')
   const ivBack = read(iv)
-  if (ivBack === null || ivBack.state !== 'intervention' || ivBack.who !== iv.who || ivBack.cause !== iv.cause || ivBack.fact !== iv.fact) {
-    return "hooks/v2/events.ts does not read back an intervention's who, cause and fact"
+  if (ivBack === null || ivBack.type !== 'intervention' || ivBack.data.who !== iv.who || ivBack.data.cause !== iv.cause || ivBack.data.fact !== iv.fact) {
+    return "hooks/v2/events.ts does not build an intervention's who, cause and fact"
   }
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-probe-`))
   try {

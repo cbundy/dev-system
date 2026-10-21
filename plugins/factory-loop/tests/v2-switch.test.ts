@@ -59,6 +59,11 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
   }
 }
 
+// the interventions the loop logged: native calls of callum-flow-event (--type intervention --data <json> [--issue N])
+const interventions = (h: { seen: { argv: string[] }[] }) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === 'intervention')
+const ivData = (s: { argv: string[] }) => JSON.parse(s.argv[4] ?? '{}') as { who: string; cause: string; life: string | null; fact: string }
+const ivFields = (s: { argv: string[] }): (string | null)[] => [s.argv[5] === '--issue' ? (s.argv[6] ?? null) : null, ivData(s).who, ivData(s).cause]
+
 describe('the settings (v2 SPEC appendix A)', () => {
   test('the defaults are v2\'s: the timeouts and limits are the spec\'s, and K is 3', () => {
     expect(DEFAULT_CONFIG).toMatchObject({
@@ -599,8 +604,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const control = h.lines().find(l => l.control === 'pause 12')
     expect(control?.problems).toBeUndefined()
     expect(control?.by).toBe('person')
-    const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
-    expect(logged).toEqual([['--issue', '12', 'who=person', 'cause=op:pause']])
+    expect(interventions(h).map(ivFields)).toEqual([['12', 'person', 'op:pause']])
   })
 
   test('the control tool\'s ops are the judge\'s interventions: who=judge, the control line\'s by', ENGINE_TEST, async ($, on) => {
@@ -615,16 +619,15 @@ describe('the driver (v2 SPEC 2.3)', () => {
     }
     const lines = h.lines()
     for (const op of ['pause 12', 'unpause 12', 'config set maxInFlightIssues 3']) expect(lines.find(l => l.control === op)).toMatchObject({ by: 'judge' })
-    const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
-    expect(logged).toEqual([
-      ['--issue', '12', 'who=judge', 'cause=op:pause'],
-      ['--issue', '12', 'who=judge', 'cause=op:unpause'],
-      ['--note', expect.stringMatching(/^who=judge cause=config-file /), 'who=judge', 'cause=config-file'],
+    expect(interventions(h).map(ivFields)).toEqual([
+      ['12', 'judge', 'op:pause'],
+      ['12', 'judge', 'op:unpause'],
+      [null, 'judge', 'config-file'],
     ])
   })
 
   test('act mode: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', ENGINE_TEST, async ($, on) => {
-    const restarts = (h: ReturnType<typeof host>) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention' && (s.argv.at(-1) ?? '').includes('cause=restart'))
+    const restarts = (h: ReturnType<typeof host>) => interventions(h).filter(s => ivData(s).cause === 'restart')
     const clock = mock.clock(on, { now: NOW })
     const earlier = { v: 1, savedAt: NOW - 30 * MIN, entries: [entry('sweep:0', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })] }
     const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work' }, run: world(), store: { [`ledger:${REPO}`]: earlier } })
@@ -634,7 +637,8 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const logged = restarts(h)
     expect(logged).toHaveLength(1)
     expect(logged[0]?.argv.includes('--issue')).toBe(false)
-    expect(logged[0]?.argv.at(-1)).toMatch(/^who=person cause=restart life=none fact=restart\/fleet\/[0-9a-z]+ reason=/)
+    expect(ivData(logged[0] as never)).toMatchObject({ who: 'person', cause: 'restart', life: null })
+    expect(ivData(logged[0] as never).fact).toMatch(/^restart\/fleet\/[0-9a-z]+$/)
   })
 
   test('act mode: the first start of a loop with no ledger logs no restart', ENGINE_TEST, async ($, on) => {
@@ -643,7 +647,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(61_000)
-    expect(h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention')).toEqual([])
+    expect(interventions(h)).toEqual([])
   })
 
   test('an issue a person closes with its PR closes (E2), without parking first: the PR read makes the issue read due, and E4 waits for it (v2 SPEC 4.1; drill run 2, R2-F2)', ENGINE_TEST, async ($, on) => {
