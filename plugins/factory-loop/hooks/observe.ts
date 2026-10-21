@@ -53,6 +53,10 @@ export type Runtime = {
   poolSize: number
   cwd: string
   loopDir: string
+  // where the step agents' transcripts are (v2/step-tokens.ts): the config dir and the cwd of this session, whose
+  // munged name is the project folder; absent in a test's Runtime: no token reading
+  configDir?: string
+  sessionCwd?: string
   // this session and process, as v2's workspace rail checks the companion's handshake (v2 SPEC 10.9)
   workspace?: { session: string; process?: string }
   // the observe-mode event sink (v2 SPEC 13.11.1), null when acting; env carries it

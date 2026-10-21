@@ -1320,8 +1320,9 @@ The medians come from (a) in code, not from SQL: the median seconds of `reviewin
 (runs, auto-fix rounds, failed steps, parked time and pipeline tokens) read the no-mistakes mirror and
 are gone.
 
-The implementer's own token spend is not in this database: read it from the implementer rows of the
-`spend` section of `callum-flow-evaluate`, which has one row per role and model. A random split
+The implementer's own token spend is in this database from the loop that writes it on (see
+[Tokens per merged issue](#tokens-per-merged-issue), per issue, model and role); for older issues read it
+from the implementer rows of the `spend` section of `callum-flow-evaluate`, which has one row per role and model. A random split
 balances easy and hard issues only over many of them, so size the noise before reading a gap as real:
 run the query with `routed` replaced by a split of past building transitions by issue parity (both
 halves on the same model), and treat a gap no bigger than that one as noise. To narrow to one repo or
@@ -2484,6 +2485,132 @@ FROM (
     AND repo = :'repo' AND ts >= :'since'::timestamptz) r
 GROUP BY repo, device, tier
 ORDER BY repo, device, tier;
+```
+
+## Tokens per merged issue
+
+An agent step's `loop_entry` ([REFERENCE.md](factory-events/REFERENCE.md)) carries, when the step has ended
+(`done`, `failed`, `timed-out` or `lost`), `input_tokens`, `output_tokens`, `cache_read_tokens` and
+`cache_creation_tokens`, and `model`, the full id of the model the step's agent actually ran on. The loop reads them
+from the step agent's transcript when the entry ends: usage once per distinct `requestId` (the last line of a streamed
+response wins, as in [Token and wake definitions](#token-and-wake-definitions)), plus every agent nested under the
+step agent. They are null on a running event, on every other kind, on events from a loop older than this field, and
+when the transcript could not be found (the decision log then names the step key and "transcript not found").
+
+The queries count each agent once: the newest ended `loop_entry` of an agent step per `(repo, agent_id)` that has
+tokens, so a re-logged end, a restart and a repaired agent (the repair resumes the same agent) are one agent, and a
+retry is a new agent. They take every attempt of a merged issue in every life. A merged issue is one with a `merged`
+event in the window; `since` narrows by when it merged. `steps_without_tokens` counts the ended agent steps (one per
+key) of those issues with no counted agent behind them, so a gap is visible rather than silently low.
+
+What they leave out: the loop's own main-session wakes and judge turns, the tells, and the no-mistakes pipeline's
+agents; only the step agents the loop spawned are here. A step's `role` is read from its key: `i<N>/l<life>/s<seq>/<step>/a<n>`
+or, for a review, `i<N>/l<life>/review/<patch>/r<round>/a<n>`.
+
+Per merged issue, the four token sums and their total over all its attempts:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+steps AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND e.repo = :'repo'),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+gaps AS (
+  SELECT s.repo, s.issue, count(*) AS steps_without_tokens
+  FROM steps s
+  WHERE s.n = 1
+    AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.repo = s.repo AND t.agent_id = s.agent_id)
+  GROUP BY s.repo, s.issue)
+SELECT m.repo, m.issue, m.merged_at,
+  count(t.agent_id) AS agents,
+  coalesce(sum(t.input_tokens), 0) AS input_tokens,
+  coalesce(sum(t.output_tokens), 0) AS output_tokens,
+  coalesce(sum(t.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(t.cache_creation_tokens), 0) AS cache_creation_tokens,
+  coalesce(sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens), 0) AS total_tokens,
+  coalesce(max(g.steps_without_tokens), 0) AS steps_without_tokens
+FROM merged m
+LEFT JOIN tokens t ON t.repo = m.repo AND t.issue = m.issue
+LEFT JOIN gaps g ON g.repo = m.repo AND g.issue = m.issue
+GROUP BY m.repo, m.issue, m.merged_at
+ORDER BY m.merged_at, m.issue;
+```
+
+The same split per model (the full id the agent ran on; `unknown` for an agent whose transcript held no model):
+
+```sql
+WITH merged AS (
+  SELECT repo, issue
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL)
+SELECT t.repo, coalesce(t.model, 'unknown') AS model,
+  count(*) AS agents,
+  sum(t.input_tokens) AS input_tokens,
+  sum(t.output_tokens) AS output_tokens,
+  sum(t.cache_read_tokens) AS cache_read_tokens,
+  sum(t.cache_creation_tokens) AS cache_creation_tokens,
+  sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens) AS total_tokens
+FROM counted t
+JOIN merged m ON m.repo = t.repo AND m.issue = t.issue
+WHERE t.rn = 1
+GROUP BY t.repo, coalesce(t.model, 'unknown')
+ORDER BY t.repo, total_tokens DESC;
+```
+
+The same split per step role, with the steps that have no tokens:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+steps AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND e.repo = :'repo'),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+roles AS (
+  SELECT s.repo, s.issue,
+    CASE WHEN split_part(s.key, '/', 3) ~ '^s[0-9]+$' THEN split_part(s.key, '/', 4) ELSE split_part(s.key, '/', 3) END AS role,
+    t.agent_id AS counted_agent, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_creation_tokens
+  FROM steps s
+  LEFT JOIN tokens t ON t.repo = s.repo AND t.agent_id = s.agent_id
+  WHERE s.n = 1)
+SELECT r.repo, r.role,
+  count(r.counted_agent) AS agents,
+  coalesce(sum(r.input_tokens), 0) AS input_tokens,
+  coalesce(sum(r.output_tokens), 0) AS output_tokens,
+  coalesce(sum(r.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(r.cache_creation_tokens), 0) AS cache_creation_tokens,
+  count(*) FILTER (WHERE r.counted_agent IS NULL) AS steps_without_tokens
+FROM roles r
+JOIN merged m ON m.repo = r.repo AND m.issue = r.issue
+GROUP BY r.repo, r.role
+ORDER BY r.repo, r.role;
 ```
 
 ## Observe time per pass

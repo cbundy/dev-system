@@ -21,6 +21,7 @@ import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms,
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswers, stepRecorded } from './v2/steps'
+import { readStepTokens } from './v2/step-tokens'
 import { gateHoldMs } from './v2/steps-gate'
 import { V2_ACTION_KINDS } from './v2/types'
 import { expireWakes, wakeExecutors } from './wake'
@@ -153,11 +154,18 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
   const cmd = commandOf(env.io, env.rt, env.commands)
   const logged = (env.live.logged ??= new Map())
   for (const entry of entries) {
-    const argv = loopEvent(entry)
+    let argv = loopEvent(entry)
     if (argv === null) continue
     const said = JSON.stringify(argv)
     if (logged.get(entry.key) === said) continue
     logged.set(entry.key, said)
+    // an agent step's end carries its transcript's token totals, read once: only here, where the
+    // end is new (#657); no reading, no problem, where the runtime knows no config dir
+    if (entry.kind === 'agent-step' && entry.status !== 'running' && entry.agentId !== undefined && env.rt.configDir !== undefined && env.rt.sessionCwd !== undefined) {
+      const read = await readStepTokens(env.io, cmd, { configDir: env.rt.configDir, sessionCwd: env.rt.sessionCwd, session: entry.session ?? '', agentId: entry.agentId })
+      if (read.problem !== null) env.problems.push(clip(`loop event ${entry.key}: ${read.problem}`))
+      argv = loopEvent(entry, read.fields) ?? argv
+    }
     try {
       const r = await cmd(argv, { timeoutMs: EVENT_TIMEOUT_MS })
       if (r.exitCode !== 0) env.problems.push(clip(`loop event ${entry.key}: exit ${r.exitCode}`))

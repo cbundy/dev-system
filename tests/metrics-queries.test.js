@@ -117,7 +117,7 @@ const RUN_ONLY = [
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4",
   "Settings #0", "Settings #1",
-  "Spend on an API key #0", "Spend on an API key #1", "Observe time per pass #0", "Pass time #0",
+  "Spend on an API key #0", "Spend on an API key #1", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Observe time per pass #0", "Pass time #0",
   "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0",
   "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",
   "Queue snapshots #0", "Queue snapshots #1", "Queue snapshots #2",

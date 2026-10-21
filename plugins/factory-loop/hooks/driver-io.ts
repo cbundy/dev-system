@@ -88,6 +88,8 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : DEFAULT_POOL_SIZE,
     cwd: checkout,
     loopDir,
+    configDir: dir,
+    sessionCwd: S.cwd,
     workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,

@@ -115,6 +115,11 @@ describe('start and finish (v2 SPEC 13.5.1, 13.6.1, 13.7.1)', () => {
     expect(sessioned.session).toBe('session-1')
     expect(fromStored(JSON.parse(JSON.stringify(toStored([sessioned], NOW))))?.[0]?.session).toBe('session-1')
     expect(start([], claim(7), NOW, 'session-1').entry.session).toBeUndefined()
+    // an agent step keeps its spawning session too (#657): its transcript is under it, also after a restart
+    const stepped = start([], designer(60), NOW, 'session-1').entry
+    expect(stepped.session).toBe('session-1')
+    expect(fromStored(JSON.parse(JSON.stringify(toStored([stepped], NOW))))?.[0]?.session).toBe('session-1')
+    expect(start([], designer(60), NOW).entry.session).toBeUndefined()
   })
 
   test('a retry keeps the key, counts the attempt and clears the last outcome and agent', () => {

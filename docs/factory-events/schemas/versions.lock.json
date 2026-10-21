@@ -760,6 +760,20 @@
         "minimum": 0,
         "type": "integer"
       },
+      "cache_creation_tokens": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "cache_read_tokens": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "class": {
         "enum": [
           "develop",
@@ -843,6 +857,13 @@
           "null"
         ]
       },
+      "input_tokens": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "key": {
         "minLength": 1,
         "type": "string"
@@ -854,6 +875,12 @@
           "tell"
         ]
       },
+      "model": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "outcome": {
         "enum": [
           "current",
@@ -861,6 +888,13 @@
           "migrated",
           "timed-out",
           null
+        ]
+      },
+      "output_tokens": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
         ]
       },
       "rule": {

@@ -21,6 +21,7 @@ import type {
   Ms,
   Outcome,
 } from './types'
+import type { TokenFields } from './v2/step-tokens'
 import { AGENT_STEPS } from './v2/types'
 
 const DAY = 86_400_000
@@ -71,8 +72,11 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
     startedAt: now,
     endedAt: null,
   }
-  if (action.kind === 'agent-step') entry.step = action.step
-  else if (action.kind === 'transition') {
+  if (action.kind === 'agent-step') {
+    entry.step = action.step
+    // the spawning session names the transcript the token totals are read from, also after a restart
+    if (session !== '') entry.session = session
+  } else if (action.kind === 'transition') {
     entry.outcome = {
       kind: 'transition',
       row: action.row,
@@ -324,8 +328,8 @@ export function exhausted(entry: LedgerEntry, config: Config): boolean {
 // loopEvent: the native callum-flow-event argv for a `loop_entry` event about this entry, for agent
 // and wake entries (owner notices and rate-cap notices are tells) at their start and end; null for
 // CLI kinds, which log their own events, and for a judge, which has no event type.
-export function loopEvent(entry: LedgerEntry): string[] | null {
-  return LOOP_KINDS.includes(entry.kind) ? loopEntryArgv(entry) : null
+export function loopEvent(entry: LedgerEntry, tokens?: TokenFields): string[] | null {
+  return LOOP_KINDS.includes(entry.kind) ? loopEntryArgv(entry, tokens) : null
 }
 
 // changedEntries: the entries `after` holds that `before` did not hold as they are: new or

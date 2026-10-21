@@ -30,9 +30,15 @@
     "flakes": { "type": ["integer", "null"], "minimum": 0, "description": "A flake bug tell: how many flakes of the test the window held when the bug was filed; null otherwise.", "x-column": true },
     "window_days": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise.", "x-column": true },
     "first_flake_at": { "type": ["string", "null"], "format": "date-time", "description": "A flake bug tell: when the first flake of the test in the window happened; null otherwise.", "x-column": true },
-    "filed_issue": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the number of the bug the loop filed (or found); null otherwise.", "x-column": true }
+    "filed_issue": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the number of the bug the loop filed (or found); null otherwise.", "x-column": true },
+    "input_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the input tokens of its agent's transcript and every agent nested under it, once per request; null while running, for other kinds and when the transcript could not be read.", "x-column": true },
+    "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the output tokens, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the cache-read input tokens, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the cache-creation input tokens, counted as input_tokens; null otherwise.", "x-column": true },
+    "model": { "type": ["string", "null"], "description": "An ended agent step: the full id of the model the step's own agent ran on (for example claude-opus-5-5), the one of most turns; null otherwise.", "x-column": true }
   },
   "examples": [
-    { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }
+    { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null },
+    { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null, "input_tokens": 1520, "output_tokens": 8431, "cache_read_tokens": 412000, "cache_creation_tokens": 36210, "model": "claude-opus-5-5" }
   ]
 }
