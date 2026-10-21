@@ -46,6 +46,13 @@ printf '\n%s' "$FAKE_CURL_CODE"
 EOF
 chmod +x "$fakebin/curl"
 
+# Stub callum-flow-event: records the arguments of each call, one line per call.
+cat > "$fakebin/callum-flow-event" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$FAKE_EVENT_LOG"
+EOF
+chmod +x "$fakebin/callum-flow-event"
+
 home="$tmpdir/home"
 config="$tmpdir/claude"
 mkdir -p "$home" "$config"
@@ -68,7 +75,8 @@ run() {
     ${AUTH_DIR+CLAUDE_SECURESTORAGE_CONFIG_DIR="$AUTH_DIR"} \
     ${TOKEN:+CLAUDE_CODE_OAUTH_TOKEN="$TOKEN"} ${MAX_AGE:+CALLUM_USAGE_MAX_AGE="$MAX_AGE"} \
     FAKE_CURL_BODY="$body" FAKE_CURL_CODE="${CODE:-200}" FAKE_CURL_LOG="$log" \
-    ${CURL_FAIL:+FAKE_CURL_FAIL=1} \
+    ${CURL_FAIL:+FAKE_CURL_FAIL=1} FAKE_EVENT_LOG="$tmpdir/events" \
+    ${DEV_AUTH:+DEV_CLAUDE_AUTH="$DEV_AUTH"} \
     "$SH" "$USAGE_CHECK" "$@" < "${STDIN:-/dev/null}" 2> "$tmpdir/stderr") || rc=$?
 }
 
@@ -194,5 +202,23 @@ expect_out "usage=unavailable reason=jq-missing"
 # 11. Usage errors exit 2.
 run --bogus
 [ "$rc" -eq 2 ] || fail "unknown flag should exit 2, got $rc"
+
+# 12. An API-key login tries neither source: valid OAuth credentials and a fresh snapshot are not read,
+# curl is never run, and the unavailable reading is logged with auth api-key.
+write_creds still-valid
+mkdir -p "$(dirname "$state")"
+printf '{"recorded_at":%s,"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":%s},"seven_day":{"used_percentage":60,"resets_at":%s}}}\n' "$now" "$soon" "$later" > "$state"
+rm -f "$log.args" "$log.stdin" "$tmpdir/events"
+DEV_AUTH=api-key run
+expect_out "usage=unavailable reason=subscription:api-key-mode auth=api-key"
+[ ! -e "$log.args" ] || fail "an API-key login must not call curl: $(cat "$log.args")"
+[ -f "$tmpdir/events" ] || fail "an API-key reading should be logged as a usage event"
+[ "$(wc -l < "$tmpdir/events")" -eq 1 ] || fail "expected one event: $(cat "$tmpdir/events")"
+ev_data=$(sed 's/^--type usage --actor watcher --data //' "$tmpdir/events")
+[ "$(printf '%s' "$ev_data" | jq -c '[.available, .auth, .source, .reasons]')" = '[false,"api-key",null,["subscription:api-key-mode"]]' ] \
+  || fail "the event should carry auth api-key and the reason: $ev_data"
+# Any other login is unchanged.
+DEV_AUTH=subscription CODE=200 run
+[ "$(field source)" = statusline ] || fail "a subscription login should still read the sources (the snapshot here): $out"
 
 echo "usage-check.test.sh: ok"

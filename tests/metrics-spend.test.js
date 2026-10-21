@@ -53,6 +53,12 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
   put("d1", "2026-09-20T11:00:00.000Z", { available: true, five_hour_pct: 99, five_hour_resets_at: R1, seven_day_pct: 99, seven_day_resets_at: R1, source: "oauth", reasons: [], auth: "subscription" });
   put("d1", "2026-09-20T11:30:00.000Z", { available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: null, reasons: ["x"], auth: "api-key" });
   put("d2", "2026-09-20T11:00:00.000Z", spend(500, 100, R1), "o/b");
+  // an unavailable API-key reading holds the loop at stop-new until the next reading (10 min, then a spend reading)
+  const gone = (reason) => ({ available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: null, reasons: [reason], auth: "api-key" });
+  put("d1", "2026-09-22T10:00:00.000Z", gone("spend:no-session-cost"));
+  put("d1", "2026-09-22T10:10:00.000Z", gone("spend:bad-tally"));
+  put("d1", "2026-09-22T10:20:00.000Z", gone("spend:no-session-cost"));
+  put("d1", "2026-09-22T10:25:00.000Z", spend(1, 100, R2));
 
   const [a, b] = blocks();
   const rowsA = db.query(sub(a, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
@@ -60,17 +66,20 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
     ["2026-09-19", "o/a", "d1", "86", "100", "86", "86"],
     ["2026-09-20", "o/a", "d1", "92", "100", "92", "6"],
     ["2026-09-21", "o/a", "d1", "9", "", "", "9"],
+    ["2026-09-22", "o/a", "d1", "1", "100", "1", "1"],
   ]);
 
   const rowsB = db.query(sub(b, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
   // 09:00-10:00 at 10% (cap 15 min), 10:00-10:20 at 80% (cap 15), 10:20 at 86% to the next reading 10-20 (cap 15)
   // 10-20: 95% for 5 min, 92% for 15 min (the last reading of the day, the next is a day on, cap 15)
   // 10-21: 7% for 2 min, then the no-budget reading for 15 min
+  // unavailable API-key readings count as stop-new: the reading of 09-20 11:30 (15 min, capped), and 09-22 10:00 (10),
+  // 10:10 (10) and 10:20 (5); the spend reading of 10:25 (1%) is normal for 15 min (capped)
   assert.deepEqual(rowsB, [
-    ["o/a", "d1", "normal", "00:32:00"],
+    ["o/a", "d1", "normal", "00:47:00"],
     ["o/a", "d1", "slow", "00:15:00"],
     ["o/a", "d1", "stop-all", "00:05:00"],
-    ["o/a", "d1", "stop-new", "00:15:00"],
+    ["o/a", "d1", "stop-new", "00:55:00"],
     ["o/a", "d1", "unknown", "00:15:00"],
   ]);
 });

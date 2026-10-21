@@ -1,6 +1,8 @@
 // `/factory config` (#698): the settings the loop runs with, grouped, each with where its value
 // came from. Pure: it renders the Runtime the last pass used (viewOf) and the control state, and
 // reads no file, so it shows what the pass runs with, not what the files say now.
+import { budgetOf } from './spend'
+import type { ApiKeySettings } from './spend'
 import { GATE_CPUS, resolveGateConcurrency, shortDuration } from './config'
 import type { Runtime } from './observe'
 import { effectiveCap } from './v2/capacity'
@@ -30,6 +32,8 @@ export type ConfigView = {
   modeFrom: Source
   deviceFrom: Source
   pluginVersion: string
+  // API-key mode: the budget settings the container's environment gave (spend.ts); absent: subscription
+  apiKey?: ApiKeySettings
 }
 
 const WIDTH = 60
@@ -107,6 +111,7 @@ export function viewOf(rt: Runtime & Partial<ViewInputs>, gates?: readonly GateL
     modeFrom: originOf(file, 'mode'),
     deviceFrom: rt.deviceFrom ?? (rt.device === '' ? 'default' : 'env'),
     pluginVersion: rt.pluginVersion ?? 'unknown',
+    ...(rt.apiKey === undefined ? {} : { apiKey: rt.apiKey }),
   }
 }
 
@@ -127,6 +132,17 @@ function render(row: Row): string[] {
 function together(sources: Source[]): Source | 'mixed' {
   const first = sources[0] ?? 'default'
   return sources.every(s => s === first) ? first : 'mixed'
+}
+
+// apiKeyRows: API-key mode's budget and reset day, which come from the workspace's parameters
+// (claude_budget_usd, claude_budget_reset_day), not from a config file.
+function apiKeyRows(k: ApiKeySettings): string[] {
+  const budget = budgetOf({ budgetUsd: k.budgetUsd, resetDay: '1' })
+  const day = budgetOf({ budgetUsd: '1', resetDay: k.resetDay })
+  return [
+    ...render({ label: 'budget', value: 'budgetUsd' in budget ? `$${budget.budgetUsd} a month` : 'none (new work stops)', source: 'env', note: 'from the workspace parameters, not a file' }),
+    ...render({ label: 'budget reset day', value: 'resetDay' in day ? `day ${day.resetDay}, 00:00 UTC` : `${k.resetDay || 'none'} (invalid, new work stops)`, source: 'env' }),
+  ]
 }
 
 // gateConcurrencyText: the gates that run at once and where that came from: `1 (auto: 8 CPUs / 8)`
@@ -265,6 +281,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
           value: live ? `to ${override.untilPct}% until ${clock(override.expiresAt, now)}` : 'none',
           source: 'directive',
         }),
+        ...(view.apiKey === undefined ? [] : apiKeyRows(view.apiKey)),
       ],
     ],
     ['Config problems', view.problems.length === 0 ? ['  none'] : view.problems.map(p => clip(`  ${p}`))],

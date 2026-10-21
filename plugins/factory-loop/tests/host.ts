@@ -152,6 +152,8 @@ export function host(on: On, opts: HostOptions = {}) {
     registered,
     agents,
     usage: [] as { kind: string; percentUsed: number }[],
+    // session usage cost.usd (the process-wide cost); undefined: the engine reports none
+    cost: undefined as number | undefined,
     // the directories $.fs.list read
     listed: [] as string[],
     // the decision log's appends fail (a full disk), so every pass throws at its end
@@ -311,7 +313,7 @@ export function host(on: On, opts: HostOptions = {}) {
     if (batch !== undefined) return done(await batch)
     return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? checkout(argv) ?? {})
   })
-  on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage } }))
+  on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage, ...(h.cost === undefined ? {} : { cost: { usd: h.cost } }) } }))
   on('session.id', async () => ({ value: opts.session ?? SESSION }))
   on('agent.list', async () => (h.failList ? { deny: 'agent list unavailable' } : { value: agents.map(a => ({ ...a })) }))
   on('agent.spawn', async ($, e) => {

@@ -314,6 +314,18 @@ describe('configText', () => {
     expect(line(configText(view({}), control(), NOW), 'override')).toContain('none')
   })
 
+  test('API-key mode shows the budget and reset day from the workspace parameters; subscription mode shows neither', () => {
+    const text = configText(view({}, {}, { apiKey: { budgetUsd: '250', resetDay: '15' } }), control(), NOW)
+    expect(line(text, 'budget')).toContain('$250 a month')
+    expect(line(text, 'budget reset day')).toContain('day 15, 00:00 UTC')
+    expect(text).toContain('from the workspace parameters')
+    const bad = configText(view({}, {}, { apiKey: { budgetUsd: '0', resetDay: '40' } }), control(), NOW)
+    expect(line(bad, 'budget')).toContain('none (new work stops)')
+    expect(line(bad, 'budget reset day')).toContain('invalid, new work stops')
+    const plain = configText(view({}), control(), NOW)
+    expect(plain).not.toContain('budget')
+  })
+
   test('no pass yet', () => {
     expect(configText(null, control(), NOW)).toBe('Factory loop: no pass yet, so no settings are loaded.')
   })

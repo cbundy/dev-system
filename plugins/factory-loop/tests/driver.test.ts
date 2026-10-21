@@ -1896,3 +1896,58 @@ describe('the pass summary event (#680)', () => {
     expect(passesEvents(h)).toHaveLength(before)
   })
 })
+
+// --- API-key mode (hooks/spend.ts; v2 SPEC 13.5.2 G3, 13.13) ----------------------------------------
+
+describe('API-key mode: the spend tally', () => {
+  const KEY = `spend:${REPO}`
+  const API = { DEV_CLAUDE_AUTH: 'api-key', DEV_CLAUDE_BUDGET_USD: '100', DEV_CLAUDE_BUDGET_RESET_DAY: '1' }
+  const tally = { v: 1, periodStart: Date.parse('2026-10-01T00:00:00Z'), spentUsd: 30, counter: { process: 'other', session: 'other', lastUsd: 5 }, at: NOW - MIN }
+
+  test('an acting pass stores the tally, counted from the cost it read; no usage-check.sh runs', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT }, env: API, run: factory({ queue: [470] }).run })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(KEY)).toMatchObject({ v: 1, spentUsd: 12, counter: { session: SESSION, lastUsd: 12 } })
+    expect(h.commands().some(s => s.argv[0] === `${TOOLS}/usage-check.sh`)).toBe(false)
+    // the cost grows: the tally grows by the difference
+    h.cost = 15
+    await clock.advance(2 * MIN)
+    expect((h.store.get(KEY) as { spentUsd: number }).spentUsd).toBe(15)
+  })
+
+  test('an observe pass reads the tally and never writes it; its event goes to the sink', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, env: API, store: { [KEY]: tally } })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(KEY)).toEqual(tally)
+    expect(h.last()).toMatchObject({ mode: 'observe', tier: 'normal' })
+    const event = h.commands().find(s => s.argv[0] === 'callum-flow-event' && s.argv[2] === 'usage')
+    expect(event?.env.CALLUM_EVENTS_DIR).toBe(SINK)
+    expect(JSON.parse(event?.argv[6] ?? '{}')).toMatchObject({ source: 'spend', spend_usd: 42, budget_usd: 100 })
+  })
+
+  test('no cost.usd stops new work: tier stop-new, and the store is left alone', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT }, env: API, run: factory({ queue: [470] }).run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last()).toMatchObject({ tier: 'stop-new' })
+    expect(h.store.has(KEY)).toBe(false)
+  })
+
+  test('without DEV_CLAUDE_AUTH the pass is a subscription pass: usage-check.sh runs, nothing is stored', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const base = factory({ queue: [470] }).run
+    const h = host(on, { config: { ...ACT }, run: (argv, seen) => (argv[0] === `${TOOLS}/usage-check.sh` ? { stdout: USAGE } : base(argv, seen)) })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.commands().some(s => s.argv[0] === `${TOOLS}/usage-check.sh`)).toBe(true)
+    expect(h.store.has(KEY)).toBe(false)
+  })
+})

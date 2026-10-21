@@ -85,7 +85,7 @@ one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the or
 usage gate. It reads the claude.ai usage endpoint with the logged-in OAuth token, falls back
 to a recent status line snapshot (its `--record` mode is a status line command), and prints
 `usage=unavailable reason=...` when neither answers. It also logs the reading as a native `usage` event (`--to-data` prints the event's data for a line on stdin). It spends no model tokens and runs no
-background process. Only the image ships it, not the deprecated feature.
+background process. With `DEV_CLAUDE_AUTH=api-key` (the Coder template's API-key login) it tries neither source and prints `usage=unavailable reason=subscription:api-key-mode auth=api-key`; the factory loop reads its own spend against a budget there instead. Only the image ships it, not the deprecated feature.
 
 ## What the image does not own
 

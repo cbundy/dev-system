@@ -577,6 +577,39 @@ data "coder_parameter" "git_email" {
   }
 }
 
+# Only with workspace_secrets_dir (as the api-key login itself): the monthly dollar
+# budget and its reset day for an api-key workspace. The factory loop tallies its
+# own spend against them and stops new work at its thresholds (factory loop spec
+# 13.13). They reach the container only in api-key mode.
+data "coder_parameter" "claude_budget_usd" {
+  count        = var.workspace_secrets_dir == "" ? 0 : 1
+  name         = "claude_budget_usd"
+  display_name = "Claude API-key budget (USD a month)"
+  description  = "Monthly API-key budget in dollars; 0 means none. Used only when Claude login is api-key: the factory loop counts what it spends against it and stops new work as it nears the budget, and stops new work at once when there is none. Takes effect on the next workspace start."
+  type         = "number"
+  default      = 0
+  mutable      = true
+  order        = 15
+  validation {
+    min = 0
+  }
+}
+
+data "coder_parameter" "claude_budget_reset_day" {
+  count        = var.workspace_secrets_dir == "" ? 0 : 1
+  name         = "claude_budget_reset_day"
+  display_name = "Claude API-key budget reset day"
+  description  = "The day of the month (1-31, UTC) the budget starts again at 00:00; a day past the month's end means its last day. Used only when Claude login is api-key. Takes effect on the next workspace start."
+  type         = "number"
+  default      = 1
+  mutable      = true
+  order        = 16
+  validation {
+    min = 1
+    max = 31
+  }
+}
+
 # The rollout ring (cbundy/dev-system#338), passed in as DEV_RING. Coder ignores
 # parameter changes on an existing workspace's update or restart (#268), so the
 # default is the right value for every workspace that never sets it.
@@ -652,6 +685,8 @@ locals {
   claude_api_key_env = local.claude_login_api_key ? [
     "DEV_CLAUDE_AUTH=api-key",
     "DEV_CLAUDE_API_KEY_FILE=/run/secrets/dev-system-workspace/anthropic-api-key",
+    "DEV_CLAUDE_BUDGET_USD=${try(data.coder_parameter.claude_budget_usd[0].value, "0")}",
+    "DEV_CLAUDE_BUDGET_RESET_DAY=${try(data.coder_parameter.claude_budget_reset_day[0].value, "1")}",
   ] : []
 
   # The gh login (parameter gh_login): shared, private or token.
