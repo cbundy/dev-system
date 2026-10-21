@@ -63,7 +63,8 @@ Name queries by schema and title, never by bare number: both sets start at 1.
 | Main after merge: main's newest state, and whether main stayed green after each merge (plant console panel F) | `factory.event_log`, [Main after merge](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#main-after-merge) |
 | Settings changes over time, and the settings each worker runs on | `factory.event_log` and `factory.workers_status`, [Settings](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#settings) (empty until the loop writes them) |
 | The loop's queue order and why each issue is or is not claimable, snapshot freshness, and whether claims follow it | `factory.event_log`, [Queue snapshots](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#queue-snapshots) (empty until the loop writes them) |
-| Agent tokens and wall time, pipeline gates, parked time, failure categories | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
+| Agent tokens per merged issue, model and step role (the loop's step agents) | `factory.event_log`, [Tokens per merged issue](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#tokens-per-merged-issue) (empty until the loop writes them) |
+| Pipeline gates, parked time, failure categories, and the tokens of anything but the loop's step agents | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
 
 Copy the query from the reference, narrow it to the repo, issue, run or window asked about,

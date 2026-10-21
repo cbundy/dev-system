@@ -460,3 +460,50 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.logged?.size).toBe(0)
   })
 })
+
+describe('an agent step\'s tokens in its loop event (#657)', () => {
+  const step = (status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}) =>
+    entry('i9/ltn0brb/review/abc/r1/a1', 'agent-step', { status, issue: 9, step: 'review', agentId: 'ag1', session: 'session-1', endedAt: status === 'running' ? null : NOW, ...over })
+  const transcript = JSON.stringify({ type: 'assistant', requestId: 'r', message: { model: 'claude-opus-5-5', usage: { input_tokens: 4, output_tokens: 5, cache_read_input_tokens: 6, cache_creation_input_tokens: 7 } } })
+  const dataOf = (f: Fake) => f.calls.filter(c => c.argv[0] === 'callum-flow-event').map(c => JSON.parse(c.argv[4] ?? '{}') as Record<string, unknown>)
+  const withTokens = (ledger: LedgerEntry[], files: Record<string, string> = {}) => {
+    const f = fake(ledger, () => ({}), { readFile: async p => files[p] ?? null })
+    f.env.rt = { ...f.env.rt, configDir: '/cfg', sessionCwd: '/work' }
+    return f
+  }
+  const PATH = '/cfg/projects/-work/session-1/subagents/agent-ag1.jsonl'
+
+  test('a running event has null fields; each ended status carries the reading, read once per ended entry', async () => {
+    for (const status of ['done', 'failed', 'timed-out', 'lost'] as const) {
+      const f = withTokens([step('running')], { [PATH]: transcript })
+      await logLoop(f.env, f.env.live.ledger)
+      const ended = transition(f.env.live, l => l.map(e => ({ ...e, status, endedAt: NOW })))
+      await logLoop(f.env, ended)
+      await logLoop(f.env, ended)
+      const [running, end] = dataOf(f)
+      expect(dataOf(f)).toHaveLength(2)
+      expect(running).toMatchObject({ status: 'running', input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null })
+      expect(end).toMatchObject({ status, input_tokens: 4, output_tokens: 5, cache_read_tokens: 6, cache_creation_tokens: 7, model: 'claude-opus-5-5' })
+      expect(f.env.problems).toEqual([])
+    }
+  })
+
+  test('a missing transcript still writes the event, with null fields and a problem naming the key', async () => {
+    const f = withTokens([step('failed')])
+    await logLoop(f.env, f.env.live.ledger)
+    expect(dataOf(f)).toHaveLength(1)
+    expect(dataOf(f)[0]).toMatchObject({ status: 'failed', input_tokens: null, model: null })
+    expect(f.env.problems).toEqual(['loop event i9/ltn0brb/review/abc/r1/a1: transcript not found'])
+  })
+
+  test('a tell carries none of the fields, and a runtime without a config dir reads nothing', async () => {
+    const f = withTokens([entry('tell:x:1', 'tell', { wake: 'runaway', class: 'owner', wakeId: 'w0' })])
+    await logLoop(f.env, f.env.live.ledger)
+    expect(Object.keys(dataOf(f)[0] ?? {})).not.toContain('input_tokens')
+    const g = fake([step('done')])
+    await logLoop(g.env, g.env.live.ledger)
+    expect(dataOf(g)[0]).toMatchObject({ input_tokens: null, model: null })
+    expect(g.env.problems).toEqual([])
+  })
+})
+

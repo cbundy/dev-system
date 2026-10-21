@@ -3136,7 +3136,16 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   a wake's turn taking its id (even when the turn starts inside the submit, before the executor
   finishes the entry), its reminder, and any other change the note does not carry log nothing.
   The module remembers the event it last logged per key, and a ledger loaded from the store or
-  rebuilt from the event log counts as logged (run 2, #536);
+  rebuilt from the event log counts as logged (run 2, #536). An agent step's end (`done`, `failed`,
+  `timed-out`, `lost`) also carries `input_tokens`, `output_tokens`, `cache_read_tokens`,
+  `cache_creation_tokens` and `model` (dev-system#657): read once, when the end is logged, from the step
+  agent's transcript `<config dir>/projects/<session cwd, non-alphanumerics as ->/<spawning session>/subagents/agent-<id>.jsonl`
+  (the spawning session is kept on the agent-step entry from its start, so a step that ends after a restart
+  finds it; when the file is absent one bounded `find` over the projects is tried). Usage is counted once
+  per distinct `requestId`, the last line winning, over the agent and every agent nested under it
+  (`.meta.json` `parentAgentId`, recursively); `model` is the step agent's own, the one of most turns.
+  They are null on a running event, on a tell or task, and when the transcript cannot be read (the event
+  is still written and the pass's problems name the key: "transcript not found");
 - a `loop_passes` pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
   timer aligned to the UTC minute: `from_at`, `to_at`, `passes`, `mean_ms`, `p50_ms`, `p90_ms`, `max_ms`,
   `acting`, `acting_mean_ms`, `idle_mean_ms`, `errors`, `mode`, `planner` (`v2`) and `pass_every_ms`. It sums up the passes

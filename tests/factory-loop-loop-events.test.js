@@ -73,6 +73,7 @@ const entries = [
   { ...base, key: "tell:heartbeat-other:1791860405000", kind: "tell", class: "owner", rule: "O2", issue: null, wake: "heartbeat-other", status: "running", endedAt: null, session: "session-1" },
 ];
 
+const TOKEN_NULLS = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null };
 const LINE = { event_id: "0d7b2f3a-1c4e-4a5b-8c9d-0e1f2a3b4c5d", repo: "cbundy/dev-system", device: "box", actor: "agent" };
 const TS = "2026-10-13T03:00:00.000Z";
 const oldTranslated = (e) => {
@@ -106,9 +107,31 @@ test("every logged entry kind is one native loop_entry the real writer takes, wi
     const got = lines[lines.length - 1];
     assert.equal(got.type, "loop_entry");
     assert.equal(got.issue, e.issue);
-    assert.deepEqual(got.data, oldTranslated(e).data);
+    // the token fields have no old equivalent: an agent step's event has them, null without a reading
+    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, model, ...rest } = got.data;
+    assert.deepEqual(rest, oldTranslated(e).data);
+    const tokens = { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, model };
+    if (e.kind === "agent-step") assert.deepEqual(tokens, TOKEN_NULLS, `${e.key} has the five fields, null`);
+    else assert.deepEqual(Object.values(tokens), Array(5).fill(undefined), `${e.key} has none`);
   }
   assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
+});
+
+test("an ended agent step with a reading writes its token totals and model through the real writer; a running one writes nulls", () => {
+  const ended = { ...entries[1], key: "i470/l1/s5/review/a2", status: "done", agentId: "agent-9" };
+  const reading = { input_tokens: 12, output_tokens: 3456, cache_read_tokens: 789012, cache_creation_tokens: 0, model: "claude-opus-5-5" };
+  const lines = [];
+  for (const argv of [ledger.loopEvent(ended, reading), ledger.loopEvent({ ...ended, status: "running", endedAt: null }, reading)]) {
+    const before = newLines().length;
+    const r = log(argv);
+    assert.equal(r.status, 0, `${argv.join(" ")}: exit ${r.status}: ${r.stderr}`);
+    assert.equal(r.stderr, "", "strict validation passes");
+    lines.push(newLines()[before]);
+  }
+  assert.deepEqual(Object.fromEntries(Object.keys(reading).map((k) => [k, lines[0].data[k]])), reading);
+  assert.equal(lines[0].data.agent_id, "agent-9");
+  // a running event never carries a reading, even when handed one
+  assert.deepEqual(Object.fromEntries(Object.keys(reading).map((k) => [k, lines[1].data[k]])), TOKEN_NULLS);
 });
 
 test("the wake entries' decision and reason come through as the translator reads them", () => {

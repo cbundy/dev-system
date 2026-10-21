@@ -243,7 +243,8 @@ export type LedgerEntry = {
   outcome?: Outcome
   // a wake's id (v2 SPEC 13.8.1 `id=`), the turn it started, whether its reminder went out (for an
   // agent, its one repair message, #548), and the session that submitted it (a restart ends the
-  // wakes of the session before, v2 SPEC 13.7.5)
+  // wakes of the session before, v2 SPEC 13.7.5). An agent step keeps it too: its transcript is under
+  // the spawning session (v2/step-tokens.ts)
   wakeId?: string
   turnId?: string
   reminded?: boolean

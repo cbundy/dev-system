@@ -5,6 +5,8 @@
 // is rebuilt from them.
 import { ACTION_KINDS } from './config'
 import { iso } from './v2/event-native'
+import { NO_TOKENS } from './v2/step-tokens'
+import type { TokenFields } from './v2/step-tokens'
 import type { Factory, FactoryIssue } from './parse'
 import type { ActionClass, Bump, LedgerEntry, LedgerStatus, Outcome, Rollout, RunState, RunView } from './types'
 
@@ -323,8 +325,9 @@ export function loopNote(entry: LedgerEntry): string {
 // loopEntryArgv: the native call that logs an entry as a `loop_entry` event (v2 SPEC 13.7.4): its
 // issue as --issue and the data the translator makes of loopNote(entry), with loopData merged on top
 // the way an old line's --data was. Null for a judge, which the event type has no kind for. The
-// run, PR and head are not carried.
-export function loopEntryArgv(entry: LedgerEntry): string[] | null {
+// run, PR and head are not carried. An agent step's event also has the five token fields: tokens
+// when it ended, null while it runs and when nothing was read.
+export function loopEntryArgv(entry: LedgerEntry, tokens: TokenFields = NO_TOKENS): string[] | null {
   if (entry.kind === 'judge') return null
   // the translator reads the string `none` as null
   const str = (v: string | undefined) => (v === undefined || v === 'none' ? null : v)
@@ -353,6 +356,8 @@ export function loopEntryArgv(entry: LedgerEntry): string[] | null {
     wake: str(entry.wake),
     ...entry.loopData,
   })
+  // an agent step's end carries the token totals and model of its transcript (step-tokens.ts)
+  if (entry.kind === 'agent-step') Object.assign(data, entry.status === 'running' ? NO_TOKENS : tokens)
   const argv = ['callum-flow-event', '--type', 'loop_entry', '--data', JSON.stringify(data)]
   if (entry.issue !== null) argv.push('--issue', String(entry.issue))
   return argv
