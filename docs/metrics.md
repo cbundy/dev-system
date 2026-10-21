@@ -3065,6 +3065,15 @@ A view export carries `reviewed.patch` and `test_weakened.restored` from migrati
 from migration 0021. The fleet export is
 `dev-query --factory -At -c "SELECT row_to_json(e) FROM factory.event_log e WHERE repo = :'repo' AND ts >= :'since'" -v repo=<owner/name> -v since=<ISO>`.
 
+#### Readers behind the writers
+
+An image that lags the writers skips an event whose type or version `factory-event-shapes.json` does not
+list as current, and counts it, instead of failing the read. See what was skipped with
+`callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the derivation reads
+that type, so the view may be incomplete), and
+`callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
+(`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`.
+
 ### Scope and the fleet-wide no-mistakes export
 
 Every report says which scope each source covers, in `window.scope` (one `Scope:` line under

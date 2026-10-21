@@ -15,8 +15,15 @@ callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format t
 
 Exit 0 ok, 2 bad arguments (a bad `--source` or `CALLUM_FLOW_FACTORY_STATE_SOURCE` included), 1 the required
 source that cannot be read: `factory.events` for `old` and `shadow`, `factory.event_log` (through
-`dev-query --factory`) for `new`, which also fails with `unknown factory event: <type> v<N>` on an event
-type or version `factory-event-shapes.json` does not list as current. An optional
+`dev-query --factory`) for `new`. Under `new` (and the new half of `shadow`) a `factory.event_log` row
+whose type and version `factory-event-shapes.json` does not list as current (a newer writer's event) is
+left out, not a failed read: the report's top-level `skipped_events` lists `{type, type_version, count,
+derived}` sorted by type then version (`[]` when nothing was skipped and always under `old`), and the text
+format adds a line such as `skipped events: claimed v2 x1 (derived), mystery v1 x1`. `derived` is true
+when the derivation reads that type (`DERIVED_TYPES`), so the view may be incomplete; every other current
+type is in `IGNORED_TYPES`, and a test requires each current type in exactly one of the two. `shadow`
+leaves `skipped_events` out of its comparison. `mapEventLogRow` itself still throws `unknown factory
+event: <type> v<N>`, so the replay reader keeps failing loudly. An optional
 source (`nomistakes.runs`, `factory.workers_status`, GitHub) that is missing shows as `n/a: <reason>`
 (`runs` and `workers` in the JSON), so no-mistakes data can never blind a reader of the factory. With
 no `nomistakes.runs`, no run places an issue.
