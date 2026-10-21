@@ -118,9 +118,15 @@ SQL
   its JSON type; it exits 2 only on those. A type or version it does not know is written with a
   warning naming it. Enum values, bounds and unknown fields are checked strictly only in `npm test`.
   The check reads the image's shapes file, `factory-event-shapes.json`, generated from the schemas.
-- **Bumps roll out in two releases.** The new schema file, the shared reader's upgrade step and
-  any view change ship one release before any producer writes the new version. The same holds for
-  a new type, so every reader knows it before it appears.
+- **Readers skew by three minor releases.** The readers in the image of each of the last three
+  minor releases must read every event the current plugin writes. A new type, or a new version of
+  an existing type, ships its schema (in the shapes file), the shared reader's upgrade step and any
+  view change in release N, and no producer writes it before release N+3 (the third minor after
+  it). The image readers skip and count an unknown type or version (#1204), so an early producer
+  does not crash the loop, but a skipped derived type turns the pass blind and any other raises the
+  `reader-behind` owner notice until the images catch up (see G2 in
+  [the v2 spec](../factory-loop/v2/SPEC.md)). This is a separate rule from the database window
+  below (database schema vs event readers).
 - **The database keeps a ten-minor-release window.** The schema at any release works for the writers and
   readers of the last 10 minor releases; migrations are expand-only, enforced by `npm run lint`
   ([Schema compatibility](../factory-db.md#schema-compatibility)).
@@ -219,8 +225,9 @@ SQL
 1. Add `<type>.v1.json` to `schemas/` with descriptions, an example and `x-issue`.
 2. Run `npm run build:events`. It rewrites the reference, the lock, `event-schemas.ts` and
    `images/base/factory-event-shapes.json`.
-3. Ship the schema one release before any producer writes it (the two-release rule above), so every
-   reader and the image's writer know the type first.
+3. Ship the schema in release N and let no producer write it before release N+3 (the three-minor
+   reader-skew rule above), so every reader and the image's writer of the last three minors know the
+   type first.
 4. Write the event with `callum-flow-event --type <type> --data '<json object>' [--issue N]`. The
    writer exits 2 on a missing required field, a wrong JSON type, a missing `--issue` for an
    `x-issue: required` type or a bad option, and writes nothing.

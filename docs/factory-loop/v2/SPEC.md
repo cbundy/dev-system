@@ -1572,12 +1572,13 @@ The designer is a reader: it writes nothing to GitHub.
   one without it: each decision the change adds (a point where an agent or a rule chooses), where
   it is recorded with the facts weighed and the reason, and the `docs/metrics.md` query it
   answers, or "none - no new decision". Optional fields on an existing event type come before a
-  new type; a new type ships schema, view fields and migration in one release before any
-  producer. The reviewer holds the change to the section like an acceptance criterion.
+  new type; a new type ships schema, view fields and migration in release N, and no producer writes it
+  before release N+3 (three minor releases before any producer), so the image readers of the last three minors know it. The reviewer holds the change to the section like an acceptance criterion.
 - **Compatible by default.** A brief has a `## Compatibility` section, and the contract refuses
   one without it: what changes in a migration, event schema, the event writer or a
   factory-database reader and why every loop of the last 10 minor versions keeps working (only
-  additive changes), and the test that proves it, or "none - no schema, event or reader change".
+  additive changes; the event readers in the image of the last three minor releases must read every
+  event a producer writes, the separate reader-skew rule), and the test that proves it, or "none - no schema, event or reader change".
   The reviewer holds the change to the section like an acceptance criterion.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
