@@ -34,7 +34,7 @@ function run(jobs, { env = {}, serial = [] } = {}) {
 }
 
 test("all passing: no output, exit 0, failed count 0", () => {
-  const x = run(["echo hi", "true"], { env: { TEST_JOBS: "3" } });
+  const x = run(["echo hi", "true"], { env: { TEST_JOBS: "2" } });
   try {
     assert.strictEqual(x.r.status, 0);
     assert.strictEqual(x.r.stdout, "");
