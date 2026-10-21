@@ -330,11 +330,13 @@ export function loopEntryArgv(entry: LedgerEntry): string[] | null {
   const str = (v: string | undefined) => (v === undefined || v === 'none' ? null : v)
   const data: Record<string, unknown> = {}
   const o = entry.outcome
-  if (entry.kind === 'task' && o !== undefined && o.kind === 'wake') {
+  const note = loopNote(entry)
+  // loopNote drops the whole outcome from a note too long for one row, and then there is no decision
+  if (entry.kind === 'task' && o !== undefined && o.kind === 'wake' && note.split(' ').includes('out=wake')) {
     const decision = str(o.decision)
     if (decision !== null) {
       data.decision = decision
-      const word = loopNote(entry).split(' ').find(w => w.startsWith('reason='))
+      const word = note.split(' ').find(w => w.startsWith('reason='))
       if (word !== undefined) data.decision_reason = (str(dec(word.slice('reason='.length))) ?? '').slice(0, 200) || null
     } else data.decision = null
   }

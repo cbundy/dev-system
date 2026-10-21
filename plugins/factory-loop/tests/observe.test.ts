@@ -964,6 +964,14 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     expect(loopEntryArgv(entry('judge:sequence:550:head50', 'judge', base))).toBeNull()
   })
 
+  test('an oversized task wake entry carries no decision, as loopNote drops its outcome', () => {
+    const task = (key: string) => entry(key, 'task', { class: 'drive', wake: 'release', outcome: wakeAnswer('hold', { reason: 'why' }) })
+    const e = task(`task:release:2:${'k'.repeat(450)}`)
+    expect(JSON.parse((loopEntryArgv(e) as string[])[4] as string)).not.toHaveProperty('decision')
+    const small = task('task:release:2:k')
+    expect(JSON.parse((loopEntryArgv(small) as string[])[4] as string)).toMatchObject({ decision: 'hold', decision_reason: 'why' })
+  })
+
   test('a lost store is rebuilt from the loop events, the latest per key winning over the rest', () => {
     const asked = entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence', status: 'running', startedAt: NOW - 30 * MIN, endedAt: null })
     const decided: LedgerEntry = { ...asked, status: 'done', endedAt: NOW - 5 * MIN, outcome: wakeAnswer('hold') }

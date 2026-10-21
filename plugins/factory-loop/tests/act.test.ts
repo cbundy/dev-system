@@ -452,6 +452,9 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
     expect(statuses()).toEqual(['done'])
+    // a changed PR or head is not in the native data, so it logs nothing
+    await logLoop(f.env, transition(f.env.live, l => l.map(e => (e.key === open.key ? { ...e, pr: 777, head: 'beef123' } : e))))
+    expect(statuses()).toEqual(['done'])
     f.env.live.ledger = []
     await logLoop(f.env, [])
     expect(f.env.live.logged?.size).toBe(0)
