@@ -127,6 +127,7 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
   const book = new Map();
   passes.notePass(book, NOW + 1_000, 120, true, false);
   passes.notePass(book, NOW + 2_000, 80, false, true);
+  passes.notePass(book, NOW + 3_000, 90, false, false, { ms: 12.6, commandsMs: 7.1, inProcessMs: 5.5 });
   for (const summary of [passes.closeMinute(book, NOW, settings), passes.closeMinute(book, NOW + 60_000, settings)]) {
     const argv = passes.passesEventArgv(summary);
     assert.deepEqual(argv.slice(0, 3), ["callum-flow-event", "--type", "loop_passes"]);

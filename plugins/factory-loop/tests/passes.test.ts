@@ -37,6 +37,8 @@ describe('closeMinute', () => {
       acting_mean_ms: '200',
       idle_mean_ms: '533',
       errors: '1',
+      observe_mean_ms: 'none',
+      observe_in_process_max_ms: 'none',
       mode: 'act',
       planner: 'v2',
       pass_every_ms: '60000',
@@ -57,6 +59,32 @@ describe('closeMinute', () => {
     const s = closeMinute(new Map(), M, SET)
     const t = tokens(passesNote(s))
     expect(t).toMatchObject({ passes: '0', mean_ms: 'none', p50_ms: 'none', p90_ms: 'none', max_ms: 'none', acting: '0', acting_mean_ms: 'none', idle_mean_ms: 'none', errors: '0' })
+  })
+
+  test('observe split: means over measured passes, max in-process, null and none without a measure', () => {
+    const book: PassBook = new Map()
+    notePass(book, M + 1, 100, true, false, { ms: 10.4, commandsMs: 6.2, inProcessMs: 4.2 })
+    notePass(book, M + 2, 100, false, false, { ms: 20.4, commandsMs: 10.2, inProcessMs: 10.2 })
+    notePass(book, M + 3, 100, false, false, { ms: 30.4, commandsMs: 20.2, inProcessMs: 8.2 })
+    notePass(book, M + 4, 100, false, false)
+    notePass(book, M + 5, 100, false, true, null)
+    const s = closeMinute(book, M, SET)
+    // rounded per pass: observe 10, 20, 30; commands 6, 10, 20; in-process 4, 10, 8
+    expect(s).toMatchObject({ observeMean: 20, observeCommandsMean: 12, observeInProcessMean: 7, observeInProcessMax: 10 })
+    expect(tokens(passesNote(s))).toMatchObject({ observe_mean_ms: '20', observe_commands_mean_ms: '12', observe_in_process_mean_ms: '7', observe_in_process_max_ms: '10' })
+    const data = JSON.parse(passesEventArgv(s)[4] as string)
+    expect(data).toMatchObject({ observe_mean_ms: 20, observe_commands_mean_ms: 12, observe_in_process_mean_ms: 7, observe_in_process_max_ms: 10 })
+  })
+
+  test('only unmeasured passes, or none, give null for the observe fields', () => {
+    const book: PassBook = new Map()
+    notePass(book, M + 1, 100, false, false)
+    notePass(book, M + 2, 100, false, true)
+    for (const s of [closeMinute(book, M, SET), closeMinute(new Map(), M, SET)]) {
+      expect(s).toMatchObject({ observeMean: null, observeCommandsMean: null, observeInProcessMean: null, observeInProcessMax: null })
+      expect(tokens(passesNote(s))).toMatchObject({ observe_mean_ms: 'none', observe_commands_mean_ms: 'none', observe_in_process_mean_ms: 'none', observe_in_process_max_ms: 'none' })
+      expect(JSON.parse(passesEventArgv(s)[4] as string)).toMatchObject({ observe_mean_ms: null, observe_in_process_max_ms: null })
+    }
   })
 
   test('one pass, or none acting, gives none where it should', () => {
@@ -81,7 +109,7 @@ describe('closeMinute', () => {
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
     expect(argv).toHaveLength(5)
     const data = JSON.parse(argv[4] as string)
-    expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'errors', 'from_at', 'idle_mean_ms', 'max_ms', 'mean_ms', 'mode', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at'])
+    expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'errors', 'from_at', 'idle_mean_ms', 'max_ms', 'mean_ms', 'mode', 'observe_commands_mean_ms', 'observe_in_process_max_ms', 'observe_in_process_mean_ms', 'observe_mean_ms', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at'])
     expect(data).toMatchObject({ from_at: new Date(summary.from).toISOString(), planner: 'v2', mode: SET.mode, pass_every_ms: SET.passEveryMs })
     // the note stays what the old-source reader parses, and gives no entry
     expect(entryFromLoop({ state: 'loop', note: passesNote(summary) } as never)).toBeNull()

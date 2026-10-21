@@ -4,10 +4,20 @@
 // passesEventArgv builds. The event is bookkeeping, never a stage or progress; entryFromLoop
 // returns null for it, so it never rebuilds a ledger entry. The reader does any weighting.
 
+import type { ObserveSplit } from './observe-clock'
+
 export const MINUTE_MS = 60_000
 
 // One finished pass: how long it took, whether it acted (a non-title outcome) and whether it threw.
-export type PassRecord = { ms: number; acted: boolean; error: boolean }
+export type PassRecord = {
+  ms: number
+  acted: boolean
+  error: boolean
+  // the observe split, rounded; null when the pass has no measure
+  observeMs: number | null
+  commandsMs: number | null
+  inProcessMs: number | null
+}
 
 // The passes recorded, by the start (epoch ms) of the UTC minute in which each ended.
 export type PassBook = Map<number, PassRecord[]>
@@ -27,16 +37,27 @@ export type PassSummary = {
   actingMean: number | null
   idleMean: number | null
   errors: number
+  observeMean: number | null
+  observeCommandsMean: number | null
+  observeInProcessMean: number | null
+  observeInProcessMax: number | null
   settings: PassSettings
 }
 
 export const minuteOf = (ms: number): number => Math.floor(ms / MINUTE_MS) * MINUTE_MS
 
 // notePass: a pass ended at endedAtMs and took ms.
-export function notePass(book: PassBook, endedAtMs: number, ms: number, acted: boolean, error: boolean): void {
+export function notePass(book: PassBook, endedAtMs: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null): void {
   const minute = minuteOf(endedAtMs)
   const list = book.get(minute)
-  const rec = { ms: Math.round(ms), acted, error }
+  const rec: PassRecord = {
+    ms: Math.round(ms),
+    acted,
+    error,
+    observeMs: split === null ? null : Math.round(split.ms),
+    commandsMs: split === null ? null : Math.round(split.commandsMs),
+    inProcessMs: split === null ? null : Math.round(split.inProcessMs),
+  }
   if (list === undefined) book.set(minute, [rec])
   else list.push(rec)
 }
@@ -58,6 +79,8 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
   const sorted = [...all].sort((a, b) => a - b)
   const acting = recs.filter(r => r.acted)
   const idle = recs.filter(r => !(r.acted))
+  const nums = (xs: readonly (number | null)[]) => xs.filter((x): x is number => x !== null)
+  const inProc = nums(recs.map(r => r.inProcessMs))
   return {
     from: minuteStartMs,
     to: minuteStartMs + MINUTE_MS,
@@ -70,6 +93,10 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
     actingMean: mean(acting.map(r => r.ms)),
     idleMean: mean(idle.map(r => r.ms)),
     errors: recs.filter(r => r.error).length,
+    observeMean: mean(nums(recs.map(r => r.observeMs))),
+    observeCommandsMean: mean(nums(recs.map(r => r.commandsMs))),
+    observeInProcessMean: mean(inProc),
+    observeInProcessMax: inProc.length === 0 ? null : Math.max(...inProc),
     settings,
   }
 }
@@ -94,6 +121,10 @@ export function passesNote(s: PassSummary): string {
     `acting_mean_ms=${opt(s.actingMean)}`,
     `idle_mean_ms=${opt(s.idleMean)}`,
     `errors=${s.errors}`,
+    `observe_mean_ms=${opt(s.observeMean)}`,
+    `observe_commands_mean_ms=${opt(s.observeCommandsMean)}`,
+    `observe_in_process_mean_ms=${opt(s.observeInProcessMean)}`,
+    `observe_in_process_max_ms=${opt(s.observeInProcessMax)}`,
     `mode=${s.settings.mode}`,
     // the event's schema still requires the field: the loop always plans with v2
     'planner=v2',
@@ -117,6 +148,10 @@ export function passesEventArgv(s: PassSummary): string[] {
     max_ms: s.max,
     acting_mean_ms: s.actingMean,
     idle_mean_ms: s.idleMean,
+    observe_mean_ms: s.observeMean,
+    observe_commands_mean_ms: s.observeCommandsMean,
+    observe_in_process_mean_ms: s.observeInProcessMean,
+    observe_in_process_max_ms: s.observeInProcessMax,
     mode: s.settings.mode,
     // the event's schema still requires the field: the loop always plans with v2
     planner: 'v2',
