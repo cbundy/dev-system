@@ -2666,6 +2666,13 @@ jq -s '[.[].offPass[]?] | group_by(.cmd) | map({cmd: .[0].cmd, runs: length, fai
   mean_ms: (map(.ms) | add / length | round), max_ms: (map(.ms) | max)})' trace-2026-10-21.jsonl
 ```
 
+The session title's rename is one of these commands (`cmd: "title"`), so the same query shows how long renames
+take. The renames that failed or timed out, with the reason:
+
+```sh
+jq -c '.offPass[]? | select(.cmd == "title" and .error != null)' trace-2026-10-21.jsonl
+```
+
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are

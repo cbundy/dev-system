@@ -468,10 +468,10 @@ describe('title', () => {
     const { result, titles, calls } = await exec(A.title())
     expect(calls).toHaveLength(0)
     expect(titles).toEqual(['🔄 dev-system (Q:1 - D:2 - M:0)'])
-    expect(result).toEqual({ status: 'done', summary: '🔄 dev-system (Q:1 - D:2 - M:0)' })
+    expect(result).toEqual({ status: 'running', summary: 'renaming off the pass: 🔄 dev-system (Q:1 - D:2 - M:0)' })
   })
 
-  test('a failed rename is failed (the next pass sets it again)', async () => {
+  test('a rename that throws at once is failed (the next pass sets it again)', async () => {
     const { result } = await exec(A.title(), [], { rename: async () => Promise.reject(new Error('command not found: rename')) })
     expect(result).toEqual({ status: 'failed', summary: 'rename failed: command not found: rename' })
   })

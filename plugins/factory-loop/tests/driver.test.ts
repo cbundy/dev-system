@@ -638,6 +638,24 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.titles.at(-1)).toBe(good)
   })
 
+  test('a rename that hangs holds no pass: the pass ends, the title stays, and the next record lists the timed-out rename (title flight)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: { ...ACT, trace: true }, run, rename: () => new Promise<void>(() => undefined) })
+    await $.session.start(START)
+    // the first pass finishes at 5 s, though its rename never answers: its record is written
+    await clock.advance(6_000)
+    expect(h.titles).toHaveLength(1)
+    const first = h.traces()[0] as { actions: { kind: string; status: string; off?: boolean }[] }
+    expect(first.actions.find(a => a.kind === 'title')).toMatchObject({ status: 'running', off: true })
+    // past the 10 s bound the rename times out; the row lands in a later record, with its error
+    await clock.advance(60_000)
+    const rows = (h.traces() as { offPass: { cmd: string; exit: number; error?: string }[] }[]).flatMap(r => r.offPass.filter(o => o.cmd === 'title'))
+    expect(rows.length).toBeGreaterThanOrEqual(1)
+    expect(rows[0]).toMatchObject({ cmd: 'title', exit: -1 })
+    expect(rows[0]?.error).toContain('rename')
+  })
+
   test('passes that fail now and then never rename more than once per titleEveryMs (O1)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()

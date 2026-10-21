@@ -2881,9 +2881,11 @@ only reach the configured repo. The foundation's kinds are these; v2's twelve (`
 | `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', task_id })`, only for an agent the ledger holds on a running entry | 30 s | 1 | stopped, or failed with the reason (13.13) |
 | `task` | drive | `$.prompt.submit` with a `TASK` line | `wakeTimeoutMs.task` | 1 reminder | `done`, `failed`, `hold` |
 | `tell` | owner | `$.prompt.submit` with a `TELL` line | `wakeTimeoutMs.tell` | none | delivered when its turn says something |
-| `title` | free | `$.command.run({ command: 'rename', args })` | 10 s | next pass | the text set |
+| `title` | free | `$.command.run({ command: 'rename', args })` | 10 s | next pass | `running`, off the pass |
 
-An action is awaited in the pass that runs it, with one exception: the kinds in `OFF_PASS`
+An action is awaited in the pass that runs it, with two exceptions. The `title` rename runs off the
+pass through the one title flight (`hooks/title-flight.ts`, 13.9.1): the action starts it and
+reports `running` with `off: true`. And the kinds in `OFF_PASS`
 (`hooks/act-off.ts`: `heartbeat`, `sweep`) are started in the pass, after their running entry is
 saved, and not awaited. The pass reports them with status `running`. Their command runs on an
 untraced `ActIo` and ends in the hook queue, which applies the same `finish` the inline run
@@ -3324,7 +3326,12 @@ whatever the title is then, and a change that reverts to the last title sends no
 first title after a load goes out at once (`lastTitle` and `lastTitleAt` start null), and the
 driver's off, kill-switch and error titles go out at once too, and every rename, those
 included, stamps `lastTitleAt`, so the first plan title after them waits until `titleEveryMs`
-has passed. The `session.append` hook blanks the note the rename leaves for the
+has passed. Every rename, the act `title` action's and the driver's own, goes through the one title
+flight, which starts the rename and returns at once, so no pass awaits a rename. At most one rename is in
+flight; a title wanted meanwhile becomes the single pending title and replaces any earlier pending one, and
+starts when the running rename settles, unless it equals the title then set. Each rename is bounded at 10 s.
+A rename that succeeds stamps `lastTitle` and `lastTitleAt` (its resolve time); one that fails or times out
+leaves both as they were, and its `offPass` row (13.12.1) is its one log. The `session.append` hook blanks the note the rename leaves for the
 model (FINDINGS check 3).
 
 #### 13.9.2 `tell`
@@ -3612,7 +3619,8 @@ are ms into the pass):
   `status` is `running` and its `ms` is its launch time; rows of other actions have no `off`.
 - `offPass`: each off-pass command that finished since the previous record (`[]` when none):
   `cmd` (the kind), `key`, `ms` (how long the command ran), `exit` (`-1` when it never exited) and
-  `endedAt` (ISO).
+  `endedAt` (ISO), and `error` (the reason, clipped) on a `title` row whose rename failed or timed out. The
+  session title's rename (`cmd: 'title'`, 13.9.1) is one of these commands; its action row carries `off: true`.
 - `wakes`: every open wake, plus each wake that ended since the previous pass (reported once):
   `key`, `wake`, `status`; `queued` (its submit); `delivered` (its turn started; null when not
   seen, as across a reload); `ended`; `deliverMs` (queued to delivered); and `answerMs`

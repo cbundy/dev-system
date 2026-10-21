@@ -262,7 +262,8 @@ const stopAgent: Executor = async (ctx, action) => {
   return { status: 'failed', summary: clip(`not stopped ${action.agentId}: ${r.error ?? 'no reason given'}`) }
 }
 
-// title: /rename through ActIo (rule O1, v2 SPEC 13.9.1).
+// title: /rename through ActIo (rule O1, v2 SPEC 13.9.1). The rename runs off the pass (title-flight.ts):
+// this starts it and returns; its time and status reach the trace as an off-pass row.
 const title: Executor = async (ctx, action) => {
   if (action.kind !== 'title') return refused(`the title executor got a ${action.kind} action`)
   try {
@@ -270,7 +271,7 @@ const title: Executor = async (ctx, action) => {
   } catch (err) {
     return { status: 'failed', summary: clip(`rename failed: ${message(err)}`) }
   }
-  return { status: 'done', summary: clip(action.text) }
+  return { status: 'running', summary: clip(`renaming off the pass: ${action.text}`) }
 }
 
 export const cliExecutors: Partial<Record<ActionKind, Executor>> = {

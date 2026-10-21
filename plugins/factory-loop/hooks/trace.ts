@@ -174,7 +174,8 @@ export function tracedActIo(tr: Tracer, io: ActIo): ActIo {
     spawnAgent: input => timed(tr, `agent.spawn ${input.name ?? input.subagentType}`, () => io.spawnAgent(input), refused),
     stopAgent: agentId => timed(tr, `TaskStop ${agentId}`, () => io.stopAgent(agentId), refused),
     submit: text => timed(tr, `prompt.submit ${text.split('\n', 1)[0] ?? ''}`, () => io.submit(text)),
-    rename: title => timed(tr, 'rename', () => io.rename(title)),
+    rename: title => timed(tr, 'rename', // the launch only: the rename itself runs off the pass
+       () => io.rename(title)),
     usage: () => timed(tr, 'session.usage', () => io.usage()),
     readFile: path => timed(tr, `fs.read ${path}`, () => io.readFile(path), text => (text === null ? {} : { bytes: byteLength(text) })),
     writeFile: (path, text) => timed(tr, `fs.write ${path}`, () => io.writeFile(path, text), () => ({ bytes: byteLength(text) })),
@@ -239,8 +240,8 @@ export function actionRows(tr: Tracer, outcomes: readonly ActOutcome[], queuedAt
 }
 
 // One off-pass command that finished since the last record (act-off.ts): its command and key, how
-// long it ran, its exit (-1: it never exited) and when it ended (ISO).
-export type OffPassRow = { cmd: ActionKind; key: string; ms: Ms; exit: number; endedAt: string }
+// long it ran, its exit (-1: it never exited) and when it ended (ISO); error: why a title rename failed.
+export type OffPassRow = { cmd: ActionKind; key: string; ms: Ms; exit: number; endedAt: string; error?: string }
 
 // attemptOf: one attempt of a ledger entry (a retry keeps the key, not the start).
 export function attemptOf(e: LedgerEntry): string {

@@ -239,7 +239,6 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
       ['title', 'skipped', 'kill switch'],
     ])
     expect(report.killed).toBe(true)
-    expect(report.title).toBeNull()
     // one check per action until the switch is seen, then the pass ends
     expect(checks).toBe(2)
     expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
@@ -307,12 +306,12 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     expect(f.env.live.ledger).toEqual([replaced])
   })
 
-  test('the title runs without a ledger entry and says what it set', async () => {
+  test('the title runs without a ledger entry and starts its rename off the pass', async () => {
     const renamed: string[] = []
     const f = fake([], () => ({}), { rename: async t => void renamed.push(t) })
     const title: Action = { kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: '🔄 dev-system (Q:0 - D:0 - M:0)' }
     const report = await runActions(f.env, state(), [title])
-    expect(report.title).toBe('🔄 dev-system (Q:0 - D:0 - M:0)')
+    expect(report.outcomes.map(o => [o.kind, o.status, o.off])).toEqual([['title', 'running', true]])
     expect(renamed).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0)'])
     expect(f.env.live.ledger).toEqual([])
   })

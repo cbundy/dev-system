@@ -110,7 +110,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
     await noteIdle(liveV2, v2StoreIo($), fileIo($), rt)
     const off = rt.mode === 'off' || (await noteKillSwitch(liveV2, v2StoreIo($), rt, await killed($)))
     if (off || rt.repo === '') {
-      await setTitle($, offTitle(rt))
+      setTitle($, offTitle(rt))
     } else {
       S.passNo += 1
       await pass($, rt, breaker, trigger, t0)
@@ -127,7 +127,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
       await appendLine($, rt, { pass: S.passNo, trigger, ms: Math.round(performance.now() - t0), error: String(err).slice(0, 500), failures: S.failures })
       const name = rt.repo.split('/')[1] ?? 'loop'
       const title = S.lastTitle === null ? `🔄 ${name} · error` : S.lastTitle.endsWith(' · error') ? S.lastTitle : `${S.lastTitle} · error`
-      await setTitle($, title).catch(() => undefined)
+      setTitle($, title)
       if (S.failures >= ERROR_PASSES && rt.mode === 'act' && !S.errorTold) S.errorTold = await tellError($, rt, now, String(err))
     }
   }
@@ -311,9 +311,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
         const planned = result.actions.find(a => a.key === restarted.key)
         S.restartRequestAt = planned?.kind === 'restart-self' && planned.windDownAt != null ? planned.windDownAt : null
       }
-      if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
-      if (report.killed) await setTitle($, offTitle(rt))
+      if (report.killed) setTitle($, offTitle(rt))
       // the queue the plan saw: one `queue_snapshot` when it changed or on the heartbeat, sent without waiting so it never slows the pass
       if (!report.killed && result.queue !== undefined) {
         const claimed = result.actions.some(a => a.kind === 'claim' && a.rule === 'S1')
@@ -333,7 +332,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       begin(tr, 'plan')
       result = planPass(state, config)
       begin(tr, 'act')
-      if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
+      if (result.actions.some(a => a.kind === 'title')) setTitle($, result.title)
     }
 
     // notices from outside plan go out once no wake is open, acting or not (v2 SPEC 13.9.2, 13.11.2), until a
