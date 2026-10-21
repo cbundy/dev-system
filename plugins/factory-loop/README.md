@@ -105,6 +105,7 @@ Each change is logged and asks for a pass at once. The ops:
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: winds down (up to windDownMinutes), then restarts this workspace;
 - `drop <N>`: abandon N and stop its agents;
+- `stamp <N>`: dry-run the intake reader on N and report its answer when it ends; writes nothing (no label, comment, event, stamp or ledger change), and works with `intakeStamp` off and in observe mode;
 - `note [<N>] <text>`: an instruction the next agent prompts carry, for N or for all;
 - `mode off|observe|act`: written to the workspace file, from the next pass;
 - `trace on|off`: trace mode (below), written to the workspace file, from the next pass.

@@ -267,6 +267,8 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `resume <N...> ["note"]`: unpark: the issue goes back to queued and resumes the state it parked
   from, its budgets reset, with the note for its next step. An issue that is not parked is left
   alone: use `note <N>`.
+- `stamp <N>`: dry-run the intake reader on N; it answers at once and the reader's answer follows as a notice. It writes nothing
+  and works while `intakeStamp` is off. Use it to show what the reader would decide on an issue.
 - `retry <N>`: clear N's effects that used up their attempts (`stalled`), so the loop tries again
   (D-38).
 - `drop <N>`: close the issue's current claim and stop its agents; the issue stays open, and

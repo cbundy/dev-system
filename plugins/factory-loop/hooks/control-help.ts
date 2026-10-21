@@ -4,7 +4,7 @@
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode', 'trace', 'config', 'stop-now',
+  'update', 'drop', 'note', 'mode', 'trace', 'config', 'stamp', 'stop-now',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -26,6 +26,7 @@ export const USAGE: Record<OpName, string> = {
   retry: 'retry <N>',
   update: 'update [<reason>]|off',
   drop: 'drop <N>',
+  stamp: 'stamp <N>',
   note: 'note [<N>] <text>',
   mode: 'mode off|observe|act',
   trace: 'trace on|off',
@@ -36,12 +37,13 @@ export const USAGE: Record<OpName, string> = {
 // the long forms (resume's note, override's arguments): `/factory help` has them.
 export const HINT_OPS: readonly [OpName, string][] = [
   ['status', 'status'],
-  ['only', 'only <N...>|off'],
-  ['priority', 'priority <N...>|off'],
+  ['only', 'only <N...>'],
+  ['priority', 'priority <N...>'],
   ['pause', 'pause <N>'],
   ['resume', 'resume <N...>'],
   ['drop', 'drop <N>'],
-  ['note', 'note [<N>] <text>'],
+  ['stamp', 'stamp <N>'],
+  ['note', 'note <text>'],
   ['new', 'new on|off'],
   ['mode', 'mode off|observe|act'],
   ['config', 'config set <key> <value>'],
@@ -72,6 +74,7 @@ export const MEANING: Record<OpName, string> = {
   retry: "clear issue N's used-up actions, so its rules try again",
   update: 'an update is due: wind down (up to windDownMinutes), then restart the workspace; off cancels it',
   drop: 'abandon issue N: its agents stop and its claim is released (for this life only; ready brings it back)',
+  stamp: 'dry-run the intake reader on one issue; writes nothing',
   note: "an instruction for issue N's agents (for every issue without N)",
   mode: 'off runs nothing, observe plans and logs only, act does the work',
   trace: "on: each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log",
