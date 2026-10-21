@@ -107,6 +107,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     blockersClosedAt: null,
     parent: null,
     siblings: null,
+    bodyVersion: null,
     epic: false,
     subIssueList: null,
     brief: null,

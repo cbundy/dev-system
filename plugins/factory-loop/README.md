@@ -94,7 +94,7 @@ Each change is logged and asks for a pass at once. The ops:
   plugin or directive), read-only; "what is this factory's config?" is answered with it;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order; the rest go by score (highest first), where the `priorityLabel` label (default `priority`) is one factor among bug, what it unblocks, its epic, waiting time and earlier failed lives (weights: `queueScore`); with `intakeStamp` on (off by default) an issue with a stamp also scores `area-factory`, `needs-owner` and `overlap`;
+- `priority <N...>|off`: claim these first, in order; the rest go by score (highest first), where the `priorityLabel` label (default `priority`) is one factor among bug, what it unblocks, its epic, waiting time and earlier failed lives (weights: `queueScore`); with `intakeStamp` on (off by default) an issue with a stamp also scores `area-factory`, `needs-owner` and `overlap`, and the loop stamps each ready issue once per body version (rule I1: a reader on `intakeModel` per issue, at most two at once, none for a version already tried, the edited body once more) and sets `area:<area>` and, when it needs the owner, `needs-decision` on it, the owner's own labels always winning: a label group the owner changed, or that the issue carried before the first stamp, is never touched again, and the loop removes only labels it set; each try writes one `intake_stamp` event with its token cost;
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;

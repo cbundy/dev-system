@@ -7,6 +7,7 @@ import type { ActEnv, Between } from './act'
 import type { AgentAnswer } from './exec'
 import { finish, retryIssue } from './ledger'
 import type { LedgerEntry, State } from './types'
+import { intakeFinish } from './v2/act-intake'
 import { stepAnswered } from './v2/steps'
 import { answerTool, onTurnComplete, onTurnStart } from './wake'
 import type { TurnEnd } from './wake'
@@ -100,6 +101,26 @@ export async function agentAnswered(
   } finally {
     between.answering.delete(id)
   }
+}
+
+// intakeAnswered: the turn of an intake reader (rule I1, v2/act-intake.ts) ended: its answer is checked, the
+// try stored and its labels set (intakeFinish), and its entry finished. null when no running `intake-stamp`
+// entry of the ledger has this agent, so the turn is not ours (agentAnswered takes it). The reader has no
+// answer script and gets no repair message: whatever it ended with is the outcome.
+export async function intakeAnswered(env: ActEnv, state: State, answer: AgentAnswer): Promise<Answered | null> {
+  const entry = env.live.ledger.find(e => e.kind === 'intake-stamp' && e.agentId === answer.agentId && e.status === 'running')
+  if (entry === undefined) return null
+  const exec = await intakeFinish(ctxOf(env, state, entry), entry, answer)
+  const now = await env.io.now()
+  const current = env.live.ledger.find(e => e.key === entry.key)
+  // a settle or a retry ended the attempt while the answer was read
+  if (current === undefined || current.agentId !== entry.agentId || current.startedAt !== entry.startedAt || current.status !== 'running') {
+    return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended`, key: entry.key }
+  }
+  const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
+  await env.save()
+  await logLoop(env, moved)
+  return { result: 'applied', key: entry.key }
 }
 
 // The refusal of a tool call that could not be decided in time (#558): the agent answers in text.

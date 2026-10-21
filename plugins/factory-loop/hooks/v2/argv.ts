@@ -32,6 +32,19 @@ export function labelCreateArgv(repo: string, label: { name: string; color: stri
   return ['gh', 'label', 'create', label.name, '--repo', repo, '--color', label.color, '--description', label.description, '--force']
 }
 
+// One label made if the repo lacks it: no --force, so a label that exists, with the owner's colour and
+// description, is left as it is (the command then fails with "already exists", which the caller reads as
+// present). The intake stamp's labels (act-intake.ts) are made this way.
+export function labelMakeArgv(repo: string, label: { name: string; color: string; description: string }): string[] {
+  return ['gh', 'label', 'create', label.name, '--repo', repo, '--color', label.color, '--description', label.description]
+}
+
+// The intake stamp's labels (`area:<area>`, `needs-decision`) on, in one call. Taking one off is
+// labelClearArgv's.
+export function labelsAddArgv(repo: string, issue: number, add: readonly string[]): string[] {
+  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add.join(',')]
+}
+
 // --- comments (4.5, 8.3) ------------------------------------------------------------------------------
 
 // A comment's body goes on stdin; it carries its hidden key, found again by the read below.

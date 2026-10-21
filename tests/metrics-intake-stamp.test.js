@@ -19,7 +19,7 @@ function blocks() {
   const rest = doc.slice(start + 1);
   const end = rest.indexOf("\n### ", 1);
   const found = [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
-  assert.equal(found.length, 5, "the subsection holds five SQL blocks");
+  assert.equal(found.length, 9, "the subsection holds nine SQL blocks");
   return found;
 }
 
@@ -45,7 +45,7 @@ test("Intake stamp: each query counts the seeded stamps and claims", opts, (t) =
   claim("2026-10-20T12:00:00.000Z", 4, [{ name: "area-factory", points: 2 }]);
 
   const rows = (sql) => db.query(sql, "reader").split("\n").map((l) => l.split("|"));
-  const [a, b, c, d, e] = blocks();
+  const [a, b, c, d, e] = blocks().slice(0, 5);
   assert.deepEqual(rows(a), [
     ["2026-10-19 00:00:00+00", "o/a", "failed", "1"],
     ["2026-10-19 00:00:00+00", "o/a", "ok", "3"],
@@ -60,5 +60,38 @@ test("Intake stamp: each query counts the seeded stamps and claims", opts, (t) =
   assert.deepEqual(rows(e), [
     ["2026-10-19 00:00:00+00", "3", "1", "33.3"],
     ["2026-10-20 00:00:00+00", "1", "1", "100.0"],
+  ]);
+});
+
+test("Intake stamp: the cost, failure and label queries read the run events' token totals, reasons and labels", opts, (t) => {
+  const db = createDb(t);
+  let seq = 0;
+  const put = (ts, issue, data) => {
+    seq += 1;
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, '${crypto.randomUUID()}', '${ts}', 'intake_stamp', 1, 'o/a', 'd1', 'agent', ${issue}, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  };
+  const run = (ts, issue, outcome, over) =>
+    put(ts, issue, { version: "v" + issue, mode: "run", outcome, area: null, needs_owner: null, reason: null, touches: [], dropped: [], labels_set: [], labels_kept: [], model: "haiku", ...over });
+  const tokens = (i, o, r, c) => ({ input_tokens: i, output_tokens: o, cache_read_tokens: r, cache_creation_tokens: c });
+  run("2026-10-19T08:00:00.000Z", 1, "ok", { area: "factory", labels_set: ["area:factory", "needs-decision"], ...tokens(100, 20, 900, 50) });
+  run("2026-10-19T09:00:00.000Z", 2, "ok", { area: "factory", labels_set: ["area:factory"], labels_kept: ["needs-decision"], ...tokens(200, 30, 1000, 0) });
+  run("2026-10-19T10:00:00.000Z", 3, "failed", { reason: "timeout", ...tokens(null, null, null, null) });
+  // a loop before the totals, and a dry run: not run events with tokens
+  run("2026-10-20T08:00:00.000Z", 4, "failed", { reason: "lost" });
+  run("2026-10-20T09:00:00.000Z", 1, "failed", { reason: "timeout", ...tokens(7, 1, 0, 0) });
+  put("2026-10-20T10:00:00.000Z", 9, { version: "v9", mode: "dry", outcome: "ok", area: "docs", needs_owner: false, reason: null, touches: [], dropped: [], labels_set: [], labels_kept: [], model: "haiku", ...tokens(999, 999, 999, 999) });
+
+  const rows = (sql) => db.query(sql, "reader").split("\n").map((l) => l.split("|"));
+  const [cost, perIssue, reasons, labels] = blocks().slice(5, 9);
+  assert.deepEqual(rows(cost), [
+    ["2026-10-19 00:00:00+00", "o/a", "3", "300", "50", "1900", "50", "1"],
+    ["2026-10-20 00:00:00+00", "o/a", "2", "7", "1", "0", "0", "1"],
+  ]);
+  assert.deepEqual(rows(perIssue), [["o/a", "2", "1", "200", "30"], ["o/a", "1", "2", "107", "21"], ["o/a", "3", "1", "0", "0"], ["o/a", "4", "1", "0", "0"]]);
+  assert.deepEqual(rows(reasons), [["o/a", "timeout", "2"], ["o/a", "lost", "1"]]);
+  assert.deepEqual(rows(labels), [
+    ["2026-10-19 00:00:00+00", "3", "1"],
+    ["2026-10-20 00:00:00+00", "0", "0"],
   ]);
 });

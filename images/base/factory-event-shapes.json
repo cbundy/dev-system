@@ -635,11 +635,32 @@
             "string"
           ]
         },
+        "cache_creation_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "dropped": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "labels_kept": {
           "items": {
@@ -674,6 +695,13 @@
             "dropped",
             "failed",
             "ok"
+          ]
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "reason": {

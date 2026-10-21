@@ -124,6 +124,7 @@ const RUN_ONLY = [
   "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",
   "Queue snapshots #0", "Queue snapshots #1", "Queue snapshots #2",
   "Intake stamp #0", "Intake stamp #1", "Intake stamp #2", "Intake stamp #3", "Intake stamp #4",
+  "Intake stamp #5", "Intake stamp #6", "Intake stamp #7", "Intake stamp #8",
 ];
 
 test("every sql block of docs/metrics.md reads only the factory database's views", () => {

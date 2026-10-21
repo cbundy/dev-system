@@ -208,3 +208,19 @@ export function flakeCommentKey(hash: string, flake: string): string {
 export function flakeMarker(hash: string): string {
   return hiddenKey(`flake:${hash}`)
 }
+
+// The intake stamp's keys (I1): one run per issue and body version, and the one settle of a run that
+// never ended. Neither names a life: a stamp belongs to the body, not to a claim.
+export function intakeKey(issue: number, version: string): string {
+  return `intake/${issue}/${version}`
+}
+
+export function intakeSettleKey(issue: number, version: string): string {
+  return `${intakeKey(issue, version)}/settle`
+}
+
+// intakeRunOf: the issue and version a run's key names (not a settle's); null for any other key.
+export function intakeRunOf(key: string): { issue: number; version: string } | null {
+  const m = /^intake\/([1-9][0-9]*)\/([0-9a-f]{16})$/.exec(key)
+  return m === null ? null : { issue: Number(m[1]), version: m[2] ?? '' }
+}

@@ -112,6 +112,7 @@ export function buildState(o: Observed): State {
         blockersClosedAt: g?.facts?.blockersClosedAt ?? null,
         parent: g?.facts?.parent ?? null,
         siblings: g?.facts?.siblings ?? null,
+        bodyVersion: g?.facts?.bodyVersion ?? null,
         epic: g?.facts ? tracker.test(g.facts.title) : null,
         subIssueList: subIssuesOf(n, timelines),
         brief: g?.brief ?? null,

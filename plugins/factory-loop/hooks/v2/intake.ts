@@ -10,8 +10,9 @@ import type { IntakeResult } from './contracts-intake.mjs'
 // the loop's own agent type for the reader (agents/intake.md), hidden from the model like the step agents
 export const INTAKE_AGENT = 'factory-loop:intake'
 
-// a reader that has not ended its turn by then is reported as failed, once
-export const STAMP_TIMEOUT_MS = 10 * 60_000
+// a reader that has not ended its turn by then is reported as failed, once (defined in stamps.ts, which the
+// pure planner may import; rule I1 settles a real run by it)
+export { STAMP_TIMEOUT_MS } from './stamps'
 
 // One stamp in progress: the issue, the model it runs on, when it started, and its agent once spawned.
 export type StampRun = { issue: number; model: string; startedAt: Ms; agentId: string | null }

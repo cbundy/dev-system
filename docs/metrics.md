@@ -898,7 +898,7 @@ ORDER BY 1, 2;
 
 ### Intake stamp
 
-These queries stay empty until the loop writes `intake_stamp` (one event per stamp attempt of one issue version; `outcome` is `ok`, `failed` or `dropped`).
+These queries stay empty until the loop writes `intake_stamp`: one event per finished try of one issue version, written only while `intakeStamp` is `on` (`mode` is `run`; `outcome` is `ok`, `failed` or `dropped`; a failed run's `reason` says why: `timeout`, `lost`, `spawn-failed`, or what the reader's answer lacked). The token fields are the run's transcript totals, null when it could not be read.
 
 Stamps per repo and day by `outcome`:
 
@@ -957,6 +957,51 @@ SELECT date_trunc('day', c.ts) AS day, count(*) AS claims,
 FROM factory.event_log c
 JOIN factory.event_store s ON s.event_id = c.event_id
 WHERE c.type = 'claimed'
+GROUP BY 1
+ORDER BY 1;
+```
+
+Intake cost per repo and day, from the token totals of the runs (`runs_without_tokens` counts the runs whose transcript could not be read):
+
+```sql
+SELECT date_trunc('day', ts) AS day, repo, count(*) AS runs,
+  coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens,
+  coalesce(sum(cache_read_tokens), 0) AS cache_read_tokens, coalesce(sum(cache_creation_tokens), 0) AS cache_creation_tokens,
+  count(*) FILTER (WHERE input_tokens IS NULL) AS runs_without_tokens
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+Intake cost per issue (a try for each body version it was stamped at), the costliest first:
+
+```sql
+SELECT repo, issue, count(*) AS tries,
+  coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
+GROUP BY 1, 2
+ORDER BY coalesce(sum(input_tokens), 0) + coalesce(sum(output_tokens), 0) DESC, 1, 2;
+```
+
+Why runs failed (`reason`), the most common first:
+
+```sql
+SELECT repo, coalesce(reason, 'none') AS reason, count(*) AS failed_runs
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run' AND outcome = 'failed'
+GROUP BY 1, 2
+ORDER BY 3 DESC, 1, 2;
+```
+
+Labels the loop set against the ones it kept because the owner had changed them, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day,
+  sum(jsonb_array_length(labels_set)) AS labels_set, sum(jsonb_array_length(labels_kept)) AS labels_kept
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
 GROUP BY 1
 ORDER BY 1;
 ```

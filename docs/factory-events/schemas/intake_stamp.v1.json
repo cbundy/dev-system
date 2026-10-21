@@ -13,16 +13,20 @@
     "outcome": { "enum": ["ok", "failed", "dropped"], "description": "ok: the stamp was applied. failed: the stamp step did not produce an answer. dropped: the answer broke the contract.", "x-column": true },
     "area": { "type": ["string", "null"], "description": "The area the stamp named, or null when there is none.", "x-column": true },
     "needs_owner": { "type": ["boolean", "null"], "description": "Whether the stamp says the issue needs the owner, or null when there is no answer.", "x-column": true },
-    "reason": { "type": ["string", "null"], "description": "The one-line needs_owner reason, or null.", "x-column": true },
+    "reason": { "type": ["string", "null"], "description": "The one-line needs_owner reason, or null. On a run that failed without an answer (outcome failed), why it ended: timeout, lost, spawn-failed or the read or answer problem.", "x-column": true },
     "touches": { "type": "array", "items": { "type": "string" }, "description": "The top-level paths the stamp says the issue touches.", "x-column": true },
     "dropped": { "type": "array", "items": { "type": "string" }, "description": "The answer fields the contract dropped.", "x-column": true },
     "labels_set": { "type": "array", "items": { "type": "string" }, "description": "The labels the loop added.", "x-column": true },
     "labels_kept": { "type": "array", "items": { "type": "string" }, "description": "The labels the loop left alone because the owner had changed them.", "x-column": true },
-    "model": { "type": "string", "minLength": 1, "description": "The model alias that stamped.", "x-column": true }
+    "model": { "type": "string", "minLength": 1, "description": "The model alias that stamped.", "x-column": true },
+    "input_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read.", "x-column": true },
+    "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The output tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-read input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true }
   },
   "examples": [
-    { "version": "3f2a9c1d", "mode": "run", "outcome": "ok", "area": "factory", "needs_owner": false, "reason": null, "touches": ["plugins", "docs"], "dropped": [], "labels_set": ["area:factory"], "labels_kept": [], "model": "sonnet" },
-    { "version": "8b7e41aa", "mode": "run", "outcome": "failed", "area": null, "needs_owner": null, "reason": null, "touches": [], "dropped": [], "labels_set": [], "labels_kept": [], "model": "sonnet" },
+    { "version": "3f2a9c1d", "mode": "run", "outcome": "ok", "area": "factory", "needs_owner": false, "reason": null, "touches": ["plugins", "docs"], "dropped": [], "labels_set": ["area:factory"], "labels_kept": [], "model": "sonnet", "input_tokens": 1840, "output_tokens": 212, "cache_read_tokens": 9600, "cache_creation_tokens": 410 },
+    { "version": "8b7e41aa", "mode": "run", "outcome": "failed", "area": null, "needs_owner": null, "reason": "timeout", "touches": [], "dropped": [], "labels_set": [], "labels_kept": [], "model": "sonnet", "input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_creation_tokens": null },
     { "version": "c04d5e72", "mode": "run", "outcome": "dropped", "area": "factory", "needs_owner": true, "reason": "The brief asks for a choice only the owner can make.", "touches": ["images"], "dropped": ["touches"], "labels_set": [], "labels_kept": ["needs-owner"], "model": "sonnet" }
   ]
 }

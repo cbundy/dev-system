@@ -6,7 +6,7 @@ import { logLoop, transition } from './act'
 import type { ActEnv } from './act'
 import { completeOff } from './act-off'
 import type { OffDone } from './act-off'
-import { agentAnswered, keep, wakeEnded, wakeStarted } from './act-between'
+import { agentAnswered, intakeAnswered, keep, wakeEnded, wakeStarted } from './act-between'
 import type { Answered, Claim, Repair } from './act-between'
 import type { Runtime } from './observe'
 import { actLockPath, releaseActLock } from './rails'
@@ -180,6 +180,15 @@ export async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentI
   if (rt === null) return
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
+  // an intake reader of rule I1 (v2/act-intake.ts) is a ledger entry of its own kind: its answer is the stamp
+  const intake = await intakeAnswered(env, S.lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason })
+  if (intake !== null) {
+    const done = live.ledger.find(x => x.key === intake.key)
+    const line = intake.result === 'applied' ? { key: intake.key, intake: done?.status, summary: done?.summary } : { agent: e.agentId, intake: 'dropped', why: intake.why }
+    await appendLine($, rt, { ...line, problems: env.problems.length > 0 ? env.problems : undefined })
+    if (intake.result === 'applied') ping(`agent ${e.agentId}`)
+    return
+  }
   const repair: Repair = (await actsNow($, rt)) ? (id, text, type) => repairTo($, id, text, type) : async () => 'the loop starts nothing until its restart'
   const r = await agentAnswered(env, S.lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, repair)
   const why = r.why === undefined || r.result === 'repair' ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]

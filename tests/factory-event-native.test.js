@@ -221,6 +221,23 @@ test("intake_stamp: a full event is written and validates; one without version i
   assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...good, outcome: "maybe" }), []);
 });
 
+test("intake_stamp: a run with token totals and one with null tokens are written and validate; an event without the tokens (an older loop) still does; a negative or text total fails strict validation", () => {
+  const [withTokens, nullTokens] = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "intake_stamp.v1.json"), "utf8")).examples;
+  assert.equal(withTokens.mode, "run");
+  assert.equal(withTokens.input_tokens, 1840);
+  assert.equal(nullTokens.mode, "run");
+  assert.equal(nullTokens.input_tokens, null);
+  for (const data of [withTokens, nullTokens]) {
+    const { r, lines } = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(data)]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(reader.validateStrict("intake_stamp", 1, JSON.parse(lines[0]).data), []);
+  }
+  const { input_tokens: _a, output_tokens: _b, cache_read_tokens: _c, cache_creation_tokens: _d, ...older } = withTokens;
+  assert.deepEqual(reader.validateStrict("intake_stamp", 1, older), []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...withTokens, output_tokens: -1 }), []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...withTokens, cache_read_tokens: "many" }), []);
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });

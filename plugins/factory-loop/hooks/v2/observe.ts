@@ -33,7 +33,7 @@ import type { FactsShadow } from './sources-facts'
 import type { RecordsShadow } from './sources-records'
 import { EMPTY_PATHS, readPaths } from './sources-paths'
 import type { PathsCache } from './sources-paths'
-import type { Stamps } from './stamps'
+import type { StampOwned, StampTries, Stamps } from './stamps'
 import { readWorkspace } from './sources-workspace'
 import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
@@ -75,7 +75,7 @@ export type SourceCtx = {
 // holds none (a rebuild may fill it); error when the store could not be read or holds no stored
 // records under the key, so nothing is known of the records; files: the owner's files as the loop
 // last read or wrote them (7.2), absent or null when none are kept.
-export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; stamps?: Stamps; error: string | null }
+export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; stamps?: Stamps; stampTries?: StampTries; stampOwned?: StampOwned; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
 // the last rebuild, the comments read per issue read, the checkout R1's tripwire last settled on
@@ -490,7 +490,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
     ...(cache.flakes.read === null ? {} : { flakes: cache.flakes.read }),
     changed: cache.changed,
-    ...(rt.config.intakeStamp === 'on' ? { stamps: stored?.stamps ?? {}, inFlightPaths: inFlight.paths } : {}),
+    ...(rt.config.intakeStamp === 'on' ? { stamps: stored?.stamps ?? {}, stampTries: stored?.stampTries ?? {}, stampOwned: stored?.stampOwned ?? {}, inFlightPaths: inFlight.paths } : {}),
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
     checkoutBase: cache.checkoutBase,
