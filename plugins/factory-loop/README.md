@@ -118,7 +118,7 @@ For more, turn trace mode on: `/factory trace on`, `"trace": true` in the worksp
 `"trace": true` in the repo's `.claude/factory-loop.json` (the workspace file wins). Each pass
 then writes one record to `trace-YYYY-MM-DD.jsonl` beside the decision log: each phase's time,
 every command with its time, exit and bytes, which sources came from the cache, each action's
-times, the wakes' latencies, and what each issue waits on and since when. The trace files are
+times, the wakes' latencies, and what each issue waits on and since when. The sweep and the heartbeat run off the pass: their action row says `off` and the next record's `offPass` lists the commands that finished, with their time and exit. The trace files are
 kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
 fills the cap is cut short. [v2 SPEC 13.12.1](../../docs/factory-loop/v2/SPEC.md#13121-trace-mode) explains each field, with `jq` examples.
 

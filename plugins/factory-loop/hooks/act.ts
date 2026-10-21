@@ -9,6 +9,8 @@
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake. The layer that plans is v2/plan.ts (v2 SPEC 2.3).
 import { cliExecutors } from './act-cli'
+import { isOffPass, launchOff, offPassExpired, sameAttempt } from './act-off'
+import type { OffPass } from './act-off'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { GITHUB_V2, turnEnded } from './foundation'
@@ -132,6 +134,8 @@ export type ActEnv = {
   killed: () => Promise<boolean>
   // what went wrong outside any one action (a loop event not logged), for the decision log
   problems: string[]
+  // where a command of an OFF_PASS kind (act-off.ts) ends; absent, it runs inline in the action
+  offPass?: OffPass
 }
 
 export function ctxOf(env: ActEnv, state: State, entry: LedgerEntry): ExecCtx {
@@ -170,7 +174,8 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
 
 // One action's result, for the decision log (v2 SPEC 13.12); at: when it started, for the trace (#552),
 // absent for an action held before it started.
-export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms }
+// off: the action's command runs off the pass (act-off.ts); ms is then its launch time.
+export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms; off?: true }
 
 export type ActReport = {
   outcomes: ActOutcome[]
@@ -240,6 +245,15 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
     env.live.ledger = finish(env.live.ledger, action.key, held, await env.io.now(), opts)
     return done(held)
   }
+  if (env.offPass !== undefined && isOffPass(action.kind)) {
+    // the command runs on, untraced, after the pass: its completion lands in the hook queue
+    const off = env.offPass
+    const ctx = ctxOf({ ...env, io: off.io, commands: [] }, state, s.entry)
+    await launchOff(off, () => env.io.now(), () => dispatch(ctx, action), { key: action.key, kind: action.kind, started: s.entry, ...opts })
+    const exec: Exec = { status: 'running', summary: 'running off the pass' }
+    const done = await env.io.now()
+    return { exec, outcome: { key: action.key, kind: action.kind, status: 'running', ms: done - t0, summary: exec.summary, at: t0, off: true } }
+  }
   const exec = await dispatch(ctxOf(env, state, s.entry), action)
   await record(env, action.key, s.entry, exec, opts)
   return done(exec)
@@ -257,8 +271,8 @@ async function record(
   opts: { config: Runtime['config']; prev: LedgerEntry | null },
 ): Promise<void> {
   const now = await env.io.now()
-  const current = env.live.ledger.find(e => e.key === key)
-  if (current === undefined || current.startedAt !== started.startedAt || current.attempts !== started.attempts) return
+  const current = sameAttempt(env.live.ledger, started)
+  if (current === undefined) return
   if (exec.status === 'running' && current.status !== 'running') return
   const moved = transition(env.live, l => finish(l, key, exec, now, opts))
   await env.save()
@@ -424,6 +438,11 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
+  // an off-pass command that outlived its bound is timed out; its completion, if it ever comes, is dropped
+  for (const u of offPassExpired(env.live.ledger, now)) {
+    env.problems.push(`${u.key}: ${u.summary}`)
+    moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
+  }
   // a recorded answer ends its step when read (v2 SPEC 10.8)
   for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e), undefined, between.gateHeld)) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {

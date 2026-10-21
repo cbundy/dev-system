@@ -11,7 +11,11 @@ import type { Engine } from 'claude-code/testing'
 
 import { loopNote } from '../hooks/derive'
 import { pruneArgvs } from '../hooks/exec'
+import { CLI_TIMEOUT_MS } from '../hooks/act-cli'
+import { OFF_PASS_MARGIN_MS } from '../hooks/act-off'
 import type { LedgerEntry } from '../hooks/types'
+import { recordsKey, recordsToStore } from '../hooks/v2/observe'
+import { madeRecord } from '../hooks/v2/table'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { handshakePath } from '../hooks/v2/workspace'
 import { STEP_AGENT } from '../hooks/v2/types'
@@ -321,7 +325,8 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(line.rails).toBeUndefined()
     expect(line.outcomes).toEqual([
       { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
-      { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
+      // the sweep runs off the pass (act-off.ts): the pass line says it is running, its completion lands after
+      { key: 'sweep:0', status: 'running', ms: 0, summary: 'running off the pass' },
     ])
     expect(line.commands).toContain('env CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} callum-flow-claim 470')
     expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adopt', branch: 'issue-470' } })
@@ -1633,6 +1638,130 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
   })
 })
 
+describe('commands that run off the pass (act-off.ts, v2 SPEC 13.2, 13.7.5)', () => {
+  // a sweep held until the test releases it; every sweep command seen is counted
+  function slowSweep(over: { exitCode?: number; stderr?: string } = {}) {
+    let release: () => void = () => undefined
+    const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: over.exitCode ?? 0, stderr: over.stderr ?? '' })))
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-sweep' ? gate : undefined) })
+    return { run, release: () => release() }
+  }
+  const sweeps = (h: Host) => h.commands().filter(s => s.argv[0] === 'callum-flow-sweep').length
+
+  test('a sweep that takes 40 s never holds a pass: the line is written with its entry running, and the completion lands between passes, logged and pinging a pass', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const first = h.passes()[0] as Record<string, unknown>
+    expect((first.outcomes as { key: string; status: string; ms: number }[]).find(o => o.key === 'sweep:0')).toMatchObject({ status: 'running', ms: 0 })
+    expect(first.ms as number).toBeLessThan(1_000)
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'running', attempts: 1 })
+    // a second pass while it runs plans no second sweep
+    await clock.advance(30_000)
+    await clock.advance(30_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(sweeps(h)).toBe(1)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    const passes = h.passes().length
+    s.release()
+    await clock.settle()
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'done', summary: 'swept', attempts: 1 })
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', kind: 'sweep', status: 'done', summary: 'swept' } })
+    // the completion pinged a pass
+    await clock.advance(6_000)
+    expect(h.passes().length).toBeGreaterThan(passes)
+  })
+
+  // a heartbeat held until the test releases it, over a record the store holds (so it runs
+  // `callum-flow-claim --heartbeat`); every such command seen is counted
+  function slowBeat() {
+    let release: () => void = () => undefined
+    const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: 0, stderr: '' })))
+    const { run } = factory({ run: argv => (argv.includes('--heartbeat') ? gate : undefined) })
+    return { run, release: () => release() }
+  }
+  const beats = (h: Host) => h.commands().filter(s => s.argv.includes('--heartbeat')).length
+
+  test('a heartbeat that takes 14 s never holds a pass: the line is written with its entry running, no second heartbeat or sweep is planned meanwhile, and the completion lands after', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const b = slowBeat()
+    const record = { ...madeRecord({ issue: 140, life: 'l', branch: 'issue-140', pr: null, others: [] }, NOW - 30 * MIN), state: 'parked' as const, step: null, question: 'q' }
+    const h = host(on, { config: ACT, run: b.run, store: { [recordsKey(REPO)]: recordsToStore([record], NOW) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const first = h.passes()[0] as Record<string, unknown>
+    expect((first.outcomes as { key: string; status: string; ms: number }[]).find(o => o.key.startsWith('heartbeat:'))).toMatchObject({ status: 'running', ms: 0 })
+    expect(first.ms as number).toBeLessThan(1_000)
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'running', attempts: 1 })
+    expect(beats(h)).toBe(1)
+    const sweepsBefore = sweeps(h)
+    // a second pass while it runs plans no new heartbeat and no new sweep
+    await clock.advance(8_000)
+    await clock.advance(8_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(beats(h)).toBe(1)
+    expect(sweeps(h)).toBe(sweepsBefore)
+    expect(h.entry('heartbeat:0')?.status).toBe('running')
+    b.release()
+    await clock.settle()
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'done', summary: 'leases renewed: #140', attempts: 1 })
+    expect(h.lines().find(l => l.offPass !== undefined && (l.offPass as { kind: string }).kind === 'heartbeat')).toMatchObject({ offPass: { key: 'heartbeat:0', kind: 'heartbeat', status: 'done' } })
+  })
+
+  test('a sweep that never ends is marked timed-out on the first pass after its bound; a completion after that changes nothing', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(CLI_TIMEOUT_MS.sweep + OFF_PASS_MARGIN_MS - 10_000)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    await clock.advance(2 * 60_000)
+    const timed = h.ledger().find(e => e.key === 'sweep:0')
+    expect(timed).toMatchObject({ status: 'timed-out', summary: 'timed out: no completion within 360 s' })
+    const attempt = timed?.startedAt
+    expect(h.passes().some(l => ((l.problems ?? []) as string[]).some(p => p.includes('sweep:0: timed out')))).toBe(true)
+    s.release()
+    await clock.settle()
+    // the late exit 0 finds the attempt ended: dropped, said in the decision log
+    const now = h.entry('sweep:0')
+    expect(now?.status === 'done' && now.startedAt === attempt).toBe(false)
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', dropped: true } })
+  })
+
+  test('a completion after the act lock went to another session changes nothing in memory and writes nothing', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    const stored = JSON.stringify(h.store.get(`ledger:${REPO}`))
+    h.files.set(LOCK, JSON.stringify({ session: 'session-other', renewedAt: NOW + 6_000, expiresAt: NOW + 10 * MIN }))
+    s.release()
+    await clock.settle()
+    expect(JSON.stringify(h.store.get(`ledger:${REPO}`))).toBe(stored)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', status: 'done', dropped: true } })
+  })
+
+  test('a rate-limited sweep sets the GitHub backoff on the next pass, as an inline action does', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep({ exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' })
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(`backoff:${REPO}`)).toBeUndefined()
+    s.release()
+    await clock.settle()
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'failed' })
+    await clock.advance(6_000)
+    expect(h.store.get(`backoff:${REPO}`)).toBeGreaterThan(NOW + 6_000)
+  })
+})
+
 describe('the pass summary event (#680)', () => {
   const passesEvents = (h: Host) => h.native('loop_passes')
 
@@ -1676,12 +1805,13 @@ describe('the pass summary event (#680)', () => {
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(10_000)
-    expect(h.passes()).toHaveLength(1)
+    // the first pass, and the one its sweep's completion pings (act-off.ts)
+    expect(h.passes()).toHaveLength(2)
     hang = true
     await clock.advance(4 * 60_000)
     const counts = passesEvents(h).map(e => e.data.passes)
     expect(counts.length).toBeGreaterThanOrEqual(3)
-    expect(counts[0]).toBe(1)
+    expect(counts[0]).toBe(2)
     expect(counts.slice(2)).toContain(0)
     const empty = passesEvents(h).find(e => e.data.passes === 0)
     expect(empty?.data.mean_ms).toBeNull()

@@ -28,6 +28,7 @@ import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/s
 import { windDownFiles, withRemembered } from './v2/wind-down-files'
 import { windDownOf } from './v2/wind-down'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
+import { offPassDone } from './driver-between'
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
 import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
@@ -267,7 +268,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // a snapshot write that failed since the last pass line is told once, here
   const late = takeProblem()
   if (late !== null) problems.push(late)
-  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems }
+  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems, offPass: { io: actIo($), done: d => void offPassDone($, rt, d) } }
 
   let report: ActReport | null = null
   let result: PlanResult
@@ -365,7 +366,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
-    const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
+    // an off-pass command that met the limit since the last pass counts as one this pass met
+    const limited = report?.rateLimited === true || S.offRateLimited
+    S.offRateLimited = false
+    const until = Math.max(state.githubBackoffUntil ?? 0, limited ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
     // the starved spell (S1): it starts on the first starved pass, stands through unknown passes and ends
     // on the first pass that is not starved
@@ -447,6 +451,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     owner: result.owner,
   })
   const ledger = act ? live.ledger : state.ledger
+  const offPass = S.offFinished.splice(0)
   if (tr !== null) {
     // ended wakes since the last pass, or since this module loaded: not the ledger's whole week
     const wakes = wakeRows(ledger, delivered, reportedWakes, Math.max(S.prevPassAt, S.loadedAt))
@@ -461,6 +466,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       wakes: wakes.rows,
       waiting: waitingRows(state, result, ledger, S.waits),
       observe: observeSplit,
+      offPass,
     })
     await writeTrace($, rt, record).catch(() => undefined)
   }

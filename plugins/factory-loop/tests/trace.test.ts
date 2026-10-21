@@ -267,9 +267,11 @@ describe('act mode, traced', () => {
     const actions = t.actions as Rec[]
     expect(actions.map(a => [a.key, a.kind, a.status])).toEqual([
       [expect.stringMatching(/^i470\/claim\//), 'claim', 'done'],
-      ['sweep:0', 'sweep', 'done'],
+      ['sweep:0', 'sweep', 'running'],
       ['title', 'title', 'done'],
     ])
+    // the sweep runs off the pass, so its row says so; the claim's keeps its shape
+    expect(actions.map(a => a.off)).toEqual([undefined, true, undefined])
     let last = 0
     for (const a of actions) {
       expect(a.started as number).toBeGreaterThanOrEqual(a.queued as number)
@@ -282,6 +284,26 @@ describe('act mode, traced', () => {
     expect(commandsOf(t).find(c => c.cmd.endsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
     expect(t.lockMs as number).toBeGreaterThanOrEqual(0)
     expect(t.persistMs as number).toBeGreaterThanOrEqual(0)
+  })
+
+  test('an off-pass action: its row says off, the next record lists the command that finished, the one after lists none', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT, trace: true }, run: world() })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // the first record: the sweep started off the pass, nothing finished yet
+    const first = h.traces()[0] as Rec
+    expect((first.actions as Rec[]).find(a => a.kind === 'sweep')).toMatchObject({ key: 'sweep:0', status: 'running', off: true })
+    expect((first.actions as Rec[]).find(a => a.kind === 'claim')?.off).toBeUndefined()
+    await clock.advance(60_000)
+    // the stub sweep ends at once, so its completion lands between this pass's work and its record or just after:
+    // the record that follows lists it once, with the command's exit, and no record repeats it
+    const records = h.traces() as Rec[]
+    const listed = records.flatMap((r, at) => ((r.offPass as Rec[]).length > 0 ? [[at, r.offPass]] : []))
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.[1]).toEqual([{ cmd: 'sweep', key: 'sweep:0', ms: expect.any(Number), exit: 0, endedAt: iso(NOW + 5_000) }])
+    expect(records.length).toBeGreaterThan(Number(listed[0]?.[0]) + 1)
+    expect(records.every(r => Array.isArray(r.offPass))).toBe(true)
   })
 
   test("a wake's row: queued by its action, delivered when its turn starts, answered when its turn ends", ENGINE_TEST, async ($, on) => {

@@ -9,6 +9,7 @@ import type { ActEnv, Between, Live } from './act'
 import type { ViewInputs } from './config-view'
 import { emptyCache } from './observe'
 import type { ObserveSplit } from './observe-clock'
+import type { OffPassRow } from './trace'
 import type { Runtime } from './observe'
 import { newScheduler } from './rails'
 import type { PassSource } from './rails'
@@ -64,6 +65,10 @@ export const S = {
   headless: false,
   // the current pass's observe split: cleared when a pass starts, set once its observe ends
   passObserve: null as ObserveSplit | null,
+  // the off-pass commands (act-off.ts) that finished since the last trace record, and whether one met
+  // a GitHub rate limit since the last pass (the next acting pass sets the backoff)
+  offFinished: [] as OffPassRow[],
+  offRateLimited: false,
   loadedAt: 0,
   cwd: '.',
   passNo: 0,

@@ -2511,6 +2511,34 @@ GROUP BY 1, repo, device
 ORDER BY 1, repo, device;
 ```
 
+## Pass time
+
+A pass no longer waits for the sweep or the heartbeat: both run off the pass ([v2 SPEC 13.6.1](factory-loop/v2/SPEC.md#1361-catalogue)),
+so passes over 20 s should be rare from this release on. Per hour, repo and device, from the `loop_passes` events (`mean_ms` and
+`max_ms` are one minute's mean and longest pass): the passes, their pass-weighted mean, the longest pass, and the minutes
+whose longest pass was over 20 s:
+
+```sql
+SELECT date_trunc('hour', from_at) AS hour, repo, device,
+  sum(passes) AS passes,
+  round(sum(mean_ms::numeric * passes) / sum(passes)) AS mean_ms,
+  max(max_ms) AS max_ms,
+  count(*) FILTER (WHERE max_ms > 20000) AS minutes_over_20s
+FROM factory.event_log
+WHERE type = 'loop_passes' AND mean_ms IS NOT NULL AND passes > 0
+  AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, repo, device
+ORDER BY 1, repo, device;
+```
+
+With trace mode on, each record lists the off-pass commands that finished since the last record (`offPass`: `cmd`, `key`, `ms`,
+`exit`, `endedAt`). How long they ran, per command, from a day's trace file in the loop dir:
+
+```sh
+jq -s '[.[].offPass[]?] | group_by(.cmd) | map({cmd: .[0].cmd, runs: length, failed: (map(select(.exit != 0)) | length),
+  mean_ms: (map(.ms) | add / length | round), max_ms: (map(.ms) | max)})' trace-2026-10-21.jsonl
+```
+
 ## Shadow runs (source switch)
 
 Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are

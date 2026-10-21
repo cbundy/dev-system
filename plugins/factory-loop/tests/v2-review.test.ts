@@ -1096,7 +1096,8 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     await $.session.start(START)
     await pass(6_000)
     // the seq's entry actions, then the ensure, which opens the PR: the ledger names it, the record not yet (8.1)
-    for (let i = 0; i < 4 && h.entry(prKey(r, 'ensure'))?.status !== 'done'; i++) await pass(60_000)
+    // (the first sweep's completion pings a pass 5 s on, which runs the ensure: step in seconds so the pass after it is the timer's)
+    for (let i = 0; i < 4 && h.entry(prKey(r, 'ensure'))?.status !== 'done'; i++) await pass(6_000)
     expect(opened).toBe(true)
     expect(h.entry(prKey(r, 'ensure'))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr, created: true } })
     // the next pass reads the PR, its checks and its patch, and starts the reviewer in the slot
@@ -1169,7 +1170,8 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     }
     await $.session.start(START)
     await pass(6_000)
-    for (let i = 0; i < 4 && recs.some(r => h.entry(prKey(r, 'ensure'))?.status !== 'done'); i++) await pass(60_000)
+    // (the first sweep's completion pings a pass 5 s on, which runs the ensure: step in seconds so the pass after it is the timer's)
+    for (let i = 0; i < 4 && recs.some(r => h.entry(prKey(r, 'ensure'))?.status !== 'done'); i++) await pass(6_000)
     expect(recs.map(r => h.entry(prKey(r, 'ensure'))?.status)).toEqual(['done', 'done'])
     // the next pass reads both PRs: #33's patch id fails, #36's reviewer starts all the same
     await pass(60_000)

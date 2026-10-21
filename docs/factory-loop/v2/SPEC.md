@@ -2438,6 +2438,7 @@ every passEveryMs (60 s), or at once when pinged:
     if acting:
         for each action in result.actions:
             renew the act lease; start its ledger entry and save it; act(action); finish it
+            (a heartbeat or a sweep only starts: its command runs on after the pass, 13.6.1)
     record(state, result, outcomes)      one decision-log line, the title
 ```
 
@@ -2454,8 +2455,15 @@ every passEveryMs (60 s), or at once when pinged:
 - **Pings.** An agent of the loop finished (`turn.complete` with its `agentId`), the model
   answered a wake (the answer tool or the main loop's `turn.complete`), or an owner control
   arrived (`/factory` or the control tool).
+- **Off the pass.** `heartbeat` and `sweep` run off the pass (`OFF_PASS` in `hooks/act-off.ts`, the
+  one list a later kind joins): the pass does everything it does for any action up to the saved
+  `running` entry (kill switch, act lock, GitHub rate-limit hold, start, pre-check, save), starts the
+  command without awaiting it and moves on, so a 40 s sweep no longer makes a 40 s pass. The
+  command ends in the hook queue (below), never inside a pass. Planning does not plan its key
+  again while the entry runs (the gate returns `running`), so no second sweep or heartbeat starts;
+  a sweep and a heartbeat may run together.
 - **Between passes.** Hooks feed the ledger as things happen: an agent's answer, a wake's turn
-  starting and ending, the answer tool, `/factory retry`. They work only in act mode with no
+  starting and ending, the answer tool, `/factory retry`, and the end of an off-pass command (13.6.1). They work only in act mode with no
   kill switch, one at a time and in the order their events came, on the same in-memory ledger
   the pass uses (section 13.7.1); a tool call changes that ledger at once and queues the rest
   (13.7.3a item 7).
@@ -2862,8 +2870,8 @@ only reach the configured repo. The foundation's kinds are these; v2's twelve (`
 
 | Kind | Class | Executor | Timeout | Retries | Outcome recorded |
 |---|---|---|---|---|---|
-| `heartbeat` | free | `callum-flow-claim --heartbeat` | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
-| `sweep` | free | `callum-flow-sweep` | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
+| `heartbeat` | free | `callum-flow-claim --heartbeat`, off the pass | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
+| `sweep` | free | `callum-flow-sweep`, off the pass | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
 | `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
 | `rollout` | free | `callum-flow-rollout <N>`, for a merged issue's follow-ups (11) | 60 s | 3 | the rollout: `merge`, `run-it` or `keep-open` |
 | `close-issue` | free | `gh issue close <N> --repo <R> --reason completed` | 60 s | 3 | exit code |
@@ -2874,6 +2882,22 @@ only reach the configured repo. The foundation's kinds are these; v2's twelve (`
 | `task` | drive | `$.prompt.submit` with a `TASK` line | `wakeTimeoutMs.task` | 1 reminder | `done`, `failed`, `hold` |
 | `tell` | owner | `$.prompt.submit` with a `TELL` line | `wakeTimeoutMs.tell` | none | delivered when its turn says something |
 | `title` | free | `$.command.run({ command: 'rename', args })` | 10 s | next pass | the text set |
+
+An action is awaited in the pass that runs it, with one exception: the kinds in `OFF_PASS`
+(`hooks/act-off.ts`: `heartbeat`, `sweep`) are started in the pass, after their running entry is
+saved, and not awaited. The pass reports them with status `running`. Their command runs on an
+untraced `ActIo` and ends in the hook queue, which applies the same `finish` the inline run
+applies (done or failed by exit code, the same summary, `noRetry` and `rateLimited`), only while
+the entry is still the same attempt (key, `startedAt`, `attempts`) and still `running`; saves it
+through the store (which refuses a write once the act lock is another session's: the completion
+then changes nothing in memory and writes nothing); appends one decision-log line
+(`offPass`: key, kind, status, `ms`, summary, `dropped` when it changed nothing); and pings a
+pass. A rate-limited completion makes the next acting pass set the GitHub backoff as an inline
+one does (13.10 item 2). The engine ends a command at its timeout and exposes no kill handle, so
+each acting pass marks `timed-out` any running off-pass entry older than its kind's timeout plus
+`OFF_PASS_MARGIN_MS` (60 s: the engine's exit and the hook queue), with the summary
+`timed out: no completion within <n> s`; a completion that arrives after that is dropped. A
+reload marks the running entry `lost` (13.7.5).
 
 The loop's agents are v2's: the designer, builder, fixer, reviewer and triage definitions in
 `plugins/factory-loop/agents/` (10.3). An `agent.offer` hook keeps the loop's own types out of the
@@ -3144,7 +3168,9 @@ The store survives a restart: `CLAUDE_CONFIG_DIR` is on `/persist`, which `dev-r
 keeps (FINDINGS check 5). On load:
 
 1. Every `running` CLI entry (no agent id, not a wake) becomes `lost`: its process died with
-   the old session or module.
+   the old session or module. That includes a `sweep` or `heartbeat` running off the pass (13.6.1):
+   its completion, if the old process still delivers one, finds the store another load's and
+   changes nothing.
 2. A `running` wake that nobody can answer any more is `lost` at once, with its attempt given
    back, so the rule that raised it decides again on the next pass. That means a wake another
    session submitted, or one that records no session (an older build, or rebuilt from the event
@@ -3412,7 +3438,10 @@ refused plans and records exactly as observe mode does (13.11.1).
   free, one writes and the other is refused. A second session on the same workspace finds a live
   lease and stays in observe. If another session holds the lease mid-pass, the pass runs nothing
   more and lets the ledger go (13.7.1). `session.end` expires this session's lease, so the next
-  session acts at once.
+  session acts at once. A command running off the pass (13.6.1) does not keep the lease renewed:
+  the lease is renewed by passes, and by the timer only while one runs. Its completion saves only
+  while the lease is still this session's (the store refuses the write otherwise) and writes
+  nothing else.
 
 Two more things hold act mode back for a pass: a ledger the store could not load (13.7.1), and a
 `dev-restart-self` that already returned (rule `R2`), which holds it for the rest of the
@@ -3570,7 +3599,11 @@ are ms into the pass):
 - `actions`: each action an acting pass ran: `key`, `kind`, `status`; `queued` (when plan handed
   it over); `started` and `ended` (null for one held before it started); and `ms`. A spawn's `ms`
   is its time to start, since it returns once the agent started; its `agent.spawn` command is the
-  engine's share of that time.
+  engine's share of that time. A `heartbeat` or `sweep` row (13.6.1) carries `off: true`, its
+  `status` is `running` and its `ms` is its launch time; rows of other actions have no `off`.
+- `offPass`: each off-pass command that finished since the previous record (`[]` when none):
+  `cmd` (the kind), `key`, `ms` (how long the command ran), `exit` (`-1` when it never exited) and
+  `endedAt` (ISO).
 - `wakes`: every open wake, plus each wake that ended since the previous pass (reported once):
   `key`, `wake`, `status`; `queued` (its submit); `delivered` (its turn started; null when not
   seen, as across a reload); `ended`; `deliverMs` (queued to delivered); and `answerMs`
