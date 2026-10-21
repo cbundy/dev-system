@@ -642,6 +642,23 @@ describe('the usage pre-check (v2 SPEC 13.10 item 7)', () => {
     expect(await preCheck(usageIo(new Error('no session')).io, claimOf('start'), CFG, null)).toBeNull()
     expect(usageVerdict({ fiveHour: null, sevenDay: 99 }, 'start', CFG, null, NOW)).toBe('usage: tier stop-all forbids start (5h n/a, 7d 99%)')
   })
+
+  test('API-key mode: spend decides, start and develop stop at stop-new, drive at stop-all', async () => {
+    const key = (usd: number | null): UsageReading => ({
+      fiveHour: null,
+      sevenDay: null,
+      usage: { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: usd === null, auth: 'api-key', spend: usd === null ? null : { usd, budgetUsd: 100, resetsAt: NOW + MIN }, ...(usd === null ? { reason: 'spend:bad-tally' } : {}) },
+    })
+    expect(usageVerdict(key(50), 'start', CFG, null, NOW)).toBeNull()
+    expect(usageVerdict(key(92), 'start', CFG, null, NOW)).toBe('usage: tier stop-new forbids start (spend $92.00 of $100)')
+    expect(usageVerdict(key(92), 'develop', CFG, null, NOW)).not.toBeNull()
+    expect(usageVerdict(key(92), 'drive', CFG, null, NOW)).toBeNull()
+    expect(usageVerdict(key(96), 'drive', CFG, null, NOW)).toBe('usage: tier stop-all forbids drive (spend $96.00 of $100)')
+    expect(usageVerdict(key(null), 'start', CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toBe('usage: tier stop-new forbids start (spend:bad-tally)')
+    const io = (r: UsageReading) => ({ usage: async () => r, now: async () => NOW })
+    expect(await preCheck(io(key(92)), claimOf('start'), CFG, null)).toEqual({ status: 'skipped', summary: 'usage: tier stop-new forbids start (spend $92.00 of $100)' })
+    expect(await preCheck(io(key(50)), claimOf('start'), CFG, null)).toBeNull()
+  })
 })
 
 // --- the pass scheduler and the ping-storm breaker --------------------------------------------------

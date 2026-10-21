@@ -72,6 +72,45 @@ describe('the usage tier (G3)', () => {
     expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW - MIN }, NOW).tier).toBe('stop-new')
     expect(tierOf(u, CFG, { untilPct: 91, expiresAt: NOW + MIN }, NOW).tier).toBe('stop-new')
   })
+
+  describe('API-key mode: spend against the budget', () => {
+    const spend = (usd: number, resetsAt = NOW + 86_400_000): Usage => ({ ...reading(null, null), auth: 'api-key', spend: { usd, budgetUsd: 100, resetsAt } })
+    const gone = (reason: string): Usage => ({ ...reading(null, null, true), auth: 'api-key', spend: null, reason })
+
+    test('the spend percent runs through the same thresholds, at, below and above', () => {
+      // 84.1 rounds up to 85, 89.1 to 90, 94.1 to 95
+      const tiers = [84, 84.1, 85, 89, 89.1, 90, 94, 94.1, 100, 250].map(usd => tierOf(spend(usd), CFG, null, NOW).tier)
+      expect(tiers).toEqual(['normal', 'slow', 'slow', 'slow', 'stop-new', 'stop-new', 'stop-new', 'stop-all', 'stop-all', 'stop-all'])
+    })
+
+    test('a spend whose period has ended counts as 0 until the next read', () => {
+      expect(tierOf(spend(99, NOW - 1), CFG, null, NOW).tier).toBe('normal')
+      expect(tierOf(spend(99, NOW), CFG, null, NOW).tier).toBe('normal')
+    })
+
+    test('an override lifts slow, stop-new and stop-all below its untilPct, not at or above it', () => {
+      const until = (untilPct: number) => ({ untilPct, expiresAt: NOW + MIN })
+      for (const usd of [86, 91, 97]) {
+        expect(tierOf(spend(usd), CFG, until(98), NOW)).toEqual({ tier: 'normal', overridden: true })
+        expect(tierOf(spend(usd), CFG, until(usd), NOW).overridden).toBe(false)
+      }
+      expect(tierOf(spend(97), CFG, until(97), NOW).tier).toBe('stop-all')
+      expect(tierOf(spend(97), CFG, { untilPct: 100, expiresAt: NOW - 1 }, NOW).tier).toBe('stop-all')
+    })
+
+    test('a missing reading is stop-new, never normal, and no override lifts it', () => {
+      for (const reason of ['spend:no-budget', 'spend:bad-reset-day', 'spend:no-session-cost', 'spend:bad-tally', 'spend:stale']) {
+        expect(tierOf(gone(reason), CFG, null, NOW)).toEqual({ tier: 'stop-new', overridden: false })
+        expect(tierOf(gone(reason), CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toEqual({ tier: 'stop-new', overridden: false })
+      }
+      // spend null without the unavailable flag is missing too
+      expect(tierOf({ ...spend(1), spend: null }, CFG, null, NOW).tier).toBe('stop-new')
+    })
+
+    test('window readings in API-key mode are ignored', () => {
+      expect(tierOf({ ...spend(10), fiveHour: 99, sevenDay: 99 }, CFG, null, NOW).tier).toBe('normal')
+    })
+  })
 })
 
 describe('the shared helpers', () => {

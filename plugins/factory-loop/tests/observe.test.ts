@@ -29,6 +29,7 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
+import { validateStrict } from '../hooks/v2/event-reader'
 import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
 import { FLAKES_SQL } from '../hooks/v2/sources-flakes'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
@@ -1058,6 +1059,10 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // the pool, and what git answers in a slot, by `<path> <reflog|status>` (#563)
     pool: Reply
     slots: Record<string, Reply>
+    // API-key mode: the session's cost.usd, the session's rate limits, and the stored tally
+    cost?: number | null
+    limits?: { kind: string; percentUsed: number }[]
+    tally?: unknown
     // a fixed answer to the batched `--issues` call (#922); undefined composes it from the single-read replies
     batch?: Reply
   }
@@ -1120,14 +1125,15 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
         return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
       },
       readFile: async path => world.files[path] ?? null,
-      sessionLimits: async () => [],
+      sessionLimits: async () => world.limits ?? [],
+      sessionCost: async () => world.cost ?? null,
       agents: async () => [],
     }
     const cache: Cache = emptyCache()
     const pass = (rt: Runtime, stored?: Stored, at = now): Promise<Observation> => {
       now = at
       calls.length = 0
-      return observe(io, rt, cache, NOW - 60 * MIN, null, null, stored)
+      return observe(io, rt, cache, NOW - 60 * MIN, null, null, stored, undefined, world.tally)
     }
     const commands = () => calls.map(c => c.argv.join(' '))
     return { world, calls, cache, pass, commands }
@@ -1173,6 +1179,75 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     await o.pass(runtime({ mode: 'observe', sink: `${LOOP}/sink-events`, env: sinkEnv }))
     expect(o.calls.every(c => c.env === sinkEnv && c.cwd === '/work')).toBe(true)
     expect(o.commands()).toContain(`${TOOLS}/usage-check.sh`)
+  })
+
+  describe('API-key mode', () => {
+    const apiKey = { budgetUsd: '100', resetDay: '1' }
+    const keyRt = (over: Partial<Runtime> = {}) => runtime({ apiKey, workspace: { session: 's1', process: 'p1' }, ...over })
+    const events = (h: { calls: Call[] }) => h.calls.filter(c => c.argv[0] === 'callum-flow-event' && c.argv[2] === 'usage')
+
+    test('usage-check.sh is not run, the session rate limits are ignored, and the reading is spend', async () => {
+      const h = host({ cost: 91, limits: [{ kind: 'five_hour', percentUsed: 99 }] })
+      const o = await h.pass(keyRt(), stored())
+      expect(h.commands().some(c => c.includes('usage-check'))).toBe(false)
+      expect(o.state.usage).toMatchObject({ auth: 'api-key', unavailable: false, fiveHour: null, sevenDay: null, spend: { usd: 91, budgetUsd: 100 } })
+      expect(o.spend).toMatchObject({ v: 1, spentUsd: 91, counter: { process: 'p1', session: 's1', lastUsd: 91 } })
+      expect(o.state.sources.usage.ok).toBe(true)
+    })
+
+    test('the usage event carries the spend data, valid against usage.v1, once per usageEveryMs', async () => {
+      const h = host({ cost: 42.5 })
+      await h.pass(keyRt(), stored())
+      const [first, ...rest] = events(h)
+      expect(rest).toEqual([])
+      expect(first?.argv.slice(0, 5)).toEqual(['callum-flow-event', '--type', 'usage', '--actor', 'watcher'])
+      expect(first?.argv[5]).toBe('--data')
+      const data = JSON.parse(first?.argv[6] ?? '{}')
+      expect(data).toMatchObject({ available: true, source: 'spend', auth: 'api-key', spend_usd: 42.5, budget_usd: 100, reasons: [] })
+      expect(validateStrict('usage', 1, data)).toEqual([])
+      await h.pass(keyRt(), stored(), NOW + MIN)
+      expect(events(h)).toEqual([])
+      await h.pass(keyRt(), stored(), NOW + 6 * MIN)
+      expect(events(h)).toHaveLength(1)
+    })
+
+    test('a missing reading is unavailable with its reason in the event, and the tally is left alone', async () => {
+      const h = host({ cost: null })
+      const o = await h.pass(keyRt(), stored())
+      expect(o.state.usage).toMatchObject({ auth: 'api-key', unavailable: true, spend: null, reason: 'spend:no-session-cost' })
+      expect(o.spend).toBeNull()
+      const data = JSON.parse(events(h)[0]?.argv[6] ?? '{}')
+      expect(data).toMatchObject({ available: false, auth: 'api-key', reasons: ['spend:no-session-cost'] })
+      expect(validateStrict('usage', 1, data)).toEqual([])
+    })
+
+    test('a reading older than usageStaleMs becomes spend:stale, and the stored tally carries over', async () => {
+      const h = host({ cost: 10 })
+      await h.pass(keyRt(), stored())
+      h.world.cost = null
+      const soon = await h.pass(keyRt(), stored(), NOW + 10 * MIN)
+      expect(soon.state.usage).toMatchObject({ unavailable: false, spend: { usd: 10 } })
+      const late = await h.pass(keyRt(), stored(), NOW + 16 * MIN)
+      expect(late.state.usage).toMatchObject({ unavailable: true, reason: 'spend:stale' })
+    })
+
+    test('a stored tally is added to, in observe mode too, which keeps the sink environment', async () => {
+      const sinkEnv = { ...ENV, CALLUM_EVENTS_DIR: `${LOOP}/sink-events` }
+      const h = host({ cost: 7, tally: { v: 1, periodStart: Date.parse('2026-10-01T00:00:00Z'), spentUsd: 30, counter: { process: 'p1', session: 's1', lastUsd: 5 }, at: NOW } })
+      const o = await h.pass(keyRt({ mode: 'observe', sink: `${LOOP}/sink-events`, env: sinkEnv }), undefined)
+      expect(o.state.usage?.spend?.usd).toBe(32)
+      expect(events(h).every(c => c.env === sinkEnv)).toBe(true)
+      expect(events(h)).toHaveLength(1)
+    })
+
+    test('without the runtime field every pass is as before: usage-check.sh runs and no event is written', async () => {
+      const h = host({ cost: 91 })
+      const o = await h.pass(runtime(), stored())
+      expect(h.commands()).toContain(`${TOOLS}/usage-check.sh`)
+      expect(events(h)).toEqual([])
+      expect(o.spend).toBeNull()
+      expect(o.state.usage?.auth).toBeUndefined()
+    })
   })
 
   test('a pass for another repo reads everything again: nothing cached for one repo stands in for another', async () => {

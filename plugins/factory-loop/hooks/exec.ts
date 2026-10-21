@@ -4,6 +4,7 @@
 // driver records the result in the ledger (ledger.ts). Executors decide nothing: plan already
 // did. They turn one action into commands, an agent spawn or a wake, and say what happened.
 import type { Runtime } from './observe'
+import type { UsageReading } from './rails'
 import type { Action, LedgerEntry, Ms, Outcome, State } from './types'
 import type { V2Io } from './v2/types'
 
@@ -35,7 +36,7 @@ export type ActIo = {
   rename: (title: string) => Promise<void>
   // $.session.usage().rateLimits as percentages, for the pre-check before a token-spending
   // action (v2 SPEC 13.10 item 7); null where the session has no reading
-  usage: () => Promise<{ fiveHour: number | null; sevenDay: number | null }>
+  usage: () => Promise<UsageReading>
   readFile: (path: string) => Promise<string | null>
   writeFile: (path: string, text: string) => Promise<void>
   // v2's live records and the driver's ping (v2 SPEC 3.3, 4.6), for the transition executor; absent

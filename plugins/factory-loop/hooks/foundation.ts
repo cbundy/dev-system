@@ -422,18 +422,24 @@ export function titleOf(f: TitleFrame): string {
 export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
 // tierOf: the usage tier (rule G3, v2 SPEC 13.5.2). The higher of the two windows decides; a missing
-// reading is Normal (the skill fails open); an owner override keeps Normal below its pct.
+// reading is Normal (stop-new in API-key mode) (the skill fails open); an owner override keeps Normal below its pct.
 export function tierOf(
   usage: Usage,
   config: Config,
   override: State['control']['usageOverride'],
   now: number,
 ): { tier: Tier; overridden: boolean } {
-  if (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null)) {
+  // API-key mode (spend.ts): spend against the budget is the one reading; a missing one stops new work and
+  // no override lifts it, because nothing then says how much was spent
+  const spend = usage.auth === 'api-key' ? (usage.unavailable ? null : (usage.spend ?? null)) : undefined
+  if (spend === null) return { tier: 'stop-new', overridden: false }
+  if (spend === undefined && (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null))) {
     return { tier: 'normal', overridden: false }
   }
   const live = (pct: number | null, resetsAt: number | null) => (resetsAt !== null && now >= resetsAt ? 0 : (pct ?? 0))
-  const binding = Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
+  const binding = spend !== undefined
+    ? live(Math.ceil((100 * spend.usd) / spend.budgetUsd), spend.resetsAt) // spend.ts spendPct
+    : Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
   const base: Tier =
     binding >= config.usageStopAllPct
       ? 'stop-all'

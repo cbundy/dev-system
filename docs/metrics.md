@@ -2569,7 +2569,14 @@ A `usage` event ([REFERENCE.md](factory-events/REFERENCE.md)) taken on an API ke
 percentages. `auth` says which login the reading was taken under (`subscription` or `api-key`). A spend reading has
 `source` `spend`, `available` true and null window fields; `spend_usd` is the dollars spent in the current budget period,
 `budget_usd` the budget for that period and `budget_resets_at` when the period resets. All four are null on every
-other usage event, and no producer writes them yet.
+other usage event. The factory loop writes one every `usageEveryMs` while its workspace is on an API key (parameter
+`claude_login` = `api-key`), from a tally of the session's own cost against the workspace's monthly budget
+(parameters `claude_budget_usd` and `claude_budget_reset_day`). When it cannot give a reading it writes an
+unavailable one (`available` false, `auth` `api-key`, one code in `reasons`) and holds new work at `stop-new`:
+`spend:no-budget`, `spend:bad-reset-day`, `spend:no-session-cost`, `spend:bad-tally` or `spend:stale`. The tally sees
+only that loop session and its agents, not other Claude sessions on the same key, and each repo's loop has its own.
+The reason codes are in the event's `reasons` list, which is not a view column, so the breakdown by reason (the last
+query below) reads it from `factory.event_store`.
 
 Spend per day against the budget, per repo and device: the day's last reading, its percent of the budget (null when
 there is no budget) and `spent_that_day`, the day's last spend less the previous day's last spend in the same budget
@@ -2597,25 +2604,42 @@ ORDER BY repo, device, day;
 Time in each tier while on an API key, per repo and device. The tier is worked out from `100 * spend_usd / budget_usd`
 against the default thresholds 85 / 90 / 95 (slow, stop-new, stop-all); they mirror
 `plugins/factory-loop/hooks/config.ts` (`usageSlowPct`, `usageStopNewPct`, `usageStopAllPct`) and are edited here when
-the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); a
-reading with no spend or no budget counts as `unknown`:
+the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); an
+unavailable reading counts as `stop-new`, as the loop holds new work then, and an available one with no spend or no
+budget counts as `unknown`:
 
 ```sql
 SELECT repo, device,
-  CASE WHEN pct IS NULL THEN 'unknown'
+  CASE WHEN NOT available THEN 'stop-new'
+       WHEN pct IS NULL THEN 'unknown'
        WHEN pct >= 95 THEN 'stop-all'
        WHEN pct >= 90 THEN 'stop-new'
        WHEN pct >= 85 THEN 'slow'
        ELSE 'normal' END AS tier,
   sum(held) AS time_in_tier
 FROM (
-  SELECT repo, device, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
+  SELECT repo, device, available, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
     least(coalesce(lead(ts) OVER (PARTITION BY repo, device ORDER BY ts), now()) - ts, interval '15 minutes') AS held
   FROM factory.event_log
-  WHERE type = 'usage' AND available AND auth = 'api-key'
+  WHERE type = 'usage' AND auth = 'api-key'
     AND repo = :'repo' AND ts >= :'since'::timestamptz) r
 GROUP BY repo, device, tier
 ORDER BY repo, device, tier;
+```
+
+Why API-key readings were unavailable, per repo, device and reason: one row per code in the event's `reasons` list
+(read from `factory.event_store`, as no `event_log` column lifts it), counted over the unavailable readings. A reading
+with several codes counts once under each. `spend:bad-tally` counts the times the tally was lost and restarted:
+
+```sql
+SELECT e.repo, e.device, r.reason, count(*) AS readings, min(e.ts) AS first_at, max(e.ts) AS last_at
+FROM factory.event_log e
+JOIN factory.event_store s ON s.event_id = e.event_id
+CROSS JOIN LATERAL jsonb_array_elements_text(s.data->'reasons') AS r(reason)
+WHERE e.type = 'usage' AND NOT e.available AND e.auth = 'api-key'
+  AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+GROUP BY e.repo, e.device, r.reason
+ORDER BY e.repo, e.device, readings DESC, r.reason;
 ```
 
 ## Tokens per merged issue

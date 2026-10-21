@@ -9,7 +9,7 @@ import { parseCsv } from './parse'
 import { tierOf } from './foundation'
 import { schemaRail } from './rail-schema'
 import type { SchemaNotice } from './rail-schema'
-import type { Action, ActionClass, Config, Control, Ms, Tier } from './types'
+import type { Action, ActionClass, Config, Control, Ms, Tier, Usage } from './types'
 
 const SECOND = 1_000
 const MINUTE = 60_000
@@ -414,7 +414,8 @@ export const TIER_CLASSES: Record<Tier, readonly ActionClass[]> = {
 // The token-spending classes, read against the session's usage again just before they run.
 export const PRECHECKED: readonly ActionClass[] = ['start', 'develop', 'drive']
 
-export type UsageReading = { fiveHour: number | null; sevenDay: number | null }
+// usage: API-key mode's spend reading (spend.ts), which tierOf reads instead of the windows
+export type UsageReading = { fiveHour: number | null; sevenDay: number | null; usage?: Usage }
 
 const pct = (v: number | null) => (v === null ? 'n/a' : `${v}%`)
 
@@ -428,9 +429,13 @@ export function usageVerdict(
   now: Ms,
 ): string | null {
   if (!PRECHECKED.includes(klass)) return null
-  const usage = { ...reading, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
+  const usage = reading.usage ?? { ...reading, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
   const { tier } = tierOf(usage, config, override, now)
   if (TIER_CLASSES[tier].includes(klass)) return null
+  const spent = reading.usage?.spend
+  if (reading.usage?.auth === 'api-key') {
+    return `usage: tier ${tier} forbids ${klass} (${spent == null ? (reading.usage.reason ?? 'no spend reading') : `spend $${spent.usd.toFixed(2)} of $${spent.budgetUsd}`})`
+  }
   return `usage: tier ${tier} forbids ${klass} (5h ${pct(reading.fiveHour)}, 7d ${pct(reading.sevenDay)})`
 }
 

@@ -128,6 +128,8 @@ for repo plugins, opt-outs and recovery when an install fails.
 | `remote_control_skip_permissions` | `false` (from `remote_control_default_skip_permissions`) | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
 | `remote_control_resume` | `false` (`true` in `orchestrator`) | yes | `session` mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Sets `DEV_REMOTE_CONTROL_RESUME=1`. Ignored in `server` mode. See [Orchestrator workspace](#orchestrator-workspace). |
 | `claude_login` | `private` | yes | Shown with `claude_auth_volume_name` or `workspace_secrets_dir` set. `private`, `shared` (with the volume) or `api-key` (with `workspace_secrets_dir`: the workspace's own Anthropic API key, no Remote Control). See [Sharing one Claude login](#sharing-one-claude-login). |
+| `claude_budget_usd` | `0` | yes | Only with `workspace_secrets_dir` set. Monthly API-key budget in dollars; 0 means none. Passed as `DEV_CLAUDE_BUDGET_USD` only when `claude_login` is `api-key`. The factory loop counts its own spend against it and stops new work as it nears the budget (and at once when there is none). |
+| `claude_budget_reset_day` | `1` | yes | Only with `workspace_secrets_dir` set. The day of the month (1-31) the budget starts again at 00:00 UTC; a day past the month's end means its last day. Passed as `DEV_CLAUDE_BUDGET_RESET_DAY` only when `claude_login` is `api-key`. |
 | `extra_trusted_authors` | empty | yes | Only with `workspace_secrets_dir` set. Comma-separated `login:id` entries appended to the template's `trusted_authors` in `CALLUM_FLOW_TRUSTED_AUTHORS`. Takes effect on the next start. |
 | `git_email` | empty | yes | Only with `workspace_secrets_dir` set. Passed as `DEV_GIT_EMAIL` when non-empty. Takes effect on the next start. |
 | `cpus` | 2 | yes | CPU limit (1-16). |
@@ -535,6 +537,10 @@ its settings:
   has no Remote Control**: Claude runs headless in the tmux session `claude` (open it with
   `coder ssh <workspace>`, then `tmux attach -t claude`), whatever the Remote Control mode.
   Until the file is readable the workspace logs where to provision it and starts no Claude.
+  The factory loop there holds new work against a monthly dollar budget, set by the
+  `claude_budget_usd` and `claude_budget_reset_day` parameters (passed as `DEV_CLAUDE_BUDGET_USD`
+  and `DEV_CLAUDE_BUDGET_RESET_DAY`): with no budget it starts no new work. The loop counts only
+  its own session's spend, not other Claude sessions on the same key.
   Details: the base image's [Claude API-key mode](../../images/base/README.md#claude-api-key-mode).
 
 The shared choice exists when `claude_auth_volume_name` is set in `terraform.tfvars` (the

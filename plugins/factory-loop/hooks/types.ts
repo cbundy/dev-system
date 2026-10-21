@@ -39,6 +39,11 @@ export type Usage = {
   fiveHourResetsAt: Ms | null
   sevenDayResetsAt: Ms | null
   unavailable: boolean
+  // API-key mode (spend.ts): the reading is spend against a budget, not windows; spend null with
+  // unavailable is a missing reading and reason is its code (tierOf holds it at stop-new)
+  auth?: 'api-key'
+  spend?: { usd: number; budgetUsd: number; resetsAt: Ms } | null
+  reason?: string
 }
 
 export type Brief = { url: string; at: Ms }

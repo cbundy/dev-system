@@ -10,6 +10,7 @@ import { loopBaseOf, loopDirOf } from './contract.mjs'
 import type { FileIo } from './control'
 import type { ActIo } from './exec'
 import type { Io, Runtime } from './observe'
+import { spendKey, tallyStep } from './spend'
 import { actLockPath, parseLease } from './rails'
 import type { LockIo } from './rails'
 import { lockTimed } from './trace'
@@ -74,6 +75,10 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
   const session = await $.session.id()
+  // API-key mode (the Coder template sets these in the container, claude_login=api-key)
+  const apiKey = (await $.env.get('DEV_CLAUDE_AUTH')) === 'api-key'
+    ? { budgetUsd: (await $.env.get('DEV_CLAUDE_BUDGET_USD')) || '', resetDay: (await $.env.get('DEV_CLAUDE_BUDGET_RESET_DAY')) || '' }
+    : undefined
   const env: Record<string, string> = {
     CALLUM_FLOW_REPO: repo,
     FACTORY_REGIME: config.regime,
@@ -101,6 +106,7 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
+    ...(apiKey === undefined ? {} : { apiKey }),
     ...(await gateLimits(argv => $.process.run(argv, { timeoutMs: 15_000 }), loaded.config)),
     configProblems: loaded.problems,
     repoSettings: loaded.raw,
@@ -154,6 +160,7 @@ export function io($: EngineInterface, agents: AgentRow[]): Io {
     run: (argv, init) => $.process.run(argv, init),
     readFile: path => text($, path),
     sessionLimits: async () => (await $.session.usage()).rateLimits,
+    sessionCost: async () => (await $.session.usage()).cost?.usd ?? null,
     agents: async () => agents,
   }
 }
@@ -195,6 +202,16 @@ export function actIo($: EngineInterface): ActIo {
       flightOf($).want(title)
     },
     usage: async () => {
+      // API-key mode: the tally and the cost now, in memory (spend.ts); no tally or no cost: the read fails
+      // and plan's tier stands
+      const rt = S.lastRt
+      if (rt?.apiKey !== undefined) {
+        const cost = (await $.session.usage()).cost?.usd
+        const tally = await $.store.get(spendKey(rt.repo))
+        if (cost === undefined || tally === undefined || tally === null) throw new Error('no spend reading')
+        const step = tallyStep(tally, { costUsd: cost, process: rt.workspace?.process ?? '', session: rt.workspace?.session ?? '' }, await $.clock.now(), rt.apiKey)
+        return { fiveHour: null, sevenDay: null, usage: step.usage }
+      }
       const limits = (await $.session.usage()).rateLimits
       const pct = (kind: string) => limits.find(l => l.kind === kind)?.percentUsed ?? null
       return { fiveHour: pct('five_hour'), sevenDay: pct('seven_day') }

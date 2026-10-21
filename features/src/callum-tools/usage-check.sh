@@ -27,6 +27,10 @@
 #    (default 900): 5-hour utilization only rises until its reset, so an old
 #    snapshot under-reports.
 #
+# With DEV_CLAUDE_AUTH=api-key in the environment (the Coder template's API-key login) neither source is
+# tried: it prints `usage=unavailable reason=subscription:api-key-mode auth=api-key`. The manual path
+# stays fail-open on it; the factory loop applies its own spend budget (docs/factory-loop/v2/SPEC.md 13.13).
+#
 # When no source answers it prints `usage=unavailable reason=<why>` and still
 # exits 0: the caller fails open (dispatches as if under every threshold) and
 # says so, rather than stalling on a missing number. Exit 2 is a usage error.
@@ -195,7 +199,13 @@ from_statusline() {
   fi
 }
 
-line=$(from_oauth || from_statusline || echo "usage=unavailable reason=${reasons%,}")
+# An API-key login (DEV_CLAUDE_AUTH=api-key) has no plan windows to read: neither source is tried, so
+# no token is sent anywhere. The loop reads spend against a budget instead (factory-loop hooks/spend.ts).
+if [ "${DEV_CLAUDE_AUTH-}" = api-key ]; then
+  line="usage=unavailable reason=subscription:api-key-mode auth=api-key"
+else
+  line=$(from_oauth || from_statusline || echo "usage=unavailable reason=${reasons%,}")
+fi
 printf '%s\n' "$line"
 # The factory event log (cbundy/dev-system#218), best effort: the reading as a native `usage` event
 # (callum-flow-event --type usage --data). Only a check is recorded, not --record, which runs on every

@@ -193,6 +193,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   begin(tr, 'observe')
   const passRt = act ? rt : rt.mode === 'act' ? observing(rt) : rt
   let stored: Stored | undefined
+  // API-key mode's tally: read in every mode, written only by an acting pass
+  const spendStored = rt.apiKey === undefined ? undefined : await storeGet($, keys.spend)
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
@@ -212,7 +214,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
   const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
   const observeStart = performance.now()
-  const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored, spendStored)
   const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
   S.passObserve = observeSplit
   let state = observed.state
@@ -365,6 +367,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
+    if (observed.spend !== null) await keepInStore(keys.spend, observed.spend)
     // an off-pass command that met the limit since the last pass counts as one this pass met
     const limited = report?.rateLimited === true || S.offRateLimited
     S.offRateLimited = false
