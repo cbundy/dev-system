@@ -6,7 +6,7 @@
 #
 # Two targets, each resolved again on every beat:
 #   old  the agentsview PostgreSQL (agentsview.sh: the same secret and rules as
-#        event-push-loop). It gets the guarded DDL plus the UPSERT.
+#        the agentsview push loops). It gets the guarded DDL plus the UPSERT.
 #   new  the factory database as its writer role (factory-db.sh: FACTORY_DB_WRITER_URL or
 #        factory-db-writer-url). It gets the same UPSERT and never any DDL (the writer role
 #        cannot run it; factory-db-bootstrap made the tables), and has no DDL state.
@@ -30,7 +30,7 @@
 # the view factory.workers_status (age, stale), never their own rule.
 #
 # critical_failures is a JSON array of check codes, [] when all is well:
-#   events_push_not_running, nm_push_not_running, agentsview_push_not_running
+#   nm_push_not_running, agentsview_push_not_running
 #       (a push loop whose lock is free; the loop is configured because this
 #       loop runs only with a URL)
 #   factory_events_push_not_running   (the writer URL is configured and the
@@ -117,7 +117,6 @@ CGROUP_DIR="${HEARTBEAT_CGROUP_DIR:-/sys/fs/cgroup}"
 PROC_DIR="${HEARTBEAT_PROC_DIR:-/proc}"
 LATEST_EVERY=900
 LATEST_FAIL_AFTER=3600
-EVENT_LOCK="${HEARTBEAT_EVENT_LOCK:-/tmp/dev-event-push.lock}"
 NM_LOCK="${HEARTBEAT_NM_LOCK:-/tmp/dev-nm-push.lock}"
 AV_LOCK="${HEARTBEAT_AV_LOCK:-/tmp/dev-agentsview-push.lock}"
 FACTORY_EVENT_LOCK="${HEARTBEAT_FACTORY_EVENT_LOCK:-/tmp/dev-factory-event-push.lock}"
@@ -417,7 +416,6 @@ is_running() { # LOCKFILE: 0 when something holds the lock
 
 critical_failures() { # prints a JSON array
   local out='' now age
-  is_running "$EVENT_LOCK" || out="$out events_push_not_running"
   is_running "$NM_LOCK" || out="$out nm_push_not_running"
   if ! is_running "$AV_LOCK"; then
     # a watcher of another container sharing the data dir also counts

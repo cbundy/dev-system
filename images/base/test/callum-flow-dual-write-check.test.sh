@@ -2,8 +2,10 @@
 #
 # Tests for images/base/callum-flow-dual-write-check (cbundy/dev-system#743): the read-only check
 # that the old event table and the new event store agree, against a real PostgreSQL
-# (scripts/test-pg.sh). Lines are written by the real callum-flow-event and shipped by the real
-# event-push-loop (old table) and factory-event-push-loop (new store). Skips cleanly with no server.
+# (scripts/test-pg.sh). The new events are written by the real callum-flow-event; the old lines are
+# literal old-format lines the test writes itself (callum-flow-event no longer writes them,
+# cbundy/dev-system#1143). Both are shipped by the real event-push-loop (old table) and
+# factory-event-push-loop (new store). Skips cleanly with no server.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -eu
 
@@ -85,10 +87,41 @@ oldrows() { q "$olddb" "SELECT count(*) FROM factory.events"; }
 
 EVDIR=$tmpdir/ev
 mkdir -p "$EVDIR"
-# ev ARGS...: the real writer, repo acme/widgets unless CALLUM_FLOW_REPO is set, device dev-box
+# ev ARGS...: the real writer, repo acme/widgets unless CALLUM_FLOW_REPO is set, device dev-box.
+# An old-state call (not --type, not --new-only) also gets the literal old line the pre-cutover
+# writer appended, sharing the new event's id and second (a skipped state gets its own id).
 ev() {
-  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=${EVREPO:-acme/widgets} DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
+  _repo=${EVREPO:-acme/widgets}
+  _file=$(printf '%s' "$_repo" | sed 's#/#__#').jsonl
+  _new=$EVDIR/factory/$_file
+  _n=0
+  [ ! -f "$_new" ] || _n=$(wc -l < "$_new")
+  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=$_repo DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" bash "$EVENT" "$@" 2> /dev/null
+  [ "$1" != --type ] || return 0
+  case " $* " in *" --new-only "*) return 0 ;; esac
+  _state=$1
+  shift
+  _issue='' _branch='' _note=''
+  while [ $# -gt 0 ]; do
+    case "$1" in --issue) _issue=$2 ;; --branch) _branch=$2 ;; --note) _note=$2 ;; esac
+    shift 2
+  done
+  _line=
+  [ ! -f "$_new" ] || _line=$(sed -n "$((_n + 1))p" "$_new")
+  if [ -n "$_line" ]; then
+    _id=$(printf '%s' "$_line" | jq -r .event_id)
+    _ts=$(printf '%s' "$_line" | jq -r '.ts | sub("\\.[0-9]{3}Z$"; "Z")')
+  else
+    _id=$(cat /proc/sys/kernel/random/uuid)
+    _ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  fi
+  jq -nc --arg ts "$_ts" --arg repo "$_repo" --arg device "${EVDEV:-dev-box}" --arg state "$_state" --arg issue "$_issue" \
+    --arg branch "$_branch" --arg note "$_note" --arg id "$_id" \
+    '{v: 2, ts: $ts, repo: $repo, device: $device, session_id: null, actor: "agent", state: $state, issue: ($issue | tonumber),
+      run_id: null, branch: (if $branch == "" then null else $branch end), pr: null, head: null,
+      note: (if $note == "" then null else $note end), event_id: $id, base_image: null, dev_image: null,
+      template_version: null, plugin_version: null}' >> "$EVDIR/$_file"
 }
 ship() {
   CALLUM_EVENTS_DIR=$EVDIR AGENTSVIEW_PG_URL="$OURL" timeout 60 bash "$OLDLOOP" --once > "$tmpdir/ship.out" 2>&1 || fail "old push: $(cat "$tmpdir/ship.out")"

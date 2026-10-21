@@ -60,7 +60,9 @@
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 #
 # This watcher keeps the old-state form (`callum-flow-event ready --if-changed`), because --if-changed has
-# no native form (--type ... --data). The cutover issue cbundy/dev-system#1143 moves it.
+# no native form (--type ... --data). Since cbundy/dev-system#1143 that call lands only in the new store:
+# it is translated, compared with the issue's newest event there, and written when the title, labels
+# or parent differ from it (or nothing is logged yet). Its behavior here is unchanged.
 #
 # Each `ready` event also carries the issue's title, labels and parent (callum-flow-event --data,
 # cbundy/dev-system#870), read from the same listing; a writer without --data (exit 2) is called again

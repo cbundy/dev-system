@@ -642,8 +642,8 @@ container never fails to start because of it.
    `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
-   cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the event and
-   no-mistakes push loops (see [Factory event log](#factory-event-log)) and the
+   cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the
+   no-mistakes push loop (see [Factory event log](#factory-event-log)) and the
    [worker heartbeat](#worker-heartbeat). Separately, with the factory database's writer secret
    (`factory-db-writer-url` or `FACTORY_DB_WRITER_URL`) and `psql`, starts `factory-event-push-loop`
    (log: `/tmp/dev-factory-event-push.log`); an unreadable secret gets a `WARNING`.
@@ -1558,7 +1558,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 
 ## Factory event log
 
-`callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
+`callum-flow-event <state> --issue N ...` records one event per lifecycle transition
 (`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
 transition reviewed intervention prompt_denied prompt_waiting`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
@@ -1575,27 +1575,27 @@ the factory loop companion's (a loop agent's call refused, or waiting, on a prom
 note and no token required. A rescue the loop cannot see is
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
-`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
-`/persist/events/<owner>__<repo>.jsonl`. In the same call it also writes the translated new event (dual write, #649) to
-`/persist/events/factory/<owner>__<repo>.jsonl`; the `factory/` dir is invisible to everything that
-reads the old file. It needs no network and never fails its caller: a miss, a missing `node` or
-translator, or a crashing translator keeps the old line and prints one `callum-flow-event: warning:`
-line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
-and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form until the cutover in #1143; `pipeline-watch.sh` no longer logs; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
+`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary)).
+It builds the old-format line, translates it and appends only the new event to
+`/persist/events/factory/<owner>__<repo>.jsonl`. The old log `/persist/events/<owner>__<repo>.jsonl` and
+`factory.events` get no new lines (#1143). It needs no network and never fails its caller: a state the
+translator skips writes nothing, and a miss, a missing `node` or translator, or a crashing translator writes
+nothing and prints one `callum-flow-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
+and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form; `pipeline-watch.sh` no longer logs; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed queue watcher's first sight of a queued issue (one it did not see change) is logged with
-`--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
-restart never replays old events; transitions a watcher observes are always logged.
-`callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
-`CALLUM_EVENTS_DIR` default as a write) and writes nothing; `--new-path` does the same for the new
-log (an older image answers it with exit 2, which makes it the capability probe). The translator is
+`--if-changed`, which translates first and skips an event with the same `type` and `data` as the issue's newest one in the
+new log (`loop_entry` and `loop_passes` skipped; `--branch` does not narrow it), so a restart never replays old events and a
+ready issue whose title, labels or parent changed is logged again; transitions a watcher observes are always logged.
+`callum-flow-event --path [--repo O/N]` prints the old log's path (kept for older callers; it gets no new lines) and writes nothing; `--new-path` prints
+the new log's path (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
-`--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
-`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
+`--new-only` is a no-op kept for older callers (the old-state mode writes the new log only), allowed with `--if-changed`; `--new-only --new-path` is the capability probe (an older image exits 2). Removing `--new-only` and `--path` is #656.
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (nothing written, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
-Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
+Every event also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
 `${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`; they are null when the snapshot is missing or unreadable, and the
-line's `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `event-push-loop`.
+event's old-format line `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `factory-event-push-loop`.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
@@ -1838,7 +1838,7 @@ and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `claim_renewed` event (`lease_minutes`) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -1899,7 +1899,9 @@ label|default|hash|fallback, `bucket`, `sonnet_pct`), and the tool is in the syn
 `callum-dev update` keeps it). With exactly one argument, `-h` or `--help` prints the usage line on stdout and exits 0 with no
 event, even when the percentage is invalid; usage errors print to stderr, exit 2 and log no event.
 
-`event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
+`event-push-loop` shipped the lines of the old log to `factory.events` in the agentsview PostgreSQL. `callum-flow-event`
+writes no old lines any more (#1143) and `dev-init` no longer starts it; it stays installed and runnable by hand
+for the history (removing it is #656). It used
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
 first push and keeps its progress in `/persist/events/.pushed/`. Every line carries an `event_id` (a UUID made
@@ -1908,8 +1910,7 @@ its new events. Lines without one (older files) keep the `(device, repo, seq)` r
 its marker was replaced: the loop pushes it again from the start and `dev-doctor` warns. The loop also migrates an
 existing table in place (adds `event_id`, swaps the old primary key for two partial unique indexes), guarded so a
 repeat takes no exclusive lock; the role in the URL must own the table. The URL is split into `PG*` variables in `psql`'s environment only, never its
-argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
-and `dev-doctor` reports when events were last written and last pushed. Variables:
+argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-doctor` still reports, as information labelled as the old log, when its lines were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
 `CREATE` on the database (or the schema and table created for it by an admin).
 The loop polls the `.wake` file about once a second and starts a pass as soon as it changes, so a new event reaches
@@ -1932,10 +1933,10 @@ past it; when the database is unreachable (or the writer is denied) nothing is s
 Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is bounded by
 `FACTORY_EVENT_PUSH_TIMEOUT` seconds (default 60), and `.wake` or `DEV_FACTORY_EVENT_PUSH_INTERVAL` (default 30 s)
 starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
-`dev-doctor` reports its counts and fails when it is not running. The old `event-push-loop` is unchanged.
+`dev-doctor` reports its counts. It is the only event push loop `dev-init` starts.
 
 `callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
-holds (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
+held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
 URL and `factory.event_store` with the factory reader URL only, in read-only transactions bounded by timeout, passes
 each old row through the translator and matches by `event_id`. Per old state it prints old lines, skipped, expected,
 found, missing and translator misses, then the extra new events per type. `--device` defaults to this device, `--repo`
@@ -2098,7 +2099,7 @@ unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
 run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it; the runs join by branch only) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the runs and chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
-that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
+that failed on this beat, `[]` when none: `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
 `latest_lookup_failing` (the background lookup has failed for over an hour), and

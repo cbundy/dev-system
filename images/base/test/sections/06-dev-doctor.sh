@@ -55,7 +55,7 @@ check "dev-doctor WARNs, naming the file, when an event log has fewer lines than
   printf "%s\n%s\n" a b > "$d/o__r.jsonl"; echo 5 > "$d/.pushed/o__r.jsonl"
   out=$(CALLUM_EVENTS_DIR="$d" dev-doctor --warn-only 2>&1); echo "$out"
   echo "$out" | grep -q "WARN event log $d/o__r.jsonl has 2 lines but 5 were pushed" &&
-  echo "$out" | grep -q "INFO factory events: 2 recorded.*, 0 waiting"' --entrypoint ""
+  echo "$out" | grep -q "INFO old factory event log (gets no new lines): 2 recorded.*, 0 waiting"' --entrypoint ""
 check "dev-doctor reports the new event log's counts and WARNs, naming the file, for a set-aside line" in_image '
   d=$(mktemp -d); mkdir -p "$d/factory/.pushed" "$d/factory/.refused"
   printf "%s\n%s\n%s\n" a b c > "$d/factory/o__r.jsonl"; echo 2 > "$d/factory/.pushed/o__r.jsonl"

@@ -42,7 +42,7 @@ for i in 1 2; do
   q=$(in_dir "$tmpdir" timeout 10 $qw) || fail "queue replay: did not exit 0"
   [ "$q" = "queue-changed known=none now=5,6" ] || fail "queue replay: printed '$q'"
 done
-[ "$(ev_count '"state":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
+[ "$(ev_count '"type":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
 "$fakebin/callum-flow-event" ready --issue 7
 queue_seq 5 5,7
 # shellcheck disable=SC2086 # $qw is the command and its fixed options

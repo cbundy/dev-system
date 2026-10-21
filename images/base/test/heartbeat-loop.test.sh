@@ -123,7 +123,7 @@ hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
     NM_PUSH_STATE_DIR="$tmpdir/nm" DEV_REPO_URL=https://github.com/Acme/Widgets.git \
-    HEARTBEAT_EVENT_LOCK="$tmpdir/ev.lock" HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
+    HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
     AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets" \
     HEARTBEAT_FACTORY_EVENT_LOCK="$tmpdir/fev.lock"
   unset FACTORY_DB_WRITER_URL
@@ -187,9 +187,9 @@ has_arg 1 repo=acme/desk-repo || fail "with no DEV_REPO_URL the repo comes from 
 
 # --- critical_failures --------------------------------------------------------
 cf() { sed -n 's/^critical_failures=//p' "$fakebin/psql-args-$1"; }
-[ "$(cf 1)" = '["events_push_not_running","nm_push_not_running","agentsview_push_not_running"]' ] || fail "free locks must be reported: $(cf 1)"
+[ "$(cf 1)" = '["nm_push_not_running","agentsview_push_not_running"]' ] || fail "free locks must be reported (the old event-push-loop is no longer one): $(cf 1)"
 reset
-for l in ev nm av; do
+for l in nm av; do
   : > "$tmpdir/$l.lock"
   flock -n "$tmpdir/$l.lock" sleep 20 &
 done

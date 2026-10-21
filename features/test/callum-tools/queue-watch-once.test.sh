@@ -118,7 +118,7 @@ for i in 1 2 3; do
   res=$(once --known 5) || fail "replay: did not exit 0"
   [ "$res" = "queue known=5 now=5,6" ] || fail "replay: $res"
 done
-[ "$(ev_count '"state":"ready"')" = 1 ] || fail "replay: want one ready line: $(cat "$evlog")"
+[ "$(ev_count '"type":"ready"')" = 1 ] || fail "replay: want one ready line: $(cat "$evlog")"
 ok # repeated --once reads do not replay ready events
 
 # 5b. The facts: a parent in another repo is null; a writer that exits 2 on --data (an older
@@ -143,15 +143,14 @@ expect_lines "$calls" 'ready --issue 8 --if-changed --data {"title":"title 8","l
 ready --issue 8 --if-changed --actor watcher'
 ok # the facts ride along, and an older writer still gets the ready event
 
-# 5c. The real writer puts the facts in the new event only; the old line is as before.
+# 5c. The real writer puts the facts in the new event and writes no old line.
 real_event_log
 queue_seq 307
 res=$(once --known none) || fail "real facts: did not exit 0"
-[ "$(jq -c 'select(.state == "ready" and .issue == 307) | [has("title"), has("data"), .note]' "$evlog")" = '[false,false,null]' ] ||
-  fail "the old ready line changed: $(cat "$evlog")"
-[ "$(jq -c 'select(.type == "ready" and .issue == 307) | .data' "$evdir/factory/o__r.jsonl")" = '{"title":"title 307","labels":["ready","bug"],"parent":1307}' ] ||
-  fail "the new ready event lacks the facts: $(cat "$evdir/factory/o__r.jsonl")"
-ok # the real writer carries the facts only in the new event
+[ ! -e "$oldevlog" ] || fail "the old log was written: $(cat "$oldevlog")"
+[ "$(jq -c 'select(.type == "ready" and .issue == 307) | .data' "$evlog")" = '{"title":"title 307","labels":["ready","bug"],"parent":1307}' ] ||
+  fail "the new ready event lacks the facts: $(cat "$evlog")"
+ok # the real writer carries the facts in the new event and writes no old line
 
 # 6. --once takes no option except --repo, --label and --known. (With --stream named, the usage
 # error is also reported as stream mode reports one: a watcher-error line on stdout.)
