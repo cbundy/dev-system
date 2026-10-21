@@ -13,7 +13,7 @@ import { reconcilable } from '../hooks/act'
 import type { ActEnv, Between } from '../hooks/act'
 import { jobPathOf, parseJob } from '../hooks/contract.mjs'
 import type { V2Contract } from '../hooks/contract.mjs'
-import { entryFromLoop } from '../hooks/derive'
+import { entryFromLoop, loopNote } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
 import { answerPath } from '../hooks/exec'
 import type { ActIo, Exec, SpawnInput } from '../hooks/exec'
@@ -316,8 +316,8 @@ describe('a lost store (v2 SPEC 3.3, 10.8)', () => {
     expect(ended).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'ok' } } })
     // its loop event is logged for the trail, and gives no entry back
     const argv = loopEvent(ended) as string[]
-    expect(argv[1]).toBe('loop')
-    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 470, run: null, branch: null, pr: null, head: null, note: argv[argv.indexOf('--note') + 1] ?? null, actor: null, device: DEVICE }
+    expect(argv.slice(0, 3)).toEqual(['callum-flow-event', '--type', 'loop_entry'])
+    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 470, run: null, branch: null, pr: null, head: null, note: loopNote(ended), actor: null, device: DEVICE }
     expect(entryFromLoop(event)).toBeNull()
     // the key dispatched again finds the answer, and spawns nothing
     const spawns = w.spawns.length

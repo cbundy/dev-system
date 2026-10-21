@@ -10,8 +10,6 @@ import {
   EXECUTORS,
   REPAIR_GRACE_MS,
   actPass,
-  capEventArgv,
-  capKey,
   commandOf,
   eventArgv,
   eventOf,
@@ -336,14 +334,6 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(prompts[0]).toStartWith('TELL heartbeat-other id=w1 repo=cbundy/dev-system device=other')
   })
 
-  test('a rate-cap hold is one loop event per cap per hour, status held (v2 SPEC 13.11.4)', () => {
-    expect(capKey('spawn', NOW)).toBe(`cap:spawn:${Math.floor(NOW / 3_600_000)}`)
-    expect(capEventArgv('spawn', NOW)).toEqual(['callum-flow-event', 'loop', '--note', `kind=spawn key=${capKey('spawn', NOW)} status=held`])
-    expect(capEventArgv('claim:470', NOW)).toEqual([
-      'callum-flow-event', 'loop', '--issue', '470', '--note', `kind=claim key=${capKey('claim:470', NOW)} status=held`,
-    ])
-  })
-
   test('an answer in flight counts as running; a first completed sighting waits one pass', () => {
     const seen = new Map<string, number>()
     const listed = [
@@ -451,10 +441,10 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   })
 
   test('a loop event is logged once per change of what it says; a loaded entry counts as logged, a dropped key is forgotten (#536)', async () => {
-    const open = entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', status: 'running', endedAt: null, wakeId: 'w0' })
+    const open = entry('tell:runaway:start:1', 'tell', { wake: 'runaway', class: 'owner', status: 'running', endedAt: null, wakeId: 'w0' })
     const f = fake([open])
     f.env.live.logged = loggedOf([open])
-    const statuses = () => f.calls.map(c => /status=(\S+)/.exec(c.argv.at(-1) ?? '')?.[1])
+    const statuses = () => f.calls.map(c => (JSON.parse(c.argv[4] ?? '{}') as { status?: string }).status)
     // its turn taking its id, then its reminder: the event would say the same, so none is logged
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', turnId: 't1' }, NOW)))
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', reminded: true }, NOW)))

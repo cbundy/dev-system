@@ -1,11 +1,12 @@
 "use strict";
 
-// Every `loop` event the factory loop builds (docs/factory-loop/v2/SPEC.md 13.7.4, DECISIONS D-09) must
-// pass callum-flow-event's own check of a loop note (kind=, key= and status=, no field split by a
-// space): one refused is a usage error the loop only notes. This runs the real
-// images/base/callum-flow-event, into a scratch log, with the notes the plugin builds for an entry
-// of every loop kind (ledger.ts loopEvent), a rate-cap hold (act.ts capEventArgv) the ping
-// breaker (act.ts breakerEventArgv) and the minute's pass summary (passes.ts). Plugin tests cannot run a command, so this lives here.
+// Every native event the factory loop builds for its own record (docs/factory-loop/v2/SPEC.md 13.7.4,
+// DECISIONS D-09) must be one callum-flow-event takes: a loop_entry for an entry of every logged kind
+// (ledger.ts loopEvent, derive.ts loopEntryArgv) and a loop_passes for the minute's pass summary
+// (passes.ts passesEventArgv). One refused is a usage error the loop only notes. This runs the real
+// images/base/callum-flow-event into a scratch CALLUM_EVENTS_DIR, and holds each line's data to what
+// the translator makes of the old `loop` line (the note from derive.ts loopNote, passes.ts
+// passesNote). Plugin tests cannot run a command or load the image's translator, so this lives here.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
@@ -34,14 +35,15 @@ const BRIEF = "https://github.com/cbundy/dev-system/issues/470#issuecomment-9001
 const RUN = "01K7S1AAAAAAAAAAAAAAAAAAAA";
 
 let ledger;
-let act;
+let derive;
+const { translate } = require(path.join(__dirname, "..", "images", "base", "factory-event-translate.js"));
 let passes;
 let dir;
 
 before(async () => {
   ledger = await import(path.join(HOOKS, "ledger.ts"));
   passes = await import(path.join(HOOKS, "passes.ts"));
-  act = await import(path.join(HOOKS, "act.ts"));
+  derive = await import(path.join(HOOKS, "derive.ts"));
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-events-"));
 });
 
@@ -65,30 +67,92 @@ const entries = [
   { ...base, key: "judge:sequence:512:abc1234", kind: "judge", class: "drive", rule: "M5", pr: 512, head: "abc1234", wake: "sequence", status: "done", wakeId: "w9", outcome: { kind: "wake", decision: "merge", reason: "nothing waits", instructions: null, bump: "minor", bumpReason: null, fields: {} } },
   { ...base, key: `judge:report:brief:470:${BRIEF}`, kind: "judge", class: "drive", rule: "D3", wake: "report", status: "done", outcome: { kind: "wake", decision: "parsed", reason: null, instructions: null, bump: null, bumpReason: null, fields: { brief: BRIEF, created: [], pendingDecision: false } } },
   { ...base, key: "task:respond-stuck:01K7S1AAAAAAAAAAAAAAAAAAAA:park@1791860000000:abc1234", kind: "task", class: "drive", rule: "P3a", wake: "respond-stuck", status: "timed-out" },
+  { ...base, key: "task:redrive:issue-470-x:abc", kind: "task", class: "drive", rule: "P3a", wake: "redrive", status: "done", wakeId: "w3", outcome: { kind: "wake", decision: "hold", reason: "r ".repeat(150), instructions: null, bump: null, bumpReason: null, fields: {} } },
+  { ...base, key: "task:redrive:issue-470-y:abc", kind: "task", class: "drive", rule: "P3a", wake: "redrive", status: "done", wakeId: "w4", outcome: { kind: "wake", decision: "hold", reason: "50% of a long é reason", instructions: null, bump: null, bumpReason: null, fields: {} } },
+  { ...base, key: "tell:flake-bug:x", kind: "tell", class: "owner", rule: "F1", wake: "flake-bug", status: "running", endedAt: null, loopData: { decision: "held", filed_issue: 901 } },
   { ...base, key: "tell:heartbeat-other:1791860405000", kind: "tell", class: "owner", rule: "O2", issue: null, wake: "heartbeat-other", status: "running", endedAt: null, session: "session-1" },
 ];
 
-test("every loop note the plugin builds is one callum-flow-event takes", () => {
-  const argvs = [
-    ...entries.map((e) => ledger.loopEvent(e)),
-    act.capEventArgv("spawn", NOW),
-    act.capEventArgv("claim:470", NOW),
-    act.breakerEventArgv({ kind: "breaker", since: NOW, until: NOW + 600_000, passes: 31 }),
-    // the minute's pass summary (passes.ts), one with passes and one with none
-    ...(() => {
-      const settings = { mode: "act", passEveryMs: 60_000 };
-      const book = new Map();
-      passes.notePass(book, NOW + 1_000, 120, true, false);
-      passes.notePass(book, NOW + 2_000, 80, false, true);
-      return [passes.passesEventArgv(passes.closeMinute(book, NOW, settings)), passes.passesEventArgv(passes.closeMinute(book, NOW + 60_000, settings))];
-    })(),
-  ];
-  for (const argv of argvs) {
-    assert.ok(Array.isArray(argv), "every entry here logs a loop event");
+const LINE = { event_id: "0d7b2f3a-1c4e-4a5b-8c9d-0e1f2a3b4c5d", repo: "cbundy/dev-system", device: "box", actor: "agent" };
+const TS = "2026-10-13T03:00:00.000Z";
+const oldTranslated = (e) => {
+  const line = { ...LINE, state: "loop", issue: e.issue, run: e.run, pr: e.pr, head: e.head, note: derive.loopNote(e) };
+  const r = translate(line, { ts: TS, sessionId: "s", data: e.loopData });
+  assert.ok(r.event, `the old line of ${e.key} translates: ${JSON.stringify(r)}`);
+  return r.event;
+};
+const newLines = () => {
+  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+};
+const oldLogPath = () => path.join(dir, "cbundy__dev-system.jsonl");
+
+test("every logged entry kind is one native loop_entry the real writer takes, with the data the translator makes of its old line", () => {
+  for (const e of entries) {
+    const argv = ledger.loopEvent(e);
+    if (e.kind === "judge") {
+      assert.equal(argv, null, "a judge has no event type");
+      continue;
+    }
+    assert.ok(Array.isArray(argv), `${e.key} logs an event`);
+    assert.deepEqual(argv.slice(0, 4).filter((_, i) => i !== 3), ["callum-flow-event", "--type", "loop_entry"]);
+    for (const flag of ["--note", "--run", "--pr", "--head"]) assert.ok(!argv.includes(flag), `${e.key} carries ${flag}`);
+    const before = newLines().length;
     const r = log(argv);
     assert.equal(r.status, 0, `${argv.join(" ")}: exit ${r.status}: ${r.stderr}`);
+    assert.equal(r.stderr, "", `${e.key} warned: ${r.stderr}`);
+    const lines = newLines();
+    assert.equal(lines.length, before + 1, "one line");
+    const got = lines[lines.length - 1];
+    assert.equal(got.type, "loop_entry");
+    assert.equal(got.issue, e.issue);
+    assert.deepEqual(got.data, oldTranslated(e).data);
   }
-  const lines = fs.readFileSync(path.join(dir, "cbundy__dev-system.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.equal(lines.length, argvs.length);
-  assert.ok(lines.every((l) => l.state === "loop" && / key=\S+ status=\S+/.test(` ${l.note}`)));
+  assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
+});
+
+test("the wake entries' decision and reason come through as the translator reads them", () => {
+  const long = newLines().find((l) => l.data.key === "task:redrive:issue-470-x:abc");
+  assert.equal(long.data.decision, "hold");
+  assert.ok(long.data.decision_reason.endsWith("..."));
+  assert.ok(long.data.decision_reason.length <= 200);
+  const enc = newLines().find((l) => l.data.key === "task:redrive:issue-470-y:abc");
+  assert.equal(enc.data.decision_reason, "50% of a long é reason");
+  const tell = newLines().find((l) => l.data.key === "tell:flake-bug:x");
+  assert.equal(tell.data.filed_issue, 901);
+});
+
+test("the minute's pass summary is a native loop_passes the real writer takes, with the data the translator makes of the note", () => {
+  const settings = { mode: "act", passEveryMs: 60_000 };
+  const book = new Map();
+  passes.notePass(book, NOW + 1_000, 120, true, false);
+  passes.notePass(book, NOW + 2_000, 80, false, true);
+  for (const summary of [passes.closeMinute(book, NOW, settings), passes.closeMinute(book, NOW + 60_000, settings)]) {
+    const argv = passes.passesEventArgv(summary);
+    assert.deepEqual(argv.slice(0, 3), ["callum-flow-event", "--type", "loop_passes"]);
+    assert.equal(argv.length, 5);
+    const before = newLines().length;
+    const r = log(argv);
+    assert.equal(r.status, 0, `${argv.join(" ")}: exit ${r.status}: ${r.stderr}`);
+    assert.equal(r.stderr, "");
+    const lines = newLines();
+    assert.equal(lines.length, before + 1);
+    const got = lines[lines.length - 1];
+    assert.equal(got.type, "loop_passes");
+    const old = translate({ ...LINE, state: "loop", note: passes.passesNote(summary) }, { ts: TS, sessionId: "s" }).event;
+    assert.deepEqual(got.data, old.data);
+  }
+  assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
+});
+
+test("no hooks file builds a `callum-flow-event loop` argv", () => {
+  const hits = [];
+  const walk = (d) => {
+    for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+      if (f.isDirectory()) walk(path.join(d, f.name));
+      else if (f.name.endsWith(".ts") && /'callum-flow-event',\s*'loop'|\['loop'/.test(fs.readFileSync(path.join(d, f.name), "utf8"))) hits.push(path.join(d, f.name));
+    }
+  };
+  walk(HOOKS);
+  assert.deepEqual(hits, []);
 });

@@ -7,7 +7,7 @@
 // log after a lost store, is derive.ts's deriveLedger. Every function returns a new array and
 // replaces only the entries it changes, so changedEntries() can tell the driver what moved.
 import { ACTION_KINDS, DEFAULT_CONFIG } from './config'
-import { loopEventArgs } from './derive'
+import { loopEntryArgv } from './derive'
 import type { Exec } from './exec'
 import { maxAttemptsOf, turnEnded } from './foundation'
 import type {
@@ -321,11 +321,11 @@ export function exhausted(entry: LedgerEntry, config: Config): boolean {
 
 // --- the loop's own events (D-09, v2 SPEC 13.7.4) -------------------------------------------------
 
-// loopEvent: the callum-flow-event argv for a `loop` event about this entry, for agent and wake
-// entries (owner notices and rate-cap notices are tells) at their start and end; null for CLI
-// kinds, which log their own events.
+// loopEvent: the native callum-flow-event argv for a `loop_entry` event about this entry, for agent
+// and wake entries (owner notices and rate-cap notices are tells) at their start and end; null for
+// CLI kinds, which log their own events, and for a judge, which has no event type.
 export function loopEvent(entry: LedgerEntry): string[] | null {
-  return LOOP_KINDS.includes(entry.kind) ? ['callum-flow-event', ...loopEventArgs(entry)] : null
+  return LOOP_KINDS.includes(entry.kind) ? loopEntryArgv(entry) : null
 }
 
 // changedEntries: the entries `after` holds that `before` did not hold as they are: new or

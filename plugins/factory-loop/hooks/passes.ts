@@ -1,4 +1,4 @@
-// The loop's pass summary (#680): once a minute, one `loop` event with `kind=passes` sums up the
+// The loop's pass summary (#680): once a minute, one native `loop_passes` event sums up the
 // passes that ended in the minute before. Pure: no engine calls. register.ts feeds it every pass
 // as it ends (notePass), closes a minute on its own timer (closeMinute) and sends what
 // passesEventArgv builds. The event is bookkeeping, never a stage or progress; entryFromLoop
@@ -101,6 +101,26 @@ export function passesNote(s: PassSummary): string {
   ].join(' ')
 }
 
+// passesEventArgv: the native call that logs a summary as a `loop_passes` event: the data the
+// translator makes of passesNote(s).
 export function passesEventArgv(s: PassSummary): string[] {
-  return ['callum-flow-event', 'loop', '--note', passesNote(s)]
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const data = {
+    from_at: iso(s.from),
+    to_at: iso(s.to),
+    passes: s.passes,
+    acting: s.acting,
+    errors: s.errors,
+    mean_ms: s.mean,
+    p50_ms: s.p50,
+    p90_ms: s.p90,
+    max_ms: s.max,
+    acting_mean_ms: s.actingMean,
+    idle_mean_ms: s.idleMean,
+    mode: s.settings.mode,
+    // the event's schema still requires the field: the loop always plans with v2
+    planner: 'v2',
+    pass_every_ms: s.settings.passEveryMs,
+  }
+  return ['callum-flow-event', '--type', 'loop_passes', '--data', JSON.stringify(data)]
 }

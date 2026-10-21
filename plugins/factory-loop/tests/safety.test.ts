@@ -15,7 +15,7 @@
 // hooks/v2/argv.ts is held to the bans with that widening and no other.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
+import { EXECUTORS, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { ACTION_KINDS } from '../hooks/config'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
@@ -620,7 +620,7 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {
-    const own: string[][] = [eventArgv('closed', { reason: 'completed' }, { issue: 470 }), capEventArgv('claim:470', NOW), capEventArgv('spawn', NOW)]
+    const own: string[][] = [eventArgv('closed', { reason: 'completed' }, { issue: 470 })]
     for (const e of [entry('design:470:1', 'agent-step', { step: 'design' }), entry('tell:x', 'tell', { wake: 'blind' })]) {
       const argv = loopEvent(e)
       if (argv !== null) own.push(argv)

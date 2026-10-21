@@ -15,7 +15,6 @@ import { GITHUB_V2, turnEnded } from './foundation'
 import { changedEntries, finish, loopEvent, reconcileAgents, start } from './ledger'
 import type { Runtime } from './observe'
 import { preCheck } from './rails'
-import type { BreakerNotice } from './rails'
 import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
@@ -24,7 +23,6 @@ import { gateHoldMs } from './v2/steps-gate'
 import { V2_ACTION_KINDS } from './v2/types'
 import { expireWakes, wakeExecutors } from './wake'
 
-const HOUR = 3_600_000
 const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
@@ -298,29 +296,6 @@ export function passErrorTell(since: Ms, passes: number, error: string): Action 
     fields: { passes: String(passes) },
     context: [`last error: ${error.replace(/\s+/g, ' ').slice(0, 300)}`],
   }
-}
-
-// --- rate-cap holds (v2 SPEC 13.11.4, D-24) ---------------------------------------------------------------
-
-// capKey: a rate cap plan tripped (a bucket, or '<kind>:<issue>') as its hourly loop event's key.
-export function capKey(capped: string, now: Ms): string {
-  return `cap:${capped}:${Math.floor(now / HOUR)}`
-}
-
-// capEventArgv: a rate-cap hold has no ledger entry of its own, so its `loop` event is built
-// here: one per capped bucket or kind and issue per hour, status held.
-export function capEventArgv(capped: string, now: Ms): string[] {
-  const [kind = capped, issue] = capped.split(':')
-  const argv = ['callum-flow-event', 'loop']
-  if (issue !== undefined && /^\d+$/.test(issue)) argv.push('--issue', issue)
-  argv.push('--note', `kind=${kind} key=${capKey(capped, now)} status=held`)
-  return argv
-}
-
-// breakerEventArgv: the ping-storm breaker opened (v2 SPEC 13.2, 13.11.4, D-39): its `loop` event, beside
-// its one tell.
-export function breakerEventArgv(b: BreakerNotice): string[] {
-  return ['callum-flow-event', 'loop', '--note', `kind=breaker key=breaker:pings:${b.since} status=open passes=${b.passes} until=${b.until}`]
 }
 
 // --- what a reload and the agent list prove (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4) --------------------------------
