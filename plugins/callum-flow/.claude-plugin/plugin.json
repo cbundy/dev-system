@@ -1,7 +1,7 @@
 {
   "name": "callum-flow",
   "displayName": "Callum Flow",
-  "version": "0.77.0",
+  "version": "0.78.0",
   "description": "Callum's portable issue-delivery workflow: an orchestrator skill that runs a GitHub ready-issue queue, an implement-issue skill that sub-agents follow to ship one issue through a treehouse worktree and the no-mistakes pipeline, an update-dev skill that upstreams improvements to the shared dev system as reviewed PRs, an onboard skill that makes a repo a dev-system repo, an evaluate-sessions skill that reports an agent run's throughput, gate quality, token spend and waste, a query-factory-data skill that answers ad-hoc questions about factory latency and pipeline cost from the fleet database, a factory-state skill that says what the factory is doing right now, a backlog-triage skill that turns the open backlog into a page where the owner picks what to close, rewrite or prioritise, then applies those choices, and a dependency-chain skill that maps an issue's full dependency chain as a doc whose diagram links every issue.",
   "author": {
     "name": "Callum Bundy"
