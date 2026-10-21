@@ -130,7 +130,7 @@ check "API-key mode: dev-init set apiKeyHelper to the image's helper in Claude's
   docker exec '$c' jq -e '.apiKeyHelper == \"/usr/local/bin/dev-claude-api-key /run/secrets/ws/anthropic-api-key\"' /persist/claude/settings.json"
 check "API-key mode: the helper prints the key; dev-login shows claude off" bash -c "
   [ \"\$(docker exec '$c' dev-claude-api-key /run/secrets/ws/anthropic-api-key)\" = '$APIKEY_FAKE' ] &&
-  ! docker exec '$c' dev-login status | grep -q '^claude:'"
+  docker exec '$c' dev-login status | grep -q '^claude: *off'"
 check "API-key mode: neither ps nor any process environment holds the key" bash -c "
   ! docker exec '$c' ps -eo args | grep -qF '$APIKEY_FAKE' &&
   ! docker exec '$c' bash -c 'cat /proc/[0-9]*/environ 2>/dev/null' | grep -qaF '$APIKEY_FAKE' &&
