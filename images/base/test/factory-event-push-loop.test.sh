@@ -125,6 +125,8 @@ echo "ok: second run is a no-op"
 EVDIR=$tmpdir/ev3
 mkdir -p "$EVDIR/.pushed"
 ev claimed --issue 9 --branch issue-9
+# callum-flow-event writes no old line any more (#1143): the old file is a literal old-format line
+printf '%s\n' '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"acme/widgets","device":"dev-box","state":"claimed","issue":9}' > "$EVDIR/acme__widgets.jsonl"
 echo 1 > "$EVDIR/.pushed/acme__widgets.jsonl"
 old_sum=$(cat "$EVDIR/acme__widgets.jsonl" "$EVDIR/.pushed/acme__widgets.jsonl" | sha256sum)
 loop --once
