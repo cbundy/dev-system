@@ -2869,7 +2869,7 @@ versions had and the loop dropped are not reused.
 | Rule | When | Then |
 |---|---|---|
 | G1 | mode `off`, or the kill switch exists | The driver does not observe or plan. Title: `🔄 <name> · off`. (Driver, not plan.) |
-| G2 | `sources.factory.ok` is false | Blind pass: no actions except `title`, and `tell(blind)` once the factory source has been failing for `blindNoticeAfterMs` |
+| G2 | `sources.factory.ok` is false, or the image's report skipped a `derived` event (its readers are older than the loop) | Blind pass: no actions except `title`, and `tell(blind)` (with the source's `error`, at most 300 characters) once the factory source has been failing for `blindNoticeAfterMs`. A derived skip is never cached. A report that skipped only non-derived events keeps the pass working and plans the owner item `reader-behind` (`types`, `count`; key `tell:reader-behind:<types>`) |
 | G3 | always | `tier = tierOf(usage, config, control.usageOverride, now)`: the higher of `fiveHour` and `sevenDay` (a window whose reset has passed counting as zero) against the thresholds; Normal when unavailable (flagged); an unexpired override keeps the tier Normal below its `untilPct`. **API-key mode** (the loop session's environment has `DEV_CLAUDE_AUTH=api-key`; `DEV_CLAUDE_BUDGET_USD` and `DEV_CLAUDE_BUDGET_RESET_DAY` come from the Coder template's `claude_budget_usd` and `claude_budget_reset_day` parameters): the reading is the spend percent, `ceil(100 * spentUsd / budgetUsd)`, against the same thresholds, and neither `usage-check.sh`, the session's `rateLimits` nor any subscription reading is read. The period starts at 00:00 UTC on the reset day (a day past the month's end means its last day); a reading whose `resetsAt` has passed counts as 0. `spentUsd` is a tally in `$.store` (`spend:<repo>`: `{ v, periodStart, spentUsd, counter: { process, session, lastUsd } \| null, at }`) that only an acting pass writes. For each `cost.usd` reading `c`: no counter adds `c`; the same process and `c >= lastUsd` adds `c - lastUsd`; the same process and `c < lastUsd` (the counter reset) adds `c`; another process of the same session and `c >= lastUsd` (a counter restored on resume) adds `c - lastUsd`; anything else adds `c`. A new period starts the tally at 0. A missing reading is **`stop-new`**, never Normal, and no override lifts it; its reason is `spend:no-budget` (no or zero budget), `spend:bad-reset-day`, `spend:no-session-cost` (no `cost.usd`), `spend:bad-tally` (the stored tally does not parse; the acting pass then stores a fresh one counting the whole current counter) or `spend:stale` (older than `usageStaleMs`). The usage pre-check (13.10 item 7) uses the stored tally plus the cost now less `lastUsd`, in memory. Every `usageEveryMs` one `usage` event goes out (`source` `spend` with `spend_usd`, `budget_usd`, `budget_resets_at`, or `available` false with the reason), to the sink in observe mode |
 | G4 | always | The admission filters (`admit`), each held action leaving a skip line that names its filter: an action on a `paused` issue is dropped (except `heartbeat`); `noNewWork` drops the `start` and `develop` classes; the tier drops the classes it forbids; the GitHub backoff holds every action that writes to GitHub (13.10 item 2); an open breaker holds its kind (13.11.4); the rate caps hold a bucket or a kind on one issue (13.11.4). `skip`, `priority`, `only` and `serial` bound the claim rule S1 (14.1). At most one wake goes out (O2) |
 
@@ -3407,7 +3407,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D, which includes the notice `done`). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable` and `starved`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable`, `starved`, `blind` and `reader-behind`) go out before any other
 wake, and the title counts the open ones.
 
 Five notices come from outside plan: `heartbeat-other`, `old-watcher` and `schema-behind` (a rail
@@ -3435,7 +3435,9 @@ session the role check refuses sends no rail notice and no pass-error.
    wait`. Observe mode keeps no backoff.
 3. **The database is down.** `callum-flow-factory-state` and `dev-query` fail: the pass is
    blind (rule `G2`). Running agents still report into the ledger, and nothing new is acted on
-   until the factory source returns. After `blindNoticeAfterMs`, `tell(blind)`.
+   until the factory source returns. After `blindNoticeAfterMs`, `tell(blind)`. The same holds when the image's
+   report says it skipped events of a type or version its readers cannot read in the derivation (`skipped_events` with
+   `derived`): the image is older than the loop, and the pass is blind with that error until the image is updated.
 4. **An agent dies or hangs.** A `turn.complete` with reason `error`, `aborted` or `refusal`,
    or an agent list entry `failed` or `killed`, ends the entry as `failed`; the step is then
    unknown and takes the unknown path (5.1). A hang ends at the step's timeout (4.4), which
@@ -3818,7 +3820,7 @@ Twenty-six rules, by id.
 | Id | Name | When | Then |
 |---|---|---|---|
 | G1 | off | mode off, or the kill switch exists | the driver does nothing (foundation) |
-| G2 | blind | the `factory` source fails | title only; `tell(blind)` after `blindNoticeAfterMs` (foundation) |
+| G2 | blind | the `factory` source fails, or its report skipped a derived event | title only; `tell(blind)` after `blindNoticeAfterMs` (foundation); `reader-behind` for non-derived skips |
 | G3 | tier | always | the tier from usage (foundation) |
 | G4 | controls | always | the admission filters: pause, no new work, skip, priority, only, serial, rate caps and the breakers (5.3); a held record's skip line names the filter (foundation) |
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
@@ -4502,15 +4504,17 @@ Notices (TELL kinds), owner items first:
 | `wait-unreadable` | yes | E6: a waiting record has an open condition unread (its read failing, or no release tag known) for a whole period; it replaces that period's `waiting` tell |
 | `starved` | yes | S1: the ready queue was starved (all of it unclaimable, nothing queued or in flight, no owner hold) for `starvedNoticeAfterMs`; names each root blocker and why it is not moving; once per spell and 24 h period of it |
 | `actions-refused` | yes | 8.5: GitHub did not start a CI job for the account's sake (payments, a spending limit); once per spell, naming its message and the PRs held; the loop resumes by itself |
+| `blind` | yes | G2: the factory source has failed for `blindNoticeAfterMs`; its `error` says why (a derived skip: the image is older than the loop, so the owner updates the image; else the owner checks the database) |
+| `reader-behind` | yes | G2: the image skipped events of types it cannot read, none in the derivation; names the types and the count; once per set of types; a release adding a reader of those types turns it into `blind` |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
 | `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |
 | `flake-bug` | no | F1: a flake bug was filed (or found) for a test; names the test, its flake count and window, the bug, and whether it was readied or held by `flakeBugReadyCap`, whose owner step is to add `ready` (8.5) |
 | `actions-resumed` | no | 8.5: a job started after a refusal spell opened; the spell ends and the refused runs are re-run once |
 | `capacity` | no | S1: `maxInFlightIssues` is above the memory ceiling (13.4.2); once per (configured, ceiling) pair, naming the memory, the reserve, the estimate and its source, and the effective cap |
-| `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
+| `runaway`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` | no | foundation, unchanged |
 
-15 kinds of the loop's own, 9 of them owner items, plus the foundation's.
+16 kinds of the loop's own, 10 of them owner items, plus `blind` (an owner item too) and the foundation's others.
 
 ## Appendix E. Owner ops
 

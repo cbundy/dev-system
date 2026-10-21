@@ -211,6 +211,13 @@ Owner items (the title counts them until resolved):
   is reached. The loop holds those PRs with no fixer and no re-run spent, re-runs one refused run every 30
   minutes, and resumes by itself. Lead with `[ACTION]`: the owner fixes billing or raises the spending limit
   in GitHub's settings; name the PRs held.
+- `blind` (since, error): factory reads have failed for 15 minutes and nothing new is acted on. Say
+  the cause from `error`. One containing `unknown factory event` or `skipped` means the workspace
+  image is older than the loop: the owner rebuilds or updates the image, and the loop does not
+  recover by itself. Any other error: the owner checks the database; the loop recovers by itself.
+- `reader-behind` (types, count): the workspace image cannot read events of those types (`type vN`,
+  comma-joined), so it is older than the loop; the loop keeps working. Owner updates the image. A
+  release that adds a reader of those types to the derivation turns this into `blind`.
 
 Notices:
 - `actions-resumed` (minutes, pr; detail: the job that started): GitHub starts CI jobs again, so the refusal
@@ -227,8 +234,6 @@ Notices:
   factory database's schema is behind this image and the loop stays in observe (v2 SPEC 13.11.2). It
   comes once per startup. Owner reads the error, fixes the migrator secret or the database, and runs
   `factory-db-migrate`; the next pass acts by itself once it succeeds.
-- `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
-  checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop
   bug. Owner reads the decision log, or `mode observe`.
 - `pass-error` (passes; detail: the last error): that many passes in a row threw, and the title

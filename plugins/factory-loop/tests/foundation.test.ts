@@ -12,6 +12,7 @@ import {
   LIVE,
   STEP_BREAKER,
   admit,
+  blindPass,
   gate,
   isoOf,
   issueFromBranch,
@@ -262,6 +263,29 @@ describe('the title frame', () => {
 
   test('a blind pass has no counts: blind takes their place', () => {
     expect(titleOf({ ...frame, counts: null, observe: true, blind: true, owner: 1 })).toBe('🔄 dev-system · observe · blind · owner 1')
+  })
+})
+
+describe('G2: the blind pass and its notice', () => {
+  const blindState = (error: string | null) => {
+    const base = state()
+    return { ...base, sources: { ...base.sources, factory: error === null ? { ok: false, at: NOW - 20 * MIN } : { ok: false, at: NOW - 20 * MIN, error } } }
+  }
+  const tellOf = (ctx: PlanCtx) => ctx.out.find(a => a.kind === 'tell' && a.wake === 'blind')
+
+  test('tell(blind) carries the source error cut to 300 characters and counts as an owner item', () => {
+    const ctx = ctxOf(blindState(`unknown factory event: queue_snapshot v1 ${'x'.repeat(400)}`), CFG, V2_OWNER_TELLS)
+    blindPass(ctx)
+    const fields = (tellOf(ctx) as Extract<Action, { kind: 'tell' }>).fields
+    expect(fields.error).toHaveLength(300)
+    expect(fields.error?.startsWith('unknown factory event: queue_snapshot v1')).toBe(true)
+    expect(ctx.owner.size).toBe(1)
+  })
+
+  test('with no error the field is absent', () => {
+    const ctx = ctxOf(blindState(null), CFG, V2_OWNER_TELLS)
+    blindPass(ctx)
+    expect((tellOf(ctx) as Extract<Action, { kind: 'tell' }>).fields).toEqual({ since: String(NOW - 20 * MIN) })
   })
 })
 

@@ -18,6 +18,7 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
+  derivedSkipError,
   parseFactoryState,
   parsePool,
   parseQueue,
@@ -221,8 +222,10 @@ export async function observe(
   try {
     const r = await run(['callum-flow-factory-state', '--repo', rt.repo, '--format', 'json', '--github', 'off'], undefined, 90_000)
     const parsed = r.exitCode === 0 ? parseFactoryState(r.stdout, rt.repo) : null
-    if (parsed !== null) cache.factory = { at: now, value: parsed }
-    mark('factory', parsed !== null, cache.factory?.at ?? null, parsed === null ? fail(r) : undefined)
+    // a derivation that left out events the loop reads is blind (G2), and never cached
+    const behind = parsed === null ? null : derivedSkipError(parsed.skipped)
+    if (parsed !== null && behind === null) cache.factory = { at: now, value: parsed }
+    mark('factory', parsed !== null && behind === null, cache.factory?.at ?? null, parsed === null ? fail(r) : (behind ?? undefined))
   } catch (err) {
     mark('factory', false, cache.factory?.at ?? null, String(err))
   }
