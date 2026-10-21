@@ -61,13 +61,25 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.ok(seed(db) > 60);
   const ev = evaluate();
   const q = blocks("## 9c. Merges, pull requests and gaps");
-  assert.equal(q.length, 7, "the five merge queries and the two run-only ones (unrecorded merges, missing size)");
+  assert.equal(q.length, 8, "the five merge queries, the two run-only ones (unrecorded merges, missing size) and merges per day by regime");
 
   // merges per day: the same counts by merged_by and recovered
   const days = rows(db, q[0]);
   assert.deepEqual(days.map((r) => [r.day, r.merged_by, r.recovered, r.merges]), ev.merges.per_day.map((d) => [d.day, d.by, d.recovered, d.merges]));
   assert.equal(days.reduce((a, r) => a + r.merges, 0), 5, "the three signals of #32 are one merge, and the day before the window is left out");
   assert.deepEqual(days.map((r) => [r.merged_by, r.recovered, r.merges]), [["factory", false, 3], ["hand", true, 1], ["hand", null, 1]]);
+
+  // merges per day by regime: the regime of a merge is that of its earliest signal; null reads unknown
+  assert.deepEqual(rows(db, q[7]).map((r) => [r.day, r.regime, r.merged_by, r.recovered, r.merges]), days.map((r) => [r.day, "unknown", r.merged_by, r.recovered, r.merges]),
+    "with no regime set, every merge is unknown and the rows are #0's");
+  db.query("UPDATE factory.event_store SET regime = CASE WHEN issue IN (30, 31) THEN 'factory_loop_v2' WHEN issue = 32 THEN 'manual' END", "owner");
+  const byRegime = rows(db, q[7]);
+  assert.deepEqual([...new Set(byRegime.map((r) => r.regime))].sort(), ["factory_loop_v2", "manual", "unknown"].filter((g) => byRegime.some((r) => r.regime === g)));
+  assert.ok(byRegime.some((r) => r.regime === "unknown") && byRegime.some((r) => r.regime !== "unknown"), "some merges are tagged and some are left unknown");
+  const perDay = new Map();
+  for (const r of byRegime) perDay.set(`${r.day}|${r.merged_by}|${r.recovered}`, (perDay.get(`${r.day}|${r.merged_by}|${r.recovered}`) ?? 0) + r.merges);
+  assert.deepEqual([...perDay].sort(), days.map((r) => [`${r.day}|${r.merged_by}|${r.recovered}`, r.merges]).sort(), "summed over regime, the days are #0's");
+  db.query("UPDATE factory.event_store SET regime = NULL", "owner");
 
   // PR open to merge, pull requests, supersedes and head moves, per merge
   const open = rows(db, q[1]);

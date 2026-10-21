@@ -67,6 +67,14 @@ Name queries by schema and title, never by bare number: both sets start at 1.
 | Pipeline gates, parked time, failure categories, and the tokens of anything but the loop's step agents | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
 
+**Per regime.** Every row has a `regime` (the kind of run that wrote it). To read a question per
+regime, filter the saved query with `AND coalesce(regime, 'unknown') = '<regime>'` (or `IN (...)`), or
+group it by `coalesce(regime, 'unknown') AS regime`; the rule, "Reading per regime" among the reading
+rules at the top of the
+[reference](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#factory-metrics), says
+which queries already group. To leave testbed rows out, name the regimes you want
+(`IN ('factory_loop_v2', 'manual', 'unknown')`), never `<> 'testbed'`.
+
 Copy the query from the reference, narrow it to the repo, issue, run or window asked about,
 and run it with `dev-query`. The reference explains each column and definition; do not
 restate or invent your own.
@@ -85,6 +93,8 @@ restate or invent your own.
   minutes. The history starts at 2026-10-16T02:00Z.
 - Count a retried event once, by the key its type names (for example `(issue, life, seq)` for
   `transition`), and time a transition by `seq_at`; the saved queries already do.
+- A null regime is `unknown`; it is never guessed from a device, a workspace name or a path, so say
+  how many rows read `unknown` when a per-regime number leans on them.
 - A device whose container is stale pushes nothing, so a missing device means missing
   data, not zero work.
 - Implementer model comparison: give each model's issue count, and run the noise check the

@@ -111,6 +111,7 @@ const RUN_ONLY = [
   "9. Interventions, judgement calls and claim completion #5",
   "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
   "9b. Permission prompts #0",
+  "4. Merges per device #1", "9c. Merges, pull requests and gaps #7",
   "9c. Merges, pull requests and gaps #0", "9c. Merges, pull requests and gaps #1", "9c. Merges, pull requests and gaps #2",
   "9c. Merges, pull requests and gaps #3", "9c. Merges, pull requests and gaps #4",
   "9c. Merges, pull requests and gaps #5", "9c. Merges, pull requests and gaps #6",
@@ -118,7 +119,7 @@ const RUN_ONLY = [
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4",
   "Settings #0", "Settings #1",
-  "Spend on an API key #0", "Spend on an API key #1", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Observe time per pass #0", "Pass time #0",
+  "Spend on an API key #0", "Spend on an API key #1", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Tokens per merged issue #3", "Observe time per pass #0", "Pass time #0",
   "Startup schema migrates #0", "10. Releases #3", "Actions refusal spells #0",
   "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",
   "Queue snapshots #0", "Queue snapshots #1", "Queue snapshots #2",
@@ -455,6 +456,32 @@ test("the document's queries answer as the old queries did on the same events", 
       const vars = "\\set repo cbundy/dev-system-scratch\n\\set since 2026-10-01T00:00:00Z\n";
       psql(dest.url, `\\set QUIET on\n\\set ON_ERROR_STOP on\n${vars}SET ROLE "${reader}";\n${stripSemicolon(sql)};\n`);
     }
+  });
+
+  await t.test("4. Merges per device by regime adds up to the ungrouped answer and takes the rule's filter", () => {
+    const sql0 = blocks.find((b) => b.id === "4. Merges per device #0").sql;
+    const sql1 = blocks.find((b) => b.id === "4. Merges per device #1").sql;
+    const flat = (rs) => rs.map((r) => `${r.device}|${r.week}|${r.merges}`);
+    // the replay carries no regime, so every row reads null: only `unknown`, and the same answer
+    const all0 = runNew(sql0);
+    const none = runNew(sql1);
+    assert.ok(none.length > 0 && none.every((r) => r.regime === "unknown"), "a null regime reads unknown");
+    assert.deepEqual(flat(none), flat(all0), "with no regime set, the grouped answer is the ungrouped one");
+    // a fixed rule: by issue, the regimes the rule names, and some rows left null
+    dest.query(`UPDATE factory.event_store SET regime = CASE issue % 4 WHEN 0 THEN 'factory_loop_v2' WHEN 1 THEN 'testbed' WHEN 2 THEN 'manual' END`);
+    const grouped = runNew(sql1);
+    assert.deepEqual([...new Set(grouped.map((r) => r.regime))].sort(), ["factory_loop_v2", "manual", "testbed", "unknown"]);
+    const summed = new Map();
+    for (const r of grouped) summed.set(`${r.device}|${r.week}`, (summed.get(`${r.device}|${r.week}`) ?? 0) + r.merges);
+    assert.deepEqual([...summed].map(([k, v]) => `${k}|${v}`).sort(), flat(all0).sort(), "summed over regime, a device and week give the ungrouped merges");
+    // the rule's filter on the ungrouped block equals the grouped rows of that regime
+    const filtered = runNew(sql0.replace("type = 'merged'", "type = 'merged' AND coalesce(regime, 'unknown') = 'manual'"));
+    assert.ok(filtered.length > 0, "the filter keeps the manual merges");
+    assert.deepEqual(flat(filtered).sort(), flat(grouped.filter((r) => r.regime === "manual")).sort());
+    assert.ok(filtered.length < all0.length + grouped.length, "the filter is narrower than the whole");
+    // back to null, so the next subtest sees the replay as loaded
+    dest.query("UPDATE factory.event_store SET regime = NULL");
+    assert.deepEqual(flat(runNew(sql1)), flat(all0));
   });
 
   await t.test("the compare bites: one changed event in the new store only is reported", () => {

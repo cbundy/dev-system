@@ -33,6 +33,18 @@ sub-agents.
 - Percentiles and medians are not SQL: take them in code from the rows a query gives. The shared
   queries also use no `@>` and no `DISTINCT ON` (a window function with `row_number() ... = 1` does
   the job).
+- Reading per regime: `factory.event_log` has a `regime` column, the kind of run that wrote the row
+  (`factory_loop_v2`, `testbed` or `manual`; see the
+  [Regime rule](factory-events/README.md#reading-events) and the
+  [Regimes](#regimes) subsection of `callum-flow-evaluate`). Null is `unknown`: read it as
+  `coalesce(regime, 'unknown')`, and never guess a regime from a device, a workspace name or a path.
+  Read any saved query per regime in one of two ways. A filter: add
+  `AND coalesce(regime, 'unknown') = '<regime>'` (or `IN (...)` for several) to each read of
+  `factory.event_log` in the query. A grouping: put `coalesce(regime, 'unknown') AS regime` in the
+  select and in the `GROUP BY`; sections 4, 9c and "Tokens per merged issue" show it in a query of
+  their own. A filter names the values it wants and never excludes one, so leaving testbed out is
+  `IN ('factory_loop_v2', 'manual', 'unknown')`, never `<> 'testbed'`. The filter applies to every
+  saved query as written, whether or not its section shows a per-regime form.
 
 Types these queries read, besides the stages `ready`, `claimed`, `transition` (the loop's record,
 whose `to_state` is the issue's state: `queued`, `designing`, `building`, `reviewing`, `fixing`,
@@ -90,7 +102,8 @@ Check coverage before quoting any window, and never extrapolate before it.
 - Per regime, the rows by the kind of run that wrote them:
   `select regime, count(*) from factory.event_log where repo = '<owner/name>' group by regime`.
   A null regime means an older row or an unset regime (see
-  [Regime](factory-events/README.md#reading-events)).
+  [Regime](factory-events/README.md#reading-events)). Reading any query per regime is the
+  "Reading per regime" rule above.
 - A device whose container is stale (older than the base image that ships the push loops) pushes
   nothing, so a missing device means missing data, not zero work.
 
@@ -729,6 +742,19 @@ WHERE type = 'merged' AND issue IS NOT NULL
   AND NOT (actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false))
 GROUP BY device, week
 ORDER BY week DESC, merges DESC;
+```
+
+The same, by regime (the regime of the `merged` event; null reads `unknown`). Summed over regime, the
+merges of a device and week are the answer above, as long as the `merged` events of one issue share a regime:
+
+```sql
+SELECT device, date_trunc('week', ts)::date AS week, coalesce(regime, 'unknown') AS regime,
+       count(DISTINCT (repo, issue)) AS merges
+FROM factory.event_log
+WHERE type = 'merged' AND issue IS NOT NULL
+  AND NOT (actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false))
+GROUP BY device, week, coalesce(regime, 'unknown')
+ORDER BY week DESC, device, regime;
 ```
 
 ## 5b. Tests deleted or weakened by auto-fixes
@@ -1483,6 +1509,16 @@ or a life no `transition` names, counts from the first `claimed` to the issue's 
 (the first to `closed` since its last claim before the merge; else the merge) plus 30 minutes.
 Fleet-level interventions (no `issue`) attach to no issue. A `ci-rerun` flake row (2d) shares its
 `fact` with the re-run's first row, so these queries count the pair once.
+
+A rescue the loop cannot see is recorded by hand, in the native form, with the regime a person works in:
+
+```sh
+callum-flow-event --type intervention --issue N --regime manual \
+  --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'
+```
+
+Nothing infers `manual`: without `--regime` (or `FACTORY_REGIME` in the environment) the row reads
+`unknown`.
 
 ```sql
 -- interventions per repo and day, by who and cause; `fleet` counts those that name no issue
@@ -2259,6 +2295,64 @@ HAVING count(*) FILTER (WHERE additions IS NULL) > 0
 ORDER BY week DESC, missing_size DESC;
 ```
 
+**Merges per day by regime** (#7): the same as #0, with the regime added. A merge's regime is that of its
+earliest signal, the one that times it (null reads `unknown`). Summed over regime, the merges of a day,
+`merged_by` and `recovered` are #0's.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, regime
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered, e.regime,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered, regime
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, regime
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, regime
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         (array_agg(coalesce(regime, 'unknown') ORDER BY at, coalesce(regime, 'unknown')))[1] AS regime
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.regime,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT repo, (at AT TIME ZONE 'UTC')::date AS day, regime, merged_by, recovered, count(*) AS merges
+FROM mg
+WHERE at >= :'since'::timestamptz
+GROUP BY repo, day, regime, merged_by, recovered
+ORDER BY repo, day, regime, merged_by, recovered;
+```
+
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
@@ -2648,6 +2742,36 @@ FROM roles r
 JOIN merged m ON m.repo = r.repo AND m.issue = r.issue
 GROUP BY r.repo, r.role
 ORDER BY r.repo, r.role;
+```
+
+The first split again, by regime: the regime of each counted agent's `loop_entry` (null reads `unknown`), so
+an issue with agents in two regimes gives one row per regime, and an issue with no counted agent gives one
+`unknown` row of zeros. Summed over regime, an issue's token sums are the first query's. It leaves out
+`steps_without_tokens`, which belongs to the issue, not to a regime.
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1)
+SELECT m.repo, m.issue, m.merged_at, coalesce(t.regime, 'unknown') AS regime,
+  count(t.agent_id) AS agents,
+  coalesce(sum(t.input_tokens), 0) AS input_tokens,
+  coalesce(sum(t.output_tokens), 0) AS output_tokens,
+  coalesce(sum(t.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(t.cache_creation_tokens), 0) AS cache_creation_tokens,
+  coalesce(sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens), 0) AS total_tokens
+FROM merged m
+LEFT JOIN tokens t ON t.repo = m.repo AND t.issue = m.issue
+GROUP BY m.repo, m.issue, m.merged_at, coalesce(t.regime, 'unknown')
+ORDER BY m.merged_at, m.issue, regime;
 ```
 
 ## Observe time per pass
