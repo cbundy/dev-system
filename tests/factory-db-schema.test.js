@@ -5,8 +5,10 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 
@@ -173,4 +175,30 @@ test("loop_passes: the observe columns are null for an old minute and the given 
   const read = (n) => db.query(`SELECT concat_ws('|', coalesce(observe_mean_ms::text, 'null'), coalesce(observe_commands_mean_ms::text, 'null'), coalesce(observe_in_process_mean_ms::text, 'null'), coalesce(observe_in_process_max_ms::text, 'null')) FROM factory.event_log WHERE device_seq = ${n}`, "reader");
   assert.equal(read(1), "null|null|null|null");
   assert.equal(read(2), "2600|2300|300|520");
+});
+
+test("regime: rows from before the migration read NULL, and a new row's regime reads from event_log", opts, (t) => {
+  const migrations = path.join(__dirname, "..", "images", "base", "factory-db", "migrations");
+  const old = fs.mkdtempSync(path.join(os.tmpdir(), "migrations-before-regime-"));
+  t.after(() => fs.rmSync(old, { recursive: true, force: true }));
+  for (const f of fs.readdirSync(migrations)) if (f !== "0027_regime.sql") fs.copyFileSync(path.join(migrations, f), path.join(old, f));
+  const db = createDb(t, { migrationsDir: old });
+  const col = "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_store' AND column_name = 'regime'";
+  assert.equal(db.query(col), "0", "the old schema has no regime column");
+  const before = crypto.randomUUID();
+  const insert = (id, cols, vals) => db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data${cols})
+    VALUES (1, '${id}', '2026-10-16T15:45:19.123Z', 'claimed', 1, 'o/r', 'dev', 'agent', 7, 1, '{"lease_minutes":5}'::jsonb${vals})`, "writer");
+  insert(before, "", "");
+  // Bootstrap again with the full directory, as the next start-up does.
+  const r = spawnSync("bash", [path.join(__dirname, "..", "images", "base", "factory-db-bootstrap"), "--db", db.name], {
+    encoding: "utf8", env: { ...process.env, FACTORY_DB_ADMIN_URL: process.env.FACTORY_TEST_PG_ADMIN_URL, FACTORY_DB_MIGRATIONS_DIR: migrations },
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(db.query(col), "1");
+  assert.equal(db.query(`SELECT regime IS NULL FROM factory.event_log WHERE event_id = '${before}'`, "reader"), "t");
+  const after = crypto.randomUUID();
+  insert(after, ", regime", ", 'testbed'");
+  assert.equal(db.query(`SELECT regime FROM factory.event_log WHERE event_id = '${after}'`, "reader"), "testbed");
+  const cols = db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log' ORDER BY ordinal_position").split("\n");
+  assert.equal(cols[cols.length - 1], "regime", "OR REPLACE appends: regime is the view's last column");
 });

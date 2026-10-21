@@ -87,6 +87,10 @@ Check coverage before quoting any window, and never extrapolate before it.
   the old `factory.events` table, which these queries do not read.
 - Per device and repo, the earliest and latest row:
   `select device, min(ts), max(ts) from factory.event_log where repo = '<owner/name>' group by device`.
+- Per regime, the rows by the kind of run that wrote them:
+  `select regime, count(*) from factory.event_log where repo = '<owner/name>' group by regime`.
+  A null regime means an older row or an unset regime (see
+  [Regime](factory-events/README.md#reading-events)).
 - A device whose container is stale (older than the base image that ships the push loops) pushes
   nothing, so a missing device means missing data, not zero work.
 

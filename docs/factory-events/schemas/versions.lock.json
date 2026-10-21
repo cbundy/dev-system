@@ -340,6 +340,18 @@
           "string"
         ]
       },
+      "regime": {
+        "enum": [
+          "factory_loop_v2",
+          "manual",
+          "testbed",
+          null
+        ],
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "repo": {
         "pattern": "^[^/\\s]+/[^/\\s]+$",
         "type": "string"

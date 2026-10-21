@@ -27,6 +27,13 @@
 # (appended to <events dir>/factory/.refused/<file> as one JSON object, the cursor
 # moves past it) or, when the probe fails, the file stops at the last good line.
 #
+# The envelope's optional regime goes into the regime column (migration 0027) only when the column
+# exists: at the start of each pass the loop probes SELECT regime FROM factory.event_store as the
+# writer, and when that fails while the table probe succeeds it inserts without regime for the whole
+# pass and says so on stderr. A database not yet migrated therefore never refuses a line and never
+# stalls the push; the regime of lines pushed in that gap is lost (acceptable: no producer sets it
+# yet). When both probes fail the pass is handled as ever (retry next pass, nothing set aside).
+#
 # The writer URL (factory_db_url writer, never AGENTSVIEW_PG_URL) is read again
 # on every pass and reaches only psql's environment, never its argv; all psql
 # output is masked. Every psql run is bounded by timeout; a timeout counts as
@@ -57,7 +64,8 @@ case "$TIMEOUT" in '' | *[!0-9]* | 0) TIMEOUT=60 ;; esac
 # is the only literal; jq doubles its single quotes.
 read -r -d '' SQL_ROWS <<'JQ'
 [inputs] | to_entries[] | (.value | gsub("'"; "''")) as $l | (.key + $off + 1) as $n |
-"INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, session_id, issue, base_image, dev_image, template_version, plugin_version, device_seq, data) SELECT (j->>'envelope')::int, (j->>'event_id')::uuid, (j->>'ts')::timestamptz, j->>'type', (j->>'type_version')::int, j->>'repo', j->>'device', j->>'actor', j->>'session_id', (j->>'issue')::int, j->>'base_image', j->>'dev_image', j->>'template_version', j->>'plugin_version', \($n), j->'data' FROM (SELECT '\($l)'::jsonb AS j) s ON CONFLICT (event_id) DO NOTHING;"
+(if $regime == 1 then ", regime" else "" end) as $col | (if $regime == 1 then ", j->>'regime'" else "" end) as $val |
+"INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, session_id, issue, base_image, dev_image, template_version, plugin_version, device_seq, data\($col)) SELECT (j->>'envelope')::int, (j->>'event_id')::uuid, (j->>'ts')::timestamptz, j->>'type', (j->>'type_version')::int, j->>'repo', j->>'device', j->>'actor', j->>'session_id', (j->>'issue')::int, j->>'base_image', j->>'dev_image', j->>'template_version', j->>'plugin_version', \($n), j->'data'\($val) FROM (SELECT '\($l)'::jsonb AS j) s ON CONFLICT (event_id) DO NOTHING;"
 JQ
 
 mask() { sed -E "$MASK_SECRETS_SED"; }
@@ -76,6 +84,20 @@ fe_psql() {
 # probe URL: succeeds when the writer can reach and read factory.event_store.
 probe() {
   printf 'SELECT 1 FROM factory.event_store LIMIT 0;\n' | fe_psql "$1" > "$PROBE_OUT"
+}
+
+# probe_regime URL: sets HAS_REGIME to 1 when factory.event_store has the regime column (migration
+# 0027), else 0. Returns 1 when the table cannot be read either (the pass is then handled as ever).
+HAS_REGIME=0
+probe_regime() {
+  HAS_REGIME=0
+  if printf 'SELECT regime FROM factory.event_store LIMIT 0;\n' | fe_psql "$1" > "$PROBE_OUT"; then
+    HAS_REGIME=1
+    return 0
+  fi
+  probe "$1" || return 1
+  echo "factory-event-push-loop: factory.event_store has no regime column yet (migration 0027 not applied) - pushing this pass without it" >&2
+  return 0
 }
 
 first_error() {
@@ -117,7 +139,7 @@ push_file() {
   while [ "$pushed" -lt "$total" ]; do
     n=$((total - pushed))
     [ "$n" -le "$BATCH" ] || n=$BATCH
-    sql=$(sed -n "$((pushed + 1)),$((pushed + n))p" "$f" | jq -nrR --argjson off "$pushed" "$SQL_ROWS") || return 0
+    sql=$(sed -n "$((pushed + 1)),$((pushed + n))p" "$f" | jq -nrR --argjson off "$pushed" --argjson regime "$HAS_REGIME" "$SQL_ROWS") || return 0
     rc=0
     out=$(printf '%s\n' "$sql" | fe_psql "$url") || rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -135,7 +157,7 @@ push_file() {
     # The database is reachable and the writer can read the table: find the lines it refuses.
     for ((i = pushed + 1; i <= pushed + n; i++)); do
       text=$(sed -n "${i}p" "$f")
-      sql=$(printf '%s\n' "$text" | jq -nrR --argjson off $((i - 1)) "$SQL_ROWS") || return 0
+      sql=$(printf '%s\n' "$text" | jq -nrR --argjson off $((i - 1)) --argjson regime "$HAS_REGIME" "$SQL_ROWS") || return 0
       rc=0
       out=$(printf '%s\n' "$sql" | fe_psql "$url") || rc=$?
       if [ "$rc" -ne 0 ]; then
@@ -162,6 +184,7 @@ pass() {
     echo "factory-event-push-loop: no readable writer URL any more (FACTORY_DB_WRITER_URL or $(factory_db_url_file writer)) - stopping" >&2
     return 2
   fi
+  probe_regime "$url" || true
   for f in "$FDIR"/*.jsonl; do
     [ -f "$f" ] || continue
     push_file "$f" "$url" || rc=1

@@ -1589,6 +1589,9 @@ ready issue whose title, labels or parent changed is logged again; transitions a
 `callum-flow-event --path [--repo O/N]` prints the old log's path (kept for older callers; it gets no new lines) and writes nothing; `--new-path` prints
 the new log's path (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
+`--type` takes `--regime R` (else `FACTORY_REGIME`; the flag wins and an empty value counts as unset): the envelope's `regime`
+(`factory_loop_v2`, `testbed` or `manual`; null when unset, never guessed). A value outside that list is written as given with
+one `callum-flow-event: warning: unknown regime` line. The old-state form takes no flag but passes `FACTORY_REGIME` on.
 `--new-only` is a no-op kept for older callers (the old-state mode writes the new log only), allowed with `--if-changed`; `--new-only --new-path` is the capability probe (an older image exits 2). Removing `--new-only` and `--path` is #656.
 `--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (nothing written, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 

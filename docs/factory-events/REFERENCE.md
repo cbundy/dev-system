@@ -60,6 +60,7 @@ One factory event: the fields every event has, with its payload in data. One lin
 | `dev_image` | string | required | yes |  |  | The repo's dev image version running when it was written; null when unknown or none. |
 | `template_version` | string | required | yes |  |  | The Coder template version running when it was written; null when unknown. |
 | `plugin_version` | string | required | yes |  |  | The callum-flow plugin version running when it was written; null when unknown. |
+| `regime` | string | optional | yes | one of "factory_loop_v2", "testbed", "manual", null |  | Which kind of run wrote it: factory_loop_v2 is work the v2 factory loop did, testbed is a testbed or experiment run, manual is a person or an interactive session. Optional: absent or null means unknown, never guessed. A reader filters by naming the values it wants. |
 | `data` | object | required | no |  |  | The payload: a flat object whose fields the type's schema describes. |
 
 Example:
@@ -80,6 +81,7 @@ Example:
   "dev_image": null,
   "template_version": "dev-system-v41",
   "plugin_version": "0.40.0",
+  "regime": "factory_loop_v2",
   "data": {
     "lease_minutes": 120
   }
@@ -106,6 +108,7 @@ Example:
 | `dev_image` | string | every event | The repo's dev image version running when it was written; null when unknown or none. |
 | `template_version` | string | every event | The Coder template version running when it was written; null when unknown. |
 | `plugin_version` | string | every event | The callum-flow plugin version running when it was written; null when unknown. |
+| `regime` | string | every event | Which kind of run wrote it: factory_loop_v2 is work the v2 factory loop did, testbed is a testbed or experiment run, manual is a person or an interactive session. Optional: absent or null means unknown, never guessed. A reader filters by naming the values it wants. |
 | `device_seq` | integer | every event | The line number of the event in its device's local log, set by the shipper. |
 | `acting` | integer | `loop_passes` | Of those passes, how many acted (did something rather than finding nothing to do). |
 | `acting_mean_ms` | integer | `loop_passes` | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |

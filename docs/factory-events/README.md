@@ -31,6 +31,11 @@ versioned payload, stored in the factory database and read through one view. Des
   as other): adding one is not a version bump.
 - **Absent fields.** A field added to a version after its first release is missing from that
   version's older events. The shared reader and the view give it as null.
+- **Regime.** The optional envelope field `regime` says which kind of run wrote an event:
+  `factory_loop_v2` (work the v2 factory loop did), `testbed` (a testbed or experiment run) or
+  `manual` (a person or an interactive session). Null means unknown and is never guessed. It ships
+  ahead of its producers, so no event carries a value yet and every row reads null. A reader
+  filters by naming the values it wants, never by excluding one.
 - `reason` is always a short why-code, but each type has its own list: read it with `type`.
 - Fields whose description starts "Loop state, for the record rebuild" (and all of `loop_entry`)
   exist so the loop can rebuild itself. Most consumers can ignore them.
@@ -143,7 +148,7 @@ SQL
   `/persist/events/factory/<owner>__<repo>.jsonl` (`callum-flow-event --new-path` prints the path; `factory/` is made
   0700). The old log `<events dir>/<owner>__<repo>.jsonl` and `factory.events` get no new lines any more
   (dev-system#1143): there is no dual write. The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
-  [--issue N] [--repo O/N] [--actor NAME]`, writes a new event straight to that file and nothing to
+  [--issue N] [--repo O/N] [--actor NAME] [--regime R]`, writes a new event straight to that file and nothing to
   the old log. The image's tools write natively (dev-system#1140): `callum-flow-claim` (`claimed`,
   `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`; its `merged` rows include the merges to the default branch that no event recorded, logged as recovered hand merges, with no issue unless a trusted pull request closes one), `callum-flow-merge`
   (`merged` with the pull request's files, additions and deletions, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`

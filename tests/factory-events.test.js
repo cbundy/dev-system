@@ -65,6 +65,15 @@ test("the envelope example passes validateStrict and readEvent takes the whole e
   assert.deepEqual(reader.readEvent(env), { type: "claimed", type_version: 1, data: { lease_minutes: 120, title: null, labels: null, parent: null, score: null, factors: null } });
 });
 
+test("readEvent gives the same result for an envelope with a regime as for one without it", () => {
+  const env = load("envelope.v1.json").examples[0];
+  const { regime, ...without } = env;
+  assert.equal(regime, "factory_loop_v2");
+  for (const value of ["factory_loop_v2", "testbed", "manual", null]) {
+    assert.deepEqual(reader.readEvent({ ...env, regime: value }), reader.readEvent(without));
+  }
+});
+
 test("readEvent refuses an unknown envelope, type and version with the exact message", () => {
   const env = load("envelope.v1.json").examples[0];
   assert.throws(() => reader.readEvent({ ...env, envelope: 2 }), /unknown factory event envelope: 2/);

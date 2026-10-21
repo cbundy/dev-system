@@ -17,11 +17,15 @@
 // CommonJS with no dependencies: callum-flow-event (dual write) and the replay script both use it.
 // Temporary: deleted with the old event path (dev-system#656).
 //
+// `opts.regime` (CLI --regime, dual write only) is the envelope's regime, set right after plugin_version
+// (null when absent). The replay has no regime key. The translator is pure and loads no shapes, so it
+// does not check the value against the envelope's enum; the native writer does.
+//
 // `opts.data` (CLI --data JSON, dual write only) is an object of extra payload fields merged into the
 // new event's data before the check (ready and claimed: title, labels, parent; dev-system#870). A key
 // the type does not accept, or a value of the wrong shape, is a miss. Replay (no opts) has none.
 //
-// CLI: node factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl
+// CLI: node factory-event-translate.js [--ts T --session-id S] [--regime R] [--data JSON] [--quiet] < old.jsonl > new.jsonl
 //   One stderr line per miss and a summary of counts per state (--quiet drops the summary); exit 1 on any miss, else 0.
 
 // --- the token codec (plugins/factory-loop/hooks/v2/events.ts: dec, tokensOf, noteToken) ---------
@@ -852,7 +856,7 @@ function envelope(line, type, data, opts) {
   const repo = text("repo");
   if (repo === null || !/^[^/\s]+\/[^/\s]+$/.test(repo)) miss(`repo is not owner/name: ${JSON.stringify(repo)}`);
   for (const k of ["device", "actor"]) if (!NE(line[k])) miss(`${k} is missing`);
-  return {
+  const env = {
     envelope: 1,
     event_id: line.event_id,
     ts,
@@ -867,8 +871,10 @@ function envelope(line, type, data, opts) {
     dev_image: text("dev_image"),
     template_version: text("template_version"),
     plugin_version: text("plugin_version"),
-    data,
   };
+  if (opts !== undefined && opts !== null) env.regime = opts.regime ?? null;
+  env.data = data;
+  return env;
 }
 
 // --- translate ------------------------------------------------------------------------------------
@@ -910,6 +916,7 @@ function main(argv) {
   const fs = require("node:fs");
   let ts;
   let sessionId;
+  let regime;
   let dual = false;
   let quiet = false;
   let extra;
@@ -919,6 +926,9 @@ function main(argv) {
       dual = true;
     } else if (argv[i] === "--session-id" && i + 1 < argv.length) {
       sessionId = argv[++i];
+      dual = true;
+    } else if (argv[i] === "--regime" && i + 1 < argv.length) {
+      regime = argv[++i];
       dual = true;
     } else if (argv[i] === "--data" && i + 1 < argv.length) {
       try {
@@ -931,11 +941,11 @@ function main(argv) {
     } else if (argv[i] === "--quiet") {
       quiet = true;
     } else {
-      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
+      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--regime R] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
       return 2;
     }
   }
-  const opts = dual ? { ts, sessionId, data: extra } : undefined;
+  const opts = dual ? { ts, sessionId, regime, data: extra } : undefined;
   const counts = new Map();
   const bump = (state, what) => {
     const c = counts.get(state) ?? { translated: 0, skipped: 0, missed: 0 };
