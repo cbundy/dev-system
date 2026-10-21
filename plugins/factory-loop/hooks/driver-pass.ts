@@ -101,6 +101,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
   // the pass's time runs from here, for the decision log and the trace (#552)
   const t0 = performance.now()
   let rt: Runtime | undefined
+  S.passObserve = null
   try {
     rt = await runtime($)
     S.lastRt = rt
@@ -121,7 +122,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
     const now = await $.clock.now()
     S.failingSince ??= now
     if (rt !== undefined) {
-      recordPass(now, Math.round(performance.now() - t0), false, true)
+      recordPass(now, Math.round(performance.now() - t0), false, true, S.passObserve)
       await appendLine($, rt, { pass: S.passNo, trigger, ms: Math.round(performance.now() - t0), error: String(err).slice(0, 500), failures: S.failures })
       const name = rt.repo.split('/')[1] ?? 'loop'
       const title = S.lastTitle === null ? `🔄 ${name} · error` : S.lastTitle.endsWith(' · error') ? S.lastTitle : `${S.lastTitle} · error`
@@ -212,6 +213,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const observeStart = performance.now()
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
   const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
+  S.passObserve = observeSplit
   let state = observed.state
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
   let snap: Snapshot | null = null
@@ -475,5 +477,5 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // the title says error until the store takes the ledger again (v2 SPEC 13.10 item 9)
   if (act && S.saveProblem !== null) throw new Error(`ledger: not saved: ${S.saveProblem}`)
   holdsLock(act)
-  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false)
+  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false, observeSplit)
 }
