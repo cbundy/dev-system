@@ -56,6 +56,10 @@ it; never use run_in_background: your turn ends only with your answer.
   machine inside the command rule with one foreground command that starts the load, records
   their PIDs, runs the repeated test, and waits on those PIDs before it exits, so no background
   run is left behind.
+- A change that adds a producer of an event type or version first checks that the release carrying
+  its schema is at least three minor releases older than the newest release tag (for example with
+  `git tag --contains <schema commit>`), and otherwise stops and names the blocker in its answer
+  instead of writing the producer.
 - Fix a test double before trusting it: a fake that ignores what the test checks proves nothing.
 - Build the fixture a guard needs when real data cannot reach it, and show the guard really
   works.

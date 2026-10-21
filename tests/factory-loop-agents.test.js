@@ -245,6 +245,16 @@ test("the v2 designer makes every new decision observable, and the reviewer hold
   assert.match(review, /drops, renames or retypes anything an old version reads/);
 });
 
+test("the three-minor-release reader-skew rule is in the designer, builder, reviewer and event README (#1206)", () => {
+  const norm = (p) => read(p).replace(/\s+/g, " ");
+  assert.match(norm("plugins/factory-loop/agents/designer-v2.md"), /names the release that ships its schema and the earliest release whose producer may write it \(three minor releases later\)/);
+  assert.match(norm("plugins/factory-loop/agents/builder.md"), /at least three minor releases older than the newest release tag/);
+  assert.match(norm("plugins/factory-loop/agents/reviewer.md"), /image readers of the last three minor releases do not know is an error finding/);
+  const readme = norm("docs/factory-events/README.md");
+  assert.match(readme, /no producer writes it before release N\+3/);
+  assert.doesNotMatch(readme, /Bumps roll out in two releases|two-release|one release before/);
+});
+
 test("the v2 designer explores with its own reads: no Agent tool, no explorer, a checklist and an Exploration line (#851)", () => {
   const raw = read("plugins/factory-loop/agents/designer-v2.md");
   assert.ok(!toolsOf(raw).includes("Agent"), "tools: does not list Agent");
