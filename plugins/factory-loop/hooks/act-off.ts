@@ -4,6 +4,7 @@
 // This module is free of the driver: act.ts hands it the pieces and register.ts' driver supplies the
 // completion's place (the hook queue) through ActEnv.offPass.
 import { CLI_TIMEOUT_MS } from './act-cli'
+import { MERGE_BOUND_MS } from './v2/act-queue'
 import type { ActEnv } from './act'
 import type { Exec } from './exec'
 import { finish } from './ledger'
@@ -11,12 +12,19 @@ import type { Completion } from './ledger'
 import type { ActionKind, LedgerEntry, Ms } from './types'
 
 // The one list of kinds that run off the pass. A later kind joins by being added here.
-export const OFF_PASS: readonly ActionKind[] = ['heartbeat', 'sweep']
+export const OFF_PASS: readonly ActionKind[] = ['heartbeat', 'sweep', 'queue-merge']
 
 // The engine ends a command at its own timeout (act-cli.ts CLI_TIMEOUT_MS, NO_EXIT) and offers no
 // kill handle, so the bound a pass marks is that timeout plus this margin, which covers the
 // command's exit and the hook queue before its completion lands.
 export const OFF_PASS_MARGIN_MS = 60_000
+
+// offPassBoundMs: how long an off-pass command may run before the margin: heartbeat and sweep end at
+// their CLI timeout; a merge at the executor's longest path (the merge command, then the PR read).
+export function offPassBoundMs(kind: ActionKind): number {
+  if (kind === 'queue-merge') return MERGE_BOUND_MS
+  return CLI_TIMEOUT_MS[kind as keyof typeof CLI_TIMEOUT_MS]
+}
 
 export function isOffPass(kind: ActionKind): boolean {
   return OFF_PASS.includes(kind)
@@ -74,7 +82,7 @@ export function offPassExpired(ledger: readonly LedgerEntry[], now: Ms): (Comple
   const out: (Completion & { key: string })[] = []
   for (const e of ledger) {
     if (e.status !== 'running' || !isOffPass(e.kind)) continue
-    const limit = CLI_TIMEOUT_MS[e.kind as keyof typeof CLI_TIMEOUT_MS] + OFF_PASS_MARGIN_MS
+    const limit = offPassBoundMs(e.kind) + OFF_PASS_MARGIN_MS
     if (now - e.startedAt <= limit) continue
     out.push({ key: e.key, status: 'timed-out', summary: `timed out: no completion within ${Math.round(limit / 1000)} s` })
   }

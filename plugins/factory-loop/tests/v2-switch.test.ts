@@ -306,10 +306,17 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const cfg = config()
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2', reason: 'update due', windDownAt: NOW })
-    const merge = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    const merge = entry('queue-update:5', 'queue-update', { class: 'drive', status: 'running', endedAt: null })
     const task = entry('task:release:unknown:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
     const busy = planV2({ ...quiet, ledger: [...quiet.ledger, merge, task] }, cfg)
-    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-merge:5, task:release:unknown:2026-10-13T03' })
+    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-update:5, task:release:unknown:2026-10-13T03' })
+    // a running merge holds the restart in both modes
+    const merging = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    for (const windDownMinutes of [0, 30]) {
+      const held = planV2({ ...quiet, ledger: [...quiet.ledger, merging, task] }, config({ windDownMinutes }))
+      expect(held.actions.some(a => a.kind === 'restart-self')).toBe(false)
+      expect(held.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: waiting on queue-merge:5' + (windDownMinutes === 0 ? ', task:release:unknown:2026-10-13T03' : '') })
+    }
     // a pass that starts something still holds it
     const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
     const both = planV2(release, cfg)

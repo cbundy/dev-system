@@ -34,6 +34,8 @@ const READ_MS = 60 * SEC
 // the guard reads the PR, its checks, linkage and Rollout and fetches for the patch id; the merge
 // itself, its event and the milestone follow
 const MERGE_MS = 10 * 60 * SEC
+// the executor's longest path: the merge command, then the PR read-back; the off-pass bound (act-off.ts)
+export const MERGE_BOUND_MS = MERGE_MS + READ_MS
 // how long GitHub's background update may take to move the head (9.2), read every POLL_S seconds
 const MOVE_MS = 30 * SEC
 const POLL_S = 2

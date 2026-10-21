@@ -2673,10 +2673,10 @@ ORDER BY 1, repo, device;
 
 ## Pass time
 
-A pass no longer waits for the sweep or the heartbeat: both run off the pass ([v2 SPEC 13.6.1](factory-loop/v2/SPEC.md#1361-catalogue)),
+A pass no longer waits for the sweep, the heartbeat or a merge: all run off the pass ([v2 SPEC 13.6.1](factory-loop/v2/SPEC.md#1361-catalogue)),
 so passes over 20 s should be rare from this release on. Per hour, repo and device, from the `loop_passes` events (`mean_ms` and
 `max_ms` are one minute's mean and longest pass): the passes, their pass-weighted mean, the longest pass, and the minutes
-whose longest pass was over 20 s:
+whose longest pass was over 20 s (a restart held for a running merge shows as the decision log's R2 skip line `update due: waiting on <keys>`, passes before the restart):
 
 ```sql
 SELECT date_trunc('hour', from_at) AS hour, repo, device,

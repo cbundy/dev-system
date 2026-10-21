@@ -113,9 +113,11 @@ export function conflictNote(r: IssueRecord, base: string): string {
 }
 
 // mayHaveMerged: a queue-merge try that merged (done, merged), or may have (running, or lost to a
-// reload); a refusal (done, not merged) and a failed or timed-out try never did.
+// reload, or expired off the pass); a refusal (done, not merged) and a failed try never did. Only
+// off-pass expiry (act-off.ts) ends a merge timed-out: an inline merge's own timeout is failed. An
+// expired merge may have merged, so a PR reading merged is the step's ok, not a hand merge.
 export function mayHaveMerged(e: LedgerEntry): boolean {
-  if (e.status === 'running' || e.status === 'lost') return true
+  if (e.status === 'running' || e.status === 'lost' || e.status === 'timed-out') return true
   return e.status === 'done' && e.outcome?.kind === 'queue' && e.outcome.merged
 }
 
