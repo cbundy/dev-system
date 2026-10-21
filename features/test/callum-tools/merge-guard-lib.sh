@@ -88,6 +88,11 @@ fi
 case "$1 $2" in
   'pr view')
     case "$*" in
+      *additions*)
+        # the merged PR's size (callum-flow-merge reads it after the merge): size-fails fails it, size overrides it
+        echo "$*" >> "$d/size-calls"
+        [ ! -f "$d/size-fails" ] || exit 1
+        if [ -f "$d/size" ]; then slurp "$d/size"; else echo '{"files":[{"path":"a.js"},{"path":"b/c.sh"},{"path":""}],"additions":10,"deletions":2}'; fi ;;
       *closingIssuesReferences*) read -r c < "$d/closing"; jq -n --rawfile b "$d/body" --argjson c "$c" '{body:$b, closingIssuesReferences:($c | map({number:.}))}' ;;
       *)
         # reads counted, so a test can see how often the guard re-queried

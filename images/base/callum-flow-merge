@@ -2,8 +2,12 @@
 #
 # callum-flow-merge: run callum-flow-merge-guard and, only if every guard
 # passes, squash-merge the PR and log the `merged` event (cbundy/dev-system#219), written with
-# `callum-flow-event --type merged --data`. The event needs an issue: when the guard knows none, the
-# merge still succeeds, a warning says so and no `merged` event is written.
+# `callum-flow-event --type merged --data`. The event needs an issue here: when the guard knows none, the
+# merge still succeeds, a warning says so and no `merged` event is written (callum-flow-sweep's
+# "unrecorded merges to main" rule records such a merge later, with a null issue).
+# After a successful merge the PR's size is read once, `gh pr view <pr> --json files,additions,deletions`,
+# and the event carries `files` (the paths), `additions` and `deletions`. A failed read warns and
+# writes the three as null: the merge already happened, so the event is still written.
 # This is the one command that can merge, so it is allowed only in the main
 # checkout's gitignored .claude/settings.local.json, never in the synced
 # allow list.
@@ -106,12 +110,20 @@ if [ "$merge_rc" -ne 0 ]; then
   exit 1
 fi
 
-# The merged event needs the issue (the event store refuses one without): with none known, warn and write none.
+# The merged event needs an issue in this script: with none known, warn and write none.
 if [ -z "$issue" ]; then
   echo "callum-flow-merge: warning: no issue known, merged event not recorded" >&2
 else
-  $EVENT --type merged --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" \
-    '{pr: $pr, branch: (if $b == "" then null else $b end), head: $h, by: "factory", recovered: false}')" ||
+  # The size of the merged PR, read once after the merge: {files, additions, deletions}, or all null when the read fails.
+  size='{"files":null,"additions":null,"deletions":null}'
+  if sv=$($GH pr view "$pr" --json files,additions,deletions 2> /dev/null) &&
+    sz=$(printf '%s' "$sv" | jq -ce '{files: ([.files[]?.path | select(type == "string" and . != "")]), additions: (.additions | numbers), deletions: (.deletions | numbers)}' 2> /dev/null); then
+    size=$sz
+  else
+    echo "callum-flow-merge: warning: could not read the size of PR #$pr - merged event written without it" >&2
+  fi
+  $EVENT --type merged --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" --argjson s "$size" \
+    '{pr: $pr, branch: (if $b == "" then null else $b end), head: $h, by: "factory", recovered: false} + $s')" ||
     echo "callum-flow-merge: warning: merged event not recorded" >&2
 fi
 # milestone tagging never fails a merge that already succeeded

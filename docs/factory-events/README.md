@@ -145,8 +145,8 @@ SQL
   (dev-system#1143): there is no dual write. The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
   [--issue N] [--repo O/N] [--actor NAME]`, writes a new event straight to that file and nothing to
   the old log. The image's tools write natively (dev-system#1140): `callum-flow-claim` (`claimed`,
-  `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`), `callum-flow-merge`
-  (`merged`, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
+  `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`; its `merged` rows include the merges to the default branch that no event recorded, logged as recovered hand merges, with no issue unless a trusted pull request closes one), `callum-flow-merge`
+  (`merged` with the pull request's files, additions and deletions, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
   (`implementer_routed`) and `usage-check.sh` (`usage`), each with the type and data `translate()` made from the
   old line it wrote before ([translator.md](translator.md) has the mapping; `tests/factory-event-native.test.js`
   pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` no longer log: their

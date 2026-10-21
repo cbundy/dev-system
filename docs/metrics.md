@@ -713,10 +713,16 @@ ORDER BY seq_at DESC;
 
 ## 4. Merges per device
 
+Merges that closed an issue. A `merged` event with no issue is left out: `callum-flow-sweep` logs a merge
+to the default branch that no event recorded with no issue when the pull request's author is not trusted,
+or when it closes none, and a sweep-logged hand merge (`actor = 'sweep'`, `by = 'hand'`, `recovered`) would
+otherwise count as a merge of the factory and of the device that swept (cbundy/dev-system#752).
+
 ```sql
 SELECT device, date_trunc('week', ts)::date AS week, count(DISTINCT (repo, issue)) AS merges
 FROM factory.event_log
-WHERE type = 'merged'
+WHERE type = 'merged' AND issue IS NOT NULL
+  AND NOT (actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false))
 GROUP BY device, week
 ORDER BY week DESC, merges DESC;
 ```
@@ -2220,6 +2226,33 @@ FROM gaps g
 LEFT JOIN flight f ON f.gap_no = g.gap_no AND f.n = 1
 GROUP BY g.gap_no, g.repo, g.gap_from, g.gap_to, g.before_issue, g.before_pr, g.after_issue, g.after_pr
 ORDER BY g.gap_no;
+```
+
+**Unrecorded merges the sweep logged** (run only; cbundy/dev-system#752): the merges to the default
+branch that no `merged` event recorded and `callum-flow-sweep` (rule 7) logged afterwards, per repo and
+week, split by whether the sweep tied the merge to an issue. Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, issue IS NULL AS no_issue, count(DISTINCT pr) AS merges
+FROM factory.event_log
+WHERE type = 'merged' AND actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false)
+  AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week, no_issue
+ORDER BY week DESC, no_issue;
+```
+
+**Merges missing their size** (run only; cbundy/dev-system#752): the `merged` events of a pull request
+whose size (`additions`) the producer could not read, per repo, week and producer (`actor`, with `by`).
+Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, actor, by,
+       count(*) AS merges, count(*) FILTER (WHERE additions IS NULL) AS missing_size
+FROM factory.event_log
+WHERE type = 'merged' AND pr IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week, actor, by
+HAVING count(*) FILTER (WHERE additions IS NULL) > 0
+ORDER BY week DESC, missing_size DESC;
 ```
 
 ## 10. Releases

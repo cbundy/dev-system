@@ -75,6 +75,22 @@ test("implementer_routed (#506) is a delegation decision: implementing, and a ne
   assert.equal(issue(r, A, 91).stage, "implementing", "routed after abandoned starts a new life");
 });
 
+test("a merged event with no issue (the sweep's unrecorded main merge, cbundy/dev-system#752) changes no issue's stage and throws nothing", () => {
+  const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
+  const base = {
+    at: "2026-10-10T12:00:00.000Z", repos: [], runs: [], workers: { available: false, reason: "test" },
+    events: [e(95, "2026-10-10T11:00:00.000Z", "claimed", { note: "lease: 120" })],
+  };
+  const orphan = e(null, "2026-10-10T11:30:00.000Z", "merged", { actor: "sweep", pr: 77, head: "1".repeat(40) });
+  const without = derive(base);
+  const withOrphan = derive({ ...base, events: [...base.events, orphan] });
+  const issuesOf = (r) => r.repos.map((x) => ({ issues: x.issues, recent: x.recent }));
+  assert.deepEqual(issuesOf(withOrphan), issuesOf(without), "the null-issue merged row changes no issue");
+  assert.equal(issue(withOrphan, A, 95).stage, issue(without, A, 95).stage);
+  // alone, it places no issue
+  assert.deepEqual(derive({ ...base, events: [orphan] }).repos.flatMap((r) => r.issues.concat(r.recent)), []);
+});
+
 test("loop events (the factory loop's bookkeeping, D-09) never derive anything about an issue", () => {
   const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
   const loop = (issue, ts, note) => e(issue, ts, "loop", { run_id: "rL", pr: 900 + issue, note });

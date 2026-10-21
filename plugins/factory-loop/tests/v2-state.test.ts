@@ -1581,6 +1581,40 @@ describe('the record\'s executors (act-state.ts)', () => {
     expect(fixer.argvs[0]?.slice(1, 3)).toEqual(['--type', 'finding_handled'])
   })
 
+  test('event: a merged event with a pr reads the PR size first and logs it; a failed read logs nulls and is no failure', async () => {
+    const merged = { state: 'merged' as const, issue: 500, branch: 'issue-500', pr: 621, head: 'abc1234', note: 'merged by hand' }
+    const action: Action = { kind: 'event', key: 'k', class: 'free', rule: 'S3', reason: 'x', issue: 500, event: merged }
+    const sizeArgv = ['gh', 'pr', 'view', '621', '--repo', REPO, '--json', 'files,additions,deletions']
+    const dataOf = (argv: string[] | undefined) => JSON.parse(argv?.[argv.indexOf('--data') + 1] ?? 'null')
+    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js' }, { path: '' }, { path: 'b/c.sh' }], additions: 12, deletions: 3 }) } : {}))
+    expect(await ok.run(action)).toMatchObject({ status: 'done', summary: 'logged merged' })
+    expect(ok.argvs[0]).toEqual(sizeArgv)
+    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, size: { files: ['a.js', 'b/c.sh'], additions: 12, deletions: 3 } }))
+    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], additions: 12, deletions: 3 })
+    // a read that fails (exit, throw, bad JSON, no counts) writes the three as null, and the summary says so
+    const bad: [string, (argv: string[]) => { exitCode?: number; stdout?: string }][] = [
+      ['exit', () => ({ exitCode: 1 })],
+      ['throw', () => {
+        throw new Error('gh timed out')
+      }],
+      ['json', () => ({ stdout: 'not json' })],
+      ['shape', () => ({ stdout: '{"files": []}' })],
+    ]
+    for (const [name, gh] of bad) {
+      const w = actWorld([], argv => (argv[0] === 'gh' ? gh(argv) : {}))
+      expect(await w.run(action), name).toMatchObject({ status: 'done', summary: expect.stringContaining('size of PR #621 was unread') })
+      expect(w.argvs[1], name).toEqual(eventArgv(merged))
+      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, additions: null, deletions: null })
+    }
+    // no pr: no size read; another event: no extra command
+    const nopr = actWorld([])
+    expect(await nopr.run({ ...action, event: { ...merged, pr: null } })).toMatchObject({ status: 'done', summary: 'logged merged' })
+    expect(nopr.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
+    const verdict = actWorld([])
+    await verdict.run({ ...action, event: { state: 'verdict', issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed' } })
+    expect(verdict.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
+  })
+
   test('claim under planner v2: exit 3 is lost; a first claim adopts the newest open PR by a trusted author on a branch of the issue, the others named; a re-claim adopts nothing', async () => {
     const claim: Action = { kind: 'claim', key: claimKey(130, LIFE), class: 'start', rule: 'S1', reason: 'x', issue: 130 }
     const lost = actWorld([], () => ({ exitCode: 3, stderr: 'callum-flow-claim: #130 is held by other since x' }))

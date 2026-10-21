@@ -203,10 +203,21 @@ const comment: Executor = async (ctx, action) => {
 const event: Executor = async (ctx, action) => {
   if (action.kind !== 'event') return refused(`the event executor got a ${action.kind} action`)
   if (action.logged === true) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `${action.event.state} already in the event log` }
-  const argv = eventArgv(action.event)
+  // a merged event with a pull request carries the PR's size: read here, because events.ts and
+  // event-native.ts are pure. A failed read never fails the action; the size is written as null.
+  let e = action.event
+  let unread = ''
+  if (e.state === 'merged' && e.pr !== null) {
+    const sizeArgv = ARGV.prSizeArgv(ctx.rt.repo, e.pr)
+    const read = await run(ctx, sizeArgv, GH_MS)
+    const size = read.ok && read.r.exitCode === 0 ? ARGV.prSizeOf(read.r.stdout) : null
+    e = { ...e, size }
+    if (size === null) unread = ` (the size of PR #${e.pr} was unread)`
+  }
+  const argv = eventArgv(e)
   const ran = await run(ctx, argv, EVENT_MS)
   if (!ran.ok) return ran.exec
-  if (ran.r.exitCode === 0) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `logged ${action.event.state}` }
+  if (ran.r.exitCode === 0) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `logged ${action.event.state}${unread}` }
   // callum-flow-event exits non-zero only on a usage error (2), a loop bug never retried
   return commandFailure(argv, ran.r)
 }

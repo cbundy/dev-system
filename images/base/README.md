@@ -1645,7 +1645,7 @@ the command is in the synced allow list. Its one writing mode, `--update-behind`
 the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
 The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
-`--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
+`--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions`, read after the merge; null with a warning when the read fails); it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
@@ -1849,11 +1849,15 @@ event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as t
 already ended (the shared rule above, over both logs: its last claim event is one that ends it, whichever device logged it, even
 when this device's own log still shows `claimed`; no other event revives an ended claim), or when it has no claim comment.
 A PR merged after the newest claim comment on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`) is a merge
-made outside the factory: the sweep logs a `merged` event (pr, head when known, by `factory`; actor `sweep`) whoever holds the claim and however live it is
+made outside the factory: the sweep logs a `merged` event (pr, head when known, the PR's size, by `factory`; actor `sweep`) whoever holds the claim and however live it is
 (checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
 expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `requeued` event (reason `lease-expired`). The sweep never touches
-any other label: the factory loop is the only writer of its `factory:*` labels. It has no
-time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
+any other label: the factory loop is the only writer of its `factory:*` labels. Rules 1-6 have no
+time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Rule 7 is bounded: a PR merged into the default branch
+inside the last `CALLUM_FLOW_SWEEP_MERGE_WINDOW_SECONDS` (default 604800) and at least `CALLUM_FLOW_SWEEP_MERGE_SETTLE_SECONDS` ago (default 3600, so another
+device's `merged` event has time to arrive) that no `merged` event names by PR (central `factory.event_log` plus this device's new log) gets a `merged` event
+as actor `sweep`, by hand and recovered, with the issue only when a trusted author wrote the lowest in-repo issue the PR closes. It needs the central store (without it
+the sweep warns once and logs nothing), skips on a read failure with exit 1, and sees merged PRs only: a direct push to the default branch is out of scope. A
 latest event of `superseded` (an old-log state; nothing writes it any more) is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced

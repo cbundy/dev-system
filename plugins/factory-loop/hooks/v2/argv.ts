@@ -4,6 +4,7 @@
 // only on its own line here, and plugins/factory-loop/tests/safety.test.ts runs every builder
 // through its bans. A v2 executor builds its commands here, never from literals of its own. Every
 // gh command carries --repo, but `gh api`, whose repo is in its path. Pure.
+import type { PrSize } from './event-data'
 import type { FactoryLabel } from './types'
 import type { ScoreResult } from './score'
 
@@ -243,6 +244,31 @@ export function updateBranchArgv(repo: string, pr: number): string[] {
 // the guard never reads the issue from the branch name (9.3).
 export function queueMergeArgv(pr: number, patch: string, issue: number): string[] {
   return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue)]
+}
+
+// A merged PR's size, for the recovered `merged` event (event-data.ts PrSize).
+export function prSizeArgv(repo: string, pr: number): string[] {
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'files,additions,deletions']
+}
+
+// prSizeOf: the size `prSizeArgv` read, or null when it does not parse or lacks the counts. The files
+// are the paths, empty ones dropped.
+export function prSizeOf(stdout: string): PrSize | null {
+  let v: unknown
+  try {
+    v = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (v === null || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (!Array.isArray(o.files) || typeof o.additions !== 'number' || typeof o.deletions !== 'number') return null
+  const files: string[] = []
+  for (const f of o.files) {
+    const path = f !== null && typeof f === 'object' ? (f as Record<string, unknown>).path : undefined
+    if (typeof path === 'string' && path !== '') files.push(path)
+  }
+  return { files, additions: o.additions, deletions: o.deletions }
 }
 
 // A head's patch id against the base (8.4).

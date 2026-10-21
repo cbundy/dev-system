@@ -150,7 +150,7 @@ Example:
 | `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
 | `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
 | `filed_issue` | integer | `loop_entry` | A flake bug tell: the number of the bug the loop filed (or found); null otherwise. |
-| `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example a pr of null or a size that could not be read. A recovered merge can carry it, read when the event was logged. |
 | `first_flake_at` | string | `loop_entry` | A flake bug tell: when the first flake of the test in the window happened; null otherwise. |
 | `five_hour_pct` | integer | `usage` | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | `usage` | When the five-hour window resets. |
@@ -221,7 +221,7 @@ Example:
 | `reason` | enum or string | `abandoned`, `closed`, `designer_routed`, `implementer_routed`, `intake_stamp`, `queue_snapshot`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `recommendation` | string | `transition` | parked: the reason for the recommended option, set only when an agent structured the question; null otherwise. |
 | `recommended` | enum | `transition` | parked: the key of the recommended option, set only when an agent structured the question; null otherwise. |
-| `recovered` | boolean | `merged` | true when the loop logged it afterwards because no merged event was recorded at the merge. |
+| `recovered` | boolean | `merged` | true when the loop or the sweep logged it afterwards because no merged event was recorded at the merge. |
 | `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `rest` | array of object | `queue_snapshot` | The candidates past the first 50, counted by why code (null = claimable). Empty when there are 50 or fewer. |
 | `restored` | boolean | `test_weakened` | true when a later commit on the branch put the test back. |
@@ -831,7 +831,7 @@ Example:
 
 ## merged
 
-A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge on the issue's branch that no event recorded. Ends the claim; the end point of lead time and throughput. Count one per pr and head.
+A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge that no event recorded: one on the issue's branch, or a merged pull request to the default branch that no merged event names by pr (logged as a hand merge, recovered, with the issue only when the pull request's author is trusted and it closes one). Ends the claim; the end point of lead time and throughput. Count one per pr and head.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -845,8 +845,8 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `branch` | string | required | yes |  | yes | The merged branch, when known. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit that was merged, when known. |
 | `by` | enum | required | no | one of "factory", "hand" | yes | factory: the factory merged it; hand: a person merged it outside the factory. |
-| `recovered` | boolean | required | no |  | yes | true when the loop logged it afterwards because no merged event was recorded at the merge. |
-| `files` | array of string | optional | yes | items: minLength 1 | yes | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `recovered` | boolean | required | no |  | yes | true when the loop or the sweep logged it afterwards because no merged event was recorded at the merge. |
+| `files` | array of string | optional | yes | items: minLength 1 | yes | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example a pr of null or a size that could not be read. A recovered merge can carry it, read when the event was logged. |
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 
