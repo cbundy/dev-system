@@ -1933,7 +1933,7 @@ past it; when the database is unreachable (or the writer is denied) nothing is s
 Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is bounded by
 `FACTORY_EVENT_PUSH_TIMEOUT` seconds (default 60), and `.wake` or `DEV_FACTORY_EVENT_PUSH_INTERVAL` (default 30 s)
 starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
-`dev-doctor` reports its counts. It is the only event push loop `dev-init` starts.
+`dev-doctor` reports its counts and fails when it is not running. It is the only event push loop `dev-init` starts.
 
 `callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
 held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview

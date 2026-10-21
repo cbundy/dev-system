@@ -63,6 +63,11 @@ check "dev-doctor reports the new event log's counts and WARNs, naming the file,
   out=$(CALLUM_EVENTS_DIR="$d" dev-doctor --warn-only 2>&1); echo "$out"
   echo "$out" | grep -q "INFO factory events (new log): 3 recorded.*, 2 pushed.*, 1 waiting, 1 set aside" &&
   echo "$out" | grep -q "WARN 1 line(s) of $d/factory/o__r.jsonl were refused"' --entrypoint ""
+check "dev-doctor raises no old-push failure with only AGENTSVIEW_PG_URL set, and FAILs when the new-log push is down" in_image '
+  out=$(AGENTSVIEW_PG_URL=postgres://x@127.0.0.1:1/x dev-doctor --warn-only 2>&1); echo "$out"
+  ! echo "$out" | grep -q "factory event push is not running" || exit 1
+  out=$(FACTORY_DB_WRITER_URL=postgres://x@127.0.0.1:1/x dev-doctor 2>&1); echo "$out"
+  echo "$out" | grep -q "FAIL factory event push (new log) is not running"' --entrypoint ""
 check "dev-doctor FAILs, naming the fix, for a missing /persist/events and /persist/dev-restart-self" in_image '
   sudo -n rm -rf /persist/events /persist/dev-restart-self
   sudo -n chown root:root /persist
