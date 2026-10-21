@@ -21,6 +21,7 @@ import { v2IoOf } from './v2/store'
 import type { V2StoreIo } from './v2/store'
 import type { V2Io } from './v2/types'
 import { processIdOf, withSlotLine } from './v2/workspace'
+import { newTitleFlight } from './title-flight'
 import { within } from './within'
 import { DEFAULT_TOOLS_DIR, RENAME_TIMEOUT_MS, S, SPAWN_TIMEOUT_MS, STOP_TIMEOUT_MS, SUBMIT_GRACE_MS, live, liveV2, ping, settingsCache } from './driver-state'
 import type { AgentRow, Options } from './driver-state'
@@ -188,7 +189,7 @@ export function actIo($: EngineInterface): ActIo {
       if (early !== null) throw new Error(`the prompt was ${early}`)
     },
     rename: async title => {
-      await within($, RENAME_TIMEOUT_MS, $.command.run({ command: 'rename', args: title }), 'rename')
+      flightOf($).want(title)
     },
     usage: async () => {
       const limits = (await $.session.usage()).rateLimits
@@ -244,11 +245,39 @@ export function offTitle(rt: Runtime): string {
   return `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`
 }
 
-export async function setTitle($: EngineInterface, title: string) { // every rename, the driver's own included, starts the throttle window
-  if (title === S.lastTitle) return
-  await $.command.run({ command: 'rename', args: title })
-  S.lastTitle = title
-  S.lastTitleAt = await $.clock.now()
+// setTitle: wants the title and returns at once; the rename runs off the pass (title-flight.ts).
+export function setTitle($: EngineInterface, title: string) {
+  flightOf($).want(title)
+}
+
+// flightOf: the one title flight of this engine. A rename that succeeds starts the throttle window
+// (v2 SPEC 13.9.1); its time and status, and its error when it failed, go to the next trace record.
+function flightOf($: EngineInterface): TitleFlight {
+  // the engine of the latest call renames; the flight itself outlives the engine handed to a call
+  S.renamer = async title => {
+    await within($, RENAME_TIMEOUT_MS, $.command.run({ command: 'rename', args: title }), 'rename')
+  }
+  S.clockNow = () => $.clock.now()
+  if (S.titleFlight === null) {
+    S.titleFlight = newTitleFlight({
+      rename: title => S.renamer?.(title) ?? Promise.resolve(),
+      now: () => S.clockNow?.() ?? Promise.resolve(0),
+      title: () => S.lastTitle,
+      settled: done => {
+        if (done.ok) [S.lastTitle, S.lastTitleAt] = [done.title, done.endedAt]
+        S.offFinished.push({
+          cmd: 'title',
+          key: 'title',
+          ms: Math.round(done.ms * 10) / 10,
+          exit: done.ok ? 0 : -1,
+          endedAt: new Date(done.endedAt).toISOString(),
+          ...(done.error === undefined ? {} : { error: done.error.slice(0, 200) }),
+        })
+        S.offFinished.splice(0, S.offFinished.length - 100)
+      },
+    })
+  }
+  return S.titleFlight
 }
 
 // wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (v2 SPEC 13.8.1).

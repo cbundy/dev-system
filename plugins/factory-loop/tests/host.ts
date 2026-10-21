@@ -107,6 +107,8 @@ export type HostOptions = {
   // answers $.session.send (an agent's repair message), at once or later (or never): undefined
   // delivers it as the engine does, a string refuses it
   send?: (to: string, text: string) => string | undefined | Promise<string | undefined>
+  // answers /rename, at once or later (or never); undefined answers at once
+  rename?: (title: string) => Promise<void> | undefined
   // holds a file's read ($.fs.exists, $.fs.read) or write until the promise it returns resolves
   hold?: (path: string, op: 'read' | 'write') => Promise<void> | undefined
   // the test's engine: with it, $.session.send resumes an agent as the engine does, only as a type
@@ -339,7 +341,10 @@ export function host(on: On, opts: HostOptions = {}) {
     return { isDelivered: true }
   })
   on('command.run', async ($, e) => {
-    if (e.command === 'rename') titles.push(e.args)
+    if (e.command === 'rename') {
+      titles.push(e.args)
+      await opts.rename?.(e.args)
+    }
     return {}
   })
   on('command.register', async ($, e) => {

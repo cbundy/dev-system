@@ -10,6 +10,7 @@ import type { ViewInputs } from './config-view'
 import { emptyCache } from './observe'
 import type { ObserveSplit } from './observe-clock'
 import type { OffPassRow } from './trace'
+import type { TitleFlight } from './title-flight'
 import type { Runtime } from './observe'
 import { newScheduler } from './rails'
 import type { PassSource } from './rails'
@@ -69,6 +70,11 @@ export const S = {
   // a GitHub rate limit since the last pass (the next acting pass sets the backoff)
   offFinished: [] as OffPassRow[],
   offRateLimited: false,
+  // the one title flight (title-flight.ts), built on the first rename, and the engine calls it renames and
+  // reads the clock with: refreshed by every call, so the flight never holds a stale engine
+  titleFlight: null as TitleFlight | null,
+  renamer: undefined as ((title: string) => Promise<void>) | undefined,
+  clockNow: undefined as (() => Promise<Ms>) | undefined,
   loadedAt: 0,
   cwd: '.',
   passNo: 0,

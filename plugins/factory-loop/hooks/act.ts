@@ -189,8 +189,6 @@ export type ActReport = {
   outcomes: ActOutcome[]
   // an executor met a GitHub rate limit: register sets the backoff (v2 SPEC 13.10 item 2)
   rateLimited: boolean
-  // the title the title action set, when it did
-  title: string | null
   // the kill switch stopped the pass between actions: register shows the loop off at once
   killed: boolean
 }
@@ -199,7 +197,7 @@ export type ActReport = {
 // The kill switch is asked before each action but the title (bookkeeping only): an action
 // already running finishes, and once the switch is seen every action left is skipped (#557).
 export async function runActions(env: ActEnv, state: State, actions: readonly Action[]): Promise<ActReport> {
-  const report: ActReport = { outcomes: [], rateLimited: false, title: null, killed: false }
+  const report: ActReport = { outcomes: [], rateLimited: false, killed: false }
   for (const action of actions) {
     if (!report.killed && action.kind !== 'title' && (await env.killed())) report.killed = true
     if (report.killed) {
@@ -217,7 +215,6 @@ export async function runActions(env: ActEnv, state: State, actions: readonly Ac
     const out = await actOne(env, state, action)
     report.outcomes.push(out.outcome)
     if (out.exec.status === 'failed' && out.exec.rateLimited === true) report.rateLimited = true
-    if (action.kind === 'title' && out.exec.status === 'done') report.title = action.text
   }
   return report
 }
@@ -230,7 +227,7 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
   const t0 = await env.io.now()
   const done = async (exec: Exec) => {
     const ms = (await env.io.now()) - t0
-    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary), at: t0 } }
+    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary), at: t0, ...(action.kind === 'title' && exec.status === 'running' ? { off: true as const } : {}) } }
   }
   if (action.kind === 'title') return done(await dispatch(ctxOf(env, state, start([], action, t0).entry), action))
 
