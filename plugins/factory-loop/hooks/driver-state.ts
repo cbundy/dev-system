@@ -15,6 +15,7 @@ import type { Runtime } from './observe'
 import { newScheduler } from './rails'
 import type { PassSource } from './rails'
 import type { AgentStatus, Ms, State } from './types'
+import type { StampRun } from './v2/intake'
 import { newV2Live } from './v2/store'
 import { newSettingsCache } from './v2/settings'
 
@@ -55,6 +56,9 @@ export type Options = { mode?: unknown; repo?: unknown; shadowDevice?: unknown; 
 // What a tool call leaves for once it has answered (#558): its ledger work (act.ts keep, or an
 // answer's follow-up, with notes on what failed), then its decision-log line, given the problems
 // met, and its ping.
+// One stamp in progress, with the runtime it started under and the cancel of its 10-minute timer.
+export type Stamp = StampRun & { rt: Runtime; cancel: () => void }
+
 export type After = { rt: Runtime; run?: (env: ActEnv) => Promise<string[]>; line?: (problems: string[]) => Record<string, unknown>; ping?: string }
 
 // The values the modules reassign. Each is read and written as S.<name>.
@@ -97,6 +101,8 @@ export const S = {
   // the last pass's runtime and state, for the hooks between passes
   lastRt: null as (Runtime & ViewInputs) | null,
   lastState: null as State | null,
+  // the main checkout the last pass read (any mode; null before the first)
+  checkout: null as State['checkout'],
   // this session held the act lock at some pass, so session.end releases it
   heldLock: false,
   // what asked for the next pass, in the order it came: the decision log's trigger (#552)
@@ -136,6 +142,10 @@ export const S = {
   saveNow: null as ((rt: Runtime) => void) | null,
   // lateDrop: a wake prompt the engine dropped after it was taken as queued (driver-between.ts)
   lateDrop: null as ((prompt: string, why: string) => void) | null,
+  // stampJob: start a dry-run stamp's background job (driver-stamp.ts)
+  stampJob: null as ((rt: Runtime, run: Stamp) => void) | null,
+  // the dry-run stamps in progress, by issue (v2/intake.ts; `/factory stamp <N>`): in memory only
+  stamping: new Map<number, Stamp>(),
 }
 
 export const cache = emptyCache()

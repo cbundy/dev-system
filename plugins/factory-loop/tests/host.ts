@@ -317,10 +317,12 @@ export function host(on: On, opts: HostOptions = {}) {
   on('session.id', async () => ({ value: opts.session ?? SESSION }))
   on('agent.list', async () => (h.failList ? { deny: 'agent list unavailable' } : { value: agents.map(a => ({ ...a })) }))
   on('agent.spawn', async ($, e) => {
-    spawns.push({ subagentType: e.subagentType, name: e.name, model: e.model, prompt: e.prompt, description: e.description })
+    // the engine's event names the type `subagent_type` (the typed field is never set), so a recorded spawn reads both
+    const type = e.subagentType ?? (e as unknown as { subagent_type?: string }).subagent_type
+    spawns.push({ subagentType: type, name: e.name, model: e.model, prompt: e.prompt, description: e.description })
     const r = (await opts.spawn?.(e)) ?? { agentId: `agent-${++nextAgent}` }
     if (r.deny !== undefined) return { deny: r.deny }
-    if (r.agentId !== undefined) agents.push({ id: r.agentId, type: e.subagentType, status: 'running', description: e.description })
+    if (r.agentId !== undefined) agents.push({ id: r.agentId, type: type ?? '', status: 'running', description: e.description })
     return { model: e.model ?? 'opus', agentId: r.agentId }
   })
   // the engine offers the model every agent type no hook hides

@@ -218,6 +218,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
   S.passObserve = observeSplit
   let state = observed.state
+  // the main checkout this pass read, for `/factory stamp` (driver-stamp.ts) in any mode
+  S.checkout = state.checkout
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
   let snap: Snapshot | null = null
   let before: Snapshot | null = null

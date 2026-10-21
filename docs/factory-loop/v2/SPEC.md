@@ -1168,7 +1168,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `op:<name>` | (`/factory` ops only) every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
+| `op:<name>` | (`/factory` ops only) every `/factory` op but `status`, `stamp` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
@@ -2745,7 +2745,7 @@ in chat, and the owner can type `/factory <op>` from any client (named so to sta
 Code's built-in `/loop`): `status`, `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`,
 `priority <N...>|off`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct> <hours>|off`,
 `resume <N...> ["note"]`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`,
-`mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`, `stop-now`. Each change
+`mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`, `stamp <N>`, `stop-now`. Each change
 pings the loop and gets its own decision-log line (`control`). Appendix E gives what v2 makes of `resume`, `drop`,
 `note`, `retry` and `stop-now`.
 
@@ -2762,6 +2762,19 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
   value captured once at load; no key is today). It is logged as a person intervention with cause
   `config-file`, and its write is the loop's own, never a hand edit. An agent may read `config`,
   never set or unset.
+- `stamp <N>` dry-runs the intake reader on one issue and writes nothing (appendix E). It works while
+  `intakeStamp` is `off` and in observe mode, and an agent may call it, as it may `status`. It answers within the
+  tool bound (`Stamping #N with <intakeModel>, dry run: its answer follows when the reader ends.`; a second
+  `stamp` of an issue still being stamped answers `already stamping #N`), then a background job reads the issue
+  (`callum-flow-issue-read <N> --comments`, trusted authors only) and the repo's top level
+  (`git ls-tree --name-only origin/<default branch>`, from the last pass's checkout; left out when unknown) and spawns
+  `factory-loop:intake` with both as data in its prompt. The reader (`agents/intake.md`) has the Read tool alone, so it
+  cannot write to GitHub or the repo. Its final message is one JSON object, checked by `checkIntake`
+  (`hooks/v2/contracts-intake.mjs`, not in `V2_CONTRACTS`: the reader has no answer script). When its turn ends the owner
+  gets one notice (outcome, area, needs_owner, reason, touches, what was dropped, the model and the seconds, ending
+  `dry run: nothing written`) through `$.prompt.submit`. A failed read or spawn, a turn that ends without an answer, or a reader that does not end within 10 minutes is a
+  failed stamp, noticed once. A dry run adds no label, comment or event (`intake_stamp` mode `dry` stays unwritten), leaves
+  `stamps:<repo>`, the score and the ledger as they were, and logs one local decision-log line (`stamp`, `outcome`, `model`, `seconds`).
 - An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
   answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` takes issue numbers and an
@@ -2776,7 +2789,7 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
 - A control.json that is not a JSON object is never overwritten: every changing op is refused
   with "fix or remove it", and `status` still answers, with a warning. A workspace file that is
   not a JSON object likewise refuses `mode`.
-- The control tool refuses every op but `status` from inside an agent: only the main
+- The control tool refuses every op but `status`, `stamp` and the `config` view from inside an agent: only the main
   conversation sets directives.
 - `/factory` is immediate, so a directive typed during a long wake turn applies at once. Ops run
   one at a time.
@@ -4338,7 +4351,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
-| `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order |
+| `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order, and `/factory stamp <N>` (13.4.3) still dry-runs the reader |
 | `intakeModel` | `haiku` | the intake agent's model; when larger than `triageModel` (haiku < sonnet < opus < fable) it is named in the config problems and `triageModel` is used |
 | `intakeAreas` | `["factory", "product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
 | `reviewer` | `adjudicator` | 8.2 |
@@ -4461,10 +4474,11 @@ Notices (TELL kinds), owner items first:
 | `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
 | `drop <N>` | E1, for the current life only (4.1) |
 | `note [N] <text>` | a note for the issue's next step (or every issue's) |
+| `stamp <N>` | the intake reader's dry run on issue N (13.4.3): the reply at once, the notice when the reader ends. The reader answers `{"area": <one of intakeAreas>, "needs_owner": <bool>, "reason": <one line, 1 to 200 characters, required when needs_owner is true>, "touches": [<at most 20 distinct top-level names>]}`; `checkIntake` drops a bad field and names it (`ok`, `dropped` or `failed`). View-only: it logs no intervention, writes nothing to GitHub, the events, `stamps:<repo>` or the ledger |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
 | `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `config`, `help` | as the foundation (13.4.3) |
 
-Every op but `status` and `help` is logged as a person intervention (7.2). Rescues the loop cannot
+Every op but `status`, `stamp` and `help` is logged as a person intervention (7.2). Rescues the loop cannot
 see are recorded by hand with `callum-flow-event intervention` (7.2); there is no `/factory touch`
 op.

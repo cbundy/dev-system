@@ -14,6 +14,7 @@ import { attemptOf } from './trace'
 import type { LedgerEntry } from './types'
 import { within } from './within'
 import { appendLine, killed, lockIo, lockOp, mayWrite, message, runtime } from './driver-io'
+import { stampEnded } from './driver-stamp'
 import { bareState, ensureLedger, hookEnv, persist } from './driver-store'
 import { REPAIR_TIMEOUT_MS, S, TOOL_ANSWER_MS, between, delivered, live, ping, resuming } from './driver-state'
 import type { After } from './driver-state'
@@ -173,6 +174,8 @@ export async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
 // An unreadable one first gets its one repair message, while the loop may start things (#548). The
 // decision log says which path each answer took (answerLine).
 export async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: string }) {
+  // a dry-run stamp's reader (driver-stamp.ts) is no ledger entry: its notice goes out in any mode
+  if (await stampEnded($, e)) return
   const rt = await ledgerFor($)
   if (rt === null) return
   const now = await $.clock.now()

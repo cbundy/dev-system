@@ -22,6 +22,7 @@ import { answer, ensure, ownerOp, toolInput } from './driver-controls'
 import { S, resuming } from './driver-state'
 import type { Options } from './driver-state'
 import { issueFromBranch } from './foundation'
+import { INTAKE_AGENT } from './v2/intake'
 import { STEP_AGENT } from './v2/types'
 import { BASH_TIMEOUT_MS } from './v2/workspace'
 
@@ -95,7 +96,7 @@ export const register: Register = (on, opts) => {
     next.called ? next(e) : { isOffered: false },
   )
   // v2's agent types (v2/types.ts STEP_AGENT), hidden the same way
-  for (const agent of new Set(Object.values(STEP_AGENT))) {
+  for (const agent of new Set([...Object.values(STEP_AGENT), INTAKE_AGENT])) {
     on('agent.offer', { agent }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
   }
 }
