@@ -103,6 +103,7 @@ docker rm -f "$c" >/dev/null
 APIKEY_FAKE="sk-ant-api03-dsb-fake-$$-key"
 APIKEY_DIR=$(mktemp -d)
 printf '%s\n' "$APIKEY_FAKE" > "$APIKEY_DIR/anthropic-api-key"
+chmod 755 "$APIKEY_DIR"
 chmod 644 "$APIKEY_DIR/anthropic-api-key"
 c=$(run_bg -e DEV_CLAUDE_AUTH=api-key -e DEV_CLAUDE_API_KEY_FILE=/run/secrets/ws/anthropic-api-key \
   -e DEV_REMOTE_CONTROL_POLL=1 "$IMAGE")
