@@ -18,9 +18,9 @@ const OK = { ok: true, at: NOW }
 const CFG = config({ mode: 'act' })
 const MS: Milestone = { open: 1, closed: 3, openIssues: [7], expected: 'minor', oldestClosedAt: '2026-10-17T10:00:00.000Z' }
 
-function world(over: { milestone?: Milestone | null; tag?: string | null; ledger?: LedgerEntry[]; release?: State['release']; backoff?: boolean } = {}): State {
+function world(over: { milestone?: Milestone | null; tag?: string | null | 'unread'; ledger?: LedgerEntry[]; release?: State['release']; backoff?: boolean } = {}): State {
   const s = baseState({ ledger: [...baseState().ledger, ...(over.ledger ?? [])] })
-  const v2: V2State = { ...emptyV2State(NOW), sources: { ...emptyV2State(NOW).sources, store: OK }, tag: over.tag === undefined ? 'v1.2.0' : over.tag }
+  const v2: V2State = { ...emptyV2State(NOW), sources: { ...emptyV2State(NOW).sources, store: OK }, ...(over.tag === 'unread' ? {} : { tag: over.tag === undefined ? 'v1.2.0' : over.tag }) }
   return { ...s, milestone: over.milestone === undefined ? MS : over.milestone, release: over.release ?? null, githubBackoffUntil: over.backoff === true ? NOW + 10 * MIN : null, v2 }
 }
 const plan = (s: State) => planV2(s, CFG).actions
@@ -125,6 +125,28 @@ describe('O5: log the milestone\'s state on each change', () => {
     const argv = eventArgv(a.event)
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'milestone_state', '--data'])
     expect(argv).not.toContain('--issue')
+  })
+
+  test('last_tag is an own key of the planned data, the tag or null, and the argv carries it', () => {
+    for (const tag of ['v1.2.0', null]) {
+      const a = states(world({ tag }))[0]
+      if (a?.event === undefined) throw new Error('no event')
+      const sent = JSON.parse(eventArgv(a.event)[4] ?? '{}')
+      expect(Object.prototype.hasOwnProperty.call(sent, 'last_tag')).toBe(true)
+      expect(sent.last_tag).toBe(tag)
+    }
+  })
+
+  test('with the tag not read yet O5 plans nothing and records why', () => {
+    const s = world({ tag: 'unread' })
+    expect(states(s)).toEqual([])
+    expect(planV2(s, CFG).skipped).toContainEqual({ rule: 'O5', issue: null, why: 'the release tag is not read yet' })
+  })
+
+  test('O4 plans a released action for a tag string, none when the tag is null or unread', () => {
+    expect(released(world({ tag: 'v1.2.0' }))).toHaveLength(1)
+    expect(released(world({ tag: null }))).toEqual([])
+    expect(released(world({ tag: 'unread' }))).toEqual([])
   })
 
   test('an unchanged reading writes nothing; a changed one does', () => {

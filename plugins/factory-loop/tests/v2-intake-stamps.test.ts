@@ -164,7 +164,7 @@ describe('the in-flight paths source', () => {
 
 // observeV2 itself: the run log with the switch off, and the V2State fields with it on
 describe('observeV2 and the intake switch', () => {
-  async function pass(intakeStamp: 'off' | 'on') {
+  async function pass(intakeStamp: 'off' | 'on', tag?: string | null) {
     const runs: string[][] = []
     const run = async (argv: string[]) => {
       runs.push(argv)
@@ -183,6 +183,7 @@ describe('observeV2 and the intake switch', () => {
       io, rt, cache: cache.v2, run, state: baseState({ now: NOW, checkout: CLEAN }),
       stored: { records: [rec(5)], heads: null, stamps: { '5': GOOD }, error: null },
       poolJson: null, github: cache.github, backoff: false, limited: () => false, readers,
+      ...(tag === undefined ? {} : { tag }),
     })
     return { runs, v2: out.v2 }
   }
@@ -192,6 +193,12 @@ describe('observeV2 and the intake switch', () => {
     expect(runs.filter(a => a[0] === 'git')).toEqual([])
     expect(v2).not.toHaveProperty('stamps')
     expect(v2).not.toHaveProperty('inFlightPaths')
+  })
+
+  test('the newest release tag reaches v2.tag: a string, null, or absent when unread', async () => {
+    expect((await pass('off', 'v1.2.0')).v2.tag).toBe('v1.2.0')
+    expect((await pass('off', null)).v2.tag).toBeNull()
+    expect((await pass('off')).v2).not.toHaveProperty('tag')
   })
 
   test('on: the stamps and the in-flight paths ride on the state', async () => {

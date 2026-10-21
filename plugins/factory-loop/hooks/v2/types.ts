@@ -509,6 +509,8 @@ export type StarvedVerdict = { starved: boolean | null; skips: Map<number, strin
 // built outside a pass.
 export type V2State = {
   sources: Record<V2SourceName, Source>
+  // the newest release tag; null: the reads show no release; absent: no tag read held yet
+  tag?: string | null
   records: IssueRecord[]
   // where the records came from: the store (act mode's), the event log (a rebuild), or neither
   recordsFrom: 'store' | 'events' | 'none'

@@ -451,6 +451,33 @@ test("a milestone_state goes through the real writer's native mode: no issue, no
   }
 });
 
+// The reading O5 plans (not a hand-written one) goes through the real writer, for a repo with a tag and one without:
+// last_tag is always present, so the writer takes it with exit 0 and no stderr.
+test("the milestone_state O5 plans is taken by the real writer, with last_tag for a tag and for none", async () => {
+  const { readingOf } = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "rules-release-log.ts"));
+  const { emptyV2State } = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "observe.ts"));
+  for (const tag of ["v0.61.0", null]) {
+    const ctx = {
+      state: { milestone: { open: 1, closed: 3, openIssues: [7], expected: "minor", oldestClosedAt: "2026-10-17T10:00:00.000Z" }, release: null, ledger: [] },
+      v2: { ...emptyV2State(NOW), tag },
+    };
+    const data = readingOf(ctx);
+    const argv = ev.eventArgv({ state: "milestone_state", data });
+    const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    newSeen.set(file, lines.length);
+    const got = JSON.parse(lines[lines.length - 1]);
+    assert.equal(got.data.last_tag, tag);
+    assert.deepEqual(reader.validateStrict("milestone_state", 1, got.data), []);
+  }
+});
+
 // A shadow_read (sources-records.ts) is written in the new format alone and for no issue: the argv has no
 // --issue, the real writer takes it with no warning, and its line matches the strict schema.
 test("a shadow_read goes through the real writer's native mode: no issue, no warning, and a line that matches the schema", async () => {

@@ -4,7 +4,7 @@
 //
 // O4 logs each new release tag once, through `callum-flow-released` (act-release-log.ts), saying whether
 // the loop's own release task made the release or a workflow did. The tag is the newest one the
-// milestone reads hold (ctx.v2.tag); the ledger's `released:<repo>:<tag>` entry makes it once.
+// milestone reads hold (V2State.tag); the ledger's `released:<repo>:<tag>` entry makes it once.
 //
 // O5 logs one `milestone_state` event each time the milestone's reading differs from the last one
 // logged. Its key, `milestone-state/<fingerprint>/<end of the last entry>`, makes each change once and
@@ -54,8 +54,8 @@ function releasedRule(ctx: V2Ctx): void {
 // readingOf: the milestone's data for the event.
 export function readingOf(ctx: V2Ctx): MilestoneStateData | null {
   const { milestone: m, release } = ctx.state
-  if (m === null) return null
   const lastTag = ctx.v2.tag
+  if (m === null || lastTag === undefined) return null
   const hold = releaseTasks(ctx)[0]
   const holding = hold?.outcome?.kind === 'wake' && hold.outcome.decision === 'hold' && tagOf(hold.key) === (lastTag ?? 'none')
   return {
@@ -77,6 +77,7 @@ export function fingerprintOf(d: MilestoneStateData): string {
 
 // milestoneRule: O5.
 function milestoneRule(ctx: V2Ctx): void {
+  if (ctx.state.milestone !== null && ctx.v2.tag === undefined) return skip(ctx, 'O5', null, 'the release tag is not read yet')
   const data = readingOf(ctx)
   if (data === null) return
   const last = doneOf(ctx, e => e.kind === 'event' && e.key.startsWith(STATE))[0]

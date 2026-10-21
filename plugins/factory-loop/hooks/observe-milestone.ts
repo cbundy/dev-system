@@ -66,11 +66,12 @@ async function readOldestClosed(run: Run, repo: string): Promise<string | null> 
 }
 
 // newestTag: the newest release tag the milestone reads hold: the full release read's or the tag view's, whichever is newer.
-export function newestTag(cache: MilestoneCache): string | null {
+// undefined when neither read is held; null when a read showed no release.
+export function newestTag(cache: MilestoneCache): string | null | undefined {
   const r = cache.release
   const t = cache.tag
   if (r !== undefined && (t === undefined || r.at >= t.at)) return r.value.tag
-  return t?.value ?? null
+  return t === undefined ? undefined : t.value
 }
 
 type Waiter = { state: string; wait: readonly { kind: string; repo?: string }[] | null }

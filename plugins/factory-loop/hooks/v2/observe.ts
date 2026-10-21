@@ -481,6 +481,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     reads,
     comments,
     prs: prs.read,
+    ...(input.tag === undefined ? {} : { tag: input.tag }),
     waits: cache.waits,
     waitsUnread: cache.waitsUnread,
     ...(starvedSince === null ? {} : { starvedSince }),

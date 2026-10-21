@@ -27,7 +27,7 @@ function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
 // releaseInProgress: the newest release task the judge answered `done` (it started a release) that is still
 // inside the releaseInProgress window and whose tag is still the newest known one; null when none. Its tag
 // is the key's `<tag>` segment: `unknown` ends only by the window, `none` ends once any tag is known.
-export function releaseInProgress(ctx: PlanCtx & { v2: { tag: string | null } }): { entry: LedgerEntry; tag: string } | null {
+export function releaseInProgress(ctx: PlanCtx & { v2: { tag?: string | null } }): { entry: LedgerEntry; tag: string } | null {
   const { state, config } = ctx
   if (config.releaseInProgressMs <= 0) return null
   let last: LedgerEntry | undefined
@@ -61,7 +61,7 @@ export function fleetRules(ctx: V2Ctx): void {
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains' && c.repo === undefined)).map(r => r.issue).sort((a, b) => a - b)
   for (const a of reopenedOffNext(ctx)) want(ctx, a)
   const newest = ctx.v2.tag
-  const due = releaseDue(state, config, waiting, newest)
+  const due = releaseDue(state, config, waiting, newest ?? null)
   const going = due === null ? null : releaseInProgress(ctx)
   if (due !== null && going !== null) skip(ctx, 'O3', null, `release in progress: ${going.entry.key} answered done at ${isoOf(going.entry.endedAt ?? 0)}, tag ${going.tag}; until a newer tag or ${isoOf((going.entry.endedAt ?? 0) + config.releaseInProgressMs)}`)
   else if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
