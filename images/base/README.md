@@ -1984,7 +1984,7 @@ starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/
 held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
 URL and `factory.event_store` with the factory reader URL only, in read-only transactions bounded by timeout, passes
 each old row through the translator and matches by `event_id`. Per old state it prints old lines, skipped, expected,
-found, missing and translator misses, then the extra new events per type. `--device` defaults to this device, `--repo`
+found, missing and translator misses, then the extra new events per type. New events of a type the translator never makes (such as `gate_run`) are counted per type as `new-only` and reported in the verdict line (`new-only=K`) but never fail the check. `--device` defaults to this device, `--repo`
 to every repo, and `--since` to the device's earliest new event. It exits 0 only when missing, misses and extras are all
 zero, 1 otherwise, and 2 on a usage error, an unreachable or unconfigured store, or no new rows to start from.
 

@@ -190,9 +190,11 @@ SQL
   the history before it) with `factory.event_store` (read with the reader URL only), read-only.
   Each old row goes through the translator in replay mode and is matched to the new store by `event_id`. For each old
   state it prints old lines, skipped (by skip name), expected new events, found, missing (with the ids) and translator
-  misses (with their reason); new events with no old row are extras, counted per type. `--device` defaults to this
+  misses (with their reason); new events with no old row are extras, counted per type, except a type the translator never
+  makes (`TRANSLATED_TYPES`, for example `gate_run`): those are counted per type as `new-only` and never fail the check. `--device` defaults to this
   device (`DEV_MACHINE_NAME`, `hostname`, `/etc/hostname`), `--repo` to every repo, and `--since` to the device's earliest new
-  event; both sides cut at the second. Exit 0 only when missing, misses and extras are all zero, 1 when any is not, and 2 on a
+  event; both sides cut at the second. The verdict line is `OK` or `DIFFERENT` with `missing`, `misses`, `extras` and `new-only` counts.
+  Exit 0 only when missing, misses and extras are all zero (new-only does not count), 1 when any is not, and 2 on a
   usage error, an unconfigured or unreachable store, or no new rows for the device and no `--since`.
   A `transition` with `via=dual-write` and no old row is not an extra: the backfill writes it to the new log
   only, by design.

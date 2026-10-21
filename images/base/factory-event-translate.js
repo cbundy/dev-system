@@ -982,6 +982,9 @@ function main(argv) {
   return missed > 0 ? 1 : 0;
 }
 
-module.exports = { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, SPECS };
+// The types a replayed old line can become; the dual-write check uses it to tell new-only types apart.
+const TRANSLATED_TYPES = Object.freeze(Object.keys(SPECS));
+
+module.exports = { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, SPECS, TRANSLATED_TYPES };
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
