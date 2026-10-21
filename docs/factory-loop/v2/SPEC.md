@@ -3103,40 +3103,40 @@ Appendix E gives what v2 makes of it (4.5).
 Most transitions are already logged by the CLIs the executors call (`claimed`, `claim_lost`,
 `renewed`, `reclaimed`, `closed`, `implementer_routed`, `merged` and the queue state through
 `queue-watch.sh --once`). A done close (8.7) also logs `closed` (reason `completed`) itself, as the `close-issue` executor's second step once `gh issue close` has passed, the way a split tracker's close is logged. v2 logs its own states through `hooks/v2/events.ts` (7.1). The
-foundation logs one state, `loop`, for its own transitions (DECISIONS D-09):
+foundation logs two native events for its own transitions (DECISIONS D-09, dev-system#1142), `loop_entry`
+and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]`:
 
-- each agent and wake entry (`agent-step`, `task`, `tell`, owner notices
-  included) when it starts and when it ends: an attempt's start and its executor's result are
+- a `loop_entry` for each agent and wake entry (`agent-step`, `task`, `tell`, owner notices
+  included; a `judge` has no event) when it starts and when it ends: an attempt's start and its executor's result are
   one transition, logged once; an entry is logged only when its event would say something new:
   a wake's turn taking its id (even when the turn starts inside the submit, before the executor
   finishes the entry), its reminder, and any other change the note does not carry log nothing.
   The module remembers the event it last logged per key, and a ledger loaded from the store or
   rebuilt from the event log counts as logged (run 2, #536);
-- a rate-cap hold, once per capped bucket (or kind and issue) per hour:
-  `kind=<bucket|kind> key=cap:<capped>:<hour> status=held`, with `--issue` for a per-issue cap;
-- the ping-storm breaker opening:
-  `kind=breaker key=breaker:pings:<since> status=open passes=<n> until=<ms>`;
-- the pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
-  timer aligned to the UTC minute: `kind=passes key=passes:<from-epoch-ms> status=done from=<ISO>
-  to=<ISO> passes=<n> mean_ms=<n> p50_ms=<n> p90_ms=<n> max_ms=<n> acting=<n> acting_mean_ms=<n>
-  idle_mean_ms=<n> errors=<n> mode=<mode> planner=v2 pass_every_ms=<n>`. It sums up the passes
+- a `loop_passes` pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
+  timer aligned to the UTC minute: `from_at`, `to_at`, `passes`, `mean_ms`, `p50_ms`, `p90_ms`, `max_ms`,
+  `acting`, `acting_mean_ms`, `idle_mean_ms`, `errors`, `mode`, `planner` (`v2`) and `pass_every_ms`. It sums up the passes
   that ended in the minute (`acting` are those with a non-`title` outcome, `idle_*` the rest,
   error passes included; percentiles are nearest-rank; a value with nothing behind it is
-  `none`, and a minute with no pass ends sends `passes=0`). Sent only while the loop runs in act
+  null, and a minute with no pass ends sends `passes` 0). Sent only while the loop runs in act
   mode, the kill switch is off and the last pass held the act lock; otherwise the minute is
   dropped. It is bookkeeping, never a stage or progress, and builds no ledger entry; the reader
   does any weighting.
 
+The rate-cap holds and the ping-storm breaker are no longer logged as events (dev-system#1142): the
+pass line's `capped` and `breaker` and the breaker's intervention record them.
+
+A `loop_entry`'s data is `kind`, `key`, `status`, `attempts`, `class`, `rule`, `started_at`, `ended_at`,
+`agent_id` and `wake` (null when unset), plus `decision` and `decision_reason` for a `task` entry
+whose outcome is a wake, with an action's `loopData` merged on top; the entry's issue is `--issue`.
+The run, PR and head are not carried. The note below is only what the old-source ledger rebuild
+reads (derive.ts `loopNote`, `entryFromLoop`); nothing writes it any more.
+
 An entry's note is `kind=<kind> key=<key> status=<status> attempts=<n> class=<class> rule=<rule>
 started=<ms>[ ended=<ms>][ agentId=<id>][ wake=<name>]` and then its outcome's
 tokens (`out=<kind>` and the fields plan reads), with `%` and whitespace percent-encoded and
-`none` for an empty value. The issue, run, PR and head travel in the event's own columns. Free
-text (reasons, instructions, summaries) is left out, and a note over 500 characters keeps the entry without
-its outcome. `callum-flow-event loop` requires `kind=`, `key=` and `status=` with values, or it
-exits 2 and writes nothing; `--issue` is optional. `--if-changed` skips `loop` lines when it
-looks for a subject's newest event, and every reader of the event log treats `loop` as
-bookkeeping: it sets no stage, run or PR and counts as no progress, though it still counts for
-coverage and for a device being alive.
+`none` for an empty value. Free text (reasons, instructions, summaries) is left out, and a note over
+500 characters keeps the entry without its outcome.
 
 #### 13.7.5 Restart and re-derivation
 

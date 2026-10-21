@@ -2,7 +2,7 @@
 // each reading the factory, planning and, in act mode, running plan's actions, then logging.
 import type { EngineInterface } from 'claude-code'
 
-import { actPass, breakerEventArgv, capEventArgv, capKey, commandOf, logLoop, loggedOf, planPass, sendNotice, updateDone } from './act'
+import { actPass, commandOf, logLoop, loggedOf, planPass, sendNotice, updateDone } from './act'
 import type { ActEnv, ActReport } from './act'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import { GITHUB_BACKOFF_MS, observe } from './observe'
@@ -31,7 +31,7 @@ import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, 
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
 import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
-import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
+import { ASKED_MAX, ERROR_PASSES, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
 // the last pass's summary (types/index.d.ts): the engine's validator reads a state reference only
@@ -176,7 +176,6 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     booked = JSON.stringify(book)
     const fresh: Notice[] = breaker === null ? rails.notices : [...rails.notices, breaker]
     for (const n of fresh) if (!book.pending.some(p => noticeTell(p).key === noticeTell(n).key)) book.pending.push(n)
-    if (breaker !== null) await commandOf(aio, acting(rt), commands)(breakerEventArgv(breaker), { timeoutMs: 60_000 }).catch(() => undefined)
     if (act && S.restartAsked !== null && S.restartRequestAt === null) {
       act = false
       railReasons.push(`restart: dev-restart-self asked for a new workspace at ${new Date(S.restartAsked).toISOString()}; nothing acts until it restarts`)
@@ -312,15 +311,6 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
       if (report.killed) await setTitle($, offTitle(rt))
-      // a rate-cap hold has no entry of its own: one loop event per cap per hour (v2 SPEC 13.11.4)
-      const hour = `:${Math.floor(state.now / HOUR)}`
-      for (const capped of result.capped) {
-        const key = capKey(capped, state.now)
-        if (book.caps.includes(key)) continue
-        const r = await commandOf(env.io, rt, commands)(capEventArgv(capped, state.now), { timeoutMs: 60_000 }).catch(() => null)
-        if (r !== null && r.exitCode === 0) book.caps.push(key)
-      }
-      book.caps = book.caps.filter(k => k.endsWith(hour))
       // the queue the plan saw: one `queue_snapshot` when it changed or on the heartbeat, sent without waiting so it never slows the pass
       if (!report.killed && result.queue !== undefined) {
         const claimed = result.actions.some(a => a.kind === 'claim' && a.rule === 'S1')

@@ -9,7 +9,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { loopEventArgs } from '../hooks/derive'
+import { loopNote } from '../hooks/derive'
 import { pruneArgvs } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
@@ -395,7 +395,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     // the spell is remembered beside the ledger, so a reload does not tell it again
     expect(h.store.get(`rails:${REPO}`)).toEqual({ heartbeat: { since: NOW + 5_000, device: OTHER }, watcher: null })
     expect(h.last().told).toEqual([`tell:heartbeat-other:${NOW + 5_000}`])
-    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=tell'))).toHaveLength(1)
+    expect(h.native('loop_entry').filter(e => e.data.kind === 'tell')).toHaveLength(1)
     expect(h.prompts[0]).toStartWith(`TELL heartbeat-other id=w`)
     expect(h.prompts[0]).toContain(`device=${OTHER}`)
   })
@@ -461,9 +461,9 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.entry('design:470:1')).toMatchObject({ status: 'running', agentId: 'agent-alive' })
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
     // the lost agent's loop event; command entries log their own events, never a loop event
-    const loops = h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith('kind='))
-    expect(loops.some(n => n.startsWith('kind=agent-step key=fixer:gate:R:review:h status=lost'))).toBe(true)
-    expect(loops.some(n => n.includes('key=heartbeat:0'))).toBe(false)
+    const loops = h.native('loop_entry').map(e => e.data)
+    expect(loops.some(d => d.kind === 'agent-step' && d.key === 'fixer:gate:R:review:h' && d.status === 'lost')).toBe(true)
+    expect(loops.some(d => d.key === 'heartbeat:0')).toBe(false)
   })
 
   test('the restart for an update ran: the update is done and the drain ends (rule H4)', ENGINE_TEST, async ($, on) => {
@@ -599,19 +599,18 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.last().starved).toBeUndefined()
   })
 
-  test('a rate-cap hold is one loop event per cap per hour (v2 SPEC 13.11.4, D-24)', ENGINE_TEST, async ($, on) => {
+  test('a rate-cap hold writes no loop event and still holds the action, once an hour in the pass line (v2 SPEC 13.11.4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const claims = Array.from({ length: 30 }, (_, i) => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN }))
     const h = host(on, { config: ACT, run, store: ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }), ...claims]) })
     await $.session.start(START)
     await clock.advance(6_000)
-    const held = `kind=start key=cap:start:${Math.floor((NOW + 5_000) / 3_600_000)} status=held`
     expect(h.last().capped).toEqual(['start'])
-    expect(h.events().filter(e => e.at(-1) === held)).toEqual([['callum-flow-event', 'loop', '--note', held]])
     await clock.advance(60_000)
     expect(h.last().capped).toEqual(['start'])
-    expect(h.events().filter(e => e.at(-1) === held)).toHaveLength(1)
+    expect(h.events().filter(e => e.some(w => w.includes('cap:') || w === 'loop'))).toEqual([])
+    expect(h.native('loop_entry').some(e => String(e.data.key).startsWith('cap:'))).toBe(false)
   })
 
   test('three passes in a row that throw tell the owner once, and the title shows error (v2 SPEC 13.10 item 9)', ENGINE_TEST, async ($, on) => {
@@ -762,7 +761,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ executed: true })
     expect(h.entry(key)).toMatchObject({ status: 'running', agentId: 'agent-1' })
-    expect(h.events().some(e => (e.at(-1) ?? '').includes('status=lost'))).toBe(false)
+    expect(h.native('loop_entry').some(e => e.data.status === 'lost')).toBe(false)
     expect(h.spawns).toEqual([])
   })
 
@@ -1033,7 +1032,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
   // run 2 (#536): a wake's turn starts inside its submit, as the engine starts it, and its one
   // start was logged twice, by turn.start and by the executor's finish
   const loopStatuses = (h: Host, kind: string) =>
-    h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith(`kind=${kind} `)).map(n => /status=(\S+)/.exec(n)?.[1])
+    h.native('loop_entry').filter(e => e.data.kind === kind).map(e => e.data.status)
 
   test('each ledger transition logs one loop event: a task whose turns start inside their submits, its reminder included', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -1180,14 +1179,14 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
   const heldQueue = (on: Parameters<typeof host>[0]) => {
     const first = 'task:redrive:issue-470-x:abc'
     const second = 'judge:sequence:512:abc1234'
-    const held = `kind=task key=${first} status=done`
+    const held = (argv: string[]) => argv[2] === 'loop_entry' && argv[4]?.includes(`"key":"${first}"`) === true && argv[4].includes('"status":"done"')
     let release: () => void = () => undefined
     const holding = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && (argv.at(-1) ?? '').startsWith(held) ? holding : undefined) })
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && held(argv) ? holding : undefined) })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(first, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
-      entry(second, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 9 * MIN, endedAt: null, wakeId: 'w2', session: SESSION }),
+      entry(second, 'task', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 9 * MIN, endedAt: null, wakeId: 'w2', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run, store })
     return { h, first, second, release: () => release() }
@@ -1211,14 +1210,14 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
     // the second wake's answer is in the store at once; its loop event and the op's line wait their turn
     expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(false)
+    expect(h.native('loop_entry').some(e => e.data.key === second && e.data.status === 'done')).toBe(false)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
 
     release()
     await turn
     await clock.settle()
     expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.key === second && e.data.status === 'done')).toBe(true)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
   })
 
@@ -1278,14 +1277,14 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.entry(judge)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=done`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'judge')).toBe(false)
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(1)
   })
 
   test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const told = entry('tell:stalled:i470/claim/old:1', 'tell', { wake: 'stalled', class: 'owner', rule: 'S1', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
-    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
+    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopNote(e)}",loop,${DEVICE}`
     const events = [NO_EVENTS.trim(), row(told)].join('\n') + '\n'
     const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
@@ -1302,7 +1301,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     // run 1 left a judge open; run 2 starts with the store cleared
     const judge = 'judge:sequence:512:abc1234'
     const open = entry(judge, 'judge', { wake: 'sequence', class: 'drive', rule: 'M5', issue: 470, pr: 512, status: 'running', startedAt: NOW - 13 * MIN, endedAt: null })
-    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
+    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopNote(e)}",loop,${DEVICE}`
     const events = [NO_EVENTS.trim(), row(open)].join('\n') + '\n'
     const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
@@ -1311,7 +1310,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'events' })
     // nobody can answer it: lost with its attempt given back, so its rule decides again
     expect(h.entry(judge)).toMatchObject({ status: 'lost', attempts: 0, summary: 'lost: it was open before this load' })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=lost`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'judge')).toBe(false)
     expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
@@ -1366,7 +1365,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.settle()
     // lost with its attempt given back, and its end logged, since its start was
     expect(h.entry(wake)).toMatchObject({ status: 'lost', attempts: 0, summary: 'submit dropped: the queue was cleared' })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=tell key=${wake} status=lost`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'tell' && e.data.key === wake && e.data.status === 'lost')).toBe(true)
     await clock.advance(60_000)
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(2)
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
@@ -1571,7 +1570,9 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect(h.prompts.filter(p => p.startsWith('TELL breaker id=w'))).toHaveLength(1)
     expect(h.prompts.find(p => p.startsWith('TELL breaker'))).toContain('kind=ping')
     expect(h.lines().some(l => l.breaker !== undefined)).toBe(true)
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith('kind=breaker key=breaker:pings:'))).toBe(true)
+    // the breaker is no longer logged as an event of its own: only its tell's loop_entry
+    expect(h.native('loop_entry').some(e => e.data.kind === 'breaker')).toBe(false)
+    expect(h.events().some(e => e[1] === 'loop')).toBe(false)
     // pings are ignored now: an op changes control.json, and no pass follows until the timer's next
     // tick (every 60 s from the session's start), which runs exactly one
     const before = h.passes().length
@@ -1633,8 +1634,7 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
 })
 
 describe('the pass summary event (#680)', () => {
-  const passesEvents = (h: Host) => h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes '))
-  const field = (argv: string[], name: string) => (argv.at(-1) ?? '').split(' ').find(t => t.startsWith(`${name}=`))?.slice(name.length + 1)
+  const passesEvents = (h: Host) => h.native('loop_passes')
 
   test('act mode sends one per minute, its count the decision log lines whose time falls in the minute', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -1645,23 +1645,21 @@ describe('the pass summary event (#680)', () => {
     const events = passesEvents(h)
     // the minutes that ended: the first at NOW + 1 min, none from the one still open
     expect(events).toHaveLength(5)
-    expect(events[0]).toEqual(['callum-flow-event', 'loop', '--note', expect.stringContaining('kind=passes key=passes:')])
+    expect(h.events().filter(e => e[2] === 'loop_passes')[0]?.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
     const lines = h.passes()
     expect(lines.length).toBeGreaterThan(10)
     events.forEach((e, i) => {
       const from = NOW + i * 60_000
-      expect(field(e, 'key')).toBe(`passes:${from}`)
-      expect(field(e, 'status')).toBe('done')
-      expect(field(e, 'from')).toBe(iso(from))
-      expect(field(e, 'to')).toBe(iso(from + 60_000))
+      expect(e.data.from_at).toBe(iso(from))
+      expect(e.data.to_at).toBe(iso(from + 60_000))
       const inMinute = lines.filter(l => Date.parse(String(l.at)) >= from && Date.parse(String(l.at)) < from + 60_000)
-      expect(Number(field(e, 'passes'))).toBe(inMinute.length)
-      expect(field(e, 'mode')).toBe('act')
-      expect(field(e, 'planner')).toBe('v2')
-      expect(field(e, 'pass_every_ms')).toBe('20000')
+      expect(e.data.passes).toBe(inMinute.length)
+      expect(e.data.mode).toBe('act')
+      expect(e.data.planner).toBe('v2')
+      expect(e.data.pass_every_ms).toBe(20000)
     })
     // no per-pass event: only the minutes' summaries
-    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes'))).toHaveLength(5)
+    expect(h.events().filter(e => e.includes('loop_passes'))).toHaveLength(5)
   })
 
   test('a minute in which a pass hangs sends passes=0', ENGINE_TEST, async ($, on) => {
@@ -1681,13 +1679,13 @@ describe('the pass summary event (#680)', () => {
     expect(h.passes()).toHaveLength(1)
     hang = true
     await clock.advance(4 * 60_000)
-    const counts = passesEvents(h).map(e => field(e, 'passes'))
+    const counts = passesEvents(h).map(e => e.data.passes)
     expect(counts.length).toBeGreaterThanOrEqual(3)
-    expect(counts[0]).toBe('1')
-    expect(counts.slice(2)).toContain('0')
-    const empty = passesEvents(h).find(e => field(e, 'passes') === '0')
-    expect(field(empty ?? [], 'mean_ms')).toBe('none')
-    expect(field(empty ?? [], 'acting_mean_ms')).toBe('none')
+    expect(counts[0]).toBe(1)
+    expect(counts.slice(2)).toContain(0)
+    const empty = passesEvents(h).find(e => e.data.passes === 0)
+    expect(empty?.data.mean_ms).toBeNull()
+    expect(empty?.data.acting_mean_ms).toBeNull()
     release()
   })
 

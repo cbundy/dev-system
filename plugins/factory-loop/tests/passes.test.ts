@@ -75,11 +75,15 @@ describe('closeMinute', () => {
     expect([...book.keys()]).toEqual([M + MINUTE_MS])
   })
 
-  test('the note is one token per field, an event argv, and no ledger entry', () => {
-    const argv = passesEventArgv(closeMinute(new Map(), M, SET))
-    expect(argv.slice(0, 3)).toEqual(['callum-flow-event', 'loop', '--note'])
-    const note = argv[3] ?? ''
-    expect(note).not.toContain('  ')
-    expect(entryFromLoop({ state: 'loop', note } as never)).toBeNull()
+  test('the summary is a native loop_passes call with the translator\'s field names, and no ledger entry', () => {
+    const summary = closeMinute(new Map(), M, SET)
+    const argv = passesEventArgv(summary)
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
+    expect(argv).toHaveLength(5)
+    const data = JSON.parse(argv[4] as string)
+    expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'errors', 'from_at', 'idle_mean_ms', 'max_ms', 'mean_ms', 'mode', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at'])
+    expect(data).toMatchObject({ from_at: new Date(summary.from).toISOString(), planner: 'v2', mode: SET.mode, pass_every_ms: SET.passEveryMs })
+    // the note stays what the old-source reader parses, and gives no entry
+    expect(entryFromLoop({ state: 'loop', note: passesNote(summary) } as never)).toBeNull()
   })
 })

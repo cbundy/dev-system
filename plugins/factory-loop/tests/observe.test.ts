@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
-import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
+import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEntryArgv, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
 import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from '../hooks/observe-milestone'
 import type { MilestoneCache } from '../hooks/observe-milestone'
@@ -952,10 +952,24 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     })
   })
 
-  test('the arguments that log an entry put its subject in the columns', () => {
-    const e = entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence' })
-    expect(loopEventArgs(e)).toEqual(['loop', '--issue', '50', '--run', '01M4RQ0050AAAA', '--pr', '550', '--head', 'head50', '--note', loopNote(e)])
-    expect(loopEventArgs(entry('tell:blind:0', 'tell', { wake: 'blind' }))).toEqual(['loop', '--note', loopNote(entry('tell:blind:0', 'tell', { wake: 'blind' }))])
+  test('the native call that logs an entry carries its issue and the translator-named data', () => {
+    const e = entry('task:sequence:550:head50', 'task', { ...base, class: 'drive', wake: 'sequence', startedAt: 1_000, endedAt: 2_000 })
+    const argv = loopEntryArgv(e) as string[]
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_entry', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', '50'])
+    expect(JSON.parse(argv[4] as string)).toMatchObject({ kind: 'task', key: e.key, status: e.status, class: 'drive', wake: 'sequence', started_at: '1970-01-01T00:00:01.000Z', ended_at: '1970-01-01T00:00:02.000Z', agent_id: null })
+    const noIssue = loopEntryArgv(entry('tell:blind:0', 'tell', { wake: 'blind' })) as string[]
+    expect(noIssue).not.toContain('--issue')
+    // a judge has no event type
+    expect(loopEntryArgv(entry('judge:sequence:550:head50', 'judge', base))).toBeNull()
+  })
+
+  test('an oversized task wake entry carries no decision, as loopNote drops its outcome', () => {
+    const task = (key: string) => entry(key, 'task', { class: 'drive', wake: 'release', outcome: wakeAnswer('hold', { reason: 'why' }) })
+    const e = task(`task:release:2:${'k'.repeat(450)}`)
+    expect(JSON.parse((loopEntryArgv(e) as string[])[4] as string)).not.toHaveProperty('decision')
+    const small = task('task:release:2:k')
+    expect(JSON.parse((loopEntryArgv(small) as string[])[4] as string)).toMatchObject({ decision: 'hold', decision_reason: 'why' })
   })
 
   test('a lost store is rebuilt from the loop events, the latest per key winning over the rest', () => {

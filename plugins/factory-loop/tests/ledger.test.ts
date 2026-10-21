@@ -5,7 +5,7 @@
 // asks plan what it does next.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { entryFromLoop } from '../hooks/derive'
+import { entryFromLoop, loopNote } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
 import type { Exec } from '../hooks/exec'
 import { maxAttemptsOf } from '../hooks/foundation'
@@ -431,24 +431,26 @@ describe('/factory retry (D-38)', () => {
 })
 
 describe("the loop's own events (D-09, v2 SPEC 13.7.4)", () => {
-  test('wake entries log a loop event at their start and end, which rebuilds them', () => {
-    let ledger = started([judge], NOW - 5 * MIN)
-    const startEvent = loopEvent(only(ledger, judge.key))
-    expect(startEvent?.slice(0, 4)).toEqual(['callum-flow-event', 'loop', '--issue', '50'])
-    expect(startEvent?.[startEvent.length - 2]).toBe('--note')
-    expect(startEvent?.[startEvent.length - 1]).toMatch(/^kind=judge key=judge:sequence:550:head50 status=running attempts=1 /)
-    ledger = finish(ledger, judge.key, { status: 'running', summary: 'submitted' }, NOW - 5 * MIN)
-    ledger = finish(ledger, judge.key, { status: 'failed', summary: 'no reply' }, NOW)
-    const ended = only(ledger, judge.key)
-    const argv = loopEvent(ended) as string[]
-    // what a lost store is rebuilt from (v2 SPEC 13.7.5): the event gives the entry back
-    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 50, run: null, branch: null, pr: null, head: null, note: argv[argv.length - 1] ?? null, actor: null, device: null }
+  const tell: Action = { kind: 'tell', wake: 'runaway', fields: {}, context: [], key: 'tell:runaway:start:1', class: 'owner', rule: 'O2', reason: 'tell runaway', issue: 50 }
+
+  test('wake entries log a native loop_entry event at their start and end; the old-source note rebuilds them', () => {
+    let ledger = started([tell], NOW - 5 * MIN)
+    const startEvent = loopEvent(only(ledger, tell.key)) as string[]
+    expect(startEvent.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_entry', '--data'])
+    expect(startEvent.slice(5)).toEqual(['--issue', '50'])
+    expect(JSON.parse(startEvent[4] as string)).toMatchObject({ kind: 'tell', key: tell.key, status: 'running', attempts: 1, class: 'owner', rule: 'O2', ended_at: null })
+    ledger = finish(ledger, tell.key, { status: 'running', summary: 'submitted' }, NOW - 5 * MIN)
+    ledger = finish(ledger, tell.key, { status: 'failed', summary: 'no reply' }, NOW)
+    const ended = only(ledger, tell.key)
+    expect(JSON.parse((loopEvent(ended) as string[])[4] as string)).toMatchObject({ status: 'failed' })
+    // what an old-source lost store is rebuilt from (v2 SPEC 13.7.5): the note gives the entry back
+    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 50, run: null, branch: null, pr: null, head: null, note: loopNote(ended), actor: null, device: null }
     expect(entryFromLoop(event)).toEqual({ ...ended, summary: undefined })
   })
 
-  test('wakes and owner notices log one; CLI work logs its own events and gets none', () => {
-    const tell: Action = { kind: 'tell', wake: 'runaway', fields: {}, context: [], key: 'tell:runaway:start:1', class: 'owner', rule: 'O2', reason: 'tell runaway', issue: null }
-    for (const a of [judge, tell]) expect(loopEvent(start([], a, NOW).entry)?.[1]).toBe('loop')
+  test('tells log one; a judge has no event type, and CLI work logs its own events and gets none', () => {
+    expect(loopEvent(start([], tell, NOW).entry)?.[2]).toBe('loop_entry')
+    expect(loopEvent(start([], judge, NOW).entry)).toBeNull()
     for (const a of [claim(7), stop('a1', 'A1')]) expect(loopEvent(start([], a, NOW).entry)).toBeNull()
     expect(loopEvent(entry('heartbeat:0', 'heartbeat'))).toBeNull()
   })

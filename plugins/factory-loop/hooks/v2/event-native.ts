@@ -41,7 +41,7 @@ export function abandonReason(note: string): AbandonReason {
 
 // iso: epoch milliseconds as ISO 8601 with three millisecond digits (as the translator's msToIso), by
 // calendar arithmetic, so the module reads no clock.
-function iso(ms: number): string {
+export function iso(ms: number): string {
   const days = Math.floor(ms / 86_400_000)
   const rest = ms - days * 86_400_000
   const z = days + 719_468
