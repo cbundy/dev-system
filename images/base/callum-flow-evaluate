@@ -1655,6 +1655,7 @@ function evaluate(opts, env = process.env) {
   });
   if (useNew) {
     sources.push({ kind: 'source', path: 'new', found: true, rows: null, note: 'computed from the new events (docs/metrics.md, Reading the new events)' });
+    for (const sk of ev.skipped || []) sources.push({ kind: 'new-events-skipped', path: `${sk.type} v${sk.type_version}`, found: false, rows: sk.count });
     for (const [k, why] of Object.entries(newMod.NA_METRICS)) sources.push({ kind: 'new-events-n/a', path: k, found: false, rows: null, 'n/a': why });
     for (const [k, why] of Object.entries(newMod.NOTES)) sources.push({ kind: 'new-events-note', path: k, found: true, rows: null, note: why });
   }

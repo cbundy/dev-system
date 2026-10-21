@@ -213,7 +213,7 @@ test("missing files give idle and no throw", () => {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
   const { out } = run();
-  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null });
+  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, skipped_events: [] });
 });
 
 test("an unreadable state.sqlite degrades to the other sources and reports on stderr", () => {
@@ -443,6 +443,18 @@ test("every event schema other than envelope is in exactly one of the lifecycle 
   assert.ok(types.length >= 20);
   for (const t of types) assert.equal([hb.EV_LIFECYCLE, hb.EV_NOISE].filter((set) => set.has(t)).length, 1, t);
   for (const t of [...hb.EV_LIFECYCLE, ...hb.EV_NOISE]) assert.ok(types.includes(t), `${t} has no schema`);
+});
+
+test("an event of a version the shapes file does not list as current is skipped and named, never a failure", () => {
+  const stamp = (e, v) => ({ ...e, type_version: v });
+  writeNew([stamp(nev("claimed", 5, { branch: "issue-5" }, { flat: true }), 2), stamp(nev("claimed", 6, { branch: "issue-6" }, { flat: true }), 1), stamp(nev("mystery", 7, {}, { flat: true }), 1)]);
+  for (const source of ["new", "shadow"]) {
+    const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: source });
+    assert.deepEqual(issuesOf(out), source === "new" ? [6] : [], source);
+    assert.deepEqual(out.skipped_events, [{ type: "claimed", type_version: 2, count: 1 }, { type: "mystery", type_version: 1, count: 1 }], source);
+  }
+  const old = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
+  assert.deepEqual(old.out.skipped_events, []);
 });
 
 test("default is new: an empty variable shows new's answer and writes no shadow record; the old variable and --source old show old's", () => {

@@ -104,7 +104,9 @@ SQL
   and version are known and the required fields are present, ignores fields it does not know,
   gives absent optional fields as null, and upgrades older versions to the current one. On an
   unknown type or version it fails with an error naming both (`unknown factory event:
-  transition v3`), never guessing. The loop's record rebuild from the new store (`eventsSource` `new`,
+  transition v3`), never guessing. The image's readers (`callum-flow-factory-state`,
+  `callum-flow-evaluate`, `heartbeat-state`) instead skip and count such an event and go on (a lagging
+  image must not go blind); the shared reader and the loop's record rebuild still fail the read. The loop's record rebuild from the new store (`eventsSource` `new`,
   `recordsFromNewRows` in `plugins/factory-loop/hooks/v2/record.ts`) fails its whole read on that
   error, or on a payload the reader refuses (store source not ok, its error names the event_id and
   the source `new`) and never skips the row, since a skipped transition quietly rebuilds an

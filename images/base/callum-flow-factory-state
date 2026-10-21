@@ -309,13 +309,21 @@ function mapOldRow(e) {
 const NEW_TYPE_NAME = {
   requeued: 'reclaimed', claim_renewed: 'renewed', finding_handled: 'verdict', loop_entry: 'loop', loop_passes: 'loop',
 };
-// Types with no old line the derivation reads (claim_lost, gate_run, intervention, reviewed,
-// shadow_read, test_weakened, untrusted_stripped, usage, wind_down, prompt_denied,
-// prompt_waiting): they keep their own name, which
-// no rule above names, so the derivation ignores them, as it ignores the old claim_lost and usage.
-// A type the shapes file lists but this tool has never seen is ignored the same way.
-// `queue_snapshot` is also ignored by name: SQL_EVENT_LOG leaves it out (it is read apart, see
-// SQL_QUEUE), so it never counts in a repo's coverage.
+// The current types the derivation reads: a row of one of these at a version this tool cannot read
+// leaves the view possibly incomplete, so the report marks it `derived`.
+const DERIVED_TYPES = [
+  'abandoned', 'claim_renewed', 'claimed', 'closed', 'finding_handled', 'implementer_routed', 'merged', 'ready', 'requeued', 'transition',
+];
+// Every other current type: the derivation ignores it (it keeps its own name, which no rule above
+// names, as it ignores the old claim_lost and usage; loop_entry and loop_passes map to `loop`, which
+// only counts in coverage). `queue_snapshot` is also left out by SQL_EVENT_LOG (it is read apart, see
+// SQL_QUEUE). tests/factory-state.test.js fails unless every type of the shapes file is in exactly
+// one of DERIVED_TYPES and IGNORED_TYPES, so a new type forces a choice.
+const IGNORED_TYPES = [
+  'claim_lost', 'comment_posted', 'designer_routed', 'gate_run', 'intake_stamp', 'intervention', 'loop_entry', 'loop_passes',
+  'main_state', 'milestone_state', 'prompt_denied', 'prompt_waiting', 'queue_snapshot', 'released', 'reviewed', 'settings_changed',
+  'shadow_read', 'test_weakened', 'untrusted_stripped', 'usage', 'wind_down',
+];
 
 // One factory.event_log row (the new store) to the common shape. A type or version the shapes file
 // does not list as current is refused: a newer writer's event is not read as if it were understood.
@@ -837,7 +845,29 @@ function loadEvents(source, base) {
     ? queryJson(SQL_EVENT_LOG, base.vars, 'events', true)
     : queryJson(SQL_EVENTS, base.vars, 'events');
   if (!Array.isArray(rows)) throw new InputError('dev-query returned unexpected data');
-  return rows.map(source === 'new' ? mapEventLogRow : mapOldRow);
+  if (source !== 'new') return { events: rows.map(mapOldRow), skipped: [] };
+  // A row of a type or version the shapes file does not list as current (a newer writer) is left
+  // out and counted, never a failed read; mapEventLogRow itself still refuses it.
+  const current = currentShapes();
+  const known = [];
+  const counts = new Map();
+  for (const r of rows) {
+    if (Object.prototype.hasOwnProperty.call(current, r.type) && current[r.type] === r.type_version) {
+      known.push(r);
+    } else {
+      const key = JSON.stringify([r.type, r.type_version]);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const skipped = [...counts].map(([key, count]) => {
+    const [type, type_version] = JSON.parse(key);
+    return { type, type_version, count, derived: DERIVED_TYPES.includes(type) };
+  }).sort((x, y) => (x.type < y.type ? -1 : x.type > y.type ? 1 : 0) || compareVersion(x.type_version, y.type_version));
+  return { events: known.map(mapEventLogRow), skipped };
+}
+
+function compareVersion(a, b) {
+  return a === b ? 0 : (a < b ? -1 : 1);
 }
 
 // The queue snapshots of the new store (SQL_QUEUE), read after the events. Optional like the
@@ -859,10 +889,11 @@ const OLD_QUEUE = { available: false, reason: 'the old store has no queue snapsh
 
 // Rows in, the full report out: the derivation, then (with --github on) a second pass with the
 // GitHub facts of the first one's issues.
-function buildReport(base, events, opts, queue = OLD_QUEUE) {
+function buildReport(base, events, opts, queue = OLD_QUEUE, skipped = []) {
   const input = { at: base.at, atSource: base.atSource, events, eventShape: 'common', runs: base.runs, repos: opts.repos, rules: opts.rules, workers: base.workers, pipeline: base.pipeline, queue };
   let report = deriveState({ ...input, github: null });
   if (opts.github) report = deriveState({ ...input, github: loadGithub(report) });
+  report.skipped_events = skipped;
   return report;
 }
 
@@ -876,8 +907,10 @@ function buildReport(base, events, opts, queue = OLD_QUEUE) {
 //  3. an abandoned final's free-text detail: the old note is free text, the new `reason` an enum, so
 //     `abandoned (...)` is reduced to `abandoned`.
 //  4. the repo's `queue`: the old store has no queue snapshots, so only the new side can show one.
+//  5. `skipped_events`: only the new store has rows this tool cannot read.
 function normalizeForCompare(report) {
   const out = JSON.parse(JSON.stringify(report));
+  delete out.skipped_events;
   for (const repo of out.repos || []) {
     delete repo.queue;
     delete repo.coverage.events;
@@ -989,6 +1022,9 @@ function renderText(r) {
   out.push(`Stuck rules (minutes): ${Object.entries(r.rules).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   out.push(`GitHub: ${r.github['n/a'] ? `n/a: ${r.github['n/a']}` : r.github.note}`);
   if (r.approximate) out.push(`Approximate: ${r.approximate}`);
+  if (r.skipped_events && r.skipped_events.length) {
+    out.push(`skipped events: ${r.skipped_events.map((s) => `${s.type} v${s.type_version} x${s.count}${s.derived ? ' (derived)' : ''}`).join(', ')}`);
+  }
   out.push('');
   out.push('Stuck');
   out.push(r.stuck.length ? table(['repo', 'issue', 'stage', 'rule', 'in stage', 'why'], r.stuck.map((s) => [s.repo, `#${s.issue}`, s.stage, s.rule, dur(s.minutes_in_stage), s.detail])) : 'none');
@@ -1039,20 +1075,20 @@ async function main(argv) {
   let report;
   if (opts.source === 'old') {
     const base = loadBase(opts, true);
-    report = buildReport(base, loadEvents('old', base), opts);
+    report = buildReport(base, loadEvents('old', base).events, opts);
   } else if (opts.source === 'new') {
     const base = loadBase(opts, false);
-    const events = loadEvents('new', base);
-    report = buildReport(base, events, opts, loadQueue(base));
+    const { events, skipped } = loadEvents('new', base);
+    report = buildReport(base, events, opts, loadQueue(base), skipped);
   } else {
     // shadow: the old answer is printed and decides the exit code; the new read only gets recorded
     const base = loadBase(opts, true);
     report = await factorySource().runShadow({
       tool: 'factory-state',
-      old: () => buildReport(base, loadEvents('old', base), opts),
+      old: () => buildReport(base, loadEvents('old', base).events, opts),
       new: () => {
-        const events = loadEvents('new', base);
-        return buildReport(base, events, opts, loadQueue(base));
+        const { events, skipped } = loadEvents('new', base);
+        return buildReport(base, events, opts, loadQueue(base), skipped);
       },
       normalize: normalizeForCompare,
       repo: opts.repos.length ? opts.repos.join(',') : null,
@@ -1082,5 +1118,5 @@ if (require.main === module) {
 
 module.exports = {
   deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_EVENT_LOG, SQL_QUEUE, SQL_QUEUE_META, SQL_RUNS, DEFAULT_RULES, STAGES,
-  mapOldRow, mapEventLogRow, normalizeForCompare,
+  mapOldRow, mapEventLogRow, normalizeForCompare, DERIVED_TYPES, IGNORED_TYPES,
 };
