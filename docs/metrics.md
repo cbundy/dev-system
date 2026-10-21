@@ -2490,7 +2490,7 @@ A `loop_passes` event ([REFERENCE.md](factory-events/REFERENCE.md)) summarises o
 optional fields split the time of each pass's observe call: `observe_mean_ms` (the mean wall time),
 `observe_commands_mean_ms` (the mean time with at least one read in flight), `observe_in_process_mean_ms` (the mean
 in-process time) and `observe_in_process_max_ms` (the longest in-process time). All four are null when no pass in the
-minute had a measure, and absent from older loops' events. No producer writes them yet (#1134 will).
+minute had a measure, and absent from older loops' events. The loop writes them from this release on.
 
 Per hour, repo and device, the pass-weighted mean of each (`sum(x * passes) / sum(passes)`, so a busy minute counts for
 more than a quiet one) and the longest in-process time, from the minutes that have a measure:

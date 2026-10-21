@@ -8,6 +8,7 @@ import type { EngineInterface } from 'claude-code'
 import type { ActEnv, Between, Live } from './act'
 import type { ViewInputs } from './config-view'
 import { emptyCache } from './observe'
+import type { ObserveSplit } from './observe-clock'
 import type { Runtime } from './observe'
 import { newScheduler } from './rails'
 import type { PassSource } from './rails'
@@ -61,6 +62,8 @@ export const S = {
   // the workspace loads the plugin, the pipeline's own review runs included, and only the
   // interactive session may observe or act (D-61)
   headless: false,
+  // the current pass's observe split: cleared when a pass starts, set once its observe ends
+  passObserve: null as ObserveSplit | null,
   loadedAt: 0,
   cwd: '.',
   passNo: 0,

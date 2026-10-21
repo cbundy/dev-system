@@ -293,10 +293,13 @@ test("passes: a note built by the real passesNote from closeMinute translates to
   const book = new Map();
   passes.notePass(book, minute + 5000, 120.4, true, false);
   passes.notePass(book, minute + 15000, 3000, false, true);
-  passes.notePass(book, minute + 25000, 450, false, false);
+  passes.notePass(book, minute + 25000, 450, false, false, { ms: 40.6, commandsMs: 30.2, inProcessMs: 10.4 });
+  passes.notePass(book, minute + 26000, 450, false, false, { ms: 20.2, commandsMs: 5.2, inProcessMs: 15.1 });
   const busy = passes.closeMinute(book, minute, settings);
   const empty = passes.closeMinute(new Map(), minute + 60000, { mode: "off", planner: "v1", passEveryMs: 5000 });
-  assert.equal(busy.passes, 3);
+  assert.equal(busy.passes, 4);
+  assert.equal(busy.observeMean, 31);
+  assert.equal(busy.observeInProcessMax, 15);
   assert.equal(empty.passes, 0);
   const base = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
   for (const summary of [busy, empty]) {
@@ -314,6 +317,10 @@ test("passes: a note built by the real passesNote from closeMinute translates to
     assert.equal(r.event.data.acting_mean_ms, summary.actingMean);
     assert.equal(r.event.data.idle_mean_ms, summary.idleMean);
     assert.equal(r.event.data.errors, summary.errors);
+    assert.equal(r.event.data.observe_mean_ms, summary.observeMean);
+    assert.equal(r.event.data.observe_commands_mean_ms, summary.observeCommandsMean);
+    assert.equal(r.event.data.observe_in_process_mean_ms, summary.observeInProcessMean);
+    assert.equal(r.event.data.observe_in_process_max_ms, summary.observeInProcessMax);
     assert.equal(r.event.data.mode, summary.settings.mode);
     assert.equal(r.event.data.pass_every_ms, summary.settings.passEveryMs);
   }
