@@ -76,6 +76,9 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
     entry.step = action.step
     // the spawning session names the transcript the token totals are read from, also after a restart
     if (session !== '') entry.session = session
+  } else if (action.kind === 'intake-stamp') {
+    // the same for an intake run's tokens (v2/act-intake.ts); it is no LOOP_KIND, so it writes no loop_entry
+    if (session !== '') entry.session = session
   } else if (action.kind === 'transition') {
     entry.outcome = {
       kind: 'transition',
@@ -152,6 +155,11 @@ export function finish(
     next.attempts = Math.max(next.attempts, next.maxAttempts ?? maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, next.kind))
   }
   let out = put(ledger, next)
+  // a settle of an intake run that ended (rule I1) ends the run's entry too: the try is settled, so the run no longer counts
+  if (next.kind === 'intake-stamp' && next.status === 'done' && key.endsWith('/settle')) {
+    const runKey = key.slice(0, -'/settle'.length)
+    out = out.map(e => (e.key === runKey && e.status === 'running' ? ended(e, 'timed-out', now, 'timed out: settled') : e))
+  }
   if (next.kind === 'stop-agent' && next.rule === 'A1' && next.status !== 'running' && key.startsWith('stop:')) {
     const agentId = key.slice('stop:'.length)
     const why = next.status === 'done' ? 'timed out: stopped' : 'timed out: the stop failed, the agent may still run'

@@ -20,7 +20,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname node; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname node sha256sum base64; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -530,6 +530,30 @@ present "stripped: 0" "--issues text"
 # the same ordering as asked
 rc_of "$READ" --json --issues 114,45
 jq -e '.issues | map(.number) == [114, 45]' "$tmpdir/out" >/dev/null || fail "--issues order: $(cat "$tmpdir/out")"
+
+# body_sha: the first 16 hex of the sha256 of the body text; a null or absent body hashes as ""; no item carries the body
+EMPTY_SHA=$(printf '' | sha256sum | cut -c1-16)
+BODY_SHA=$(printf '%s' 'Fix the thing
+with two lines' | sha256sum | cut -c1-16)
+reset
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User '{"body": "Fix the thing\nwith two lines"}')" --argjson b "$(gq 46 cbundy 13131067 OPEN 'U' User '{"body": null}')" \
+  --argjson c "$(gq 47 cbundy 13131067 OPEN 'V')" --argjson e "$(gq 48 cbundy 13131067 OPEN 'W' User '{"body": ""}')" '{i45: $a, i46: $b, i47: $c, i48: $e}')"
+rc_of "$READ" --json --issues 45,46,47,48
+expect_rc 0 "--issues body_sha"
+jq -e --arg b "$BODY_SHA" --arg e "$EMPTY_SHA" '.issues | map(has("body") | not) | all' "$tmpdir/out" >/dev/null || fail "--issues carries a body: $(cat "$tmpdir/out")"
+jq -e --arg b "$BODY_SHA" --arg e "$EMPTY_SHA" '(.issues | map(.body_sha)) == [$b, $e, $e, $e] and (.issues | all(.body_sha | test("^[0-9a-f]{16}$")))' "$tmpdir/out" >/dev/null || fail "--issues body_sha: $(cat "$tmpdir/out")"
+[ "$EMPTY_SHA" = e3b0c44298fc1c14 ] || fail "the empty hash is not sha256's: $EMPTY_SHA"
+# stable for the same body, different after an edit
+cp "$tmpdir/out" "$tmpdir/out1"
+rc_of "$READ" --json --issues 45,46,47,48
+cmp -s "$tmpdir/out" "$tmpdir/out1" || fail "--issues body_sha is not stable"
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User '{"body": "Fix the thing\nwith three lines"}')" '{i45: $a}')"
+rc_of "$READ" --json --issues 45
+[ "$(jq -r '.issues[0].body_sha' "$tmpdir/out")" != "$BODY_SHA" ] || fail "--issues body_sha did not change with the body"
+# a body that is not text is a malformed answer
+gresp "$(jq -n --argjson a "$(gq 45 cbundy 13131067 OPEN 'T' User '{"body": 7}')" '{i45: $a}')"
+rc_of "$READ" --json --issues 45
+expect_rc 1 "--issues body not text"
 
 # an untrusted author, a wrong id and a ghost are refused and never printed
 reset

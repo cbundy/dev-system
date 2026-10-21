@@ -122,7 +122,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | the slot pool's holders, read without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag whenever the milestone exists (rule O4; also while a stored record waits on a `tag-contains` condition, even when the milestone does not qualify), and a list of the milestone's closed issues (`--json closedAt`, limit 200) for the oldest `closedAt` (null on a full list of 200 or a failed read; rule O5), both skipped in a GitHub backoff; the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
-| store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>`, `files:<repo>`, `stamps:<repo>` (the intake stamps, `{ v: 1, stamps: { "<issue>": { version, area, needsOwner, touches, at, labels } } }`; read only, each entry checked field by field, one that does not read dropped, an absent or malformed key the empty store) | every pass | the records are in 3.3 |
+| store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>`, `files:<repo>`, `stamps:<repo>` (the intake stamps, `{ v: 1, stamps: { "<issue>": { version, area, needsOwner, touches, at, labels } }, tries?: { "<issue>": { version, outcome, at, reason? } }, owned?: { "<issue>": ["area" \| "needs-decision"] } }`; each entry checked field by field, one that does not read dropped, an absent or malformed key the empty store; written only by the intake run, 13.4.4, as a read-modify-write that keeps keys it does not know) | every pass | the records are in 3.3 |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records; the due records are read up to 4 at once, started in 2.4's order, with results kept in it |
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
 | `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
@@ -2775,6 +2775,7 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
   `dry run: nothing written`) through `$.prompt.submit`. A failed read or spawn, a turn that ends without an answer, or a reader that does not end within 10 minutes is a
   failed stamp, noticed once. A dry run adds no label, comment or event (`intake_stamp` mode `dry` stays unwritten), leaves
   `stamps:<repo>`, the score and the ledger as they were, and logs one local decision-log line (`stamp`, `outcome`, `model`, `seconds`).
+  The real run, which writes, is rule I1's (13.4.4); the dry run keeps writing nothing.
 - An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
   answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` takes issue numbers and an
@@ -2793,6 +2794,47 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
   conversation sets directives.
 - `/factory` is immediate, so a directive typed during a long wake turn applies at once. Ops run
   one at a time.
+
+#### 13.4.4 The intake stamp's run (rule I1)
+
+While `intakeStamp` is `on`, rule I1 stamps each ready issue once per body version; while it is `off` (the default) the
+rule plans nothing, so no reader is spawned and no label, comment, event, `stamps:<repo>` write or ledger entry of the
+kind `intake-stamp` happens.
+
+- **The body version** is `body_sha`, which `callum-flow-issue-read --json --issues` adds to each item: the first 16 hex of
+  the sha256 of the body text (a null body hashes as the empty text). The items still carry no body. The plugin reads it
+  into `IssueView.bodyVersion` (null when absent or not 16 hex: an older image, or the per-issue fallback read), and I1
+  skips an issue without one (skip `no-body-version`); it never stamps without a version.
+- **I1 plans** one `intake-stamp` action, op `run`, key `intake/<N>/<version>`, class `develop`, for each issue in the ready
+  queue that passes S1's filters before its blocked and claim checks (open, trusted, labels read, not `factory:rejected`, labelled
+  `readyLabel`, no skip label; `readyProblem`, `hooks/v2/rules-claim.ts`) whose current version has no try in `stamps:<repo>`
+  (skip `tried`), in ascending issue number, while fewer than 2 `intake/<N>/<version>` entries run (skip `cap`). It plans
+  nothing while the records are not read (G2) or GitHub is in backoff. It runs after S1 and the merge queue, claims nothing
+  and changes nothing S1 reads except through the score factors a stamp feeds (3.5).
+- **The executor** (`hooks/v2/act-intake.ts`) reads the issue (`callum-flow-issue-read <N> --comments`) and the repo's top level, then
+  records the try `{ version, outcome: running, at }` BEFORE it spawns `factory-loop:intake` (model `intakeModel`, name
+  `intake-<N>-<version>`), so a crash, timeout, failure or drop never respawns the same version; an edited body (a new
+  `body_sha`) is eligible exactly once. The entry runs until the reader's turn ends (`driver-between.ts` calls
+  `intakeAnswered`, `act-between.ts`, before `agentAnswered`; it takes the turn only when a running `intake-stamp` entry holds
+  the agent). The answer goes through `parseIntakeAnswer` / `checkIntake` and the outcome (`ok`, `dropped`, `failed`) is the
+  try's. Only `ok` writes `stamps["<N>"]`; a failed or dropped stamp leaves the stamp factors at 0 and every other factor as it was.
+- **Settling.** A try still `running` whose run has had `STAMP_TIMEOUT_MS` (10 minutes) from its start, or whose entry ended
+  lost, timed out or failed, or is gone, is settled by an `intake-stamp` action op `settle` (key `intake/<N>/<version>/settle`,
+  class `free`): the agent is stopped if it still runs, the try is recorded `failed` with the reason (`timeout`, `lost` or
+  `spawn-failed`) and the run's entry ends. A try is never retried for its version; an answer that comes after is dropped.
+- **Labels** (ok only; `hooks/v2/intake-labels.ts`): `area:<area>`, and `needs-decision` when `needs_owner` is true. A missing
+  label is made first (`gh label create` without `--force`, so an existing label keeps the owner's colour; "already exists" is
+  fine). The owner wins, group by group (`area`, `needs-decision`): a group is the owner's, and the loop never touches it
+  again on that issue, when (1) the issue's labels in the group differ from the `labels` the loop last stored for it, or (2) on
+  the first stamp the issue already carries an `area:*` label (area) or `needs-decision`. The loop removes only labels it set
+  itself (an area that changed on a new version, `needs-decision` once `needs_owner` is false). The labels it set and the ones
+  it kept go in the event (`labels_set`, `labels_kept`), the owned groups in `owned`, the labels it holds in the stamp's `labels`.
+  When the issue's labels cannot be read none is set.
+- **The event.** Every finished try (ok, dropped, failed, settled) writes exactly one `intake_stamp` v1 event, `mode` `run`, with the
+  issue, the model and the run's input, output, cache-read and cache-creation token totals (read from the reader's transcript;
+  null when it cannot be read). `reason` is the needs_owner reason, or why a failed run failed.
+- **The ledger.** The run is the ledger kind `intake-stamp`, not in `LOOP_KINDS`, so it writes no `loop_entry`; the entry records its
+  session so the tokens can be read. A wind-down drops a `run` like any start.
 
 ### 13.5 Plan: the foundation's rules
 
@@ -3771,7 +3813,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-Twenty-five rules, by id.
+Twenty-six rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3783,7 +3825,7 @@ Twenty-five rules, by id.
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
 | R2 | restart | `updateDue` is set, the pass admitted no other action, and no `queue-merge` runs (whatever `windDownMinutes`), and (only with `windDownMinutes` 0) no `queue-update` or release task runs | `restart-self`, last in the pass; with wind-down on it writes the `restart-self` request first and the wind-down finishes queue and release work up to the cap; a failed restart is told once and not retried until the update is set again. Cut agent steps re-run free (5.1). See wind-down (10.11) |
-| S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then by score, highest first (the claim score, `hooks/v2/score.ts`: the factors `priority-label`, `bug`, `unblocks`, `closes-epic`, `nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, weighted by `queueScore`; and, only while `intakeStamp` is `on` and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`, which are null, never a penalty, when the stamp or the facts they read are missing), ties to the oldest claimable time, then the lowest number; the reason names the order, `owner only`, `owner priority` or `score <n>: <factor> <points>, ...`, and every S1 claim carries its `score` and `factors`, which the claim tool records on the `claimed` event; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0. The pass also gets a starved verdict (`PlanResult.starved`): true when the queue is not empty, no record is queued or in a slot state, no first claim is in flight, `noNewWork` is off, `only` is empty, the tier is not `stop-new` or `stop-all`, and every queue issue was skipped by a claim filter; null when the queue or github source failed. While it is true and the spell (the store's `starved:<repo>`, set on the first starved pass, kept through unknown passes, removed on the first pass that is not starved) is `starvedNoticeAfterMs` old, `tell(starved)` (an owner item, key `tell:starved:<since>:<k>`) names each root blocker found in the `blockers` tree and why it is not moving; it waits, with the skip `starved since <time>: blockers not read yet`, until that period's tree is read; S1 also records the queue view (`hooks/v2/queue-view.ts`): each candidate of the order with its rank, score, factors and a why-code (`blocked`, `skipped`, `paused`, `outside_only`, `no_slot`, `new_off`, `usage_tier`, `rejected`, `tracker`, `held`, `exhausted`, `untrusted`, `unknown`), finalised in `planV2` after admission (a claim admission or wind-down drops is `no_slot`), which the `queue_snapshot` event carries (7.1) |
+| S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then by score, highest first (the claim score, `hooks/v2/score.ts`: the factors `priority-label`, `bug`, `unblocks`, `closes-epic`, `nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, weighted by `queueScore`; and, only while `intakeStamp` is `on` and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`, which are null, never a penalty, when the stamp or the facts they read are missing), ties to the oldest claimable time, then the lowest number; the reason names the order, `owner only`, `owner priority` or `score <n>: <factor> <points>, ...`, and every S1 claim carries its `score` and `factors`, which the claim tool records on the `claimed` event; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0. I1 (13.4.4) plans after S1 and changes neither its choice nor its order. The pass also gets a starved verdict (`PlanResult.starved`): true when the queue is not empty, no record is queued or in a slot state, no first claim is in flight, `noNewWork` is off, `only` is empty, the tier is not `stop-new` or `stop-all`, and every queue issue was skipped by a claim filter; null when the queue or github source failed. While it is true and the spell (the store's `starved:<repo>`, set on the first starved pass, kept through unknown passes, removed on the first pass that is not starved) is `starvedNoticeAfterMs` old, `tell(starved)` (an owner item, key `tell:starved:<since>:<k>`) names each root blocker found in the `blockers` tree and why it is not moving; it waits, with the skip `starved since <time>: blockers not read yet`, until that period's tree is read; S1 also records the queue view (`hooks/v2/queue-view.ts`): each candidate of the order with its rank, score, factors and a why-code (`blocked`, `skipped`, `paused`, `outside_only`, `no_slot`, `new_off`, `usage_tier`, `rejected`, `tracker`, `held`, `exhausted`, `untrusted`, `unknown`), finalised in `planV2` after admission (a claim admission or wind-down drops is `no_slot`), which the `queue_snapshot` event carries (7.1) |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
 | S4 | unknown | an unknown result, a running step's timeout, or a GitHub wait past its bound | the unknown path, rows U1 to U4 (5.1) |
@@ -3800,6 +3842,7 @@ Twenty-five rules, by id.
 | O5 | milestone state | the milestone exists and its reading differs from the last logged (the newest done `milestone-state/` entry's fingerprint) | a free `event` of `milestone_state`, key `milestone-state/<fingerprint>/<last>` (11) |
 | M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
 | N1 | settings changed | an acting pass whose settings snapshot differs, leaf by leaf, from the one the store kept (`settings:<repo>`); none when no valid snapshot was kept | a free `event` of `settings_changed` per changed leaf, key `settings/<key>/<snapshot time, base36>`, `who` from the config ops since (`settings-ops:<repo>`), then the layer; at most 50 per pass, the rest named in a skip line |
+| I1 | intake stamp | `intakeStamp` is `on`, the records are read and GitHub is not in backoff: an issue of the ready queue that passes S1's filters before its blocked and claim checks has a `bodyVersion` and no try for it, fewer than 2 runs are going (ascending issue number); a try still running whose run timed out, was lost or failed | `intake-stamp` op `run` (13.4.4), once per issue and body version; op `settle` for a try that never ended. Skips `no-body-version`, `tried`, `cap`. After S1 and the merge queue: it claims nothing and S1's choice and order are as without it |
 | F1 | flake bug | the `flakes` source shows a test with `flakeBugMin` flakes in the last `flakeWindowDays` and no open bug carrying its marker; or a flake of a test with an open bug that is not on it; or a `flake-bug` entry done with no tell yet | `flake-bug` (one bug, `ready` only under `flakeBugReadyCap`), a `comment` for each later flake, and `tell(flake-bug)` once per bug (8.5) |
 
 ## 15. Decisions
@@ -4351,7 +4394,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
-| `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order, and `/factory stamp <N>` (13.4.3) still dry-runs the reader |
+| `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order and runs no reader (13.4.4: on, rule I1 also stamps each ready issue once per body version and sets `area:*` and `needs-decision` with the owner's precedence), and `/factory stamp <N>` (13.4.3) still dry-runs the reader |
 | `intakeModel` | `haiku` | the intake agent's model; when larger than `triageModel` (haiku < sonnet < opus < fable) it is named in the config problems and `triageModel` is used |
 | `intakeAreas` | `["factory", "product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
 | `reviewer` | `adjudicator` | 8.2 |
@@ -4389,6 +4432,7 @@ still accepts them in a settings file, and they have no effect.
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
 | `flake-bug` | free | rule F1 (8.5): `callum-flow-issue-read --json --list --state open` for the bug's marker, else `gh label create flaky --repo R ... --force` and `gh issue create --repo R --title <t> --body-file -`; then `gh issue edit <N> --repo R --add-label flaky --add-label <priorityLabel>`, the sub-issue link under `flakeEpic` (`gh api`, unless the epic holds it), and last `gh issue edit <N> --repo R --add-label <ready>` only when the action says the cap allowed it. The one place the safety tests let the loop add `ready` outside a split child and a requeue | 3 |
+| `intake-stamp` | develop (run), free (settle) | rule I1 (13.4.4): op `run`: `callum-flow-issue-read <N> --comments`, `git ls-tree --name-only origin/<base>`, the try recorded in `stamps:<repo>`, then `$.agent.spawn` of `factory-loop:intake` (`intakeModel`); at the reader's end `callum-flow-issue-read --json <N>`, `gh label create <name> --repo R --color <c> --description <d>` (no `--force`) for a missing `area:<area>` or `needs-decision`, `gh issue edit <N> --repo R --add-label <l,...>` and `--remove-label <l,...>`, and one `intake_stamp` event; op `settle`: TaskStop of the reader, the try recorded failed, one event | run 2 per key (reading fails before the try is recorded; the try is never repeated), settle 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
@@ -4397,7 +4441,7 @@ still accepts them in a settings file, and they have no effect.
 | `released` | free | `callum-flow-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
 
-15 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
+16 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
 command carries `--repo`. The safety tests allow exactly these argv shapes and keep every other
 ban of the foundation (13.11). `rerun` is banned there otherwise, so `gh run rerun` is allowed
 deliberately, as one argv.
@@ -4422,10 +4466,11 @@ deliberately, as one argv.
 | released | `released:<repo>:<tag>` |
 | milestone state | `milestone-state/<fingerprint>/<base-36 end of the newest done entry, or 0>` |
 | main state | `main/<last>/<current>`, each a state key `<head>.<workflows>.<deployments>` (8 hex digits each) or `none` before the first |
+| intake stamp | `intake/<issue>/<body version>` (the run), `intake/<issue>/<body version>/settle` |
 | flake bug | `flake-bug/<hash>/<first flake event id>` (the bug), `flake-bug/<hash>/c/<flake event id>` (a comment on it); its tell `tell:flake-bug:<bug number>` |
 | heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-17 families of the loop's own, plus the foundation's 5.
+18 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 

@@ -31,10 +31,10 @@
     "window_days": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise.", "x-column": true },
     "first_flake_at": { "type": ["string", "null"], "format": "date-time", "description": "A flake bug tell: when the first flake of the test in the window happened; null otherwise.", "x-column": true },
     "filed_issue": { "type": ["integer", "null"], "minimum": 1, "description": "A flake bug tell: the number of the bug the loop filed (or found); null otherwise.", "x-column": true },
-    "input_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the input tokens of its agent's transcript and every agent nested under it, once per request; null while running, for other kinds and when the transcript could not be read.", "x-column": true },
-    "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the output tokens, counted as input_tokens; null otherwise.", "x-column": true },
-    "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the cache-read input tokens, counted as input_tokens; null otherwise.", "x-column": true },
-    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "An ended agent step: the cache-creation input tokens, counted as input_tokens; null otherwise.", "x-column": true },
+    "input_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read.", "x-column": true },
+    "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The output tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-read input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
     "model": { "type": ["string", "null"], "description": "An ended agent step: the full id of the model the step's own agent ran on (for example claude-opus-5-5), the one of most turns; null otherwise.", "x-column": true }
   },
   "examples": [

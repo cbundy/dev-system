@@ -127,8 +127,8 @@ Example:
 | `budget_resets_at` | string | `usage` | When the budget period resets. |
 | `budget_usd` | number | `usage` | The budget for that period, in dollars. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
-| `cache_creation_tokens` | integer | `loop_entry` | An ended agent step: the cache-creation input tokens, counted as input_tokens; null otherwise. |
-| `cache_read_tokens` | integer | `loop_entry` | An ended agent step: the cache-read input tokens, counted as input_tokens; null otherwise. |
+| `cache_creation_tokens` | integer | `intake_stamp`, `loop_entry` | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_read_tokens` | integer | `intake_stamp`, `loop_entry` | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `candidates` | array of object | `queue_snapshot` | The first 50 candidates in rank order. why is null exactly when claimable is true. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
@@ -169,7 +169,7 @@ Example:
 | `head` | string | `finding_handled`, `gate_run`, `intervention`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
-| `input_tokens` | integer | `loop_entry` | An ended agent step: the input tokens of its agent's transcript and every agent nested under it, once per request; null while running, for other kinds and when the transcript could not be read. |
+| `input_tokens` | integer | `intake_stamp`, `loop_entry` | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
 | `key` | string | `loop_entry`, `settings_changed` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
@@ -203,7 +203,7 @@ Example:
 | `options` | array of object | `transition` | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `intake_stamp`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
-| `output_tokens` | integer | `loop_entry` | An ended agent step: the output tokens, counted as input_tokens; null otherwise. |
+| `output_tokens` | integer | `intake_stamp`, `loop_entry` | The output tokens of an ended run, counted as input_tokens; null otherwise. |
 | `owner_new_off` | boolean | `queue_snapshot` | Whether the owner's 'no new work' control is on. |
 | `owner_only` | array of integer | `queue_snapshot` | The owner's 'only' list in force; empty when off. |
 | `owner_priority` | array of integer | `queue_snapshot` | The owner's priority list in force; empty when off. |
@@ -586,12 +586,16 @@ One stamp attempt of one issue version: the intake step read the issue body and 
 | `outcome` | enum | required | no | one of "ok", "failed", "dropped" | yes | ok: the stamp was applied. failed: the stamp step did not produce an answer. dropped: the answer broke the contract. |
 | `area` | string | required | yes |  | yes | The area the stamp named, or null when there is none. |
 | `needs_owner` | boolean | required | yes |  | yes | Whether the stamp says the issue needs the owner, or null when there is no answer. |
-| `reason` | string | required | yes |  | yes | The one-line needs_owner reason, or null. |
+| `reason` | string | required | yes |  | yes | The one-line needs_owner reason, or null. On a run that failed without an answer (outcome failed), why it ended: timeout, lost, spawn-failed or the read or answer problem. |
 | `touches` | array of string | required | no |  | yes | The top-level paths the stamp says the issue touches. |
 | `dropped` | array of string | required | no |  | yes | The answer fields the contract dropped. |
 | `labels_set` | array of string | required | no |  | yes | The labels the loop added. |
 | `labels_kept` | array of string | required | no |  | yes | The labels the loop left alone because the owner had changed them. |
 | `model` | string | required | no | minLength 1 | yes | The model alias that stamped. |
+| `input_tokens` | integer | optional | yes | minimum 0 | yes | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
+| `output_tokens` | integer | optional | yes | minimum 0 | yes | The output tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
 
 Example:
 
@@ -612,7 +616,11 @@ Example:
     "area:factory"
   ],
   "labels_kept": [],
-  "model": "sonnet"
+  "model": "sonnet",
+  "input_tokens": 1840,
+  "output_tokens": 212,
+  "cache_read_tokens": 9600,
+  "cache_creation_tokens": 410
 }
 ```
 
@@ -687,10 +695,10 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `window_days` | integer | optional | yes | minimum 1 | yes | A flake bug tell: the flake window in days (the flakeWindowDays setting); null otherwise. |
 | `first_flake_at` | string | optional | yes | format date-time | yes | A flake bug tell: when the first flake of the test in the window happened; null otherwise. |
 | `filed_issue` | integer | optional | yes | minimum 1 | yes | A flake bug tell: the number of the bug the loop filed (or found); null otherwise. |
-| `input_tokens` | integer | optional | yes | minimum 0 | yes | An ended agent step: the input tokens of its agent's transcript and every agent nested under it, once per request; null while running, for other kinds and when the transcript could not be read. |
-| `output_tokens` | integer | optional | yes | minimum 0 | yes | An ended agent step: the output tokens, counted as input_tokens; null otherwise. |
-| `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | An ended agent step: the cache-read input tokens, counted as input_tokens; null otherwise. |
-| `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | An ended agent step: the cache-creation input tokens, counted as input_tokens; null otherwise. |
+| `input_tokens` | integer | optional | yes | minimum 0 | yes | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
+| `output_tokens` | integer | optional | yes | minimum 0 | yes | The output tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `model` | string | optional | yes |  | yes | An ended agent step: the full id of the model the step's own agent ran on (for example claude-opus-5-5), the one of most turns; null otherwise. |
 
 Example:

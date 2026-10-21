@@ -147,6 +147,8 @@ export type IssueFacts = {
   parent: number | null
   // the parent's other sub-issues in this repo, itself left out; null: not read or no parent here
   siblings: { number: number; open: boolean }[] | null
+  // the body's version, the reader's `body_sha` of --issues (16 hex); absent from the per-issue read and from an older image
+  bodyVersion?: string
 }
 
 type Node = { number: number; repo: string; state: string }
@@ -157,7 +159,7 @@ const nodesOf = (v: unknown): Node[] | null =>
 
 function factsOf(issue: unknown, repo?: string): IssueFacts | null {
   if (issue === null || typeof issue !== 'object') return null
-  const i = issue as { number?: unknown; blocking?: unknown; blocked_by?: unknown; parent?: unknown; state?: unknown; labels?: unknown; title?: unknown; issue_dependencies_summary?: { blocked_by?: unknown; blocking?: unknown }; sub_issues_summary?: { total?: unknown } }
+  const i = issue as { body_sha?: unknown; number?: unknown; blocking?: unknown; blocked_by?: unknown; parent?: unknown; state?: unknown; labels?: unknown; title?: unknown; issue_dependencies_summary?: { blocked_by?: unknown; blocking?: unknown }; sub_issues_summary?: { total?: unknown } }
   const deps = i.issue_dependencies_summary
   const subs = i.sub_issues_summary
   const blocking = repo === undefined ? null : nodesOf(i.blocking)
@@ -178,6 +180,7 @@ function factsOf(issue: unknown, repo?: string): IssueFacts | null {
     blockersClosedAt: closedAts.length > 0 ? Math.max(...closedAts) : null,
     parent: here ? par.number : null,
     siblings: sibs === null ? null : sibs.filter(n => n.repo === repo && n.number !== i.number).map(n => ({ number: n.number, open: n.state === 'open' })),
+    ...(typeof i.body_sha === 'string' && /^[0-9a-f]{16}$/.test(i.body_sha) ? { bodyVersion: i.body_sha } : {}),
   }
 }
 

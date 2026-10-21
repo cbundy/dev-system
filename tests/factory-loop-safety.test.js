@@ -30,6 +30,7 @@ const V2_ARGV = "v2/argv.ts";
 const V2_ALLOWED = [
   "  const argv = ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add]",
   "  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add, '--remove-label', remove.join(',')]",
+  "  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add.join(',')]",
   "  return ['gh', 'issue', 'comment', String(issue), '--repo', repo, '--body-file', '-']",
   "  return ['gh', 'pr', 'create', '--repo', repo, '--base', base, '--head', branch, '--title', title, '--body-file', '-']",
   "  return ['gh', 'pr', 'edit', String(pr), '--repo', repo, '--body-file', '-']",

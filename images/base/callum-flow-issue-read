@@ -31,7 +31,9 @@
 #   needs a trusted author on the source issue or PR.
 # --issues: the facts of several issues in ONE GraphQL request (chunks of at most 50):
 #   number, title, state, labels, author, dependency and sub-issue counts, no body,
-#   no comments, and each item also carries `blocking` [{number, repo, state}],
+#   no comments, `body_sha` (the first 16 hex of the sha256 of the body text, "" for a
+#   null body: the body's version, for a caller that must know the body changed
+#   without reading it), and each item also carries `blocking` [{number, repo, state}],
 #   `blocked_by` [{number, repo, state, closed_at}] and `parent` {number, repo,
 #   sub_issues: [{number, repo, state}]} or null (each list capped at 50, no
 #   pagination; repo is owner/name, state lower-case). A nested issue by an
@@ -271,7 +273,7 @@ case "$mode" in
     case "$repo" in */*) ;; *) die "cannot determine the repo owner and name" ;; esac
     owner=${repo%%/*} rname=${repo#*/}
     case "$owner$rname" in *[!A-Za-z0-9._/-]*) die "unexpected repo name '$repo'" ;; esac
-    FRAG='fragment N on Issue { number state repository { nameWithOwner } author { __typename login ... on User { databaseId } ... on Bot { databaseId } } } fragment F on Issue { number title state author { __typename login ... on User { databaseId } ... on Bot { databaseId } } labels(first: 100) { totalCount nodes { name } } issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking } subIssuesSummary { total completed } blocking(first: 50) { nodes { ...N } } blockedBy(first: 50) { nodes { ...N closedAt } } parent { ...N subIssues(first: 50) { nodes { ...N } } } }'
+    FRAG='fragment N on Issue { number state repository { nameWithOwner } author { __typename login ... on User { databaseId } ... on Bot { databaseId } } } fragment F on Issue { number title state body author { __typename login ... on User { databaseId } ... on Bot { databaseId } } labels(first: 100) { totalCount nodes { name } } issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking } subIssuesSummary { total completed } blocking(first: 50) { nodes { ...N } } blockedBy(first: 50) { nodes { ...N closedAt } } parent { ...N subIssues(first: 50) { nodes { ...N } } } }'
     parts=''
     rest=$(printf '%s' "$nums" | tr ',' ' ')
     while [ -n "$rest" ]; do
@@ -315,6 +317,7 @@ case "$mode" in
             | if $v == null then (if ($nf | index($en.key)) != null then .missing += [$num] else bad end)
               else
                 (if ($v | type) == "object" and $v.number == $num and ($v.title | type) == "string" and ($v.state | type) == "string"
+                    and (($v.body | type) == "string" or ($v.body | type) == "null")
                     and ($v.labels | type) == "object" and ($v.labels.nodes | type) == "array"
                     and ($v.labels.totalCount | type) == "number" and $v.labels.totalCount <= ($v.labels.nodes | length)
                     and ($v.issueDependenciesSummary | type) == "object" and ($v.subIssuesSummary | type) == "object"
@@ -337,7 +340,7 @@ case "$mode" in
                     then {login: (if $a.__typename == "Bot" then $a.login + "[bot]" else $a.login end), id: $a.databaseId}
                     else null end) as $u
                 | if $u != null and any($T[]; .login == ($u.login | ascii_downcase) and .id == $u.id)
-                  then .issues += [{number: $num, title: $v.title, state: ($v.state | ascii_downcase), labels: ($v.labels.nodes | map({name})),
+                  then .issues += [{number: $num, body: ($v.body // ""), title: $v.title, state: ($v.state | ascii_downcase), labels: ($v.labels.nodes | map({name})),
                       user: $u,
                       blocking: ($blt | map(nsum)),
                       blocked_by: ($bbt | map(nsum + {closed_at: .closedAt})),
@@ -361,6 +364,14 @@ case "$mode" in
       | .missing |= sort_by(. as $x | $order | index($x))
       | . + {stripped: ((.refused | length) + (.nested | map(.n) | add // 0))}') || die "unexpected response for the issues"
     for _r in $(printf '%s' "$res" | jq -r '.refused[]'); do log_stripped "$_r" issue true ""; done
+    # body_sha: the body version, the first 16 hex of the body's sha256 (a null body hashes as ""). The
+    # bodies were kept for this alone: they are hashed here and dropped, so no item carries one.
+    shas=$(printf '%s' "$res" | jq -r '.issues[] | .body | @base64' | while IFS= read -r _b; do
+      printf '%s' "$_b" | base64 -d | sha256sum | cut -c1-16
+    done) || die "cannot hash the issue bodies"
+    res=$(printf '%s' "$res" | jq -c --arg shas "$shas" '($shas | split("\n")) as $s
+      | if (.issues | length) != ($s | length) and (.issues | length) > 0 then error("count") else . end
+      | .issues |= [to_entries[] | .key as $k | .value | del(.body) + {body_sha: $s[$k]}]') || die "unexpected response for the issues"
     # Stripped dependency nodes are counted in the result but not logged: untrusted_stripped has no source for them.
     res=$(printf '%s' "$res" | jq -c 'del(.nested)') || die "unexpected response for the issues"
     ;;

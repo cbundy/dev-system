@@ -18,8 +18,12 @@ import type { RecordsShadow } from './sources-records'
 import type { WindDownRead } from './wind-down'
 import type { CapInfo } from './capacity'
 import type { WorkspaceRead } from './workspace'
-import type { Stamps } from './stamps'
+import type { StampOwned, StampTries, Stamps } from './stamps'
 import type { QueueView } from './queue-view'
+import type { MainReading } from './types-facts'
+
+export { LOOP_CAUSES, PERSON_CAUSES } from './types-facts'
+export type { InterventionWho, MainDeployment, MainReading, MainRun, MainWorkflow } from './types-facts'
 
 // --- states, steps and the record (v2 SPEC 3.1, 3.2) ------------------------------------------------
 
@@ -262,7 +266,7 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released', 'intake-stamp'] as const
 // What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
 // body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
 export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
@@ -355,6 +359,9 @@ export type V2Action =
   | (ActionBase & { kind: 'released'; tag: string; source: 'loop' | 'workflow' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
+  // I1: the intake reader on one issue's body version. run: record the try, spawn the reader; settle: a run
+  // that timed out or was lost ends failed (why), its agent stopped. The key names the version (act-intake.ts)
+  | (ActionBase & { kind: 'intake-stamp'; op: 'run' | 'settle'; version: string; why?: string })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
   | (ActionBase & { kind: 'ci-rerun'; pr: number; runId: string; round: number })
   // base: main's head at plan time (the key's); head: the PR's head as observe read it
@@ -428,20 +435,9 @@ export type V2Tell = (typeof V2_TELLS)[number]
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1', 'I1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
-
-// --- interventions (v2 SPEC 7.2) ---------------------------------------------------------------------
-
-export type InterventionWho = 'person' | 'loop' | 'judge'
-
-// The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
-// and `guard:<what>` take their suffix from the lists above or the op's name.
-export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'unreject', 'rescue', 'hold'] as const
-export const LOOP_CAUSES = [
-  'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'prompt-denied', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
-] as const
 
 // --- what v2 reads (v2 SPEC 2.4) ---------------------------------------------------------------------
 
@@ -471,17 +467,6 @@ export type IssueComment = { body: string; at: Ms; url: string | null }
 
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).
 export type HeadSeen = { pr: number; at: Ms }
-
-// The newest completed run of a workflow on the default branch (sources-main.ts).
-export type MainRun = { id: number; attempt: number; head: string; event: string; conclusion: string }
-// One active workflow as the main read showed it: its newest completed run (null: none) and whether
-// a newer run is queued or in progress.
-export type MainWorkflow = { id: number; name: string; run: MainRun | null; running: boolean }
-// The newest deployment of an environment at the head, and its newest status (null: none).
-export type MainDeployment = { environment: string; id: number; state: string | null }
-// What one read of the default branch showed (sources-main.ts, the schema main_state.v1): when (ISO, 3 ms digits), the
-// branch and its head, the merged PR the head came from, the workflows and the deployments.
-export type MainReading = { observedAt: string; branch: string; head: string; pr: number | null; workflows: MainWorkflow[]; deployments: MainDeployment[] }
 
 export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite', 'releasePrs', 'main', 'flakes'] as const
 // What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
@@ -538,6 +523,9 @@ export type V2State = {
   changed: Record<number, Ms>
   // the intake stamps and each live record's in-flight paths (null: the read failed); present only while intakeStamp is on
   stamps?: Stamps
+  // the tries and the owner-owned label groups of the intake stamp (stamps.ts); present only while intakeStamp is on
+  stampTries?: StampTries
+  stampOwned?: StampOwned
   inFlightPaths?: Record<number, string[] | null>
   interventions: InterventionFacts
   // the onceKeys (events.ts) of this device's events in the pass's read of the event log (the facts
@@ -584,6 +572,9 @@ export type V2Io = {
   // the live ledger, which the transition executor re-checks its trigger against (3.3)
   ledger?: () => readonly LedgerEntry[]
   updateRecords: (fn: (records: readonly IssueRecord[]) => IssueRecord[] | null) => Promise<{ changed: boolean; saved: boolean }>
+  // stamps:<repo> changed by fn, which gets the value as the store holds it and returns the whole value to store
+  // (null: no change): a read-modify-write that keeps keys it does not know (stamps.ts withTry, withStamp, withOwned)
+  updateStamps?: (fn: (raw: unknown) => unknown) => Promise<{ changed: boolean; saved: boolean }>
   // asks the driver for the next pass at once: a transition's next event is taken without delay
   ping: (why: string) => void
 }

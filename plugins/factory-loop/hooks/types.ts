@@ -71,6 +71,8 @@ export type IssueView = {
   parent: number | null
   // the parent's other sub-issues in this repo (itself left out); null if unread
   siblings: { number: number; open: boolean }[] | null
+  // the body's version (the reader's body_sha, 16 hex); null: not read, or an image that does not give it
+  bodyVersion: string | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null
   // a tracker's open sub-issues, nested ones included, ascending, from its timeline; read only

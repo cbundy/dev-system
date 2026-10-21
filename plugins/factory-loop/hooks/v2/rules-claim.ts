@@ -21,7 +21,7 @@
 //
 // Pure: the time is state.now.
 import { gate, skip, wake, want } from '../foundation'
-import type { IssueView, LedgerEntry, Ms } from '../types'
+import type { Config, IssueView, LedgerEntry, Ms } from '../types'
 import { capOf, capText } from './capacity'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { newView, noteRow } from './queue-view'
@@ -177,9 +177,10 @@ function blockedWhy(count: number): string {
   return `blocked by ${count} open issue${count > 1 ? 's' : ''}`
 }
 
-// candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
-function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
-  const { config, state } = ctx
+// readyProblem: why a queue issue is not one S1 would look at, before its blocked and claim checks, or
+// null: observed, open, trusted, labels read, not rejected, labelled ready, no skip label. I1 (the intake
+// stamp) uses the same filters, so a stamp is made for the issues S1 may come to claim.
+export function readyProblem(config: Pick<Config, 'readyLabel' | 'skipLabels'>, issue: IssueView | undefined): string | null {
   if (issue === undefined) return 'not observed'
   if (issue.open !== true) return issue.open === false ? 'closed' : 'GitHub state unknown'
   if (issue.trusted !== true) return issue.trusted === false ? 'untrusted author' : 'author unknown'
@@ -187,7 +188,14 @@ function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): 
   if (issue.labels.some(l => sameLabel(l, REJECTED_LABEL.name))) return `label ${REJECTED_LABEL.name}: the owner removes it to try again`
   if (!issue.labels.some(l => sameLabel(l, config.readyLabel))) return `no ${config.readyLabel} label`
   const skipLabel = issue.labels.find(l => config.skipLabels.some(s => sameLabel(s, l)))
-  if (skipLabel !== undefined) return `label ${skipLabel}`
+  return skipLabel === undefined ? null : `label ${skipLabel}`
+}
+
+// candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
+function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
+  const { config, state } = ctx
+  const ready = readyProblem(config, issue)
+  if (ready !== null || issue === undefined) return ready
   if (issue.blockedBy === null) return 'blockers unknown'
   if (issue.blockedBy > 0) return blockedWhy(issue.blockedBy)
   if (issue.subIssues === null) return 'sub-issues unknown'
