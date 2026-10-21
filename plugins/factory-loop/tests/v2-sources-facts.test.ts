@@ -92,6 +92,31 @@ describe('the new rows as the events the facts code reads (eventsFromNewRows)', 
     })
   }
 
+  test('a merged row with no issue (the sweep logs an unrecorded merge to main, recovered by hand) changes nothing for any issue', () => {
+    const orphan = merged({ issue: null, actor: 'sweep', ts: T + MIN })
+    const rows = newOf([claimed(), orphan])
+    expect(rows.map(e => [e.state, e.issue])).toEqual([['claimed', 48], ['merged', null]])
+    const alone = newOf([claimed()])
+    // the facts, the ledger and the once keys of the other issue are what they were without the row; the
+    // only trace is the row itself in the by-branch pipeline list, where no run ever picks it (it has none)
+    const { pipeline, ...facts } = factsOf(rows)
+    const { pipeline: none, ...factsAlone } = factsOf(alone)
+    expect(facts).toEqual(factsAlone)
+    expect(none.size).toBe(0)
+    expect([...pipeline.values()].flat().map(e => [e.state, e.issue, e.run])).toEqual([['merged', null, null]])
+    // the row's actor is the sweep, so the sweep's own marker entry (no issue) appears, as for any sweep row
+    const ledger = deriveLedger(rows, DEVICE)
+    expect(ledger.filter(e => e.issue !== null)).toEqual(deriveLedger(alone, DEVICE))
+    expect(ledger.filter(e => e.issue === null).map(e => e.key)).toEqual(['sweep:derived'])
+    expect([...viewOf(rows, DEVICE).ledger.keys()].filter(k => k !== 'sweep:derived')).toEqual([...viewOf(alone, DEVICE).ledger.keys()])
+    // alone, it derives nothing: no rollout entry, no reclaim, no ready
+    const only = newOf([orphan])
+    expect(deriveLedger(only, DEVICE).map(e => e.key)).toEqual(['sweep:derived'])
+    expect(factsOf(only).reclaimed.size + factsOf(only).readyAt.size).toBe(0)
+    expect([...viewOf(only, DEVICE).ledger.keys()]).toEqual(['sweep:derived'])
+    expect(only.map(e => onceKey(e))).toHaveLength(1)
+  })
+
   test("the old log keeps a loop entry's outcome that the new event drops, so the compare drops it on both sides", () => {
     expect(deriveLedger(oldOf([tell('done')]), DEVICE)[0]?.outcome).toMatchObject({ kind: 'wake', decision: 'ok' })
     expect(deriveLedger(newOf([tell('done')]), DEVICE)[0]?.outcome).toBeUndefined()

@@ -197,7 +197,18 @@ export function closedData(reason: string | null): Record<string, unknown> {
 
 function mergedData(e: ReusedEvent): Record<string, unknown> {
   const note = text(e.note)
-  return { pr: e.pr, branch: text(e.branch), head: text(e.head), by: note === null || note === 'merged by the factory loop' ? 'factory' : 'hand', recovered: note !== null }
+  // the size is null when the event has none (the executor reads it), or has no pull request, or the read failed
+  const size = e.pr === null ? null : (e.size ?? null)
+  return {
+    pr: e.pr,
+    branch: text(e.branch),
+    head: text(e.head),
+    by: note === null || note === 'merged by the factory loop' ? 'factory' : 'hand',
+    recovered: note !== null,
+    files: size?.files ?? null,
+    additions: size?.additions ?? null,
+    deletions: size?.deletions ?? null,
+  }
 }
 
 // A fixer's disposition: `CORRECT: <id> <reason>` fixed the finding, `WRONG: <id> <reason>` declined it.
