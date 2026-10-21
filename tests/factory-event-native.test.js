@@ -455,3 +455,32 @@ test("regime: the old-state mode passes FACTORY_REGIME to the translator, and wi
   assert.equal(JSON.parse(without.lines[0]).regime, null);
   assert.deepEqual(reader.validateStrict("envelope", 1, JSON.parse(without.lines[0])), []);
 });
+
+// The hand-recorded rescue of docs/metrics.md (section 9), run through the writer as the document shows it.
+test("the documented rescue command writes a manual intervention, and reads null without --regime", () => {
+  const md = fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8");
+  const block = md.match(/```sh\n(callum-flow-event --type intervention[\s\S]*?)```/);
+  assert.ok(block, "docs/metrics.md shows the rescue command");
+  const cmd = block[1].replace(/\\\n\s*/g, "").trim().replace(/^callum-flow-event\s+/, "")
+    .replace("--issue N", "--issue 7").replace("<what was done>", "patched the trust file");
+  const m = cmd.match(/^(.*?) --data '(.*)'$/);
+  assert.ok(m, `the command has a --data argument: ${cmd}`);
+  const args = [...m[1].split(/\s+/), "--data", m[2]];
+  assert.ok(args.includes("--regime") && args[args.indexOf("--regime") + 1] === "manual");
+
+  const { r, lines } = native(args);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "", "no warning");
+  assert.equal(lines.length, 1);
+  const e = JSON.parse(lines[0]);
+  assert.equal(e.regime, "manual");
+  assert.equal(e.type, "intervention");
+  assert.equal(e.issue, 7);
+  assert.deepEqual(reader.validateStrict("intervention", 1, e.data), []);
+  assert.deepEqual([e.data.who, e.data.cause, e.data.detail], ["person", "rescue", "patched the trust file"]);
+
+  const bare = args.filter((a, i) => a !== "--regime" && args[i - 1] !== "--regime");
+  const none = native(bare);
+  assert.equal(none.r.status, 0, none.r.stderr);
+  assert.equal(JSON.parse(none.lines[0]).regime, null);
+});

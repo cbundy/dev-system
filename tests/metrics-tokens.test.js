@@ -21,7 +21,7 @@ function blocks() {
   const rest = doc.slice(start + 1);
   const end = rest.indexOf("\n## ", 1);
   const found = [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
-  assert.equal(found.length, 3, "the section holds three SQL blocks");
+  assert.equal(found.length, 4, "the section holds four SQL blocks");
   return found;
 }
 
@@ -58,7 +58,7 @@ test("Tokens per merged issue: each agent once, over every life, with the gaps c
   entry("i1/lA/s1/build/a1", "ag1", "done", "2026-10-18T09:10:00.000Z", 1, [8000, 8000, 8000, 8000], "claude-opus-5-5", "o/b");
   merged("2026-10-18T11:00:00.000Z", 1, "o/b");
 
-  const [perIssue, perModel, perRole] = blocks();
+  const [perIssue, perModel, perRole, perRegime] = blocks();
   const rows = (sql) => db.query(sub(sql, "o/a", "2026-10-01T00:00:00Z"), "reader").split("\n").filter(Boolean).map((l) => l.split("|"));
   assert.deepEqual(rows(perIssue), [["o/a", "1", "2026-10-18 11:00:00+00", "3", "420", "42", "4200", "125", "4787", "1"]]);
   assert.deepEqual(rows(perModel), [
@@ -70,4 +70,13 @@ test("Tokens per merged issue: each agent once, over every life, with the gaps c
     ["o/a", "fix", "0", "0", "0", "0", "0", "1"],
     ["o/a", "review", "1", "300", "30", "3000", "70", "0"],
   ]);
+
+  // by regime: the regime of each counted agent's loop_entry
+  assert.deepEqual(rows(perRegime), [["o/a", "1", "2026-10-18 11:00:00+00", "unknown", "3", "420", "42", "4200", "125", "4787"]], "no regime set: one unknown row, the same sums");
+  db.query("UPDATE factory.event_store SET regime = 'factory_loop_v2' WHERE type = 'loop_entry' AND data->>'agent_id' IN ('ag1', 'ag2')");
+  db.query("UPDATE factory.event_store SET regime = 'manual' WHERE type = 'loop_entry' AND data->>'agent_id' = 'ag3'");
+  assert.deepEqual(rows(perRegime), [
+    ["o/a", "1", "2026-10-18 11:00:00+00", "factory_loop_v2", "2", "120", "12", "1200", "55", "1387"],
+    ["o/a", "1", "2026-10-18 11:00:00+00", "manual", "1", "300", "30", "3000", "70", "3400"],
+  ], "an issue with agents in two regimes gives a row each, and they add up to the per-issue row (4787)");
 });

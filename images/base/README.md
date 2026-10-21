@@ -1573,8 +1573,8 @@ the factory loop companion's (a loop agent's call refused, or waiting, on a prom
 `--issue` required, never a stage, progress or final. The current companion writes the native types
 (`--type`, `--data`); the states are kept for older companions and the history, with a `key=value`
 note and no token required. A rescue the loop cannot see is
-recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
-reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
+recorded by hand: `callum-flow-event --type intervention --issue N --regime manual --data
+'{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"what was done"}'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary)).
 It builds the old-format line, translates it and appends only the new event to
 `/persist/events/factory/<owner>__<repo>.jsonl`. The old log `/persist/events/<owner>__<repo>.jsonl` and
