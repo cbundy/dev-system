@@ -4,7 +4,9 @@ The factory event log answers the questions below, plus the waste measures at th
 written by `callum-flow-event` and shipped by `factory-event-push-loop` into the factory database
 (see [Where events live](factory-events/README.md#where-events-live)). Every saved query here reads
 the view `factory.event_log`, or for the workers `factory.workers_status` and
-`factory.worker_samples`; none reads the old `factory.events` table or the `nomistakes` mirror.
+`factory.worker_samples`; none reads the old `factory.events` table or the `nomistakes` mirror. The old log and `factory.events` get no
+new rows since the cutover ([#1143](https://github.com/cbundy/dev-system/issues/1143)); the old table holds
+only the history before it.
 
 Run the queries with `dev-query --factory` (see "dev-query" in `images/base/README.md`), e.g.
 `dev-query --factory -c '<sql>'` or the SQL on stdin, with `-v NAME=VALUE` for the `:'NAME'`

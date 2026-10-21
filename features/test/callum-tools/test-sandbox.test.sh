@@ -32,9 +32,9 @@ under_npm_test=${TEST_RESULTS_DIR:+1}
 
   # A real event write with no events dir of its own lands in the sandbox, and the check names it.
   env -u CALLUM_FLOW_EVENT_BIN "$EVENT" ready --issue 1 --repo o/r > /dev/null 2>&1 || fail "event write should succeed"
-  [ -f "$CALLUM_EVENTS_DIR/o__r.jsonl" ] || fail "event should land in the sandbox: $(ls -A "$CALLUM_EVENTS_DIR")"
+  [ -f "$CALLUM_EVENTS_DIR/factory/o__r.jsonl" ] || fail "event should land in the sandbox: $(ls -A "$CALLUM_EVENTS_DIR")"
   err=$(test_sandbox_check 2>&1) && fail "check should fail with a stray file"
-  case "$err" in *"FAIL test isolation: $CALLUM_EVENTS_DIR/o__r.jsonl"*) ;; *) fail "check should name the file: $err" ;; esac
+  case "$err" in *"FAIL test isolation: $CALLUM_EVENTS_DIR/factory/o__r.jsonl"*) ;; *) fail "check should name the file: $err" ;; esac
 
   # Secrets folders point inside the sandbox at missing paths; the URL variables are gone.
   for d in "$DEV_SECRETS_DIR" "$DEV_WORKSPACE_SECRETS_DIR" "$DEV_MIGRATOR_SECRETS_DIR"; do

@@ -85,16 +85,37 @@ function oldArgv(e) {
   return argv;
 }
 
-// oldLine: the line the old argv writes to the old log (in its own scratch dir); its text and the
-// translator's event for it.
+// oldLineOf: the line the old writer built from an old argv (callum-flow-event writes it to no log any
+// more, cbundy/dev-system#1143, but still builds it for the translator): its columns, as the writer filled them.
+function oldLineOf(argv) {
+  const opt = (flag) => {
+    const i = argv.indexOf(flag);
+    return i === -1 ? null : argv[i + 1];
+  };
+  const num = (v) => (v === null ? null : Number(v));
+  const branch = opt("--branch");
+  const issue = opt("--issue") ?? (/issue-(\d+)/.exec(branch ?? "") ?? [])[1] ?? null;
+  const row = {
+    v: 2, ts: "2026-10-15T09:30:00Z", repo: "cbundy/dev-system", device: "box", session_id: "s", actor: opt("--actor") ?? "agent", state: argv[0],
+    issue: num(issue), run_id: opt("--run"), branch, pr: num(opt("--pr")), head: opt("--head"), note: opt("--note"), event_id: crypto.randomUUID(),
+    base_image: null, dev_image: null, template_version: null, plugin_version: null,
+  };
+  return { text: JSON.stringify(row), row };
+}
+
+// oldLine: the old line for an event and the translator's event for it; the real writer takes the same
+// argv (in its own scratch dir), writes the translator's event to the new log and nothing to the old one.
 function oldLine(e) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-v2-events-old-"));
   try {
-    const r = spawnSync("sh", [EVENT, ...oldArgv(e).slice(1)], { encoding: "utf8", env: ENV(d) });
+    const argv = oldArgv(e).slice(1);
+    const r = spawnSync("sh", [EVENT, ...argv], { encoding: "utf8", env: ENV(d) });
     assert.equal(r.status, 0, `${e.state} was refused: ${r.stderr}`);
-    const text = linesOf(oldLog(d)).pop();
-    const row = JSON.parse(text);
-    return { text, row, translated: translate(text, { ts: "2026-10-15T09:30:00.000Z", sessionId: "s" }) };
+    assert.equal(linesOf(oldLog(d)).length, 0, `${e.state} wrote the old log`);
+    const { text, row } = oldLineOf(argv);
+    const translated = translate(text, { ts: "2026-10-15T09:30:00.000Z", sessionId: "s" });
+    if (translated.event !== undefined) assert.equal(JSON.parse(linesOf(newLog(d)).pop()).type, translated.event.type, `${e.state}: the writer's event`);
+    return { text, row, translated };
   } finally {
     fs.rmSync(d, { recursive: true, force: true });
   }
@@ -480,7 +501,9 @@ test("the operator's hand-recorded rescue, as the playbook writes it in the old 
   try {
     const r = spawnSync("sh", [EVENT, "intervention", "--issue", "571", "--note", "who=person cause=rescue reason=patched%20the%20trust%20file"], { encoding: "utf8", env: ENV(d) });
     assert.equal(r.status, 0, r.stderr);
-    const line = JSON.parse(linesOf(oldLog(d)).pop());
+    assert.equal(linesOf(oldLog(d)).length, 0, "the old log must get no line");
+    assert.equal(JSON.parse(linesOf(newLog(d)).pop()).type, "intervention");
+    const line = oldLineOf(["intervention", "--issue", "571", "--note", "who=person cause=rescue reason=patched%20the%20trust%20file"]).row;
     assert.deepEqual(ev.parseIntervention({ ...line, run: undefined }), { state: "intervention", who: "person", cause: "rescue", reason: "patched the trust file", issue: 571, life: null, pr: null, fact: "" });
   } finally {
     fs.rmSync(d, { recursive: true, force: true });
@@ -511,7 +534,10 @@ test("the corpus through the real writer: zero misses, and the events are the co
       assert.equal(r.stderr, "", `${old.state} ${old.event_id} warned: ${r.stderr}`);
       made.push(old.state);
     }
-    const olds = fs.readFileSync(path.join(root, "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+    assert.equal(fs.existsSync(path.join(root, "cbundy__dev-system.jsonl")), false, "the writer must not create the old log");
+    // the old lines the writer built from the corpus's arguments (no longer written anywhere): the corpus's own, without the
+    // columns the writer fills from its environment (this test has no session and no version snapshot)
+    const olds = read("old-lines.jsonl").map((o) => JSON.stringify({ ...o, session_id: null, base_image: null, dev_image: null, template_version: null, plugin_version: null }));
     const news = fs.readFileSync(path.join(root, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     assert.equal(olds.length, made.length);
     const byId = new Map(news.map((e) => [e.event_id, e]));

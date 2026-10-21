@@ -4,8 +4,10 @@ Temporary: this mapping and its code are deleted with the old event path
 ([#656](https://github.com/cbundy/dev-system/issues/656)). Nobody maintains it after the switch.
 
 One function turns one line of today's event log into at most one new event. It runs in two
-places: inside `callum-flow-event` during dual write, on the line the writer has just built
-([#649](https://github.com/cbundy/dev-system/issues/649)), and over the stored history for the
+places: inside `callum-flow-event` for every old-state call, on the line the writer has just built
+(dual write, [#649](https://github.com/cbundy/dev-system/issues/649); since
+[#1143](https://github.com/cbundy/dev-system/issues/1143) the line itself is no longer written, only the
+translated event is), and over the stored history for the
 replay ([#650](https://github.com/cbundy/dev-system/issues/650)). It is
 [`images/base/factory-event-translate.js`](../../images/base/factory-event-translate.js)
 (built in [#648](https://github.com/cbundy/dev-system/issues/648)): plain CommonJS with no
@@ -16,7 +18,8 @@ new log ([README](README.md#where-events-live)).
 Rules:
 
 - **The old line is untouched.** The new event shares its `event_id`, so old and new rows join
-  one to one.
+  one to one. For history only: the writer no longer appends the old line anywhere (#1143), so
+  the translated event is all a call leaves behind.
 - **Never guess.** A line that does not match a shape below gives no new event: it is a miss. The
   writer warns with the state and the reason, and the replay counts misses per state. A token
   note (`transition`, `reviewed`, `intervention`, `loop`, a release) with a token the mapping does
@@ -135,7 +138,7 @@ outcome token `out` (and `decision` on lines that are not task wakes), `resets_i
 
 `translate(line, opts)` returns exactly one of `{ event }`, `{ skip: "<name>" }` or
 `{ miss: "<state>: <reason>" }`, never a partial event. It is pure: no clock, environment, file or
-network reads. With no `opts` it is the replay; with `{ ts, sessionId }` it is dual write.
+network reads. With no `opts` it is the replay; with `{ ts, sessionId }` it is the writer (every old-state call).
 `node factory-event-translate.js [--ts T --session-id S] [--quiet]` reads old lines as JSONL on stdin and writes
 new events as JSONL on stdout; it prints one stderr line per miss and a count per state (`--quiet` drops the counts and keeps the
 miss lines, which the writer relays as its warning), and exits 1 on any miss. The writer finds it

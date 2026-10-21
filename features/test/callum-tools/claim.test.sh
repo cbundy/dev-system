@@ -173,15 +173,27 @@ rc_of() { set +e; run "$@" >"$tmpdir/out" 2>"$tmpdir/err"; rc=$?; set -e; }
 expect_rc() { [ "$rc" = "$1" ] || fail "$2: exit $rc, wanted $1 (stderr: $(cat "$tmpdir/err"))"; }
 calls() { cat "$d/calls"; }
 no_calls() { [ ! -s "$d/calls" ] || fail "$1: unexpected writes: $(calls)"; }
-# events: the new store, where the tools write (--type ... --data); old_events: the old log, which only
-# the old-state writer (seed) and a dual write reach
+# events: the new store, where the tools write (--type ... --data); old_events: the old log, which
+# callum-flow-event no longer writes (cbundy/dev-system#1143): only old_seed, a literal old-format line, reaches it
 events() { cat "$tmpdir/events"/factory/*.jsonl 2>/dev/null || true; }
 old_events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
 no_events() { [ -z "$(events)" ] || fail "$1: unexpected events: $(events)"; [ -z "$(old_events)" ] || fail "$1: unexpected old events: $(old_events)"; }
-# seed <state> <issue> : append a real event to this device's log; the sweep's candidates are the
-# issues the event log and factory-state list as live (v2 SPEC 3.6), never a label list
-# (a reclaimed line needs its note to reach the new store)
+# old_seed <state> <issue> [run]: append a literal old-format line to this device's old log, for the
+# tests that read the old source
+old_seed() {
+  mkdir -p "$tmpdir/events"
+  os_n=1
+  [ ! -f "$tmpdir/events/o__r.jsonl" ] || os_n=$(($(wc -l < "$tmpdir/events/o__r.jsonl") + 1))
+  jq -nc --arg state "$1" --argjson issue "$2" --arg run "${3-}" --arg id "$(printf '00000000-0000-4000-8000-%012d' "$os_n")" \
+    '{v: 2, ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")), repo: "o/r", device: "devA", session_id: null, actor: "agent", state: $state,
+      issue: $issue, run_id: (if $run == "" then null else $run end), branch: null, pr: null, head: null, note: null, event_id: $id,
+      base_image: null, dev_image: null, template_version: null, plugin_version: null}' >> "$tmpdir/events/o__r.jsonl"
+}
+# seed <state> <issue> : append a real event to this device's new log (and a literal line to the old
+# one); the sweep's candidates are the issues the event log and factory-state list as live (v2 SPEC
+# 3.6), never a label list (a reclaimed line needs its note to reach the new store)
 seed() {
+  old_seed "$1" "$2"
   case "$1" in
     reclaimed) rc_of "$EVENT" reclaimed --issue "$2" --repo o/r --note "lease expired" ;;
     verdict) rc_of "$EVENT" verdict --issue "$2" --repo o/r --note "CORRECT: F1 fixed" ;;
@@ -308,7 +320,7 @@ grep -q 'CALLUM_FLOW_CLAIM_SCORE' "$tmpdir/err" && fail "score, loser: warned"
 score_issue
 mkdir -p "$tmpdir/nodebin"
 ln -sf "$(command -v node)" "$tmpdir/nodebin/node"
-rm -rf "$tmpdir/events/factory"
+rm -rf "$tmpdir/events/factory" "$tmpdir/events/o__r.jsonl" # the seeds above wrote literal old lines; the real writer must add none
 EXTRA_PATH="$tmpdir/nodebin" CALLUM_FLOW_CLAIM_SCORE=$SCORE rc_of "$CLAIM" 7
 expect_rc 0 "score, real writer"
 events | jq -e 'select(.type == "claimed") | .data.score == 42 and (.data.factors | length) == 2' >/dev/null || fail "score e2e: new log: $(cat "$tmpdir"/events/factory/*.jsonl 2>&1)"
@@ -717,10 +729,9 @@ for fin in closed abandoned; do
   [ "$(events | wc -l)" = "$n" ] || fail "final $fin: $(events)"
 done
 
-# H1's backfill of a closed issue's last stage (cbundy/dev-system#825): written with --new-only it
-# leaves the old log alone, so the sweep still sees `closed` as the newest lifecycle event and logs
-# nothing. Written to both logs (the bug) the old log's newest line is a transition and the sweep
-# logs `closed` a second time.
+# H1's backfill of a closed issue's last stage (cbundy/dev-system#825, #1143): the old-state writer
+# only ever writes the new log, with or without --new-only, so the old log's newest line stays
+# `closed` and the sweep logs nothing.
 # h1_event ARGS...: the real writer with node on PATH too (this suite's toolbin has none), so the
 # translator runs
 mkdir -p "$tmpdir/nodebin"
@@ -746,14 +757,17 @@ n=$(events | wc -l)
 CLAIM_SRC=old rc_of "$SWEEP"
 expect_rc 0 "sweep after H1 backfill"
 [ "$(events | wc -l)" = "$n" ] || fail "the sweep logged after a new-only backfill: $(events)"
+# without --new-only the backfill is the same: the old log is untouched, the sweep adds nothing
 reset
 closed_issue 7 completed
 seed claimed 7
 seed closed 7
+n=$(old_events | wc -l)
 h1_event transition --issue 7 --branch issue-7 --note "$H1NOTE"
+[ "$(old_events | wc -l)" = "$n" ] || fail "a plain backfill wrote to the old log: $(old_events)"
 n=$(events | wc -l)
 CLAIM_SRC=old rc_of "$SWEEP"
-[ "$(events | wc -l)" = $((n + 1)) ] || fail "control: a both-logs backfill should make the sweep log closed again: $(events)"
+[ "$(events | wc -l)" = "$n" ] || fail "the sweep logged after a plain backfill: $(events)"
 
 # the companion's prompt_denied and prompt_waiting are no lifecycle event: after closed they do not
 # make the issue a candidate for a second closed
@@ -791,6 +805,7 @@ reset
 closed_issue 7 completed
 seed claimed 7
 rc_of "$EVENT" superseded --issue 7 --run r7a --repo o/r
+old_seed superseded 7 r7a
 # superseded has no type in the new store, so this reads the old log
 CLAIM_SRC=old rc_of "$SWEEP"
 expect_rc 0 "sweep superseded then closed"

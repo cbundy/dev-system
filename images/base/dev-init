@@ -55,8 +55,6 @@ CALLUM_TOOLS=/usr/local/share/callum-tools
 # start_agentsview_push). dev-doctor reads the same path.
 AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
 AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
-EVENT_PUSH_LOCK=/tmp/dev-event-push.lock
-EVENT_PUSH_LOG=/tmp/dev-event-push.log
 FACTORY_EVENT_PUSH_LOCK=/tmp/dev-factory-event-push.lock
 FACTORY_EVENT_PUSH_LOG=/tmp/dev-factory-event-push.log
 NM_PUSH_LOCK=/tmp/dev-nm-push.lock
@@ -665,31 +663,11 @@ start_agentsview_push() {
   log "started agentsview session push (log: $AGENTSVIEW_PUSH_LOG, $data/pg-watch.log)"
 }
 
-# 8b. The factory event log push (cbundy/dev-system#218): with the same
-#     PostgreSQL URL as step 8, keep event-push-loop running so the lines
-#     callum-flow-event appends to /persist/events reach factory.events. One
-#     loop per container (the lock); several containers sharing the volume are
-#     harmless, the rows are idempotent.
-start_event_push() {
-  local rc=0
-  # shellcheck source=agentsview.sh
-  . /usr/local/share/dev-system/agentsview.sh
-  agentsview_pg_url >/dev/null || rc=$?
-  [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
-  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - factory event push not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
-  # check_persist_dirs (step 1) already created it; this only guards the loop.
-  [ -w "${CALLUM_EVENTS_DIR:-/persist/events}" ] || { log "WARNING: ${CALLUM_EVENTS_DIR:-/persist/events} is not writable - factory event push not started."; return 0; }
-  flock -n "$EVENT_PUSH_LOCK" true 2>/dev/null || return 0
-  : > "$EVENT_PUSH_LOG"
-  setsid nohup flock -n "$EVENT_PUSH_LOCK" /usr/local/share/dev-system/event-push-loop \
-    >> "$EVENT_PUSH_LOG" 2>&1 < /dev/null &
-  log "started factory event push (log: $EVENT_PUSH_LOG)"
-}
-
-# 8b2. The new factory event log push (cbundy/dev-system#740): with the writer
+# 8b. The factory event log push (cbundy/dev-system#740): with the writer
 #      secret of the factory database, keep factory-event-push-loop running so
 #      the lines callum-flow-event appends to <events dir>/factory reach
-#      factory.event_store. start_event_push is separate and unchanged.
+#      factory.event_store. The old event-push-loop is no longer started: callum-flow-event
+#      writes no old log lines (cbundy/dev-system#1143), so factory.events gets no new rows.
 start_factory_event_push() {
   local rc=0
   # shellcheck source=factory-db.sh
@@ -848,7 +826,6 @@ run_factory_db_migrate
 recover_no_mistakes
 write_versions
 start_agentsview_push
-start_event_push
 start_factory_event_push
 start_nm_push
 start_heartbeat

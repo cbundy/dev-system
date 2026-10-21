@@ -161,6 +161,10 @@ Switched readers and their known differences from `old` (dropped before comparin
 
 ## Defaults moved to new
 
+Since [#1143](https://github.com/cbundy/dev-system/issues/1143) the old log and `factory.events` get no new rows, so
+the "way back" below is no longer one: `old` and `shadow` (and an invalid value, which still reads old) read a store
+frozen at the cutover. `callum-flow-dual-write-check` only compares the history before it.
+
 The default source of these tools moved from `shadow` to `new` on 2026-10-18
 ([#902](https://github.com/cbundy/dev-system/issues/902); the factory loop row under [#978](https://github.com/cbundy/dev-system/issues/978)). The owner decided to skip the shadow runs: the evidence is the
 full-history compare ([#650](https://github.com/cbundy/dev-system/issues/650)) and the dual-write check. The way back

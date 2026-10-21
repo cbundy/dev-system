@@ -116,7 +116,26 @@ row() {
 }
 # both OFFSET ISSUE OLDSTATE NEWSTATE DEVICE: the same event in both stores
 both() { row old "$1" "$2" "$3" "$5"; row new "$1" "$2" "$4" "$5"; }
+old_line() {
+  ol_state=$1
+  shift
+  ol_issue='' ol_note=''
+  while [ $# -gt 0 ]; do
+    case "$1" in --issue) ol_issue=$2 ;; --note) ol_note=$2 ;; esac
+    shift 2
+  done
+  ol_n=1
+  [ ! -f "$EV/o__r.jsonl" ] || ol_n=$(($(wc -l < "$EV/o__r.jsonl") + 1))
+  jq -nc --arg state "$ol_state" --argjson issue "$ol_issue" --arg note "$ol_note" --arg id "$(printf '00000000-0000-4000-8000-%012d' "$ol_n")" \
+    '{v: 2, ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")), repo: "o/r", device: "devA", session_id: null, actor: "agent", state: $state,
+      issue: $issue, run_id: null, branch: null, pr: null, head: null, note: (if $note == "" then null else $note end), event_id: $id,
+      base_image: null, dev_image: null, template_version: null, plugin_version: null}' >> "$EV/o__r.jsonl"
+}
+# local_event STATE --issue N [--note TEXT]: the event on this device in both local stores. The new
+# store gets it from the real writer; the old log (which callum-flow-event no longer writes,
+# cbundy/dev-system#1143) gets a literal old-format line the test writes itself.
 local_event() {
+  old_line "$@"
   env -i PATH="$toolbin" HOME="$tmpdir" CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA "$SH" "$REAL_EVENT" "$@" --repo o/r > /dev/null 2> "$tmpdir/lerr" || fail "callum-flow-event $*: $(cat "$tmpdir/lerr")"
 }
 shadow_events() { cat "$EV"/factory/*.jsonl 2>/dev/null | jq -c 'select(.type == "shadow_read")' || true; }

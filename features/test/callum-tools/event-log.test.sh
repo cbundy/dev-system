@@ -38,28 +38,33 @@ ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="
 log="$events/o__r.jsonl"
 
 # --- callum-flow-event ------------------------------------------------------
-ev claimed --issue 7 --note "it's \"quoted\"" --branch feat/issue-7-x --pr 9 --head abc --run r1 || fail "claimed should exit 0"
-[ "$(wc -l < "$log" | tr -d ' ')" = 1 ] || fail "one line expected"
-jq -e '.v == 2 and .repo == "o/r" and .device == "dev-box" and .state == "claimed" and .issue == 7
-  and .pr == 9 and .head == "abc" and .run_id == "r1" and .branch == "feat/issue-7-x"
-  and .note == "it'"'"'s \"quoted\"" and .session_id == null and .actor == "agent"
-  and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))' "$log" > /dev/null || fail "bad line: $(cat "$log")"
+# The old-state mode writes only the new event (cbundy/dev-system#1143): every call is checked
+# against <events dir>/factory/<file>, and the old log <events dir>/<file> must never appear.
+log="$events/factory/o__r.jsonl"
+oldlog="$events/o__r.jsonl"
+nlines() { if [ -f "$log" ]; then wc -l < "$log" | tr -d ' '; else echo 0; fi; }
+ev claimed --issue 7 --note "lease: 120" --branch feat/issue-7-x --pr 9 --head abc --run r1 || fail "claimed should exit 0"
+[ "$(nlines)" = 1 ] || fail "one line expected"
+jq -e '.envelope == 1 and .repo == "o/r" and .device == "dev-box" and .type == "claimed" and .issue == 7
+  and .data.lease_minutes == 120 and .session_id == null and .actor == "agent"
+  and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\\.[0-9]{3}Z$"))' "$log" > /dev/null || fail "bad line: $(cat "$log")"
+[ ! -e "$oldlog" ] || fail "the old log must not be written"
 
 # version fields (#316): read from the snapshot, null without one, one line either way
 [ "$(jq -c '[.base_image, .dev_image, .template_version, .plugin_version]' "$log")" = '[null,null,null,null]' ] || fail "no snapshot must give null version fields: $(cat "$log")"
 printf '%s\n' '{"device":"x","base_image":"2.25.0","dev_image":null,"template_version":"tpl-1","plugin_version":7,"components":[]}' > "$tmpdir/versions.json"
 EV_VERSIONS="$tmpdir/versions.json" ev ready --issue 7 || fail "snapshot event should exit 0"
-[ "$(wc -l < "$log" | tr -d ' ')" = 2 ] || fail "one line per event"
-[ "$(tail -n 1 "$log" | jq -c '[.v, .base_image, .dev_image, .template_version, .plugin_version, .device]')" = '[2,"2.25.0",null,"tpl-1",null,"dev-box"]' ] || fail "snapshot fields wrong: $(tail -n 1 "$log")"
+[ "$(nlines)" = 2 ] || fail "one line per event"
+[ "$(tail -n 1 "$log" | jq -c '[.base_image, .dev_image, .template_version, .plugin_version, .device]')" = '["2.25.0",null,"tpl-1",null,"dev-box"]' ] || fail "snapshot fields wrong: $(tail -n 1 "$log")"
 printf 'not json{' > "$tmpdir/versions.json"
 EV_VERSIONS="$tmpdir/versions.json" ev ready --issue 7 || fail "corrupt snapshot event should exit 0"
-[ "$(tail -n 1 "$log" | jq -c '[.v, .base_image, .plugin_version]')" = '[2,null,null]' ] || fail "corrupt snapshot must give nulls: $(tail -n 1 "$log")"
+[ "$(tail -n 1 "$log" | jq -c '[.base_image, .plugin_version]')" = '[null,null]' ] || fail "corrupt snapshot must give nulls: $(tail -n 1 "$log")"
 head -n 1 "$log" > "$tmpdir/log1" && cp "$tmpdir/log1" "$log"
 [ -e "$events/.wake" ] || fail "an event must touch the wake file"
 rm -f "$events/.wake"
 ev bogus --issue 1 2> /dev/null || :
 [ ! -e "$events/.wake" ] || fail "a rejected call must not touch the wake file"
-ev delegated --branch fix/issue-12-y || fail "issue from branch should exit 0"
+ev ready --branch fix/issue-12-y || fail "issue from branch should exit 0"
 [ "$(tail -n 1 "$log" | jq .issue)" = 12 ] || fail "issue should come from the branch"
 
 rc=0
@@ -71,67 +76,63 @@ ev merged 2> /dev/null || rc=$?
 rc=0
 ev merged --issue x 2> /dev/null || rc=$?
 [ "$rc" = 2 ] || fail "non-numeric --issue should exit 2, got $rc"
-[ "$(wc -l < "$log" | tr -d ' ')" = 2 ] || fail "rejected calls must not write"
+[ "$(nlines)" = 2 ] || fail "rejected calls must not write"
 
-ev usage --note "five_hour=3" || fail "usage needs no issue"
-[ "$(tail -n 1 "$log" | jq -r '.issue, .state' | tr '\n' ' ')" = "null usage " ] || fail "usage line wrong"
+ev closed --issue 31 --note completed || fail "closed"
+[ "$(tail -n 1 "$log" | jq -c '[.type, .issue, .data.reason]')" = '["closed",31,"completed"]' ] || fail "closed event wrong: $(tail -n 1 "$log")"
+ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.type, .issue, .data.who, .data.cause]')" = '["intervention",null,"person","op:mode"]' ] || fail "intervention event wrong: $(tail -n 1 "$log")"
 
-# every line carries a UUID event_id, and two lines differ (#229)
+# every event carries a UUID event_id, and two events differ (#229)
 uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-jq -s -e --arg re "$uuid_re" 'all(.[]; .event_id | type == "string" and test($re))' "$log" > /dev/null || fail "every line needs a UUID event_id: $(cat "$log")"
-[ "$(jq -r .event_id "$log" | sort -u | wc -l | tr -d ' ')" = "$(wc -l < "$log" | tr -d ' ')" ] || fail "event_ids must be unique"
-# an unreadable UUID source: the line is still written, without event_id, exit 0
-before=$(wc -l < "$log" | tr -d ' ')
+jq -s -e --arg re "$uuid_re" 'all(.[]; .event_id | type == "string" and test($re))' "$log" > /dev/null || fail "every event needs a UUID event_id: $(cat "$log")"
+[ "$(jq -r .event_id "$log" | sort -u | wc -l | tr -d ' ')" = "$(nlines)" ] || fail "event_ids must be unique"
+# an unreadable UUID source: the translator refuses the line - nothing written, one warning, exit 0
+before=$(nlines)
 out=$(CALLUM_EVENT_UUID_SOURCE="$tmpdir/no-such-uuid" ev ready --issue 2 2>&1) || fail "a missing UUID source must exit 0"
 case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn: $out" ;; esac
-[ "$(wc -l < "$log" | tr -d ' ')" = $((before + 1)) ] || fail "the line must still be written"
-[ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
+[ "$(nlines)" = "$before" ] || fail "no event may be written without an event_id"
 
 # every state of the closed vocabulary is accepted (loop and v2's three with their required
-# notes, tested below)
+# notes, tested below); the translator may write nothing or warn for a note it cannot read
 for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention prompt_denied prompt_waiting; do
-  ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s life=l seq=1 from=none to=queued verdict=approve round=1 who=loop cause=c" || fail "$s should be accepted"
+  ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s life=l seq=1 from=none to=queued verdict=approve round=1 who=loop cause=c" 2> /dev/null || fail "$s should be accepted"
 done
 [ "$(PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep '^states:')" = "states: $(grep '^STATES=' "$EVENT" | sed 's/^STATES="//; s/"$//')" ] || fail "usage should list the vocabulary"
 PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop transition reviewed intervention prompt_denied prompt_waiting$' || fail "the vocabulary should list loop, v2's three, then the companion's two"
 
-# superseded is run-scoped: --run is required, and the line carries it
+# superseded is run-scoped: --run is required; the translator skips it, so nothing is written
 rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
 [ "$rc" = 2 ] || fail "superseded without --run must exit 2, got $rc: $out"
 case "$out" in *"--run is required"*) ;; *) fail "superseded without --run should say so: $out" ;; esac
+before=$(nlines)
 ev superseded --issue 1 --run r9 --note "by feat/issue-1-x-v2" || fail "superseded with --run should be accepted"
-[ "$(tail -n 1 "$log" | jq -r '.run_id')" = r9 ] || fail "superseded should record the run"
+[ "$(nlines)" = "$before" ] || fail "superseded writes no event"
 
-# loop (D-09): the factory loop's bookkeeping. --issue is optional; the note must carry kind=,
-# key= and status= with values (more fields may follow, in any order), or nothing is written.
-ev loop --issue 470 --run r1 --note "kind=spawn key=design:470:1 status=running agent=designer" || fail "loop should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .run_id, .note]')" = '["loop",470,"r1","kind=spawn key=design:470:1 status=running agent=designer"]' ] || fail "loop line wrong: $(tail -n 1 "$log")"
-ev loop --note "status=held key=capped:start kind=hold" || fail "loop without --issue should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue]')" = '["loop",null]' ] || fail "loop without --issue wrong: $(tail -n 1 "$log")"
-before=$(wc -l < "$log" | tr -d ' ')
+# loop (D-09): --issue is optional; the note must carry kind=, key= and status= with values (more
+# fields may follow, in any order), or nothing is written and the call exits 2.
+ev loop --issue 470 --run r1 --note "kind=spawn key=design:470:1 status=running agent=designer" 2> /dev/null || fail "loop should be accepted"
+ev loop --note "status=held key=capped:start kind=hold" 2> /dev/null || fail "loop without --issue should be accepted"
+before=$(nlines)
 for bad in "" "kind=spawn key=k1" "kind=spawn status=done" "key=k1 status=done" "kind= key=k1 status=done" "kind=spawn key=k1 status=" "kind=spawn rekey=k1 status=done"; do
   rc=0; out=$(ev loop --issue 1 --note "$bad" 2>&1) || rc=$?
   [ "$rc" = 2 ] || fail "loop with note '$bad' must exit 2, got $rc"
   case "$out" in *"kind=, key= and status="*) ;; *) fail "loop with note '$bad' should say why: $out" ;; esac
 done
-[ "$(wc -l < "$log" | tr -d ' ')" = "$before" ] || fail "a rejected loop event must not write"
+[ "$(nlines)" = "$before" ] || fail "a rejected loop event must not write"
 
 # v2's three states (docs/factory-loop/v2/SPEC.md 7.1): each needs its identifying tokens with
 # values; transition and reviewed need --issue, intervention does not (a fleet-level one)
-ev transition --issue 571 --branch issue-571 --note "row=T5 life=lss1x2k seq=7 from=building to=reviewing via=ok" || fail "transition should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .branch]')" = '["transition",571,"issue-571"]' ] || fail "transition line wrong: $(tail -n 1 "$log")"
-ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patch=f00d errors=1" || fail "reviewed should be accepted"
-ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .note]')" = '["intervention",null,"who=person cause=op:mode reason=mode%20act"]' ] || fail "intervention line wrong: $(tail -n 1 "$log")"
+ev transition --issue 571 --branch issue-571 --note "row=T5 life=lss1x2k seq=7 from=building to=reviewing via=ok" 2> /dev/null || fail "transition should be accepted"
+ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patch=f00d errors=1" 2> /dev/null || fail "reviewed should be accepted"
 ev intervention --note "who=judge cause=op:pause" || fail "a judge intervention should be accepted"
-[ "$(tail -n 1 "$log" | jq -r .note)" = "who=judge cause=op:pause" ] || fail "judge line wrong: $(tail -n 1 "$log")"
+[ "$(tail -n 1 "$log" | jq -r .data.who)" = judge ] || fail "judge event wrong: $(tail -n 1 "$log")"
 ev intervention --issue 571 --note "who=person cause=rescue reason=patched%20the%20trust%20file" || fail "a hand-recorded rescue should be accepted"
 # the companion's two (v2 SPEC 10.10): --issue is required, no note token is
 ev prompt_denied --issue 571 --branch issue-571 --pr 621 --note "life=l seq=7 tool=Bash input=rm%20-f%20\$D/*" || fail "prompt_denied should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .branch, .pr]')" = '["prompt_denied",571,"issue-571",621]' ] || fail "prompt_denied line wrong: $(tail -n 1 "$log")"
-ev prompt_waiting --issue 571 --branch issue-571 || fail "prompt_waiting with no note should be accepted"
-[ "$(tail -n 1 "$log" | jq -c '[.state, .issue]')" = '["prompt_waiting",571]' ] || fail "prompt_waiting line wrong: $(tail -n 1 "$log")"
-before=$(wc -l < "$log" | tr -d ' ')
+[ "$(tail -n 1 "$log" | jq -c '[.type, .issue, .data.branch, .data.pr]')" = '["prompt_denied",571,"issue-571",621]' ] || fail "prompt_denied event wrong: $(tail -n 1 "$log")"
+ev prompt_waiting --issue 571 --branch issue-571 2> /dev/null || fail "prompt_waiting with no note should be accepted"
+before=$(nlines)
 for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   "transition|1|life= seq=1 from=none to=queued|life=, seq=, from= and to=" \
   "transition||life=l seq=1 from=none to=queued|--issue is required" \
@@ -150,17 +151,19 @@ for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   [ "$rc" = 2 ] || fail "$state with note '$note' must exit 2, got $rc"
   case "$out" in *"$why"*) ;; *) fail "$state with note '$note' should say '$why': $out" ;; esac
 done
-[ "$(wc -l < "$log" | tr -d ' ')" = "$before" ] || fail "a rejected v2 event must not write"
+[ "$(nlines)" = "$before" ] || fail "a rejected v2 event must not write"
+[ ! -e "$oldlog" ] || fail "no old-state call may write the old log"
 
-# --path prints the file a write appends to, and writes nothing
+# --path prints the old log (older writers appended to it), and writes nothing
 before=$(find "$events" -type f | sort | tr '\n' ' ')
-[ "$(ev --path)" = "$log" ] || fail "--path should print the log: $(ev --path)"
+[ "$(ev --path)" = "$oldlog" ] || fail "--path should print the old log: $(ev --path)"
 [ "$(ev --path --repo acme/widgets)" = "$events/acme__widgets.jsonl" ] || fail "--path --repo wrong: $(ev --path --repo acme/widgets)"
 [ "$(PATH="$toolbin" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=acme/widgets "$SH" "$EVENT" --path)" = "$events/acme__widgets.jsonl" ] || fail "--path should honour CALLUM_FLOW_REPO"
 [ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --path)" = "/persist/events/o__r.jsonl" ] || fail "--path default dir"
 ev closed --issue 31 --repo acme/widgets --note completed
-[ "$(tail -n 1 "$events/acme__widgets.jsonl" | jq -r .state)" = closed ] || fail "closed write should land where --path says"
-rm -f "$events/acme__widgets.jsonl" "$events/factory/acme__widgets.jsonl"
+[ ! -e "$events/acme__widgets.jsonl" ] || fail "a write must not reach the old log --path names"
+[ "$(tail -n 1 "$events/factory/acme__widgets.jsonl" | jq -r .type)" = closed ] || fail "closed write should land in the new log"
+rm -f "$events/factory/acme__widgets.jsonl"
 [ "$(find "$events" -type f | sort | tr '\n' ' ')" = "$before" ] || fail "--path must not write"
 rc=0
 ev --path --bogus 2> /dev/null || rc=$?
@@ -178,92 +181,82 @@ rc=0
 ev --new-path --bogus 2> /dev/null || rc=$?
 [ "$rc" = 2 ] || fail "--new-path with a bad option should exit 2, got $rc"
 
-# dual write: the new event lands in factory/<file> beside the old line
+# old-state mode: the new event lands in factory/<file>; the old log is never written
 dw() { # dw DIR ARGS...: run the writer into DIR, hermetic, stderr to $tmpdir/dw.err
   d=$1
   shift
   PATH="$toolbin" CLAUDE_CONFIG_DIR="${DW_CLAUDE:-$tmpdir/no-claude}" CALLUM_EVENTS_DIR="$d" CALLUM_FLOW_REPO=cbundy/dev-system DEV_MACHINE_NAME=dev-box \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" DEV_SYSTEM_SHARE="${DW_SHARE:-/nonexistent}" "$SH" "${DW_EVENT:-$EVENT}" "$@" 2> "$tmpdir/dw.err"
 }
+only_new() { # DIR: the dir holds the new log and .wake, nothing else
+  [ -z "$(find "$1" -type f ! -path "$1/factory/cbundy__dev-system.jsonl" ! -name .wake)" ] || fail "unexpected files in $1: $(find "$1" -type f)"
+}
 d1="$tmpdir/dw1"
-dw "$d1" claimed --issue 7 --branch issue-7 || fail "dual write must exit 0"
-[ ! -s "$tmpdir/dw.err" ] || fail "a good dual write must be silent: $(cat "$tmpdir/dw.err")"
-old="$d1/cbundy__dev-system.jsonl"
+dw "$d1" claimed --issue 7 --branch issue-7 --note 'lease: 120' || fail "old-state call must exit 0"
+[ ! -s "$tmpdir/dw.err" ] || fail "a good call must be silent: $(cat "$tmpdir/dw.err")"
 new="$d1/factory/cbundy__dev-system.jsonl"
-[ "$(wc -l < "$old" | tr -d ' ')" = 1 ] || fail "one old and one new line expected"
-[ "$(wc -l < "$new" | tr -d ' ')" = 1 ] || fail "one old and one new line expected"
-[ "$(jq -c 'keys' "$old")" = '["actor","base_image","branch","dev_image","device","event_id","head","issue","note","plugin_version","pr","repo","run_id","session_id","state","template_version","ts","v"]' ] || fail "old key set changed: $(cat "$old")"
-jq -e '.ts | test("^....-..-..T..:..:..Z$")' "$old" > /dev/null || fail "old ts must stay second precision"
+[ "$(wc -l < "$new" | tr -d ' ')" = 1 ] || fail "one new line expected"
+only_new "$d1"
+jq -e '.envelope == 1 and .type == "claimed" and .issue == 7 and .data == {lease_minutes: 120} and (.ts | test("\\.[0-9]{3}Z$"))' "$new" > /dev/null || fail "new event wrong: $(cat "$new")"
 [ -e "$d1/.wake" ] || fail ".wake must be touched"
 [ -z "$(find "$new" -newer "$d1/.wake")" ] || fail ".wake must be touched no earlier than the new log's append"
 [ "$(stat -c %a "$d1/factory")" = 700 ] || fail "factory/ must be 0700"
-[ "$(jq -r .event_id "$new")" = "$(jq -r .event_id "$old")" ] || fail "event_id must match"
-[ "$(jq -r '.ts | sub("\\.[0-9]{3}Z$"; "Z")' "$new")" = "$(jq -r .ts "$old")" ] || fail "new ts must be the old ts with ms: $(cat "$new")"
-jq -e '.ts | test("\\.[0-9]{3}Z$")' "$new" > /dev/null || fail "new ts needs milliseconds"
 [ "$(jq -r .session_id "$new")" = null ] || fail "session_id must be null without CLAUDE_SESSION_ID: $(cat "$new")"
 
-# the transcript guess feeds the old line only
+# the transcript guess feeds nothing: the session id is the variable or null
 guess="$tmpdir/guess"
 gp="$guess/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
 mkdir -p "$gp"
 : > "$gp/guessed.jsonl"
 d2="$tmpdir/dw2"
-DW_CLAUDE="$guess" dw "$d2" claimed --issue 7
-[ "$(jq -r .session_id "$d2/cbundy__dev-system.jsonl")" = guessed ] || fail "old line should keep the transcript guess"
+DW_CLAUDE="$guess" dw "$d2" claimed --issue 7 --note 'lease: 120'
 [ "$(jq -r .session_id "$d2/factory/cbundy__dev-system.jsonl")" = null ] || fail "new event must not copy the guess"
 d3="$tmpdir/dw3"
-CLAUDE_SESSION_ID=sess-9 dw "$d3" claimed --issue 7
+CLAUDE_SESSION_ID=sess-9 dw "$d3" claimed --issue 7 --note 'lease: 120'
 [ "$(jq -r .session_id "$d3/factory/cbundy__dev-system.jsonl")" = sess-9 ] || fail "new event should take CLAUDE_SESSION_ID"
 d3c="$tmpdir/dw3c"
-CLAUDE_CODE_SESSION_ID=sess-c dw "$d3c" claimed --issue 7
+CLAUDE_CODE_SESSION_ID=sess-c dw "$d3c" claimed --issue 7 --note 'lease: 120'
 [ "$(jq -r .session_id "$d3c/factory/cbundy__dev-system.jsonl")" = sess-c ] || fail "new event should take CLAUDE_CODE_SESSION_ID"
-[ "$(jq -r .session_id "$d3c/cbundy__dev-system.jsonl")" = sess-c ] || fail "old line should take CLAUDE_CODE_SESSION_ID"
 d3b="$tmpdir/dw3b"
-CLAUDE_SESSION_ID=sess-9 CLAUDE_CODE_SESSION_ID=sess-c dw "$d3b" claimed --issue 7
+CLAUDE_SESSION_ID=sess-9 CLAUDE_CODE_SESSION_ID=sess-c dw "$d3b" claimed --issue 7 --note 'lease: 120'
 [ "$(jq -r .session_id "$d3b/factory/cbundy__dev-system.jsonl")" = sess-9 ] || fail "CLAUDE_SESSION_ID must win in the new event"
-[ "$(jq -r .session_id "$d3b/cbundy__dev-system.jsonl")" = sess-9 ] || fail "CLAUDE_SESSION_ID must win in the old line"
 d3e="$tmpdir/dw3e"
-CLAUDE_SESSION_ID='' CLAUDE_CODE_SESSION_ID='' DW_CLAUDE="$guess" dw "$d3e" claimed --issue 7
+CLAUDE_SESSION_ID='' CLAUDE_CODE_SESSION_ID='' DW_CLAUDE="$guess" dw "$d3e" claimed --issue 7 --note 'lease: 120'
 [ "$(jq -r .session_id "$d3e/factory/cbundy__dev-system.jsonl")" = null ] || fail "empty variables must leave the new event null"
-[ "$(jq -r .session_id "$d3e/cbundy__dev-system.jsonl")" = guessed ] || fail "empty variables must keep the old line guess"
+for d in "$d2" "$d3" "$d3c" "$d3b" "$d3e"; do [ ! -e "$d/cbundy__dev-system.jsonl" ] || fail "the old log must not be written"; done
 
-# a skipped state writes no new event and says nothing
+# a skipped state writes nothing and says nothing
 d4="$tmpdir/dw4"
-dw "$d4" delegated --issue 7
-[ "$(wc -l < "$d4/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "delegated must write the old line"
-[ ! -e "$d4/factory/cbundy__dev-system.jsonl" ] || fail "delegated must write no new event"
+dw "$d4" delegated --issue 7 || fail "a skipped state must exit 0"
+[ -z "$(find "$d4" -type f 2> /dev/null)" ] || fail "delegated must write nothing: $(find "$d4" -type f)"
 [ ! -s "$tmpdir/dw.err" ] || fail "a skip must be silent: $(cat "$tmpdir/dw.err")"
 
-# a miss keeps the old line, writes no new one, and warns once
+# a miss writes nothing and warns once
 d5="$tmpdir/dw5"
 rc=0
 dw "$d5" transition --issue 7 --note 'life=a seq=1 from=bogus to=building' || rc=$?
 [ "$rc" = 0 ] || fail "a miss must exit 0"
-[ "$(wc -l < "$d5/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "a miss keeps the old line"
-[ ! -e "$d5/factory/cbundy__dev-system.jsonl" ] || fail "a miss writes no new event"
+[ -z "$(find "$d5" -type f 2> /dev/null)" ] || fail "a miss writes nothing"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a miss warns once: $(cat "$tmpdir/dw.err")"
 case "$(cat "$tmpdir/dw.err")" in "callum-flow-event: warning: transition: "*) ;; *) fail "miss warning should name the state: $(cat "$tmpdir/dw.err")" ;; esac
 
-# no translator, no node, a crashing translator: one warning each, old line kept, exit 0
+# no translator, no node, a crashing translator: one warning each, nothing written, exit 0
 mkdir -p "$tmpdir/copy"
 cp "$EVENT" "$tmpdir/copy/callum-flow-event"
 d6="$tmpdir/dw6"
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d6" claimed --issue 7 || fail "missing translator must exit 0"
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d6" claimed --issue 7 --note 'lease: 120' || fail "missing translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "missing translator warns once: $(cat "$tmpdir/dw.err")"
-[ "$(wc -l < "$d6/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "missing translator: old line only"
-[ ! -e "$d6/factory" ] || fail "missing translator: old line only"
+[ -z "$(find "$d6" -type f 2> /dev/null)" ] || fail "missing translator: nothing written"
 printf 'process.exit(3);\n' > "$tmpdir/copy/factory-event-translate.js"
 d7="$tmpdir/dw7"
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d7" claimed --issue 7 || fail "crashing translator must exit 0"
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d7" claimed --issue 7 --note 'lease: 120' || fail "crashing translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "crashing translator warns once: $(cat "$tmpdir/dw.err")"
-[ "$(wc -l < "$d7/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "crashing translator: old line only"
-[ ! -e "$d7/factory" ] || fail "crashing translator: old line only"
+[ -z "$(find "$d7" -type f 2> /dev/null)" ] || fail "crashing translator: nothing written"
 mkdir -p "$tmpdir/share"
 cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/share/"
 d8="$tmpdir/dw8"
-DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7
 rm -f "$tmpdir/copy/factory-event-translate.js"
-DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7
+DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7 --note 'lease: 120'
 [ "$(wc -l < "$d8/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "DEV_SYSTEM_SHARE lookup should find the translator"
 nonode="$tmpdir/nonode"
 mkdir -p "$nonode"
@@ -271,29 +264,26 @@ for t in "$toolbin"/*; do [ "$(basename "$t")" = node ] || ln -s "$(readlink "$t
 d9="$tmpdir/dw9"
 PATH="$nonode" CALLUM_EVENTS_DIR="$d9" CALLUM_FLOW_REPO=cbundy/dev-system DEV_VERSIONS_FILE="$tmpdir/no-versions.json" "$SH" "$EVENT" claimed --issue 7 2> "$tmpdir/dw.err" || fail "no node must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "no node warns once: $(cat "$tmpdir/dw.err")"
-[ "$(wc -l < "$d9/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "no node: old line only"
-[ ! -e "$d9/factory" ] || fail "no node: old line only"
+[ -z "$(find "$d9" -type f 2> /dev/null)" ] || fail "no node: nothing written"
 
-# --data (#870): extra payload fields only the new event carries; the old line is as without it
+# --data (#870): extra payload fields only the new event carries
 FACTS='{"title":"T","labels":["ready"],"parent":3}'
 dd0="$tmpdir/dd0"
 dw "$dd0" ready --issue 7 || fail "ready without --data"
 dd1="$tmpdir/dd1"
 dw "$dd1" ready --issue 7 --data "$FACTS" || fail "ready --data must exit 0"
 [ ! -s "$tmpdir/dw.err" ] || fail "ready --data must be silent: $(cat "$tmpdir/dw.err")"
-[ "$(jq -c 'del(.event_id, .ts, .device_seq)' "$dd1/cbundy__dev-system.jsonl")" = "$(jq -c 'del(.event_id, .ts, .device_seq)' "$dd0/cbundy__dev-system.jsonl")" ] || fail "--data changed the old line: $(cat "$dd1/cbundy__dev-system.jsonl")"
 [ "$(jq -c '.data' "$dd1/factory/cbundy__dev-system.jsonl")" = "$FACTS" ] || fail "the new line lacks the facts: $(cat "$dd1/factory/cbundy__dev-system.jsonl")"
 [ "$(jq -c '.data' "$dd0/factory/cbundy__dev-system.jsonl")" = '{}' ] || fail "ready without --data: $(cat "$dd0/factory/cbundy__dev-system.jsonl")"
 # claimed keeps its lease_minutes beside the facts
 dd2="$tmpdir/dd2"
 dw "$dd2" claimed --issue 7 --note 'lease: 120' --data "$FACTS" || fail "claimed --data"
 [ "$(jq -c '.data' "$dd2/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"title":"T","labels":["ready"],"parent":3}' ] || fail "claimed --data: $(cat "$dd2/factory/cbundy__dev-system.jsonl")"
-# score and factors (claim rule) ride --data the same way and keep the old line's note
+# score and factors (claim rule) ride --data the same way
 SC='{"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}'
 dds="$tmpdir/dds"
 dw "$dds" claimed --issue 7 --note 'lease: 120' --data "$SC" || fail "claimed --data score"
 [ "$(jq -c '.data | {lease_minutes, score, factors}' "$dds/factory/cbundy__dev-system.jsonl")" = '{"lease_minutes":120,"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "claimed score: $(cat "$dds/factory/cbundy__dev-system.jsonl")"
-jq -e '.note == "lease: 120" and (has("score") | not) and (has("factors") | not)' "$dds/cbundy__dev-system.jsonl" >/dev/null || fail "claimed score: old line: $(cat "$dds/cbundy__dev-system.jsonl")"
 # not JSON, or not an object: exit 2, nothing written
 for bad in '[1]' 'x' '"s"' '3'; do
   ddb="$tmpdir/ddb"
@@ -303,98 +293,87 @@ for bad in '[1]' 'x' '"s"' '3'; do
   [ "$rc" = 2 ] || fail "--data $bad: exit $rc, want 2"
   [ ! -e "$ddb" ] || [ -z "$(find "$ddb" -type f)" ] || fail "--data $bad wrote something"
 done
-# --if-changed suppression still writes nothing
-dw "$dd1" ready --issue 7 --if-changed --data "$FACTS" || fail "--if-changed --data"
-[ "$(wc -l < "$dd1/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed --data wrote an old line"
-[ "$(wc -l < "$dd1/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed --data wrote a new line"
-# --new-only --data: the new line only
-dd3="$tmpdir/dd3"
-dw "$dd3" ready --issue 7 --new-only --data "$FACTS" || fail "--new-only --data"
-[ ! -e "$dd3/cbundy__dev-system.jsonl" ] || fail "--new-only --data wrote the old log"
-[ "$(jq -c '.data' "$dd3/factory/cbundy__dev-system.jsonl")" = "$FACTS" ] || fail "--new-only --data: $(cat "$dd3/factory/cbundy__dev-system.jsonl")"
-# a key the type does not accept, or a wrong value: a miss - old line kept, no new event, one warning, exit 0
+# a key the type does not accept, or a wrong value: a miss - nothing written, one warning, exit 0
 for bad in '{"nope":1}' '{"title":5}' '{"labels":"a"}' '{"parent":0}' '{"lease_minutes":1}'; do
   ddm="$tmpdir/ddm"
   rm -rf "$ddm"
   dw "$ddm" ready --issue 7 --data "$bad" || fail "--data $bad must exit 0"
-  [ "$(wc -l < "$ddm/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--data $bad: the old line must stay"
-  [ ! -e "$ddm/factory" ] || fail "--data $bad: no new event expected"
+  [ -z "$(find "$ddm" -type f 2> /dev/null)" ] || fail "--data $bad: nothing expected"
   [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "--data $bad: one warning expected: $(cat "$tmpdir/dw.err")"
 done
 
-# --new-only (#825): the new log only, never the old one; .wake touched after the new line
+# --new-only (#825) is a no-op now: the same as without it; the old log is never touched
 dn1="$tmpdir/dwn1"
 NOTE='row=H1 life=a seq=1 from=queued to=building seqAt=1792182907816 since=1792182907816 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 approvedPatch=none prClosedAt=none via=dual-write brief=none question=none notes=none why=none'
 dw "$dn1" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "--new-only must exit 0"
 [ ! -s "$tmpdir/dw.err" ] || fail "--new-only must be silent: $(cat "$tmpdir/dw.err")"
-[ ! -e "$dn1/cbundy__dev-system.jsonl" ] || fail "--new-only must not create or append the old log"
+[ ! -e "$dn1/cbundy__dev-system.jsonl" ] || fail "--new-only must not create the old log"
 [ "$(wc -l < "$dn1/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--new-only: one new line expected"
 jq -e '.type == "transition" and .issue == 1 and .data.via == "dual-write" and .data.seq == 1' "$dn1/factory/cbundy__dev-system.jsonl" > /dev/null || fail "--new-only line: $(cat "$dn1/factory/cbundy__dev-system.jsonl")"
 [ -e "$dn1/.wake" ] || fail "--new-only must touch .wake"
 [ -z "$(find "$dn1/factory/cbundy__dev-system.jsonl" -newer "$dn1/.wake")" ] || fail "--new-only: .wake no earlier than the new line"
-# an existing old log stays byte-identical
+# an existing old log stays byte-identical in every old-state mode (plain, --if-changed, --data, --new-only)
 dn2="$tmpdir/dwn2"
-dw "$dn2" claimed --issue 7 || fail "claimed"
+mkdir -p "$dn2"
+printf '%s\n' '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"cbundy/dev-system","state":"ready","issue":9}' > "$dn2/cbundy__dev-system.jsonl"
 cp "$dn2/cbundy__dev-system.jsonl" "$tmpdir/old.before"
-dw "$dn2" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only
-cmp -s "$dn2/cbundy__dev-system.jsonl" "$tmpdir/old.before" || fail "--new-only changed the old log"
-[ "$(wc -l < "$dn2/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 2 ] || fail "--new-only appends one new line"
+dw "$dn2" claimed --issue 7 --note 'lease: 120' || fail "plain"
+dw "$dn2" ready --issue 7 --if-changed || fail "if-changed"
+dw "$dn2" ready --issue 8 --data "$FACTS" || fail "data"
+dw "$dn2" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "new-only"
+cmp -s "$dn2/cbundy__dev-system.jsonl" "$tmpdir/old.before" || fail "an old-state mode changed the old log"
+[ "$(wc -l < "$dn2/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 4 ] || fail "four new lines expected"
 # the same validation: a bad note is a usage error, nothing written
 dn3="$tmpdir/dwn3"
 rc=0
 dw "$dn3" transition --issue 1 --note 'life=a' --new-only || rc=$?
 [ "$rc" = 2 ] || fail "--new-only keeps the note checks (exit $rc)"
 [ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "a refused --new-only wrote something"
-# --if-changed with --new-only: usage error, nothing written
+# --if-changed with --new-only is accepted (both mean the new log)
 rc=0
-dw "$dn3" transition --issue 1 --note "$NOTE" --new-only --if-changed || rc=$?
-[ "$rc" = 2 ] || fail "--new-only with --if-changed should exit 2, got $rc"
-[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "--new-only --if-changed wrote something"
-# a translator miss writes nothing to either log, warns once, exits 0
+dw "$dn3" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only --if-changed || rc=$?
+[ "$rc" = 0 ] || fail "--new-only with --if-changed should exit 0, got $rc"
+dw "$dn3" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only --if-changed
+[ "$(wc -l < "$dn3/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--new-only --if-changed: the repeat must write nothing"
+# a --new-only miss writes nothing, warns once, exits 0
 rc=0
-dw "$dn3" transition --issue 1 --note 'life=a seq=1 from=bogus to=building' --new-only || rc=$?
+dw "$dn3" transition --issue 2 --note 'life=a seq=1 from=bogus to=building' --new-only || rc=$?
 [ "$rc" = 0 ] || fail "a --new-only miss must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a --new-only miss warns once: $(cat "$tmpdir/dw.err")"
-[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "a --new-only miss wrote something"
 # no translator: nothing written, one warning, exit 0
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$dn3" transition --issue 1 --note "$NOTE" --new-only || fail "--new-only without a translator must exit 0"
+dn4="$tmpdir/dwn4"
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$dn4" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "--new-only without a translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "--new-only without a translator warns once"
-[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "--new-only without a translator wrote something"
+[ ! -e "$dn4" ] || [ -z "$(find "$dn4" -type f)" ] || fail "--new-only without a translator wrote something"
 # the capability probe
-[ "$(dw "$dn3" --new-only --new-path)" = "$dn3/factory/cbundy__dev-system.jsonl" ] || fail "--new-only --new-path should print the new log"
-[ "$(dw "$dn3" --new-only --new-path --repo a/b)" = "$dn3/factory/a__b.jsonl" ] || fail "probe with --repo"
-[ ! -e "$dn3" ] || [ -z "$(find "$dn3" -type f)" ] || fail "the probe wrote something"
+dn5="$tmpdir/dwn5"
+[ "$(dw "$dn5" --new-only --new-path)" = "$dn5/factory/cbundy__dev-system.jsonl" ] || fail "--new-only --new-path should print the new log"
+[ "$(dw "$dn5" --new-only --new-path --repo a/b)" = "$dn5/factory/a__b.jsonl" ] || fail "probe with --repo"
+[ ! -e "$dn5" ] || fail "the probe wrote something"
 rc=0
-dw "$dn3" --new-only --path || rc=$?
+dw "$dn5" --new-only --path || rc=$?
 [ "$rc" = 2 ] || fail "--new-only --path should exit 2, got $rc"
+# --path still prints the old log's path and writes nothing
+[ "$(dw "$dn5" --path)" = "$dn5/cbundy__dev-system.jsonl" ] || fail "--path should print the old log's path"
+[ ! -e "$dn5" ] || fail "--path wrote something"
 
-# --if-changed suppression writes neither line
+# --if-changed (#344, #1143): compared against the newest event for the issue in the new log
 d10="$tmpdir/dw10"
-dw "$d10" ready --issue 7 --branch issue-7
-dw "$d10" ready --issue 7 --branch issue-7 --if-changed
-[ "$(wc -l < "$d10/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed suppression must write neither line"
-[ "$(wc -l < "$d10/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed suppression must write neither line"
+dw "$d10" ready --issue 7 --branch issue-7 --data "$FACTS"
+dw "$d10" ready --issue 7 --branch issue-7 --if-changed --data "$FACTS"
+[ "$(wc -l < "$d10/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed with the same facts must write nothing"
+[ ! -e "$d10/cbundy__dev-system.jsonl" ] || fail "--if-changed wrote the old log"
 
 # event-push-loop pushes only the top-level file, never factory/
 cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/copy/" 2> /dev/null || :
 
-# session id: CLAUDE_SESSION_ID, else the newest transcript of the working directory
+# session id: CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (the transcript guess is gone)
 CLAUDE_SESSION_ID=sess-1 ev ready --issue 3
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-1 ] || fail "CLAUDE_SESSION_ID not used"
 CLAUDE_CODE_SESSION_ID=sess-c ev ready --issue 3
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-c ] || fail "CLAUDE_CODE_SESSION_ID not used"
 CLAUDE_SESSION_ID=sess-1 CLAUDE_CODE_SESSION_ID=sess-c ev ready --issue 3
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-1 ] || fail "CLAUDE_SESSION_ID must win"
-work="$tmpdir/work dir"
-mkdir -p "$work"
-proj="$tmpdir/claude/projects/$(cd "$work" && pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
-mkdir -p "$proj"
-: > "$proj/old.jsonl"
-sleep 1
-: > "$proj/new.jsonl"
-(cd "$work" && PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" ready --issue 4)
-[ "$(tail -n 1 "$log" | jq -r .session_id)" = new ] || fail "newest transcript not used: $(tail -n 1 "$log")"
-
 # an unwritable log is a warning, exit 0
 mkdir -p "$tmpdir/ro"
 chmod 0500 "$tmpdir/ro"
@@ -408,50 +387,54 @@ chmod 0700 "$tmpdir/ro"
 git init -q "$tmpdir/repo"
 git -C "$tmpdir/repo" remote add origin git@github.com:acme/widgets.git
 (cd "$tmpdir/repo" && PATH="$toolbin" CALLUM_EVENTS_DIR="$events" "$SH" "$EVENT" ready --issue 1)
-[ -f "$events/acme__widgets.jsonl" ] || fail "file should be named from the remote: $(ls "$events")"
-[ "$(jq -r .repo "$events/acme__widgets.jsonl")" = acme/widgets ] || fail "repo should come from the remote"
+[ -f "$events/factory/acme__widgets.jsonl" ] || fail "file should be named from the remote: $(ls "$events/factory")"
+[ "$(jq -r .repo "$events/factory/acme__widgets.jsonl")" = acme/widgets ] || fail "repo should come from the remote"
 
-# --if-changed (cbundy/dev-system#344): skip a line that repeats the subject's newest one
+# --if-changed (cbundy/dev-system#344, #1143): skip an event that repeats the issue's newest one
 ic="$tmpdir/ic"
 icev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
-iclog="$ic/o__r.jsonl"
-iclines() { wc -l < "$iclog" | tr -d ' '; }
-icev failed --branch fix/issue-9-a --head h1 --run r1 --note cancelled --if-changed || fail "if-changed with no log should exit 0"
+iclog="$ic/factory/o__r.jsonl"
+iclines() { if [ -f "$iclog" ]; then wc -l < "$iclog" | tr -d ' '; else echo 0; fi; }
+F1='{"title":"A","labels":["ready"],"parent":null}'
+F2='{"title":"B","labels":["ready"],"parent":null}'
+# a missing new log counts as changed
+icev ready --issue 20 --if-changed --data "$F1" || fail "if-changed with no log should exit 0"
 [ "$(iclines)" = 1 ] || fail "if-changed with no log must write"
-icev failed --branch fix/issue-9-a --head h1 --run unknown --note cancelled --if-changed
-[ "$(iclines)" = 1 ] || fail "same state, head and note (run_id differs) must not write"
-icev failed --branch fix/issue-9-a --head h1 --run r1 --if-changed
-[ "$(iclines)" = 2 ] || fail "a different note must write"
-icev failed --branch fix/issue-9-a --head h2 --if-changed
-[ "$(iclines)" = 3 ] || fail "a different head must write"
-icev parked --branch fix/issue-9-a --head h2 --if-changed
-[ "$(iclines)" = 4 ] || fail "a different state must write"
-icev parked --branch fix/issue-9-a --head h2 --if-changed
-[ "$(iclines)" = 4 ] || fail "a repeat must not write"
-icev parked --branch fix/issue-9-a --head h2
-[ "$(iclines)" = 5 ] || fail "without the flag an identical line still writes"
-# the subject is the branch when given: another branch's newest line does not count
-icev parked --branch fix/issue-10-b --head h2 --if-changed
-[ "$(iclines)" = 6 ] || fail "another branch must write"
-# else the issue
-icev ready --issue 20 --if-changed
-icev ready --issue 20 --if-changed
-icev ready --issue 21 --if-changed
-[ "$(iclines)" = 8 ] || fail "issue subject: want 8 lines, got $(iclines)"
-# an interleaved line for the subject makes the repeat a change
-icev claimed --issue 20
-icev ready --issue 20 --if-changed
-[ "$(iclines)" = 10 ] || fail "only the newest line for the subject counts: $(iclines)"
+# the same facts: nothing written (--branch does not narrow the match)
+icev ready --issue 20 --if-changed --data "$F1"
+icev ready --issue 20 --branch fix/issue-20-x --if-changed --data "$F1"
+[ "$(iclines)" = 1 ] || fail "the same type and data must not write: $(iclines)"
+# changed facts write
+icev ready --issue 20 --if-changed --data "$F2"
+[ "$(iclines)" = 2 ] || fail "changed facts must write"
+icev ready --issue 20 --if-changed --data "$F2"
+[ "$(iclines)" = 2 ] || fail "a repeat must not write"
+# without the flag an identical event still writes
+icev ready --issue 20 --data "$F2"
+[ "$(iclines)" = 3 ] || fail "without the flag an identical event still writes"
+# another issue's newest event does not count
+icev ready --issue 21 --if-changed --data "$F2"
+[ "$(iclines)" = 4 ] || fail "another issue must write"
+# an interleaved event for the issue (a later claimed) makes the repeat a change
+icev claimed --issue 20 --note 'lease: 120'
+icev ready --issue 20 --if-changed --data "$F2"
+[ "$(iclines)" = 6 ] || fail "only the newest event for the issue counts: $(iclines)"
+# an unparseable line is ignored, not a stop
 printf 'not json\n' >> "$iclog"
-icev ready --issue 20 --if-changed
-[ "$(iclines)" = 11 ] || fail "an unparseable line must be ignored, not stop the check: $(iclines)"
-# a loop line (the factory loop's bookkeeping) is no transition: it never makes a repeat new
-icev loop --issue 20 --note "kind=hold key=capped:start status=held"
-icev ready --issue 20 --if-changed
-[ "$(iclines)" = 12 ] || fail "a loop line must not make a repeated ready new: $(iclines)"
-icev loop --branch fix/issue-9-a --note "kind=spawn key=fix:r1 status=done"
-icev parked --branch fix/issue-9-a --head h2 --if-changed
-[ "$(iclines)" = 13 ] || fail "a loop line must not make a repeated parked new: $(iclines)"
+icev ready --issue 20 --if-changed --data "$F2"
+[ "$(iclines)" = 7 ] || fail "an unparseable line must be ignored, not stop the check: $(iclines)"
+# loop_entry and loop_passes events are no transition: they never make a repeat new
+LOOPENTRY=$(jq -nc '{envelope:1,event_id:"00000000-0000-4000-8000-000000000001",ts:"2026-10-21T00:00:00.000Z",type:"loop_entry",type_version:1,repo:"o/r",device:"d",actor:"a",session_id:null,issue:20,base_image:null,dev_image:null,template_version:null,plugin_version:null,data:{}}')
+LOOPPASS=$(printf '%s' "$LOOPENTRY" | jq -c '.type = "loop_passes" | .issue = 20')
+printf '%s\n%s\n' "$LOOPENTRY" "$LOOPPASS" >> "$iclog"
+before=$(iclines)
+icev ready --issue 20 --if-changed --data "$F2"
+[ "$(iclines)" = "$before" ] || fail "loop_entry and loop_passes must not make a repeated ready new: $(iclines)"
+# a skipped state writes nothing even with --if-changed
+icev parked --issue 20 --if-changed
+[ "$(iclines)" = "$before" ] || fail "a skipped state wrote"
+# the old log never appears
+[ ! -e "$ic/o__r.jsonl" ] || fail "--if-changed created the old log"
 
 # --- event-push-loop --------------------------------------------------------
 cat > "$fakebin/psql" <<'STUB'
