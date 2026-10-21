@@ -4,6 +4,8 @@ import type { EngineInterface } from 'claude-code'
 
 import { logLoop, transition } from './act'
 import type { ActEnv } from './act'
+import { completeOff } from './act-off'
+import type { OffDone } from './act-off'
 import { agentAnswered, keep, wakeEnded, wakeStarted } from './act-between'
 import type { Answered, Claim, Repair } from './act-between'
 import type { Runtime } from './observe'
@@ -11,7 +13,7 @@ import { actLockPath, releaseActLock } from './rails'
 import { attemptOf } from './trace'
 import type { LedgerEntry } from './types'
 import { within } from './within'
-import { appendLine, killed, lockIo, lockOp, message, runtime } from './driver-io'
+import { appendLine, killed, lockIo, lockOp, mayWrite, message, runtime } from './driver-io'
 import { bareState, ensureLedger, hookEnv, persist } from './driver-store'
 import { REPAIR_TIMEOUT_MS, S, TOOL_ANSWER_MS, between, delivered, live, ping, resuming } from './driver-state'
 import type { After } from './driver-state'
@@ -70,6 +72,27 @@ export async function afterwards($: EngineInterface, after: After) {
   const notes = after.run === undefined ? [] : await after.run(env)
   if (after.line !== undefined) await appendLine($, after.rt, after.line([...notes, ...env.problems]))
   if (after.ping !== undefined) ping(after.ping)
+}
+
+// offPassDone: an off-pass command ended (act-off.ts): its completion runs in the hook queue, never in a
+// pass. It changes nothing and writes nothing unless this session still holds the loaded ledger and the
+// act lock; a completion for an attempt that already ended is dropped. One decision-log line names it,
+// the trace gets its row, a rate limit is left for the next pass's backoff, and a pass is pinged.
+export function offPassDone($: EngineInterface, rt: Runtime, done: OffDone): Promise<void> {
+  return hook(async () => {
+    let applied = false
+    if (live.loaded && live.repo === rt.repo) {
+      if (await mayWrite($, rt)) applied = await completeOff(hookEnv($, rt, await $.clock.now()), done)
+      else live.loaded = false
+    }
+    const failed = done.exec.status === 'failed'
+    const cli = done.exec.status === 'done' ? 0 : done.exec.status === 'failed' && done.exec.outcome?.kind === 'cli' ? done.exec.outcome.exit : -1
+    S.offFinished.push({ cmd: done.kind, key: done.key, ms: Math.round(done.ms * 10) / 10, exit: cli, endedAt: new Date(done.endedAt).toISOString() })
+    S.offFinished.splice(0, S.offFinished.length - 100)
+    if (applied && failed && done.exec.rateLimited === true) S.offRateLimited = true
+    await appendLine($, rt, { offPass: { key: done.key, kind: done.kind, status: done.exec.status, ms: Math.round(done.ms), summary: done.exec.summary, ...(applied ? {} : { dropped: true }) } })
+    ping(`off-pass ${done.key}`)
+  }).catch(() => undefined)
 }
 
 // kept: an After's ledger work for a transition a hook made at once: saved, then logged.

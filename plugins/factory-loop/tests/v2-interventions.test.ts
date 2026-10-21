@@ -29,6 +29,7 @@ import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, TableEvent, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state } from './fixtures'
 import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
+import type { Host } from './host'
 
 const N = 571
 const LIFE = (Math.floor(NOW / 1000) - 3 * 3600).toString(36)
@@ -857,6 +858,9 @@ describe('the owner\'s files in the pass driver', () => {
   }
   const ACT_V2 = { repo: REPO, mode: 'act', checkout: '/work' }
   const fileIvs = (line: Record<string, unknown>) => (line.actions as { key: string }[]).map(a => a.key).filter(k => /^iv\/(control|config)-file\//.test(k))
+  // every pass line from index `from` on: a sweep's completion pings an extra pass (act-off.ts), so
+  // "the next pass" is any pass since
+  const ivsFrom = (h: Host, from: number) => h.passes().slice(from).flatMap(fileIvs)
 
   test('the kill switch on for a pass, then off: exactly one control-file intervention, the next acting pass\'s', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -866,9 +870,10 @@ describe('the owner\'s files in the pass driver', () => {
     expect(h.titles).toEqual(['🔄 dev-system · off'])
     await clock.advance(60_000)
     h.files.delete(OFF)
+    const from = h.passes().length
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
-    expect(fileIvs(h.last())).toEqual([`iv/control-file/fleet/${(NOW + 5_000).toString(36)}`])
+    expect(ivsFrom(h, from)).toEqual([`iv/control-file/fleet/${(NOW + 5_000).toString(36)}`])
     expect((h.store.get(filesKey(REPO)) as FilesSeen).off).toBe(false)
   })
 
@@ -904,16 +909,18 @@ describe('the owner\'s files in the pass driver', () => {
     expect(h.titles).toEqual(['🔄 dev-system · off'])
     // by hand: mode off -> act (the host's file also holds eventsSource: old)
     h.files.set(path, JSON.stringify({ ...ACT_V2, eventsSource: 'old' }))
+    const from = h.passes().length
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
-    expect(fileIvs(h.last())).toEqual([])
     await clock.advance(60_000)
-    expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
+    // the first acting pass keeps it, a later one logs it (a sweep's completion pings passes in between)
+    expect(ivsFrom(h, from)).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
     const iv = h.native('intervention').find(e => e.data.cause === 'config-file')
     expect(iv?.data.detail).toContain('settings changed with no op: config.json mode')
     // once
+    const again = h.passes().length
     await clock.advance(60_000)
-    expect(fileIvs(h.last())).toEqual([])
+    expect(ivsFrom(h, again)).toEqual([])
     // the op: observe, then `/factory mode act`, logged as the op alone
     const r = await $.command.run({ command: 'factory', args: 'mode observe', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
     expect(JSON.parse(h.files.get(path) ?? '{}').mode).toBe('observe')

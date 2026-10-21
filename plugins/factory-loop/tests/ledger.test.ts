@@ -272,6 +272,14 @@ describe('a reload and the agent list (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4)', (
     expect(only(after, wake.key)).toBe(wake)
   })
 
+  test('a sweep and a heartbeat that ran off the pass when the loop reloaded are lost, their attempts counted (act-off.ts)', () => {
+    const sweep = entry('sweep:0', 'sweep', { status: 'running', endedAt: null })
+    const beat = entry('heartbeat:0', 'heartbeat', { status: 'running', endedAt: null })
+    const after = onLoad([sweep, beat], NOW)
+    expect(only(after, sweep.key)).toMatchObject({ status: 'lost', endedAt: NOW, attempts: 1 })
+    expect(only(after, beat.key)).toMatchObject({ status: 'lost', endedAt: NOW, attempts: 1 })
+  })
+
   test('an agent the list lacks, or lists as completed or idle (its turn ended, #560), is lost; failed or killed is failed', () => {
     const ids = ['gone', 'done', 'failed', 'killed', 'running', 'waiting', 'idle', 'pending']
     const before = [...ids.map(agentEntry), wake, done]

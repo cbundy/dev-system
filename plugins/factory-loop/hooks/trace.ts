@@ -220,7 +220,7 @@ export function sourceRows(state: State, commands: readonly Command[], made: rea
 // One executed action: when plan handed it over, when it started and ended (ms into the pass;
 // null for one held before it started), and how long it ran. A spawn's ms is its time to start:
 // it returns once the agent started.
-export type ActionRow = { key: string; kind: ActionKind; status: ActOutcome['status']; queued: number | null; started: number | null; ended: number | null; ms: Ms }
+export type ActionRow = { key: string; kind: ActionKind; status: ActOutcome['status']; queued: number | null; started: number | null; ended: number | null; ms: Ms; off?: true }
 
 export function actionRows(tr: Tracer, outcomes: readonly ActOutcome[], queuedAt: Ms | null): ActionRow[] {
   return outcomes.map(o => {
@@ -233,9 +233,14 @@ export function actionRows(tr: Tracer, outcomes: readonly ActOutcome[], queuedAt
       started,
       ended: started === null ? null : tenth(started + o.ms),
       ms: o.ms,
+      ...(o.off === true ? { off: true as const } : {}),
     }
   })
 }
+
+// One off-pass command that finished since the last record (act-off.ts): its command and key, how
+// long it ran, its exit (-1: it never exited) and when it ended (ISO).
+export type OffPassRow = { cmd: ActionKind; key: string; ms: Ms; exit: number; endedAt: string }
 
 // attemptOf: one attempt of a ledger entry (a retry keeps the key, not the start).
 export function attemptOf(e: LedgerEntry): string {
@@ -340,6 +345,8 @@ export type TraceInput = {
   waiting: WaitRow[]
   // the observe call's wall time and its split (observe-clock.ts)
   observe?: ObserveSplit
+  // the off-pass commands that finished since the last record
+  offPass?: readonly OffPassRow[]
 }
 
 // traceRecord: the pass's record, its log phase ending now: start and end on the loop's clock
@@ -365,6 +372,7 @@ export function traceRecord(input: TraceInput): Record<string, unknown> {
     actions: actionRows(tr, input.outcomes, input.queuedAt),
     wakes: input.wakes,
     waiting: input.waiting,
+    offPass: input.offPass ?? [],
   }
 }
 
