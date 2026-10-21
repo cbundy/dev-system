@@ -14,6 +14,8 @@ import { pruneArgvs } from '../hooks/exec'
 import { CLI_TIMEOUT_MS } from '../hooks/act-cli'
 import { OFF_PASS_MARGIN_MS } from '../hooks/act-off'
 import type { LedgerEntry } from '../hooks/types'
+import { recordsKey, recordsToStore } from '../hooks/v2/observe'
+import { madeRecord } from '../hooks/v2/table'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { handshakePath } from '../hooks/v2/workspace'
 import { STEP_AGENT } from '../hooks/v2/types'
@@ -1670,6 +1672,42 @@ describe('commands that run off the pass (act-off.ts, v2 SPEC 13.2, 13.7.5)', ()
     // the completion pinged a pass
     await clock.advance(6_000)
     expect(h.passes().length).toBeGreaterThan(passes)
+  })
+
+  // a heartbeat held until the test releases it, over a record the store holds (so it runs
+  // `callum-flow-claim --heartbeat`); every such command seen is counted
+  function slowBeat() {
+    let release: () => void = () => undefined
+    const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: 0, stderr: '' })))
+    const { run } = factory({ run: argv => (argv.includes('--heartbeat') ? gate : undefined) })
+    return { run, release: () => release() }
+  }
+  const beats = (h: Host) => h.commands().filter(s => s.argv.includes('--heartbeat')).length
+
+  test('a heartbeat that takes 14 s never holds a pass: the line is written with its entry running, no second heartbeat or sweep is planned meanwhile, and the completion lands after', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const b = slowBeat()
+    const record = { ...madeRecord({ issue: 140, life: 'l', branch: 'issue-140', pr: null, others: [] }, NOW - 30 * MIN), state: 'parked' as const, step: null, question: 'q' }
+    const h = host(on, { config: ACT, run: b.run, store: { [recordsKey(REPO)]: recordsToStore([record], NOW) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const first = h.passes()[0] as Record<string, unknown>
+    expect((first.outcomes as { key: string; status: string; ms: number }[]).find(o => o.key.startsWith('heartbeat:'))).toMatchObject({ status: 'running', ms: 0 })
+    expect(first.ms as number).toBeLessThan(1_000)
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'running', attempts: 1 })
+    expect(beats(h)).toBe(1)
+    const sweepsBefore = sweeps(h)
+    // a second pass while it runs plans no new heartbeat and no new sweep
+    await clock.advance(8_000)
+    await clock.advance(8_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(beats(h)).toBe(1)
+    expect(sweeps(h)).toBe(sweepsBefore)
+    expect(h.entry('heartbeat:0')?.status).toBe('running')
+    b.release()
+    await clock.settle()
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'done', summary: 'leases renewed: #140', attempts: 1 })
+    expect(h.lines().find(l => l.offPass !== undefined && (l.offPass as { kind: string }).kind === 'heartbeat')).toMatchObject({ offPass: { key: 'heartbeat:0', kind: 'heartbeat', status: 'done' } })
   })
 
   test('a sweep that never ends is marked timed-out on the first pass after its bound; a completion after that changes nothing', ENGINE_TEST, async ($, on) => {

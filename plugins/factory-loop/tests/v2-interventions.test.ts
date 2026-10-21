@@ -912,8 +912,10 @@ describe('the owner\'s files in the pass driver', () => {
     const from = h.passes().length
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
+    // the first acting pass keeps it: it logs nothing
+    expect(fileIvs(h.passes()[from] as Record<string, unknown>)).toEqual([])
     await clock.advance(60_000)
-    // the first acting pass keeps it, a later one logs it (a sweep's completion pings passes in between)
+    // a later one logs it, a later one logs it (a sweep's completion pings passes in between)
     expect(ivsFrom(h, from)).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
     const iv = h.native('intervention').find(e => e.data.cause === 'config-file')
     expect(iv?.data.detail).toContain('settings changed with no op: config.json mode')

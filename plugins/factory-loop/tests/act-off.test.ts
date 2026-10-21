@@ -10,8 +10,10 @@ import { OFF_PASS, OFF_PASS_MARGIN_MS, completeOff, isOffPass, offPassExpired } 
 import type { OffDone } from '../hooks/act-off'
 import type { ActIo, RunResult } from '../hooks/exec'
 import { loopEvent } from '../hooks/ledger'
+import { emptyV2State } from '../hooks/v2/observe'
+import { madeRecord } from '../hooks/v2/table'
 import type { Runtime } from '../hooks/observe'
-import type { Action, LedgerEntry } from '../hooks/types'
+import type { Action, LedgerEntry, State } from '../hooks/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -42,11 +44,13 @@ function world(opts: { off: boolean; exit?: number; stderr?: string }) {
   const live: Live = { ledger: [] }
   const finished: OffDone[] = []
   const saves: LedgerEntry[][] = []
+  const argvs: string[][] = []
   let release: () => void = () => undefined
   const gate = new Promise<void>(resolve => (release = resolve))
   const io = (wait: boolean): ActIo => ({
     now: async () => clock.now,
-    run: async (): Promise<RunResult> => {
+    run: async (argv): Promise<RunResult> => {
+      argvs.push([...argv])
       if (wait) await gate
       return { exitCode: opts.exit ?? 0, stdout: '', stderr: opts.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } as RunResult
     },
@@ -74,7 +78,7 @@ function world(opts: { off: boolean; exit?: number; stderr?: string }) {
     problems: [],
     ...(opts.off ? { offPass: { io: io(true), done: (d: OffDone) => void finished.push(d) } } : {}),
   }
-  return { env, live, finished, saves, clock, release: () => release() }
+  return { env, live, finished, saves, argvs, clock, release: () => release() }
 }
 
 const settle = async () => {
@@ -140,6 +144,36 @@ describe('an off-pass action', () => {
       expect(done.exec.status === 'failed' ? done.exec.rateLimited === true : false).toBe(stderr === RATE)
     })
   }
+
+  // a state with v2 records, so the heartbeat executor really runs `callum-flow-claim --heartbeat`
+  const withRecords = (): State => ({ ...state(), v2: emptyV2State(NOW, [140, 141].map(n => madeRecord({ issue: n, life: 'l', branch: `issue-${n}`, pr: null, others: [] }, NOW))) })
+
+  test('a heartbeat with records to renew runs its command off the pass: the entry stays running for 14 s, the completion records what the inline run records', async () => {
+    const inline = world({ off: false })
+    await actOne(inline.env, withRecords(), heartbeat)
+    expect(inline.argvs).toEqual([['callum-flow-claim', '--heartbeat', '140', '141']])
+    const w = world({ off: true })
+    const { outcome } = await actOne(w.env, withRecords(), heartbeat)
+    // started without awaiting: the command is out, the entry saved running, nothing finished
+    expect(outcome).toMatchObject({ key: 'heartbeat:0', kind: 'heartbeat', status: 'running', off: true, ms: 0 })
+    expect(w.argvs).toEqual([['callum-flow-claim', '--heartbeat', '140', '141']])
+    expect(w.live.ledger).toMatchObject([{ key: 'heartbeat:0', status: 'running', attempts: 1 }])
+    w.clock.now = NOW + 14_000
+    await settle()
+    expect(w.finished).toEqual([])
+    expect(w.live.ledger[0]?.status).toBe('running')
+    w.release()
+    await settle()
+    expect(w.finished).toHaveLength(1)
+    const done = w.finished[0] as OffDone
+    expect(done.ms).toBe(14_000)
+    expect(done.endedAt).toBe(NOW + 14_000)
+    expect(await completeOff(w.env, done)).toBe(true)
+    const got = w.live.ledger[0] as LedgerEntry
+    const want = inline.live.ledger[0] as LedgerEntry
+    expect(got).toMatchObject({ status: 'done', summary: 'leases renewed: #140 #141', endedAt: NOW + 14_000 })
+    expect({ ...got, endedAt: 0 }).toEqual({ ...want, endedAt: 0 })
+  })
 
   test('a completion finds its own attempt only: a retry, a timeout or a pruned entry drops it', async () => {
     const cases: [string, (l: LedgerEntry[]) => LedgerEntry[]][] = [
