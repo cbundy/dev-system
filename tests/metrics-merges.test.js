@@ -61,7 +61,7 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.ok(seed(db) > 60);
   const ev = evaluate();
   const q = blocks("## 9c. Merges, pull requests and gaps");
-  assert.equal(q.length, 5);
+  assert.equal(q.length, 7, "the five merge queries and the two run-only ones (unrecorded merges, missing size)");
 
   // merges per day: the same counts by merged_by and recovered
   const days = rows(db, q[0]);

@@ -205,6 +205,8 @@ test("every event v2 builds is the translator's event for its old line, and one 
       const old = oldLine(e);
       assert.equal(old.translated.skip, undefined, `${e.state}: the old line translates`);
       const want = old.translated.event;
+      // the old line carries no size: the executor reads it (cbundy/dev-system#752), null here
+      if (want.type === "merged") want.data = { ...want.data, files: null, additions: null, deletions: null };
       assert.deepEqual(argv.slice(0, 5), ["callum-flow-event", "--type", want.type, "--data", argv[4]], e.state);
       assert.deepEqual(JSON.parse(argv[4]), want.data, `${e.state}: the data is the translator's`);
       const got = log(argv, nativeDir);
