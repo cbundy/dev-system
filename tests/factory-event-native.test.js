@@ -417,3 +417,41 @@ test("the old-state lines of the tools that stopped logging make no new event", 
   const t = TRANSLATE.translate(oldLine({ state: "untrusted_stripped", issue: 7, note: "dependencies=3" }));
   assert.ok(t.miss, JSON.stringify(t));
 });
+
+test("regime: the flag, FACTORY_REGIME, and null; the flag wins; every good output is strictly valid", () => {
+  const regimeOf = (args, env) => {
+    const { r, lines } = native([...claimed, ...args], { env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const e = JSON.parse(lines[0]);
+    assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
+    assert.ok("regime" in e, "the key is always present");
+    assert.deepEqual(Object.keys(e).slice(Object.keys(e).indexOf("plugin_version")), ["plugin_version", "regime", "data"]);
+    return e.regime;
+  };
+  assert.equal(regimeOf(["--regime", "testbed"], {}), "testbed");
+  assert.equal(regimeOf([], { FACTORY_REGIME: "manual" }), "manual");
+  assert.equal(regimeOf(["--regime", "testbed"], { FACTORY_REGIME: "manual" }), "testbed");
+  assert.equal(regimeOf([], {}), null);
+  assert.equal(regimeOf(["--regime", ""], { FACTORY_REGIME: "" }), null, "an empty value counts as unset");
+  assert.equal(regimeOf(["--regime", ""], { FACTORY_REGIME: "manual" }), null, "an empty flag is unset, not a fallback to the variable");
+});
+
+test("regime: a value the enum lacks is written as given with exactly one warning and exit 0", () => {
+  const { r, lines } = native([...claimed, "--regime", "bogus"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr.trim().split("\n").length, 1, r.stderr);
+  assert.match(r.stderr, /callum-flow-event: warning: unknown regime 'bogus' - written as given/);
+  const e = JSON.parse(lines[0]);
+  assert.equal(e.regime, "bogus");
+  assert.notDeepEqual(reader.validateStrict("envelope", 1, e), [], "strict validation still rejects it");
+});
+
+test("regime: the old-state mode passes FACTORY_REGIME to the translator, and without it writes null", () => {
+  const withIt = native(["ready", "--issue", "7"], { env: { FACTORY_REGIME: "manual", HOME: tmp } });
+  assert.equal(withIt.r.status, 0, withIt.r.stderr);
+  assert.equal(JSON.parse(withIt.lines[0]).regime, "manual");
+  const without = native(["ready", "--issue", "7"], { env: { HOME: tmp } });
+  assert.equal(JSON.parse(without.lines[0]).regime, null);
+  assert.deepEqual(reader.validateStrict("envelope", 1, JSON.parse(without.lines[0])), []);
+});

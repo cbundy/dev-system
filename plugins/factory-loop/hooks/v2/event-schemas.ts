@@ -136,6 +136,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "event_id": {"pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$","type":"string"},
       "issue": {"minimum":1,"type":["integer","null"]},
       "plugin_version": {"type":["null","string"]},
+      "regime": {"enum":["factory_loop_v2","manual","testbed",null],"type":["null","string"]},
       "repo": {"pattern":"^[^/\\s]+/[^/\\s]+$","type":"string"},
       "session_id": {"type":["null","string"]},
       "template_version": {"type":["null","string"]},

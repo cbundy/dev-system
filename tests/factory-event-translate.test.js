@@ -444,7 +444,9 @@ test("determinism: the same line twice gives deep-equal output, and dual-write o
     assert.equal(r.event.ts, opts.ts);
     assert.equal(r.event.session_id, opts.sessionId);
     const replay = translate(line).event;
-    assert.deepEqual({ ...r.event, ts: 0, session_id: 0 }, { ...replay, ts: 0, session_id: 0 });
+    assert.equal(r.event.regime, null, "dual write carries regime: null when opts name none");
+    assert.ok(!("regime" in replay), "the replay has no regime key");
+    assert.deepEqual({ ...r.event, ts: 0, session_id: 0, regime: 0 }, { ...replay, ts: 0, session_id: 0, regime: 0 });
     assert.equal(replay.ts, `${line.ts.slice(0, -1)}.000Z`);
     assert.equal(replay.session_id, line.session_id);
     assert.equal(translate(line, { ts: opts.ts }).event.session_id, null);
@@ -748,4 +750,19 @@ test("usage: auth on today's two shapes, and the spend shape (dev-system#1114)",
     [`${sub.note} auth=other`, /bad auth=other/],
     [`${unavail.note} auth=nope`, /bad auth=nope/],
   ]) assert.match(missOf(withNote(sub, bad)), cause, bad);
+});
+
+test("CLI: --regime sets the envelope's regime after plugin_version in dual write, null without it, and the replay has no key", () => {
+  const line = JSON.stringify(oldLines.find((l) => l.state === "ready"));
+  const withRegime = JSON.parse(cli(["--ts", "2026-10-17T01:02:03.456Z", "--regime", "testbed"], `${line}\n`).out);
+  assert.equal(withRegime.regime, "testbed");
+  const keys = Object.keys(withRegime);
+  assert.equal(keys[keys.indexOf("plugin_version") + 1], "regime");
+  assert.equal(keys[keys.length - 1], "data");
+  assert.equal(JSON.parse(cli(["--ts", "2026-10-17T01:02:03.456Z"], `${line}\n`).out).regime, null);
+  assert.equal(JSON.parse(cli(["--regime", "manual"], `${line}\n`).out).regime, "manual", "--regime alone makes it dual write");
+  assert.ok(!("regime" in JSON.parse(cli([], `${line}\n`).out)), "the replay has no regime key");
+  const t = translate(line);
+  assert.ok(!("regime" in t.event));
+  assert.equal(translate(line, { ts: "2026-10-17T01:02:03.456Z" }).event.regime, null);
 });

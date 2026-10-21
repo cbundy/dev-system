@@ -13,7 +13,7 @@
 #        callum-flow-event --new-path [--repo O/N]
 #        callum-flow-event --new-only --new-path [--repo O/N]
 #        callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N]
-#          [--actor NAME]
+#          [--actor NAME] [--regime R]
 #
 # Native mode (cbundy/dev-system#792): --type writes one new-format event (envelope v1,
 # docs/factory-events/README.md) straight from its type and payload to <events dir>/factory/<file>
@@ -27,6 +27,11 @@
 # positive integer; --type not matching ^[a-z][a-z_]*$; an unknown option; a refused payload. A
 # missing node, writer or log that cannot be written warns and exits 0. CALLUM_EVENT_SHAPES
 # overrides the shapes file (tests).
+#
+# --regime R (else FACTORY_REGIME; the flag wins, an empty value counts as unset) is the envelope's
+# regime: factory_loop_v2, testbed or manual (docs/factory-events/README.md, "Reading events"). Unset
+# is null, never guessed. A value outside the shapes' enum is written as given with one warning. The
+# old-state mode takes no flag but passes FACTORY_REGIME to the translator the same way.
 #
 # Old-state mode (<state> ...): builds the old-format line as before (same validation, same note
 # checks), translates it with factory-event-translate.js (found next to this script, else in
@@ -142,7 +147,7 @@ usage() {
   echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "       callum-flow-event --new-path [--repo O/N]" >&2
   echo "       callum-flow-event --new-only --new-path [--repo O/N]" >&2
-  echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME]" >&2
+  echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME] [--regime R]" >&2
   echo "states: $STATES" >&2
   exit 2
 }
@@ -209,7 +214,7 @@ if [ "$1" = --path ] || [ "$1" = --new-path ]; then
 fi
 if [ "$1" = --type ]; then
   n_type='' n_ver='' n_data='' n_issue='' n_repo=${CALLUM_FLOW_REPO-} n_actor=${CALLUM_FLOW_ACTOR:-agent}
-  n_has_ver='' n_has_data='' n_has_issue=''
+  n_has_ver='' n_has_data='' n_has_issue='' n_regime=${FACTORY_REGIME-}
   while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || native_usage "$1 needs a value"
     case "$1" in
@@ -219,6 +224,7 @@ if [ "$1" = --type ]; then
       --issue) n_issue=$2 n_has_issue=1 ;;
       --repo) n_repo=$2 ;;
       --actor) n_actor=$2 ;;
+      --regime) n_regime=$2 ;;
       *) native_usage "unknown option '$1'" ;;
     esac
     shift 2
@@ -238,6 +244,7 @@ if [ "$1" = --type ]; then
   [ -z "$n_has_ver" ] || set -- "$@" --type-version "$n_ver"
   [ -z "$n_has_issue" ] || set -- "$@" --issue "$n_issue"
   [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "$n_regime" ] || set -- "$@" --regime "$n_regime"
   wr_rc=0
   new=$(node "$wr_js" "$@") || wr_rc=$?
   [ "$wr_rc" -ne 2 ] || exit 2
@@ -378,6 +385,7 @@ translate() {
   [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - event not recorded"; return 0; }
   set -- --quiet --ts "$ts_ms"
   [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "${FACTORY_REGIME-}" ] || set -- "$@" --regime "$FACTORY_REGIME"
   [ -z "$extra" ] || set -- "$@" --data "$extra"
   tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - event not recorded"; return 0; }
   tr_rc=0
