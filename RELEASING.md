@@ -136,10 +136,10 @@ are mutable - see `images/base/README.md`.
 
 `ghcr.io/cbundy/dev-system/dev`, this repo's own dev environment
 (`.devcontainer/Dockerfile`), has no version and is never released by hand. The
-`Publish dev image` workflow rebuilds and pushes `latest` and `sha-<short>` on every
-change to `.devcontainer/` merged to main, and weekly a few hours after the base image's
-weekly rebuild. To pick up a base image release sooner, run it by hand on main
-(`gh workflow run publish-dev-image.yml`). Its first push creates the package with this
+`Publish dev image` workflow rebuilds and pushes `latest` and `sha-<short>` after every
+successful base image publish (a release's, the weekly refresh or a manual one), on every
+change to `.devcontainer/` merged to main, and weekly (which also refreshes its own tools).
+The release skill waits for the run the base publish starts. Its first push creates the package with this
 repo's visibility (public).
 
 ## Drift check
