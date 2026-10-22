@@ -1320,6 +1320,12 @@ jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key
   | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+How often GitHub's ready listing came back empty while its issues still carried the label (the loop held the last list), with the pass and the reason:
+
+```sh
+jq -r 'select((.sources.queue // "") | startswith("failed: the ready list came back empty")) | [.at, .pass, .sources.queue] | @tsv' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ### Starved queue
 
 A ready queue the factory cannot touch while nothing is in flight raises the owner item `starved` once the
