@@ -172,6 +172,8 @@ export function roleProblem(role: string | undefined, config: Config): string | 
 // lock by.
 export type RailEnv = {
   DEV_ROLE?: string
+  // this Coder workspace: a beat from the same workspace is never another orchestrator
+  DEV_CODER_WORKSPACE?: string
   ORCHESTRATOR_WATCH_LOCK_DIR?: string
   XDG_RUNTIME_DIR?: string
   TMPDIR?: string
@@ -249,7 +251,8 @@ export const HEARTBEAT_QUIET_MS = 120 * SECOND
 
 // Every other device's orchestrator row for the repo, aged by the database's clock through
 // factory.workers_status, as heartbeat-loop asks readers to (it stores the repo lower-cased).
-export const HEARTBEAT_SQL = `select device, extract(epoch from age) as age_s
+// coder_workspace lets the guard tell a twin of this workspace from another workspace.
+export const HEARTBEAT_SQL = `select device, extract(epoch from age) as age_s, coder_workspace
 from factory.workers_status
 where role = 'orchestrator'
   and lower(repo) = lower(:'repo')
@@ -261,17 +264,17 @@ export function heartbeatArgv(repo: string, device: string): string[] {
   return ['dev-query', '--csv', '-v', `repo=${repo}`, '-v', `device=${device}`]
 }
 
-export type Beat = { device: string; ageMs: Ms }
+export type Beat = { device: string; ageMs: Ms; workspace: string }
 
 // parseBeats: the query's CSV as beats; null when it is not the query's output. A row with no
 // age (no last_seen) is no heartbeat; a negative age (a clock step) counts as just now.
 export function parseBeats(stdout: string): Beat[] | null {
   const header = (stdout.split(/\r?\n/, 1)[0] ?? '').trim()
-  if (header !== 'device,age_s') return null
+  if (header !== 'device,age_s,coder_workspace') return null
   return parseCsv(stdout).flatMap(row => {
     const device = row.device ?? ''
     const age = row.age_s === undefined || row.age_s.trim() === '' ? Number.NaN : Number(row.age_s)
-    return device !== '' && Number.isFinite(age) ? [{ device, ageMs: Math.max(0, age * SECOND) }] : []
+    return device !== '' && Number.isFinite(age) ? [{ device, ageMs: Math.max(0, age * SECOND), workspace: (row.coder_workspace ?? '').trim() }] : []
   })
 }
 
@@ -279,16 +282,22 @@ export function parseBeats(stdout: string): Beat[] | null {
 export type Spell = { since: Ms; device: string }
 
 // notice: the spell that started this pass, told once (TELL heartbeat-other).
-export type GuardVerdict = { ok: boolean; reason: string | null; spell: Spell | null; notice: Spell | null }
+// twins: recent beats left out because they come from this loop's own Coder workspace.
+export type GuardVerdict = { ok: boolean; reason: string | null; spell: Spell | null; notice: Spell | null; twins: Beat[] }
 
 // heartbeatVerdict: block while any beat is at most HEARTBEAT_QUIET_MS old. A spell starts at
 // the first pass that sees one, with its one notice, and ends at the first pass that sees none.
-// A failed query (beats null) blocks too, fail safe, and leaves the spell as it was.
-export function heartbeatVerdict(beats: Beat[] | null, prev: Spell | null, now: Ms, error = 'no output'): GuardVerdict {
-  if (beats === null) return { ok: false, reason: `heartbeat: query failed (${error})`, spell: prev, notice: null }
-  const recent = beats.filter(b => b.ageMs <= HEARTBEAT_QUIET_MS).sort((a, b) => a.ageMs - b.ageMs)
+// A failed query (beats null) blocks too, fail safe, and leaves the spell as it was. A recent
+// beat whose coder_workspace is non-empty and equals this loop's own is a twin of this workspace,
+// never another orchestrator: it is left out of the block and returned as twins.
+export function heartbeatVerdict(beats: Beat[] | null, prev: Spell | null, now: Ms, error = 'no output', workspace = ''): GuardVerdict {
+  if (beats === null) return { ok: false, reason: `heartbeat: query failed (${error})`, spell: prev, notice: null, twins: [] }
+  const all = beats.filter(b => b.ageMs <= HEARTBEAT_QUIET_MS).sort((a, b) => a.ageMs - b.ageMs)
+  const isTwin = (b: Beat) => workspace !== '' && b.workspace === workspace
+  const twins = all.filter(isTwin)
+  const recent = all.filter(b => !isTwin(b))
   const newest = recent[0]
-  if (newest === undefined) return { ok: true, reason: null, spell: null, notice: null }
+  if (newest === undefined) return { ok: true, reason: null, spell: null, notice: null, twins }
   const seen = recent.map(b => `${b.device} ${Math.round(b.ageMs / SECOND)}s ago`).join(', ')
   const spell = prev ?? { since: now, device: newest.device }
   return {
@@ -296,14 +305,15 @@ export function heartbeatVerdict(beats: Beat[] | null, prev: Spell | null, now: 
     reason: `heartbeat: another orchestrator on this repo is up (${seen})`,
     spell,
     notice: prev === null ? spell : null,
+    twins,
   }
 }
 
 // heartbeatGuard: one dev-query per pass. A device with no name cannot tell its own beat from
 // another's, so it refuses rather than guess.
-export async function heartbeatGuard(io: RailIo, repo: string, device: string, prev: Spell | null, now: Ms): Promise<GuardVerdict> {
+export async function heartbeatGuard(io: RailIo, repo: string, device: string, prev: Spell | null, now: Ms, workspace = ''): Promise<GuardVerdict> {
   if (device === '') {
-    return { ok: false, reason: 'heartbeat: this device has no name (DEV_MACHINE_NAME), so its own beat cannot be told apart', spell: prev, notice: null }
+    return { ok: false, reason: 'heartbeat: this device has no name (DEV_MACHINE_NAME), so its own beat cannot be told apart', spell: prev, notice: null, twins: [] }
   }
   try {
     const r = await io.cmd(heartbeatArgv(repo, device), { stdin: HEARTBEAT_SQL, timeoutMs: QUERY_TIMEOUT_MS })
@@ -311,7 +321,7 @@ export async function heartbeatGuard(io: RailIo, repo: string, device: string, p
       const last = r.stderr.trim().split('\n').pop()?.slice(0, 200) ?? ''
       return heartbeatVerdict(null, prev, now, `exit ${r.exitCode}${last === '' ? '' : `: ${last}`}`)
     }
-    return heartbeatVerdict(parseBeats(r.stdout), prev, now, 'unexpected output')
+    return heartbeatVerdict(parseBeats(r.stdout), prev, now, 'unexpected output', workspace)
   } catch (err) {
     return heartbeatVerdict(null, prev, now, String(err).slice(0, 200))
   }
@@ -349,7 +359,7 @@ export type RailInput = {
 
 // act: every rail passed and this session holds the lease. reasons: each refusal, in the fixed
 // order. lock: the lease outcome, null when another rail refused (the lease is left alone).
-export type RailResult = { act: boolean; reasons: string[]; notices: RailNotice[]; memory: RailMemory; lock: LockResult | null }
+export type RailResult = { act: boolean; reasons: string[]; notices: RailNotice[]; memory: RailMemory; lock: LockResult | null; twins: Beat[] }
 
 // checkRails: run at the start of every act-mode pass, before any action, in a fixed order:
 // the role, the old watcher, the heartbeat guard, the schema, then the act lock. The first four always run,
@@ -378,7 +388,7 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
     watcherSpell = null
   }
 
-  const guard = await heartbeatGuard(io, input.repo, input.device, memory.heartbeat, now)
+  const guard = await heartbeatGuard(io, input.repo, input.device, memory.heartbeat, now, env.DEV_CODER_WORKSPACE ?? '')
   if (guard.reason !== null) reasons.push(guard.reason)
   if (guard.notice !== null) notices.push({ kind: 'heartbeat-other', device: guard.notice.device, since: guard.notice.since })
 
@@ -397,6 +407,7 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
     notices: role === null ? notices : [],
     memory: { heartbeat: guard.spell, watcher: watcherSpell },
     lock,
+    twins: guard.twins,
   }
 }
 

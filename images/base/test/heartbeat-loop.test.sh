@@ -94,7 +94,7 @@ case "$1" in
     echo x >> "$d/dver-local-calls"
     [ ! -e "$d/dver-local-sleep" ] || sleep 60
     [ ! -e "$d/dver-snapshot-fail" ] || exit 2
-    printf '%s\n' '{"device":"dev-box","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
+    printf '%s\n' '{"device":"'"$(cat "$d/dver-device" 2>/dev/null || echo dev-box)"'","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
     ;;
   --json)
     echo started >> "$d/dver-json-calls"
@@ -203,6 +203,12 @@ once > /dev/null 2>&1 || fail "beat without a snapshot"
 [ "$(cf 1)" = '["versions_snapshot_missing"]' ] || fail "a missing snapshot must be reported: $(cf 1)"
 has_arg 1 device=dev-box || fail "device falls back to DEV_MACHINE_NAME"
 rm -f "$fakebin/dver-snapshot-fail"
+# a snapshot naming another device cannot rename the row: DEV_MACHINE_NAME wins (#1051)
+reset
+echo box > "$fakebin/dver-device"
+once > /dev/null 2>&1 || fail "beat with a snapshot naming another device"
+has_arg 1 device=dev-box || fail "DEV_MACHINE_NAME must name the device, not the snapshot's: $(grep '^device=' "$fakebin/psql-args-1")"
+rm -f "$fakebin/dver-device"
 
 # --- the latest cache: background, never waited for ---------------------------
 reset

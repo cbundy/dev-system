@@ -235,6 +235,12 @@ skill does not use them, and notices for them would be new behaviour.
   and lets the loop act after 120 seconds of quiet. It covers two workspaces on one repo, which
   the per-workspace act lock cannot see. A heartbeat means the workspace is up, not that it is
   driving, so an idle old orchestrator blocks the loop too: the safe side during cutover.
+- **Amendment, own workspace (2026-10-22, cbundy/dev-system#1051)**: a beat whose `coder_workspace`
+  is non-empty and equals this loop's `DEV_CODER_WORKSPACE` is never another orchestrator, even
+  under another device name (a test once wrote a `box` row from a loop's own workspace). It is left
+  out of the block and logged as `railTwins` on the pass line. Every other beat blocks as before,
+  and so do a failed query, unexpected output and a device with no name. heartbeat-loop also names
+  its device from `DEV_MACHINE_NAME` first, so a snapshot cannot rename the row.
 - **Alternatives**: rely on the mode option alone.
 - **Why**: two drivers on one repo would double every action. The old watcher's lock is the
   clearest sign that the released skill is still driving. The role check stops a desktop session

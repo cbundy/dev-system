@@ -91,6 +91,7 @@ export async function listAgents($: EngineInterface): Promise<{ ok: boolean; age
 export async function railEnv($: EngineInterface): Promise<RailEnv> {
   return {
     DEV_ROLE: await $.env.get('DEV_ROLE'),
+    DEV_CODER_WORKSPACE: await $.env.get('DEV_CODER_WORKSPACE'),
     ORCHESTRATOR_WATCH_LOCK_DIR: await $.env.get('ORCHESTRATOR_WATCH_LOCK_DIR'),
     XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR'),
     TMPDIR: await $.env.get('TMPDIR'),
@@ -144,6 +145,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const aio = tr === null ? actIo($) : tracedActIo(tr, actIo($))
   const keepInStore = (key: string, value: unknown) => spent(tr, 'persistMs', () => storeSet($, key, value, problems))
   let railReasons: string[] = []
+  let railTwins: { device: string; age_s: number }[] = []
   let memory: RailMemory | null = null
   let book: NoticeBook = { pending: [], caps: [] }
   let booked = JSON.stringify(book)
@@ -167,6 +169,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     )
     memory = rails.memory
     railReasons = rails.reasons
+    railTwins = rails.twins.map(b => ({ device: b.device, age_s: Math.round(b.ageMs / 1000) }))
     act = rails.act
     if (JSON.stringify(rails.memory) !== JSON.stringify(remembered)) await keepInStore(keys.rails, rails.memory)
     if (rails.lock !== null && rails.lock.held) {
@@ -419,6 +422,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     atCap: result.atCap ? true : undefined,
     cap: result.cap === undefined ? undefined : { effective: result.cap.effective, configured: result.cap.configured, ceiling: result.cap.ceiling, memoryBytes: result.cap.memoryBytes, estimateBytes: result.cap.estimateBytes, estimateSource: result.cap.estimateSource },
     rails: railReasons.length > 0 ? railReasons : undefined,
+    railTwins: railTwins.length > 0 ? railTwins : undefined,
     ledgerSource: act ? observed.ledgerSource : undefined,
     breaker: breaker === null ? undefined : { since: new Date(breaker.since).toISOString(), until: new Date(breaker.until).toISOString(), passes: breaker.passes },
     told: told.length > 0 ? told : undefined,

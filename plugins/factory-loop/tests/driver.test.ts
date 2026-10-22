@@ -381,7 +381,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       reason: `old watcher: orchestrator-watch.sh holds ${WATCH_LOCK} (pid 4242)`,
       tell: 'TELL old-watcher id=w',
     },
-    { name: "another orchestrator's heartbeat", beats: `device,age_s\n${OTHER},30\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
+    { name: "another orchestrator's heartbeat", beats: `device,age_s,coder_workspace\n${OTHER},30,\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
     {
       name: 'a failed startup migrate',
       files: { '/tmp/dev-factory-db-migrate.json': JSON.stringify({ outcome: 'failed', at: new Date(NOW - 60_000).toISOString(), to_version: 12, error: 'connecting as x_migrator failed' }) },
@@ -423,7 +423,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
 
   test('a heartbeat notice keeps its key in the ledger and is logged as a loop event', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -434,6 +434,19 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.native('loop_entry').filter(e => e.data.kind === 'tell')).toHaveLength(1)
     expect(h.prompts[0]).toStartWith(`TELL heartbeat-other id=w`)
     expect(h.prompts[0]).toContain(`device=${OTHER}`)
+  })
+
+  test('a beat from this loop\'s own Coder workspace under another device name does not hold act mode, and is logged as railTwins', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470], beats: 'device,age_s,coder_workspace\nbox,12,ws-a\n' })
+    const h = host(on, { config: ACT, run, env: { DEV_CODER_WORKSPACE: 'ws-a' } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const line = h.last()
+    expect(line).toMatchObject({ mode: 'act', executed: true, railTwins: [{ device: 'box', age_s: 12 }] })
+    expect(line.rails).toBeUndefined()
+    await clock.advance(60_000)
+    expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toEqual([])
   })
 
   test('the kill switch stops act mode within a pass: nothing read, nothing run', ENGINE_TEST, async ($, on) => {
@@ -1112,7 +1125,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
 
   test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     let turns = 0
     const h = host(on, { config: ACT, run, submit: text => void $.turn.start({ text, turnId: `turn-${++turns}` }) })
     await $.session.start(START)
@@ -1153,7 +1166,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     const first = /id=(\S+)/.exec(h.prompts[0] ?? '')?.[1] ?? ''
     expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: first, decision: 'done' })).toMatchObject({ result: expect.stringContaining('Recorded') })
     // another orchestrator comes up: its notice is the next wake
-    f.w.beats = `device,age_s\n${OTHER},30\n`
+    f.w.beats = `device,age_s,coder_workspace\n${OTHER},30,\n`
     await clock.advance(60_000)
     const second = /id=(\S+)/.exec(h.prompts.find(p => p.startsWith('TELL heartbeat-other')) ?? '')?.[1] ?? ''
     expect(second).not.toBe('')
@@ -1162,7 +1175,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
 
   test("a rail's notice whose spell ended before a wake let it out is never sent (v2 SPEC 13.11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const f = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const f = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
@@ -1429,7 +1442,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     const clock = mock.clock(on, { now: NOW })
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const h = host(on, { config: ACT, run, submit: () => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : undefined) })
     await $.session.start(START)
     await clock.advance(6_000)

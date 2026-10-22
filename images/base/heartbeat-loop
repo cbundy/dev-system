@@ -20,7 +20,8 @@
 # left the loop stops. An unreadable secret counts as not configured.
 #
 # Row: identity and versions come from `dev-version --local --snapshot`
-# ($DEV_VERSIONS_FILE); `versions` is that document plus the cached `latest`
+# ($DEV_VERSIONS_FILE), except the device name: $DEV_MACHINE_NAME first, then the
+# snapshot's device, then the hostname; `versions` is that document plus the cached `latest`
 # lookup (`dev-version --json`, which uses the network). The lookup runs in the
 # background, at most every 15 minutes, under a lock, and a beat only reads the
 # cache. busy / idle, in_flight and sessions (the live Claude sessions and
@@ -607,8 +608,10 @@ beat() {
   chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
   sessions=$(jq -c '.sessions // []' <<< "$state_json")
   [ -z "${HEARTBEAT_STOPPING:-}" ] || sessions='[]'
-  device=$(jq -r '.device // empty' <<< "$snap")
-  [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
+  # the device names itself from its own environment first, so a snapshot cannot rename the row (#1051)
+  device=${DEV_MACHINE_NAME:-}
+  [ -n "$device" ] || device=$(jq -r '.device // empty' <<< "$snap")
+  [ -n "$device" ] || device=$(hostname)
   g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
   ARGS=(-v "device=$device" -v "repo=$repo" -v "role=$(g role)" -v "ring=$(g ring)"
     -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)"

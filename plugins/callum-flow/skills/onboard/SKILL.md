@@ -530,7 +530,7 @@ comment on the issue), built, PR opened, CI, reviewed and merged. The labels sho
 | Symptom | What shows it | Fix |
 |---|---|---|
 | Act mode does nothing: the role | `rails`: `role: DEV_ROLE is dev, act needs orchestrator` | The workspace is not from the `orchestrator-loop` template. Create one from it. |
-| Act mode does nothing: another orchestrator | `rails`: `heartbeat: another orchestrator on this repo is up (<device> ...)` | Another orchestrator workspace runs on the repo. Stop it: one loop per repo. |
+| Act mode does nothing: another orchestrator | `rails`: `heartbeat: another orchestrator on this repo is up (<device> ...)` | Another orchestrator workspace runs on the repo. Stop it: one loop per repo. A beat from this loop's own Coder workspace under another device name never blocks; it shows as `railTwins`. |
 | Act mode does nothing: the act lock | `rails`: `act lock: session <id> holds it until <time>` | Another session in this workspace holds the loop. Close it; the lock frees itself when its lease runs out. |
 | Act mode does nothing: the factory database | `rails`: `heartbeat: query failed (...)` | The workspace cannot query the factory database. `coder ssh <repo>-loop -- dev-doctor` shows its database checks, with the fix for each. |
 | Act mode does nothing: the repo | `rails`: `repo: the checkout ... is ..., not <owner>/<repo>` | The checkout's `origin` is another repo. Fix `repo_url`, or `repo` in the workspace file. |
