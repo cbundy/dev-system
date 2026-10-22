@@ -106,10 +106,14 @@ fix the notes until the validator passes and the preview reads well. Do not wait
    workflow's last step rolls the milestone over; check `vX.Y.Z` is closed and a fresh
    `Next release` exists (when the repo had one).
 4. If the release bumped the image: `gh workflow run publish-base-image.yml` on main to publish the
-   new tags, then confirm the run is green.
+   new tags, then confirm the run is green. Once it is green, the `Publish dev image` workflow
+   starts by itself (`workflow_run`): find that run with `gh run list --workflow publish-dev-image.yml
+   --event workflow_run --limit 1 --json databaseId,headSha,status,conclusion,url`, check it is newer
+   than the base run, wait on it with `gh run watch <id> --exit-status --interval 60`, and confirm it
+   is green.
 5. Report (to the judge that started you, or to the owner when a person ran this skill): the
    version and image level with the reasons in one line each, the tag, the release URL
-   (`gh release view vX.Y.Z --json url`), and the result of each workflow run.
+   (`gh release view vX.Y.Z --json url`), and the result of each workflow run, including the dev image run.
 
 Waiting on a check or a run: the whole fleet (every loop and session) shares one GitHub rate limit,
 and the image publish alone takes about 15 minutes. Always wait with a slow interval:
