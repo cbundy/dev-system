@@ -287,6 +287,23 @@ for that, `dev-doctor` shows a WARN with the fix: `gh auth refresh -h github.com
 A PR opened before `ci.yml` reaches the default branch gets no checks until a new
 `pull_request` event (push a commit, or close and reopen it).
 
+### 3g. Release workflow (only if the repo cuts releases from its own workflow)
+
+Skip this when the repo does not create GitHub Releases in a workflow. Otherwise add one step
+after the step that creates the Release, so its `released` event reaches the factory store:
+
+```yaml
+- uses: cbundy/dev-system/.github/actions/released-event@vX.Y.Z   # the dev-system release you use
+  env:
+    GH_TOKEN: ${{ github.token }}   # the job needs `contents: write`
+  with:
+    tag: ${{ steps.release.outputs.tag }}   # the tag the Release was created for
+```
+
+The step attaches `factory-released.json` to the Release. A device running the factory push loop
+collects it: set `FACTORY_RELEASE_REPOS=owner/name` on the device for a repo it has never logged an
+event for (a repo it already has a factory log for is watched without it).
+
 ### Existing consumers
 
 A repo onboarded before the factory-loop-only setup keeps its files. `npx callum-dev update`

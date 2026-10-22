@@ -64,6 +64,9 @@ export DEV_SECRETS_DIR="$tmpdir/secrets"
 export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
 mkdir -p "$DEV_SECRETS_DIR"
 export DEV_SYSTEM_SHARE="$ROOT/images/base"
+# The release collector is off for every case but its own (section 12): no test may reach GitHub.
+export DEV_FACTORY_RELEASE_COLLECT_INTERVAL=0
+unset FACTORY_RELEASE_COLLECT_BIN FACTORY_RELEASE_COLLECT_TIMEOUT
 
 WPW=wpw-$$-secret
 db="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
@@ -291,4 +294,74 @@ loop --once
 [ "$(q "$db_old" "SELECT regime FROM factory.event_store WHERE issue = 93")" = manual ] || fail "after the migration regime should land: $(cat "$tmpdir/loop.out")"
 [ "$(q "$db_old" "SELECT count(*) FROM factory.event_store WHERE issue IN (91, 92) AND regime IS NULL")" = 2 ] || fail "lines pushed before the migration read NULL"
 echo "ok: a missing regime column drops the field, not the line"
+
+# -- 12. the release collector: cadence, and it never stops or delays the push
+WURL=$(url_for "$db" "${db}_writer" "$WPW")
+stub=$tmpdir/collector
+cat > "$stub" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$STUB_CALLS"
+echo "callum-flow-released: collect o/r v1.0.0: collect (stub) postgres://u:hunter2secret@h/db" >&2
+case "${STUB_MODE:-ok}" in
+  fail) exit 1 ;;
+  sleep) sleep 30 ;;
+  write) CLAUDE_CONFIG_DIR=/nonexistent CALLUM_FLOW_REPO=acme/widgets DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="$NOVERS" bash "$EVENT_BIN" --type claimed --data '{"lease_minutes":5}' --issue 121 2> /dev/null ;;
+esac
+STUB
+chmod +x "$stub"
+export STUB_CALLS=$tmpdir/collector.calls EVENT_BIN=$EVENT NOVERS=$tmpdir/no-versions.json
+collect_loop() { # MODE INTERVAL [BIN]
+  rc=0
+  STUB_MODE=$1 DEV_FACTORY_RELEASE_COLLECT_INTERVAL=$2 FACTORY_RELEASE_COLLECT_BIN=${3:-$stub} FACTORY_RELEASE_COLLECT_TIMEOUT=1 \
+    CALLUM_EVENTS_DIR=$EVDIR FACTORY_DB_WRITER_URL=$WURL timeout 60 bash "$LOOP" --once > "$tmpdir/loop.out" 2>&1 || rc=$?
+}
+calls() { if [ -f "$STUB_CALLS" ]; then wc -l < "$STUB_CALLS" | tr -d ' '; else echo 0; fi; }
+
+# cadence: two passes inside the interval call it once; its stderr reaches the log, masked
+EVDIR=$tmpdir/ev12a
+mkdir -p "$EVDIR"
+ev --type claimed --data '{"lease_minutes":5}' --issue 120
+rm -f "$STUB_CALLS"
+collect_loop ok 900
+[ "$rc" = 0 ] || fail "pass with the collector should succeed: $(cat "$tmpdir/loop.out")"
+grep -q "collect o/r v1.0.0: collect (stub)" "$tmpdir/loop.out" || fail "the collector's stderr belongs in the log"
+grep -q hunter2secret "$tmpdir/loop.out" && fail "the collector's output must be masked"
+collect_loop ok 900
+[ "$(calls)" = 1 ] || fail "two passes inside the interval must call the collector once, got $(calls)"
+[ "$(cat "$STUB_CALLS")" = "--collect" ] || fail "the collector is run as --collect"
+# an old stamp runs it again
+touch -d '2 hours ago' "$EVDIR/factory/.released-collect"
+collect_loop ok 900
+[ "$(calls)" = 2 ] || fail "a stamp older than the interval must run the collector again, got $(calls)"
+# interval 0 never calls it
+rm -f "$STUB_CALLS" "$EVDIR/factory/.released-collect"
+collect_loop ok 0
+[ "$(calls)" = 0 ] || fail "interval 0 must never call the collector"
+[ ! -e "$EVDIR/factory/.released-collect" ] || fail "interval 0 must not stamp"
+
+# failure isolation: the pass still pushes, with one warning, and the stamp is set
+n=0
+for mode in fail sleep missing; do
+  n=$((n + 1))
+  EVDIR=$tmpdir/ev12b$n
+  mkdir -p "$EVDIR"
+  ev --type claimed --data '{"lease_minutes":5}' --issue 130
+  before=$(rows)
+  bin=$stub
+  [ "$mode" != missing ] || bin=$tmpdir/no-such-collector
+  collect_loop "$mode" 900 "$bin"
+  [ "$rc" = 0 ] || fail "a $mode collector must not fail the pass: $(cat "$tmpdir/loop.out")"
+  [ "$(($(rows) - before))" = 1 ] || fail "a $mode collector must not stop the push: $(cat "$tmpdir/loop.out")"
+  [ "$(grep -c 'factory-event-push-loop: release collector' "$tmpdir/loop.out")" = 1 ] || fail "a $mode collector gives one warning: $(cat "$tmpdir/loop.out")"
+  [ -e "$EVDIR/factory/.released-collect" ] || fail "the stamp is set whatever the collector did ($mode)"
+done
+
+# what the collector writes is pushed in the same pass
+EVDIR=$tmpdir/ev12c
+mkdir -p "$EVDIR"
+before=$(rows)
+collect_loop write 900
+[ "$rc" = 0 ] || fail "pass with a writing collector: $(cat "$tmpdir/loop.out")"
+[ "$(($(rows) - before))" = 1 ] || fail "an event the collector writes must be pushed in the same pass: $(cat "$tmpdir/loop.out")"
+echo "ok: the release collector runs at its interval and never blocks the push"
 echo "factory-event-push-loop tests passed"

@@ -86,6 +86,26 @@ notes' headlines (the bold title leading each bullet). The technical list, the m
 issues. A run-it or keep-open issue may sit in `Later` while its PR is in the release; that is not a
 disagreement.
 
+### A release cut by a repo's own workflow
+
+A repo that cuts its releases in a GitHub workflow (not through the factory loop's release task) reaches the
+factory event store with one step, added after the step that creates the GitHub Release:
+
+```yaml
+- uses: cbundy/dev-system/.github/actions/released-event@vX.Y.Z
+  env:
+    GH_TOKEN: ${{ github.token }}   # the job needs contents: write
+  with:
+    tag: v1.2.3
+```
+
+It uploads the asset `factory-released.json` (the `released` event's type, version and payload, built from the
+same `release-contents.js` rule) to the Release; a re-run replaces it. Nothing is written in CI. A device running
+`factory-event-push-loop` collects the asset into its own log and pushes it: automatically for a repo the device
+already has a factory log for, and for any other repo once it is listed in `FACTORY_RELEASE_REPOS` (comma or
+space separated `owner/name`). dev-system's own `release.yml` runs the step last, so a failure never blocks the
+tag, the Release or the milestone.
+
 ## The Dev Container Feature (deprecated, separate cadence)
 
 The feature is deprecated (cbundy/dev-system#89) and gets no new capabilities. A script

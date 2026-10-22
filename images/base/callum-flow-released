@@ -4,11 +4,26 @@
 // the payload with release-contents.js (the one definition of what a release carried) and writes it
 // with `callum-flow-event --type released`.
 //
-// Usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]
+// Usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]
+//        callum-flow-released --collect [--repo O/N]...
 //
-//   --repo     default CALLUM_FLOW_REPO, else `gh repo view --json nameWithOwner`
+//   --repo     default CALLUM_FLOW_REPO, else `gh repo view --json nameWithOwner`; repeatable with
+//              --collect (the repos to collect, else the watched repos below)
 //   --source   who cut the release; default manual
 //   --dry-run  print the payload as one JSON line on stdout and write nothing
+//   --attach   (CI) build the same payload and upload it to the tag's GitHub Release as the asset
+//              factory-released.json, {"type":"released","type_version":1,"data":<payload>}, with
+//              `gh release upload --clobber` (a re-run replaces it). Writes no local event and needs no
+//              events dir. No GitHub Release for the tag is exit 1. Not with --dry-run (exit 2).
+//   --collect  (a device) for each watched repo read its newest 20 releases (one page, drafts skipped)
+//              and write the `released` event of each factory-released.json asset whose tag the local
+//              log does not hold. Watched repos: the --repo flags, else FACTORY_RELEASE_REPOS (comma or
+//              space separated owner/name) plus the repos named by <events dir>/factory/*.jsonl. One
+//              stderr line per release: `collect <repo> <tag>: <decision> (<reason>)`, the decision
+//              being collect, skip already-logged, skip unknown-version (this image's shapes lack the
+//              asset's type_version; a newer image collects it later) or refuse (not JSON, not a
+//              `released` event, data.tag not the release's tag, bad source, or the writer refused it).
+//              Exit 0 every repo read, 1 a read or write failed, 2 usage.
 //
 // Reads: the tag's commit (sha and committer date), the repo's v* tags (for the previous final tag),
 // the compare of previous...tag (first-parent PRs; without a previous tag, the tag's commit list),
@@ -19,8 +34,8 @@
 // `callum-flow-released: <tag> already written as <event_id>, skipped` line goes to stderr and the
 // exit is 0.
 //
-// Exit codes: 0 written (or skipped as already written, or dry run); 1 a GitHub read failed or the
-// event tool failed (nothing is written); 2 usage error.
+// Exit codes: 0 written (or skipped as already written, dry run, attached, collected); 1 a GitHub read
+// or upload failed or the event tool failed (nothing is written); 2 usage error.
 //
 // Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_EVENT_BIN (the event tool; default callum-flow-event
 // beside this script, else on PATH), DEV_SYSTEM_SHARE (where release-contents.js is found when it is
@@ -32,7 +47,10 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const SOURCES = ["loop", "workflow", "manual"];
-const USAGE = "usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]\n";
+const ASSET = "factory-released.json";
+const USAGE =
+  "usage: callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]\n" +
+  "       callum-flow-released --collect [--repo O/N]...\n";
 
 class UsageError extends Error {}
 class ReadError extends Error {
@@ -69,6 +87,15 @@ function gh(method, endpoint, body) {
   return method === "GET" ? (Array.isArray(json[0]) ? json.flat() : json) : json;
 }
 
+// One page, not paginated: GET `endpoint` with extra gh args. Returns stdout (raw) or throws.
+function ghOnce(endpoint, extra = []) {
+  const r = spawnSync("gh", ["api", "-X", "GET", endpoint, ...extra], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const what = `gh api GET ${endpoint}`;
+  if (r.error) throw new ReadError(`${what} failed: ${r.error.message}`);
+  if (r.status !== 0) throw new ReadError(`${what} failed: ${(r.stderr || r.stdout).trim()}`, /HTTP 404/.test(r.stderr || ""));
+  return r.stdout;
+}
+
 // --slurp wraps the pages in an array; a single object endpoint is the first page.
 const one = (pages) => (Array.isArray(pages) ? pages[0] : pages);
 
@@ -79,7 +106,7 @@ const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
 }`;
 
 function parseArgs(argv) {
-  const o = { tag: null, repo: null, source: "manual", dryRun: false, help: false };
+  const o = { tag: null, repo: null, repos: [], source: "manual", dryRun: false, attach: false, collect: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = () => {
@@ -88,13 +115,23 @@ function parseArgs(argv) {
     };
     if (a === "-h" || a === "--help") o.help = true;
     else if (a === "--dry-run") o.dryRun = true;
-    else if (a === "--repo") o.repo = value();
+    else if (a === "--attach") o.attach = true;
+    else if (a === "--collect") o.collect = true;
+    else if (a === "--repo") o.repos.push((o.repo = value()));
     else if (a === "--source") o.source = value();
     else if (a.startsWith("-")) throw new UsageError(`unknown option ${a}`);
     else if (o.tag === null) o.tag = a;
     else throw new UsageError(`unexpected argument ${a}`);
   }
   if (o.help) return o;
+  const badRepo = (r) => !/^[^/\s]+\/[^/\s]+$/.test(r);
+  if (o.collect) {
+    if (o.tag || o.dryRun || o.attach) throw new UsageError("--collect takes no tag and no --dry-run or --attach");
+    if (o.repos.some(badRepo)) throw new UsageError("--repo must look like owner/name");
+    return o;
+  }
+  if (o.repos.length > 1) throw new UsageError("--repo can be given once without --collect");
+  if (o.attach && o.dryRun) throw new UsageError("--attach and --dry-run cannot be combined");
   if (!o.tag) throw new UsageError("no tag given");
   if (!SOURCES.includes(o.source)) throw new UsageError(`--source must be one of ${SOURCES.join(", ")}`);
   if (o.repo !== null && !/^[^/\s]+\/[^/\s]+$/.test(o.repo)) throw new UsageError("--repo must look like owner/name");
@@ -119,15 +156,16 @@ function eventTool() {
   return fs.existsSync(beside) ? beside : "callum-flow-event";
 }
 
-// The event_id of a `released` event for `tag` already in the log, or null.
-function alreadyWritten(tool, repo, tag) {
+// The `released` events already in the repo's factory log: tag -> event_id.
+function loggedReleases(tool, repo) {
   const r = spawnSync(tool, ["--new-path", "--repo", repo], { encoding: "utf-8" });
   if (r.status !== 0) throw new ReadError(`${tool} --new-path failed: ${(r.stderr || "").trim()}`);
+  const have = new Map();
   let text;
   try {
     text = fs.readFileSync(r.stdout.trim(), "utf-8");
   } catch {
-    return null;
+    return have;
   }
   for (const line of text.split("\n")) {
     if (!line.includes('"released"')) continue;
@@ -137,10 +175,13 @@ function alreadyWritten(tool, repo, tag) {
     } catch {
       continue;
     }
-    if (e && e.type === "released" && e.data && e.data.tag === tag) return e.event_id || "unknown";
+    if (e && e.type === "released" && e.data && typeof e.data.tag === "string" && !have.has(e.data.tag)) have.set(e.data.tag, e.event_id || "unknown");
   }
-  return null;
+  return have;
 }
+
+// The event_id of a `released` event for `tag` already in the log, or null.
+const alreadyWritten = (tool, repo, tag) => loggedReleases(tool, repo).get(tag) || null;
 
 function buildPayload(rc, repo, tag, source, note) {
   const [owner, name] = repo.split("/");
@@ -187,6 +228,122 @@ function buildPayload(rc, repo, tag, source, note) {
   return { tag, previous_tag: prev, commit: sha, released_at: releasedAt, prs: c.prs, issues: c.issues, issues_closed: c.issues_closed, headlines, source };
 }
 
+// CI: upload the payload wrapped as an event to the tag's GitHub Release.
+function attach(rc, repo, tag, source, err) {
+  try {
+    gh("GET", `repos/${repo}/releases/tags/${encodeURIComponent(tag)}`);
+  } catch (e) {
+    if (e.notFound) throw new ReadError(`${repo} has no GitHub Release for ${tag}; create the Release first, there is nothing to attach to`);
+    throw e;
+  }
+  const payload = buildPayload(rc, repo, tag, source, err);
+  const dir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || process.env.TMPDIR || "/tmp", "factory-released-"));
+  try {
+    const file = path.join(dir, ASSET);
+    fs.writeFileSync(file, `${JSON.stringify({ type: "released", type_version: 1, data: payload })}\n`);
+    const r = spawnSync("gh", ["release", "upload", tag, file, "--clobber", "--repo", repo], { encoding: "utf-8" });
+    if (r.error || r.status !== 0) throw new ReadError(`gh release upload ${tag} failed: ${r.error ? r.error.message : (r.stderr || r.stdout).trim()}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  process.stdout.write(`callum-flow-released: attached ${ASSET} to ${repo} ${tag} (${payload.prs.length} PRs)\n`);
+}
+
+const REPO_RE = /^[^/\s]+\/[^/\s]+$/;
+
+// The repos a device watches when --repo is not given.
+function watchedRepos() {
+  const repos = new Set((process.env.FACTORY_RELEASE_REPOS || "").split(/[\s,]+/).filter((r) => REPO_RE.test(r)));
+  const fdir = path.join(process.env.CALLUM_EVENTS_DIR || "/persist/events", "factory");
+  let names = [];
+  try {
+    names = fs.readdirSync(fdir);
+  } catch {
+    // no factory log yet
+  }
+  for (const n of names) {
+    const m = /^(.+?)__(.+)\.jsonl$/.exec(n);
+    if (m && REPO_RE.test(`${m[1]}/${m[2]}`)) repos.add(`${m[1]}/${m[2]}`);
+  }
+  return [...repos].sort();
+}
+
+// The versions of `released` this image's shapes know.
+function knownVersions() {
+  const candidates = process.env.CALLUM_EVENT_SHAPES ? [process.env.CALLUM_EVENT_SHAPES] : [sharedFile("factory-event-shapes.json")];
+  let shapes;
+  try {
+    shapes = JSON.parse(fs.readFileSync(candidates[0], "utf-8"));
+  } catch (e) {
+    throw new ReadError(`cannot read the event shapes ${candidates[0]}: ${e.message}`);
+  }
+  const out = new Set();
+  for (const k of Object.keys((shapes && shapes.schemas) || {})) {
+    const m = /^released\.v(\d+)$/.exec(k);
+    if (m) out.add(Number(m[1]));
+  }
+  return out;
+}
+
+// Decide one release; returns [decision, reason] and writes the event when it is `collect`.
+function collectOne(tool, repo, rel, logged, versions) {
+  const tag = rel.tag_name;
+  const asset = (rel.assets || []).find((a) => a && a.name === ASSET);
+  if (!asset) return null;
+  if (logged.has(tag)) return ["skip already-logged", `event ${logged.get(tag)}`];
+  let doc;
+  try {
+    doc = JSON.parse(ghOnce(`repos/${repo}/releases/assets/${asset.id}`, ["-H", "Accept: application/octet-stream"]));
+  } catch (e) {
+    if (e instanceof ReadError) throw e;
+    return ["refuse", "the asset is not JSON"];
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return ["refuse", "the asset is not a JSON object"];
+  if (doc.type !== "released") return ["refuse", `type is ${JSON.stringify(doc.type)}, not "released"`];
+  const data = doc.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return ["refuse", "data is not an object"];
+  if (data.tag !== tag) return ["refuse", `data.tag ${JSON.stringify(data.tag)} differs from the release tag`];
+  if (!SOURCES.includes(data.source)) return ["refuse", `data.source ${JSON.stringify(data.source)} is not one of ${SOURCES.join(", ")}`];
+  const v = doc.type_version;
+  if (!Number.isInteger(v) || v < 1) return ["refuse", "type_version is not a positive integer"];
+  if (!versions.has(v)) return ["skip unknown-version", `released v${v} is not in this image's shapes`];
+  const w = spawnSync(tool, ["--type", "released", "--type-version", String(v), "--data", JSON.stringify(data), "--repo", repo], { encoding: "utf-8" });
+  if (w.error || w.status === null) throw new ReadError(`the event tool failed: ${w.error ? w.error.message : "no exit status"}`);
+  if (w.status === 2) return ["refuse", `the event writer refused it: ${(w.stderr || "").trim().split("\n")[0]}`];
+  if (w.status !== 0) throw new ReadError(`the event tool failed (exit ${w.status})`);
+  return ["collect", `source ${data.source}`];
+}
+
+function collect(o, err) {
+  const tool = eventTool();
+  const repos = o.repos.length ? [...new Set(o.repos)] : watchedRepos();
+  const versions = knownVersions();
+  let failed = false;
+  for (const repo of repos) {
+    try {
+      const releases = JSON.parse(ghOnce(`repos/${repo}/releases?per_page=20`));
+      if (!Array.isArray(releases)) throw new ReadError(`releases of ${repo} are not a list`);
+      const logged = loggedReleases(tool, repo);
+      for (const rel of releases) {
+        if (!rel || rel.draft || typeof rel.tag_name !== "string") continue;
+        try {
+          const d = collectOne(tool, repo, rel, logged, versions);
+          if (d) err(`callum-flow-released: collect ${repo} ${rel.tag_name}: ${d[0]} (${d[1]})`);
+        } catch (e) {
+          if (!(e instanceof ReadError)) throw e;
+          failed = true;
+          err(`callum-flow-released: collect ${repo} ${rel.tag_name}: failed (${e.message})`);
+        }
+      }
+    } catch (e) {
+      if (!(e instanceof ReadError) && !(e instanceof SyntaxError)) throw e;
+      failed = true;
+      err(`callum-flow-released: collect ${repo}: cannot read its releases (${e.message})`);
+    }
+  }
+  return failed ? 1 : 0;
+}
+
 function main(argv) {
   const err = (s) => process.stderr.write(`${s}\n`);
   try {
@@ -195,8 +352,13 @@ function main(argv) {
       process.stdout.write(USAGE);
       return 0;
     }
+    if (o.collect) return collect(o, err);
     const repo = resolveRepo(o.repo);
     const rc = require(sharedFile("release-contents.js"));
+    if (o.attach) {
+      attach(rc, repo, o.tag, o.source, err);
+      return 0;
+    }
     if (!o.dryRun) {
       const have = alreadyWritten(eventTool(), repo, o.tag);
       if (have) {
