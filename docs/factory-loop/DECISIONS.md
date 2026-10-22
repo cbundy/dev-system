@@ -698,3 +698,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   would keep the workspace from starting for a database fault, and `dev-init` is best effort by
   design. (b) leaves partial work. (c) gives a loop session the migrator secret. (d) makes the rail
   read a secret folder; a missing status file already means nothing ran here.
+
+### D-76 An empty ready list is checked against the members' own reads
+
+- **Decision**: `observe` does not accept an empty ready list (act mode's `queue-watch.sh --once`
+  or observe mode's `--list`) when the last accepted list was not empty and a member of it is, by
+  its own cached per-issue read, open, trusted and labelled `readyLabel`. The source is marked
+  failed, naming those issues; the last list stands and the stored `--known` is kept. An empty
+  list no member contradicts is accepted (v2 SPEC 13.3.3, 13.3.4).
+- **Alternatives**: debounce an empty read for N passes.
+- **Why**: GitHub's label listing returned `[]` with status 200 for runs of up to 4 reads (8
+  minutes) while the issues carried the label, which flipped the title Q:8 -> Q:0 -> Q:8, fed
+  rule S1 an empty queue and re-logged `ready` events. A debounce long enough for those runs would
+  delay every genuine emptying by as long. The per-issue reads are already cached, so a wrong
+  guess delays emptying by at most one `githubEveryMs`.
+- **Same change**: a cadenced key (heartbeat, sweep) that used up its attempts stays exhausted
+  while its next attempt runs, so its `tell:stalled` owner item does not drop out of the title's
+  count for the length of the retry.

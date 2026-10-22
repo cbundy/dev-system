@@ -14,11 +14,12 @@
     "by": { "enum": ["factory", "hand"], "description": "factory: the factory merged it; hand: a person merged it outside the factory.", "x-column": true },
     "recovered": { "type": "boolean", "description": "true when the loop or the sweep logged it afterwards because no merged event was recorded at the merge.", "x-column": true },
     "files": { "type": ["array", "null"], "items": { "type": "string", "minLength": 1 }, "description": "The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example a pr of null or a size that could not be read. A recovered merge can carry it, read when the event was logged.", "x-column": true },
+    "file_lines": { "type": ["array", "null"], "items": { "type": "object", "additionalProperties": false, "required": ["path", "additions", "deletions"], "properties": { "path": { "type": "string", "minLength": 1, "description": "The repo-relative path." }, "additions": { "type": "integer", "minimum": 0, "description": "Lines added in this file." }, "deletions": { "type": "integer", "minimum": 0, "description": "Lines deleted in this file." } } }, "description": "The pull request's per-file line counts ({path, additions, deletions}) from GitHub's pull request files at merge time, in the same order as files and up to the same cap. An entry whose counts are not non-negative integers is left out here but still counts in files. null when unknown.", "x-column": true },
     "additions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines added, as GitHub reports them at merge time. null when unknown.", "x-column": true },
     "deletions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown.", "x-column": true }
   },
   "examples": [
     { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false },
-    { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false, "files": ["src/usage.js", "tests/usage.test.js"], "additions": 120, "deletions": 8 }
+    { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false, "files": ["src/usage.js", "tests/usage.test.js"], "file_lines": [{ "path": "src/usage.js", "additions": 100, "deletions": 8 }, { "path": "tests/usage.test.js", "additions": 20, "deletions": 0 }], "additions": 120, "deletions": 8 }
   ]
 }

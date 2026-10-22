@@ -152,6 +152,10 @@ SQL
 
 ## Where events live
 
+- **A CI release.** A repo that cuts releases in a workflow attaches the `released` event to the GitHub
+  Release as the asset `factory-released.json` (the composite action `.github/actions/released-event`); a
+  device's `factory-event-push-loop` collects it with `callum-flow-released --collect` into its own log and
+  pushes it. The same release may reach the store from two devices; count it once by `(repo, tag)`.
 - **Local log.** Each device appends one line per event to
   `/persist/events/factory/<owner>__<repo>.jsonl` (`callum-flow-event --new-path` prints the path; `factory/` is made
   0700). The old log `<events dir>/<owner>__<repo>.jsonl` and `factory.events` get no new lines any more
@@ -159,7 +163,7 @@ SQL
   [--issue N] [--repo O/N] [--actor NAME] [--regime R]`, writes a new event straight to that file and nothing to
   the old log. The image's tools write natively (dev-system#1140): `callum-flow-claim` (`claimed`,
   `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`; its `merged` rows include the merges to the default branch that no event recorded, logged as recovered hand merges, with no issue unless a trusted pull request closes one), `callum-flow-merge`
-  (`merged` with the pull request's files, additions and deletions, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
+  (`merged` with the pull request's files, per-file line counts (`file_lines`), additions and deletions, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
   (`implementer_routed`) and `usage-check.sh` (`usage`), each with the type and data `translate()` made from the
   old line it wrote before ([translator.md](translator.md) has the mapping; `tests/factory-event-native.test.js`
   pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` no longer log: their

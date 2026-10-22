@@ -58,6 +58,7 @@ check "callum-flow-milestone is on PATH, shows usage, and exits 2 on a bad subco
   callum-flow-milestone bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-released is on PATH, shows usage, exits 2 on a bad flag, and release-contents.js loads" in_image '
   [ -x "$(command -v callum-flow-released)" ] && callum-flow-released --help | grep -q "^usage: callum-flow-released" &&
+  callum-flow-released --help | grep -q -e "--attach" && callum-flow-released --help | grep -q -e "--collect" &&
   node -e "const r=require(\"/usr/local/share/dev-system/release-contents.js\"); for (const f of [\"previousTag\",\"parseCommit\",\"gitRangeCommits\",\"firstParentChain\",\"prLinks\",\"contents\",\"headlines\"]) if (typeof r[f] !== \"function\") process.exit(1)" &&
   callum-flow-released --bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-test-weakening is on PATH, exits 2 on bad usage and 1 on an unknown ref" in_image '

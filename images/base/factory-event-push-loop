@@ -42,11 +42,24 @@
 # callum-flow-event touches <events dir>/.wake after every append. Between
 # passes the loop polls that file about once a second.
 #
+# Release collector (cbundy/dev-system#1012): at the start of a pass, at most every
+# DEV_FACTORY_RELEASE_COLLECT_INTERVAL seconds (default 900; 0 turns it off; the stamp is the mtime of
+# <events dir>/factory/.released-collect), the loop runs `callum-flow-released --collect`, which writes
+# the `released` events a repo's CI attached to its GitHub Releases. It runs before the files are
+# walked, so what it writes is pushed in the same pass. Its stderr goes to this log, masked. A missing
+# tool, unauthenticated gh, a timeout (FACTORY_RELEASE_COLLECT_TIMEOUT, default 120) or a non-zero exit
+# is one warning line and never stops the push; the stamp is touched whatever the outcome, so a failing
+# collector is retried after the interval, not on every pass.
+#
 # Usage: factory-event-push-loop [--once]   --once makes one pass and exits (tests)
 # Environment: CALLUM_EVENTS_DIR (default /persist/events),
 #   DEV_FACTORY_EVENT_PUSH_INTERVAL seconds between passes (default 30),
 #   FACTORY_EVENT_PUSH_BATCH lines per transaction (default 500),
-#   FACTORY_EVENT_PUSH_TIMEOUT seconds a psql run may take (default 60).
+#   FACTORY_EVENT_PUSH_TIMEOUT seconds a psql run may take (default 60),
+#   DEV_FACTORY_RELEASE_COLLECT_INTERVAL seconds between release collections (default 900; 0 = off),
+#   FACTORY_RELEASE_COLLECT_TIMEOUT seconds the collector may take (default 120),
+#   FACTORY_RELEASE_COLLECT_BIN the collector (default callum-flow-released on PATH),
+#   FACTORY_RELEASE_REPOS repos to collect besides those the device's logs name (owner/name list).
 set -u
 
 # shellcheck source=factory-db.sh
@@ -59,6 +72,12 @@ BATCH="${FACTORY_EVENT_PUSH_BATCH:-500}"
 case "$BATCH" in '' | *[!0-9]* | 0) BATCH=500 ;; esac
 TIMEOUT="${FACTORY_EVENT_PUSH_TIMEOUT:-60}"
 case "$TIMEOUT" in '' | *[!0-9]* | 0) TIMEOUT=60 ;; esac
+
+COLLECT_INTERVAL="${DEV_FACTORY_RELEASE_COLLECT_INTERVAL:-900}"
+case "$COLLECT_INTERVAL" in '' | *[!0-9]*) COLLECT_INTERVAL=900 ;; esac
+COLLECT_TIMEOUT="${FACTORY_RELEASE_COLLECT_TIMEOUT:-120}"
+case "$COLLECT_TIMEOUT" in '' | *[!0-9]* | 0) COLLECT_TIMEOUT=120 ;; esac
+COLLECT_BIN="${FACTORY_RELEASE_COLLECT_BIN:-callum-flow-released}"
 
 # The statement for each line of the input, numbered from $off + 1. The raw line
 # is the only literal; jq doubles its single quotes.
@@ -177,6 +196,27 @@ push_file() {
 PROBE_OUT=$(mktemp) || exit 1
 trap 'rm -f "$PROBE_OUT"' EXIT
 
+# collect_releases: runs the release collector when the interval since its stamp has passed. Never
+# fails: any trouble is one warning line.
+collect_releases() {
+  local stamp="$FDIR/.released-collect" now mtime out rc=0
+  [ "$COLLECT_INTERVAL" -gt 0 ] || return 0
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
+  [ $((now - mtime)) -ge "$COLLECT_INTERVAL" ] || return 0
+  mkdir -p "$FDIR" 2>/dev/null || return 0
+  : > "$stamp" 2>/dev/null || return 0
+  out=$(timeout "$COLLECT_TIMEOUT" "$COLLECT_BIN" --collect 2>&1 < /dev/null) || rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" | mask >&2
+  case "$rc" in
+    0) ;;
+    124) echo "factory-event-push-loop: release collector timed out after ${COLLECT_TIMEOUT}s - pushing without waiting for it" >&2 ;;
+    127) echo "factory-event-push-loop: release collector $COLLECT_BIN not found - skipped" >&2 ;;
+    *) echo "factory-event-push-loop: release collector exited $rc - retrying after the interval" >&2 ;;
+  esac
+  return 0
+}
+
 pass() {
   local url f rc=0 urc=0
   url=$(factory_db_url writer) || urc=$?
@@ -184,6 +224,7 @@ pass() {
     echo "factory-event-push-loop: no readable writer URL any more (FACTORY_DB_WRITER_URL or $(factory_db_url_file writer)) - stopping" >&2
     return 2
   fi
+  collect_releases
   probe_regime "$url" || true
   for f in "$FDIR"/*.jsonl; do
     [ -f "$f" ] || continue

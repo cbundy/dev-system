@@ -43,12 +43,20 @@ const fs = require("node:fs");
 const fx = JSON.parse(fs.readFileSync(process.env.GH_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 let key = args[3];
+if (args[0] === "release") {
+  // gh release upload TAG FILE --clobber --repo R: record the call and keep what was uploaded.
+  fs.appendFileSync(process.env.GH_FIXTURE + ".calls", args.join(" ") + "\\n");
+  const hit = fx["release upload"];
+  if (hit && hit.fail) { process.stderr.write(hit.fail + "\\n"); process.exit(1); }
+  fs.copyFileSync(args[3], process.env.GH_FIXTURE + ".uploaded");
+  process.exit(0);
+}
 if (key === "graphql") key = "graphql#" + JSON.parse(fs.readFileSync(0, "utf8")).variables.number;
 fs.appendFileSync(process.env.GH_FIXTURE + ".calls", args.slice(1).join(" ") + "\\n");
 const hit = fx[key];
 if (hit === undefined) { process.stderr.write("HTTP 404: stub has no " + key + "\\n"); process.exit(1); }
 if (hit && hit.fail) { process.stderr.write(hit.fail + "\\n"); process.exit(1); }
-process.stdout.write(JSON.stringify(hit));
+process.stdout.write(hit && hit.raw !== undefined ? hit.raw : JSON.stringify(hit));
 `,
     { mode: 0o755 },
   );
@@ -93,7 +101,7 @@ function run(args, { fx = fixture(), env = {} } = {}) {
     });
   const log = path.join(dir, "factory", "o__r.jsonl");
   const lines = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean) : []);
-  return { go, lines, dir, log, calls: () => (fs.existsSync(`${fxFile}.calls`) ? fs.readFileSync(`${fxFile}.calls`, "utf8") : "") };
+  return { go, lines, dir, log, uploaded: () => (fs.existsSync(`${fxFile}.uploaded`) ? fs.readFileSync(`${fxFile}.uploaded`, "utf8") : null), calls: () => (fs.existsSync(`${fxFile}.calls`) ? fs.readFileSync(`${fxFile}.calls`, "utf8") : "") };
 }
 
 const EXPECTED = {
@@ -183,4 +191,179 @@ test("with no previous tag, previous_tag is null and the commit list is read", (
   const p = JSON.parse(r.stdout);
   assert.equal(p.previous_tag, null);
   assert.deepEqual(p.prs, [12, 11]);
+});
+
+// ---- --attach (the CI side)
+
+test("--attach uploads the dry-run payload wrapped as a released event, with --clobber, and writes no event", () => {
+  const dry = run(["v0.2.0", "--repo", REPO, "--source", "workflow", "--dry-run"]).go();
+  const t = run(["v0.2.0", "--repo", REPO, "--source", "workflow", "--attach"]);
+  const r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `callum-flow-released: attached factory-released.json to ${REPO} v0.2.0 (2 PRs)\n`);
+  assert.equal(t.uploaded(), `${JSON.stringify({ type: "released", type_version: 1, data: JSON.parse(dry.stdout) })}\n`);
+  assert.match(t.calls(), /^release upload v0\.2\.0 \S+factory-released\.json --clobber --repo o\/r$/m);
+  assert.equal(fs.existsSync(path.join(t.dir, "factory")), false);
+  // a re-run uploads again with --clobber (replaces the asset)
+  assert.equal(t.go().status, 0);
+  assert.equal(t.calls().split("\n").filter((l) => l.startsWith("release upload")).length, 2);
+});
+
+test("--attach with no GitHub Release for the tag exits 1 and uploads nothing", () => {
+  const fx = fixture();
+  delete fx[`repos/${REPO}/releases/tags/v0.2.0`];
+  const t = run(["v0.2.0", "--repo", REPO, "--attach"], { fx });
+  const r = t.go();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no GitHub Release for v0\.2\.0/);
+  assert.equal(t.uploaded(), null);
+});
+
+test("--attach with a failed upload exits 1", () => {
+  const r = run(["v0.2.0", "--repo", REPO, "--attach"], { fx: fixture({ "release upload": { fail: "HTTP 403: nope" } }) }).go();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /nope/);
+});
+
+test("--attach with --dry-run, and --collect with a tag or --attach, exit 2", () => {
+  for (const args of [["v0.2.0", "--repo", REPO, "--attach", "--dry-run"], ["--collect", "v0.2.0"], ["--collect", "--attach"], ["--collect", "--repo", "bad"]]) {
+    const t = run(args);
+    const r = t.go();
+    assert.equal(r.status, 2, args.join(" "));
+    assert.equal(t.uploaded(), null);
+  }
+});
+
+test("the composite action runs the attach mode with the repo, tag and source inputs", () => {
+  const y = fs.readFileSync(path.join(ROOT, ".github", "actions", "released-event", "action.yml"), "utf8");
+  assert.match(y, /^runs:\s*\n\s+using: composite/m);
+  assert.match(y, /^\s+tag:\s*\n(\s+.*\n)*?\s+required: true/m);
+  assert.match(y, /^\s+source:\s*\n(\s+.*\n)*?\s+default: workflow/m);
+  assert.match(y, /TAG: \$\{\{ inputs\.tag \}\}/);
+  assert.match(y, /SOURCE: \$\{\{ inputs\.source \}\}/);
+  assert.match(y, /callum-flow-released" "\$TAG" --repo "\$GITHUB_REPOSITORY" --source "\$SOURCE" --attach/);
+  const wf = fs.readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  const steps = wf.split(/^ {6}- /m);
+  assert.match(steps[steps.length - 1], /uses: \.\/\.github\/actions\/released-event/);
+});
+
+// ---- --collect (the device side)
+
+const rel = (tag, assetId, over = {}) => ({ tag_name: tag, draft: false, assets: assetId === null ? [] : [{ id: assetId, name: "factory-released.json" }], ...over });
+const asset = (tag, over = {}) => ({ raw: JSON.stringify({ type: "released", type_version: 1, data: { ...EXPECTED, tag, source: "workflow" }, ...over }) });
+const rawData = (tag, data) => ({ raw: JSON.stringify({ type: "released", type_version: 1, data: { ...EXPECTED, tag, ...data } }) });
+const releasesKey = (repo) => `repos/${repo}/releases?per_page=20`;
+const assetKey = (repo, id) => `repos/${repo}/releases/assets/${id}`;
+const tagsOf = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+test("--collect writes one valid released event per release, once, and says so", () => {
+  const fx = {
+    [releasesKey(REPO)]: [rel("v0.2.0", 1), rel("v0.1.0", null)],
+    [assetKey(REPO, 1)]: asset("v0.2.0"),
+  };
+  const t = run(["--collect", "--repo", REPO], { fx });
+  let r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /callum-flow-released: collect o\/r v0\.2\.0: collect \(source workflow\)/);
+  const evs = t.lines().map((l) => JSON.parse(l));
+  assert.equal(evs.length, 1);
+  assert.equal(evs[0].type, "released");
+  assert.equal(evs[0].data.source, "workflow");
+  assert.deepEqual(reader.validateStrict("released", evs[0].type_version, evs[0].data), []);
+  r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /v0\.2\.0: skip already-logged/);
+  assert.equal(t.lines().length, 1);
+});
+
+test("--collect skips a tag the log already holds (written by the loop)", () => {
+  const t = run(["--collect", "--repo", REPO], { fx: { [releasesKey(REPO)]: [rel("v0.2.0", 1)], [assetKey(REPO, 1)]: asset("v0.2.0") } });
+  const w = spawnSync(path.join(ROOT, "images", "base", "callum-flow-event"), ["--type", "released", "--data", JSON.stringify(EXPECTED), "--repo", REPO], { encoding: "utf8", env: { ...process.env, CALLUM_EVENTS_DIR: t.dir, DEV_VERSIONS_FILE: path.join(t.dir, "versions.json"), DEV_MACHINE_NAME: "box" } });
+  assert.equal(w.status, 0, w.stderr);
+  const r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /v0\.2\.0: skip already-logged/);
+  assert.equal(t.lines().length, 1);
+});
+
+test("--collect skips an unknown type_version, and collects it once the shapes know it", () => {
+  const fx = { [releasesKey(REPO)]: [rel("v0.2.0", 1)], [assetKey(REPO, 1)]: asset("v0.2.0", { type_version: 2 }) };
+  const t = run(["--collect", "--repo", REPO], { fx });
+  let r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /v0\.2\.0: skip unknown-version/);
+  assert.equal(t.lines().length, 0);
+
+  const shapes = JSON.parse(fs.readFileSync(path.join(ROOT, "images", "base", "factory-event-shapes.json"), "utf8"));
+  shapes.schemas["released.v2"] = shapes.schemas["released.v1"];
+  const f = path.join(t.dir, "shapes.json");
+  fs.writeFileSync(f, JSON.stringify(shapes));
+  const t2 = run(["--collect", "--repo", REPO], { fx, env: { CALLUM_EVENT_SHAPES: f } });
+  r = t2.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /v0\.2\.0: collect/);
+  assert.equal(t2.lines().length, 1);
+  assert.equal(JSON.parse(t2.lines()[0]).type_version, 2);
+});
+
+test("--collect refuses a non-JSON asset, a wrong type, a tag mismatch, a bad source; ignores a draft; goes on", () => {
+  const fx = {
+    [releasesKey(REPO)]: [rel("v0.9.0", 1), rel("v0.8.0", 2), rel("v0.7.0", 3), rel("v0.6.0", 4), rel("v0.5.0", 5, { draft: true }), rel("v0.4.0", 6)],
+    [assetKey(REPO, 1)]: { raw: "<html>not json" },
+    [assetKey(REPO, 2)]: asset("v0.8.0", { type: "closed" }),
+    [assetKey(REPO, 3)]: asset("v0.0.1"),
+    [assetKey(REPO, 4)]: rawData("v0.6.0", { source: "bogus" }),
+    [assetKey(REPO, 5)]: asset("v0.5.0"),
+    [assetKey(REPO, 6)]: asset("v0.4.0"),
+  };
+  const t = run(["--collect", "--repo", REPO], { fx });
+  const r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  for (const tag of ["v0.9.0", "v0.8.0", "v0.7.0", "v0.6.0"]) assert.match(r.stderr, new RegExp(`collect o/r ${tag.replace(/\./g, "\\.")}: refuse`));
+  assert.doesNotMatch(r.stderr, /v0\.5\.0/);
+  assert.deepEqual(t.lines().map((l) => JSON.parse(l).data.tag), ["v0.4.0"]);
+});
+
+test("--collect refuses an asset the writer refuses (a missing required field)", () => {
+  const bad = JSON.parse(asset("v0.2.0").raw);
+  delete bad.data.prs;
+  const t = run(["--collect", "--repo", REPO], { fx: { [releasesKey(REPO)]: [rel("v0.2.0", 1)], [assetKey(REPO, 1)]: { raw: JSON.stringify(bad) } } });
+  const r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /v0\.2\.0: refuse \(the event writer refused it/);
+  assert.equal(t.lines().length, 0);
+});
+
+test("--collect reads a repo whose releases fail, logs it, collects the other repo, exits 1", () => {
+  const fx = {
+    [releasesKey("o/bad")]: { fail: "HTTP 404: Not Found" },
+    [releasesKey(REPO)]: [rel("v0.2.0", 1)],
+    [assetKey(REPO, 1)]: asset("v0.2.0"),
+  };
+  const t = run(["--collect", "--repo", "o/bad", "--repo", REPO], { fx });
+  const r = t.go();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /collect o\/bad: cannot read its releases/);
+  assert.equal(t.lines().length, 1);
+});
+
+test("--collect watches FACTORY_RELEASE_REPOS and the repos of the device's own logs", () => {
+  const fx = {
+    [releasesKey(REPO)]: [rel("v0.2.0", 1)],
+    [assetKey(REPO, 1)]: asset("v0.2.0"),
+    [releasesKey("x/y")]: [rel("v1.0.0", 2)],
+    [assetKey("x/y", 2)]: asset("v1.0.0"),
+    [releasesKey("a/b")]: [rel("v2.0.0", 3)],
+    [assetKey("a/b", 3)]: asset("v2.0.0"),
+  };
+  const t = run(["--collect"], { fx, env: { FACTORY_RELEASE_REPOS: "x/y, nonsense" } });
+  fs.mkdirSync(path.join(t.dir, "factory"));
+  fs.writeFileSync(path.join(t.dir, "factory", "a__b.jsonl"), "");
+  const r = t.go();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /collect x\/y v1\.0\.0: collect/);
+  assert.match(r.stderr, /collect a\/b v2\.0\.0: collect/);
+  assert.doesNotMatch(r.stderr, /o\/r/);
+  assert.equal(tagsOf(path.join(t.dir, "factory", "x__y.jsonl")).length, 1);
+  assert.equal(tagsOf(path.join(t.dir, "factory", "a__b.jsonl")).length, 1);
 });

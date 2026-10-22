@@ -12,6 +12,7 @@ import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
 import { readIssues } from './observe-github'
+import { readQueue } from './observe-queue'
 import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
@@ -21,8 +22,6 @@ import {
   derivedSkipError,
   parseFactoryState,
   parsePool,
-  parseQueue,
-  parseQueueOnce,
   parseSubIssues,
   parseUsage,
 } from './parse'
@@ -289,21 +288,14 @@ export async function observe(
     mark('queue', false, cache.queue?.at ?? null, waiting)
   } else if (readDue(cache.queue?.at, now, cfg.queueEveryMs, lastLabelWrite())) {
     try {
-      if (stored !== undefined) {
-        const known = stored.queueKnown !== null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
-        const r = await run([tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known])
-        const line = r.exitCode === 0 ? parseQueueOnce(r.stdout) : null
-        if (line !== null) {
-          cache.queue = { at: now, value: line.now }
-          queueKnown = line.now
-        }
-        mark('queue', line !== null, cache.queue?.at ?? null, line === null ? fail(r) : undefined)
-      } else {
-        const r = await run(['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel])
-        const queue = r.exitCode === 0 ? parseQueue(r.stdout) : null
-        if (queue !== null) cache.queue = { at: now, value: queue }
-        mark('queue', queue !== null, cache.queue?.at ?? null, queue === null ? fail(r) : undefined)
-      }
+      const once = stored !== undefined
+      const known = stored?.queueKnown != null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
+      const argv = once
+        ? [tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known]
+        : ['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel]
+      const q = await readQueue({ argv, once, cache, now, readyLabel: cfg.readyLabel, run: a => run(a), fail })
+      queueKnown = q.known
+      mark('queue', q.source.ok, q.source.at, q.source.error)
     } catch (err) {
       mark('queue', false, cache.queue?.at ?? null, String(err))
     }

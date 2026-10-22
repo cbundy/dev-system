@@ -43,6 +43,11 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The Claude Code release the mod tests run on. Pinned so a new CLI release cannot turn every pull
+# request red; bumping it is this one line, in its own PR, after `npm test` passes on the new release.
+env:
+  CLAUDE_CODE_VERSION: "2.1.308"
+
 jobs:
   lint:
     name: lint
@@ -121,11 +126,11 @@ jobs:
           node-version: "24"
 
       # Claude Code validates and tests the mods (plugins/*/ with a hooks module); it
-      # needs no login for that. Latest, as the image installs it, so a release that
-      # breaks a mod fails here. TEST_REQUIRE_CLAUDE=1 makes a missing claude fail
-      # instead of skipping.
+      # needs no login for that. The release is CLAUDE_CODE_VERSION above, so a new CLI
+      # release changes nothing here until the pin moves. TEST_REQUIRE_CLAUDE=1 makes a
+      # missing claude fail instead of skipping.
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code && claude --version
+        run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" && claude --version
 
       - name: Test
         env:
