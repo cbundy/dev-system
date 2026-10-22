@@ -720,6 +720,28 @@ WHERE type = 'transition'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
+While a conflicting PR's reviewer of the head's patch still runs, the review step waits for it, so one
+fixer gets the merge and the findings (v2 SPEC 8.5). This counts per repo and week the review-stage
+conflict rounds (T9, via `fix:conflict`, from reviewing) and how many carry a finished review: a
+`reviewed` row of the same issue and round, with verdict `approve` or `changes`, at or before the
+transition's `seq_at`.
+
+```sql
+-- conflict rounds with a finished review
+SELECT t.repo, date_trunc('week', t.seq_at) AS week,
+       count(*) AS conflict_rounds,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM factory.event_log r
+         WHERE r.repo = t.repo AND r.issue = t.issue AND r.type = 'reviewed'
+           AND r.round = (SELECT count(*) FROM factory.event_log p
+                          WHERE p.repo = t.repo AND p.issue = t.issue AND p.life = t.life
+                            AND p.type = 'transition' AND p.table_row = 'T9' AND p.seq_at < t.seq_at) + 1
+           AND r.verdict IN ('approve', 'changes') AND r.ts <= t.seq_at)) AS with_finished_review
+FROM factory.event_log t
+WHERE t.type = 'transition' AND t.table_row = 'T9' AND t.via = 'fix:conflict' AND t.from_state = 'reviewing'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ### Split children parked on their open decision
 
 A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).
@@ -1664,6 +1686,20 @@ FROM spans s
 LEFT JOIN mine ON mine.repo = s.repo AND mine.issue = s.issue
 GROUP BY s.repo, s.issue, s.merged_at
 ORDER BY s.merged_at DESC;
+```
+
+An agent step whose agent the loop itself stopped, and that gave no answer, ends `unknown:stopped`
+(v2 SPEC 7.2); `unknown:agent-dead` is a death the loop did not cause. This counts both per repo and
+week, to show how many agent unknowns were the loop's own stops.
+
+```sql
+-- loop-stopped versus agent-dead unknowns, per repo and week
+SELECT repo, date_trunc('week', ts) AS week,
+       count(*) FILTER (WHERE cause = 'unknown:stopped')    AS stopped,
+       count(*) FILTER (WHERE cause = 'unknown:agent-dead') AS agent_dead
+FROM factory.event_log
+WHERE type = 'intervention' AND cause IN ('unknown:stopped', 'unknown:agent-dead')
+GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
 **Judgement calls** (#632 metric 2): the decisions a model made, by kind and outcome: each review

@@ -9,7 +9,7 @@
 // Pure: the time is state.now.
 import { stepBreaker, want } from '../foundation'
 import type { LedgerEntry, Ms, State } from '../types'
-import { freeKey, keyParts, lifeAt, prepareKey, stepKey } from './keys'
+import { freeKey, keyParts, lifeAt, prepareKey, stepKey, stoppedBy } from './keys'
 import type { FixWhy } from './prompts-work'
 import type { EventData } from './table'
 import { AGENT_STEPS, STEP_CLASS, STEP_ROLE, WHY_CAUSE } from './types'
@@ -212,10 +212,13 @@ export function stepEvent(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, step: Step
   }
   const said = e.summary ?? e.status
   if (e.status === 'timed-out') return unknownOf(ctx, r, e, 'timeout', said)
-  if (e.status === 'lost') return unknownOf(ctx, r, e, 'agent-dead', said)
+  // an agent the loop stopped (a stop-agent names it) is `stopped`, not a death the loop did not cause
+  const stop = stoppedBy(ctx.state.ledger, e)
+  const dead = (): TableEvent => (stop !== null ? unknownOf(ctx, r, e, 'stopped', `${said} (the loop stopped it: ${stop.key})`) : unknownOf(ctx, r, e, 'agent-dead', said))
+  if (e.status === 'lost') return dead()
   // failed: the agent list saw it fail or killed; a job file not written or a refusal (a loop bug)
   // is a CLI result outside the step's outcomes; anything else kept the agent from starting
-  if (/^agent (failed|killed)/.test(said)) return unknownOf(ctx, r, e, 'agent-dead', said)
+  if (/^agent (failed|killed)/.test(said)) return dead()
   if (/could not be written|^refused/.test(said)) return unknownOf(ctx, r, e, 'cli', said)
   return unknownOf(ctx, r, e, 'spawn', said)
 }

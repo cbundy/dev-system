@@ -249,6 +249,28 @@ describe('reading a step\'s answer (v2 SPEC 10.8)', () => {
     expect(await ended(build.entry, 'error')).toMatchObject({ event: 'unknown', why: 'api' })
   })
 
+  test('a turn that ended after the loop stopped its agent is unknown(stopped), whatever the words; a recorded valid answer still wins', async () => {
+    const w = world()
+    const { entry } = await spawned(w, stepAction('review'))
+    const e: LedgerEntry = { ...entry, agentId: 'agent-1' }
+    const stop = (key: string): LedgerEntry => ({ ...start([], { kind: 'stop-agent', key, class: 'free', rule: 'R1', reason: 'stop', issue: 470, agentId: 'agent-1', entry: e.key } as Action, NOW).entry })
+    const ended = async (ledger: LedgerEntry[], words = 'it stopped') => {
+      const r = await stepAnswered(ctxOf(w.env, state(), e), e, { agentId: 'agent-1', answer: words, reason: 'aborted' }, DEPS, new Map(), ledger)
+      return r.exec.status === 'done' && r.exec.outcome?.kind === 'step' ? r.exec.outcome.result : null
+    }
+    expect(await ended([])).toMatchObject({ why: 'agent-dead' })
+    const keys = [`i470/ltbq3k0/s4/stop/${e.key.slice('i470/ltbq3k0/'.length)}`, 'i470/reconcile/c1/stop/agent-1', 'stop:agent-1']
+    for (const key of keys) {
+      const r = await ended([stop(key)])
+      expect(r).toMatchObject({ event: 'unknown', why: 'stopped' })
+      expect(r?.reason).toContain(key)
+    }
+    expect(await ended([stop('stop:agent-1')], 'API Error: 529 overloaded')).toMatchObject({ why: 'stopped' })
+    expect(WHY_CAUSE.stopped).toBeUndefined()
+    recorded(w, e.key, 'review', { verdict: 'ok' })
+    expect(await ended([stop('stop:agent-1')])).toMatchObject({ event: 'ok' })
+  })
+
   test('an answer is read every pass: a reader\'s ends its step at once; a writer\'s ok waits for its turn\'s end, its not-ok does not', async () => {
     const w = world()
     const review = await spawned(w, stepAction('review'))
@@ -367,6 +389,20 @@ describe('the act step routes a v2 agent\'s turn end to steps.ts (act-between.ts
     expect(second).toMatchObject({ result: 'applied', key: action.key, repaired: true })
     expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', step: 'triage', result: { event: 'unknown', why: 'bad-answer' } } })
     expect(sent).toHaveLength(1)
+  })
+})
+
+describe('agentAnswered and a loop stop', () => {
+  test('a stop only in the live ledger, not in the planned state, makes the aborted turn unknown(stopped)', async () => {
+    const w = world()
+    const action = stepAction('review')
+    const { entry } = await spawned(w, action)
+    const stop = start([], { kind: 'stop-agent', key: 'stop:agent-1', class: 'free', rule: 'A1', reason: 'stop', issue: 470, agentId: 'agent-1', entry: entry.key } as Action, NOW).entry
+    w.env.live.ledger = [entry, stop]
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map(), gateHeld: new Map() }
+    const r = await agentAnswered(w.env, state(), { agentId: 'agent-1', answer: 'it stopped', reason: 'aborted' }, between)
+    expect(r).toMatchObject({ result: 'applied', key: action.key })
+    expect(w.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'unknown', why: 'stopped' } } })
   })
 })
 
