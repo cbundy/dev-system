@@ -1098,6 +1098,12 @@ WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NUL
 ORDER BY c.ts;
 ```
 
+How often GitHub's ready listing came back empty while its issues still carried the label (the loop held the last list), with the pass and the reason:
+
+```sh
+jq -r 'select((.sources.queue // "") | startswith("failed: the ready list came back empty")) | [.at, .pass, .sources.queue] | @tsv' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two
@@ -1318,12 +1324,6 @@ A wait the loop cannot read (a failing read, or a tag condition on a repo with n
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | test("/wait-unreadable/")))
   | {day: ($d.at | tostring | .[0:10]), issue, key}] | unique_by(.key) | group_by(.issue)[]
   | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
-```
-
-How often GitHub's ready listing came back empty while its issues still carried the label (the loop held the last list), with the pass and the reason:
-
-```sh
-jq -r 'select((.sources.queue // "") | startswith("failed: the ready list came back empty")) | [.at, .pass, .sources.queue] | @tsv' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
 ### Starved queue
