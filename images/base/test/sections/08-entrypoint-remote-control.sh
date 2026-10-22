@@ -52,17 +52,34 @@ check "piped stdin reaches the command" bash -c "
   echo \"stdout=\$out\"
   [ \"\$out\" = hi ]"
 # A --final that hangs is cut off after 10s, and its stdout never reaches the container's stdout.
+# The stub timestamps its own start and its TERM (only the entrypoint's `timeout 10` sends it: tini forwards the stop
+# signal to the entrypoint alone), so the check measures the cut-off itself and not the wall time of `docker stop`,
+# which also holds container teardown on a busy runner. The 15000ms bound is the 10s cut-off plus 5s of scheduling
+# slack, still half of docker's 30s kill; it is not a raised timeout. Exit 143 proves the container ended by itself:
+# without the cut-off the stub runs 60s and docker kills the container at 30s (137).
 WORKDIR=${WORKDIR:-$(mktemp -d)} # section 7 sets it only when it runs; lib.sh's cleanup removes it
-printf '#!/bin/sh\necho STUB-FINAL-OUTPUT\nsleep 60\n' > "$WORKDIR/hang-final"
+cat > "$WORKDIR/hang-final" <<'STUB'
+#!/bin/sh
+echo STUB-FINAL-OUTPUT
+echo "STUB-FINAL-START $(date +%s%N)"
+trap 'echo "STUB-FINAL-TERM $(date +%s%N)"; exit 143' TERM
+sleep 60 & wait
+STUB
 chmod 755 "$WORKDIR/hang-final"
 c=$(run_bg -v "$WORKDIR/hang-final:/usr/local/share/dev-system/heartbeat-loop:ro" "$IMAGE" bash -c 'sleep infinity')
-check "a hanging heartbeat-loop --final is cut off: docker stop under 13s, its stdout kept off the command's" bash -c "
+check "a hanging heartbeat-loop --final is cut off by its 10s timeout (container exits itself, not killed), its stdout kept off the command's" bash -c "
   for _ in \$(seq 60); do docker exec '$c' pgrep -x sleep >/dev/null 2>&1 && break; sleep 1; done
   $(declare -f stop_status)
   read -r rc ms < <(stop_status '$c')
-  echo \"rc=\$rc ms=\$ms\"
+  err=\$(docker logs '$c' 2>&1 >/dev/null)
+  start=\$(echo \"\$err\" | sed -n 's/^STUB-FINAL-START //p')
+  term=\$(echo \"\$err\" | sed -n 's/^STUB-FINAL-TERM //p')
+  final_ms=
+  [ -n \"\$start\" ] && [ -n \"\$term\" ] && final_ms=\$(((term - start) / 1000000))
+  echo \"rc=\$rc ms=\$ms final_ms=\$final_ms\"
   ! docker logs '$c' 2>/dev/null | grep -q STUB-FINAL-OUTPUT &&
-  [ \$ms -lt 13000 ]"
+  [ \$rc = 143 ] &&
+  [ -n \"\$final_ms\" ] && [ \$final_ms -lt 15000 ]"
 docker rm -f "$c" >/dev/null
 
 # No login, no command: waits for a login without starting Claude. A 1s poll

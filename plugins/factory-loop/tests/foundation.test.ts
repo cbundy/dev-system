@@ -456,4 +456,17 @@ describe('v2 actions in the foundation\'s filters', () => {
     expect(ctx.exhausted).toEqual(['slot/l1/free'])
     expect(ctx.skipped).toEqual([{ rule: 'W2', issue: 1, why: 'exhausted: slot/l1/free' }])
   })
+
+  test('a cadenced key stays exhausted while its retry runs, and not after it is done', () => {
+    const sweep: Action = { kind: 'sweep', key: 'sweep:7', class: 'free', rule: 'H2', reason: 'x', issue: null }
+    const exhaustedWith = (over: Partial<LedgerEntry>) => {
+      const ctx = ctxOf(withLedger(state(), [entry('sweep:7', 'sweep', { endedAt: NOW - HOUR, ...over })]))
+      want(ctx, sweep)
+      return ctx.exhausted
+    }
+    expect(exhaustedWith({ status: 'failed', attempts: 3 })).toEqual(['sweep:7'])
+    expect(exhaustedWith({ status: 'running', attempts: 4, endedAt: null })).toEqual(['sweep:7'])
+    expect(exhaustedWith({ status: 'running', attempts: 3, endedAt: null })).toEqual([])
+    expect(exhaustedWith({ status: 'done', attempts: 4 })).toEqual([])
+  })
 })

@@ -114,10 +114,10 @@ fi
 if [ -z "$issue" ]; then
   echo "callum-flow-merge: warning: no issue known, merged event not recorded" >&2
 else
-  # The size of the merged PR, read once after the merge: {files, additions, deletions}, or all null when the read fails.
-  size='{"files":null,"additions":null,"deletions":null}'
+  # The size of the merged PR, read once after the merge: {files, file_lines, additions, deletions}, or all null when the read fails.
+  size='{"files":null,"file_lines":null,"additions":null,"deletions":null}'
   if sv=$($GH pr view "$pr" --json files,additions,deletions 2> /dev/null) &&
-    sz=$(printf '%s' "$sv" | jq -ce '{files: ([.files[]?.path | select(type == "string" and . != "")]), additions: (.additions | numbers), deletions: (.deletions | numbers)}' 2> /dev/null); then
+    sz=$(printf '%s' "$sv" | jq -ce '{files: ([.files[]?.path | select(type == "string" and . != "")]), file_lines: [.files[]? | objects | select((.path | type) == "string" and .path != "" and (.additions | type) == "number" and (.deletions | type) == "number" and .additions >= 0 and .deletions >= 0 and .additions == (.additions | floor) and .deletions == (.deletions | floor)) | {path, additions, deletions}], additions: (.additions | numbers), deletions: (.deletions | numbers)}' 2> /dev/null); then
     size=$sz
   else
     echo "callum-flow-merge: warning: could not read the size of PR #$pr - merged event written without it" >&2

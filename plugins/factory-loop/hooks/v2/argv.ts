@@ -265,7 +265,7 @@ export function prSizeArgv(repo: string, pr: number): string[] {
 }
 
 // prSizeOf: the size `prSizeArgv` read, or null when it does not parse or lacks the counts. The files
-// are the paths, empty ones dropped.
+// are the paths, empty ones dropped; fileLines are the per-file counts, an entry with a bad count dropped.
 export function prSizeOf(stdout: string): PrSize | null {
   let v: unknown
   try {
@@ -277,11 +277,16 @@ export function prSizeOf(stdout: string): PrSize | null {
   const o = v as Record<string, unknown>
   if (!Array.isArray(o.files) || typeof o.additions !== 'number' || typeof o.deletions !== 'number') return null
   const files: string[] = []
+  const fileLines: { path: string; additions: number; deletions: number }[] = []
+  const count = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
   for (const f of o.files) {
-    const path = f !== null && typeof f === 'object' ? (f as Record<string, unknown>).path : undefined
-    if (typeof path === 'string' && path !== '') files.push(path)
+    const r = f !== null && typeof f === 'object' ? (f as Record<string, unknown>) : {}
+    const path = r.path
+    if (typeof path !== 'string' || path === '') continue
+    files.push(path)
+    if (count(r.additions) && count(r.deletions)) fileLines.push({ path, additions: r.additions, deletions: r.deletions })
   }
-  return { files, additions: o.additions, deletions: o.deletions }
+  return { files, fileLines, additions: o.additions, deletions: o.deletions }
 }
 
 // A head's patch id against the base (8.4).

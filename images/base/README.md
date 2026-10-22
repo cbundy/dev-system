@@ -1686,7 +1686,7 @@ the command is in the synced allow list. Its one writing mode, `--update-behind`
 the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
 The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
-`--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions`, read after the merge; null with a warning when the read fails); it is allowed only in the main
+`--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `file_lines`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions`, read after the merge; null with a warning when the read fails); it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
@@ -1785,7 +1785,8 @@ For an epic-base merge, follow any manual issue-closure instruction printed on s
 
 `callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
 
-`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]` writes the `released`
+`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]` and
+`callum-flow-released --collect [--repo O/N]...` write the `released`
 factory event for one release tag. It reads GitHub only through `gh api` (the tag's commit, the `v*` tags,
 the compare with the previous final tag, each PR's body and closing issues, and the GitHub Release for the
 headlines; no Release gives empty headlines), builds the payload with `release-contents.js` (the one rule
@@ -1795,6 +1796,19 @@ already in the factory log is skipped on stderr with its event id (exit 0). `--d
 and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
 2 usage error. The factory loop calls it on each new release tag of a repo with a Next release milestone
 (`--source loop` for a release its own release task cut, else `workflow`).
+
+For a repo that cuts releases from its own workflow, `--attach` is the CI half: it builds the same payload and
+uploads `{"type":"released","type_version":1,"data":<payload>}` to the tag's GitHub Release as the asset
+`factory-released.json` (`gh release upload --clobber`, so a re-run replaces it; it writes no local event and
+needs no events dir; no Release for the tag is exit 1). The composite action
+`cbundy/dev-system/.github/actions/released-event@vX.Y.Z` (`tag`, `source` default `workflow`; the caller sets
+`GH_TOKEN` with `contents: write`) runs it as one step after the step that creates the Release. `--collect` is the
+device half: for each watched repo it reads the newest 20 releases (drafts skipped) and writes the `released`
+event of each valid asset whose tag the local log does not hold, with one stderr line per release
+(`collect <repo> <tag>: collect | skip already-logged | skip unknown-version | refuse (reason)`). An asset with a
+`type_version` this image's shapes lack is skipped, not written, so a newer image collects it later. Watched repos
+are the `--repo` flags, else `FACTORY_RELEASE_REPOS` (comma or space separated `owner/name`) plus the repos the
+device's own factory logs name. `factory-event-push-loop` runs it (below).
 For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line
@@ -1979,6 +1993,11 @@ Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is 
 `FACTORY_EVENT_PUSH_TIMEOUT` seconds (default 60), and `.wake` or `DEV_FACTORY_EVENT_PUSH_INTERVAL` (default 30 s)
 starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
 `dev-doctor` reports its counts and fails when it is not running. It is the only event push loop `dev-init` starts.
+At the start of a pass, at most every `DEV_FACTORY_RELEASE_COLLECT_INTERVAL` seconds (default 900; 0 turns it off;
+stamp: `factory/.released-collect`), it runs the release collector (`FACTORY_RELEASE_COLLECT_BIN`, default
+`callum-flow-released --collect`) bounded by `FACTORY_RELEASE_COLLECT_TIMEOUT` seconds (default 120), so what it
+writes is pushed in the same pass. Its output goes to the log, masked; a missing tool, a timeout or a failure is one
+warning line and never stops the push.
 
 `callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
 held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
