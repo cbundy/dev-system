@@ -650,6 +650,28 @@ jq -c 'select(.cap != null) | {at, cap}' /persist/claude/factory-loop/<owner>__<
 jq -c 'select(.cap.ceiling != null and .cap.ceiling < .cap.configured) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
 ```
 
+### Heartbeat twins of the loop's own workspace
+
+The heartbeat guard leaves out a recent beat from the loop's own Coder workspace under another
+device name (a mislabelled twin, cbundy/dev-system#1051) and records it as `railTwins` (device and
+age in seconds) on that pass line. Which passes left out a twin, and which device:
+
+```sh
+jq -c 'select(.railTwins != null) | {at, railTwins}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
+```
+
+The condition itself: which Coder workspaces beat under more than one device name in the last day.
+
+```sql
+SELECT coder_workspace, count(DISTINCT device) AS devices, array_agg(DISTINCT device ORDER BY device) AS names
+FROM factory.workers_status
+WHERE coder_workspace IS NOT NULL AND coder_workspace <> ''
+  AND last_seen > now() - interval '1 day'
+GROUP BY coder_workspace
+HAVING count(DISTINCT device) > 1
+ORDER BY coder_workspace;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`

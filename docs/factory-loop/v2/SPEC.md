@@ -3512,7 +3512,10 @@ refused plans and records exactly as observe mode does (13.11.1).
   (`tell(heartbeat-other)`), and acts again after 120 seconds of quiet (DECISIONS D-28). A failed
   query blocks, and so does a device with no name (`DEV_MACHINE_NAME`), which cannot tell its
   own heartbeat from another's. It covers two workspaces on one repo, which the per-workspace
-  act lock cannot see.
+  act lock cannot see. A beat whose `coder_workspace` is non-empty and equals this loop's own
+  `DEV_CODER_WORKSPACE` is never another orchestrator, whatever its device name: it does not
+  block, and the pass line records it as `railTwins` (device and age in seconds). With no
+  `DEV_CODER_WORKSPACE` nothing is left out.
 - **The schema is current.** `dev-init` runs `factory-db-migrate` before the loop starts
   (cbundy/dev-system#888); it writes its outcome to `DEV_FACTORY_DB_MIGRATE_STATUS` (default
   `/tmp/dev-factory-db-migrate.json`). A missing file passes (no migrator is set up), as do
@@ -3631,7 +3634,8 @@ separated by commas. A ping the breaker ignores is left out. `ms` is the pass's 
 start to this line. The error line of a pass that threw carries both. `executed` says
 whether the pass acted. Act mode adds, when they apply: `outcomes` (each action's status, time
 and summary; the title's left out), `ledgerSource` (`store`, `events` or `none`), `rails` (why
-act mode was held back), `capped` and `atCap`, `breaker` (the ping breaker opened), `told` (the
+act mode was held back), `railTwins` (heartbeats from this loop's own Coder workspace under
+another device name, left out of the heartbeat guard), `capped` and `atCap`, `breaker` (the ping breaker opened), `told` (the
 notices from outside plan sent this pass), `config` (what the repo-local settings got wrong) and
 `problems` (a loop event not logged, a store write refused, the act lease lost mid-pass).
 `commands` lists every command the pass ran, observe's and the executors'. Other lines share the

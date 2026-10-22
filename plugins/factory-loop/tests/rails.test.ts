@@ -62,8 +62,8 @@ const LOCK = `${LOOP_DIR}/act.lock`
 const ENV: RailEnv = { DEV_ROLE: 'orchestrator', XDG_RUNTIME_DIR: '/run/user/1000' }
 const WATCH_LOCK = '/run/user/1000/orchestrator-watch-cbundy_dev-system.lock'
 const WATCHER_CMDLINE = '/bin/sh\0/usr/local/share/callum-tools/orchestrator-watch.sh\0--repo\0cbundy/dev-system\0--label\0ready\0'
-const NO_BEATS = 'device,age_s\n'
-const beats = (...rows: [string, number][]) => `device,age_s\n${rows.map(([d, a]) => `${d},${a}`).join('\n')}\n`
+const NO_BEATS = 'device,age_s,coder_workspace\n'
+const beats = (...rows: ([string, number] | [string, number, string])[]) => `device,age_s,coder_workspace\n${rows.map(([d, a, w]) => `${d},${a},${w ?? ''}`).join('\n')}\n`
 
 type Call = { argv: string[]; init: RunInit }
 type Handler = (argv: string[]) => Partial<RunResult> | Error
@@ -335,52 +335,84 @@ describe('the heartbeat guard (D-28)', () => {
     expect(calls.map(c => c.argv)).toEqual([heartbeatArgv(REPO, DEVICE)])
     expect(heartbeatArgv(REPO, DEVICE)).toEqual(['dev-query', '--csv', '-v', `repo=${REPO}`, '-v', `device=${DEVICE}`])
     expect(calls[0]?.init.stdin).toBe(HEARTBEAT_SQL)
-    for (const part of ['from factory.workers_status', "role = 'orchestrator'", "lower(repo) = lower(:'repo')", "device <> :'device'"]) {
+    for (const part of ['from factory.workers_status', "role = 'orchestrator'", "lower(repo) = lower(:'repo')", "device <> :'device'", 'coder_workspace']) {
       expect(HEARTBEAT_SQL).toContain(part)
     }
   })
 
   test('the CSV is read as psql printed it', () => {
-    const printed = 'device,age_s\ncoder-other,51.573429\ncoder-old,10806.573429\n'
+    const printed = 'device,age_s,coder_workspace\ncoder-other,51.573429,\ncoder-old,10806.573429,coder-x\n'
     expect(parseBeats(printed)?.map(b => [b.device, Math.round(b.ageMs)])).toEqual([
       ['coder-other', 51573],
       ['coder-old', 10806573],
     ])
-    expect(parseBeats('device,age_s\n')).toEqual([])
-    expect(parseBeats('device,age_s\ncoder-x,\ncoder-y,-2.5\n')).toEqual([{ device: 'coder-y', ageMs: 0 }])
+    expect(parseBeats('device,age_s,coder_workspace\n')).toEqual([])
+    expect(parseBeats(printed)?.map(b => b.workspace)).toEqual(['', 'coder-x'])
+    // the old header has no workspace column: not this query's output, so the guard blocks
+    expect(parseBeats('device,age_s\ncoder-x,3\n')).toBeNull()
+    expect(parseBeats('device,age_s,coder_workspace\ncoder-x,,\ncoder-y,-2.5,\n')).toEqual([{ device: 'coder-y', ageMs: 0, workspace: '' }])
     expect(parseBeats('')).toBeNull()
     expect(parseBeats('ERROR:  relation "factory.workers_status" does not exist\n')).toBeNull()
   })
 
   test('a beat from another orchestrator in the last 120 seconds blocks; one older does not', () => {
-    expect(heartbeatVerdict([{ device: OTHER, ageMs: HEARTBEAT_QUIET_MS }], null, NOW).ok).toBe(false)
-    expect(heartbeatVerdict([{ device: OTHER, ageMs: HEARTBEAT_QUIET_MS + 1 }], null, NOW)).toEqual({ ok: true, reason: null, spell: null, notice: null })
+    expect(heartbeatVerdict([{ device: OTHER, ageMs: HEARTBEAT_QUIET_MS, workspace: '' }], null, NOW).ok).toBe(false)
+    expect(heartbeatVerdict([{ device: OTHER, ageMs: HEARTBEAT_QUIET_MS + 1, workspace: '' }], null, NOW)).toEqual({ ok: true, reason: null, spell: null, notice: null, twins: [] })
     expect(heartbeatVerdict([], null, NOW).ok).toBe(true)
-    expect(heartbeatVerdict([{ device: 'coder-b', ageMs: 80_000 }, { device: OTHER, ageMs: 12_400 }], null, NOW).reason).toBe(
+    expect(heartbeatVerdict([{ device: 'coder-b', ageMs: 80_000, workspace: '' }, { device: OTHER, ageMs: 12_400, workspace: '' }], null, NOW).reason).toBe(
       `heartbeat: another orchestrator on this repo is up (${OTHER} 12s ago, coder-b 80s ago)`,
     )
   })
 
   test('one notice per blocking spell, and acting again after 120 seconds of quiet', () => {
-    const first = heartbeatVerdict([{ device: OTHER, ageMs: 30_000 }], null, NOW)
+    const first = heartbeatVerdict([{ device: OTHER, ageMs: 30_000, workspace: '' }], null, NOW)
     expect(first).toMatchObject({ ok: false, spell: { since: NOW, device: OTHER }, notice: { since: NOW, device: OTHER } })
-    const second = heartbeatVerdict([{ device: OTHER, ageMs: 20_000 }], first.spell, NOW + MIN)
+    const second = heartbeatVerdict([{ device: OTHER, ageMs: 20_000, workspace: '' }], first.spell, NOW + MIN)
     expect(second).toMatchObject({ ok: false, spell: { since: NOW, device: OTHER }, notice: null })
     // the other stopped beating: 119 s of quiet still holds, 121 s lets the loop act
-    const quieting = heartbeatVerdict([{ device: OTHER, ageMs: 119_000 }], second.spell, NOW + 3 * MIN)
+    const quieting = heartbeatVerdict([{ device: OTHER, ageMs: 119_000, workspace: '' }], second.spell, NOW + 3 * MIN)
     expect(quieting).toMatchObject({ ok: false, notice: null })
-    const quiet = heartbeatVerdict([{ device: OTHER, ageMs: 121_000 }], quieting.spell, NOW + 3 * MIN + 2_000)
-    expect(quiet).toEqual({ ok: true, reason: null, spell: null, notice: null })
-    const again = heartbeatVerdict([{ device: OTHER, ageMs: 5_000 }], quiet.spell, NOW + 10 * MIN)
+    const quiet = heartbeatVerdict([{ device: OTHER, ageMs: 121_000, workspace: '' }], quieting.spell, NOW + 3 * MIN + 2_000)
+    expect(quiet).toEqual({ ok: true, reason: null, spell: null, notice: null, twins: [] })
+    const again = heartbeatVerdict([{ device: OTHER, ageMs: 5_000, workspace: '' }], quiet.spell, NOW + 10 * MIN)
     expect(again.notice).toEqual({ since: NOW + 10 * MIN, device: OTHER })
+  })
+
+  test('a recent beat from this loop\'s own Coder workspace is a twin: left out of the block and returned', async () => {
+    const twin = { device: 'box', ageMs: 12_000, workspace: 'ws-a' }
+    const left = heartbeatVerdict([twin], null, NOW, 'x', 'ws-a')
+    expect(left).toEqual({ ok: true, reason: null, spell: null, notice: null, twins: [twin] })
+    // no own workspace: nothing is left out
+    expect(heartbeatVerdict([twin], null, NOW, 'x', '').ok).toBe(false)
+    // a beat with no workspace, or another workspace, still blocks
+    expect(heartbeatVerdict([{ ...twin, workspace: '' }], null, NOW, 'x', 'ws-a').ok).toBe(false)
+    expect(heartbeatVerdict([{ ...twin, workspace: 'ws-b' }], null, NOW, 'x', 'ws-a').ok).toBe(false)
+    // a twin beside a real other device: the reason and notice name only the real one
+    const mixed = heartbeatVerdict([twin, { device: OTHER, ageMs: 30_000, workspace: 'ws-b' }], null, NOW, 'x', 'ws-a')
+    expect(mixed.ok).toBe(false)
+    expect(mixed.reason).toBe(`heartbeat: another orchestrator on this repo is up (${OTHER} 30s ago)`)
+    expect(mixed.notice).toEqual({ since: NOW, device: OTHER })
+    expect(mixed.twins).toEqual([twin])
+    // an old twin is not recorded
+    expect(heartbeatVerdict([{ ...twin, ageMs: HEARTBEAT_QUIET_MS + 1 }], null, NOW, 'x', 'ws-a').twins).toEqual([])
+  })
+
+  test('through the guard: the query prints a twin row and the workspace comes from the caller', async () => {
+    const csv = beats(['box', 12, 'ws-a'])
+    const same = await heartbeatGuard(fakeIo({}, world({ csv })).io, REPO, DEVICE, null, NOW, 'ws-a')
+    expect(same).toMatchObject({ ok: true, notice: null, twins: [{ device: 'box', workspace: 'ws-a' }] })
+    expect((await heartbeatGuard(fakeIo({}, world({ csv })).io, REPO, DEVICE, null, NOW, '')).ok).toBe(false)
+    // the old header blocks fail safe
+    const old = await heartbeatGuard(fakeIo({}, world({ csv: 'device,age_s\nbox,12\n' })).io, REPO, DEVICE, null, NOW, 'ws-a')
+    expect(old.reason).toBe('heartbeat: query failed (unexpected output)')
   })
 
   test('a failed query blocks with its own reason and leaves the spell as it was', async () => {
     const spell = { since: NOW - MIN, device: OTHER }
     const down = await heartbeatGuard(fakeIo({}, world({ queryExit: 78 })).io, REPO, DEVICE, spell, NOW)
-    expect(down).toEqual({ ok: false, reason: 'heartbeat: query failed (exit 78: dev-query: no PostgreSQL URL configured)', spell, notice: null })
+    expect(down).toEqual({ ok: false, reason: 'heartbeat: query failed (exit 78: dev-query: no PostgreSQL URL configured)', spell, notice: null, twins: [] })
     const odd = await heartbeatGuard(fakeIo({}, world({ csv: 'garbage\n' })).io, REPO, DEVICE, null, NOW)
-    expect(odd).toEqual({ ok: false, reason: 'heartbeat: query failed (unexpected output)', spell: null, notice: null })
+    expect(odd).toEqual({ ok: false, reason: 'heartbeat: query failed (unexpected output)', spell: null, notice: null, twins: [] })
     const thrown = await heartbeatGuard(fakeIo({}, () => new Error('timed out')).io, REPO, DEVICE, null, NOW)
     expect(thrown.reason).toBe('heartbeat: query failed (Error: timed out)')
   })
@@ -397,6 +429,12 @@ describe('the heartbeat guard (D-28)', () => {
 // --- the rails together ----------------------------------------------------------------------------
 
 describe('checkRails (v2 SPEC 13.11.2)', () => {
+  test('a twin beat from DEV_CODER_WORKSPACE does not stop the loop acting and comes back in twins', async () => {
+    const { io } = fakeIo({}, world({ csv: beats(['box', 12, 'ws-a']) }))
+    const r = await checkRails(io, input({ env: { ...ENV, DEV_CODER_WORKSPACE: 'ws-a' } }))
+    expect(r).toMatchObject({ act: true, reasons: [], notices: [], twins: [{ device: 'box' }] })
+  })
+
   test('every rail passes: the lease is taken and the loop acts', async () => {
     const { io, calls, files } = fakeIo()
     const r = await checkRails(io, input())
@@ -406,6 +444,7 @@ describe('checkRails (v2 SPEC 13.11.2)', () => {
       notices: [],
       memory: { heartbeat: null, watcher: null },
       lock: { held: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + 15 * MIN }, took: null },
+      twins: [],
     })
     // no watcher's lock directory, the heartbeat query, then the lease's one compare-and-set
     expect(calls.map(c => c.argv[0])).toEqual(['test', 'dev-query', 'sh'])

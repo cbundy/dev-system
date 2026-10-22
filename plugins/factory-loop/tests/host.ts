@@ -395,6 +395,6 @@ export function factoryDoc(issues: Record<string, unknown>[], recent: Record<str
 }
 
 // The heartbeat guard's query (rails.ts HEARTBEAT_SQL) reads no other orchestrator.
-export const QUIET_BEATS = 'device,age_s\n'
+export const QUIET_BEATS = 'device,age_s,coder_workspace\n'
 // The event log's columns (derive.ts EVENTS_SQL), no rows.
 export const NO_EVENTS = 'ts,state,issue,run_id,branch,pr,head,note,actor,device\n'
