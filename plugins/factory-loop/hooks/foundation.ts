@@ -145,7 +145,8 @@ export function gate(ctx: PlanCtx, key: string, kind: ActionKind | AgentType, ca
 // want: plan the action unless its key is blocked, and say what blocked it. An owner notice counts
 // toward the title's owner items whether or not it goes out this pass. An exhausted key is named
 // in the decision log and kept in ctx.exhausted for its rule to tell; a cadenced kind that failed
-// its attempts in a row is kept there too, and keeps trying.
+// its attempts in a row is kept there too, and keeps trying: a running retry counts, since the
+// ledger counts its attempt (attempts - 1 earlier ones), so the tell stays while the retry runs.
 export function want(ctx: PlanCtx, action: Action): Gate {
   if (action.kind === 'tell' && ctx.ownerTells.includes(action.wake)) ctx.owner.add(action.key)
   const kind = action.kind
@@ -160,8 +161,9 @@ export function want(ctx: PlanCtx, action: Action): Gate {
     if (WAKES.includes(action.kind) && action.kind !== 'task') ctx.owner.add(action.key)
     else ctx.exhausted.push(action.key)
   } else if (cadenceOf(ctx.config, kind) !== null) {
-    if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttemptsOf(ctx.config, kind, entry.maxAttempts)) {
-      ctx.exhausted.push(action.key)
+    if (entry !== undefined && entry.status !== 'done') {
+      const earlier = entry.status === 'running' ? entry.attempts - 1 : entry.attempts
+      if (earlier >= maxAttemptsOf(ctx.config, kind, entry.maxAttempts)) ctx.exhausted.push(action.key)
     }
   }
   return g
