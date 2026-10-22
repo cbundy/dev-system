@@ -1586,11 +1586,11 @@ describe('the record\'s executors (act-state.ts)', () => {
     const action: Action = { kind: 'event', key: 'k', class: 'free', rule: 'S3', reason: 'x', issue: 500, event: merged }
     const sizeArgv = ['gh', 'pr', 'view', '621', '--repo', REPO, '--json', 'files,additions,deletions']
     const dataOf = (argv: string[] | undefined) => JSON.parse(argv?.[argv.indexOf('--data') + 1] ?? 'null')
-    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js' }, { path: '' }, { path: 'b/c.sh' }], additions: 12, deletions: 3 }) } : {}))
+    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: '', additions: 1, deletions: 0 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 }) } : {}))
     expect(await ok.run(action)).toMatchObject({ status: 'done', summary: 'logged merged' })
     expect(ok.argvs[0]).toEqual(sizeArgv)
-    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, size: { files: ['a.js', 'b/c.sh'], additions: 12, deletions: 3 } }))
-    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], additions: 12, deletions: 3 })
+    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, size: { files: ['a.js', 'b/c.sh'], fileLines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 } }))
+    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], file_lines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 })
     // a read that fails (exit, throw, bad JSON, no counts) writes the three as null, and the summary says so
     const bad: [string, (argv: string[]) => { exitCode?: number; stdout?: string }][] = [
       ['exit', () => ({ exitCode: 1 })],
@@ -1604,7 +1604,7 @@ describe('the record\'s executors (act-state.ts)', () => {
       const w = actWorld([], argv => (argv[0] === 'gh' ? gh(argv) : {}))
       expect(await w.run(action), name).toMatchObject({ status: 'done', summary: expect.stringContaining('size of PR #621 was unread') })
       expect(w.argvs[1], name).toEqual(eventArgv(merged))
-      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, additions: null, deletions: null })
+      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
     }
     // no pr: no size read; another event: no extra command
     const nopr = actWorld([])
@@ -1819,6 +1819,22 @@ describe('the title is a throttle (O1, titleEveryMs)', () => {
     }
     expect(renames).toBeGreaterThan(1)
     expect(renames).toBeLessThanOrEqual(12)
+  })
+})
+
+describe('the title\'s owner count holds across a sweep retry (H2, O2)', () => {
+  test('the pass that starts the retry counts the same stalled sweep as the pass before it', () => {
+    // the fixture's own ledger holds a recent done sweep, which would be the last one: replace it
+    const lastDoneAt = NOW - 2 * HOUR
+    const key = `sweep:${lastDoneAt}`
+    const swept = done('sweep:0', 'sweep', { startedAt: lastDoneAt - MIN, endedAt: lastDoneAt })
+    const on = (retry: LedgerEntry) => plan({ ...world([]), ledger: [swept, retry] })
+    const before = on(entry(key, 'sweep', { status: 'failed', attempts: 3, startedAt: NOW - 20 * MIN, endedAt: NOW - 19 * MIN }))
+    const during = on(entry(key, 'sweep', { status: 'running', attempts: 4, startedAt: NOW, endedAt: null }))
+    expect(before.owner).toBe(1)
+    expect(during.owner).toBe(before.owner)
+    expect(before.title).toContain('owner 1')
+    expect(during.title).toBe(before.title)
   })
 })
 

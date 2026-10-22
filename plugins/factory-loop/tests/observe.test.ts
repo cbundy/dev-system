@@ -1327,6 +1327,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect([shadow.state.queue, shadow.queueKnown]).toEqual([[114, 470], null])
   })
 
+  test('an empty ready list that the members\' own reads contradict is a failed source and the last list stands', async () => {
+    for (const mode of ['act', 'observe'] as const) {
+      const rt = mode === 'act' ? runtime() : runtime({ mode: 'observe', runSource: 'events' })
+      const h = host({ queue: { stdout: 'queue known=114 now=114,470\n' } })
+      const st = (known: number[] | null) => (mode === 'act' ? stored({ queueKnown: known }) : undefined)
+      const first = await h.pass(rt, st(null))
+      expect(first.state.queue).toEqual([114, 470])
+      expect(h.cache.github.get(114)?.value.facts?.labels).toContain('ready')
+      const listEmpty = { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      const empty = () => {
+        if (mode === 'act') h.world.queue = { stdout: 'queue known=114,470 now=none\n' }
+        else h.world.issues['--json --list --label ready'] = listEmpty
+      }
+      empty()
+      const held = await h.pass(rt, st([114, 470]), NOW + 3 * MIN)
+      expect(held.state.queue).toEqual([114, 470])
+      expect(held.state.sources.queue).toEqual({
+        ok: false,
+        at: NOW,
+        error: 'the ready list came back empty while #114, #470 carry ready by their own reads; the last list stands',
+      })
+      expect(held.queueKnown).toBeNull()
+      // the members no longer carry the label by their own reads: the empty list is accepted
+      for (const n of [114, 470]) {
+        const c = h.cache.github.get(n)
+        if (c?.value.facts) c.value.facts.labels = []
+      }
+      const taken = await h.pass(rt, st([114, 470]), NOW + 6 * MIN)
+      expect(taken.state.queue).toEqual([])
+      expect(taken.state.sources.queue).toEqual({ ok: true, at: NOW + 6 * MIN })
+      if (mode === 'act') expect(taken.queueKnown).toEqual([])
+    }
+  })
+
   test('the store wins whenever it holds a ledger; observe mode derives it from the 3-day log', async () => {
     const kept = [entry('claim:470:new', 'claim', { class: 'start', issue: 470, outcome: { kind: 'claim', result: 'claimed' } })]
     const h = host()

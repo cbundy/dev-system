@@ -137,18 +137,19 @@ log_closed() {
   "$EVENT" --type closed --issue "$1" --actor sweep --data "$(jq -nc --arg r "$reason" '{reason: (if $r == "" then null else $r end)}')" >/dev/null 2>&1 || err "warning: could not log the closed event for #$1"
 }
 
-# pr_size PR: prints {files, additions, deletions} of the PR (files are the paths, empty ones dropped)
+# pr_size PR: prints {files, file_lines, additions, deletions} of the PR (files are the paths, empty ones dropped;
+# file_lines are the per-file {path, additions, deletions}, an entry with a bad count dropped)
 # and returns 0, or prints nothing and returns 1 when the read fails or does not parse.
-SIZE_JQ='{files: ([.files[]?.path | select(type == "string" and . != "")]), additions: (.additions | numbers), deletions: (.deletions | numbers)}'
+SIZE_JQ='{files: ([.files[]?.path | select(type == "string" and . != "")]), file_lines: [.files[]? | objects | select((.path | type) == "string" and .path != "" and (.additions | type) == "number" and (.deletions | type) == "number" and .additions >= 0 and .deletions >= 0 and .additions == (.additions | floor) and .deletions == (.deletions | floor)) | {path, additions, deletions}], additions: (.additions | numbers), deletions: (.deletions | numbers)}'
 pr_size() {
   _psv=$("$GH" pr view "$1" --repo "$repo" --json files,additions,deletions 2>/dev/null) || return 1
   printf '%s' "$_psv" | jq -ce "$SIZE_JQ" 2>/dev/null
 }
-# pr_size_or_null PR: the same, but with all three null and a warning when it cannot be read
+# pr_size_or_null PR: the same, but with all four null and a warning when it cannot be read
 pr_size_or_null() {
   pr_size "$1" && return 0
   err "warning: could not read the size of PR #$1 - merged event written without it"
-  echo '{"files":null,"additions":null,"deletions":null}'
+  echo '{"files":null,"file_lines":null,"additions":null,"deletions":null}'
 }
 
 # The candidates: every issue the log has seen that is not final, and every issue
