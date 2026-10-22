@@ -60,9 +60,15 @@ export type ReleaseEvent = {
   lives: number | null
 }
 
-// A merged pull request's size (merged.v1 files, additions, deletions): what `gh pr view --json
+// A merged pull request's size (merged.v1 files, file_lines, additions, deletions): what `gh pr view --json
 // files,additions,deletions` read, each null when it did not read.
-export type PrSize = { files: string[] | null; additions: number | null; deletions: number | null }
+export type PrFileLine = { path: string; additions: number; deletions: number }
+export type PrSize = {
+  files: string[] | null
+  fileLines: PrFileLine[] | null
+  additions: number | null
+  deletions: number | null
+}
 
 // The reused states, each with the meaning it already has (7.1); the note is read for its payload (event-native.ts).
 // A `merged` event may carry the size the event executor read (act-state.ts); the planner never sets it.

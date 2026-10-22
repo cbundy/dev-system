@@ -206,6 +206,7 @@ function mergedData(e: ReusedEvent): Record<string, unknown> {
     by: note === null || note === 'merged by the factory loop' ? 'factory' : 'hand',
     recovered: note !== null,
     files: size?.files ?? null,
+    file_lines: size?.fileLines ?? null,
     additions: size?.additions ?? null,
     deletions: size?.deletions ?? null,
   }

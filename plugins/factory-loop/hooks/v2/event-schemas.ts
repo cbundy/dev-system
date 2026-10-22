@@ -305,6 +305,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "branch": {"type":["null","string"]},
       "by": {"enum":["factory","hand"]},
       "deletions": {"minimum":0,"type":["integer","null"]},
+      "file_lines": {"items":{"additionalProperties":false,"properties":{"additions":{"minimum":0,"type":"integer"},"deletions":{"minimum":0,"type":"integer"},"path":{"minLength":1,"type":"string"}},"required":["additions","deletions","path"],"type":"object"},"type":["array","null"]},
       "files": {"items":{"minLength":1,"type":"string"},"type":["array","null"]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
