@@ -62,10 +62,12 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     gateRuns: [] as { command: string; cwd?: string; timeoutMs?: number }[],
     // every `exec 2>&1` text the gate ran, wrapper and all
     wrapperRuns: [] as string[],
-    // callum-flow-event's argv, and the engine's own answer to a tool.check
+    // callum-flow-event's argv, and the engine's own answer to a tool.check: allow, as for a loop
+    // agent that runs unattended. Since Claude Code 2.1.308 the kit's $.tool.call raises tool.check
+    // first, as the engine does, so a default of ask would turn every call into the guard's deny.
     events: [] as string[][],
     checked: [] as Record<string, unknown>[],
-    decided: { decision: 'ask' } as Record<string, unknown>,
+    decided: { decision: 'allow' } as Record<string, unknown>,
     ids: 0,
     sleeps: 0,
     // what the plugin set with $.env.set, in order
@@ -918,10 +920,17 @@ const AGENT_TRANSCRIPT = '/c/projects/p/s1/subagents/agent-agent-1.jsonl'
 const RM = { tool: 'Bash', input: { command: 'rm -f $D/*' }, agentId: 'agent-1' }
 const dataOf = (argv: string[]) => JSON.parse(argv[argv.indexOf('--data') + 1] ?? 'null') as Record<string, unknown>
 
+// askWorld: a world whose engine would ask a person about every call
+function askWorld(on: On, opts: Parameters<typeof world>[1] = {}) {
+  const w = world(on, opts)
+  w.decided = { decision: 'ask' }
+  return w
+}
+
 describe('prompts nobody answers', () => {
   test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
     // #674: `rm -f $D/*` waited for ever on a prompt nobody answered
-    const w = world(on)
+    const w = askWorld(on)
     w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'host' }
     await $.agent.spawn(spawn(BUILD))
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
@@ -959,7 +968,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('the safe rewrite of the same command is allowed, with no event and no line', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     w.decided = { decision: 'allow' }
     await $.agent.spawn(spawn(BUILD))
     expect(await check($, { tool: 'Bash', input: { command: 'rm -f "${D:?}"/*' }, agentId: 'agent-1' })).toEqual({ decision: 'allow' })
@@ -968,7 +977,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('a deny of Claude Code\'s own comes back as it was, untouched', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     w.decided = { decision: 'deny', reason: 'no' }
     await $.agent.spawn(spawn(BUILD))
     expect(await check($, RM)).toEqual({ decision: 'deny', reason: 'no' })
@@ -976,7 +985,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('a command that is no rm of a glob gets no rewrite, and one without a reason quotes none', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     await $.agent.spawn(spawn(BUILD))
     const r = (await check($, { tool: 'Bash', input: { command: 'curl https://example.com' }, agentId: 'agent-1' })) as { reason: string }
     expect(r.reason).not.toContain(':?')
@@ -985,7 +994,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('a child of the loop agent is denied and logged with its own agent type', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     await $.agent.spawn(spawn(BUILD))
     await $.agent.spawn(spawn({ subagentType: 'Explore', description: 'look', prompt: 'look around', parentAgentId: 'agent-1' }))
     expect((await check($, { ...RM, agentId: 'agent-2' })).decision).toBe('deny')
@@ -993,7 +1002,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('the main session and an agent the companion does not know are left to Claude Code', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     await $.agent.spawn(spawn(BUILD))
     expect(await check($, { tool: 'Bash', input: { command: 'rm -f $D/*' } })).toEqual({ decision: 'ask' })
     expect(await check($, { ...RM, agentId: 'someone-else' })).toEqual({ decision: 'ask' })
@@ -1004,7 +1013,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('a long input is clipped to the constant', async ($, on) => {
-    const w = world(on)
+    const w = askWorld(on)
     await $.agent.spawn(spawn(BUILD))
     await check($, { tool: 'Bash', input: { command: `echo ${'x'.repeat(5000)}` }, agentId: 'agent-1' })
     expect(dataOf(w.events[0] as string[]).tool_input).toHaveLength(INPUT_CLIP)
@@ -1015,7 +1024,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('an image whose callum-flow-event refuses the write still gets the deny and the line', async ($, on) => {
-    const w = world(on, { eventExit: 2 })
+    const w = askWorld(on, { eventExit: 2 })
     await $.agent.spawn(spawn(BUILD))
     expect((await check($, RM)).decision).toBe('deny')
     expect(w.events).toHaveLength(1)
@@ -1023,7 +1032,7 @@ describe('prompts nobody answers', () => {
   })
 
   test('a marker with a pr gives pr in the data, and one without gives null', async ($, on) => {
-    const w = world(on, { marker: { ...MARKER, pr: 612 } })
+    const w = askWorld(on, { marker: { ...MARKER, pr: 612 } })
     await $.agent.spawn(spawn(BUILD))
     await check($, RM)
     expect(dataOf(w.events[0] as string[]).pr).toBe(612)
