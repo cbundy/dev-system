@@ -1822,6 +1822,22 @@ describe('the title is a throttle (O1, titleEveryMs)', () => {
   })
 })
 
+describe('the title\'s owner count holds across a sweep retry (H2, O2)', () => {
+  test('the pass that starts the retry counts the same stalled sweep as the pass before it', () => {
+    // the fixture's own ledger holds a recent done sweep, which would be the last one: replace it
+    const lastDoneAt = NOW - 2 * HOUR
+    const key = `sweep:${lastDoneAt}`
+    const swept = done('sweep:0', 'sweep', { startedAt: lastDoneAt - MIN, endedAt: lastDoneAt })
+    const on = (retry: LedgerEntry) => plan({ ...world([]), ledger: [swept, retry] })
+    const before = on(entry(key, 'sweep', { status: 'failed', attempts: 3, startedAt: NOW - 20 * MIN, endedAt: NOW - 19 * MIN }))
+    const during = on(entry(key, 'sweep', { status: 'running', attempts: 4, startedAt: NOW, endedAt: null }))
+    expect(before.owner).toBe(1)
+    expect(during.owner).toBe(before.owner)
+    expect(before.title).toContain('owner 1')
+    expect(during.title).toBe(before.title)
+  })
+})
+
 // --- comment_posted (v2 SPEC 4.5, comment_posted.v1) ---------------------------------------------------------
 
 describe('a park or wait comment logs where it is (comment_posted)', () => {

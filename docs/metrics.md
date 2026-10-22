@@ -1098,6 +1098,12 @@ WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NUL
 ORDER BY c.ts;
 ```
 
+How often GitHub's ready listing came back empty while its issues still carried the label (the loop held the last list), with the pass and the reason:
+
+```sh
+jq -r 'select((.sources.queue // "") | startswith("failed: the ready list came back empty")) | [.at, .pass, .sources.queue] | @tsv' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ## 6b. Reader shadow compares
 
 How often a reader with an old/new source switch (`reader`, such as `claim-events`) found its two
