@@ -1688,20 +1688,6 @@ GROUP BY s.repo, s.issue, s.merged_at
 ORDER BY s.merged_at DESC;
 ```
 
-An agent step whose agent the loop itself stopped, and that gave no answer, ends `unknown:stopped`
-(v2 SPEC 7.2); `unknown:agent-dead` is a death the loop did not cause. This counts both per repo and
-week, to show how many agent unknowns were the loop's own stops.
-
-```sql
--- loop-stopped versus agent-dead unknowns, per repo and week
-SELECT repo, date_trunc('week', ts) AS week,
-       count(*) FILTER (WHERE cause = 'unknown:stopped')    AS stopped,
-       count(*) FILTER (WHERE cause = 'unknown:agent-dead') AS agent_dead
-FROM factory.event_log
-WHERE type = 'intervention' AND cause IN ('unknown:stopped', 'unknown:agent-dead')
-GROUP BY 1, 2 ORDER BY 2, 1;
-```
-
 **Judgement calls** (#632 metric 2): the decisions a model made, by kind and outcome: each review
 (`reviewed`, by `verdict`; one per `(issue, round, patch)`), each triage call (an `intervention` with
 cause `triage`, by the choice the next triage row of the loop's table applied: `X1` retry, `X2` fix,
@@ -1967,6 +1953,22 @@ Only non-derived skips keep the loop working and raise the owner item `reader-be
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:reader-behind:")))
   | {day: ($d.at | tostring | .[0:10]), types: .fields.types, count: .fields.count}]
   | unique_by(.types) | .[] | "\(.day) \(.types) (\(.count))"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+### Loop-stopped agent unknowns
+
+An agent step whose agent the loop itself stopped, and that gave no answer, ends `unknown:stopped`
+(v2 SPEC 7.2); `unknown:agent-dead` is a death the loop did not cause. This counts both per repo and
+week, to show how many agent unknowns were the loop's own stops.
+
+```sql
+-- loop-stopped versus agent-dead unknowns, per repo and week
+SELECT repo, date_trunc('week', ts) AS week,
+       count(*) FILTER (WHERE cause = 'unknown:stopped')    AS stopped,
+       count(*) FILTER (WHERE cause = 'unknown:agent-dead') AS agent_dead
+FROM factory.event_log
+WHERE type = 'intervention' AND cause IN ('unknown:stopped', 'unknown:agent-dead')
+GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
 ### Actions refusal spells
