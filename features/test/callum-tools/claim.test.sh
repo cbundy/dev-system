@@ -1066,7 +1066,7 @@ for who in devA devB; do
   no_calls "sweep merged by hand, live claim of $who"
   [ "$(events | jq -s 'map(select(.type == "merged")) | length')" = 1 ] || fail "merged by hand ($who): $(events)"
   events | tail -n 1 | jq -e '.type == "merged" and .data.pr == 55 and .actor == "sweep" and .data.head == "0123456789abcdef0123456789abcdef01234567"' >/dev/null || fail "merged by hand ($who): event: $(events)"
-  events | tail -n 1 | jq -e '.data.files == null and .data.additions == null and .data.deletions == null' >/dev/null || fail "merged by hand ($who): the unread size is null: $(events)"
+  events | tail -n 1 | jq -e '.data.files == null and .data.file_lines == null and .data.additions == null and .data.deletions == null' >/dev/null || fail "merged by hand ($who): the unread size is null: $(events)"
   grep -q 'could not read the size of PR #55' "$tmpdir/err" || fail "merged by hand ($who): no size warning: $(cat "$tmpdir/err")"
   n=$(events | wc -l)
   rc_of "$SWEEP"
@@ -1375,10 +1375,10 @@ issue 7 OPEN
 seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
-echo '{"files":[{"path":"a.js"},{"path":""},{"path":"b/c.sh"}],"additions":12,"deletions":3}' > "$d/pr-view-55.json"
+echo '{"files":[{"path":"a.js","additions":8,"deletions":1},{"path":"","additions":1,"deletions":1},{"path":"b/c.sh","additions":4,"deletions":2},{"path":"e.md","additions":-1,"deletions":0}],"additions":12,"deletions":3}' > "$d/pr-view-55.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep merged with a size"
-events | tail -n 1 | jq -e '.type == "merged" and .issue == 7 and .data.files == ["a.js", "b/c.sh"] and .data.additions == 12 and .data.deletions == 3 and .data.by == "factory" and .data.recovered == false' >/dev/null || fail "rule 4 size: $(events)"
+events | tail -n 1 | jq -e '.type == "merged" and .issue == 7 and .data.files == ["a.js", "b/c.sh", "e.md"] and .data.file_lines == [{path: "a.js", additions: 8, deletions: 1}, {path: "b/c.sh", additions: 4, deletions: 2}] and .data.additions == 12 and .data.deletions == 3 and .data.by == "factory" and .data.recovered == false' >/dev/null || fail "rule 4 size: $(events)"
 grep -qx 'pr view 55 --repo o/r --json files,additions,deletions' "$d/pr-view-args" || fail "rule 4 size read: $(cat "$d/pr-view-args")"
 
 # --- sweep rule 7: unrecorded merges to main ---------------------------------------------------
@@ -1392,7 +1392,7 @@ pl() { jq -n '$ARGS.positional | . as $a | [range(0; length; 4) | {number: ($a[.
 pv() {
   pn=$1
   shift
-  jq -n --arg n "$*" '{closingIssuesReferences: [$n | split(" ")[] | select(. != "") | {number: tonumber, repository: {name: "r", owner: {login: "o"}}}], files: [{path: "x.js"}, {path: "y.sh"}], additions: 5, deletions: 1}' > "$d/pr-view-$pn.json"
+  jq -n --arg n "$*" '{closingIssuesReferences: [$n | split(" ")[] | select(. != "") | {number: tonumber, repository: {name: "r", owner: {login: "o"}}}], files: [{path: "x.js", additions: 4, deletions: 1}, {path: "y.sh", additions: 1, deletions: 0}, {path: "", additions: 0, deletions: 0}, {path: "z.md", additions: 1.5, deletions: 0}], additions: 5, deletions: 1}' > "$d/pr-view-$pn.json"
   echo "feat/p$pn" > "$d/head-ref-$pn"
 }
 merged_rows() { events | jq -c 'select(.type == "merged")'; }
@@ -1406,7 +1406,7 @@ sweep7
 expect_rc 0 "rule 7 unlinked"
 no_calls "rule 7 unlinked"
 [ "$(merged_rows | wc -l)" = 1 ] || fail "rule 7 unlinked: one event: $(events)"
-merged_rows | jq -e --arg h "$H1" '.actor == "sweep" and (.issue == null) and .data == {pr: 60, branch: "main-fix", head: $h, by: "hand", recovered: true, files: ["x.js", "y.sh"], additions: 5, deletions: 1}' > /dev/null || fail "rule 7 unlinked: event: $(events)"
+merged_rows | jq -e --arg h "$H1" '.actor == "sweep" and (.issue == null) and .data == {pr: 60, branch: "main-fix", head: $h, by: "hand", recovered: true, files: ["x.js", "y.sh", "z.md"], file_lines: [{path: "x.js", additions: 4, deletions: 1}, {path: "y.sh", additions: 1, deletions: 0}], additions: 5, deletions: 1}' > /dev/null || fail "rule 7 unlinked: event: $(events)"
 grep -q -- '--base main' "$d/pr-list-args" && grep -q -- 'merged:>=2026-10-01' "$d/pr-list-args" && grep -q -- '--limit 200' "$d/pr-list-args" || fail "rule 7 list args: $(cat "$d/pr-list-args")"
 grep -q 'repo=o/r' "$d/dq-calls-merged" || fail "rule 7 central read: $(cat "$d/dq-calls-merged")"
 # a second run writes nothing

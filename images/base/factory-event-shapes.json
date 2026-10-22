@@ -1329,6 +1329,35 @@
             "null"
           ]
         },
+        "file_lines": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "additions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "deletions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "additions",
+              "deletions",
+              "path"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "files": {
           "items": {
             "minLength": 1,

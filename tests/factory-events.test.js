@@ -107,6 +107,20 @@ test("validateStrict rejects a bad merged files, additions or deletions", () => 
   }
 });
 
+test("validateStrict takes a good merged file_lines and null, and rejects a bad one", () => {
+  const base = { pr: 1, branch: "b", head: "f94eb46", by: "factory", recovered: false };
+  const strict = (file_lines) => reader.validateStrict("merged", 1, { ...base, file_lines });
+  const ok = { path: "a.js", additions: 3, deletions: 0 };
+  assert.deepEqual(strict(null), []);
+  assert.deepEqual(strict([]), []);
+  assert.deepEqual(strict([ok]), []);
+  const bad = [
+    [{ ...ok, additions: -1 }], [{ ...ok, deletions: 1.5 }], [{ ...ok, path: "" }],
+    [{ path: "a.js", additions: 1 }], [{ ...ok, extra: 1 }], "a.js", { path: "a.js" },
+  ];
+  for (const v of bad) assert.notDeepEqual(strict(v), [], JSON.stringify(v));
+});
+
 const shape2 = {
   v1: { type: "object", additionalProperties: false, required: ["a"], properties: { a: { type: "integer" }, old: { type: ["string", "null"] } } },
   v2: { type: "object", additionalProperties: false, required: ["a", "b"], properties: { a: { type: "integer" }, b: { type: "string" }, c: { type: ["string", "null"] } } },

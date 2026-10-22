@@ -152,6 +152,7 @@ Example:
 | `failed_at` | string | `gate_run` | On a flaky pass row, when the failed run started. Null otherwise. |
 | `failed_jobs` | array of string | `intervention` | The names of the CI jobs that failed. Null when none were recorded. |
 | `failed_tests` | array of string | `gate_run`, `intervention` | The failing tests' names on a fail row; on a flaky pass row the names from the fail before it. Null when none were recorded. |
+| `file_lines` | array of object | `merged` | The pull request's per-file line counts ({path, additions, deletions}) from GitHub's pull request files at merge time, in the same order as files and up to the same cap. An entry whose counts are not non-negative integers is left out here but still counts in files. null when unknown. |
 | `filed_issue` | integer | `loop_entry` | A flake bug tell: the number of the bug the loop filed (or found); null otherwise. |
 | `files` | array of string | `merged`, `test_weakened` | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example a pr of null or a size that could not be read. A recovered merge can carry it, read when the event was logged. |
 | `first_flake_at` | string | `loop_entry` | A flake bug tell: when the first flake of the test in the window happened; null otherwise. |
@@ -858,6 +859,7 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `by` | enum | required | no | one of "factory", "hand" | yes | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `recovered` | boolean | required | no |  | yes | true when the loop or the sweep logged it afterwards because no merged event was recorded at the merge. |
 | `files` | array of string | optional | yes | items: minLength 1 | yes | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example a pr of null or a size that could not be read. A recovered merge can carry it, read when the event was logged. |
+| `file_lines` | array of object | optional | yes |  | yes | The pull request's per-file line counts ({path, additions, deletions}) from GitHub's pull request files at merge time, in the same order as files and up to the same cap. An entry whose counts are not non-negative integers is left out here but still counts in files. null when unknown. |
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 
