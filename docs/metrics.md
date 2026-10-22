@@ -723,7 +723,7 @@ GROUP BY 1, 2 ORDER BY 2, 1;
 While a conflicting PR's reviewer of the head's patch still runs, the review step waits for it, so one
 fixer gets the merge and the findings (v2 SPEC 8.5). This counts per repo and week the review-stage
 conflict rounds (T9, via `fix:conflict`, from reviewing) and how many carry a finished review: a
-`reviewed` row of the same issue and round, with verdict `approve` or `changes`, at or before the
+`reviewed` row of the same issue, the transition's own `round` (a merge-queue `patch` return, T14, raises it with no T9) and life (a `reviewed` row has no life, so it must be no older than the life's first row), with verdict `approve` or `changes`, at or before the
 transition's `seq_at`.
 
 ```sql
@@ -733,9 +733,9 @@ SELECT t.repo, date_trunc('week', t.seq_at) AS week,
        count(*) FILTER (WHERE EXISTS (
          SELECT 1 FROM factory.event_log r
          WHERE r.repo = t.repo AND r.issue = t.issue AND r.type = 'reviewed'
-           AND r.round = (SELECT count(*) FROM factory.event_log p
-                          WHERE p.repo = t.repo AND p.issue = t.issue AND p.life = t.life
-                            AND p.type = 'transition' AND p.table_row = 'T9' AND p.seq_at < t.seq_at) + 1
+           AND r.round = t.round
+           AND r.ts >= (SELECT min(p.ts) FROM factory.event_log p
+                        WHERE p.repo = t.repo AND p.issue = t.issue AND p.life = t.life)
            AND r.verdict IN ('approve', 'changes') AND r.ts <= t.seq_at)) AS with_finished_review
 FROM factory.event_log t
 WHERE t.type = 'transition' AND t.table_row = 'T9' AND t.via = 'fix:conflict' AND t.from_state = 'reviewing'

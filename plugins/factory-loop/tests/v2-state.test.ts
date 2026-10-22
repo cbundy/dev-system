@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { ctxOf, dispatch } from '../hooks/act'
+import { GITHUB_V2, newCtx } from '../hooks/foundation'
 import type { ActEnv } from '../hooks/act'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
 import type { ActIo, ExecCtx, SpawnInput } from '../hooks/exec'
@@ -18,6 +19,8 @@ import { eventArgv } from '../hooks/v2/events'
 import { claimKey, entryKey, followKey, interventionKey, lifeKey, lifeOf, prKey, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
+import { stepEvent } from '../hooks/v2/rules-agent'
+import { stopKey } from '../hooks/v2/rules-entry'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
 import type { TriageInput } from '../hooks/v2/prompts-triage'
 import { resultsOf, stepFiles, triageInput, triageResult } from '../hooks/v2/steps-triage'
@@ -25,8 +28,8 @@ import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { parkText } from '../hooks/v2/park-text'
 import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
-import { FACTORY_LABELS, SLOT_STATES } from '../hooks/v2/types'
-import type { IssueRecord, Lease, StepResult, V2Io, V2State } from '../hooks/v2/types'
+import { FACTORY_LABELS, SLOT_STATES, V2_OWNER_TELLS } from '../hooks/v2/types'
+import type { IssueRecord, Lease, StepResult, V2Ctx, V2Io, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, config, control, entry, issue, running, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -1880,5 +1883,34 @@ describe('a park or wait comment logs where it is (comment_posted)', () => {
     const p = run(parked, comment(parked, URL), done(entryKey(parked, 'event/comment-posted'), 'event', { issue: 61 }))
     expect(posted(parked, p)).toEqual([])
     expect(posted(parked, plan(withLedger(world([parked]), [comment(parked, URL)])))).toEqual([])
+  })
+})
+
+describe('stepEvent: an ended agent step the loop stopped', () => {
+  const r = rec(171)
+  const ctxOver = (ledger: LedgerEntry[]): V2Ctx => {
+    const s = withLedger(world([r]), ledger)
+    return Object.assign(newCtx(s, CFG, { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2), { v2: s.v2 as V2State })
+  }
+  const step = (status: LedgerEntry['status'], summary: string): LedgerEntry => done(stepKey(r, 'build', 1), 'agent-step', { issue: 171, agentId: 'agent-9', status, summary, endedAt: NOW - MIN })
+  const stops = [
+    ['the v2 stopKey', (e: LedgerEntry) => done(stopKey(r, e.key), 'stop-agent', { issue: 171 })],
+    ['/stop/<agentId>', () => done(`i171/l${LIFE}/s9/stop/agent-9`, 'stop-agent', { issue: 171 })],
+    ['stop:<agentId>', () => done('stop:agent-9', 'stop-agent', { issue: 171 })],
+  ] as const
+  for (const [name, mk] of stops) {
+    for (const [status, summary] of [['lost', 'lost'], ['failed', 'agent killed']] as const) {
+      test(`a ${status} step with a stop-agent (${name}) is unknown stopped, naming the stop key`, () => {
+        const e = step(status, summary)
+        const stop = mk(e)
+        expect(stepEvent(ctxOver([e, stop]), r, e, 'build')).toMatchObject({ kind: 'unknown', why: 'stopped', reason: expect.stringContaining(stop.key) })
+      })
+    }
+  }
+  test('without a stop-agent a lost step, or one that failed killed, is unknown agent-dead', () => {
+    for (const [status, summary] of [['lost', 'lost'], ['failed', 'agent killed']] as const) {
+      const e = step(status, summary)
+      expect(stepEvent(ctxOver([e]), r, e, 'build')).toMatchObject({ kind: 'unknown', why: 'agent-dead' })
+    }
   })
 })
