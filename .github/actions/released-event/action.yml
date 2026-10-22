@@ -1,0 +1,22 @@
+name: Released event
+description: >-
+  Attach the factory `released` event for a tag to its GitHub Release as the asset
+  factory-released.json. A device running the factory push loop collects it. Run it after the step
+  that creates the GitHub Release; the caller provides GH_TOKEN with contents: write.
+inputs:
+  tag:
+    description: The release tag, for example v1.2.3.
+    required: true
+  source:
+    description: Who cut the release (workflow, manual or loop).
+    required: false
+    default: workflow
+runs:
+  using: composite
+  steps:
+    - name: Attach factory-released.json
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        SOURCE: ${{ inputs.source }}
+      run: node "$GITHUB_ACTION_PATH/../../../images/base/callum-flow-released" "$TAG" --repo "$GITHUB_REPOSITORY" --source "$SOURCE" --attach

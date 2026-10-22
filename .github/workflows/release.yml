@@ -125,3 +125,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: node scripts/release-milestone.js --release "$RELEASE_VERSION"
+
+      - name: Attach the released event to the Release
+        uses: ./.github/actions/released-event
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          tag: v${{ inputs.version }}

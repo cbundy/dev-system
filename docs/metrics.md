@@ -2421,7 +2421,9 @@ ORDER BY repo, day, regime, merged_by, recovered;
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
-factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, and rule
+factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, a device's
+push loop is the second producer (`callum-flow-released --collect` writes the `released` event a repo's CI
+attached to its GitHub Release), and rule
 O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
 11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
 
@@ -2491,6 +2493,23 @@ JOIN factory.event_store s ON s.event_id = l.event_id
 WHERE l.type = 'loop_entry' AND l.wake = 'release' AND l.decision = 'hold'
 GROUP BY 1, 2
 ORDER BY 1 DESC, 3 DESC;
+```
+
+Releases by who cut them (`source` is `workflow` for a CI release, `loop` for one the loop's release task cut,
+`manual` for one logged by hand; counted once by `(repo, tag)`; read from `event_store` as `source` is not a column):
+
+```sql
+WITH rel AS (
+  SELECT l.repo, l.tag, min(s.data->>'source') AS source
+  FROM factory.event_log l
+  JOIN factory.event_store s ON s.event_id = l.event_id
+  WHERE l.type = 'released'
+  GROUP BY l.repo, l.tag
+)
+SELECT repo, source, count(*) AS releases
+FROM rel
+GROUP BY repo, source
+ORDER BY repo, releases DESC;
 ```
 
 ## Main after merge

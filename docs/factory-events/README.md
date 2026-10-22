@@ -152,6 +152,10 @@ SQL
 
 ## Where events live
 
+- **A CI release.** A repo that cuts releases in a workflow attaches the `released` event to the GitHub
+  Release as the asset `factory-released.json` (the composite action `.github/actions/released-event`); a
+  device's `factory-event-push-loop` collects it with `callum-flow-released --collect` into its own log and
+  pushes it. The same release may reach the store from two devices; count it once by `(repo, tag)`.
 - **Local log.** Each device appends one line per event to
   `/persist/events/factory/<owner>__<repo>.jsonl` (`callum-flow-event --new-path` prints the path; `factory/` is made
   0700). The old log `<events dir>/<owner>__<repo>.jsonl` and `factory.events` get no new lines any more
