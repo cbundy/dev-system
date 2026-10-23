@@ -13,6 +13,9 @@ callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format t
                           [--rule S1..S5=<minutes>]... [--github on|off] [--source old|new|shadow]
 ```
 
+`--repo` is matched case-insensitively, and the report's `repos[].repo` is always lower case (the tool
+groups events, runs and queues by the lower-cased name).
+
 Exit 0 ok, 2 bad arguments (a bad `--source` or `CALLUM_FLOW_FACTORY_STATE_SOURCE` included), 1 the required
 source that cannot be read: `factory.events` for `old` and `shadow`, `factory.event_log` (through
 `dev-query --factory`) for `new`. Under `new` (and the new half of `shadow`) a `factory.event_log` row
