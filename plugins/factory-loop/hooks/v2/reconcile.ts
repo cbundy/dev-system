@@ -317,7 +317,7 @@ export function checkoutBaseOf(base: CheckoutBase | null, now: Checkout | null, 
     const hopped = base.checkout.head !== now.head || base.checkout.branch !== now.branch
     return hopped ? { checkout: now, at, settled: { from: base.checkout.head, to: now.head, behind: now.behind ?? 0 } } : { checkout: now, at }
   }
-  return base
+  return base.settled === undefined ? base : { checkout: base.checkout, at: base.at }
 }
 
 // tripwire: tell(checkout) for a change against the base until it is told, with its paths and the

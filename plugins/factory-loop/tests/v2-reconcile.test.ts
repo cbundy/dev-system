@@ -742,6 +742,16 @@ describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
     expect(skips(planV2(world({ base: next, checkout: ff }), CFG))).toEqual([])
   })
 
+  test('the settled skip line is not repeated while a later change waits to be told', () => {
+    const ff = dirty([], { head: B, behind: 3 })
+    const settled = checkoutBaseOf(base(CLEAN), ff, [], NOW)
+    expect(settled?.settled).toBeDefined()
+    const changed = dirty(['new.ts'], { head: B, behind: 3 })
+    const kept = checkoutBaseOf(settled, changed, [], NOW + MIN)
+    expect(kept?.settled).toBeUndefined()
+    expect(skips(planV2(world({ base: kept, checkout: changed }), CFG))).toEqual([])
+  })
+
   test('checkoutBaseOf: a failed or missing read keeps the base; the first read is a clean checkout at its HEAD unless told', () => {
     const b = base(CLEAN)
     expect(checkoutBaseOf(b, { error: 'x' }, [], NOW)).toBe(b)
