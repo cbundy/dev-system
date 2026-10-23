@@ -28,6 +28,7 @@ import { settingsRules } from './rules-settings'
 import { slotRules } from './rules-slots'
 import { starvedRules } from './rules-starved'
 import { readerRules } from './rules-reader'
+import { releaseHoldRules } from './rules-release-hold'
 import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
 import { windDownGuard, windDownOf, windDownTells, windDownTitle } from './wind-down'
@@ -68,6 +69,7 @@ export function planV2(state: State, config: Config): PlanResult {
     }
     readerRules(ctx)
     interventionRules(ctx)
+    releaseHoldRules(ctx)
     settingsRules(ctx)
     flakeRules(ctx)
     refusedRules(ctx)

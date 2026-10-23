@@ -126,7 +126,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records; the due records are read up to 4 at once, started in 2.4's order, with results kept in it |
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
 | `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
-| `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed read keeps the last reading, which the window still bounds, and shows in `sources` |
+| `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,headRefOid,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; per listed PR its head commit's time (`gh pr view N --repo R --json headRefOid,commits`, once per head) and its checks (`gh pr checks`, the bucket of each: `fail` or `cancel` is red, `pending` or none reported is pending, else green; with the earliest check start); a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed list read keeps the last reading and shows in `sources`; a failed head or checks read keeps the last reading of the same head, and a new head with none is held as pending, bounded by its window |
 | `main` | act mode only: `gh api repos/R --jq .default_branch` (once per load), `gh api repos/R/commits/<branch> --jq .sha`, `gh api repos/R/commits/<head>/pulls` (only when the head moved), `gh api repos/R/actions/workflows?per_page=100` (the active workflows), for each `gh api repos/R/actions/workflows/<id>/runs?branch=<b>&per_page=10`, then `gh api repos/R/deployments?sha=<head>&per_page=100` (the newest of each environment) and for each `gh api repos/R/deployments/<id>/statuses?per_page=1` | `mainEveryMs`; none during a GitHub backoff or once a rate limit met this pass ends the loop's reads (checked before each call). When skipped or not yet due, the last reading stands | the `main_state` event (7.1, rule M1). Any failed call, or output not understood, fails the whole read: `sources.main` is not ok and the pass carries no reading, so a partial read is never shown as green |
 | `paths` | only while `intakeStamp` is `on`, for each record that is not closed and has a `head`, and only when the default branch is known (`checkout.defaultBranch`): `git fetch` of the base ref, `git fetch origin <head>` when the head is not here (as `callum-flow-patch-id`), then `git diff --name-only --no-renames <merge-base>..<head>`; each path is cut to its first segment, de-duplicated and sorted | once per `<issue> <head>`: a successful read is cached until the head moves; a failed read is null for that record this pass and is tried again on a later pass; nothing is read during a GitHub backoff or once a rate limit ended this pass's reads | the in-flight paths the `overlap` score factor reads (3.5, S1); while `intakeStamp` is `off` no git command runs for it |
 | `flakes` | act mode only: `dev-query --factory --csv -v repo=R -v since=<now - flakeWindowDays>` with the per-flake query of metrics 2d (a gate flake and a CI flake, each once; one row per flake per test with the first row's event id and the test name's hash), then, only when some test has `flakeBugMin` flakes, `callum-flow-issue-read --json --list --label flaky --state open` (the reader lists trusted authors only) for the open flake bugs: number, marker, whether labelled `ready`, the flake ids its body names | `githubEveryMs`, and at once after an action of rule F1 ended; none during a GitHub backoff or after a rate limit | rule F1 (8.5). A missing factory URL (`dev-query` exit 77) is no flakes; any other failure or an unreadable list fails the source, and F1 plans nothing (`V2State.flakes`, `sources.flakes`) |
@@ -1180,8 +1180,8 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `hold` | `hold:dont-merge` when a merge-queue record is first held by the `don't-merge` label (on its issue or PR; the reason says which), and `hold:released` when the label is gone from both. One event for each toggle within a life, keyed `hold/i<N>/l<life>/k<n>` with `n` the count of the life's earlier hold events. A failed label read (`labels not read`) writes none (9.1) | the issue |
-| `hold:release` | the merge queue's start of a release hold: a release bump PR is open within `releaseHold` of its creation (9.1). `who=loop`, no issue, `pr` the bump PR; the detail names its branch, when it opened, the end of its window and the heads held. Fact `hold/release/pr<p>/start` | none |
-| `hold:release-merged`, `hold:release-closed`, `hold:release-timeout` | the end of that hold: the bump PR left the list and was merged or closed (its state read once), or its window ran out while it was still open. `who=loop`; the detail names the heads whose merge it held. Fact `hold/release/pr<p>/end`. Both are logged once per device, derived from the ledger's start key and GitHub, so a restart between them still logs the end | none |
+| `hold:release` | the merge queue's start of a release hold window: a release bump PR's head is inside its window (9.1). `who=loop`, no issue, `pr` the bump PR, `head` its head; the detail names its branch, the head, the state of its checks, the end of its window and the heads held. Fact `hold/release/pr<p>/h<head12>/start` (a start in the old form `hold/release/pr<p>/start`, logged before the window was per head, is still ended once) | none |
+| `hold:release-merged`, `hold:release-closed`, `hold:release-pushed`, `hold:release-failed`, `hold:release-timeout` | the end of that window: the bump PR left the list and was merged or closed (its state read once); a push made a new head (`pushed`, and the new head's window starts); a check on the head failed or was cancelled (`failed`, the detail and `failed_jobs` name them); or its window ran out while the head was still open and its checks not red (`timeout`, which also plans the owner item `release-hold`, appendix D). `who=loop`; `head` the window's head; the detail names the heads whose merge it held. Fact `hold/release/pr<p>/h<head12>/end`. Both are logged once per device, derived from the ledger's start key and GitHub, so a restart between them still logs the end | none |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
 | `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event --type intervention [--issue N] --regime manual --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'` (without `--regime` the row reads `unknown`), which the operator playbook adds to each rescue recipe | the issue, when given |
 
@@ -1695,18 +1695,25 @@ The designer is a reader: it writes nothing to GitHub.
   record with no PR view yet is held by the issue alone. The status title counts held records
   (`held <n>`). The hold is a hold, not a state: no record transition is made for it, and a
   hold and its release are interventions (7.2).
-- **The release hold.** While a release bump PR is open, the loop holds its own merges for at most
-  `releaseHold` (10 minutes by default; 0 turns it off), counted from the PR's GitHub `createdAt`.
+- **The release hold.** While a release bump PR's head is inside its window, the loop holds its own
+  merges. The window is per head: it starts at the head's anchor, the latest of the PR's GitHub
+  `createdAt`, the head commit's `committedDate` and the earliest `startedAt` of the head's checks
+  (each left out when unread), and lasts `releaseHold` at most (45 minutes by default, the cap per
+  head; 0 turns it off). A push makes a new head and so restarts the full window; a failed or
+  cancelled check on the head ends the hold on that pass (the release failed, so the queue goes on).
+  Pending, not yet reported and green checks hold.
   A bump PR is an open PR of the repo (not a fork's) whose head branch starts with
   `releaseBranchPrefix` (no default: unset turns the hold off; dev-system sets `chore/release-`).
   The signal is read from GitHub (the `releasePrs` source, 2.4), so every device honours it, a
-  restart loses nothing, and a release that failed holds for the window at most with nothing to
-  clear. While the hold is in force the head plans no Q2: its step is `held` (no clock, no E6, no
+  restart loses nothing, and a release that failed holds for the window at most (red checks end it
+  sooner) with nothing to clear. While the hold is in force the head plans no Q2: its step is `held` (no clock, no E6, no
   tell) with the skip line `merge queue: held for release PR #<p> until <HH:MM> UTC`. The records
   stay in the queue in their order, the others keep their `waiting behind` lines and `seqAt`, and
   Q1, CI re-runs and fixers go on, so the head is ready to merge the moment the hold ends. The hold
-  ends on the first pass where the PR is no longer listed open or its window has run out, and the
-  head is then merged on that same pass if it is ready. Each hold is an intervention pair (7.2).
+  ends on the first pass where the PR is no longer listed open, its checks are red, or its window
+  has run out, and the head is then merged on that same pass if it is ready. A window that ran out
+  with the head open and the checks not red also plans the owner item `release-hold` (pr, branch,
+  head, minutes, checks), once per head. Each window is an intervention pair (7.2).
 - Every transition sets `seqAt`. So a head whose step ends other than ok (an unknown, a retry, a
   triage's retry) goes to the back, and the next PR becomes the head.
 - The head is the first. Only the head is ever touched: updated, checked or merged. A
@@ -3437,7 +3444,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `schema-behind`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D, which includes the notice `done`). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable`, `starved`, `blind` and `reader-behind`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow`, `facts-shadow`, `wait-unreadable`, `starved`, `blind`, `reader-behind` and `release-hold`) go out before any other
 wake, and the title counts the open ones.
 
 Five notices come from outside plan: `heartbeat-other`, `old-watcher` and `schema-behind` (a rail
@@ -4150,6 +4157,18 @@ The first entries are the owner's own decisions; they are settled.
 - **Why:** a flake should not spend a fix round; one re-run is the generic retry for CI, as a
   check step has.
 
+### The release hold covers the bump PR's CI, per push (#1048)
+
+- **Decision:** the hold window is per bump PR head: it starts at the latest of the PR's creation, the
+  head commit's time and the earliest start of the head's checks, and lasts `releaseHold`, now 45
+  minutes. A push restarts it, a failed or cancelled check ends it, and a window that runs out with
+  the head open and its checks not red ends as `hold:release-timeout` and tells the owner
+  (`release-hold`). Supersedes the 10 minutes from the PR's opening below.
+- **Alternatives:** raise the number of minutes only; hold with no bound until the bump PR merges.
+- **Why:** #1035: a bump PR's CI still ran at 11 minutes, the hold from creation had ended, the
+  queue merged a head and the bump PR fell behind main again. Time from creation does not follow the
+  CI run, a rebase and force push restart it, and a release that failed should not hold the queue.
+
 ### The merge queue holds for a release's bump PR (owner, 2026-10-18, #970)
 
 - **Decision:** while a release bump PR is open, the loop holds its merges for at most `releaseHold`
@@ -4421,7 +4440,7 @@ The loop's own keys, in the repo-local file or the workspace file (which wins). 
 | `windDownMinutes` | 10 | 10.11: the minutes a requested wind-down may take, a whole number of at least 0; 0 turns wind-down off (a request is ignored). Read every pass from both settings files; `/factory config` shows it as `windDown`, with its source |
 | `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
 | `releaseBranchPrefix` | `null` | 9.1: the head-branch prefix of a release's bump PR (like `chore/release-`), a non-empty string; null turns the release hold off. Read every pass from both settings files; `/factory config` shows it with its source |
-| `releaseHoldMs` (written `releaseHold`) | `10m` | 9.1: the longest the merge queue holds for a bump PR, counted from its creation; 0 turns the hold off. Read every pass from both settings files; `/factory config` shows it as `releaseHold` (`off` at 0) |
+| `releaseHoldMs` (written `releaseHold`) | `45m` | 9.1: the longest the merge queue holds per head of a bump PR, counted from the head's anchor; 0 turns the hold off. Read every pass from both settings files; `/factory config` shows it as `releaseHold` (`off` at 0) |
 | `releaseInProgressMs` (written `releaseInProgress`) | `2h` | 11, O3: after a release task answered `done`, no release review is planned until a newer tag is seen or this long has passed since it ended; 0 turns it off. Read every pass; `/factory config` shows it as `releaseInProgress` (`off` at 0) |
 | `flakeWindowDays` | 7 | 8.5: the days back a test's flakes count toward a flake bug, a whole number of at least 1 |
 | `flakeBugMin` | 2 | 8.5: the flakes of one test in the window that file a flake bug, a whole number of at least 1 |
@@ -4540,6 +4559,7 @@ Notices (TELL kinds), owner items first:
 | `actions-refused` | yes | 8.5: GitHub did not start a CI job for the account's sake (payments, a spending limit); once per spell, naming its message and the PRs held; the loop resumes by itself |
 | `blind` | yes | G2: the factory source has failed for `blindNoticeAfterMs`; its `error` says why (a derived skip: the image is older than the loop, so the owner updates the image; else the owner checks the database) |
 | `reader-behind` | yes | G2: the image skipped events of types it cannot read, none in the derivation; names the types and the count; once per set of types; a release adding a reader of those types turns it into `blind` |
+| `release-hold` | yes | Q2: a release bump PR's hold window ran out (`releaseHold`, 45 minutes by default) with its head open and its checks not red; names the PR, branch, head, minutes and checks; the queue merges again meanwhile; once per head |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
 | `done` | no | a done close (8.7): one [INFO] line with the issue, the evidence and what became of its branch |

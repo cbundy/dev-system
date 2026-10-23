@@ -129,7 +129,7 @@ export const DEFAULT_CONFIG: Config = {
   windDownMinutes: 10,
   minimumReleaseCadenceMs: 6 * 60 * MIN,
   releaseBranchPrefix: null,
-  releaseHoldMs: 10 * MIN,
+  releaseHoldMs: 45 * MIN,
   releaseInProgressMs: 2 * 60 * MIN,
   flakeWindowDays: 7,
   flakeBugMin: 2,
