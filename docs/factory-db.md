@@ -219,6 +219,61 @@ one `loop_entry` event. The factory loop reads the status file: while it says `f
 (`TELL schema-behind`). Run `factory-db-migrate --strict` by hand to retry (it exits 1 on a
 failure); when it succeeds the next pass acts with no other step.
 
+## The panel role
+
+`NAME_panel` is a login role for a public dashboard. It reads a few views over the repos on an allowlist and
+can do nothing else. The bootstrap creates it with the other roles; it needs no flag to exist, but it has no
+password until you give it one (below), so it cannot log in.
+
+**What it can see.** `SELECT` on five views in schema `factory_public`: `event_store` (with `data`), `event_log`,
+`workers`, `workers_status` and `worker_samples`. Each view keeps only the rows of repos in
+`factory.public_repos` (matched exactly, case included; a worker sample is kept when its device's repo is listed).
+The views run with their owner's rights and are security barriers, so a function the panel calls in a query never
+sees a row the allowlist drops. The panel has no grant on schema `factory`, on schema `public` or on anything in
+them, and no default privilege ever names it: a table or view a later migration adds stays hidden until it is added
+to `PANEL_VIEWS` in `factory-db-bootstrap` and given a view. It cannot create objects (schemas, tables, functions,
+temporary tables, extensions), cannot `SET ROLE`, and has no file or program access.
+
+**Its limits.** `LOGIN`, `NOINHERIT`, `CONNECTION LIMIT 10`, a member of no role, and role settings
+`default_transaction_read_only=on`, `statement_timeout=5s`, `idle_in_transaction_session_timeout=30s`,
+`lock_timeout=1s`, `work_mem=4MB`, `temp_file_limit=64MB` and `search_path=factory_public`. Every run puts back any
+grant, membership, limit or setting that differs, and `--migrate` re-applies the grants.
+
+**Its URL.** Give `--panel-dir DIR` (and optionally `FACTORY_DB_PANEL_PASSWORD`) and the bootstrap writes
+`DIR/factory-db-panel-url`, mode 0600, under the same password rule as the other roles. The URL always has
+`sslmode=verify-full`, whatever the admin URL says, and keeps the admin URL's `sslrootcert`. `DIR` must be the
+dashboard host's own directory: the run is refused when it is the same path as `--secrets-dir` or
+`--migrator-dir`, and `--migrate` refuses `--panel-dir`.
+
+**Rotating the password.** Delete `DIR/factory-db-panel-url` and run the bootstrap with `--panel-dir DIR` again, or
+set `FACTORY_DB_PANEL_PASSWORD`.
+
+**The allowlist.** `factory-db-bootstrap --db NAME --public-repo add OWNER/NAME` adds a repo and
+`--public-repo remove OWNER/NAME` takes it off; the flag may be repeated, needs the admin URL, and is refused with
+`--migrate`. A name that is not `OWNER/NAME` (GitHub's characters, one `/`) is refused before the bootstrap
+connects. It runs as `NAME_owner` after the migrations and grants, a run without the flag leaves the list as it is,
+and the summary ends with `public repos: +a/b, -c/d` (or `none`). `factory.public_repos` also holds `added_at` and a
+`note`; the writer and reader can read it but not change it.
+
+**`temp_file_limit` for a non-superuser admin.** PostgreSQL lets only a superuser set `temp_file_limit` on a role,
+unless the admin holds `SET` on that parameter. With a `CREATEDB CREATEROLE` admin that has not, the run still
+succeeds, sets the other settings and the summary says `panel settings skipped: temp_file_limit`. A superuser runs
+`GRANT SET ON PARAMETER temp_file_limit TO <admin>;` and the next run sets it.
+
+**Network.** Put the panel's line in `pg_hba.conf` above any broader rule, so it connects over TLS only:
+
+```
+hostssl <db> <db>_panel <panel host>/32 scram-sha-256
+```
+
+Never expose the server beyond the panel host.
+
+**What PostgreSQL cannot restrict.** The panel can `SET` its own user-level timeouts and
+`default_transaction_read_only` back, but it has nothing it could write to, so that gains it nothing. Catalog
+metadata stays readable by every role (`pg_class`, row-count statistics in `pg_stat_all_tables`, role and
+database names), and functions that `PUBLIC` may execute stay callable. Notification channels (`LISTEN`) are not
+covered here.
+
 ## Schema compatibility
 
 The schema at any release works for the writers and readers of the last 10 minor releases, so a
@@ -238,6 +293,11 @@ Forbidden, and refused by `npm run lint` (`scripts/migration-lint.js`, which pri
 - a narrowed check: `ADD CHECK`, `UNIQUE`, `PRIMARY KEY`, `FOREIGN KEY` or `EXCLUDE` on an existing table,
   `ALTER DOMAIN ... ADD CONSTRAINT`, and `CREATE UNIQUE INDEX` on a table not created in the same file;
 - any `REVOKE`.
+
+A migration that adds a column to `factory.event_store`, `factory.event_log`, `factory.workers`,
+`factory.workers_status` or `factory.worker_samples` also adds it to the matching view in `factory_public`
+(migration 0030): the public views name every column, so the panel never sees a column they do not list.
+`tests/factory-db-panel.test.js` fails when a view lacks a column of its source.
 
 An applied migration is immutable: the bootstrap refuses a file whose sha256 changed. Removing dead
 fields is out of scope here; the epic that introduced this window owns it.

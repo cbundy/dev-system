@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # factory-db-bootstrap: sets up a factory database from nothing on any PostgreSQL server
-# (cbundy/dev-system#646). It creates four roles named after the database, creates the
+# (cbundy/dev-system#646). It creates five roles named after the database, creates the
 # database when it is missing, or takes over one that exists by making NAME_owner its owner,
 # applies the numbered SQL migrations shipped beside it and
 # records each in factory.schema_migrations. Running it again changes nothing.
@@ -9,7 +9,8 @@
 # The whole procedure, from a fresh server to a healthy dev-doctor, is in docs/factory-db.md.
 #
 # Usage: factory-db-bootstrap --db NAME [--admin-url-file PATH]
-#                             [--secrets-dir DIR] [--migrator-dir DIR]
+#                             [--secrets-dir DIR] [--migrator-dir DIR] [--panel-dir DIR]
+#                             [--public-repo add|remove OWNER/NAME]...
 #        factory-db-bootstrap --db NAME --migrate [--migrator-url-file PATH]
 #   --db NAME             the database to set up: ^[a-z][a-z0-9_]{0,47}$. Required; there is
 #                         no default, so the factory never lands in another database by accident.
@@ -18,6 +19,11 @@
 #                         factory-db-reader-url (the shared secrets directory workspaces mount)
 #   --migrator-dir DIR    write the migrator's URL here as factory-db-migrator-url (never the
 #                         workspaces' directory: only the host that upgrades the schema reads it)
+#   --panel-dir DIR       write the panel's URL here as factory-db-panel-url (the public
+#                         dashboard host's directory: never the workspaces' or the migrator's)
+#   --public-repo add|remove OWNER/NAME
+#                         put a repo on the public panel's allowlist, or take it off (may be given
+#                         more than once; needs the admin URL, so never with --migrate)
 #   --migrate             upgrade the schema only, connected as NAME_migrator (see Migrate mode)
 #   --migrator-url-file PATH
 #                         with --migrate: read the migrator URL from PATH (first line)
@@ -30,6 +36,7 @@
 #   FACTORY_DB_WRITER_PASSWORD   when set, becomes NAME_writer's password
 #   FACTORY_DB_READER_PASSWORD   when set, becomes NAME_reader's password
 #   FACTORY_DB_MIGRATOR_PASSWORD when set, becomes NAME_migrator's password
+#   FACTORY_DB_PANEL_PASSWORD    when set, becomes NAME_panel's password
 #                                (see The password rule for a password that is not set)
 #   FACTORY_DB_MIGRATOR_URL      with --migrate: the migrator URL, used when --migrator-url-file
 #                                is not given (it never falls back to the admin URL)
@@ -48,23 +55,30 @@
 #   NAME_migrator LOGIN. CONNECT on the database and membership of NAME_owner with SET but not
 #                 INHERIT, so it can only upgrade the schema (--migrate) and holds no grant on
 #                 any factory object.
+#   NAME_panel    LOGIN, NOINHERIT, CONNECTION LIMIT 10, a member of no role, read-only by default
+#                 with short timeouts (role settings). CONNECT on the database, USAGE on schema
+#                 factory_public and SELECT on the views listed in PANEL_VIEWS below; nothing on
+#                 the factory schema or on public. It sees only the repos on factory.public_repos
+#                 (docs/factory-db.md "The panel role").
 # Every login role is NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS. A role that
 # already exists is adopted: only the attributes that differ are altered, and the migrator's
-# membership options are corrected and its memberships in other roles revoked.
+# membership options are corrected and its memberships in other roles revoked (the panel's
+# memberships in any role, and its role settings that differ, likewise).
 # Grants are re-applied on every run, and default privileges give later migrations' objects
-# the same grants. CONNECT and TEMP on the database and CREATE on schema public are revoked
-# from PUBLIC.
+# the same grants (never the panel: a new relation stays hidden from it until it is added to
+# PANEL_VIEWS). CONNECT and TEMP on the database, CREATE on schema public and USAGE on schema
+# public are revoked from PUBLIC (USAGE on public goes to the owner, writer, reader and migrator).
 #
 # The password rule: a login role gets a new password in a run when its FACTORY_DB_<ROLE>_PASSWORD
 # is set (the explicit value wins), or when its directory was given (--secrets-dir for the writer
-# and reader, --migrator-dir for the migrator) and the role was created in this run, its URL file
+# and reader, --migrator-dir for the migrator, --panel-dir for the panel) and the role was created in this run, its URL file
 # is missing there, or the admin is a superuser and the role has no password. A generated password
 # is 32 random bytes from /dev/urandom in hex. Without a directory no password is generated, and a
 # password that is not set is left alone.
 #
 # The URL files: for each role whose password changed in the run and whose directory was given,
-# factory-db-writer-url / factory-db-reader-url (in --secrets-dir) and factory-db-migrator-url (in
-# --migrator-dir) are written atomically, mode 0600, owned by FACTORY_DB_SECRET_OWNER, right after
+# factory-db-writer-url / factory-db-reader-url (in --secrets-dir), factory-db-migrator-url (in
+# --migrator-dir) and factory-db-panel-url (in --panel-dir, always with sslmode=verify-full) are written atomically, mode 0600, owned by FACTORY_DB_SECRET_OWNER, right after
 # the roles are set up. Each URL has the admin URL's host, port and ssl settings, the role, its
 # password and the database NAME. No other file is touched, and a run that changes nothing
 # rewrites nothing. A file that is missing makes the next run give that role a new password. The
@@ -81,6 +95,11 @@
 # and has no CREATEROLE or CREATEDB, or when the full bootstrap has not run. It never creates a
 # role or a database; it runs the same migrations and grants and prints the schema versions
 # before and after.
+#
+# The panel: --public-repo add|remove OWNER/NAME changes factory.public_repos, the repos the panel
+# may see, as NAME_owner after the migrations and grants; a run without it leaves the list alone.
+# NAME_panel's temp_file_limit is set only when the admin may (a superuser, or one granted SET on
+# that parameter); otherwise the run succeeds and the summary names the skipped setting.
 #
 # Output: one summary line on success; on failure one error line naming the step (or the
 # migration file and psql's error), and a non-zero exit.
@@ -107,6 +126,10 @@ secrets_dir=''
 migrator_dir=''
 migrate=0
 migrator_url_file=''
+panel_dir=''
+repo_ops=()
+# What factory.public_repos accepts (the CHECK in migration 0030): OWNER/NAME.
+repo_re='^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$'
 while [ $# -gt 0 ]; do
   case "$1" in
     --db)
@@ -128,6 +151,18 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--migrator-dir needs a path"
       migrator_dir=$2
       shift 2
+      ;;
+    --panel-dir)
+      [ $# -ge 2 ] || die "--panel-dir needs a path"
+      panel_dir=$2
+      shift 2
+      ;;
+    --public-repo)
+      [ $# -ge 3 ] || die "--public-repo needs add or remove, then OWNER/NAME"
+      case "$2" in add | remove) ;; *) die "--public-repo needs add or remove, got '$2'" ;; esac
+      [[ $3 =~ $repo_re ]] || die "'$3' is not a repo name: it must be OWNER/NAME (letters, digits, - . _), as GitHub spells it"
+      repo_ops+=("$2" "$3")
+      shift 3
       ;;
     --migrate)
       migrate=1
@@ -153,11 +188,16 @@ owner="${name}_owner"
 writer="${name}_writer"
 reader="${name}_reader"
 migrator="${name}_migrator"
+panel="${name}_panel"
+# The views in schema factory_public the panel may SELECT, and nothing else (migration 0030).
+PANEL_VIEWS=(event_store event_log workers workers_status worker_samples)
 
 if [ "$migrate" = 1 ]; then
   [ -z "$url_file" ] || die "--migrate connects as $migrator: --admin-url-file is not allowed"
   [ -z "$secrets_dir" ] || die "--migrate connects as $migrator: --secrets-dir is not allowed"
   [ -z "$migrator_dir" ] || die "--migrate connects as $migrator: --migrator-dir is not allowed"
+  [ -z "$panel_dir" ] || die "--migrate connects as $migrator: --panel-dir is not allowed"
+  [ ${#repo_ops[@]} = 0 ] || die "--migrate connects as $migrator: --public-repo is not allowed"
   if [ -n "$migrator_url_file" ]; then
     [ -r "$migrator_url_file" ] || die "cannot read the migrator URL file"
     conn_url=$(head -n 1 -- "$migrator_url_file")
@@ -198,7 +238,7 @@ check_target() {
     die "cannot write in $probe as UID $(id -u); $root_hint"
   fi
 }
-if [ -n "$secrets_dir$migrator_dir" ]; then
+if [ -n "$secrets_dir$migrator_dir$panel_dir" ]; then
   [[ $secret_owner =~ ^[0-9]+:[0-9]+$ ]] || die "FACTORY_DB_SECRET_OWNER must be UID:GID, got '$secret_owner'"
   if [ "$(id -u)" != 0 ]; then
     [ "${secret_owner%%:*}" = "$(id -u)" ] \
@@ -210,6 +250,16 @@ if [ -n "$secrets_dir$migrator_dir" ]; then
   fi
   [ -z "$secrets_dir" ] || check_target "$secrets_dir"
   [ -z "$migrator_dir" ] || check_target "$migrator_dir"
+  if [ -n "$panel_dir" ]; then
+    # The panel's URL goes to the public dashboard host only: never into a directory the
+    # workspaces or the migrator's host read.
+    pd=$(realpath -m -- "$panel_dir")
+    for other in "$secrets_dir" "$migrator_dir"; do
+      [ -z "$other" ] || [ "$pd" != "$(realpath -m -- "$other")" ] \
+        || die "--panel-dir must not be the same directory as --secrets-dir or --migrator-dir ($other)"
+    done
+    check_target "$panel_dir"
+  fi
 fi
 
 mig_dir=${FACTORY_DB_MIGRATIONS_DIR:-}
@@ -247,7 +297,7 @@ done < <(find "$mig_dir" -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
 # The passwords of this run, for the roles it may change: the explicit value, else (when the
 # role's directory was given) a generated one. They reach psql only through \getenv.
 gen_pw() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-pw_w='' pw_r='' pw_m=''
+pw_w='' pw_r='' pw_m='' pw_p=''
 flag_sql=''
 if [ "$migrate" = 0 ]; then
   # role_setup KEY ROLE EXPLICIT_VALUE DIR FILE: sets pw_KEY and appends the role's psql flags.
@@ -271,14 +321,16 @@ if [ "$migrate" = 0 ]; then
   role_setup w "${FACTORY_DB_WRITER_PASSWORD:-}" "$secrets_dir" factory-db-writer-url
   role_setup r "${FACTORY_DB_READER_PASSWORD:-}" "$secrets_dir" factory-db-reader-url
   role_setup m "${FACTORY_DB_MIGRATOR_PASSWORD:-}" "$migrator_dir" factory-db-migrator-url
+  role_setup p "${FACTORY_DB_PANEL_PASSWORD:-}" "$panel_dir" factory-db-panel-url
   export FACTORY_DB_BOOT_PW_WRITER=$pw_w FACTORY_DB_BOOT_PW_READER=$pw_r FACTORY_DB_BOOT_PW_MIGRATOR=$pw_m
+  export FACTORY_DB_BOOT_PW_PANEL=$pw_p
 fi
 
 # psql runs; its output never reaches the log unmasked.
 mask_out() {
   local text=$1 pw
   for pw in "${FACTORY_DB_WRITER_PASSWORD:-}" "${FACTORY_DB_READER_PASSWORD:-}" "${FACTORY_DB_MIGRATOR_PASSWORD:-}" \
-    "$pw_w" "$pw_r" "$pw_m" "$admin_url"; do
+    "${FACTORY_DB_PANEL_PASSWORD:-}" "$pw_w" "$pw_r" "$pw_m" "$pw_p" "$admin_url"; do
     [ -z "$pw" ] || text=${text//"$pw"/***}
   done
   printf '%s\n' "$text" | mask_secrets
@@ -317,10 +369,12 @@ urlenc() {
   printf '%s' "$out"
 }
 
-# role_url ROLE PASSWORD: ROLE's URL for database NAME: the admin URL's host and port (in the
-# authority or in host=, hostaddr=, port=) and its sslmode, sslrootcert, sslcrl and sslsni.
+# role_url ROLE PASSWORD [verify-full]: ROLE's URL for database NAME: the admin URL's host and port
+# (in the authority or in host=, hostaddr=, port=) and its sslmode, sslrootcert, sslcrl and sslsni.
+# With verify-full the sslmode is always verify-full, whatever the admin URL says (the panel
+# connects across the network).
 role_url() {
-  local rest=${admin_url#*://} query='' hostport kv keep=''
+  local rest=${admin_url#*://} query='' hostport kv keep='' force=${3:-}
   local -a kvs=()
   case "$rest" in *\?*) query=${rest#*\?} rest=${rest%%\?*} ;; esac
   rest=${rest%%/*}
@@ -328,9 +382,11 @@ role_url() {
   IFS='&' read -r -a kvs <<< "$query"
   for kv in "${kvs[@]+"${kvs[@]}"}"; do
     case "${kv%%=*}" in
-      host | hostaddr | port | sslmode | sslrootcert | sslcrl | sslsni) keep+="${keep:+&}$kv" ;;
+      sslmode) [ -n "$force" ] || keep+="${keep:+&}$kv" ;;
+      host | hostaddr | port | sslrootcert | sslcrl | sslsni) keep+="${keep:+&}$kv" ;;
     esac
   done
+  [ -z "$force" ] || keep+="${keep:+&}sslmode=verify-full"
   printf 'postgresql://%s:%s@%s/%s%s' "$(urlenc "$1")" "$(urlenc "$2")" "$hostport" "$name" "${keep:+?$keep}"
 }
 
@@ -373,12 +429,13 @@ COMMIT;
 \set writer '@DB@_writer'
 \set reader '@DB@_reader'
 \set migrator '@DB@_migrator'
+\set panel '@DB@_panel'
 @FLAGS@
 SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:' || :'db'));
 SELECT rolsuper AS is_super FROM pg_roles WHERE rolname = current_user \gset
 SELECT current_setting('server_version_num')::int >= 160000 AS pg16 \gset
 SELECT coalesce(string_agg(r, ',' ORDER BY o), '') AS created
-  FROM unnest(ARRAY[:'owner', :'writer', :'reader', :'migrator']) WITH ORDINALITY AS t(r, o)
+  FROM unnest(ARRAY[:'owner', :'writer', :'reader', :'migrator', :'panel']) WITH ORDINALITY AS t(r, o)
   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gset
 SELECT 'MARK|created|' || :'created';
 SELECT format('CREATE ROLE %I NOLOGIN', :'owner')
@@ -386,6 +443,8 @@ SELECT format('CREATE ROLE %I NOLOGIN', :'owner')
 SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE', r)
   FROM unnest(ARRAY[:'writer', :'reader', :'migrator']) AS r
   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
+SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 10', :'panel')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'panel') \gexec
 -- Adoption: alter only the attributes that differ (PG16+ refuses even a no-op NOREPLICATION
 -- or NOBYPASSRLS from a non-superuser).
 SELECT format('ALTER ROLE %I %s', rolname, concat_ws(' ',
@@ -398,6 +457,20 @@ SELECT format('ALTER ROLE %I %s', rolname, concat_ws(' ',
   FROM pg_roles
   WHERE rolname IN (:'writer', :'reader', :'migrator')
     AND (NOT rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) \gexec
+-- The panel also gets NOINHERIT and its connection limit.
+SELECT format('ALTER ROLE %I %s', rolname, concat_ws(' ',
+    CASE WHEN NOT rolcanlogin THEN 'LOGIN' END,
+    CASE WHEN rolsuper THEN 'NOSUPERUSER' END,
+    CASE WHEN rolinherit THEN 'NOINHERIT' END,
+    CASE WHEN rolcreatedb THEN 'NOCREATEDB' END,
+    CASE WHEN rolcreaterole THEN 'NOCREATEROLE' END,
+    CASE WHEN rolreplication THEN 'NOREPLICATION' END,
+    CASE WHEN rolbypassrls THEN 'NOBYPASSRLS' END,
+    CASE WHEN rolconnlimit <> 10 THEN 'CONNECTION LIMIT 10' END))
+  FROM pg_roles
+  WHERE rolname = :'panel'
+    AND (NOT rolcanlogin OR rolsuper OR rolinherit OR rolcreatedb OR rolcreaterole OR rolreplication
+         OR rolbypassrls OR rolconnlimit <> 10) \gexec
 SELECT format('GRANT %I TO CURRENT_USER WITH INHERIT TRUE, SET TRUE', :'owner')
   WHERE current_setting('server_version_num')::int >= 160000 \gexec
 SELECT format('GRANT %I TO CURRENT_USER', :'owner')
@@ -426,6 +499,20 @@ SELECT format('REVOKE %I FROM %I%s', pg_get_userbyid(m.roleid), :'migrator',
   FROM pg_auth_members m
   WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = :'migrator')
     AND m.roleid <> (SELECT oid FROM pg_roles WHERE rolname = :'owner') \gexec
+-- The panel belongs to no role.
+SELECT format('REVOKE %I FROM %I%s', pg_get_userbyid(m.roleid), :'panel',
+    CASE WHEN :'pg16'::boolean AND :'is_super'::boolean
+         THEN format(' GRANTED BY %I', pg_get_userbyid(m.grantor)) ELSE '' END)
+  FROM pg_auth_members m
+  WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = :'panel') \gexec
+-- The panel's role settings: read-only, short timeouts, nothing but factory_public on its path.
+-- temp_file_limit is a superuser-context parameter: only a superuser, or an admin granted SET on
+-- it, may set it; any other admin leaves it and the summary says so.
+SELECT :'is_super'::boolean OR has_parameter_privilege(current_user, 'temp_file_limit', 'SET') AS can_tfl \gset
+SELECT format('ALTER ROLE %I SET %I TO %L', :'panel', k, v) FROM @PANEL_TODO@
+  AND (k <> 'temp_file_limit' OR :'can_tfl'::boolean) \gexec
+SELECT 'MARK|skipped|' || k FROM @PANEL_TODO@
+  AND k = 'temp_file_limit' AND NOT :'can_tfl'::boolean;
 SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:create-database'));
 SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'owner')
   WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
@@ -437,10 +524,12 @@ SELECT pg_advisory_unlock(hashtext('factory-db-bootstrap:create-database'));
 \set w_nopw f
 \set r_nopw f
 \set m_nopw f
+\set p_nopw f
 \if :is_super
 SELECT EXISTS (SELECT 1 FROM pg_authid WHERE rolname = :'writer' AND rolpassword IS NULL) AS w_nopw \gset
 SELECT EXISTS (SELECT 1 FROM pg_authid WHERE rolname = :'reader' AND rolpassword IS NULL) AS r_nopw \gset
 SELECT EXISTS (SELECT 1 FROM pg_authid WHERE rolname = :'migrator' AND rolpassword IS NULL) AS m_nopw \gset
+SELECT EXISTS (SELECT 1 FROM pg_authid WHERE rolname = :'panel' AND rolpassword IS NULL) AS p_nopw \gset
 \endif
 SELECT :'w_explicit'::boolean OR (:'w_dir'::boolean AND (:'w_missing'::boolean OR :'w_nopw'::boolean
   OR :'writer' = ANY(string_to_array(:'created', ',')))) AS w_new \gset
@@ -448,6 +537,8 @@ SELECT :'r_explicit'::boolean OR (:'r_dir'::boolean AND (:'r_missing'::boolean O
   OR :'reader' = ANY(string_to_array(:'created', ',')))) AS r_new \gset
 SELECT :'m_explicit'::boolean OR (:'m_dir'::boolean AND (:'m_missing'::boolean OR :'m_nopw'::boolean
   OR :'migrator' = ANY(string_to_array(:'created', ',')))) AS m_new \gset
+SELECT :'p_explicit'::boolean OR (:'p_dir'::boolean AND (:'p_missing'::boolean OR :'p_nopw'::boolean
+  OR :'panel' = ANY(string_to_array(:'created', ',')))) AS p_new \gset
 \if :w_new
 \getenv pass FACTORY_DB_BOOT_PW_WRITER
 SELECT format('ALTER ROLE %I PASSWORD %L', :'writer', :'pass') \gexec
@@ -463,14 +554,29 @@ SELECT 'MARK|passwd|' || :'reader';
 SELECT format('ALTER ROLE %I PASSWORD %L', :'migrator', :'pass') \gexec
 SELECT 'MARK|passwd|' || :'migrator';
 \endif
+\if :p_new
+\getenv pass FACTORY_DB_BOOT_PW_PANEL
+SELECT format('ALTER ROLE %I PASSWORD %L', :'panel', :'pass') \gexec
+SELECT 'MARK|passwd|' || :'panel';
+\endif
 BEGIN;
 SQL
 )
+# The panel settings still to set: the settings (name, value) the role does not have as they are.
+panel_todo="(VALUES ('default_transaction_read_only', 'on'), ('statement_timeout', '5s'),
+    ('idle_in_transaction_session_timeout', '30s'), ('lock_timeout', '1s'), ('work_mem', '4MB'),
+    ('temp_file_limit', '64MB'), ('search_path', 'factory_public')) AS s(k, v)
+  WHERE NOT EXISTS (SELECT 1 FROM pg_db_role_setting d
+                      WHERE d.setdatabase = 0
+                        AND d.setrole = (SELECT oid FROM pg_roles WHERE rolname = :'panel')
+                        AND s.k || '=' || s.v = ANY (d.setconfig))"
+sql=${sql//@PANEL_TODO@/$panel_todo}
 sql=${sql//@FLAGS@/$flag_sql}
 sql=${sql//@DB@/$name}
 sql_run "$admin_url" "creating the roles and the database" <<< "$sql"
 phase1=$sql_out
 created_list=$(marker "$phase1" created)
+panel_skipped=$(printf '%s\n' "$phase1" | sed -n 's/^MARK|skipped|//p' | paste -sd, -)
 while IFS= read -r r; do
   [ -z "$r" ] || new_pw_roles+=("$r")
 done < <(printf '%s\n' "$phase1" | sed -n 's/^MARK|passwd|//p')
@@ -481,10 +587,11 @@ for r in "${new_pw_roles[@]+"${new_pw_roles[@]}"}"; do
     "$writer") dir=$secrets_dir file=factory-db-writer-url pw=$pw_w ;;
     "$reader") dir=$secrets_dir file=factory-db-reader-url pw=$pw_r ;;
     "$migrator") dir=$migrator_dir file=factory-db-migrator-url pw=$pw_m ;;
+    "$panel") dir=$panel_dir file=factory-db-panel-url pw=$pw_p ;;
     *) continue ;;
   esac
   [ -n "$dir" ] || continue
-  write_secret "$dir" "$file" "$(role_url "$r" "$pw")" \
+  write_secret "$dir" "$file" "$(role_url "$r" "$pw" "$([ "$r" = "$panel" ] && echo verify-full)")" \
     || die "writing $dir/$file failed (run it again to retry: a missing file gets a new password)"
   wrote+=("$dir/$file")
 done
@@ -600,7 +707,7 @@ BEGIN
     EXECUTE format('GRANT SELECT ON %s TO %I, %I', r.rel, '@DB@_writer', '@DB@_reader');
     EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON %s FROM %I', r.rel, '@DB@_reader');
     EXECUTE format('REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON %s FROM %I', r.rel, '@DB@_writer');
-    IF r.relkind IN ('r', 'p', 'f') AND r.relname <> 'schema_migrations' THEN
+    IF r.relkind IN ('r', 'p', 'f') AND r.relname NOT IN ('schema_migrations', 'public_repos') THEN
       EXECUTE format('GRANT INSERT, UPDATE ON %s TO %I', r.rel, '@DB@_writer');
     ELSE
       EXECUTE format('REVOKE INSERT, UPDATE ON %s FROM %I', r.rel, '@DB@_writer');
@@ -608,11 +715,62 @@ BEGIN
   END LOOP;
 END
 $grants$;
+-- The panel, in this order: take away everything it holds, give back exactly the views listed
+-- in PANEL_VIEWS, then close schema public to everyone but the roles that use it. No default
+-- privilege ever names the panel. A role that does not exist yet (--migrate before the full
+-- bootstrap made it) is skipped.
+DO $panel$
+DECLARE
+  p oid := (SELECT oid FROM pg_roles WHERE rolname = '@DB@_panel');
+  r record;
+  v text;
+BEGIN
+  IF p IS NULL THEN
+    RETURN;
+  END IF;
+  FOR r IN SELECT c.oid::regclass AS rel, c.relkind FROM pg_class c
+           WHERE c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname IN ('factory', 'factory_public', 'public'))
+             AND c.relkind IN ('r', 'p', 'f', 'v', 'm', 'S')
+             AND (EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = p)
+                  OR EXISTS (SELECT 1 FROM pg_attribute t, aclexplode(t.attacl) a WHERE t.attrelid = c.oid AND a.grantee = p)) LOOP
+    EXECUTE format('REVOKE ALL ON %s %s FROM %I', CASE WHEN r.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, r.rel, '@DB@_panel');
+  END LOOP;
+  FOR r IN SELECT f.oid::regprocedure AS fn FROM pg_proc f
+           WHERE f.pronamespace IN (SELECT oid FROM pg_namespace WHERE nspname IN ('factory', 'factory_public', 'public'))
+             AND EXISTS (SELECT 1 FROM aclexplode(f.proacl) a WHERE a.grantee = p) LOOP
+    EXECUTE format('REVOKE ALL ON ROUTINE %s FROM %I', r.fn, '@DB@_panel');
+  END LOOP;
+  REVOKE USAGE, CREATE ON SCHEMA factory FROM "@DB@_panel";
+  REVOKE CREATE ON DATABASE "@DB@" FROM "@DB@_panel";
+  REVOKE TEMPORARY ON DATABASE "@DB@" FROM "@DB@_panel";
+  REVOKE USAGE, CREATE ON SCHEMA public FROM "@DB@_panel";
+  GRANT CONNECT ON DATABASE "@DB@" TO "@DB@_panel";
+  IF to_regnamespace('factory_public') IS NOT NULL THEN
+    REVOKE CREATE ON SCHEMA factory_public FROM "@DB@_panel";
+    GRANT USAGE ON SCHEMA factory_public TO "@DB@_panel";
+    FOREACH v IN ARRAY ARRAY[@PANEL_VIEWS@] LOOP
+      IF to_regclass(format('factory_public.%I', v)) IS NULL THEN
+        RAISE EXCEPTION 'the panel view factory_public.% does not exist', v;
+      END IF;
+      EXECUTE format('GRANT SELECT ON factory_public.%I TO %I', v, '@DB@_panel');
+    END LOOP;
+  END IF;
+  REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+  GRANT USAGE ON SCHEMA public TO "@DB@_owner", "@DB@_writer", "@DB@_reader", "@DB@_migrator";
+  IF has_schema_privilege(p, 'public', 'USAGE') THEN
+    RAISE EXCEPTION 'the panel can still use schema public (its owner is %, not pg_database_owner): revoke it by hand',
+      pg_get_userbyid((SELECT nspowner FROM pg_namespace WHERE nspname = 'public'));
+  END IF;
+END
+$panel$;
 SELECT 'MARK|to|' || coalesce(max(version), 0) FROM factory.schema_migrations;
 COMMIT;
 BEGIN;
 SQL
 )
+panel_views=''
+for v in "${PANEL_VIEWS[@]}"; do panel_views+="${panel_views:+, }'$v'"; done
+sql=${sql//@PANEL_VIEWS@/$panel_views}
 sql=${sql//@DB@/$name}
 # A migration's own error names its file: psql reports the \i file and line.
 sql_run "$db_url" "applying migrations" <<< "$sql"
@@ -625,6 +783,29 @@ if [ "$migrate" = 1 ]; then
   exit 0
 fi
 
+# The public panel's allowlist, as NAME_owner, after the migrations and the grants: add inserts
+# (an existing row stays as it is), remove deletes. The summary lists what actually changed.
+repo_changes=()
+if [ ${#repo_ops[@]} -gt 0 ]; then
+  sql="SET LOCAL ROLE \"$owner\";
+"
+  for ((i = 0; i < ${#repo_ops[@]}; i += 2)); do
+    if [ "${repo_ops[$i]}" = add ]; then
+      sql+="WITH c AS (INSERT INTO factory.public_repos (repo) VALUES ('${repo_ops[$((i + 1))]}') ON CONFLICT DO NOTHING RETURNING repo)
+  SELECT 'MARK|repo|+' || repo FROM c;
+"
+    else
+      sql+="WITH c AS (DELETE FROM factory.public_repos WHERE repo = '${repo_ops[$((i + 1))]}' RETURNING repo)
+  SELECT 'MARK|repo|-' || repo FROM c;
+"
+    fi
+  done
+  sql_run "$db_url" "changing the public repos" <<< "$sql"
+  while IFS= read -r r; do
+    [ -z "$r" ] || repo_changes+=("$r")
+  done < <(printf '%s\n' "$sql_out" | sed -n 's/^MARK|repo|//p')
+fi
+
 # join SEP ITEM...: the items joined, or "none".
 join_or_none() {
   local sep=$1 out='' x
@@ -634,4 +815,4 @@ join_or_none() {
 }
 created_txt=none
 [ -z "$created_list" ] || created_txt=${created_list//,/, }
-echo "factory-db-bootstrap: database $name ready (roles $owner, $writer, $reader, $migrator; created: $created_txt; new passwords: $(join_or_none ', ' "${new_pw_roles[@]+"${new_pw_roles[@]}"}"); wrote: $(join_or_none ', ' "${wrote[@]+"${wrote[@]}"}")), schema version $version"
+echo "factory-db-bootstrap: database $name ready (roles $owner, $writer, $reader, $migrator, $panel; created: $created_txt; new passwords: $(join_or_none ', ' "${new_pw_roles[@]+"${new_pw_roles[@]}"}"); wrote: $(join_or_none ', ' "${wrote[@]+"${wrote[@]}"}"); public repos: $(join_or_none ', ' "${repo_changes[@]+"${repo_changes[@]}"}")${panel_skipped:+; panel settings skipped: ${panel_skipped//,/, }}), schema version $version"

@@ -223,6 +223,9 @@ SQL
   `device`, `device_seq`. `ts` is `timestamptz` in Postgres and ISO text in SQLite. Shared queries
   read only the view and keep the [#644](https://github.com/cbundy/dev-system/issues/644) rules: no
   `@>`, no `DISTINCT ON`, percentiles in code.
+  A migration that adds a column to `factory.event_store` or `factory.event_log` also adds it to the
+  matching view in `factory_public`, the read-only copy for the public panel
+  ([docs/factory-db.md](../factory-db.md#the-panel-role)); the panel never sees a column that view does not name.
 
 ## Adding an event
 

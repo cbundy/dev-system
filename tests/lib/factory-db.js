@@ -42,15 +42,17 @@ function roleUrl(db, user, password) {
   return `${m[1]}://${cred}${m[2]}/${db}${m[3] ? `?${m[3]}` : ""}`;
 }
 
-// createDb(t, opts?): { name, url, writerUrl, readerUrl, query(sql, role?) }. The drop is registered
-// on t. opts: bootstrap (the factory-db-bootstrap to run, default the checkout's), migrationsDir
-// (sets FACTORY_DB_MIGRATIONS_DIR), writerPassword and readerPassword (the roles' passwords, which
-// writerUrl and readerUrl carry).
-function createDb(t, { bootstrap = BOOTSTRAP, migrationsDir, writerPassword, readerPassword } = {}) {
+// createDb(t, opts?): { name, url, writerUrl, readerUrl, panelUrl, query(sql, role?) }. The drop is
+// registered on t. opts: bootstrap (the factory-db-bootstrap to run, default the checkout's),
+// migrationsDir (sets FACTORY_DB_MIGRATIONS_DIR), writerPassword and readerPassword (the roles'
+// passwords, which writerUrl and readerUrl carry), panelPassword (the panel's, default a random
+// one: panelUrl logs in as NAME_panel with it, so the role's settings apply).
+function createDb(t, { bootstrap = BOOTSTRAP, migrationsDir, writerPassword, readerPassword, panelPassword = crypto.randomBytes(8).toString("hex") } = {}) {
   const name = `factory_test_${process.pid}_${crypto.randomBytes(4).toString("hex")}`;
   const drop = () => {
     for (const sql of [
       `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`,
+      `DROP ROLE IF EXISTS "${name}_panel"`,
       `DROP ROLE IF EXISTS "${name}_migrator"`,
       `DROP ROLE IF EXISTS "${name}_owner"`,
       `DROP ROLE IF EXISTS "${name}_writer"`,
@@ -62,6 +64,7 @@ function createDb(t, { bootstrap = BOOTSTRAP, migrationsDir, writerPassword, rea
   if (migrationsDir !== undefined) env.FACTORY_DB_MIGRATIONS_DIR = migrationsDir;
   if (writerPassword !== undefined) env.FACTORY_DB_WRITER_PASSWORD = writerPassword;
   if (readerPassword !== undefined) env.FACTORY_DB_READER_PASSWORD = readerPassword;
+  env.FACTORY_DB_PANEL_PASSWORD = panelPassword;
   const r = spawnSync("bash", [bootstrap, "--db", name], { encoding: "utf8", env });
   if (r.status !== 0) throw new Error(`factory-db-bootstrap failed: ${r.stdout}${r.stderr}`);
   const url = urlFor(name);
@@ -71,6 +74,7 @@ function createDb(t, { bootstrap = BOOTSTRAP, migrationsDir, writerPassword, rea
     name, url, query,
     writerUrl: roleUrl(name, `${name}_writer`, writerPassword),
     readerUrl: roleUrl(name, `${name}_reader`, readerPassword),
+    panelUrl: roleUrl(name, `${name}_panel`, panelPassword),
   };
 }
 

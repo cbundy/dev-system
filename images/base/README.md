@@ -2194,25 +2194,28 @@ both URLs (see [`dev-doctor`](#dev-doctor)).
 | Role | Login | Grants |
 |---|---|---|
 | `NAME_owner` | no | owns the database, the `factory` schema and every object the migrations create; only the bootstrap uses it, through `SET ROLE` |
-| `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
+| `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` and `public_repos` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
 | `NAME_reader` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT` on every table and view |
 | `NAME_migrator` | yes | `CONNECT` and membership of `NAME_owner` with `SET` but not `INHERIT`; no grant on any factory object. Only `--migrate` uses it |
+| `NAME_panel` | yes | `CONNECT`, `USAGE` on `factory_public` and `SELECT` on its five views (`event_store`, `event_log`, `workers`, `workers_status`, `worker_samples`), which show only the repos in `factory.public_repos`; nothing on `factory` or `public`; read-only, 5 s statements, 10 sessions. A migration that adds a column to one of those five also adds it to the matching `factory_public` view. Written by `--panel-dir`; see [The panel role](../../docs/factory-db.md#the-panel-role) |
 
 The roles are named after the database, so several databases (and parallel test databases) share one
 server. Default privileges give later migrations' objects the same grants, and every run re-applies them.
-`CONNECT` and `TEMP` on the database and `CREATE` on schema `public` are revoked from `PUBLIC`.
+`CONNECT` and `TEMP` on the database, `CREATE` and `USAGE` on schema `public` are revoked from `PUBLIC` (`USAGE` on `public` goes to the owner, writer, reader and migrator).
 Every login role is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. A role that already
 exists is adopted: only the attributes that differ are altered, the migrator's membership options in
-`NAME_owner` are corrected and its memberships in other roles are revoked.
+`NAME_owner` are corrected and its memberships in other roles are revoked, and the panel's memberships and
+settings are put back. `--panel-dir DIR` writes `factory-db-panel-url` (always `sslmode=verify-full`);
+`--public-repo add|remove OWNER/NAME` edits the panel's allowlist.
 
 **Passwords and files.** A login role gets a new password in a run when its `FACTORY_DB_WRITER_PASSWORD`,
-`FACTORY_DB_READER_PASSWORD` or `FACTORY_DB_MIGRATOR_PASSWORD` is set (the explicit value wins), or when its
-directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator) and the
+`FACTORY_DB_READER_PASSWORD`, `FACTORY_DB_MIGRATOR_PASSWORD` or `FACTORY_DB_PANEL_PASSWORD` is set (the explicit value wins), or when its
+directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator, `--panel-dir` for the panel) and the
 role was created in this run, its URL file is missing there, or the admin is a superuser and the role has no
 password. A generated password is 32 random bytes from `/dev/urandom` in hex. Passwords reach psql only
 through psql variables, and without a directory none is generated. For each role whose password changed and
 whose directory was given, the command writes `factory-db-writer-url` / `factory-db-reader-url` /
-`factory-db-migrator-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
+`factory-db-migrator-url` / `factory-db-panel-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
 with the admin URL's host, port and ssl settings. It checks before connecting that it can write there (run
 it with `docker run --user root --entrypoint factory-db-bootstrap` to give files to another UID), touches no
 other file, and a run that changes nothing rewrites nothing. The summary line lists the roles created, the
@@ -2230,7 +2233,7 @@ The migrations are `NNNN_<name>.sql` files in `/usr/local/share/dev-system/facto
 one runs in one transaction with its `factory.schema_migrations` row (`version`, `name`, `sha256`,
 `applied_at`), as `NAME_owner`, under a session advisory lock, so two concurrent runs serialise. An applied
 file whose sha256 changed, or a recorded version with no file, is refused by name and version with a
-non-zero exit. On success it prints one line with the database, the four roles and the schema version; on
+non-zero exit. On success it prints one line with the database, the five roles and the schema version; on
 failure one error line naming the step (or the migration file and psql's error). `0001_events_and_workers`
 creates `factory.event_store`, the view `factory.event_log` ([event design](../../docs/factory-events/README.md)),
 and `factory.workers` with its view and notify triggers.
