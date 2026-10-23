@@ -15,6 +15,7 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
+  factoryStateError,
   parseFactoryState,
   parseIssueRead,
   parseIssuesRead,
@@ -103,6 +104,25 @@ describe('parse', () => {
     ])
     expect(parseFactoryState(json, 'other/repo')).toBeNull()
     expect(parseFactoryState('not json', REPO)).toBeNull()
+  })
+
+  test('factory-state: the repo matches case-insensitively, both ways (the tool lower-cases it)', () => {
+    const lower = factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'cbundy/vost')
+    expect(parseFactoryState(lower, 'cbundy/Vost')?.issues.map(i => i.number)).toEqual([45])
+    const mixed = factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'CBundy/Vost')
+    expect(parseFactoryState(mixed, 'cbundy/vost')?.issues.map(i => i.number)).toEqual([45])
+    expect(parseFactoryState(lower, 'other/repo')).toBeNull()
+  })
+
+  test('factoryStateError says why a report from an exit 0 cannot be used', () => {
+    expect(factoryStateError('', REPO)).toBe('factory-state report is not JSON')
+    expect(factoryStateError('null', REPO)).toBe('factory-state report is not JSON')
+    expect(factoryStateError('{"repos":[]}', REPO)).toBe('factory-state report has no valid at')
+    const other = JSON.stringify({ at: iso(NOW), repos: [{ repo: 'other/repo', issues: [] }] })
+    expect(factoryStateError(other, REPO)).toBe(`factory-state report has no entry for ${REPO} (repos: other/repo)`)
+    expect(factoryStateError(JSON.stringify({ at: iso(NOW), repos: [] }), REPO)).toBe(`factory-state report has no entry for ${REPO} (repos: none)`)
+    const many = JSON.stringify({ at: iso(NOW), repos: Array.from({ length: 50 }, (_, i) => ({ repo: `owner/repository-${i}` })) })
+    expect(factoryStateError(many, REPO)).toHaveLength(300)
   })
 
   test('factory-state: skipped_events map type_version to version; absent, malformed or non-array give none', () => {
@@ -194,6 +214,25 @@ describe('parse', () => {
     expect(parseIssuesRead(JSON.stringify({ issues: [full], refused: [], missing: [] }))?.facts.get(45)).toMatchObject({ blockingList: null, parent: null, siblings: null })
     // the single read carries none of them
     expect(parseIssueRead(JSON.stringify({ issue: full }))).toMatchObject({ blockingList: null, parent: null, siblings: null })
+  })
+
+  test('parseIssuesRead matches the repo of blocking, parent and sibling nodes case-insensitively', () => {
+    const node = (number: number, state: string, repo: string) => ({ number, repo, state })
+    const item = (repo: string) => ({
+      number: 45,
+      title: 'T',
+      state: 'open',
+      labels: [],
+      issue_dependencies_summary: { blocked_by: 0, blocking: 2 },
+      sub_issues_summary: { total: 0 },
+      blocking: [node(7, 'open', repo), node(9, 'open', 'other/repo')],
+      blocked_by: [],
+      parent: { ...node(12, 'open', repo), sub_issues: [node(45, 'open', repo), node(46, 'open', repo), node(48, 'open', 'other/repo')] },
+    })
+    for (const [theirs, ours] of [['CBundy/Dev-System', REPO.toLowerCase()], [REPO.toLowerCase(), 'CBundy/Dev-System']] as const) {
+      const read = parseIssuesRead(JSON.stringify({ issues: [item(theirs)], refused: [], missing: [] }), ours)
+      expect(read?.facts.get(45)).toMatchObject({ blockingList: [7], parent: 12, siblings: [{ number: 46, open: true }] })
+    }
   })
 
   test('the newest design brief comment, by its heading', () => {
@@ -1840,6 +1879,23 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const kept = await observe(ioOf(report([{ type: 'mystery', type_version: 1, count: 3, derived: false }])), runtime(), cache, NOW, null, null, stored())
     expect(kept.state.sources.factory.ok).toBe(true)
     expect(cache.factory?.value.skipped).toEqual([{ type: 'mystery', version: 1, count: 3, derived: false }])
+  })
+
+  test('a factory report whose repo differs only in case still makes the source ok (the Vost failure)', async () => {
+    const ioOf = (stdout: string): Io => ({
+      now: async () => NOW,
+      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      readFile: async () => null,
+      sessionLimits: async () => [],
+      agents: async () => [],
+    })
+    const rt = { ...runtime(), repo: 'cbundy/Vost' }
+    const ok = await observe(ioOf(factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'cbundy/vost')), rt, emptyCache(), NOW, null, null, stored())
+    expect(ok.state.sources.factory.ok).toBe(true)
+    expect(ok.state.sources.factory.error).toBeUndefined()
+    const other = await observe(ioOf(JSON.stringify({ at: iso(NOW), repos: [{ repo: 'other/repo', issues: [], recent: [] }] })), runtime(), emptyCache(), NOW, null, null, stored())
+    expect(other.state.sources.factory.ok).toBe(false)
+    expect(other.state.sources.factory.error).toBe(`factory-state report has no entry for ${REPO} (repos: other/repo)`)
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {

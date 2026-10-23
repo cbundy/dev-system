@@ -1,6 +1,7 @@
 // The dual-write source (v2 SPEC 2.4, 4.1): in act mode with the v2 planner, whether this image writes the
 // new event log (`callum-flow-event --new-path`, exit 0 and the path; an older image exits 2) and,
 // when it does, which transitions of this device and repo the log already holds. Read once per load.
+import { sameRepo } from '../parse'
 import { readEvent } from './event-reader'
 import type { SourceCtx } from './observe'
 import type { DualWrite } from './types'
@@ -15,7 +16,7 @@ export function seenIn(text: string, device: string, repo: string): Set<string> 
     if (line.trim() === '') continue
     try {
       const raw = JSON.parse(line) as { type?: unknown; device?: unknown; repo?: unknown; issue?: unknown }
-      if (raw.type !== 'transition' || raw.device !== device || raw.repo !== repo) continue
+      if (raw.type !== 'transition' || raw.device !== device || typeof raw.repo !== 'string' || !sameRepo(raw.repo, repo)) continue
       const e = readEvent(raw)
       seen.add(`${String(raw.issue)}:${String(e.data.life)}:${String(e.data.seq)}`)
     } catch {
