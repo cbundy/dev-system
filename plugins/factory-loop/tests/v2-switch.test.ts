@@ -291,7 +291,7 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     // wait #7 starts the review, with the waits in the reason
     expect(tasks(at(NOW, [7]))).toMatchObject([{ key: KEY, rule: 'O3', reason: 'task release: #7 waiting', fields: { waiting: '7' } }])
     // the milestone alone: the plain reason
-    expect(tasks(at(NOW, []).milestone === null ? at(NOW, []) : { ...at(NOW, []), milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' } })).toMatchObject([{ key: KEY, reason: 'task release' }])
+    expect(tasks({ ...at(NOW, []), milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' } })).toMatchObject([{ key: KEY, reason: 'task release' }])
     // #9 arrives a minute later while it runs: no second task, one skip naming both
     const running = entry(KEY, 'task', { class: 'drive', wake: 'release', status: 'running', startedAt: NOW, endedAt: null })
     const joined = at(NOW + MIN, [7, 9], running)
@@ -300,6 +300,12 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     // it ends done: the hour has its review, no other key
     const ended = entry(KEY, 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + 5 * MIN })
     expect(tasks(at(NOW + 6 * MIN, [7, 9], ended))).toEqual([])
+    // the tag it cut carries both commits: the next pass reads both conditions held, and both records leave waiting
+    const cut: State = { ...at(NOW + 7 * MIN, [7, 9], ended), release: { tag: 'v1.1.0', oldest: null } }
+    const held = { ...cut, v2: { ...cut.v2, tag: 'v1.1.0', waits: { 'tag:35bb655': { at: NOW + 7 * MIN, held: true, tag: 'v1.1.0' } } } }
+    const planned = pass(held).actions
+    expect(planned.filter(x => x.kind === 'transition')).toMatchObject([{ issue: 7, row: 'C1' }, { issue: 9, row: 'C1' }])
+    expect(planned.filter(x => x.kind === 'task')).toEqual([])
     // started at 03:59 and still running at 04:00: the 04 review is held, the skip recorded
     const late = entry(KEY, 'task', { class: 'drive', wake: 'release', status: 'running', startedAt: NOW + 59 * MIN, endedAt: null })
     const next = at(NOW + 60 * MIN, [7], late)
