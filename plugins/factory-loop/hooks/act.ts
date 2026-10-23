@@ -63,7 +63,7 @@ export async function dispatch(ctx: ExecCtx, action: Action): Promise<Exec> {
 export function commandOf(io: ActIo, rt: Runtime, log: string[]): ExecCtx['cmd'] {
   return (argv: string[], init: RunInit): Promise<RunResult> => {
     log.push(argv.join(' ').slice(0, 160))
-    const run: RunInit & { cwd: string; env: Record<string, string> } = { cwd: init.cwd ?? rt.cwd, env: rt.env, timeoutMs: init.timeoutMs }
+    const run: RunInit & { cwd: string; env: Record<string, string> } = { cwd: init.cwd ?? rt.cwd, env: init.env === undefined ? rt.env : { ...rt.env, ...init.env }, timeoutMs: init.timeoutMs }
     if (init.stdin !== undefined) run.stdin = init.stdin
     return io.run(argv, run)
   }

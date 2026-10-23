@@ -104,17 +104,17 @@ export function ids(stdout: string): number[] | null {
 
 type Run = { ok: true; r: RunResult } | { ok: false; exec: Exec }
 
-async function run(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<Run> {
+async function run(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS, env?: Record<string, string>): Promise<Run> {
   try {
-    return { ok: true, r: await ctx.cmd(argv, stdin === undefined ? { timeoutMs } : { timeoutMs, stdin }) }
+    return { ok: true, r: await ctx.cmd(argv, { timeoutMs, ...(stdin === undefined ? {} : { stdin }), ...(env === undefined ? {} : { env }) }) }
   } catch (err) {
     return { ok: false, exec: { status: 'failed', outcome: { kind: 'cli', exit: NO_EXIT, detail: message(err).slice(0, 2000) }, summary: clip(`${argv.slice(0, 3).join(' ')}: ${message(err)}`) } }
   }
 }
 
 // ok: a command that must exit 0; its stdout, or the failed attempt.
-export async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS): Promise<{ out: string } | { exec: Exec }> {
-  const ran = await run(ctx, argv, stdin, timeoutMs)
+export async function ok(ctx: ExecCtx, argv: string[], stdin?: string, timeoutMs = GH_MS, env?: Record<string, string>): Promise<{ out: string } | { exec: Exec }> {
+  const ran = await run(ctx, argv, stdin, timeoutMs, env)
   if (!ran.ok) return { exec: ran.exec }
   return ran.r.exitCode === 0 ? { out: ran.r.stdout } : { exec: commandFailure(argv, ran.r) }
 }

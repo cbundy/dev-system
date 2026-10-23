@@ -19,14 +19,14 @@ import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-wor
 import { renderQuestion } from '../hooks/v2/question.mjs'
 import { decisionFallback } from '../hooks/v2/split-decision.mjs'
 import { designOf, legacyDecision } from '../hooks/v2/rules-work'
-import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
+import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey, upstreamKey, upstreamMarker } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { COMMAND_RULE, FOREGROUND_RULE, TEST_POLICY, buildPrompt, checkId, checkIdsOf, checkNote, designPrompt, fixPrompt, neutralBody } from '../hooks/v2/prompts-work'
 import type { FixInput, WorkInput } from '../hooks/v2/prompts-work'
 import { fixWhyOf } from '../hooks/v2/rules-agent'
 import { stepAnswerPath, stepAnswered, stepExecutor, stepRecorded } from '../hooks/v2/steps'
-import { errorFindings, routedModel } from '../hooks/v2/steps-work'
+import { designResult, errorFindings, routedModel } from '../hooks/v2/steps-work'
 import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES } from '../hooks/v2/types'
 import type { AgentStep, IssueRecord, IssueState, Lease, StepResult, V2State } from '../hooks/v2/types'
@@ -163,7 +163,7 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence, upstream)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
       'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
@@ -171,7 +171,7 @@ describe('the design-v2 contract (8.7)', () => {
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
-    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait, done', 'brief is required'])
+    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait, done, upstream', 'brief is required'])
     expect(problems('design-v2', 'a brief')).toHaveLength(1)
   })
 
@@ -235,14 +235,14 @@ describe('the design-v2 contract (8.7)', () => {
     // stray fields: a PR number on an issue condition, a field of another kind of answer
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue, repo)'])
     expect(problems('design-v2', { ...wait, children: [] })).toEqual(['children must be absent or null unless kind is split'])
-    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)'])
+    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence, upstream)'])
     // the reason is required, one line, and at most 500 characters
     expect(problems('design-v2', { kind: 'wait', conditions })).toEqual(['reason is required'])
     expect(problems('design-v2', { ...wait, reason: 'two\nlines' })).toEqual(['reason must be one line'])
     expect(problems('design-v2', { ...wait, reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
     expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
-    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait or done'])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait, done or upstream'])
   })
 
   test('a done close gives its evidence and a one-line reason: the outcome carries them for a done alone, and the summary names the evidence', () => {
@@ -422,6 +422,17 @@ function input(over: Partial<WorkInput> = {}): WorkInput {
   return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], scratch: SCRATCH, place: PLACE, ...over }
 }
 const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], ...over })
+
+describe('the designer\'s upstream prompt (8.7)', () => {
+  test('the prompt tells when to raise an upstream issue, both authorities, never to ask the owner to write it, and to wait on an existing one', () => {
+    const prompt = designPrompt({ ...input(), inFlight: [] })
+    expect(prompt).toContain('{"kind": "upstream", "upstream": {"repo": "cbundy/dev-system"')
+    expect(prompt).toContain('never ask the owner to write that issue')
+    expect(prompt).toContain('{"kind": "bug", "blocking"')
+    expect(prompt).toContain('never raise a second one')
+    expect(prompt).toContain(`https://github.com/${REPO}/issues/300#issuecomment-<digits>`)
+  })
+})
 
 describe('the work prompts (prompts-work.ts)', () => {
   const all = () => [designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }] }), buildPrompt(input()), fixPrompt(fixInput())]
@@ -875,6 +886,14 @@ describe('the design step (8.7)', () => {
     expect(resultOf(await h.atEnd(e))).toMatchObject({ event: 'ok', data: { kind: 'brief', brief: BRIEF.trim() } })
   })
 
+  test('the design spawn\'s job data carries the owner notes of the step, without their prefix, and no other note', async () => {
+    const r = rec(321, { state: 'designing', step: 'design' })
+    const h = harness(r)
+    await h.spawn('design')
+    const job = [...h.files.keys()].find(k => k.endsWith('.job.json')) ?? ''
+    expect(parseJob(h.files.get(job) ?? '')).toEqual({ contract: 'design-v2', purpose: null, repo: REPO, issue: 321, branch: 'issue-321', data: { ownerNotes: ['keep it small'] } })
+  })
+
   describe('the designer\'s route', () => {
     const r = rec(330, { state: 'designing', step: 'design' })
     const FALLBACK = (model: string) => ['callum-flow-event', '--type', 'designer_routed', '--issue', '330', '--data', JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null })]
@@ -1107,6 +1126,66 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     // an answer with no evidence is a bad answer
     const bare = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'done', data: { kind: 'done' } })]))
     expect(transitionOf(bare, 330)).toMatchObject({ row: 'U2', via: 'unknown:bad-answer' })
+  })
+
+  describe('an upstream request (8.7)', () => {
+    const OWN_UP = 'cbundy/dev-system'
+    const answer = {
+      kind: 'upstream',
+      brief: null,
+      question: null,
+      children: [],
+      reason: 'the reader drops a quote',
+      upstream: { repo: OWN_UP, request: 'bug', title: 'The reader drops a quote', body: 'It does.', authority: { kind: 'owner', source: 'note', quote: 'raise it upstream' } },
+    }
+    const asked = (extra: LedgerEntry[] = []) => withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'upstream', data: { ...answer, text: 'x' } }), ...extra])
+    const key = upstreamKey(r)
+    const raised = (n: number) => done(key, 'upstream', { issue: 330, outcome: { kind: 'upstream', repo: OWN_UP, issue: n, made: true } })
+
+    test('designResult maps an upstream answer to not-ok upstream, with the answer as data', () => {
+      expect(designResult(answer)).toMatchObject({ event: 'not-ok', reason: 'upstream', data: { kind: 'upstream', upstream: { repo: OWN_UP } } })
+    })
+
+    test('the plan makes exactly one upstream action, keyed by the seq, with the marker, the request and the log fields; the record does not move', () => {
+      const p = plan(asked())
+      expect(of(p, 330)).toEqual([
+        expect.objectContaining({
+          kind: 'upstream',
+          key: `i330/l${LIFE}/s3/upstream`,
+          target: OWN_UP,
+          request: 'bug',
+          title: 'The reader drops a quote',
+          body: 'It does.',
+          marker: upstreamMarker(REPO, r),
+          authority: { kind: 'owner', source: 'note' },
+          fields: { repo: OWN_UP, request: 'bug', authority: 'owner', source: 'note' },
+        }),
+      ])
+      expect(transitionOf(p, 330)).toBeUndefined()
+      // running: held, nothing planned twice
+      const running = plan(asked([entry(key, 'upstream', { issue: 330, status: 'running', endedAt: null })]))
+      expect(of(running, 330)).toEqual([])
+      expect(said(running, 330)).toContain(`upstream: the issue in ${OWN_UP}: it runs`)
+    })
+
+    test('once the issue is raised, the step is a wait on it in its repo and T16 takes the record to waiting, parking nothing', () => {
+      const p = plan(asked([raised(1300)]))
+      expect(of(p, 330).filter(a => a.kind === 'upstream')).toEqual([])
+      const wait = { kind: 'issue-closed', issue: 1300, repo: OWN_UP }
+      expect(transitionOf(p, 330)).toMatchObject({
+        row: 'T16',
+        via: 'wait',
+        next: { state: 'waiting', wait: [wait], resumeTo: 'designing', notes: [`raised ${OWN_UP}#1300 upstream (bug): the reader drops a quote`] },
+      })
+      expect(transitionOf(p, 330)?.next.state).not.toBe('parked')
+    })
+
+    test('the same issue found again (made false) waits the same; an answer with no request is a bad answer', () => {
+      const found = done(key, 'upstream', { issue: 330, outcome: { kind: 'upstream', repo: OWN_UP, issue: 1250, made: false } })
+      expect(transitionOf(plan(asked([found])), 330)).toMatchObject({ row: 'T16', next: { wait: [{ kind: 'issue-closed', issue: 1250, repo: OWN_UP }] } })
+      const bad = plan(withLedger(world([r]), [stepDone(r, 'design', { event: 'not-ok', reason: 'upstream', data: { kind: 'upstream', reason: 'x' } })]))
+      expect(transitionOf(bad, 330)).toMatchObject({ row: 'U2', via: 'unknown:bad-answer' })
+    })
   })
 
   test('a design answer with no kind the plan reads goes down the unknown path', () => {

@@ -40,6 +40,9 @@
 // through callum-flow-issue-read: an issue body with a `## Run it` heading refuses it, with the reason
 // callum-flow-rollout gives; a read that decides nothing records it and says so on stderr. The PR-open
 // check (callum-flow-rollout) stays the backstop.
+// A design-v2 upstream request whose owner authority cites this issue or one of its comments is read the
+// same way (hooks/v2/upstream-check.mjs): the quote must be in it, its author trusted, and a comment
+// on this issue; a read that decides nothing records it and names the unchecked authority on stderr.
 'use strict'
 
 const NAME = 'factory-answer'
@@ -244,6 +247,17 @@ async function checkRolloutOnIssue(mods, self, repo, issue, brief) {
   if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking the Rollout against issue #${issue}: ${unchecked.join('; ')}. The PR-open check runs callum-flow-rollout again.\n`)
 }
 
+// checkUpstreamOnIssue: an upstream request's owner authority read from the issue or comment it cites
+// (hooks/v2/upstream-check.mjs). A quote that is not there, an untrusted author or a comment on another
+// issue refuses; a read that decided nothing is named on stderr and the answer is still recorded,
+// since the authority is the owner's word and the loop acts on the contract's own check.
+async function checkUpstreamOnIssue(mods, self, job, upstream) {
+  const { check, runner } = await readOnGitHub(mods, self, 'upstream-check.mjs', 'callum-flow-issue-read', { CALLUM_FLOW_REPO: job.repo })
+  const { problems, unchecked } = await check.checkUpstreamAuthority(upstream, job, runner)
+  if (problems.length > 0) throw new Refused(problems)
+  if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking the owner authority of the upstream request against ${upstream.authority.source}: ${unchecked.join('; ')}.\n`)
+}
+
 async function main(argv) {
   const args = argsOf(argv)
   if (args.help) {
@@ -269,6 +283,7 @@ async function main(argv) {
   if (place.job.contract === 'design-v2' && input.kind === 'wait') await checkWaitOnGitHub(mods, self, place.job.repo, input.conditions)
   if (place.job.contract === 'design-v2' && input.kind === 'done') await checkDoneOnGitHub(mods, self, place.job.repo, { pr: input.evidence.pr ?? null, commit: typeof input.evidence.commit === 'string' ? input.evidence.commit.trim().toLowerCase() : null })
   if (place.job.contract === 'design-v2' && input.kind === 'brief') await checkRolloutOnIssue(mods, self, place.job.repo, place.job.issue, input.brief)
+  if (place.job.contract === 'design-v2' && input.kind === 'upstream') await checkUpstreamOnIssue(mods, self, place.job, contract.checkAnswer(place.job, input).outcome.upstream)
   await writeAtomically(mods, place.dir, place.name, body.outcome)
   process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${contract.answerSummary(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
   return 0

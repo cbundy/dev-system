@@ -92,13 +92,19 @@ exit 1
 `;
 
 // A stub `callum-flow-issue-read` beside it: the issue's body is STUB_BODY (default: no Run it heading),
-// STUB_READ=fail exits 1 and STUB_READ=junk prints no JSON; each call's argv and CALLUM_FLOW_REPO go to
+// STUB_READ=fail exits 1, STUB_READ=junk prints no JSON, STUB_READ=untrusted exits 3 and STUB_READ=hang never answers; --comment serves STUB_COMMENT on issue STUB_COMMENT_ISSUE; each call's argv and CALLUM_FLOW_REPO go to
 // STUB_READ_LOG. With --comments it also serves STUB_BRIEF as a design brief comment (the parity test).
 const READ_STUB = `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.appendFileSync(process.env.STUB_READ_LOG, process.argv.slice(2).join(" ") + " repo=" + process.env.CALLUM_FLOW_REPO + "\\n");
 if (process.env.STUB_READ === "fail") { console.error("callum-flow-issue-read: cannot read"); process.exit(1); }
 if (process.env.STUB_READ === "junk") { console.log("not json"); process.exit(0); }
+if (process.env.STUB_READ === "untrusted") process.exit(3);
+if (process.env.STUB_READ === "hang") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
+if (process.argv.includes("--comment")) {
+  console.log(JSON.stringify({ comment: { body: process.env.STUB_COMMENT ?? "", issue_url: "https://api.github.com/repos/cbundy/consumer/issues/" + (process.env.STUB_COMMENT_ISSUE ?? "470") }, stripped: 0 }));
+  process.exit(0);
+}
 const out = { issue: { body: process.env.STUB_BODY ?? "Do the thing.\\n" } };
 if (process.argv.includes("--comments")) out.comments = process.env.STUB_BRIEF ? [{ body: process.env.STUB_BRIEF }] : [];
 console.log(JSON.stringify(out));
@@ -133,6 +139,13 @@ function issue(job, dir = answers) {
   const jobPath = contract.jobPathOf(file);
   fs.writeFileSync(jobPath, contract.jobText(job));
   return { file, jobPath };
+}
+
+// answersOf: the answers directory of the loop for the job's repo (contract.mjs loopDirOf), made.
+function answersOf(job) {
+  const dir = path.join(cfg, "factory-loop", job.repo.replace("/", "__"), "answers");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 // run: the script as an agent's Bash runs it, from a directory of its own, with the config dir
@@ -181,7 +194,7 @@ test("the contract's declaration file names exactly the module's exports", () =>
 test("every case of the shared table: the script records exactly the answers the contract takes, and names exactly its problems for the rest", () => {
   assert.ok(table.CASES.length >= 10);
   for (const c of table.CASES) {
-    const { file } = issue(table.JOBS[c.job]);
+    const { file } = issue(table.JOBS[c.job], answersOf(table.JOBS[c.job]));
     const r = run(["--to", file], { input: JSON.stringify(c.input) });
     if (c.problems.length === 0) {
       assert.equal(r.code, 0, `${c.name}: ${r.err}`);
@@ -712,6 +725,75 @@ test("an issue read that decides nothing records the merge brief and names the u
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /recorded without checking the Rollout against issue #467: callum-flow-issue-read is not installed/);
   assert.equal(fs.existsSync(file), true);
+});
+
+// An upstream request's owner authority, when it cites a comment or the issue itself, is read through
+// callum-flow-issue-read (hooks/v2/upstream-check.mjs).
+const UP_JOB = { contract: "design-v2", purpose: null, repo: "cbundy/consumer", issue: 470, branch: null, data: { ownerNotes: [] } };
+const UP_COMMENT = "https://github.com/cbundy/consumer/issues/470#issuecomment-4242";
+const UP_ISSUE = "https://github.com/cbundy/consumer/issues/470";
+const upstreamAnswer = (source, quote = "raise it upstream in dev-system") => ({
+  kind: "upstream",
+  upstream: { repo: "cbundy/dev-system", request: "need", title: "A reader flag", body: "The reader needs a flag.", authority: { kind: "owner", source, quote } },
+  reason: "Waits on the reader flag",
+  brief: null,
+});
+function answerUpstream(answer, env = {}) {
+  fs.rmSync(readLog, { force: true });
+  const { file } = issue(UP_JOB, answersOf(UP_JOB));
+  const r = run(["--to", file], { input: JSON.stringify(answer), env });
+  return { ...r, file, reads: readCalls() };
+}
+
+test("an upstream request citing a comment is recorded when the comment holds the quote; the read is of that comment in the job's repo", () => {
+  const r = answerUpstream(upstreamAnswer(UP_COMMENT), { STUB_COMMENT: "Yes, please  RAISE it upstream in dev-system, it's the way." });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.err, "");
+  assert.match(r.out, /recorded your design-v2 answer \(an upstream request to cbundy\/dev-system \(need\)\)/);
+  assert.equal(fs.existsSync(r.file), true);
+  assert.deepEqual(r.reads, [`--json --comment ${UP_COMMENT} repo=cbundy/consumer`]);
+  const body = answerUpstream(upstreamAnswer(UP_ISSUE), { STUB_BODY: "We should raise it upstream in dev-system.\n" });
+  assert.equal(body.code, 0, body.err);
+  assert.deepEqual(body.reads, ["--json 470 repo=cbundy/consumer"]);
+});
+
+test("an upstream request is refused when the comment has no quote, is by an untrusted author or is on another issue; nothing is written", () => {
+  const none = answerUpstream(upstreamAnswer(UP_COMMENT), { STUB_COMMENT: "Please do something else." });
+  assert.equal(none.code, 1, none.out);
+  assert.match(problemsOf(none.err)[0], /^authority\.quote is not in https:\/\/github\.com\/cbundy\/consumer\/issues\/470#issuecomment-4242/);
+  const untrusted = answerUpstream(upstreamAnswer(UP_COMMENT), { STUB_READ: "untrusted" });
+  assert.equal(untrusted.code, 1, untrusted.out);
+  assert.match(problemsOf(untrusted.err)[0], /is by an author the factory does not trust/);
+  const other = answerUpstream(upstreamAnswer(UP_COMMENT), { STUB_COMMENT: "raise it upstream in dev-system", STUB_COMMENT_ISSUE: "471" });
+  assert.equal(other.code, 1, other.out);
+  assert.match(problemsOf(other.err)[0], /is a comment on issue #471, not on this issue #470/);
+  for (const r of [none, untrusted, other]) assert.equal(fs.existsSync(r.file), false);
+});
+
+test("an upstream request whose authority read decides nothing is recorded and names the unchecked authority", () => {
+  for (const STUB_READ of ["fail", "junk", "hang"]) {
+    const r = answerUpstream(upstreamAnswer(UP_COMMENT), { STUB_READ, FACTORY_ANSWER_GH_TIMEOUT_MS: "300" });
+    assert.equal(r.code, 0, `${STUB_READ}: ${r.err}`);
+    assert.match(r.err, new RegExp(`^factory-answer: recorded without checking the owner authority of the upstream request against ${UP_COMMENT}: `));
+    assert.equal(fs.existsSync(r.file), true);
+  }
+});
+
+test("a note or bug authority makes no issue read", () => {
+  const job = { ...UP_JOB, data: { ownerNotes: ["Raise it upstream in dev-system."] } };
+  fs.rmSync(readLog, { force: true });
+  const { file } = issue(job, answersOf(job));
+  const r = run(["--to", file], { input: JSON.stringify(upstreamAnswer("note")) });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readCalls(), []);
+});
+
+test("upstream-check's declaration file names exactly the module's exports", async () => {
+  for (const name of ["upstream-check", "upstream-answer"]) {
+    const mod = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", `${name}.mjs`)).href);
+    const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", `${name}.d.mts`), "utf8");
+    assert.deepEqual([...dts.matchAll(/^export (?:const|function) (\w+)/gm)].map((m) => m[1]).sort(), Object.keys(mod).sort(), name);
+  }
 });
 
 test("question, wait, done and split answers, and a gate job make no issue read", () => {

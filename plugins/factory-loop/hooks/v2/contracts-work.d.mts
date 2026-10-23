@@ -1,9 +1,10 @@
 // The types of contracts-work.mjs. contract.mjs imports its CONTRACTS.
 import type { V2Contract } from '../contract.mjs'
 import type { DoneEvidence } from './done-answer.mjs'
+import type { UpstreamRequest } from './upstream-answer.mjs'
 import type { QuestionParts } from './question.mjs'
 
-export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait', 'done']
+export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait', 'done', 'upstream']
 export const BUILD_RESULTS: readonly ['built', 'cannot']
 export const FIX_RESULTS: readonly ['fixed', 'declined', 'unchanged']
 export const DISPOSITIONS: readonly ['fixed', 'declined']
@@ -47,6 +48,8 @@ export type DesignAnswer = {
   reason?: string
   // a done close: the evidence that the work is merged (with reason)
   evidence?: DoneEvidence
+  // an upstream request: what to raise in another repo (with reason)
+  upstream?: UpstreamRequest
 } & QuestionParts
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }
 export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string }

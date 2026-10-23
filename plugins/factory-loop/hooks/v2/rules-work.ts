@@ -22,13 +22,15 @@ import { childKey, claimKey, entryKey, lifeOf } from './keys'
 import { partsOfAnswer } from './park-parts'
 import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
+import { upstreamOf, upstreamPlan } from './rules-upstream'
+import type { UpstreamSpec } from './rules-upstream'
 import type { IssueRecord, ParkParts, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
 
 const RULE = 'S2'
 
 // The design answer as the step's result carries it (contracts-work.mjs DesignAnswer).
 type Design = {
-  kind: 'brief' | 'question' | 'split' | 'wait' | 'done'
+  kind: 'brief' | 'question' | 'split' | 'wait' | 'done' | 'upstream'
   brief: string | null
   question: string | null
   // the designer's question as the owner will see it in parts, null for a ledger entry from before
@@ -38,6 +40,8 @@ type Design = {
   // a wait: what it waits on and why
   conditions: WaitCondition[]
   reason: string | null
+  // an upstream request: what to raise in another repo (with reason)
+  upstream: UpstreamSpec | null
   // a done close: the evidence, the commit the loop checked, the evidence PR's merge commit, and the
   // branch as the design step read it (null before the step's check)
   evidence: DoneEvidence | null
@@ -65,7 +69,7 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
   const data = e?.outcome?.kind === 'step' ? e.outcome.result.data : null
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
   const d = data as Partial<Design>
-  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait' && d.kind !== 'done') return null
+  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait' && d.kind !== 'done' && d.kind !== 'upstream') return null
   const x = data as Record<string, unknown>
   const ev = x.evidence !== null && typeof x.evidence === 'object' ? (x.evidence as Record<string, unknown>) : null
   const br = x.branch !== null && typeof x.branch === 'object' ? (x.branch as Record<string, unknown>) : null
@@ -80,6 +84,7 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
     children,
     conditions,
     reason: typeof d.reason === 'string' ? d.reason : null,
+    upstream: upstreamOf(x.upstream),
     evidence: ev === null ? null : { pr: typeof ev.pr === 'number' ? ev.pr : null, commit: typeof ev.commit === 'string' ? ev.commit : null, runIt: typeof ev.runIt === 'string' ? ev.runIt : null },
     checked: typeof x.checked === 'string' ? x.checked : null,
     mergeCommit: typeof x.mergeCommit === 'string' ? x.mergeCommit : null,
@@ -122,9 +127,9 @@ function childOf(e: LedgerEntry | undefined): number | null {
 
 // effect: one keyed effect of the step: planned when it may start, else what holds it. done: its
 // entry ended well, with the entry.
-type Effect = { done: LedgerEntry } | { read: StepRead }
+export type Effect = { done: LedgerEntry } | { read: StepRead }
 
-function effect(env: StepEnv, action: Parameters<typeof want>[1], what: string): Effect {
+export function effect(env: StepEnv, action: Parameters<typeof want>[1], what: string): Effect {
   const e = env.ctx.byKey.get(action.key)
   if (e?.status === 'done') return { done: e }
   if (!env.start) return { read: { kind: 'held', why: env.hold ?? `${what} is held` } }
@@ -235,6 +240,10 @@ export const designPlan: StepPlan = env => {
     const data = entry?.outcome?.kind === 'step' && entry.outcome.result.data !== null && typeof entry.outcome.result.data === 'object' ? (entry.outcome.result.data as { text?: unknown }) : {}
     const text = typeof data.text === 'string' ? data.text : 'done: the work is already merged'
     return { kind: 'result', event: { kind: 'not-ok', reason: 'done', data: { text, evidence: d.evidence } }, trigger: read.trigger }
+  }
+  if (d.kind === 'upstream') {
+    if (d.upstream === null) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the upstream answer holds no request'), trigger: read.trigger }
+    return upstreamPlan(env, d.upstream, d.reason ?? '', read.trigger)
   }
   if (d.kind === 'wait') {
     if (d.conditions.length === 0) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer waits on no condition'), trigger: read.trigger }

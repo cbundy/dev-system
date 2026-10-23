@@ -1124,6 +1124,26 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
     expect(of(r, 131).some(a => a.kind === 'slot' || a.kind === 'agent-step')).toBe(false)
   })
 
+  test('T16 from an upstream request: the waiting record is made from the transition alone, names owner/name#N in its one comment (no link), and resumes on the foreign issue\'s close with the cleared note', () => {
+    const wait = [{ kind: 'issue-closed' as const, issue: 1300, repo: 'cbundy/dev-system' }]
+    const note = 'raised cbundy/dev-system#1300 upstream (bug): the reader drops a quote'
+    const d = rec(135, { state: 'designing', step: 'design', seq: 5, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
+    const answer = { kind: 'wait', brief: null, question: null, conditions: wait, reason: note, text: note, reasons: null, children: [] }
+    const t = transitionOf(plan(withLedger(world([d]), [stepDone(d, 'design', { event: 'not-ok', reason: 'wait', data: answer })])), 135)
+    expect(t).toMatchObject({ row: 'T16', via: 'wait', next: { state: 'waiting', resumeTo: 'designing', wait, notes: [note] } })
+    const entered = t?.next as IssueRecord
+    // rebuilt from its transition entry alone: the posted comment names the foreign issue as owner/name#N, and no link is made
+    const r = plan(withLedger(world([entered]), [transitioned(entered, 'T16', 'designing', 'wait')]))
+    const comment = of(r, 135).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    expect(comment?.body).toContain('issue cbundy/dev-system#1300 must be closed on GitHub')
+    expect(comment?.body).toContain(note)
+    expect(of(r, 135).filter(a => a.kind === 'link')).toEqual([])
+    // the foreign issue is still open: it waits; once it closes the loop resumes the design with the note naming what cleared
+    const settledAt = (v2: Partial<V2State>) => plan(withLedger(world([entered], {}, v2), settled(entered)))
+    expect(said(settledAt({}), 135)).toEqual(['waiting: for cbundy/dev-system#1300 (still open)'])
+    expect(transitionOf(settledAt(held('issue:cbundy/dev-system#1300')), 135)).toMatchObject({ row: 'C1', next: { notes: ['The loop resumed this: cbundy/dev-system#1300 closed; every condition holds.'] } })
+  })
+
   test('the link executor: a blocked_by link from the waiting issue to the open blocker, once; a closed blocker and a pull request are skipped; a failed read is a failed attempt', async () => {
     const link: Action = { kind: 'link', key: entryKey(w, 'link/57'), class: 'free', rule: 'S3', reason: 'x', issue: 130, blocker: 57 }
     const read = (state: string, pull = false, held: string = '') => (argv: string[]): Reply => {

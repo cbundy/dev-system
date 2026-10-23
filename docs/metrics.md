@@ -1389,6 +1389,33 @@ show without the tell:
 jq -rs 'map(select(.starved != null)) | group_by(.starved.since)[] | "\(.[0].starved.since): \((map(.starved.minutes) | max)) min"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
+### Upstream requests
+
+A design that needs a change in another repo of the factory's own (v2 SPEC 8.7, `kind: "upstream"`) raises
+one issue there instead of parking, on the owner's word or its own confident, non-minor bug, and waits for
+it. The `upstream` action in the decision log carries `fields` (`repo`, `request`, `authority` as `owner` or
+`bug`, and `source` as `note`, `issue` or `comment` for an owner authority), and its outcome the issue and
+`made` (true: created now; false: found again by its marker). How often designers raise one, on whose
+authority, and what became of each:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "upstream")
+  | {at: $d.at, issue, key, repo: .fields.repo, request: .fields.request, authority: .fields.authority, source: .fields.source}]
+  | unique_by(.key) | .[] | "\(.at) #\(.issue) -> \(.repo) (\(.request), \(.authority) \(.source))"' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -rs '[.[] | (.outcomes // [])[] | select(.key | test("/upstream$")) | "\(.key) \(.status): \(.summary)"] | unique | .[]' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+How long the upstream waits last: the 7a query above, filtered to waits that name the upstream repo (the
+transition note's `wait` is `issue:cbundy/dev-system#<n>`):
+
+```sql
+-- add to the final SELECT of 7a
+AND EXISTS (SELECT 1 FROM jsonb_array_elements(data -> 'wait') w WHERE w ->> 'repo' = 'cbundy/dev-system')
+```
+
+An answer the script refused (an authority it could not confirm) shows only in the designer's stderr, as 7b's
+done refusals do.
+
 ## 7b. Done closes
 
 The designer answers `done` when an issue's work is already merged (v2 SPEC 8.7): the loop checks the

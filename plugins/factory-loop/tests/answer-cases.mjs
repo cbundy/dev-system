@@ -6,6 +6,7 @@
 // drift apart unseen. Plain JS, so node and the engine's test kit both import it.
 
 const REPO = 'cbundy/dev-system'
+const CONSUMER = 'cbundy/consumer'
 const BRIEF = `https://github.com/${REPO}/issues/470#issuecomment-3301234567`
 
 // The job of each agent and purpose, as the loop writes its job file at the spawn.
@@ -15,9 +16,22 @@ export const JOBS = Object.freeze({
   merge: { contract: 'verdict', purpose: 'merge', repo: REPO, issue: 470, branch: null },
   designer: { contract: 'design', purpose: null, repo: REPO, issue: 470, branch: null },
   designV2: { contract: 'design-v2', purpose: null, repo: REPO, issue: 470, branch: null },
+  // a consumer's design, which may raise an issue upstream (REPO): its job data holds the owner notes of the step
+  designUpstream: { contract: 'design-v2', purpose: null, repo: CONSUMER, issue: 470, branch: null, data: { ownerNotes: ['Please raise it upstream in cbundy/dev-system:\nthe reader drops the   quote, it is broken.'] } },
   implementer: { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: null },
   fixer: { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: 'feat/issue-470-x' },
 })
+
+
+// upstreamOf: a valid upstream answer, with the given fields over the defaults.
+function upstreamOf(over) {
+  return {
+    kind: 'upstream',
+    upstream: { repo: REPO, request: 'bug', title: 'The reader drops a quote', body: 'callum-flow-issue-read drops the quote in a comment body.\n\nSteps: ...', ...over },
+    reason: 'Waits on the reader fix',
+    brief: null,
+  }
+}
 
 // name, the job it answers, the input, and the problems the contract names (none: recorded).
 export const CASES = Object.freeze([
@@ -160,7 +174,7 @@ export const CASES = Object.freeze([
     job: 'designV2',
     input: { kind: 'done', reason: 'one\ntwo', conditions: [], extra: 1, brief: null },
     problems: [
-      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason, evidence, upstream)',
       'conditions must be absent or null unless kind is wait',
       'evidence is required for done: { pr, commit, runIt }, at least one of pr and commit',
       'reason must be one line',
@@ -171,6 +185,60 @@ export const CASES = Object.freeze([
     job: 'designV2',
     input: { kind: 'done', evidence: { pr: 3, commit: null, runIt: null }, brief: null },
     problems: ['reason is required'],
+  },
+  {
+    name: 'a v2 upstream request on the owner note that holds the quote (whitespace, case and curly quotes ignored)',
+    job: 'designUpstream',
+    input: upstreamOf({ authority: { kind: 'owner', source: 'note', quote: 'RAISE it upstream in cbundy/dev-system: the reader drops the quote' } }),
+    problems: [],
+  },
+  {
+    name: 'a v2 upstream bug request on a confident bug authority',
+    job: 'designUpstream',
+    input: upstreamOf({ authority: { kind: 'bug', blocking: 'every design of a consumer stalls on it; the workaround is to hand-edit the job file', confidence: 'reproduced: callum-flow-issue-read exits 1 (images/base/callum-flow-issue-read:157)' } }),
+    problems: [],
+  },
+  {
+    name: 'a v2 upstream need on a bug authority is refused: a need rests on the owner',
+    job: 'designUpstream',
+    input: upstreamOf({ request: 'need', authority: { kind: 'bug', blocking: 'it blocks a thing', confidence: 'reproduced it once' } }),
+    problems: ['upstream.authority.kind "bug" is allowed only with request "bug"; a need rests on the owner\'s word'],
+  },
+  {
+    name: 'a v2 upstream request whose quote is in no owner note',
+    job: 'designUpstream',
+    input: upstreamOf({ authority: { kind: 'owner', source: 'note', quote: 'please file this against the other repo' } }),
+    problems: ['upstream.authority.quote "please file this against the other repo" is in no owner note of this step: quote the note word for word, or use the URL of the comment or issue that holds it'],
+  },
+  {
+    name: 'a v2 upstream request to a repo outside the list, and a short quote',
+    job: 'designUpstream',
+    input: upstreamOf({ repo: 'other/repo', authority: { kind: 'owner', source: 'note', quote: 'raise it' } }),
+    problems: ['upstream.repo "other/repo" is not one of cbundy/dev-system', 'upstream.authority.quote is 8 characters; 10 to 500'],
+  },
+  {
+    name: "a v2 upstream request to the job's own repo",
+    job: 'designV2',
+    input: upstreamOf({ authority: { kind: 'bug', blocking: 'it blocks a thing', confidence: 'reproduced it once' } }),
+    problems: ["upstream.repo cbundy/dev-system is this issue's own repo; an upstream request goes to another one"],
+  },
+  {
+    name: 'a v2 upstream request with a missing field, stray fields, a multi-line title and a source that is no issue of the job',
+    job: 'designUpstream',
+    input: { kind: 'upstream', upstream: { repo: 'cbundy/dev-system', request: 'bug', title: 'a\nb', extra: 1, authority: { kind: 'owner', source: 'https://github.com/cbundy/other/issues/1#issuecomment-2', quote: 'raise it upstream please', extra: 1 } }, reason: 'Waits on the fix', brief: null },
+    problems: [
+      'upstream.extra is not a field of an upstream request (only repo, request, title, body, authority)',
+      'upstream.title must be one line',
+      'upstream.body is required: text, not undefined',
+      'upstream.authority.extra is not a field of an owner authority (only kind, source, quote)',
+      'upstream.authority.source "https://github.com/cbundy/other/issues/1#issuecomment-2" must be "note", the URL of this issue (https://github.com/cbundy/consumer/issues/470) or a comment URL on it (...#issuecomment-<digits>)',
+    ],
+  },
+  {
+    name: 'an upstream field on another kind of v2 design answer',
+    job: 'designV2',
+    input: { kind: 'wait', conditions: [{ kind: 'issue-closed', issue: 57 }], reason: 'Waits', brief: null, upstream: { repo: 'cbundy/dev-system' } },
+    problems: ['upstream must be absent or null unless kind is upstream'],
   },
   {
     name: "an implementer's gated handoff",
