@@ -10,7 +10,7 @@ description: >-
   are such a sub-agent (as opposed to orchestrating a queue of issues). Not for
   the factory loop's agents (designer, builder, fixer, reviewer, triage): their
   definition and prompt are their procedure.
-version: 0.90.0
+version: 0.91.0
 ---
 
 # Implement issue
