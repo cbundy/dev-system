@@ -8,7 +8,8 @@ import type { UsageReading } from './rails'
 import type { Action, LedgerEntry, Ms, Outcome, State } from './types'
 import type { V2Io } from './v2/types'
 
-export type RunInit = { cwd?: string; stdin?: string; timeoutMs: number }
+// env: variables set over the runtime's for this command (an upstream read points the reader at another repo)
+export type RunInit = { cwd?: string; stdin?: string; timeoutMs: number; env?: Record<string, string> }
 export type RunResult = { exitCode: number; stdout: string; stderr: string }
 
 export type SpawnInput = {

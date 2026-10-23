@@ -250,6 +250,8 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
+  // an upstream request: the issue raised in another repo, made now or found by its marker
+  | { kind: 'upstream'; repo: string; issue: number; made: boolean }
   // F1: the flake bug filed or found, with what its tell says (rules-flake-bugs.ts)
   | { kind: 'flake-bug'; issue: number; made: boolean; ready: boolean; test: string; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
   // a close-tracker check: the split parent found (null: the issue is no split child), whether it was closed, and the sub-issues still open
@@ -269,7 +271,7 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released', 'intake-stamp'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released', 'intake-stamp', 'upstream'] as const
 // What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
 // body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
 export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
@@ -362,6 +364,8 @@ export type V2Action =
   | (ActionBase & { kind: 'released'; tag: string; source: 'loop' | 'workflow' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
+  // a design's upstream request: one issue in target (a repo of UPSTREAM_REPOS), found by its marker or made (act-upstream.ts); authority: what the designer rested it on; fields: the decision log's view of it
+  | (ActionBase & { kind: 'upstream'; target: string; request: 'bug' | 'need'; title: string; body: string; marker: string; authority: { kind: 'owner' | 'bug'; source?: string }; fields: Record<string, string> })
   // I1: the intake reader on one issue's body version. run: record the try, spawn the reader; settle: a run
   // that timed out or was lost ends failed (why), its agent stopped. The key names the version (act-intake.ts)
   | (ActionBase & { kind: 'intake-stamp'; op: 'run' | 'settle'; version: string; why?: string })

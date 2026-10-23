@@ -244,7 +244,7 @@ const notOk = (reason: string, data: unknown): StepResult => ({ event: 'not-ok',
 
 function asDesign(answer: unknown): DesignAnswer | null {
   const a = answer as Partial<DesignAnswer> | null
-  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait' || a.kind === 'done') ? (a as DesignAnswer) : null
+  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait' || a.kind === 'done' || a.kind === 'upstream') ? (a as DesignAnswer) : null
 }
 
 // designResult: the checked design answer's meaning (8.7), with the answer as the data the plan
@@ -260,6 +260,7 @@ export function designResult(answer: unknown): StepResult {
   }
   if (a.kind === 'wait') return notOk(a.kind, { ...a, text: a.reason ?? 'the designer waits on a condition' })
   if (a.kind === 'done') return notOk(a.kind, { ...a, text: doneText(a, null) })
+  if (a.kind === 'upstream') return notOk(a.kind, { ...a, text: `upstream request to ${a.upstream?.repo ?? 'another repo'}: ${a.reason ?? ''}` })
   return notOk(a.kind, { ...a, text: a.kind === 'question' ? a.question : `split into ${a.children.length} children` })
 }
 
@@ -398,6 +399,8 @@ const says = (field: 'result', notOkValues: readonly string[]) => (answer: unkno
 
 const model = (text: string | null) => (text === null || text.trim() === '' ? null : text.trim())
 
+const OWNER_PREFIX = 'owner: '
+
 const design: StepModule = {
   step: 'design',
   contract: 'design-v2',
@@ -407,14 +410,16 @@ const design: StepModule = {
     // a reader applies no leftovers patch: it changes nothing in its slot
     const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
     const routedTo = await runRoute(ctx, ARGV.designerRouteArgv(r.issue), 'callum-flow-designer-route ' + r.issue)
-    if (typeof routedTo === 'string' && routedTo.startsWith('ok:')) return { prompt, model: routedTo.slice(3), data: null }
+    // the owner notes of the step, which an upstream answer's `note` authority is checked against (upstream-answer.mjs)
+    const data = { ownerNotes: action.notes.filter(n => n.startsWith(OWNER_PREFIX)).map(n => n.slice(OWNER_PREFIX.length)) }
+    if (typeof routedTo === 'string' && routedTo.startsWith('ok:')) return { prompt, model: routedTo.slice(3), data }
     const fallback = model(modelLabelOf(ctx.state, r.issue))
     try {
       await ctx.cmd(ARGV.designerFallbackArgv(r.issue, fallback ?? 'opus'), { timeoutMs: ROUTE_MS })
     } catch {
       // best effort: the design runs either way
     }
-    return { prompt, model: fallback, data: null }
+    return { prompt, model: fallback, data }
   },
   result: async (ctx, record, answer) => (asDesign(answer)?.kind === 'done' ? doneResult(ctx, record, answer) : designResult(answer)),
 }

@@ -27,6 +27,7 @@ import type { Action, LedgerEntry, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { emptyV2State } from '../hooks/v2/observe'
 import { INTAKE_AGENT } from '../hooks/v2/intake'
+import { UPSTREAM_REPOS } from '../hooks/v2/upstream-answer.mjs'
 import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
@@ -34,6 +35,9 @@ import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
+// the repo an upstream request goes to, and a consumer repo whose loop raises it (the loop's one write to another repo)
+const UP = 'cbundy/dev-system'
+const CONSUMER = 'cbundy/consumer'
 const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/2/dev-system'
 const LEASED = '/workspaces/dev-system/.treehouse/dev-system-22f535/3/dev-system'
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-1'
@@ -42,17 +46,17 @@ const HEAD = 'abc1234'
 // the one shell signal the loop sends: signal 0, a liveness probe by pid that delivers nothing
 const PROBE = 'kill -0 "$1" 2>/dev/null'
 
-function runtime(): Runtime {
+function runtime(repo = REPO): Runtime {
   return {
     mode: 'act',
-    repo: REPO,
+    repo,
     device: DEVICE,
     runSource: 'local',
     poolSize: 16,
     cwd: '/work',
     loopDir: LOOP_DIR,
     sink: null,
-    env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: READY, CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
+    env: { CALLUM_FLOW_REPO: repo, CALLUM_FLOW_READY_LABEL: READY, CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
     pluginRoot: PLUGIN_ROOT,
     config: config({ readyLabel: READY, intakeStamp: 'on' }),
@@ -107,15 +111,16 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
   return {}
 }
 
-type Recorded = { argvs: string[][]; spawns: SpawnInput[]; prompts: string[]; titles: string[]; stops: string[]; writes: string[] }
+type Recorded = { argvs: string[][]; envRepos: (string | undefined)[]; spawns: SpawnInput[]; prompts: string[]; titles: string[]; stops: string[]; writes: string[] }
 
 function recorder(): { io: ActIo; seen: Recorded } {
   const stamps: { value: unknown } = { value: null }
-  const seen: Recorded = { argvs: [], spawns: [], prompts: [], titles: [], stops: [], writes: [] }
+  const seen: Recorded = { argvs: [], envRepos: [], spawns: [], prompts: [], titles: [], stops: [], writes: [] }
   const io: ActIo = {
     now: async () => NOW,
-    run: async (argv: string[], _init: RunInit & { cwd: string; env: Record<string, string> }) => {
+    run: async (argv: string[], init: RunInit & { cwd: string; env: Record<string, string> }) => {
       seen.argvs.push([...argv])
+      seen.envRepos.push(init.env.CALLUM_FLOW_REPO)
       return { exitCode: 0, stdout: '', stderr: '', ...reply(argv) }
     },
     spawnAgent: async input => {
@@ -223,6 +228,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'split', key: `${at}/child/b`, class: 'free', rule: 'S3', parent: 470, child: { key: 'b', title: 'Part two', body: 'Do it', blockedBy: [], ready: false, decision: 'Which API?' }, blockedBy: [] },
   // F1's flake bug (v2 SPEC 8.5): the one action that may add the ready label to an issue it filed itself, and only when the cap allowed it
   { ...base, issue: null, kind: 'flake-bug', key: 'flake-bug/0123456789abcdef/0f0f0f0f-0000-4000-8000-000000000001', class: 'free', rule: 'F1', bug: FLAKE_BUG },
+  // a design's upstream request (v2 SPEC 8.7): the one write to a repo other than the loop's own, to a repo of UPSTREAM_REPOS
+  { ...base, kind: 'upstream', key: `${at}/upstream`, class: 'free', rule: 'S2', target: UP, request: 'bug', title: 'The reader drops a quote', body: 'Body --yes', marker: `<!-- factory-loop:upstream:${CONSUMER}#470/l${LIFE}/s3 -->`, authority: { kind: 'owner', source: 'note' }, fields: { repo: UP, request: 'bug', authority: 'owner', source: 'note' } },
   // O4's release log (v2 SPEC 11): the image's own tool, with the tag and the repo
   { ...base, issue: null, kind: 'released', key: `released:${REPO}:v1.2.0`, class: 'free', rule: 'O4', tag: 'v1.2.0', source: 'loop' },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
@@ -246,7 +253,7 @@ const V2_ACTIONS: Action[] = [
 // requeue, with every state label off in the same call.
 const STATE_LABEL = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
 const FACTORY = (l: string) => ALL_FACTORY_LABELS.some(x => x.name === l)
-function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean } {
+function v2Shape(argv: readonly string[], action: Action | undefined): { repo?: string; labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean } {
   const is = (...shape: (string | ((s: string) => boolean))[]) => shape.length === argv.length && shape.every((p, i) => (typeof p === 'string' ? p === argv[i] : p(argv[i] ?? '')))
   const num = (s: string) => /^[1-9]\d*$/.test(s)
   const text = (s: string) => s !== '' && !s.startsWith('-')
@@ -277,6 +284,9 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
         is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
+    case 'upstream':
+      // one issue created in the action's own target, a repo of UPSTREAM_REPOS; the list read is the reader's, not gh's
+      return is('gh', 'issue', 'create', '--repo', r => r === action.target && UPSTREAM_REPOS.includes(r), '--title', text, '--body-file', '-') ? { body: true, repo: action.target } : {}
     case 'flake-bug': {
       const api = (re: string) => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/${re}$`)
       if (is('gh', 'issue', 'create', '--repo', REPO, '--title', text, '--body-file', '-')) return { body: true }
@@ -332,11 +342,11 @@ function world(): { state: State; ledger: LedgerEntry[] } {
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles
-async function run(action: Action, poolless = false, attempt = 1): Promise<Recorded & { status: string; summary: string }> {
+async function run(action: Action, poolless = false, attempt = 1, repo = REPO): Promise<Recorded & { status: string; summary: string }> {
   const { io, seen } = recorder()
   const w = world()
   const s = poolless ? { ...w.state, pool: { free: 10, total: 16, slots: [] } } : w.state
-  const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
+  const env: ActEnv = { io, rt: runtime(repo), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const started = { ...start(w.ledger, action, NOW).entry, attempts: attempt }
   const exec = await dispatch(ctxOf(env, s, started), action)
   return { ...seen, status: exec.status, summary: exec.summary }
@@ -378,7 +388,7 @@ function mainRead(args: readonly string[]): boolean {
   return verb === 'api' && MAIN_READ_PATH.test(path) && jq
 }
 
-function bans(argv: readonly string[], action?: Action): string[] {
+function bans(argv: readonly string[], action?: Action, own = REPO): string[] {
   const out: string[] = []
   const [cmd = '', ...args] = argv
   const v2 = cmd === 'gh' && mainRead(args) ? { api: true } : v2Shape(argv, action)
@@ -399,7 +409,8 @@ function bans(argv: readonly string[], action?: Action): string[] {
     if (args[0] === 'pr' && ((args[1] === 'edit' && v2.prEdit !== true) || args[1] === 'merge')) out.push(`gh pr ${args[1]}`)
     if (args.some(a => a.startsWith('--body')) && !(args[0] === 'pr' && args[1] === 'comment') && !(v2.body === true && args.includes('--body-file'))) out.push('--body outside a PR comment')
     if (args.includes('api') && v2.api !== true) out.push('gh api')
-    if ((args[args.indexOf('--repo') + 1] !== REPO || !args.includes('--repo')) && v2.api !== true) out.push('gh without --repo <the repo>')
+    const to = args[args.indexOf('--repo') + 1]
+    if ((to !== own || !args.includes('--repo')) && v2.api !== true && !(v2.repo !== undefined && to === v2.repo)) out.push('gh without --repo <the repo>')
   }
   // reading the queue by its label is fine; adding one anywhere is not, but v2's own factory labels
   // and a split's ready child
@@ -477,6 +488,8 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['agent-step', ARGV.beyondBaseArgv('main', 'abc1234')],
   ['agent-step', ARGV.isAncestorArgv('abc1234', 'def5678')],
   ['agent-step', ARGV.implementerRouteArgv(470)],
+  ['upstream', ARGV.openIssuesArgv()],
+  ['upstream', ARGV.issueCreateArgv(UP, 'The reader drops a quote')],
   ['claim', ARGV.claimArgv(470)],
   ['claim', ARGV.claimArgv(470, { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] })],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
@@ -555,6 +568,39 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'pr', 'create', '--repo', REPO, '--base', 'main', '--head', 'issue-470', '--title', 'x', '--body-file', '-', '--yes'], kindAction('pr')],
     ]
     for (const [argv, action] of bad) expect({ argv, kind: action?.kind, banned: bans(argv, action).length > 0 }).toEqual({ argv, kind: action?.kind, banned: true })
+  })
+})
+
+describe('the upstream request: the loop\'s one write to a repo other than its own (v2 SPEC 8.7)', () => {
+  const upstream = V2_ACTIONS.find(a => a.kind === 'upstream') as Extract<Action, { kind: 'upstream' }>
+
+  test('from a consumer\'s loop it reads the target\'s open issues through the reader pointed at the target and creates one issue there, and nothing else', async () => {
+    const r = await run(upstream, false, 1, CONSUMER)
+    expect(r.status).toBe('done')
+    expect(r.argvs).toEqual([ARGV.openIssuesArgv(), ARGV.issueCreateArgv(UP, 'The reader drops a quote')])
+    // the list is read in the target repo: the reader is pointed there; the create names it with --repo
+    expect(r.envRepos[0]).toBe(UP)
+    for (const argv of r.argvs) expect({ argv, bans: bans(argv, upstream, CONSUMER) }).toEqual({ argv, bans: [] })
+    expect(UPSTREAM_REPOS).toEqual([UP])
+  })
+
+  test('the same write is banned for any other kind (a split, a flake bug, a comment), for a repo outside UPSTREAM_REPOS, and as any other write to the target', () => {
+    const create = ARGV.issueCreateArgv(UP, 'x')
+    for (const kind of ['split', 'flake-bug', 'comment', 'transition'] as const) {
+      expect({ kind, banned: bans(create, kindAction(kind), CONSUMER).length > 0 }).toEqual({ kind, banned: true })
+    }
+    const other = { ...upstream, target: 'other/repo' } as Action
+    expect(bans(ARGV.issueCreateArgv('other/repo', 'x'), other, CONSUMER)).not.toEqual([])
+    // the action names its own target: another repo of the list than the action's is banned too
+    expect(bans(ARGV.issueCreateArgv(UP, 'x'), { ...upstream, target: 'cbundy/other' } as Action, CONSUMER)).not.toEqual([])
+    // and nothing else is written to the target: no label, no comment, no edit
+    for (const argv of [
+      ['gh', 'issue', 'edit', '601', '--repo', UP, '--add-label', 'ready'],
+      ['gh', 'issue', 'edit', '601', '--repo', UP, '--add-label', 'bug'],
+      ['gh', 'issue', 'comment', '601', '--repo', UP, '--body-file', '-'],
+      ['gh', 'issue', 'close', '601', '--repo', UP],
+      ['gh', 'pr', 'merge', '601', '--repo', UP],
+    ]) expect({ argv, banned: bans(argv, upstream, CONSUMER).length > 0 }).toEqual({ argv, banned: true })
   })
 })
 

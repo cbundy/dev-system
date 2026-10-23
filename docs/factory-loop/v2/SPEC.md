@@ -583,7 +583,7 @@ column names what a row's seq logs. The loop no longer writes a state's own entr
 | T2 | designing | ok | - | building | brief set | transition, `delegated` |
 | T3 | designing | not-ok | a question | parked | question; resumeTo designing | transition |
 | T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ..., with the designer's reasons) |
-| T16 | designing | not-ok | a wait | waiting | `wait` set to the answer's conditions; resumeTo designing; the reason to notes | transition |
+| T16 | designing | not-ok | a wait (also an upstream request, once its issue is raised, 8.7) | waiting | `wait` set to the answer's conditions; resumeTo designing; the reason to notes | transition |
 | T18 | designing | not-ok | a done close | closed | why done; the evidence line (`done: PR #N (merge <sha7>)`, `commit <sha7>`, the run-it URL) to notes | transition |
 | T5 | building | ok | - | reviewing | head set; round +1 | transition |
 | T6 | building | not-ok | triages < max | building, step triage | attempt 1; triages +1; cut cleared | transition |
@@ -1569,10 +1569,11 @@ The designer is a reader: it writes nothing to GitHub.
   background and a turn end is final (10.8), so an explorer's report would arrive after the
   answer and never be recorded; the definition carries an exploration checklist instead
   ([#851](https://github.com/cbundy/dev-system/issues/851)).
-- **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait" | "done",
+- **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait" | "done" | "upstream",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean, decision?: { question, context?, options?, recommendation? } }],
-  conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason?, evidence?: { pr: N | null, commit: sha | null, runIt: url | null } }`.
+  conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason?, evidence?: { pr: N | null, commit: sha | null, runIt: url | null },
+  upstream?: { repo, request: "bug" | "need", title, body, authority: { kind: "owner", source, quote } | { kind: "bug", blocking, confidence } } }`.
 - **Observable by default.** A brief has an `## Observability` section, and the contract refuses
   one without it: each decision the change adds (a point where an agent or a rule chooses), where
   it is recorded with the facts weighed and the reason, and the `docs/metrics.md` query it
@@ -1644,6 +1645,40 @@ The designer is a reader: it writes nothing to GitHub.
   remedy: answer `run-it` when the Run it stands, or ask the owner to rename the stale heading. An
   indeterminate read records the brief and names the unchecked Rollout on stderr. The PR-open check
   (`callum-flow-rollout` in `act-pr.ts`) stays as the backstop.
+- **An upstream request** (`kind: "upstream"`, the designer's choice when the change needs a change in
+  another repo of the factory's own, and never a question asking the owner to write the issue). The
+  answer is `{ kind: "upstream", upstream: { repo, request, title, body, authority }, reason, brief }`
+  (`hooks/v2/upstream-answer.mjs`): `repo` is one of `UPSTREAM_REPOS` (a frozen list holding only
+  `cbundy/dev-system`, compared in lower case) and never the job's own repo; `request` is `bug` or
+  `need`; `title` is one line of at most 120 characters; `body` is at most the brief limit; `reason` is
+  one line of at most 500; `brief` is an optional draft. Stray fields are refused, and every other kind
+  refuses an `upstream` field. `authority` is either the owner's word, `{ kind: "owner", source, quote }`
+  (`source` is `"note"`, the URL of this issue, or a comment URL on this issue; `quote` is 10 to 500
+  characters), or a confident, non-minor bug, `{ kind: "bug", blocking, confidence }` (texts of at most
+  500 characters: what it blocks and why the workarounds are poor, and the evidence), allowed only with
+  `request: "bug"`. The authority is checked mechanically. The design step's job data carries the owner
+  notes of the step (`data.ownerNotes`, the `owner: ` lines of the action's notes, set at the spawn), and
+  a `note` source passes only when the quote appears in one of them (whitespace collapsed, case and
+  straight versus curly quotes ignored); the contract does this, so the answer script and the loop's
+  turn-end re-check refuse alike. A URL source is read by `bin/factory-answer`
+  (`hooks/v2/upstream-check.mjs`; `callum-flow-issue-read --json --comment <url>`, or `--json <N>` for the
+  body, with `CALLUM_FLOW_REPO` set to the job's repo, each read limited to 15 s): exit 3 (an untrusted
+  author), a comment that is not on this issue, or a text without the quote refuses; a read that decides
+  nothing records the answer and names the unchecked authority on stderr. `bin/factory-answer` reports
+  "an upstream request to <repo> (<request>)". The step result is not-ok(`upstream`) with the answer as
+  data; `designPlan` hands it to `upstreamPlan` (`rules-upstream.ts`), which plans one keyed effect, the
+  `upstream` action (key `i<N>/l<L>/s<seq>/upstream`). Its executor (`act-upstream.ts`) lists the target
+  repo's open issues (the reader with `CALLUM_FLOW_REPO` set to the target), finds the issue carrying the
+  marker `<!-- factory-loop:upstream:<own repo>#<N>/l<L>/s<seq> -->`, or creates it with
+  `gh issue create --repo <target>`; the body is the designer's text, a line naming the source issue as
+  `<own repo>#<N>` (no closing keyword) and the request kind, and the marker. No label is added, and a
+  retry or a lost ledger never files a second issue. This is the loop's only write to a repo other than
+  its own, and the safety tests pin it to this one action kind and to `UPSTREAM_REPOS`. Once the effect is
+  done the plan returns not-ok(`wait`) on `{ kind: "issue-closed", issue, repo }` with the text `raised
+  <target>#<n> upstream (<request>): <reason>`, so T16 takes the record to waiting (the one waiting comment
+  names `owner/name#N`) and the design resumes with a note naming what cleared. A design resuming after an
+  upstream issue exists waits on it rather than raising another. The decision log's `upstream` action and
+  outcome (`made`) record it (`docs/metrics.md`, "Upstream requests").
 - **A done close** (`kind: "done"`, the designer's choice when the issue's work is already merged on
   the default branch). `evidence` is `{ pr, commit, runIt }`, at least one of `pr` and `commit` (a
   whole number of at least 1; 7 to 40 hex digits, stored lower-case); `runIt`, when given, is a
@@ -4503,6 +4538,7 @@ settings file, and they have no effect. `/factory help config` lists them on one
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child; a not-ready child gets none: plan claims it with a `park` and row S7 parks it (8.7) | 3 |
 | `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
 | `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
+| `upstream` | free | a design's upstream request (8.7): `callum-flow-issue-read --json --list --state open` with `CALLUM_FLOW_REPO` set to the target repo (one of `UPSTREAM_REPOS`) for the request's marker, else `gh issue create --repo <target> --title <t> --body-file -`; no label, no other write. The one write to a repo other than the loop's own | 3 |
 | `flake-bug` | free | rule F1 (8.5): `callum-flow-issue-read --json --list --state open` for the bug's marker, else `gh label create flaky --repo R ... --force` and `gh issue create --repo R --title <t> --body-file -`; then `gh issue edit <N> --repo R --add-label flaky --add-label <priorityLabel>`, the sub-issue link under `flakeEpic` (`gh api`, unless the epic holds it), and last `gh issue edit <N> --repo R --add-label <ready>` only when the action says the cap allowed it. The one place the safety tests let the loop add `ready` outside a split child and a requeue | 3 |
 | `intake-stamp` | develop (run), free (settle) | rule I1 (13.4.4): op `run`: `callum-flow-issue-read <N> --comments`, `git ls-tree --name-only origin/<base>`, the try recorded in `stamps:<repo>`, then `$.agent.spawn` of `factory-loop:intake` (`intakeModel`); at the reader's end `callum-flow-issue-read --json <N>`, `gh label create <name> --repo R --color <c> --description <d>` (no `--force`) for a missing `area:<area>` or `needs-decision`, `gh issue edit <N> --repo R --add-label <l,...>` and `--remove-label <l,...>`, and one `intake_stamp` event; op `settle`: TaskStop of the reader, the try recorded failed, one event | run 2 per key (reading fails before the try is recorded; the try is never repeated), settle 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
@@ -4539,10 +4575,11 @@ deliberately, as one argv.
 | milestone state | `milestone-state/<fingerprint>/<base-36 end of the newest done entry, or 0>` |
 | main state | `main/<last>/<current>`, each a state key `<head>.<workflows>.<deployments>` (8 hex digits each) or `none` before the first |
 | intake stamp | `intake/<issue>/<body version>` (the run), `intake/<issue>/<body version>/settle` |
+| upstream request | `i<N>/l<L>/s<seq>/upstream` |
 | flake bug | `flake-bug/<hash>/<first flake event id>` (the bug), `flake-bug/<hash>/c/<flake event id>` (a comment on it); its tell `tell:flake-bug:<bug number>` |
 | heartbeat, sweep, tell, restart, release task | foundation (13.7.1) (the release task: hourly review, 11) |
 
-18 families of the loop's own, plus the foundation's 5.
+19 families of the loop's own, plus the foundation's 5.
 
 ## Appendix D. Labels and notices
 

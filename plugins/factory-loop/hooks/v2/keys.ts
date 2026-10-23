@@ -121,6 +121,17 @@ export function childKey(r: RecordRef, child: string): string {
   return `${seqKey(r)}/child/${child}`
 }
 
+// upstreamKey: a design's upstream request (8.7), once per seq.
+export function upstreamKey(r: RecordRef): string {
+  return `${seqKey(r)}/upstream`
+}
+
+// upstreamMarker: the marker an upstream issue's body carries, which finds it again: the own repo, the
+// issue and the life and seq that raised it. The raising repo is part of it, so two repos never share one.
+export function upstreamMarker(repo: string, r: RecordRef): string {
+  return hiddenKey(`upstream:${repo}#${r.issue}/l${r.life}/s${r.seq}`)
+}
+
 // rerunKey: the one re-run of a failed check per round (8.5), by its run id.
 export function rerunKey(r: Life, round: number, runId: string): string {
   return `${lifeKey(r)}/rerun/r${round}/${runId}`

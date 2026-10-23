@@ -306,13 +306,13 @@ test("the answer script's only writes are its own temp file and the rename over 
   // (the one runner takes its command from readOnGitHub's calls below: gh, or callum-flow-issue-read)
   assert.deepEqual([...src.matchAll(/\bexecFile\(([^,]*),/g)].map((m) => m[1]), ["command"]);
   assert.ok(src.includes("async function readOnGitHub(mods, self, file, command = 'gh', env = {})"));
-  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')(?:, ('[^']+'))?/g)].map((m) => [m[1], m[2] ?? "'gh'"]), [["'wait-check.mjs'", "'gh'"], ["'done-check.mjs'", "'gh'"], ["'rollout-check.mjs'", "'callum-flow-issue-read'"]]);
+  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')(?:, ('[^']+'))?/g)].map((m) => [m[1], m[2] ?? "'gh'"]), [["'wait-check.mjs'", "'gh'"], ["'done-check.mjs'", "'gh'"], ["'rollout-check.mjs'", "'callum-flow-issue-read'"], ["'upstream-check.mjs'", "'callum-flow-issue-read'"]]);
   // the modules it loads: node's own, and the contract and the wait check beside the hooks
   const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]).sort();
   assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'", "'node:child_process'", "'node:url'"].sort());
   assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 2);
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
-  // the one loader of the read-only checks takes its file from the two calls below: a wait's and a done close's
+  // the one loader of the read-only checks takes its file from the calls above: a wait's, a done close's, a Rollout's and an upstream request's
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)"));
 });
 

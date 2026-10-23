@@ -22,6 +22,12 @@
 //       "reason": "<one line, at most 500>", "brief": null }
 //       the issue's work is already merged on the default branch; at least one of pr and commit
 //       (done-answer.mjs); the answer script and the loop check the evidence on GitHub and origin
+//     { "kind": "upstream", "upstream": { "repo": "cbundy/dev-system", "request": "bug" | "need", "title", "body",
+//       "authority": { "kind": "owner", "source": "note" | "<issue or comment URL>", "quote" } | { "kind": "bug", "blocking", "confidence" } },
+//       "reason": "<one line, at most 500>", "brief": null }
+//       raise an issue in another repo of the factory's own and wait for it to close (upstream-answer.mjs):
+//       the owner's words (a note is checked against the step's owner notes here, a URL by the answer
+//       script) or a confident, non-minor bug
 //   A child with "ready": false carries an open owner decision: an optional "decision" object
 //   { question, context?, options?, recommendation? }, checked as a question answer is
 //   (split-decision.mjs; refused on a ready child), which the loop parks the child on. Without one, the
@@ -62,9 +68,10 @@
 
 import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
 import { checkDone } from './done-answer.mjs'
+import { checkUpstream } from './upstream-answer.mjs'
 import { childDecisionWithParts } from './split-decision.mjs'
 
-export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait', 'done'])
+export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait', 'done', 'upstream'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
 export const FIX_RESULTS = Object.freeze(['fixed', 'declined', 'unchanged'])
 export const DISPOSITIONS = Object.freeze(['fixed', 'declined'])
@@ -396,12 +403,12 @@ function conditionsOf(v, problems, self, ownRepo) {
 
 function checkDesign(input, job) {
   const o = record(input)
-  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split" | "wait" | "done", "brief", and "question", "children", "conditions" and "reason", or "evidence" and "reason"}'] }
+  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split" | "wait" | "done" | "upstream", "brief", and "question", "children", "conditions" and "reason", "evidence" and "reason", or "upstream" and "reason"}'] }
   const problems = []
-  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children', 'conditions', 'reason', 'evidence'], 'a design answer', problems)
+  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children', 'conditions', 'reason', 'evidence', 'upstream'], 'a design answer', problems)
   const kind = DESIGN_KINDS.find(k => k === o.kind)
   if (kind === undefined) problems.push(`kind ${show(o.kind)} is not one of ${DESIGN_KINDS.join(', ')}`)
-  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' || kind === 'wait' || kind === 'done' ? 'optional' : 'required', problems)
+  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' || kind === 'wait' || kind === 'done' || kind === 'upstream' ? 'optional' : 'required', problems)
   if (kind === 'brief' && brief !== null) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
     problems.push(...rolloutProblems(brief, 'brief'))
@@ -430,10 +437,14 @@ function checkDesign(input, job) {
   } else if (kind === 'done') {
     if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
     wait = checkDone(o, problems, job) ?? {}
+  } else if (kind === 'upstream') {
+    if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
+    wait = checkUpstream(o, problems, job, LIMITS.brief) ?? {}
   } else {
     if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
-    if (o.reason !== undefined && o.reason !== null) problems.push('reason must be absent or null unless kind is wait or done')
+    if (o.reason !== undefined && o.reason !== null) problems.push('reason must be absent or null unless kind is wait, done or upstream')
   }
+  if (kind !== 'upstream' && o.upstream !== undefined && o.upstream !== null) problems.push('upstream must be absent or null unless kind is upstream')
   if (kind !== 'done' && o.evidence !== undefined && o.evidence !== null) problems.push('evidence must be absent or null unless kind is done')
   return checked(problems, () => ({ kind, brief, question, ...parts, ...wait, reasons, children }))
 }
@@ -449,6 +460,7 @@ function summaryOfDesign(input) {
   if (o.kind === 'split') return `a split into ${Array.isArray(o.children) ? o.children.length : 0} children`
   if (o.kind === 'question') return 'a question for the owner'
   if (o.kind === 'done') return `a done close on ${doneEvidenceText(o.evidence)}`
+  if (o.kind === 'upstream') return `an upstream request to ${String(record(o.upstream)?.repo)} (${String(record(o.upstream)?.request)})`
   if (o.kind === 'wait') return `a wait on ${Array.isArray(o.conditions) ? o.conditions.length : 0} conditions`
   return o.kind === 'brief' ? 'a design brief' : 'no kind'
 }
