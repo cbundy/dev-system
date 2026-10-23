@@ -211,7 +211,18 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env.PATH).toStartWith('/work/images/base:')
+    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env.CALLUM_FLOW_LINKAGE_BIN).toBe('/work/features/src/callum-tools/check-pr-linkage.sh')
     expect(h.seen.some(s => s.argv[0] === '/work/features/src/callum-tools/usage-check.sh')).toBe(true)
+  })
+
+  test('without toolsDir the guard keeps its own link check (no CALLUM_FLOW_LINKAGE_BIN)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const state = h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')
+    expect(state).toBeDefined()
+    expect(state?.env).not.toHaveProperty('CALLUM_FLOW_LINKAGE_BIN')
   })
 
   test('once a day the loop dir loses its files older than a week (v2 SPEC 13.11.6)', ENGINE_TEST, async ($, on) => {

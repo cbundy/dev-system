@@ -363,7 +363,8 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision**: the workspace file takes `toolsDir` (where the watchers and `usage-check.sh`
   live; default the base image's `/usr/local/share/callum-tools`) and `binDir` (put ahead of
-  `PATH`). Every command also gets the configured labels as `CALLUM_FLOW_READY_LABEL` and
+  `PATH`). A `toolsDir` also sets `CALLUM_FLOW_LINKAGE_BIN=<toolsDir>/check-pr-linkage.sh` for every
+  command, so the merge guard's link check runs the checkout's script. Every command also gets the configured labels as `CALLUM_FLOW_READY_LABEL` and
   `CALLUM_FLOW_IN_DEV_LABEL` (v2 SPEC 13.4.1).
 - **Alternatives**: wait for a base image release before any act-mode test; fixed image paths.
 - **Why**: the `--once` modes and the `loop` state ship in the image, and no release carries
