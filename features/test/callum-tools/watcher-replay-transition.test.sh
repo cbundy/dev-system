@@ -23,15 +23,15 @@ run_state RUNP feat/issue-150-p running 4444444444444444444444444444444444444444
 wait_polls "$fakebin/nm-polls" 2 # the watcher has seen it leave the parked state
 run_state RUNP feat/issue-150-p parked 4444444444444444444444444444444444444444
 wait_lines "$out" 2
-wait_events '"state":"parked"' 2
 stop_bg
-[ "$(ev_count '"state":"parked"')" = 2 ] || fail "transition: want two parked lines: $(cat "$evlog")"
+# both parked lines were printed; the watcher logs neither (it no longer writes events)
+no_event_log "transition"
 start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches feat/issue-150-p
 wait_lines "$out" 1
-wait_polls "$fakebin/nm-polls" 2 # a replayed parked line is logged by the end of the next whole poll
+wait_polls "$fakebin/nm-polls" 2 # a logged line would be written by the end of the next whole poll
 stop_bg
-[ "$(ev_count '"state":"parked"')" = 2 ] || fail "transition: a restart added a parked line: $(cat "$evlog")"
-ok # pipeline-watch: an observed transition is logged, a restart does not replay it
+no_event_log "transition, restart"
+ok # pipeline-watch: an observed transition prints as always and nothing is logged
 
 # queue-watch: a restart with no baseline logs each issue once; a joiner after
 # the first poll is logged even when the log already ends with its ready event
@@ -42,7 +42,7 @@ for i in 1 2; do
   q=$(in_dir "$tmpdir" timeout 10 $qw) || fail "queue replay: did not exit 0"
   [ "$q" = "queue-changed known=none now=5,6" ] || fail "queue replay: printed '$q'"
 done
-[ "$(ev_count '"state":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
+[ "$(ev_count '"type":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
 "$fakebin/callum-flow-event" ready --issue 7
 queue_seq 5 5,7
 # shellcheck disable=SC2086 # $qw is the command and its fixed options

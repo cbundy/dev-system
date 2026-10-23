@@ -1,18 +1,19 @@
 #!/bin/sh
 #
-# callum-flow-event: append one JSON line for a factory lifecycle transition
-# to /persist/events/<owner>__<repo>.jsonl (cbundy/dev-system#218). The log is
-# the factory's state: event-push-loop ships it to factory.events in the
-# central PostgreSQL, docs/metrics.md has the queries.
+# callum-flow-event: record one factory lifecycle transition as a new-format event in
+# <events dir>/factory/<owner>__<repo>.jsonl (cbundy/dev-system#218, #1143). The log is the factory's
+# state: factory-event-push-loop ships it to the central PostgreSQL, docs/metrics.md has the queries.
+# The old log <events dir>/<owner>__<repo>.jsonl and factory.events get no new lines from this tool
+# any more; the options that named them stay accepted for older callers (removing them is #656).
 #
 # Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
-#          [--if-changed | --new-only] [--data JSON]
+#          [--if-changed] [--new-only] [--data JSON]
 #        callum-flow-event --path [--repo O/N]
 #        callum-flow-event --new-path [--repo O/N]
 #        callum-flow-event --new-only --new-path [--repo O/N]
 #        callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N]
-#          [--actor NAME]
+#          [--actor NAME] [--regime R]
 #
 # Native mode (cbundy/dev-system#792): --type writes one new-format event (envelope v1,
 # docs/factory-events/README.md) straight from its type and payload to <events dir>/factory/<file>
@@ -27,48 +28,46 @@
 # missing node, writer or log that cannot be written warns and exits 0. CALLUM_EVENT_SHAPES
 # overrides the shapes file (tests).
 #
-# Dual write (cbundy/dev-system#649): right after the old line is appended, the same call
-# translates it with factory-event-translate.js (found next to this script, else in
-# ${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}) and appends the new event as one JSON line to
-# <events dir>/factory/<same file name>. The factory/ dir is made 0700. The clock is read once, with
-# milliseconds: the old ts is that value cut to the second. session_id of the new event is
-# CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, or null (never the transcript guess). A line the translator skips by name writes
-# nothing. A miss, a missing node or translator, or a crashing translator keeps the old line, writes
-# no new event, prints one `callum-flow-event: warning:` line and still exits 0. --if-changed
-# suppression writes neither line.
+# --regime R (else FACTORY_REGIME; the flag wins, an empty value counts as unset) is the envelope's
+# regime: factory_loop_v2, testbed or manual (docs/factory-events/README.md, "Reading events"). Unset
+# is null, never guessed. A value outside the shapes' enum is written as given with one warning. The
+# old-state mode takes no flag but passes FACTORY_REGIME to the translator the same way.
+#
+# Old-state mode (<state> ...): builds the old-format line as before (same validation, same note
+# checks), translates it with factory-event-translate.js (found next to this script, else in
+# ${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}) and appends only the new event as one JSON line
+# to <events dir>/factory/<same file name> (made 0700), then touches <events dir>/.wake. The old
+# line itself is never written anywhere, so a call from any older plugin lands in the new store. The
+# clock is read once, with milliseconds. session_id of the new event is CLAUDE_SESSION_ID, else
+# CLAUDE_CODE_SESSION_ID, or null (never the transcript guess). A state the translator skips by name
+# writes nothing and exits 0. A miss, a missing node or translator, or a crashing translator writes
+# nothing, prints one `callum-flow-event: warning:` line and still exits 0.
 #
 # --new-path prints the absolute path of the new log like --path, and writes nothing. An older
 # image answers it with a usage error (exit 2): that is the capability probe.
 #
-# --new-only (cbundy/dev-system#825) is for the old-state mode: it builds the line as usual (same
-# validation, same note checks), translates it as dual write does and appends the result to
-# <events dir>/factory/<file> only; the old log is never appended to. It touches <events dir>/.wake
-# after the new line is written. The factory loop's v2 backfill uses it, so a backfilled row does not
-# reach the old log (and so factory.events a second time). A translator that misses, crashes or is
-# absent writes nothing to either log, warns once and exits 0. --if-changed with --new-only is a
-# usage error (exit 2): the old log is what --if-changed compares against. The capability probe is
-# `--new-only --new-path`: it prints the new path with exit 0, and an older image exits 2 on it.
+# --new-only (cbundy/dev-system#825) is a no-op, kept for older callers: it is what the old-state
+# mode does now. `--new-only --new-path` still prints the new path with exit 0 (the probe).
 #
 # --data JSON (cbundy/dev-system#870) in the old-state mode hands the translator extra payload fields
-# that only the new event carries (ready and claimed: title, labels, parent). The old line is
-# unchanged and gets no new key. JSON that is not an object exits 2 with nothing written. A key the
-# translated type does not accept, or a value of the wrong shape, is a translator miss: the old line
-# is kept, no new event is written, one warning, exit 0. An older writer answers --data with a usage
-# error (exit 2), which callers use to retry without it.
+# that only the new event carries (ready and claimed: title, labels, parent). JSON that is not an
+# object exits 2 with nothing written. A key the translated type does not accept, or a value of the
+# wrong shape, is a translator miss: no event is written, one warning, exit 0. An older writer
+# answers --data with a usage error (exit 2), which callers use to retry without it.
 #
-# --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
-# newest line already in the log for the same subject (the same branch when
-# --branch is given, else the same issue) has the same state, head and note.
-# The watchers use it for a transition they did not see happen (a restart's
-# first sight of a run), so a re-armed watcher never re-logs old events.
-# run_id is not compared: the same run is logged under a ULID and "unknown".
-# `loop` lines are skipped when finding the newest line: the factory loop's
-# bookkeeping is no transition of the subject, so it never makes a repeat new.
-# A missing or unreadable log counts as changed. Without the flag every call
-# writes, as before.
+# --if-changed (cbundy/dev-system#344) translates first, then writes nothing, and exits 0, when the
+# newest event in the new log for the same issue has the same type and data as the translated one.
+# `loop_entry` and `loop_passes` events are skipped when finding it: the factory loop's bookkeeping
+# is no transition of the issue, so it never makes a repeat new. The watchers use it for a
+# transition they did not see happen (a restart's first sight of a run), so a re-armed watcher never
+# re-logs old events: queue-watch's first sight of an already-logged ready issue with the same title,
+# labels and parent writes nothing, and one whose title, labels or parent changed is logged again.
+# --branch no longer narrows the match (the envelope has no branch). A missing or unreadable new
+# log, or no earlier event for the issue, counts as changed. Without the flag every call writes. It
+# combines with --new-only (both now mean the new log).
 #
-# --path prints the absolute path of the repo's log file, named and placed as a
-# write would, and writes nothing (callum-flow-sweep reads the log through it).
+# --path prints the absolute path of the old log, named and placed as an older write would, and
+# writes nothing (callum-flow-sweep reads the log through it). The old log gets no new lines.
 #
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
@@ -114,8 +113,8 @@
 #      and intervention, and is taken from an issue-<N> branch name when
 #      --branch has one.
 #
-# No network, one jq call, one O_APPEND write of a single short line (atomic
-# between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
+# No network, one O_APPEND write of a single short line (atomic between concurrent writers). The
+# old-state line is built with one jq call and handed to the translator, not written. Fills ts, repo, device (DEV_MACHINE_NAME, else
 # the hostname), session_id (CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, else the newest transcript of
 # the working directory's Claude project, else null), actor
 # (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (2), the running versions
@@ -127,8 +126,8 @@
 # is lost and restarts at line 1; omitted with a warning if the kernel source is
 # unreadable - cbundy/dev-system#229).
 #
-# After the append it touches <events dir>/.wake so event-push-loop pushes the
-# line within seconds instead of at its next interval (failure ignored; still
+# After the append it touches <events dir>/.wake so factory-event-push-loop pushes the
+# event within seconds instead of at its next interval (failure ignored; still
 # no network here).
 #
 # Environment: CALLUM_EVENTS_DIR (default /persist/events), DEV_VERSIONS_FILE,
@@ -144,11 +143,11 @@ STATES="ready claimed briefed delegated run_started parked verdict fix_requested
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
-  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed | --new-only] [--data JSON]" >&2
+  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed] [--new-only] [--data JSON]" >&2
   echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "       callum-flow-event --new-path [--repo O/N]" >&2
   echo "       callum-flow-event --new-only --new-path [--repo O/N]" >&2
-  echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME]" >&2
+  echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME] [--regime R]" >&2
   echo "states: $STATES" >&2
   exit 2
 }
@@ -194,7 +193,7 @@ read_snap() {
   snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
 }
 
-if [ "$1" = --new-only ] && [ "$2" = --new-path ]; then
+if [ "$1" = --new-only ] && [ "${2-}" = --new-path ]; then
   shift
 fi
 if [ "$1" = --path ] || [ "$1" = --new-path ]; then
@@ -215,7 +214,7 @@ if [ "$1" = --path ] || [ "$1" = --new-path ]; then
 fi
 if [ "$1" = --type ]; then
   n_type='' n_ver='' n_data='' n_issue='' n_repo=${CALLUM_FLOW_REPO-} n_actor=${CALLUM_FLOW_ACTOR:-agent}
-  n_has_ver='' n_has_data='' n_has_issue=''
+  n_has_ver='' n_has_data='' n_has_issue='' n_regime=${FACTORY_REGIME-}
   while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || native_usage "$1 needs a value"
     case "$1" in
@@ -225,6 +224,7 @@ if [ "$1" = --type ]; then
       --issue) n_issue=$2 n_has_issue=1 ;;
       --repo) n_repo=$2 ;;
       --actor) n_actor=$2 ;;
+      --regime) n_regime=$2 ;;
       *) native_usage "unknown option '$1'" ;;
     esac
     shift 2
@@ -244,6 +244,7 @@ if [ "$1" = --type ]; then
   [ -z "$n_has_ver" ] || set -- "$@" --type-version "$n_ver"
   [ -z "$n_has_issue" ] || set -- "$@" --issue "$n_issue"
   [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "$n_regime" ] || set -- "$@" --regime "$n_regime"
   wr_rc=0
   new=$(node "$wr_js" "$@") || wr_rc=$?
   [ "$wr_rc" -ne 2 ] || exit 2
@@ -266,11 +267,9 @@ issue='' run='' branch='' pr='' head='' note=''
 actor=${CALLUM_FLOW_ACTOR:-agent}
 repo=${CALLUM_FLOW_REPO-}
 if_changed=
-new_only=
 extra=
 while [ $# -gt 0 ]; do
   if [ "$1" = --new-only ]; then
-    new_only=1
     shift
     continue
   fi
@@ -333,7 +332,6 @@ case "$state" in
     esac
     ;;
 esac
-[ -z "$new_only" ] || [ -z "$if_changed" ] || usage "--new-only cannot be combined with --if-changed"
 case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 
@@ -377,54 +375,49 @@ line=$(jq -nc --arg snap "$snap" \
    template_version: sv("template_version"), plugin_version: sv("plugin_version")}') || { warn "could not build the event"; exit 0; }
 
 dir=${CALLUM_EVENTS_DIR:-/persist/events}
-if [ ! -d "$dir" ]; then
-  mkdir -p "$dir" 2>/dev/null && chmod 0700 "$dir" 2>/dev/null
-fi
-if [ -n "$if_changed" ] && [ -r "$dir/$file" ]; then
-  same=$(jq -Rn --argjson new "$line" '
-    [inputs | fromjson? | select(type == "object")
-     | select(.state != "loop")
-     | select(if $new.branch != null then .branch == $new.branch else .issue == $new.issue end)]
-    | last
-    | . != null and .state == $new.state and .head == $new.head and .note == $new.note' "$dir/$file" 2>/dev/null) || same=
-  [ "$same" != true ] || exit 0
-fi
-# dual_write: translate $line and append the new event to $dir/factory/$file. Never fails the caller.
-dual_write() {
-  command -v node >/dev/null 2>&1 || { warn "node not found - new event not recorded"; return 0; }
+# translate: translate $line into $new (the event for the new log). Empty $new means nothing to
+# write: a state the translator skips by name, or a warning already given. Never fails the caller.
+translate() {
+  new=''
+  command -v node >/dev/null 2>&1 || { warn "node not found - event not recorded"; return 0; }
   tr_js=$(dirname "$0")/factory-event-translate.js
   [ -r "$tr_js" ] || tr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-translate.js
-  [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - new event not recorded"; return 0; }
+  [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - event not recorded"; return 0; }
   set -- --quiet --ts "$ts_ms"
   [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "${FACTORY_REGIME-}" ] || set -- "$@" --regime "$FACTORY_REGIME"
   [ -z "$extra" ] || set -- "$@" --data "$extra"
-  tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - new event not recorded"; return 0; }
+  tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - event not recorded"; return 0; }
   tr_rc=0
   new=$(printf '%s\n' "$line" | node "$tr_js" "$@" 2>"$tr_err") || tr_rc=$?
   tr_msg=$(sed -n 's/^.*miss: //p' "$tr_err" | sed -n 1p)
   tr_all=$(sed -n 1p "$tr_err")
   rm -f "$tr_err"
   if [ "$tr_rc" -ne 0 ]; then
-    if [ -n "$tr_msg" ]; then warn "$tr_msg - new event not recorded"; else warn "translator failed (exit $tr_rc)${tr_all:+: $tr_all} - new event not recorded"; fi
-    return 0
+    new=''
+    if [ -n "$tr_msg" ]; then warn "$tr_msg - event not recorded"; else warn "translator failed (exit $tr_rc)${tr_all:+: $tr_all} - event not recorded"; fi
   fi
-  [ -n "$new" ] || return 0
-  if [ ! -d "$dir/factory" ]; then
-    mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
-  fi
-  if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then dw_wrote=1; else warn "cannot write $dir/factory/$file - new event not recorded"; fi
+  return 0
 }
-dw_wrote=''
-
-if [ -n "$new_only" ]; then
-  dual_write
-  [ -z "$dw_wrote" ] || touch "$dir/.wake" 2>/dev/null || :
-elif printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
-  touch "$dir/.wake" 2>/dev/null || :
-  dual_write
-  # again after the new line exists, so factory-event-push-loop wakes for it
+translate
+[ -n "$new" ] || exit 0
+# --if-changed: nothing to write when the subject's newest event in the new log (loop_entry and
+# loop_passes skipped) has the same type and data. A missing or unreadable log counts as changed.
+if [ -n "$if_changed" ] && [ -r "$dir/factory/$file" ]; then
+  same=$(jq -Rn --argjson new "$new" '
+    [inputs | fromjson? | select(type == "object")
+     | select(.type != "loop_entry" and .type != "loop_passes")
+     | select(.issue == $new.issue)]
+    | last
+    | . != null and .type == $new.type and .data == $new.data' "$dir/factory/$file" 2>/dev/null) || same=
+  [ "$same" != true ] || exit 0
+fi
+if [ ! -d "$dir/factory" ]; then
+  mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
+fi
+if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then
   touch "$dir/.wake" 2>/dev/null || :
 else
-  warn "cannot write $dir/$file - event not recorded"
+  warn "cannot write $dir/factory/$file - event not recorded"
 fi
 exit 0

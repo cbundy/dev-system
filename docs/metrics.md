@@ -4,7 +4,9 @@ The factory event log answers the questions below, plus the waste measures at th
 written by `callum-flow-event` and shipped by `factory-event-push-loop` into the factory database
 (see [Where events live](factory-events/README.md#where-events-live)). Every saved query here reads
 the view `factory.event_log`, or for the workers `factory.workers_status` and
-`factory.worker_samples`; none reads the old `factory.events` table or the `nomistakes` mirror.
+`factory.worker_samples`; none reads the old `factory.events` table or the `nomistakes` mirror. The old log and `factory.events` get no
+new rows since the cutover ([#1143](https://github.com/cbundy/dev-system/issues/1143)); the old table holds
+only the history before it.
 
 Run the queries with `dev-query --factory` (see "dev-query" in `images/base/README.md`), e.g.
 `dev-query --factory -c '<sql>'` or the SQL on stdin, with `-v NAME=VALUE` for the `:'NAME'`
@@ -31,6 +33,18 @@ sub-agents.
 - Percentiles and medians are not SQL: take them in code from the rows a query gives. The shared
   queries also use no `@>` and no `DISTINCT ON` (a window function with `row_number() ... = 1` does
   the job).
+- Reading per regime: `factory.event_log` has a `regime` column, the kind of run that wrote the row
+  (`factory_loop_v2`, `testbed` or `manual`; see the
+  [Regime rule](factory-events/README.md#reading-events) and the
+  [Regimes](#regimes) subsection of `callum-flow-evaluate`). Null is `unknown`: read it as
+  `coalesce(regime, 'unknown')`, and never guess a regime from a device, a workspace name or a path.
+  Read any saved query per regime in one of two ways. A filter: add
+  `AND coalesce(regime, 'unknown') = '<regime>'` (or `IN (...)` for several) to each read of
+  `factory.event_log` in the query. A grouping: put `coalesce(regime, 'unknown') AS regime` in the
+  select and in the `GROUP BY`; sections 4, 9c and "Tokens per merged issue" show it in a query of
+  their own. A filter names the values it wants and never excludes one, so leaving testbed out is
+  `IN ('factory_loop_v2', 'manual', 'unknown')`, never `<> 'testbed'`. The filter applies to every
+  saved query as written, whether or not its section shows a per-regime form.
 
 Types these queries read, besides the stages `ready`, `claimed`, `transition` (the loop's record,
 whose `to_state` is the issue's state: `queued`, `designing`, `building`, `reviewing`, `fixing`,
@@ -85,6 +99,11 @@ Check coverage before quoting any window, and never extrapolate before it.
   the old `factory.events` table, which these queries do not read.
 - Per device and repo, the earliest and latest row:
   `select device, min(ts), max(ts) from factory.event_log where repo = '<owner/name>' group by device`.
+- Per regime, the rows by the kind of run that wrote them:
+  `select regime, count(*) from factory.event_log where repo = '<owner/name>' group by regime`.
+  A null regime means an older row or an unset regime (see
+  [Regime](factory-events/README.md#reading-events)). Reading any query per regime is the
+  "Reading per regime" rule above.
 - A device whose container is stale (older than the base image that ships the push loops) pushes
   nothing, so a missing device means missing data, not zero work.
 
@@ -153,13 +172,25 @@ GROUP BY repo;
 
 How long the stop gate waited for a turn, and how long it ran, per gate run. The loop writes one
 `gate_run` event for each `gate-pass`, `gate-fail` and `gate-unknown` line of the workspace
-companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
-took one at once or there is no limit), `run_ms` the time the commands ran (0 when they never
+companion (`rules-gates.ts`, v2 SPEC 10.6). `wait_ms` is the time before it got a turn plus the time it waited for one of the container's
+gate slots (v2 SPEC 10.6; 0 when it took both at once or there is no limit), `run_ms` the time the commands ran (0 when they never
 did), `queued_behind` how many gates held a turn or waited ahead when it asked, `concurrency` the
 limit it ran under (null: none), and `started_at` when it asked for its turn. A retried write can
 repeat an event, so each run counts once per (issue, life, seq, started_at). The query reads the
 columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
 rows before a loop with this rule has run.
+
+How often agents' own gate-command runs (`npm test` run by an agent) waited for the container's gate
+slots or were refused by them (the second command gives the per-day counts of runs, waits and refusals). The wrapper writes an `agent-gate` line to the companion's log
+(`<loop dir>/companion.jsonl`) when each ends or is refused; they are not events, so read the file:
+
+```sh
+jq -c 'select(.cause == "agent-gate") | {at, issue, command, waitMs, refused, ms}' <loop dir>/companion.jsonl
+jq -rs '[.[] | select(.cause == "agent-gate")] | group_by(.at[:10])[] | {day: .[0].at[:10], runs: length, waited: map(select(.waitMs > 1000)) | length, refused: map(select(.refused)) | length}' <loop dir>/companion.jsonl
+```
+
+A stop gate's own wait for a container slot is `slotWaitMs` on its settling line, also counted in
+`waitMs`.
 
 A pass row can carry `flaky` (and, when true, `failed_tests` and `failed_at` of the fail it followed)
 and a fail row `failed_tests`; section 2d reads them.
@@ -571,6 +602,76 @@ FROM bugs b
 LEFT JOIN ended e ON e.repo = b.repo AND e.issue = b.filed_issue;
 ```
 
+## 2e. Gate memory
+
+How much memory a stop gate adds. The workspace companion reads the container's cgroup
+(`memory.current`, `memory.max`) when a gate starts to run, every 5 s while it runs and once when
+it ends, and writes the first reading, the highest one and the limit on the gate's settling line;
+the loop copies them onto the `gate_run` event as `mem_start_bytes`, `mem_peak_bytes` and
+`mem_limit_bytes` (left out when the cgroup could not be read, and on a gate that never got a
+turn). The test hook `FACTORY_GATE_CGROUP_DIR` names another cgroup directory.
+
+The reading is container-wide. At concurrency above 1 other gates run in the same container and
+their memory overlaps this one's, so the query groups by `concurrency`: the `concurrency` 1 rows
+are the nearest to one gate's own memory. This is the per-slot estimate the memory cap (#1127)
+uses (`slotMemoryMiB: auto`: the p90, nearest rank, of `mem_peak_bytes - mem_start_bytes`, once at
+least 3 runs are in the loop's 6-day companion window, else 3072 MiB). A retried write can repeat an event, so each run counts once per (issue, life, seq,
+started_at). Take percentiles in code.
+
+```sql
+WITH runs AS (
+  SELECT repo, issue, life, seq, started_at,
+    min(concurrency) AS concurrency,
+    min(mem_peak_bytes) - min(mem_start_bytes) AS added_bytes
+  FROM factory.event_log
+  WHERE type = 'gate_run' AND mem_start_bytes IS NOT NULL AND mem_peak_bytes IS NOT NULL
+    AND started_at >= :'since'::timestamptz
+  GROUP BY repo, issue, life, seq, started_at
+)
+SELECT repo, concurrency,
+  count(*)                    AS runs,
+  round(avg(added_bytes))     AS avg_added_bytes,
+  max(added_bytes)            AS max_added_bytes
+FROM runs
+GROUP BY repo, concurrency
+ORDER BY repo, concurrency;
+```
+
+The loop holds at most `min(maxInFlightIssues, ceiling)` issues, where the ceiling is
+`max(1, floor((memory - memoryReserveMiB) / estimate))` (`memory`: the cgroup's `memory.max`, else
+`/proc/meminfo` MemTotal, read once per process). Each pass line of the decision log carries
+`cap: {effective, configured, ceiling, memoryBytes, estimateBytes, estimateSource}`
+(`estimateSource`: `setting`, `measured` or `default`), so a held issue is told apart: the S1/W1 skip
+text names `memory ceiling` only when the ceiling was the lower bound. When the configured cap is
+above the ceiling the loop tells the owner once per pair (`loop_entry` wake `capacity`).
+
+```sh
+jq -c 'select(.cap != null) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
+jq -c 'select(.cap.ceiling != null and .cap.ceiling < .cap.configured) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
+```
+
+### Heartbeat twins of the loop's own workspace
+
+The heartbeat guard leaves out a recent beat from the loop's own Coder workspace under another
+device name (a mislabelled twin, cbundy/dev-system#1051) and records it as `railTwins` (device and
+age in seconds) on that pass line. Which passes left out a twin, and which device:
+
+```sh
+jq -c 'select(.railTwins != null) | {at, railTwins}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
+```
+
+The condition itself: which Coder workspaces beat under more than one device name in the last day.
+
+```sql
+SELECT coder_workspace, count(DISTINCT device) AS devices, array_agg(DISTINCT device ORDER BY device) AS names
+FROM factory.workers_status
+WHERE coder_workspace IS NOT NULL AND coder_workspace <> ''
+  AND last_seen > now() - interval '1 day'
+GROUP BY coder_workspace
+HAVING count(DISTINCT device) > 1
+ORDER BY coder_workspace;
+```
+
 ## 3. Reviewer false-positive rate
 
 `finding_handled` events carry the fixer's disposition of each review finding in `outcome`: `fixed`
@@ -597,6 +698,47 @@ T17, via `unchanged`). This counts them per repo and week.
 SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS unchanged_fixes
 FROM factory.event_log
 WHERE type = 'transition' AND table_row = 'T17'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
+### Fix rounds caused by other merges
+
+A conflict, or red CI in the merge queue, is charged to its own cap (`conflictFixCap`) apart from the
+PR's own fix rounds (v2 SPEC 8.6). This counts per repo and week the fix rounds other merges caused
+(via `fix:conflict`, or `fix:ci` from the merge queue) and the parks at the conflict cap (via
+`fix-cap:conflict`, or `fix-cap:ci` from the merge queue), to show whether the separate cap still
+parks busy days.
+
+```sql
+SELECT repo, date_trunc('week', seq_at) AS week,
+       count(*) FILTER (WHERE table_row = 'T9') AS conflict_rounds,
+       count(*) FILTER (WHERE table_row = 'T10') AS conflict_cap_parks
+FROM factory.event_log
+WHERE type = 'transition'
+  AND ((table_row = 'T9' AND (via = 'fix:conflict' OR (via = 'fix:ci' AND from_state = 'merge-queue')))
+    OR (table_row = 'T10' AND (via = 'fix-cap:conflict' OR (via = 'fix-cap:ci' AND from_state = 'merge-queue'))))
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
+While a conflicting PR's reviewer of the head's patch still runs, the review step waits for it, so one
+fixer gets the merge and the findings (v2 SPEC 8.5). This counts per repo and week the review-stage
+conflict rounds (T9, via `fix:conflict`, from reviewing) and how many carry a finished review: a
+`reviewed` row of the same issue, the transition's own `round` (a merge-queue `patch` return, T14, raises it with no T9) and life (a `reviewed` row has no life, so it must be no older than the life's first row), with verdict `approve` or `changes`, at or before the
+transition's `seq_at`.
+
+```sql
+-- conflict rounds with a finished review
+SELECT t.repo, date_trunc('week', t.seq_at) AS week,
+       count(*) AS conflict_rounds,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM factory.event_log r
+         WHERE r.repo = t.repo AND r.issue = t.issue AND r.type = 'reviewed'
+           AND r.round = t.round
+           AND r.ts >= (SELECT min(p.ts) FROM factory.event_log p
+                        WHERE p.repo = t.repo AND p.issue = t.issue AND p.life = t.life)
+           AND r.verdict IN ('approve', 'changes') AND r.ts <= t.seq_at)) AS with_finished_review
+FROM factory.event_log t
+WHERE t.type = 'transition' AND t.table_row = 'T9' AND t.via = 'fix:conflict' AND t.from_state = 'reviewing'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
@@ -632,12 +774,31 @@ ORDER BY seq_at DESC;
 
 ## 4. Merges per device
 
+Merges that closed an issue. A `merged` event with no issue is left out: `callum-flow-sweep` logs a merge
+to the default branch that no event recorded with no issue when the pull request's author is not trusted,
+or when it closes none, and a sweep-logged hand merge (`actor = 'sweep'`, `by = 'hand'`, `recovered`) would
+otherwise count as a merge of the factory and of the device that swept (cbundy/dev-system#752).
+
 ```sql
 SELECT device, date_trunc('week', ts)::date AS week, count(DISTINCT (repo, issue)) AS merges
 FROM factory.event_log
-WHERE type = 'merged'
+WHERE type = 'merged' AND issue IS NOT NULL
+  AND NOT (actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false))
 GROUP BY device, week
 ORDER BY week DESC, merges DESC;
+```
+
+The same, by regime (the regime of the `merged` event; null reads `unknown`). Summed over regime, the
+merges of a device and week are the answer above, as long as the `merged` events of one issue share a regime:
+
+```sql
+SELECT device, date_trunc('week', ts)::date AS week, coalesce(regime, 'unknown') AS regime,
+       count(DISTINCT (repo, issue)) AS merges
+FROM factory.event_log
+WHERE type = 'merged' AND issue IS NOT NULL
+  AND NOT (actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false))
+GROUP BY device, week, coalesce(regime, 'unknown')
+ORDER BY week DESC, device, regime;
 ```
 
 ## 5b. Tests deleted or weakened by auto-fixes
@@ -701,15 +862,192 @@ GROUP BY device;
 
 ### Claim order
 
-S1 names the tier a claim came from in its reason (`ready and unblocked (order: label priority)`).
-How many claims each tier gave per day, and which issues the label promoted, from the decision log
-(`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device):
+S1 names the order a claim came from in its reason: `ready and unblocked (order: owner only)` or
+`(order: owner priority)` for the owner's lists, else `(order: score <n>: <factor> <+/-points>, ...)`
+(`score 0` when no factor scored). The factors are `priority-label`, `bug`, `unblocks`, `closes-epic`,
+`nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, and, only while `intakeStamp` is on and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`. How many claims each order gave
+per day, grouped by the owner tiers and `score`, and which factors put the issues first, from the
+decision log (`/persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl`, per device); a loop
+before the score reads `label priority` and `number`, and groups apart:
 
 ```sh
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "S1" and (.reason | test("order:")))
-  | {day: ($d.at | tostring | .[0:10]), tier: (.reason | capture("order: (?<t>[^)]*)").t), issue}]
-  | group_by([.day, .tier])[] | "\(.[0].day) \(.[0].tier): \(length) \(map(.issue) | @json)"' \
+  | {day: ($d.at | tostring | .[0:10]), order: (.reason | capture("order: (?<t>[^)]*)").t), issue}
+  | .tier = (.order | if startswith("score") then "score" else . end)
+  | .factors = (.order | if startswith("score") then ((capture("score -?[0-9]+: (?<f>.*)").f // "") | split(", ")) else [] end)]
+  | group_by([.day, .tier])[] | "\(.[0].day) \(.[0].tier): \(length) \(map({issue, factors}) | @json)"' \
   /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+Does a high score merge sooner, in fewer lives? The `claimed` event records the claim's `score` and
+`factors` in the event's `data` (read from `factory.event_store`, as no `event_log` column lifts them; events from a loop before the score carry none and stay out). One row per scored
+claim, with the seconds to its issue's next `merged` (null if none yet) and how many `claimed` events
+the issue has (its lives). Bucket by `score`, then count, take the median of `claim_to_merge_s` and
+the mean of `lives` in code (percentiles and medians are not SQL):
+
+```sql
+SELECT c.repo, c.issue, c.ts AS claimed_at, (s.data->>'score')::int AS score, s.data->'factors' AS factors,
+  extract(epoch FROM (m.ts - c.ts)) AS claim_to_merge_s,
+  count(*) OVER (PARTITION BY c.repo, c.issue) AS lives
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+LEFT JOIN LATERAL (
+  SELECT min(ts) AS ts FROM factory.event_log
+  WHERE type = 'merged' AND repo = c.repo AND issue = c.issue AND ts > c.ts
+) m ON true
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NULL
+ORDER BY c.ts;
+```
+
+Did the score change how long ready work waits for a claim? One row per claim with the seconds from
+the issue's last `ready` to its `claimed` and the plugin version the claim ran under; take the median
+per `plugin_version` in code and compare the versions before and after the release that brought the
+score (an issue with no `ready` event drops out). The second query is the loop's mean pass time per
+plugin version from `loop_passes`, weighted by passes, which should not move:
+
+```sql
+SELECT c.plugin_version, c.repo, c.issue, c.ts AS claimed_at,
+  extract(epoch FROM (c.ts - r.ts)) AS time_to_claim_s
+FROM factory.event_log c
+JOIN LATERAL (
+  SELECT max(ts) AS ts FROM factory.event_log
+  WHERE type = 'ready' AND repo = c.repo AND issue = c.issue AND ts <= c.ts
+) r ON r.ts IS NOT NULL
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL
+ORDER BY c.ts;
+```
+
+```sql
+SELECT plugin_version, sum(passes) AS passes, round(sum(mean_ms * passes)::numeric / sum(passes)) AS mean_pass_ms
+FROM factory.event_log
+WHERE type = 'loop_passes' AND passes > 0
+GROUP BY plugin_version
+ORDER BY min(ts);
+```
+
+Which claims did a stamp factor move, and by how much? One row per factor per day from the `claimed`
+events' `factors`, with the claims it appeared in and its points (`area-factory`, `needs-owner`,
+`overlap`; a stamp factor that scored 0 is not listed, so the count is claims it moved):
+
+```sql
+SELECT date_trunc('day', c.ts) AS day, f->>'name' AS factor, count(*) AS claims, sum((f->>'points')::int) AS points
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+CROSS JOIN LATERAL jsonb_array_elements(s.data->'factors') f
+WHERE c.type = 'claimed' AND jsonb_typeof(s.data->'factors') = 'array'
+  AND f->>'name' IN ('area-factory', 'needs-owner', 'overlap')
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+### Intake stamp
+
+These queries stay empty until the loop writes `intake_stamp`: one event per finished try of one issue version, written only while `intakeStamp` is `on` (`mode` is `run`; `outcome` is `ok`, `failed` or `dropped`; a failed run's `reason` says why: `timeout`, `lost`, `spawn-failed`, or what the reader's answer lacked). The token fields are the run's transcript totals, null when it could not be read.
+
+Stamps per repo and day by `outcome`:
+
+```sql
+SELECT date_trunc('day', ts) AS day, repo, outcome, count(*) AS stamps
+FROM factory.event_log
+WHERE type = 'intake_stamp'
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+```
+
+The `area` mix of `ok` stamps:
+
+```sql
+SELECT repo, area, count(*) AS stamps
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND outcome = 'ok'
+GROUP BY 1, 2
+ORDER BY 1, 3 DESC, 2;
+```
+
+The share of `ok` stamps with `needs_owner` true, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day, count(*) AS ok_stamps,
+  count(*) FILTER (WHERE needs_owner) AS needs_owner,
+  round(100.0 * count(*) FILTER (WHERE needs_owner) / count(*), 1) AS needs_owner_pct
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND outcome = 'ok'
+GROUP BY 1
+ORDER BY 1;
+```
+
+How often the owner overrode a stamp label (a stamp whose `labels_kept` is not empty), over all stamps, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day, count(*) AS stamps,
+  count(*) FILTER (WHERE jsonb_array_length(labels_kept) > 0) AS overridden,
+  round(100.0 * count(*) FILTER (WHERE jsonb_array_length(labels_kept) > 0) / count(*), 1) AS overridden_pct
+FROM factory.event_log
+WHERE type = 'intake_stamp'
+GROUP BY 1
+ORDER BY 1;
+```
+
+The share of `claimed` events per day whose `factors` include `area-factory`, `needs-owner` or `overlap`. It counts claims and complements the per-factor query under "Claim order" (which lists points per factor); `factors` are read from `factory.event_store` as there:
+
+```sql
+SELECT date_trunc('day', c.ts) AS day, count(*) AS claims,
+  count(*) FILTER (WHERE jsonb_typeof(s.data->'factors') = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(s.data->'factors') f
+    WHERE f->>'name' IN ('area-factory', 'needs-owner', 'overlap'))) AS stamp_moved,
+  round(100.0 * count(*) FILTER (WHERE jsonb_typeof(s.data->'factors') = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(s.data->'factors') f
+    WHERE f->>'name' IN ('area-factory', 'needs-owner', 'overlap'))) / count(*), 1) AS stamp_moved_pct
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+WHERE c.type = 'claimed'
+GROUP BY 1
+ORDER BY 1;
+```
+
+Intake cost per repo and day, from the token totals of the runs (`runs_without_tokens` counts the runs whose transcript could not be read):
+
+```sql
+SELECT date_trunc('day', ts) AS day, repo, count(*) AS runs,
+  coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens,
+  coalesce(sum(cache_read_tokens), 0) AS cache_read_tokens, coalesce(sum(cache_creation_tokens), 0) AS cache_creation_tokens,
+  count(*) FILTER (WHERE input_tokens IS NULL) AS runs_without_tokens
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+Intake cost per issue (a try for each body version it was stamped at), the costliest first:
+
+```sql
+SELECT repo, issue, count(*) AS tries,
+  coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
+GROUP BY 1, 2
+ORDER BY coalesce(sum(input_tokens), 0) + coalesce(sum(output_tokens), 0) DESC, 1, 2;
+```
+
+Why runs failed (`reason`), the most common first:
+
+```sql
+SELECT repo, coalesce(reason, 'none') AS reason, count(*) AS failed_runs
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run' AND outcome = 'failed'
+GROUP BY 1, 2
+ORDER BY 3 DESC, 1, 2;
+```
+
+Labels the loop set against the ones it kept because the owner had changed them, per day:
+
+```sql
+SELECT date_trunc('day', ts) AS day,
+  sum(jsonb_array_length(labels_set)) AS labels_set, sum(jsonb_array_length(labels_kept)) AS labels_kept
+FROM factory.event_log
+WHERE type = 'intake_stamp' AND mode = 'run'
+GROUP BY 1
+ORDER BY 1;
 ```
 
 ### Split trackers closed by the loop
@@ -756,6 +1094,59 @@ ORDER BY a.split_at DESC;
 ```
 
 The leftover count is the rows with `all_merged AND closed_at IS NULL`.
+
+### Queue snapshots
+
+The loop writes a `queue_snapshot` after each claim pass when its view of the claim queue changed, and as a heartbeat when it did not: the candidates in rank order (first 50) with score, factors, whether the claim rule would take each and, if not, a `why` code, plus the owner's controls. These queries are empty until the loop writes them. The newest queue per repo, with its age in seconds (`candidates` is the JSON list, `rest` counts the candidates past 50 by `why`):
+
+```sql
+SELECT repo, taken_at, reason, considered, free_slots, candidates, rest,
+  extract(epoch FROM (now() - taken_at)) AS age_s
+FROM (
+  SELECT repo, taken_at, reason, considered, free_slots, candidates, rest,
+    row_number() OVER (PARTITION BY repo ORDER BY taken_at DESC, ts DESC) AS n
+  FROM factory.event_log
+  WHERE type = 'queue_snapshot'
+) t
+WHERE n = 1
+ORDER BY repo;
+```
+
+Snapshots per repo and day by `reason`, with the queue changes they folded in (a quiet day is about 100 snapshots, at most about 1,440 plus claims):
+
+```sql
+SELECT repo, date_trunc('day', taken_at) AS day, reason, count(*) AS snapshots, sum(folded) AS folded
+FROM factory.event_log
+WHERE type = 'queue_snapshot' AND taken_at >= :'since'::timestamptz
+GROUP BY repo, date_trunc('day', taken_at), reason
+ORDER BY day, repo, reason;
+```
+
+Do claims follow the queue? For each scored `claimed` event (score read from `factory.event_store`, as in the Claim order block above), the newest `queue_snapshot` of the same repo at or before it, that issue's score in that snapshot's top 50, and whether the two match (null when the issue is not in the top 50 or no snapshot exists):
+
+```sql
+SELECT c.repo, c.issue, c.ts AS claimed_at, (s.data->>'score')::int AS claim_score,
+  q.taken_at AS snapshot_at, q.snapshot_score,
+  (s.data->>'score')::int = q.snapshot_score AS match
+FROM factory.event_log c
+JOIN factory.event_store s ON s.event_id = c.event_id
+LEFT JOIN LATERAL (
+  SELECT n.taken_at,
+    (SELECT (e->>'score')::int FROM jsonb_array_elements(n.candidates) e WHERE (e->>'issue')::int = c.issue LIMIT 1) AS snapshot_score
+  FROM factory.event_log n
+  WHERE n.type = 'queue_snapshot' AND n.repo = c.repo AND n.taken_at <= c.ts
+  ORDER BY n.taken_at DESC, n.ts DESC
+  LIMIT 1
+) q ON true
+WHERE c.type = 'claimed' AND c.issue IS NOT NULL AND s.data->>'score' IS NOT NULL
+ORDER BY c.ts;
+```
+
+How often GitHub's ready listing came back empty while its issues still carried the label (the loop held the last list), with the pass and the reason:
+
+```sh
+jq -r 'select((.sources.queue // "") | startswith("failed: the ready list came back empty")) | [.at, .pass, .sources.queue] | @tsv' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
 
 ## 6b. Reader shadow compares
 
@@ -1060,8 +1451,9 @@ The medians come from (a) in code, not from SQL: the median seconds of `reviewin
 (runs, auto-fix rounds, failed steps, parked time and pipeline tokens) read the no-mistakes mirror and
 are gone.
 
-The implementer's own token spend is not in this database: read it from the implementer rows of the
-`spend` section of `callum-flow-evaluate`, which has one row per role and model. A random split
+The implementer's own token spend is in this database from the loop that writes it on (see
+[Tokens per merged issue](#tokens-per-merged-issue), per issue, model and role); for older issues read it
+from the implementer rows of the `spend` section of `callum-flow-evaluate`, which has one row per role and model. A random split
 balances easy and hard issues only over many of them, so size the noise before reading a gap as real:
 run the query with `routed` replaced by a split of past building transitions by issue parity (both
 halves on the same model), and treat a gap no bigger than that one as noise. To narrow to one repo or
@@ -1197,7 +1589,8 @@ ORDER BY model;
 The factory loop v2's effectiveness, as issue #632 asks for it, from `factory.event_log` alone. Every
 query counts a retried event once (see the reading rules above), and all of them apply to any regime
 that logs these types. `callum-flow-evaluate` reports the same numbers over a window (its
-`interventions`, `judgement_calls`, `claim_completion` and `rounds` sections).
+`interventions`, `judgement_calls`, `claim_completion` and `rounds` sections). Merges, pull requests
+and merge gaps are section 9c.
 
 **Interventions** (#632 metric 1): an `intervention` event is any point where a person, the loop's judge
 (`who=judge`, a control op run through the control tool) or the loop with unplanned judgement or
@@ -1211,6 +1604,16 @@ or a life no `transition` names, counts from the first `claimed` to the issue's 
 (the first to `closed` since its last claim before the merge; else the merge) plus 30 minutes.
 Fleet-level interventions (no `issue`) attach to no issue. A `ci-rerun` flake row (2d) shares its
 `fact` with the re-run's first row, so these queries count the pair once.
+
+A rescue the loop cannot see is recorded by hand, in the native form, with the regime a person works in:
+
+```sh
+callum-flow-event --type intervention --issue N --regime manual \
+  --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'
+```
+
+Nothing infers `manual`: without `--regime` (or `FACTORY_REGIME` in the environment) the row reads
+`unknown`.
 
 ```sql
 -- interventions per repo and day, by who and cause; `fleet` counts those that name no issue
@@ -1289,8 +1692,11 @@ ORDER BY s.merged_at DESC;
 (`reviewed`, by `verdict`; one per `(issue, round, patch)`), each triage call (an `intervention` with
 cause `triage`, by the choice the next triage row of the loop's table applied: `X1` retry, `X2` fix,
 `X3` redesign, `X4` park, `X5` drop, else `pending`), a designer's question or split (a `transition`
-by row `T3` or `T4`) and a fixer's dispositions (`finding_handled` events of actor `fixer`, `fixed`
-or `declined`). A call is **overridden** when a person intervention names its issue within an hour
+by row `T3` or `T4`), a fixer's dispositions (`finding_handled` events of actor `fixer`, `fixed`
+or `declined`) and a judge task (a `loop_entry` with `kind = 'task'`: a wake of the loop's model
+outside a planned step; one call per `key`, timed and attributed by the key's first row, its outcome
+`<wake>:<final status>` from the key's latest row by `ts`, then `device_seq`, with `none` for a null
+wake). A call is **overridden** when a person intervention names its issue within an hour
 after it.
 
 ```sql
@@ -1324,6 +1730,17 @@ WITH calls AS (
       SELECT e.repo, e.issue, e.ts, e.event_id, 'fix', e.outcome, e.event_id::text
       FROM factory.event_log e
       WHERE e.type = 'finding_handled' AND e.actor = 'fixer' AND e.outcome IN ('fixed', 'declined')
+      UNION ALL
+      SELECT f.repo, f.issue, f.ts, f.event_id, 'task', coalesce(f.wake, 'none') || ':' || f.status, f.key
+      FROM (
+        SELECT e.repo, e.issue, e.ts, e.event_id, e.key,
+               first_value(e.wake) OVER latest AS wake, first_value(e.status) OVER latest AS status,
+               row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts, e.device_seq) AS first_n
+        FROM factory.event_log e
+        WHERE e.type = 'loop_entry' AND e.kind = 'task'
+        WINDOW latest AS (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC)
+      ) f
+      WHERE f.first_n = 1
     ) c
   ) y
   WHERE n = 1
@@ -1518,6 +1935,42 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
+
+### Readers behind the loop
+
+The loop reads `skipped_events` from the image's report (see "Readers behind the writers"). A skipped
+derived event makes the pass blind (rule G2): the pass's skip line carries the error and `tell(blind)` carries
+it as `error`. How often and how long a lagging image stopped the loop, and for which types:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:blind:")))
+  | {since: .fields.since, error: .fields.error}] | unique_by(.since) | .[] | "\(.since) \(.error)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+Only non-derived skips keep the loop working and raise the owner item `reader-behind`, once per set of types:
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:reader-behind:")))
+  | {day: ($d.at | tostring | .[0:10]), types: .fields.types, count: .fields.count}]
+  | unique_by(.types) | .[] | "\(.day) \(.types) (\(.count))"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+### Loop-stopped agent unknowns
+
+An agent step whose agent the loop itself stopped, and that gave no answer, ends `unknown:stopped`
+(v2 SPEC 7.2); `unknown:agent-dead` is a death the loop did not cause. This counts both per repo and
+week, to show how many agent unknowns were the loop's own stops.
+
+```sql
+-- loop-stopped versus agent-dead unknowns, per repo and week
+SELECT repo, date_trunc('week', ts) AS week,
+       count(*) FILTER (WHERE cause = 'unknown:stopped')    AS stopped,
+       count(*) FILTER (WHERE cause = 'unknown:agent-dead') AS agent_dead
+FROM factory.event_log
+WHERE type = 'intervention' AND cause IN ('unknown:stopped', 'unknown:agent-dead')
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ### Actions refusal spells
 
 When GitHub does not start a CI job for the account's sake (failed payments, a spending limit), the
@@ -1585,10 +2038,809 @@ WHERE type = 'prompt_waiting' AND repo = :'repo' AND ts >= now() - interval '24 
 ORDER BY 1, 3 DESC, 2, 4, 5, 6;
 ```
 
+## 9c. Merges, pull requests and gaps
+
+How merges arrive and how a pull request behaves on the way: how many merges per day, how long a
+pull request is open before it merges, how often it is replaced or its head moved, and where the
+long quiet stretches between merges went. Every query reads `factory.event_log` only, counts a
+retried event once by its type's key (a `transition` by `(issue, life, seq)`, a `reviewed` by
+`(issue, round, patch)`, an `intervention` by `(issue, who, cause, fact)`), and takes
+`-v repo=... -v since=...` (merges at or after `since`; `callum-flow-evaluate` also takes the
+window's end). Each repeats the same first CTEs (`ev`, `sig`, `mg`), so it runs on its own. They
+need `recovered` as a column: migration 0021 lifts it. `callum-flow-evaluate` reports the same
+numbers as its `merges` (with `per_day_by_kind`), `prs`, `gaps`, `size` and `overlap` sections, from the
+new events only. The size and overlap blocks (#8 to #11) read the `merged` event's `files`, `file_lines`,
+`additions` and `deletions` (migration 0028).
+
+**A merge** is one per `(repo, issue, pr)`, told by three signals: a `merged` event; a `transition`
+to `closed` with `why = 'merged-by-hand'` (timed by `seq_at`); and a person `intervention` with
+cause `hand-merge`. A signal whose `pr` is null takes the `pr` of the issue's latest event with a
+non-null `pr` at or before it (a `transition`, `reviewed`, `intervention` or `merged`, ties by the
+higher `pr`); with none it stays a merge of its own with a null `pr`. The merge's time is its
+earliest signal. It is `hand` when any signal says so (`merged.by = 'hand'`, the transition or the
+intervention), else `factory`. `recovered` is the `merged` event's `recovered` (true when any
+`merged` event of the merge says so), and null when no `merged` event names the merge.
+
+**Merges per day** (#0): per repo and day, by `merged_by` and `recovered`.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT repo, (at AT TIME ZONE 'UTC')::date AS day, merged_by, recovered, count(*) AS merges
+FROM mg
+WHERE at >= :'since'::timestamptz
+GROUP BY repo, day, merged_by, recovered
+ORDER BY repo, day, merged_by, recovered;
+```
+
+**PR open to merge** (#1): per merge, the seconds from the first `transition` or `reviewed` row that
+names the merge's `pr` for that issue (at or before the merge) to the merge time. That is "first seen
+by the factory", not GitHub's creation time of the pull request; null when no such row exists (and
+for a merge with no `pr`).
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT m.repo, m.issue, m.pr, m.at AS merged_at, f.first_seen,
+       round(extract(epoch FROM m.at - f.first_seen))::bigint AS pr_open_to_merge_seconds
+FROM mg m
+LEFT JOIN LATERAL (
+  SELECT min(e.at) AS first_seen FROM ev e
+  WHERE e.repo = m.repo AND e.issue = m.issue AND e.type IN ('transition', 'reviewed')
+    AND e.pr = m.pr AND e.at <= m.at
+) f ON true
+WHERE m.at >= :'since'::timestamptz
+ORDER BY m.at, m.issue, m.pr;
+```
+
+**Pull requests per issue** (#2): per merge, the distinct non-null `pr` values on the issue's
+`transition`, `reviewed`, `intervention` and `merged` events from its first `claimed` (else the merge)
+to the merge time, and `supersedes`, that count minus one (never below 0): how many pull requests the
+factory dropped for a new one.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT m.repo, m.issue, m.pr, m.at AS merged_at, p.prs, greatest(p.prs - 1, 0) AS supersedes
+FROM mg m
+CROSS JOIN LATERAL (
+  SELECT count(DISTINCT e.pr) AS prs FROM ev e
+  WHERE e.pr IS NOT NULL AND e.repo = m.repo AND e.issue = m.issue AND e.at <= m.at
+        AND e.at >= least(coalesce((SELECT min(c.ts) FROM factory.event_log c
+                                    WHERE c.repo = m.repo AND c.issue = m.issue AND c.type = 'claimed'), m.at), m.at)
+) p
+WHERE m.at >= :'since'::timestamptz
+ORDER BY m.at, m.issue, m.pr;
+```
+
+**Head moves** (#3): per merge, the `intervention` rows with cause `queue:patch` or `push` in the same
+span, once each: the times the merge queue or a person moved the pull request's head after the review.
+This is v2's equivalent of the v1 `head_mismatch`, which the translator treats as v1-only
+([translator.md](factory-events/translator.md)).
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT m.repo, m.issue, m.pr, m.at AS merged_at, h.head_moves
+FROM mg m
+CROSS JOIN LATERAL (
+  SELECT count(*) AS head_moves FROM ev e
+  WHERE e.type = 'intervention' AND e.cause IN ('queue:patch', 'push') AND e.repo = m.repo AND e.issue = m.issue AND e.at <= m.at
+        AND e.at >= least(coalesce((SELECT min(c.ts) FROM factory.event_log c
+                                    WHERE c.repo = m.repo AND c.issue = m.issue AND c.type = 'claimed'), m.at), m.at)
+) h
+WHERE m.at >= :'since'::timestamptz
+ORDER BY m.at, m.issue, m.pr;
+```
+
+**Merge gaps** (#4): the 10 longest gaps between consecutive merges of a repo (by merge time, ties by
+the earlier start), each with the issues in flight during it. An issue is **in flight** during a gap
+when its state, from its `transition` rows ordered by `seq_at` then `seq` (a state lasts to the next
+transition; before the first it has none), was anything but `closed` for part of the gap. `state` is
+the `to_state` it held for the most gap time, summed over its visits (a tie goes to the name that
+sorts first), and `parked_with_question` says whether it held a `parked` state entered by a
+`transition` with a non-null `question` during the gap. `in_flight` is a JSON list ordered by issue.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), m AS (
+  SELECT repo, issue, pr, at,
+         lead(at) OVER w AS next_at, lead(issue) OVER w AS next_issue, lead(pr) OVER w AS next_pr
+  FROM mg
+  WHERE at >= :'since'::timestamptz
+  WINDOW w AS (PARTITION BY repo ORDER BY at, issue, pr)
+), gaps AS (
+  SELECT repo, gap_no, gap_from, gap_to, before_issue, before_pr, after_issue, after_pr
+  FROM (
+    SELECT repo, at AS gap_from, next_at AS gap_to, issue AS before_issue, pr AS before_pr,
+           next_issue AS after_issue, next_pr AS after_pr,
+           row_number() OVER (ORDER BY next_at - at DESC, at) AS gap_no
+    FROM m WHERE next_at IS NOT NULL
+  ) z
+  WHERE gap_no <= 10
+), st AS (
+  -- each issue's states from its transitions: a state lasts to the next transition, the last has no end
+  SELECT repo, issue, to_state, question, at AS s_from,
+         coalesce(lead(at) OVER (PARTITION BY repo, issue ORDER BY at, seq, life), 'infinity'::timestamptz) AS s_to
+  FROM ev WHERE type = 'transition'
+), held AS (
+  SELECT g.gap_no, s.issue, s.to_state,
+         sum(extract(epoch FROM least(s.s_to, g.gap_to) - greatest(s.s_from, g.gap_from))) AS held_seconds,
+         bool_or(s.to_state = 'parked' AND s.question IS NOT NULL) AS asked
+  FROM gaps g
+  JOIN st s ON s.repo = g.repo AND s.s_from < g.gap_to AND s.s_to > g.gap_from AND s.to_state <> 'closed'
+  GROUP BY g.gap_no, s.issue, s.to_state
+), flight AS (
+  SELECT gap_no, issue, to_state,
+         bool_or(asked) OVER (PARTITION BY gap_no, issue) AS asked,
+         row_number() OVER (PARTITION BY gap_no, issue ORDER BY held_seconds DESC, to_state) AS n
+  FROM held
+)
+SELECT g.repo, g.gap_from, g.gap_to, round(extract(epoch FROM g.gap_to - g.gap_from))::bigint AS gap_seconds,
+       g.before_issue, g.before_pr, g.after_issue, g.after_pr,
+       coalesce(jsonb_agg(jsonb_build_object('issue', f.issue, 'state', f.to_state, 'parked_with_question', f.asked)
+                          ORDER BY f.issue) FILTER (WHERE f.issue IS NOT NULL), '[]'::jsonb) AS in_flight
+FROM gaps g
+LEFT JOIN flight f ON f.gap_no = g.gap_no AND f.n = 1
+GROUP BY g.gap_no, g.repo, g.gap_from, g.gap_to, g.before_issue, g.before_pr, g.after_issue, g.after_pr
+ORDER BY g.gap_no;
+```
+
+**Unrecorded merges the sweep logged** (run only; cbundy/dev-system#752): the merges to the default
+branch that no `merged` event recorded and `callum-flow-sweep` (rule 7) logged afterwards, per repo and
+week, split by whether the sweep tied the merge to an issue. Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, issue IS NULL AS no_issue, count(DISTINCT pr) AS merges
+FROM factory.event_log
+WHERE type = 'merged' AND actor = 'sweep' AND by = 'hand' AND coalesce(recovered, false)
+  AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week, no_issue
+ORDER BY week DESC, no_issue;
+```
+
+**Merges missing their size** (run only; cbundy/dev-system#752): the `merged` events of a pull request
+whose size (`additions`) the producer could not read, per repo, week and producer (`actor`, with `by`).
+Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, actor, by,
+       count(*) AS merges, count(*) FILTER (WHERE additions IS NULL) AS missing_size
+FROM factory.event_log
+WHERE type = 'merged' AND pr IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week, actor, by
+HAVING count(*) FILTER (WHERE additions IS NULL) > 0
+ORDER BY week DESC, missing_size DESC;
+```
+
+**Merges per day by regime** (#7): the same as #0, with the regime added. A merge's regime is that of its
+earliest signal, the one that times it (null reads `unknown`). Summed over regime, the merges of a day,
+`merged_by` and `recovered` are #0's.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, regime
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered, e.regime,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered, regime
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, regime
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, regime
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         (array_agg(coalesce(regime, 'unknown') ORDER BY at, coalesce(regime, 'unknown')))[1] AS regime
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.regime,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+)
+SELECT repo, (at AT TIME ZONE 'UTC')::date AS day, regime, merged_by, recovered, count(*) AS merges
+FROM mg
+WHERE at >= :'since'::timestamptz
+GROUP BY repo, day, regime, merged_by, recovered
+ORDER BY repo, day, regime, merged_by, recovered;
+```
+
+**What is a code file** (used by the size, overlap and hottest-files blocks below, and by
+`callum-flow-evaluate`'s `NON_CODE_RE`, which these blocks repeat literally): a path is not a code file when
+it ends in `.md`; its base name is `CHANGELOG` (with or without an extension) or `VERSION`; it is under a
+`release-notes/` directory; or its base name is one of `package.json`, `package-lock.json`,
+`npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.toml`, `Cargo.lock`, `go.mod`, `go.sum`,
+`Gemfile`, `Gemfile.lock`, `poetry.lock`, `pyproject.toml`, `requirements*.txt`, `composer.json` or
+`composer.lock`. As one expression, which JS `RegExp` and PostgreSQL `~` read alike:
+
+```text
+(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)
+```
+
+**Issue size** (#8; cbundy/dev-system#1219): one row per merge in the window, from the merge's earliest
+`merged` event whose `files` is not null. `files` is the number of changed paths and `lines` is
+`additions + deletions`; `code_files` and `code_lines` count only the code files, `code_lines` summing the
+`file_lines` entries of those paths. Every count is null when no such event exists (the merge's size is
+unknown, left out of the stats), and `code_lines` is null when that event has no `file_lines`. Medians and
+90th percentiles (nearest rank) are taken in code.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), sized AS (
+  SELECT repo, issue, pr, at, sz -> 'files' AS files,
+         CASE WHEN jsonb_typeof(sz -> 'file_lines') = 'array' THEN sz -> 'file_lines' END AS file_lines,
+         (sz ->> 'additions')::int AS additions, (sz ->> 'deletions')::int AS deletions
+  FROM mg
+  WHERE at >= :'since'::timestamptz
+)
+SELECT repo, issue, pr, at,
+       jsonb_array_length(files) AS files,
+       additions + deletions AS lines,
+       CASE WHEN files IS NOT NULL THEN
+         (SELECT count(*) FROM jsonb_array_elements_text(files) f(path) WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)')
+       END AS code_files,
+       CASE WHEN file_lines IS NOT NULL THEN
+         (SELECT coalesce(sum((l ->> 'additions')::int + (l ->> 'deletions')::int), 0)
+          FROM jsonb_array_elements(file_lines) l WHERE (l ->> 'path') !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)')
+       END AS code_lines
+FROM sized
+ORDER BY at, issue, pr;
+```
+
+**Overlap** (#9): per merge in the window with known files, whether it overlapped another issue's merge.
+A merge's window runs from its issue's first `claimed` event (at any time, not bounded by `since`) to the
+merge, and is the merge instant when the issue has no claim. `overlapping` is true when a merge of a
+different issue, with known files (at any time), has a window that meets this one
+(`a.from < b.at AND b.from < a.at`, or both are the same instant) and shares at least one code file with
+it; `overlaps` names those issues. Only merged work is covered: in-flight work that has not merged has no
+known files.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), w AS (
+  -- each merge with known files and its window: from the issue's first claim (the merge itself with none)
+  SELECT m.repo, m.issue, m.pr, m.at, least(coalesce(c.at, m.at), m.at) AS from_at, m.sz -> 'files' AS files
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.sz IS NOT NULL
+), hit AS (
+  -- a code file that a merge shares with a merge of another issue whose window meets its own
+  SELECT a.issue, a.pr, a.at, b.issue AS other_issue, f.path
+  FROM w a
+  JOIN w b ON b.issue <> a.issue
+   AND ((a.from_at < b.at AND b.from_at < a.at) OR (a.from_at = a.at AND b.from_at = b.at AND a.at = b.at))
+  CROSS JOIN LATERAL jsonb_array_elements_text(a.files) f(path)
+  WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(b.files) bf(path) WHERE bf.path = f.path)
+)
+SELECT w.repo, w.issue, w.pr, w.at,
+       EXISTS (SELECT 1 FROM hit h WHERE h.issue = w.issue AND h.pr IS NOT DISTINCT FROM w.pr) AS overlapping,
+       coalesce((SELECT array_agg(DISTINCT h.other_issue ORDER BY h.other_issue) FROM hit h
+                 WHERE h.issue = w.issue AND h.pr IS NOT DISTINCT FROM w.pr), '{}') AS overlaps
+FROM w
+WHERE w.at >= :'since'::timestamptz
+ORDER BY w.at, w.issue, w.pr;
+```
+
+**Hottest files** (#10): the code files behind #9, the 10 with the most issues. A file's count is the
+number of distinct issues merged in the window that touch it and have an overlapping merge of another
+issue that also touches it. Ranked by count descending, ties by path.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), w AS (
+  -- each merge with known files and its window: from the issue's first claim (the merge itself with none)
+  SELECT m.repo, m.issue, m.pr, m.at, least(coalesce(c.at, m.at), m.at) AS from_at, m.sz -> 'files' AS files
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.sz IS NOT NULL
+), hit AS (
+  -- a code file that a merge shares with a merge of another issue whose window meets its own
+  SELECT a.issue, a.pr, a.at, b.issue AS other_issue, f.path
+  FROM w a
+  JOIN w b ON b.issue <> a.issue
+   AND ((a.from_at < b.at AND b.from_at < a.at) OR (a.from_at = a.at AND b.from_at = b.at AND a.at = b.at))
+  CROSS JOIN LATERAL jsonb_array_elements_text(a.files) f(path)
+  WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(b.files) bf(path) WHERE bf.path = f.path)
+)
+SELECT path, count(DISTINCT issue) AS issues
+FROM hit
+WHERE at >= :'since'::timestamptz
+GROUP BY path
+ORDER BY issues DESC, path COLLATE "C"
+LIMIT 10;
+```
+
+**All merges to main by kind** (#11): per repo, day and `kind`. `unlinked` is a `merged` event with no
+issue (one per `pr`, a retried event counted once) or a merge above whose issue has no `claimed` event at
+or before the merge; `hand` is any other merge that is `hand`; `factory` is the rest. Summed over `kind`,
+the merges with an issue are #0's per day.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), un AS (
+  -- merges to main that name no issue: one per pr (a retried event counted once), at its earliest event
+  SELECT min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NULL AND repo = :'repo'
+  GROUP BY coalesce(pr::text, event_id::text)
+)
+SELECT repo, day, kind, count(*) AS merges
+FROM (
+  SELECT m.repo, (m.at AT TIME ZONE 'UTC')::date AS day,
+         CASE WHEN c.at IS NULL OR c.at > m.at THEN 'unlinked'
+              WHEN m.merged_by = 'hand' THEN 'hand'
+              ELSE 'factory' END AS kind
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.at >= :'since'::timestamptz
+  UNION ALL
+  SELECT :'repo', (at AT TIME ZONE 'UTC')::date, 'unlinked'
+  FROM un
+  WHERE at >= :'since'::timestamptz
+) k
+GROUP BY repo, day, kind
+ORDER BY repo, day, kind;
+```
+
+`callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
+claimed before `since` read unlinked and shorten its overlap window; the saved queries above look at all
+time.
+
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
-factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, and rule
+factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, a device's
+push loop is the second producer (`callum-flow-released --collect` writes the `released` event a repo's CI
+attached to its GitHub Release), and rule
 O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
 11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
 
@@ -1660,6 +2912,23 @@ GROUP BY 1, 2
 ORDER BY 1 DESC, 3 DESC;
 ```
 
+Releases by who cut them (`source` is `workflow` for a CI release, `loop` for one the loop's release task cut,
+`manual` for one logged by hand; counted once by `(repo, tag)`; read from `event_store` as `source` is not a column):
+
+```sql
+WITH rel AS (
+  SELECT l.repo, l.tag, min(s.data->>'source') AS source
+  FROM factory.event_log l
+  JOIN factory.event_store s ON s.event_id = l.event_id
+  WHERE l.type = 'released'
+  GROUP BY l.repo, l.tag
+)
+SELECT repo, source, count(*) AS releases
+FROM rel
+GROUP BY repo, source
+ORDER BY repo, releases DESC;
+```
+
 ## Main after merge
 
 Reads the `main_state` events. The factory loop writes one (rule M1) when the state of the default
@@ -1729,7 +2998,8 @@ Latest machine load per worker (the stats columns are NULL until a worker's firs
 ```sql
 SELECT device, state, stale, cpu_pct, cpu_limit_cores, cpu_quota_set,
        round(mem_used_bytes / 1048576.0) AS mem_used_mib, round(mem_limit_bytes / 1048576.0) AS mem_limit_mib,
-       claude_interactive, claude_headless, claude_procs, procs, stats_at
+       claude_interactive, claude_headless, claude_procs, procs, stats_at,
+       mem_max_events, mem_max_rate_per_min, mem_oom_kills, mem_psi_some_avg10, mem_psi_full_avg10
 FROM factory.workers_status
 ORDER BY stale, device;
 ```
@@ -1740,6 +3010,21 @@ Load trend per device, hourly over the last day (samples are kept 30 days):
 SELECT device, date_trunc('hour', sampled_at) AS hour,
        round(avg(cpu_pct)::numeric, 1) AS cpu_avg, max(cpu_pct) AS cpu_max,
        round(avg(mem_used_bytes) / 1048576.0) AS mem_avg_mib, round(max(mem_used_bytes) / 1048576.0) AS mem_max_mib
+FROM factory.worker_samples
+WHERE sampled_at > now() - interval '1 day'
+GROUP BY device, hour
+ORDER BY device, hour;
+```
+
+Memory pressure per device, hourly over the last day (the rate is how often the container hit its memory
+limit per minute; `psi_full` is the percent of time all tasks stalled on memory, and a rate above 0, any
+OOM kill or `psi_full` of 10 or more means the machine is short of memory; the columns are NULL on cgroup v1):
+
+```sql
+SELECT device, date_trunc('hour', sampled_at) AS hour,
+       max(mem_max_rate_per_min) AS max_rate_per_min,
+       max(mem_psi_full_avg10) AS psi_full_max, round(avg(mem_psi_full_avg10)::numeric, 2) AS psi_full_avg,
+       max(mem_oom_kills) - min(mem_oom_kills) AS oom_kills_growth
 FROM factory.worker_samples
 WHERE sampled_at > now() - interval '1 day'
 GROUP BY device, hour
@@ -1785,7 +3070,14 @@ A `usage` event ([REFERENCE.md](factory-events/REFERENCE.md)) taken on an API ke
 percentages. `auth` says which login the reading was taken under (`subscription` or `api-key`). A spend reading has
 `source` `spend`, `available` true and null window fields; `spend_usd` is the dollars spent in the current budget period,
 `budget_usd` the budget for that period and `budget_resets_at` when the period resets. All four are null on every
-other usage event, and no producer writes them yet.
+other usage event. The factory loop writes one every `usageEveryMs` while its workspace is on an API key (parameter
+`claude_login` = `api-key`), from a tally of the session's own cost against the workspace's monthly budget
+(parameters `claude_budget_usd` and `claude_budget_reset_day`). When it cannot give a reading it writes an
+unavailable one (`available` false, `auth` `api-key`, one code in `reasons`) and holds new work at `stop-new`:
+`spend:no-budget`, `spend:bad-reset-day`, `spend:no-session-cost`, `spend:bad-tally` or `spend:stale`. The tally sees
+only that loop session and its agents, not other Claude sessions on the same key, and each repo's loop has its own.
+The reason codes are in the event's `reasons` list, which is not a view column, so the breakdown by reason (the last
+query below) reads it from `factory.event_store`.
 
 Spend per day against the budget, per repo and device: the day's last reading, its percent of the budget (null when
 there is no budget) and `spent_that_day`, the day's last spend less the previous day's last spend in the same budget
@@ -1813,25 +3105,258 @@ ORDER BY repo, device, day;
 Time in each tier while on an API key, per repo and device. The tier is worked out from `100 * spend_usd / budget_usd`
 against the default thresholds 85 / 90 / 95 (slow, stop-new, stop-all); they mirror
 `plugins/factory-loop/hooks/config.ts` (`usageSlowPct`, `usageStopNewPct`, `usageStopAllPct`) and are edited here when
-the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); a
-reading with no spend or no budget counts as `unknown`:
+the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); an
+unavailable reading counts as `stop-new`, as the loop holds new work then, and an available one with no spend or no
+budget counts as `unknown`:
 
 ```sql
 SELECT repo, device,
-  CASE WHEN pct IS NULL THEN 'unknown'
+  CASE WHEN NOT available THEN 'stop-new'
+       WHEN pct IS NULL THEN 'unknown'
        WHEN pct >= 95 THEN 'stop-all'
        WHEN pct >= 90 THEN 'stop-new'
        WHEN pct >= 85 THEN 'slow'
        ELSE 'normal' END AS tier,
   sum(held) AS time_in_tier
 FROM (
-  SELECT repo, device, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
+  SELECT repo, device, available, 100 * spend_usd / nullif(budget_usd, 0) AS pct,
     least(coalesce(lead(ts) OVER (PARTITION BY repo, device ORDER BY ts), now()) - ts, interval '15 minutes') AS held
   FROM factory.event_log
-  WHERE type = 'usage' AND available AND auth = 'api-key'
+  WHERE type = 'usage' AND auth = 'api-key'
     AND repo = :'repo' AND ts >= :'since'::timestamptz) r
 GROUP BY repo, device, tier
 ORDER BY repo, device, tier;
+```
+
+Why API-key readings were unavailable, per repo, device and reason: one row per code in the event's `reasons` list
+(read from `factory.event_store`, as no `event_log` column lifts it), counted over the unavailable readings. A reading
+with several codes counts once under each. `spend:bad-tally` counts the times the tally was lost and restarted:
+
+```sql
+SELECT e.repo, e.device, r.reason, count(*) AS readings, min(e.ts) AS first_at, max(e.ts) AS last_at
+FROM factory.event_log e
+JOIN factory.event_store s ON s.event_id = e.event_id
+CROSS JOIN LATERAL jsonb_array_elements_text(s.data->'reasons') AS r(reason)
+WHERE e.type = 'usage' AND NOT e.available AND e.auth = 'api-key'
+  AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+GROUP BY e.repo, e.device, r.reason
+ORDER BY e.repo, e.device, readings DESC, r.reason;
+```
+
+## Tokens per merged issue
+
+An agent step's `loop_entry` ([REFERENCE.md](factory-events/REFERENCE.md)) carries, when the step has ended
+(`done`, `failed`, `timed-out` or `lost`), `input_tokens`, `output_tokens`, `cache_read_tokens` and
+`cache_creation_tokens`, and `model`, the full id of the model the step's agent actually ran on. The loop reads them
+from the step agent's transcript when the entry ends: usage once per distinct `requestId` (the last line of a streamed
+response wins, as in [Token and wake definitions](#token-and-wake-definitions)), plus every agent nested under the
+step agent. They are null on a running event, on every other kind, on events from a loop older than this field, and
+when the transcript could not be found (the decision log then names the step key and "transcript not found").
+
+The queries count each agent once: the newest ended `loop_entry` of an agent step per `(repo, agent_id)` that has
+tokens, so a re-logged end, a restart and a repaired agent (the repair resumes the same agent) are one agent, and a
+retry is a new agent. They take every attempt of a merged issue in every life. A merged issue is one with a `merged`
+event in the window; `since` narrows by when it merged. `steps_without_tokens` counts the ended agent steps (one per
+key) of those issues with no counted agent behind them, so a gap is visible rather than silently low.
+
+What they leave out: the loop's own main-session wakes and judge turns, the tells, and the no-mistakes pipeline's
+agents; only the step agents the loop spawned are here. A step's `role` is read from its key: `i<N>/l<life>/s<seq>/<step>/a<n>`
+or, for a review, `i<N>/l<life>/review/<patch>/r<round>/a<n>`.
+
+Per merged issue, the four token sums and their total over all its attempts:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+steps AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND e.repo = :'repo'),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+gaps AS (
+  SELECT s.repo, s.issue, count(*) AS steps_without_tokens
+  FROM steps s
+  WHERE s.n = 1
+    AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.repo = s.repo AND t.agent_id = s.agent_id)
+  GROUP BY s.repo, s.issue)
+SELECT m.repo, m.issue, m.merged_at,
+  count(t.agent_id) AS agents,
+  coalesce(sum(t.input_tokens), 0) AS input_tokens,
+  coalesce(sum(t.output_tokens), 0) AS output_tokens,
+  coalesce(sum(t.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(t.cache_creation_tokens), 0) AS cache_creation_tokens,
+  coalesce(sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens), 0) AS total_tokens,
+  coalesce(max(g.steps_without_tokens), 0) AS steps_without_tokens
+FROM merged m
+LEFT JOIN tokens t ON t.repo = m.repo AND t.issue = m.issue
+LEFT JOIN gaps g ON g.repo = m.repo AND g.issue = m.issue
+GROUP BY m.repo, m.issue, m.merged_at
+ORDER BY m.merged_at, m.issue;
+```
+
+The same split per model (the full id the agent ran on; `unknown` for an agent whose transcript held no model):
+
+```sql
+WITH merged AS (
+  SELECT repo, issue
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL)
+SELECT t.repo, coalesce(t.model, 'unknown') AS model,
+  count(*) AS agents,
+  sum(t.input_tokens) AS input_tokens,
+  sum(t.output_tokens) AS output_tokens,
+  sum(t.cache_read_tokens) AS cache_read_tokens,
+  sum(t.cache_creation_tokens) AS cache_creation_tokens,
+  sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens) AS total_tokens
+FROM counted t
+JOIN merged m ON m.repo = t.repo AND m.issue = t.issue
+WHERE t.rn = 1
+GROUP BY t.repo, coalesce(t.model, 'unknown')
+ORDER BY t.repo, total_tokens DESC;
+```
+
+The same split per step role, with the steps that have no tokens:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+steps AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND e.repo = :'repo'),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+roles AS (
+  SELECT s.repo, s.issue,
+    CASE WHEN split_part(s.key, '/', 3) ~ '^s[0-9]+$' THEN split_part(s.key, '/', 4) ELSE split_part(s.key, '/', 3) END AS role,
+    t.agent_id AS counted_agent, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_creation_tokens
+  FROM steps s
+  LEFT JOIN tokens t ON t.repo = s.repo AND t.agent_id = s.agent_id
+  WHERE s.n = 1)
+SELECT r.repo, r.role,
+  count(r.counted_agent) AS agents,
+  coalesce(sum(r.input_tokens), 0) AS input_tokens,
+  coalesce(sum(r.output_tokens), 0) AS output_tokens,
+  coalesce(sum(r.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(r.cache_creation_tokens), 0) AS cache_creation_tokens,
+  count(*) FILTER (WHERE r.counted_agent IS NULL) AS steps_without_tokens
+FROM roles r
+JOIN merged m ON m.repo = r.repo AND m.issue = r.issue
+GROUP BY r.repo, r.role
+ORDER BY r.repo, r.role;
+```
+
+The first split again, by regime: the regime of each counted agent's `loop_entry` (null reads `unknown`), so
+an issue with agents in two regimes gives one row per regime, and an issue with no counted agent gives one
+`unknown` row of zeros. Summed over regime, an issue's token sums are the first query's. It leaves out
+`steps_without_tokens`, which belongs to the issue, not to a regime.
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1)
+SELECT m.repo, m.issue, m.merged_at, coalesce(t.regime, 'unknown') AS regime,
+  count(t.agent_id) AS agents,
+  coalesce(sum(t.input_tokens), 0) AS input_tokens,
+  coalesce(sum(t.output_tokens), 0) AS output_tokens,
+  coalesce(sum(t.cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(t.cache_creation_tokens), 0) AS cache_creation_tokens,
+  coalesce(sum(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_creation_tokens), 0) AS total_tokens
+FROM merged m
+LEFT JOIN tokens t ON t.repo = m.repo AND t.issue = m.issue
+GROUP BY m.repo, m.issue, m.merged_at, coalesce(t.regime, 'unknown')
+ORDER BY m.merged_at, m.issue, regime;
+```
+
+## Observe time per pass
+
+A `loop_passes` event ([REFERENCE.md](factory-events/REFERENCE.md)) summarises one UTC minute of the loop's passes. Four
+optional fields split the time of each pass's observe call: `observe_mean_ms` (the mean wall time),
+`observe_commands_mean_ms` (the mean time with at least one read in flight), `observe_in_process_mean_ms` (the mean
+in-process time) and `observe_in_process_max_ms` (the longest in-process time). All four are null when no pass in the
+minute had a measure, and absent from older loops' events. The loop writes them from this release on.
+
+Per hour, repo and device, the pass-weighted mean of each (`sum(x * passes) / sum(passes)`, so a busy minute counts for
+more than a quiet one) and the longest in-process time, from the minutes that have a measure:
+
+```sql
+SELECT date_trunc('hour', from_at) AS hour, repo, device,
+  sum(passes) AS passes,
+  round(sum(observe_mean_ms::numeric * passes) / sum(passes)) AS observe_ms,
+  round(sum(observe_commands_mean_ms::numeric * passes) / sum(passes)) AS commands_ms,
+  round(sum(observe_in_process_mean_ms::numeric * passes) / sum(passes)) AS in_process_ms,
+  max(observe_in_process_max_ms) AS in_process_max_ms
+FROM factory.event_log
+WHERE type = 'loop_passes' AND observe_mean_ms IS NOT NULL AND passes > 0
+  AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, repo, device
+ORDER BY 1, repo, device;
+```
+
+## Pass time
+
+A pass no longer waits for the sweep, the heartbeat or a merge: all run off the pass ([v2 SPEC 13.6.1](factory-loop/v2/SPEC.md#1361-catalogue)),
+so passes over 20 s should be rare from this release on. Per hour, repo and device, from the `loop_passes` events (`mean_ms` and
+`max_ms` are one minute's mean and longest pass): the passes, their pass-weighted mean, the longest pass, and the minutes
+whose longest pass was over 20 s (a restart held for a running merge shows as the decision log's R2 skip line `update due: waiting on <keys>`, passes before the restart):
+
+```sql
+SELECT date_trunc('hour', from_at) AS hour, repo, device,
+  sum(passes) AS passes,
+  round(sum(mean_ms::numeric * passes) / sum(passes)) AS mean_ms,
+  max(max_ms) AS max_ms,
+  count(*) FILTER (WHERE max_ms > 20000) AS minutes_over_20s
+FROM factory.event_log
+WHERE type = 'loop_passes' AND mean_ms IS NOT NULL AND passes > 0
+  AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, repo, device
+ORDER BY 1, repo, device;
+```
+
+With trace mode on, each record lists the off-pass commands that finished since the last record (`offPass`: `cmd`, `key`, `ms`,
+`exit`, `endedAt`). How long they ran, per command, from a day's trace file in the loop dir:
+
+```sh
+jq -s '[.[].offPass[]?] | group_by(.cmd) | map({cmd: .[0].cmd, runs: length, failed: (map(select(.exit != 0)) | length),
+  mean_ms: (map(.ms) | add / length | round), max_ms: (map(.ms) | max)})' trace-2026-10-21.jsonl
+```
+
+The session title's rename is one of these commands (`cmd: "title"`), so the same query shows how long renames
+take. The renames that failed or timed out, with the reason:
+
+```sh
+jq -c '.offPass[]? | select(.cmd == "title" and .error != null)' trace-2026-10-21.jsonl
 ```
 
 ## Shadow runs (source switch)
@@ -1884,7 +3409,7 @@ jq -s --arg since 2026-10-18T00:00:00Z '
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--events <file>] [--nm-export <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
+[--events <file>] [--nm-export <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/callum-flow-evaluate`)
 computes the numbers of queries 1 to 4, 6, 7 and 9 for a time window from an events file (`--events`,
 default the local event log; a `factory.events` export covers every device), plus token spend, waste
 and pipeline numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It reads the
@@ -1919,6 +3444,26 @@ export is passed (see the skill).
   merged issue its review and fix rounds and its time in flight less the time parked. Each counts a
   retried event once, as section 9 does. A merged issue's lead-time row takes its pipeline start from
   its first `transition` to reviewing when it has no linked run (`run_source` `transition`).
+- `merges`, `prs` and `gaps` are section 9c's numbers over the window, from the new events' `pr`, `by`
+  and `recovered` fields: the merges whose time is in the window (a `merged` event, a hand-merge
+  transition or a person `hand-merge` intervention, one per issue and `pr`) by `by` and `recovered`,
+  per day and per merge; per merge the seconds from the first `transition` or `reviewed` naming its
+  `pr` to the merge ("first seen by the factory"), the pull requests it went through, how many it
+  superseded and its head moves (`queue:patch` and `push` interventions), with the median and max
+  computed in code; and the 10 longest gaps between consecutive in-window merges, each with the
+  issues in flight. They read `n/a` with a reason for no events, for 0 merges (`gaps`: fewer than 2)
+  and under `--source old`. `merges` also lists `per_day_by_kind` (day, `kind`, merges): `unlinked`
+  (a `merged` event with no issue, or a merge whose issue has no `claimed` event at or before it),
+  `hand` or `factory`; its other fields are unchanged.
+- `size` and `overlap` are section 9c's issue size, overlap and hottest-files numbers over the same
+  merges, from the `merged` event's `files`, `file_lines`, `additions` and `deletions`, with the one code-file
+  rule `NON_CODE_RE`. `size`: `merges`, `known` (those with `files`), `code_lines_known`, the median and
+  p90 (nearest rank) of `files`, `lines`, `code_files` and `code_lines`, and per merge its counts. `overlap`:
+  the merges with known files, how many `overlapping` and their `share`, per merge the issues it
+  overlaps, and the `hottest_files` (10 shown). A merge without `files` is unknown and left out; both
+  read `n/a` when no merge has `files`, and the code-only line stats read `n/a` when none has
+  `file_lines`. Evaluate reads `claimed` from its input, so a fleet export cut at `since` can make an
+  issue claimed before `since` read unlinked and shorten its overlap window.
 - `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store
   ([source switch](factory-events/replay.md#source-switch)). `old` is the behaviour above. `new` reads the
   new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<name>.jsonl`, or with
@@ -1932,6 +3477,26 @@ export is passed (see the skill).
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
 
+### Regimes
+
+`--regime <factory_loop_v2|testbed|manual|unknown>` keeps only the events whose `regime` equals the value
+(a null, empty or missing regime is `unknown`; any other value, or none, exits 2 with the usage line). The
+filter runs before pipeline runs are linked and before the event metrics are computed, and `window.regime` says
+which value was given, or `all`. Without the flag, `throughput.by_regime` lists per regime `merged_issues` (the
+throughput derivation on that regime's events), `closed_issues` (distinct issues with a `closed` event in the
+window) and `claims` (`claimed` events in the window), and `spend.by_regime` lists the spend rows of each regime
+(for a role and model they add up to `spend.rows`); both hold exactly the regimes that appear among the window's
+events or attributed turns, sorted by name, and are omitted with `--regime`, where they would repeat the totals.
+
+A transcript turn has no regime of its own. It takes one through the transcript's session (a sub-agent takes its
+parent's): the regime of the latest regime-carrying event of that session at or before the turn's time, the first
+such event's regime for an earlier turn, and `unknown` when no event of the session carries one. Pipeline
+(no-mistakes) invocations have no session, so they are `unknown`. With `--regime R`, `spend.rows` counts only the
+turns attributed to R, and the pipeline rows only when R is `unknown`. `waste`, `pipeline` and
+`sub_agent_model_mismatches` are not filtered by regime. A regime is never guessed from a device, workspace name
+or path. Events written before v0.81.0 carry no `regime` or `session_id` and read as `unknown` and no session.
+The shadow and replay comparisons leave both `by_regime` keys out (the old source's records carry no regime).
+
 ### Reading the new events
 
 Under `--source new` one mapping (`images/base/evaluate-new-events.js`) turns each new event, from the
@@ -1941,25 +3506,40 @@ once counts once per (issue, life, seq), the first kept.
 
 | New event | Becomes |
 |---|---|
-| `transition` | a `transition` timed by its `seq_at`, with `life`, `seq`, `row` (`table_row`), `from`, `to` and `via` |
+| `transition` | a `transition` timed by its `seq_at`, with `life`, `seq`, `row` (`table_row`), `from`, `to`, `via`, `why` and `question` (`yes` when the transition has one) |
 | `transition` into `building`, `fixing`, `merge-queue` (from another state) | also `delegated`, `fix_requested`, `merge_ready`, timed by `seq_at` |
 | `finding_handled` | `verdict`: `fixed` is `CORRECT`, `declined` is `WRONG` |
 | `claim_renewed`, `requeued` | `renewed`, `reclaimed` |
-| `loop_entry`, `loop_passes` | `loop` |
+| `loop_entry`, `loop_passes` | `loop`, with `kind`, `key`, `status` and `wake` |
 | `intervention` | `intervention` with `who`, `cause`, `life`, `fact` |
 | `reviewed` | `reviewed` with `verdict`, `round`, `patch` |
+| `merged` | `merged` with `by` and `recovered` |
 | `test_weakened` | `test_weakened` with `restored` (no step: always `none` under v2) |
 | `abandoned` | `abandoned` with `reason` |
-| `ready`, `claimed`, `claim_lost`, `merged`, `closed`, `implementer_routed`, `untrusted_stripped`, `usage` | the same name |
+| `ready`, `claimed`, `claim_lost`, `closed`, `implementer_routed`, `untrusted_stripped`, `usage` | the same name |
+
+Every record also carries the event's `pr` (null when it has none) and its `device_seq` (a view
+row's; the local log has none, so file order breaks ties), which the 9c sections read.
 
 Metrics that need a v1-only state read `n/a`, never 0, and `sources` names each one and why:
 `waiting` (needs `run_started` and `parked`), `adjudicator_agreement` (pairs verdicts by the v1 `run_id`).
 `first_pass` keeps its number but counts only `fix_requested` as a setback, as `failed` is v1 only
 (`sources` says so). The per-issue lead-time stages `design`, `implementation`, `pipeline` and
 `waiting_for_merge` can differ by seconds from `old`, which times `delegated` and `merge_ready` by the
-line's write time; the shadow comparison leaves them out, with the `sources` block and the two `n/a` metrics.
-A view export carries `reviewed.patch` and `test_weakened.restored` from migration 0006. The fleet export is
+line's write time; the shadow comparison leaves them out, with the `sources` block, the two `n/a` metrics and the
+`merges`, `prs`, `gaps`, `size` and `overlap` sections (they read `n/a` under `--source old`: "needs the new events' pr, by and recovered fields").
+A view export carries `reviewed.patch` and `test_weakened.restored` from migration 0006, and `merged.recovered`
+from migration 0021. The fleet export is
 `dev-query --factory -At -c "SELECT row_to_json(e) FROM factory.event_log e WHERE repo = :'repo' AND ts >= :'since'" -v repo=<owner/name> -v since=<ISO>`.
+
+#### Readers behind the writers
+
+An image that lags the writers skips an event whose type or version `factory-event-shapes.json` does not
+list as current, and counts it, instead of failing the read. See what was skipped with
+`callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the derivation reads
+that type, so the view may be incomplete), and
+`callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
+(`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`. The loop's reaction is in "Readers behind the loop".
 
 ### Scope and the fleet-wide no-mistakes export
 
@@ -2048,6 +3628,8 @@ either source. A key is `n/a` on its own when its columns are missing.
   `analyze-agent-run.ts`.
 - **Tokens**: input, output, cache_read and cache_creation tokens, reported separately; a "wake's
   tokens" is the sum of the four over its turns.
+- **Regime**: a turn's regime comes from its session's events, see "Regimes" above; the `unknown` rule and the
+  attribution apply to every spend row.
 - **Role**: the main session is `orchestrator`; a sub-agent's role is its `agent-<id>.meta.json`
   `agentType`, else `unknown`; pipeline agent invocations are `pipeline:<step_name>`, restricted
   to runs of the repo created in the window (their `turns` are `model_roundtrips`).

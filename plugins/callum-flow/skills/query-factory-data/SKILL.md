@@ -10,7 +10,7 @@ description: >-
   it with dev-query --factory. Use for a quick targeted number. For a full windowed report
   or a comparison with a baseline, use evaluate-sessions instead. For what is
   happening right now (current stage, stuck issues), use factory-state.
-version: 0.71.0
+version: 0.88.0
 ---
 
 # Query factory data
@@ -55,13 +55,28 @@ Name queries by schema and title, never by bare number: both sets start at 1.
 | Wind-down: how long stops wait for running steps, how often the cap hits, steps cut and their re-runs | `factory.event_log`, [2c. Wind-downs](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2c-wind-downs) (a per-stop row; take the median and p90 of `waited_ms` in code) |
 | Reader shadow compares: how often a reader's old and new sources disagree, failed central reads, the newest difference | `factory.event_log`, [6b. Reader shadow compares](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#6b-reader-shadow-compares) (per reader, tool, device and day) |
 | Permission prompts denied or waiting, and the issues blocked on one | `factory.event_log`, [9b. Permission prompts](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9b-permission-prompts) (one block: `daily` rows per repo and day, `blocked` rows for the last 24 hours) |
+| Interventions (a person or the loop stepping in), judgement calls (reviews, triage, designer questions, fixer dispositions and judge tasks) and claim completion | `factory.event_log`, [9. Interventions, judgement calls and claim completion](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9-interventions-judgement-calls-and-claim-completion) |
+| Merges per day (by factory or hand, recovered or not), PR open to merge, PR churn (pull requests replaced), head moves and the longest gaps between merges | `factory.event_log`, [9c. Merges, pull requests and gaps](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9c-merges-pull-requests-and-gaps) (five blocks; medians in code) |
+| Issue size (files, lines, code-only files and lines per merged issue) | `factory.event_log`, [9c. Merges, pull requests and gaps](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9c-merges-pull-requests-and-gaps) (the issue size block, #8; medians and p90 in code) |
+| Overlap (merges whose issue windows overlapped another issue's and shared a code file) and the hottest files | `factory.event_log`, [9c. Merges, pull requests and gaps](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9c-merges-pull-requests-and-gaps) (the overlap and hottest files blocks, #9 and #10) |
+| All merges to main per day by kind (factory, hand, unlinked) | `factory.event_log`, [9c. Merges, pull requests and gaps](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9c-merges-pull-requests-and-gaps) (the merges by kind block, #11) |
 | Waiting versus working, dispatcher bound | `factory.event_log`, [7. The waiting split](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#7-the-waiting-split) (the gate-bound half of the call is in `callum-flow-evaluate`) |
 | First-pass rate, fix rounds and review rounds per issue | `factory.event_log`, [2. First-pass gate pass rate](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#2-first-pass-gate-pass-rate) and the rounds block of [9. Interventions, judgement calls and claim completion](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#9-interventions-judgement-calls-and-claim-completion) |
 | Sonnet against Opus as the implementer: time taken, first-pass rate and fix requests per model | `factory.event_log`, [8. Implementer model comparison](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#8-implementer-model-comparison) (medians in code) |
 | Main after merge: main's newest state, and whether main stayed green after each merge (plant console panel F) | `factory.event_log`, [Main after merge](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#main-after-merge) |
 | Settings changes over time, and the settings each worker runs on | `factory.event_log` and `factory.workers_status`, [Settings](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#settings) (empty until the loop writes them) |
-| Agent tokens and wall time, pipeline gates, parked time, failure categories | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
+| The loop's queue order and why each issue is or is not claimable, snapshot freshness, and whether claims follow it | `factory.event_log`, [Queue snapshots](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#queue-snapshots) (empty until the loop writes them) |
+| Agent tokens per merged issue, model and step role (the loop's step agents) | `factory.event_log`, [Tokens per merged issue](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#tokens-per-merged-issue) (empty until the loop writes them) |
+| Pipeline gates, parked time, failure categories, and the tokens of anything but the loop's step agents | no saved query: the no-mistakes data is not in the factory database; use `evaluate-sessions` / `callum-flow-evaluate` |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
+
+**Per regime.** Every row has a `regime` (the kind of run that wrote it). To read a question per
+regime, filter the saved query with `AND coalesce(regime, 'unknown') = '<regime>'` (or `IN (...)`), or
+group it by `coalesce(regime, 'unknown') AS regime`; the rule, "Reading per regime" among the reading
+rules at the top of the
+[reference](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#factory-metrics), says
+which queries already group. To leave testbed rows out, name the regimes you want
+(`IN ('factory_loop_v2', 'manual', 'unknown')`), never `<> 'testbed'`.
 
 Copy the query from the reference, narrow it to the repo, issue, run or window asked about,
 and run it with `dev-query`. The reference explains each column and definition; do not
@@ -81,6 +96,8 @@ restate or invent your own.
   minutes. The history starts at 2026-10-16T02:00Z.
 - Count a retried event once, by the key its type names (for example `(issue, life, seq)` for
   `transition`), and time a transition by `seq_at`; the saved queries already do.
+- A null regime is `unknown`; it is never guessed from a device, a workspace name or a path, so say
+  how many rows read `unknown` when a per-regime number leans on them.
 - A device whose container is stale pushes nothing, so a missing device means missing
   data, not zero work.
 - Implementer model comparison: give each model's issue count, and run the noise check the

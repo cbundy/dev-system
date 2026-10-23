@@ -2,20 +2,24 @@
 // each reading the factory, planning and, in act mode, running plan's actions, then logging.
 import type { EngineInterface } from 'claude-code'
 
-import { actPass, breakerEventArgv, capEventArgv, capKey, commandOf, logLoop, loggedOf, planPass, sendNotice, updateDone } from './act'
+import { actPass, commandOf, logLoop, loggedOf, planPass, sendNotice, updateDone } from './act'
 import type { ActEnv, ActReport } from './act'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import { GITHUB_BACKOFF_MS, observe } from './observe'
 import type { Runtime, Stored } from './observe'
 import { holdsLock, recordPass } from './pass-summary'
+import { nextSnapshot, snapshotFailed, takeProblem } from './queue-snapshot'
 import { LOCK_CAS_SCRIPT, actLockPath, checkRails, holdActLock, leaseMsOf, nextPass, noticeTell, parseLease, passEnded, pingsIgnored, requestPass, waitOver } from './rails'
 import type { BreakerNotice, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { keepTitles } from './report'
 import { agentModelsOf, snapshotFrom, snapshotOf, writeSnapshot } from './settings-snapshot'
 import type { Snapshot } from './settings-snapshot'
 import { digestOf } from './state'
+import { clocked } from './observe-clock'
+import type { ObserveSplit } from './observe-clock'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
 import type { Config, Ms, PlanResult } from './types'
+import { effectiveCap } from './v2/capacity'
 import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
 import { opsFrom } from './v2/rules-settings'
@@ -24,10 +28,11 @@ import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/s
 import { windDownFiles, withRemembered } from './v2/wind-down-files'
 import { windDownOf } from './v2/wind-down'
 import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
+import { offPassDone } from './driver-between'
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
 import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
-import { ASKED_MAX, ERROR_PASSES, HOUR, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
+import { ASKED_MAX, ERROR_PASSES, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
 // the last pass's summary (types/index.d.ts): the engine's validator reads a state reference only
@@ -86,6 +91,7 @@ export async function listAgents($: EngineInterface): Promise<{ ok: boolean; age
 export async function railEnv($: EngineInterface): Promise<RailEnv> {
   return {
     DEV_ROLE: await $.env.get('DEV_ROLE'),
+    DEV_CODER_WORKSPACE: await $.env.get('DEV_CODER_WORKSPACE'),
     ORCHESTRATOR_WATCH_LOCK_DIR: await $.env.get('ORCHESTRATOR_WATCH_LOCK_DIR'),
     XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR'),
     TMPDIR: await $.env.get('TMPDIR'),
@@ -97,6 +103,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
   // the pass's time runs from here, for the decision log and the trace (#552)
   const t0 = performance.now()
   let rt: Runtime | undefined
+  S.passObserve = null
   try {
     rt = await runtime($)
     S.lastRt = rt
@@ -104,7 +111,7 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
     await noteIdle(liveV2, v2StoreIo($), fileIo($), rt)
     const off = rt.mode === 'off' || (await noteKillSwitch(liveV2, v2StoreIo($), rt, await killed($)))
     if (off || rt.repo === '') {
-      await setTitle($, offTitle(rt))
+      setTitle($, offTitle(rt))
     } else {
       S.passNo += 1
       await pass($, rt, breaker, trigger, t0)
@@ -117,11 +124,11 @@ export async function runPass($: EngineInterface, breaker: BreakerNotice | null,
     const now = await $.clock.now()
     S.failingSince ??= now
     if (rt !== undefined) {
-      recordPass(now, Math.round(performance.now() - t0), false, true)
+      recordPass(now, Math.round(performance.now() - t0), false, true, S.passObserve)
       await appendLine($, rt, { pass: S.passNo, trigger, ms: Math.round(performance.now() - t0), error: String(err).slice(0, 500), failures: S.failures })
       const name = rt.repo.split('/')[1] ?? 'loop'
       const title = S.lastTitle === null ? `🔄 ${name} · error` : S.lastTitle.endsWith(' · error') ? S.lastTitle : `${S.lastTitle} · error`
-      await setTitle($, title).catch(() => undefined)
+      setTitle($, title)
       if (S.failures >= ERROR_PASSES && rt.mode === 'act' && !S.errorTold) S.errorTold = await tellError($, rt, now, String(err))
     }
   }
@@ -138,6 +145,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const aio = tr === null ? actIo($) : tracedActIo(tr, actIo($))
   const keepInStore = (key: string, value: unknown) => spent(tr, 'persistMs', () => storeSet($, key, value, problems))
   let railReasons: string[] = []
+  let railTwins: { device: string; age_s: number }[] = []
   let memory: RailMemory | null = null
   let book: NoticeBook = { pending: [], caps: [] }
   let booked = JSON.stringify(book)
@@ -161,6 +169,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     )
     memory = rails.memory
     railReasons = rails.reasons
+    railTwins = rails.twins.map(b => ({ device: b.device, age_s: Math.round(b.ageMs / 1000) }))
     act = rails.act
     if (JSON.stringify(rails.memory) !== JSON.stringify(remembered)) await keepInStore(keys.rails, rails.memory)
     if (rails.lock !== null && rails.lock.held) {
@@ -172,7 +181,6 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     booked = JSON.stringify(book)
     const fresh: Notice[] = breaker === null ? rails.notices : [...rails.notices, breaker]
     for (const n of fresh) if (!book.pending.some(p => noticeTell(p).key === noticeTell(n).key)) book.pending.push(n)
-    if (breaker !== null) await commandOf(aio, acting(rt), commands)(breakerEventArgv(breaker), { timeoutMs: 60_000 }).catch(() => undefined)
     if (act && S.restartAsked !== null && S.restartRequestAt === null) {
       act = false
       railReasons.push(`restart: dev-restart-self asked for a new workspace at ${new Date(S.restartAsked).toISOString()}; nothing acts until it restarts`)
@@ -188,6 +196,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   begin(tr, 'observe')
   const passRt = act ? rt : rt.mode === 'act' ? observing(rt) : rt
   let stored: Stored | undefined
+  // API-key mode's tally: read in every mode, written only by an acting pass
+  const spendStored = rt.apiKey === undefined ? undefined : await storeGet($, keys.spend)
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
@@ -202,11 +212,17 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // A shadow watches another session: this module's own load says nothing about when that
   // session restarted, so the first-pass heartbeat (rule H1) is left to real lease timing.
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
-  const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
+  const clock = clocked(tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents)), () => performance.now())
+  const reads = clock.io
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
   const v2Stored: V2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
-  const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored)
+  const observeStart = performance.now()
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored, spendStored)
+  const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
+  S.passObserve = observeSplit
   let state = observed.state
+  // the main checkout this pass read, for `/factory stamp` (driver-stamp.ts) in any mode
+  S.checkout = state.checkout
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
   let snap: Snapshot | null = null
   let before: Snapshot | null = null
@@ -217,6 +233,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       await agentModelsOf(path => text($, path), rt.pluginRoot),
       { implementerOpusPct: await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT'), designSessionPct: await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT') },
       state.now,
+      effectiveCap(rt.config, rt.memoryBytes ?? null, state.v2?.interventions.gates),
     )
     problems.push(...(await writeSnapshot({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, snap)))
   } catch (e) {
@@ -255,7 +272,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     return spent(tr, 'persistMs', () => persist($, rt))
   }
   const holds = () => (act ? renew() : Promise.resolve(holding))
-  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems }
+  // a snapshot write that failed since the last pass line is told once, here
+  const late = takeProblem()
+  if (late !== null) problems.push(late)
+  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems, offPass: { io: actIo($), done: d => void offPassDone($, rt, d) } }
 
   let report: ActReport | null = null
   let result: PlanResult
@@ -298,25 +318,28 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
         const planned = result.actions.find(a => a.key === restarted.key)
         S.restartRequestAt = planned?.kind === 'restart-self' && planned.windDownAt != null ? planned.windDownAt : null
       }
-      if (report.title !== null) [S.lastTitle, S.lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
-      if (report.killed) await setTitle($, offTitle(rt))
-      // a rate-cap hold has no entry of its own: one loop event per cap per hour (v2 SPEC 13.11.4)
-      const hour = `:${Math.floor(state.now / HOUR)}`
-      for (const capped of result.capped) {
-        const key = capKey(capped, state.now)
-        if (book.caps.includes(key)) continue
-        const r = await commandOf(env.io, rt, commands)(capEventArgv(capped, state.now), { timeoutMs: 60_000 }).catch(() => null)
-        if (r !== null && r.exitCode === 0) book.caps.push(key)
+      if (report.killed) setTitle($, offTitle(rt))
+      // the queue the plan saw: one `queue_snapshot` when it changed or on the heartbeat, sent without waiting so it never slows the pass
+      if (!report.killed && result.queue !== undefined) {
+        const claimed = result.actions.some(a => a.kind === 'claim' && a.rule === 'S1')
+        const argv = nextSnapshot(result.queue, state.now, claimed)
+        if (argv !== null) {
+          void commandOf(env.io, rt, commands)(argv, { timeoutMs: 60_000 }).then(
+            r => {
+              if (r.exitCode !== 0) snapshotFailed(`exit ${r.exitCode}`)
+            },
+            (e: unknown) => snapshotFailed(e instanceof Error ? e.message : String(e)),
+          )
+        }
       }
-      book.caps = book.caps.filter(k => k.endsWith(hour))
     } else {
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
       begin(tr, 'plan')
       result = planPass(state, config)
       begin(tr, 'act')
-      if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
+      if (result.actions.some(a => a.kind === 'title')) setTitle($, result.title)
     }
 
     // notices from outside plan go out once no wake is open, acting or not (v2 SPEC 13.9.2, 13.11.2), until a
@@ -349,7 +372,11 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
-    const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
+    if (observed.spend !== null) await keepInStore(keys.spend, observed.spend)
+    // an off-pass command that met the limit since the last pass counts as one this pass met
+    const limited = report?.rateLimited === true || S.offRateLimited
+    S.offRateLimited = false
+    const until = Math.max(state.githubBackoffUntil ?? 0, limited ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
     // the starved spell (S1): it starts on the first starved pass, stands through unknown passes and ends
     // on the first pass that is not starved
@@ -393,7 +420,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
+    cap: result.cap === undefined ? undefined : { effective: result.cap.effective, configured: result.cap.configured, ceiling: result.cap.ceiling, memoryBytes: result.cap.memoryBytes, estimateBytes: result.cap.estimateBytes, estimateSource: result.cap.estimateSource },
     rails: railReasons.length > 0 ? railReasons : undefined,
+    railTwins: railTwins.length > 0 ? railTwins : undefined,
     ledgerSource: act ? observed.ledgerSource : undefined,
     breaker: breaker === null ? undefined : { since: new Date(breaker.since).toISOString(), until: new Date(breaker.until).toISOString(), passes: breaker.passes },
     told: told.length > 0 ? told : undefined,
@@ -430,6 +459,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     owner: result.owner,
   })
   const ledger = act ? live.ledger : state.ledger
+  const offPass = S.offFinished.splice(0)
   if (tr !== null) {
     // ended wakes since the last pass, or since this module loaded: not the ledger's whole week
     const wakes = wakeRows(ledger, delivered, reportedWakes, Math.max(S.prevPassAt, S.loadedAt))
@@ -443,6 +473,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       queuedAt,
       wakes: wakes.rows,
       waiting: waitingRows(state, result, ledger, S.waits),
+      observe: observeSplit,
+      offPass,
     })
     await writeTrace($, rt, record).catch(() => undefined)
   }
@@ -459,5 +491,5 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // the title says error until the store takes the ledger again (v2 SPEC 13.10 item 9)
   if (act && S.saveProblem !== null) throw new Error(`ledger: not saved: ${S.saveProblem}`)
   holdsLock(act)
-  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false)
+  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false, observeSplit)
 }

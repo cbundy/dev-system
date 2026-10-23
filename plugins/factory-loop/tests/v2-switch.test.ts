@@ -46,6 +46,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     cut: false,
     triages: 0,
     fixes: 0,
+    conflicts: 0,
     round: 0,
     question: null,
     parts: null,
@@ -57,6 +58,11 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     ...over,
   }
 }
+
+// the interventions the loop logged: native calls of callum-flow-event (--type intervention --data <json> [--issue N])
+const interventions = (h: { seen: { argv: string[] }[] }) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === 'intervention')
+const ivData = (s: { argv: string[] }) => JSON.parse(s.argv[4] ?? '{}') as { who: string; cause: string; life: string | null; fact: string }
+const ivFields = (s: { argv: string[] }): (string | null)[] => [s.argv[5] === '--issue' ? (s.argv[6] ?? null) : null, ivData(s).who, ivData(s).cause]
 
 describe('the settings (v2 SPEC appendix A)', () => {
   test('the defaults are v2\'s: the timeouts and limits are the spec\'s, and K is 3', () => {
@@ -133,6 +139,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
       'triageModel: "Opus" is not sonnet, opus, haiku or fable',
     ])
     expect(bad.config).toMatchObject({ reviewerModel: 'opus', triageModel: 'opus' })
+    expect(loadConfig({ intakeModel: 'Haiku' }).problems).toEqual(['intakeModel: "Haiku" is not sonnet, opus, haiku or fable'])
   })
 
   test('no settings file (a new workspace): v2\'s defaults, K 3 and no problems', () => {
@@ -193,6 +200,14 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(tasks(after)).toEqual([])
     expect(tasks({ ...after, release: { tag: 'v1.1.0', oldest: null } })).toEqual([])
     expect(tasks({ ...after, now: NOW + 60 * MIN }).map(x => x.key)).toEqual(['task:release:v1.0.0:2026-10-13T04'])
+  })
+
+  test('O3 (v2) with the newest tag known to be the release read\'s tag, the review carries oldest', () => {
+    const cfg = config()
+    const s: State = { ...state({ milestone: { open: 0, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: NOW - 2 * MIN } }), v2: { ...emptyV2State(NOW), tag: 'v1.0.0' } }
+    const t = planV2(s, cfg).actions.filter(x => x.kind === 'task')
+    expect(t).toHaveLength(1)
+    expect(t[0]).toMatchObject({ fields: { oldest: new Date(NOW - 2 * MIN).toISOString() } })
   })
 
   test('O3 (v2) with records waiting on a release tag: the review is due while the milestone has open items, its fields list the issues, once per UTC hour', () => {
@@ -284,7 +299,7 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const cfg = config({ windDownMinutes: 0 })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
-    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' }, v2: { ...emptyV2State(NOW), tag: null } }
     const both = planV2(release, cfg)
     // the release log (O4, O5) writes beside the review: it holds nothing back
     expect(both.actions.filter(a => a.rule !== 'O4' && a.rule !== 'O5').map(a => a.kind)).toEqual(['task', 'title'])
@@ -299,10 +314,17 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const cfg = config()
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
     expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2', reason: 'update due', windDownAt: NOW })
-    const merge = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    const merge = entry('queue-update:5', 'queue-update', { class: 'drive', status: 'running', endedAt: null })
     const task = entry('task:release:unknown:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
     const busy = planV2({ ...quiet, ledger: [...quiet.ledger, merge, task] }, cfg)
-    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-merge:5, task:release:unknown:2026-10-13T03' })
+    expect(busy.actions.at(-1)).toMatchObject({ kind: 'restart-self', windDownAt: NOW, reason: 'update due; the wind-down finishes queue-update:5, task:release:unknown:2026-10-13T03' })
+    // a running merge holds the restart in both modes
+    const merging = entry('queue-merge:5', 'queue-merge', { class: 'drive', status: 'running', endedAt: null })
+    for (const windDownMinutes of [0, 30]) {
+      const held = planV2({ ...quiet, ledger: [...quiet.ledger, merging, task] }, config({ windDownMinutes }))
+      expect(held.actions.some(a => a.kind === 'restart-self')).toBe(false)
+      expect(held.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: waiting on queue-merge:5' + (windDownMinutes === 0 ? ', task:release:unknown:2026-10-13T03' : '') })
+    }
     // a pass that starts something still holds it
     const release: State = { ...quiet, milestone: { open: 0, closed: 3, openIssues: [], expected: 'patch' } }
     const both = planV2(release, cfg)
@@ -393,7 +415,7 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
       const { env, argvs } = envOf()
       env.io.run = async argv => {
         argvs.push([...argv])
-        return argv[0] === 'callum-flow-claim' ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
+        return argv.includes('callum-flow-claim') ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
       }
       return { env, argvs }
     }
@@ -597,8 +619,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const control = h.lines().find(l => l.control === 'pause 12')
     expect(control?.problems).toBeUndefined()
     expect(control?.by).toBe('person')
-    const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
-    expect(logged).toEqual([['--issue', '12', 'who=person', 'cause=op:pause']])
+    expect(interventions(h).map(ivFields)).toEqual([['12', 'person', 'op:pause']])
   })
 
   test('the control tool\'s ops are the judge\'s interventions: who=judge, the control line\'s by', ENGINE_TEST, async ($, on) => {
@@ -613,16 +634,15 @@ describe('the driver (v2 SPEC 2.3)', () => {
     }
     const lines = h.lines()
     for (const op of ['pause 12', 'unpause 12', 'config set maxInFlightIssues 3']) expect(lines.find(l => l.control === op)).toMatchObject({ by: 'judge' })
-    const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
-    expect(logged).toEqual([
-      ['--issue', '12', 'who=judge', 'cause=op:pause'],
-      ['--issue', '12', 'who=judge', 'cause=op:unpause'],
-      ['--note', expect.stringMatching(/^who=judge cause=config-file /), 'who=judge', 'cause=config-file'],
+    expect(interventions(h).map(ivFields)).toEqual([
+      ['12', 'judge', 'op:pause'],
+      ['12', 'judge', 'op:unpause'],
+      [null, 'judge', 'config-file'],
     ])
   })
 
   test('act mode: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', ENGINE_TEST, async ($, on) => {
-    const restarts = (h: ReturnType<typeof host>) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention' && (s.argv.at(-1) ?? '').includes('cause=restart'))
+    const restarts = (h: ReturnType<typeof host>) => interventions(h).filter(s => ivData(s).cause === 'restart')
     const clock = mock.clock(on, { now: NOW })
     const earlier = { v: 1, savedAt: NOW - 30 * MIN, entries: [entry('sweep:0', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })] }
     const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work' }, run: world(), store: { [`ledger:${REPO}`]: earlier } })
@@ -632,7 +652,8 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const logged = restarts(h)
     expect(logged).toHaveLength(1)
     expect(logged[0]?.argv.includes('--issue')).toBe(false)
-    expect(logged[0]?.argv.at(-1)).toMatch(/^who=person cause=restart life=none fact=restart\/fleet\/[0-9a-z]+ reason=/)
+    expect(ivData(logged[0] as never)).toMatchObject({ who: 'person', cause: 'restart', life: null })
+    expect(ivData(logged[0] as never).fact).toMatch(/^restart\/fleet\/[0-9a-z]+$/)
   })
 
   test('act mode: the first start of a loop with no ledger logs no restart', ENGINE_TEST, async ($, on) => {
@@ -641,7 +662,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     await clock.advance(61_000)
-    expect(h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention')).toEqual([])
+    expect(interventions(h)).toEqual([])
   })
 
   test('an issue a person closes with its PR closes (E2), without parking first: the PR read makes the issue read due, and E4 waits for it (v2 SPEC 4.1; drill run 2, R2-F2)', ENGINE_TEST, async ($, on) => {

@@ -4,6 +4,9 @@
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
 import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { CapInfo } from './v2/capacity'
+import type { QueueView } from './v2/queue-view'
+import type { QueueScoreWeights, ScoreResult } from './v2/score'
 
 export type Ms = number
 
@@ -36,6 +39,11 @@ export type Usage = {
   fiveHourResetsAt: Ms | null
   sevenDayResetsAt: Ms | null
   unavailable: boolean
+  // API-key mode (spend.ts): the reading is spend against a budget, not windows; spend null with
+  // unavailable is a missing reading and reason is its code (tierOf holds it at stop-new)
+  auth?: 'api-key'
+  spend?: { usd: number; budgetUsd: number; resetsAt: Ms } | null
+  reason?: string
 }
 
 export type Brief = { url: string; at: Ms }
@@ -63,6 +71,8 @@ export type IssueView = {
   parent: number | null
   // the parent's other sub-issues in this repo (itself left out); null if unread
   siblings: { number: number; open: boolean }[] | null
+  // the body's version (the reader's body_sha, 16 hex); null: not read, or an image that does not give it
+  bodyVersion: string | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null
   // a tracker's open sub-issues, nested ones included, ascending, from its timeline; read only
@@ -240,7 +250,8 @@ export type LedgerEntry = {
   outcome?: Outcome
   // a wake's id (v2 SPEC 13.8.1 `id=`), the turn it started, whether its reminder went out (for an
   // agent, its one repair message, #548), and the session that submitted it (a restart ends the
-  // wakes of the session before, v2 SPEC 13.7.5)
+  // wakes of the session before, v2 SPEC 13.7.5). An agent step keeps it too: its transcript is under
+  // the spawning session (v2/step-tokens.ts)
   wakeId?: string
   turnId?: string
   reminded?: boolean
@@ -280,6 +291,9 @@ export type State = {
   checkout: Checkout | null
   // what v2 reads besides (v2 SPEC 2.4)
   v2?: V2State
+  // each read issue's open blocked issues, the chain issues outside `issues` too; absent: not read
+  // (the replay harness), and the score's transitive count is 0
+  blockGraph?: Record<number, number[]>
 }
 
 export type Mode = 'off' | 'observe' | 'act'
@@ -331,6 +345,8 @@ export type Config = {
   maxInFlightIssues: number | null
   worktreeReserve: number
   reviewFixCap: number
+  // fix rounds a life may spend on conflicts and red CI after other merges, apart from reviewFixCap
+  conflictFixCap: number
   guardRecheckMs: Ms
   guardTtlMs: Ms
   respondSettleMs: Ms
@@ -346,6 +362,8 @@ export type Config = {
   retryBackoffMs: Ms
   // per rolling hour; merges are never capped (D-24)
   rateCaps: { start: number; spawn: number; wake: number; perIssueKind: number }
+  // the weights of the claim score (v2/score.ts): whole numbers of at least 0, penalties as magnitudes
+  queueScore: QueueScoreWeights
   // act mode without DEV_ROLE=orchestrator, for a testbed (v2 SPEC 13.11.2)
   allowActOutsideOrchestrator: boolean
   // one timing record per pass in trace-YYYY-MM-DD.jsonl (#552); the workspace file's own
@@ -381,6 +399,12 @@ export type Config = {
   // queue (v2 SPEC 6.4)
   maxLives: number
   triageModel: Model
+  // the regime every event the loop's commands write carries (FACTORY_REGIME); manual is never a value
+  regime: 'factory_loop_v2' | 'testbed'
+  // the intake stamp (#995): off by default; the model that stamps, never larger than triageModel; the areas a stamp may name (always holding factory and product)
+  intakeStamp: 'off' | 'on'
+  intakeModel: Model
+  intakeAreas: string[]
   // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
   reviewer: string
   reviewerModel: Model
@@ -392,6 +416,10 @@ export type Config = {
   // for its turn (v2 SPEC 10.6)
   gateConcurrency: 'auto' | number
   gateWaitTimeoutMs: Ms
+  // the memory one slot is assumed to use, in MiB: 'auto' (measured from the gate runs, else a default)
+  // or a whole number of at least 1; and the memory kept free of slots, in MiB (v2/capacity.ts)
+  slotMemoryMiB: 'auto' | number
+  memoryReserveMiB: number
 }
 
 export type AnswerChannel = 'script' | 'tool' | 'text'
@@ -417,7 +445,7 @@ export type Action =
   // a done close's branch on origin, deleted only while it still reads sha (a leased delete)
   | (Base & { kind: 'delete-branch'; branch: string; sha: string })
   // park: a split's not-ready child, claimed at once to park on its open decision (v2 SPEC 8.7)
-  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null } })
+  | (Base & { kind: 'claim'; park?: { question: string; parent: number; parts?: ParkParts | null }; score?: ScoreResult })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
   // null when the life's design answer can no longer be read
   | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
@@ -445,6 +473,10 @@ export type PlanResult = {
   capped: string[]
   // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
+  // the cap the pass held claims and leases to; absent: the pass planned no v2 rules
+  cap?: CapInfo
   // S1: the pass was starved (a ready queue, all of it unclaimable, nothing in flight); null: unknown (a source failed)
   starved?: boolean | null
+  // S1: the queue as the claim rule saw it, claimable as planned after admission; absent: S1 did not run its queue (v2 SPEC S1)
+  queue?: QueueView
 }

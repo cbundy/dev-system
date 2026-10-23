@@ -1,0 +1,476 @@
+{
+ "at": "2026-10-10T12:00:00.000Z",
+ "repos": [],
+ "workers": {
+  "available": false,
+  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+ },
+ "events": [
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:30:00.000Z",
+   "state": "claimed",
+   "issue": 300,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/gadgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:30:00.000Z",
+   "state": "claimed",
+   "issue": 5,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  }
+ ],
+ "runs": [],
+ "queue": {
+  "available": true,
+  "rows": [
+   {
+    "repo": "acme/widgets",
+    "ts": "2026-10-10T09:00:01.000Z",
+    "taken_at": "2026-10-10T09:00:00.000Z",
+    "reason": "changed",
+    "considered": 14,
+    "candidates": [
+     {
+      "issue": 400,
+      "rank": 1,
+      "score": 100,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 90
+       }
+      ],
+      "claimable": true,
+      "why": null
+     },
+     {
+      "issue": 401,
+      "rank": 2,
+      "score": 95,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 85
+       }
+      ],
+      "claimable": true,
+      "why": null
+     },
+     {
+      "issue": 402,
+      "rank": 3,
+      "score": 90,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 80
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 403,
+      "rank": 4,
+      "score": null,
+      "factors": null,
+      "claimable": false,
+      "why": "unknown"
+     },
+     {
+      "issue": 404,
+      "rank": 5,
+      "score": 80,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 70
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 405,
+      "rank": 6,
+      "score": 75,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 65
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 406,
+      "rank": 7,
+      "score": 70,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 60
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 407,
+      "rank": 8,
+      "score": 65,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 55
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 408,
+      "rank": 9,
+      "score": 60,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 50
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 409,
+      "rank": 10,
+      "score": 55,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 45
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 410,
+      "rank": 11,
+      "score": 50,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 40
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 411,
+      "rank": 12,
+      "score": 45,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 35
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     }
+    ],
+    "rest": [
+     {
+      "why": "blocked",
+      "count": 2
+     }
+    ],
+    "free_slots": 1,
+    "owner_priority": [
+     300,
+     301
+    ],
+    "owner_only": [],
+    "owner_serial": false,
+    "owner_new_off": true
+   },
+   {
+    "repo": "acme/widgets",
+    "ts": "2026-10-10T11:55:01.000Z",
+    "taken_at": "2026-10-10T11:55:00.000Z",
+    "reason": "heartbeat",
+    "considered": 14,
+    "candidates": [
+     {
+      "issue": 200,
+      "rank": 1,
+      "score": 100,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 90
+       }
+      ],
+      "claimable": true,
+      "why": null
+     },
+     {
+      "issue": 201,
+      "rank": 2,
+      "score": 95,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 85
+       }
+      ],
+      "claimable": true,
+      "why": null
+     },
+     {
+      "issue": 202,
+      "rank": 3,
+      "score": 90,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 80
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 203,
+      "rank": 4,
+      "score": null,
+      "factors": null,
+      "claimable": false,
+      "why": "unknown"
+     },
+     {
+      "issue": 204,
+      "rank": 5,
+      "score": 80,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 70
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 205,
+      "rank": 6,
+      "score": 75,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 65
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 206,
+      "rank": 7,
+      "score": 70,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 60
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 207,
+      "rank": 8,
+      "score": 65,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 55
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 208,
+      "rank": 9,
+      "score": 60,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 50
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 209,
+      "rank": 10,
+      "score": 55,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 45
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 210,
+      "rank": 11,
+      "score": 50,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 40
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     },
+     {
+      "issue": 211,
+      "rank": 12,
+      "score": 45,
+      "factors": [
+       {
+        "name": "age",
+        "points": 10
+       },
+       {
+        "name": "priority",
+        "points": 35
+       }
+      ],
+      "claimable": false,
+      "why": "blocked"
+     }
+    ],
+    "rest": [
+     {
+      "why": "blocked",
+      "count": 2
+     }
+    ],
+    "free_slots": 1,
+    "owner_priority": [
+     300,
+     301
+    ],
+    "owner_only": [],
+    "owner_serial": false,
+    "owner_new_off": true
+   }
+  ]
+ }
+}

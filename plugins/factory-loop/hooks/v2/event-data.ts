@@ -60,14 +60,26 @@ export type ReleaseEvent = {
   lives: number | null
 }
 
-// The reused states, each with the meaning it already has (7.1); the note is today's.
+// A merged pull request's size (merged.v1 files, file_lines, additions, deletions): what `gh pr view --json
+// files,additions,deletions` read, each null when it did not read.
+export type PrFileLine = { path: string; additions: number; deletions: number }
+export type PrSize = {
+  files: string[] | null
+  fileLines: PrFileLine[] | null
+  additions: number | null
+  deletions: number | null
+}
+
+// The reused states, each with the meaning it already has (7.1); the note is read for its payload (event-native.ts).
+// A `merged` event may carry the size the event executor read (act-state.ts); the planner never sets it.
 export type ReusedEvent = {
-  state: 'delegated' | 'fix_requested' | 'merge_ready' | 'abandoned' | 'merged' | 'verdict'
+  state: 'abandoned' | 'merged' | 'verdict'
   issue: number
   branch: string | null
   pr: number | null
   head: string | null
   note: string
+  size?: PrSize | null
 }
 
 // One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by
@@ -87,6 +99,11 @@ export type GateRunData = {
   flaky?: boolean | null
   failed_tests?: string[] | null
   failed_at?: string | null
+  // the container's memory (cgroup memory.current) when the run started, its peak while it ran and
+  // the cgroup's limit, in bytes; left out when not read
+  mem_start_bytes?: number
+  mem_peak_bytes?: number
+  mem_limit_bytes?: number
 }
 export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
 

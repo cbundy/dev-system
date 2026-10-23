@@ -15,7 +15,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // The new types that keep their own name as the old state, and need no note.
-const SAME = new Set(["ready", "claimed", "claim_lost", "merged", "closed", "implementer_routed", "untrusted_stripped", "usage"]);
+const SAME = new Set(["ready", "claimed", "claim_lost", "closed", "implementer_routed", "untrusted_stripped", "usage"]);
 // A transition into these states is also the old delegated, fix_requested and merge_ready line.
 const SYNTHESIZED = { building: "delegated", fixing: "fix_requested", "merge-queue": "merge_ready" };
 
@@ -24,6 +24,9 @@ const NA_METRICS = {
   waiting: "needs the v1-only run_started and parked events: the new log has neither, so ready-to-merge time cannot be split into pipeline-bound and dispatcher-bound",
   adjudicator_agreement: "pairs verdicts by the v1 run_id, which no new event carries",
 };
+// The sections that read the new events' pr, by, recovered, files, file_lines, additions and deletions
+// fields; n/a under --source old.
+const MERGE_SECTIONS = ["merges", "prs", "gaps", "size", "overlap"];
 const NOTES = {
   first_pass: "the v1-only failed event does not exist in the new log: setbacks count fix_requested (a transition to fixing) only",
 };
@@ -55,12 +58,16 @@ function mapEvent(raw) {
     device: raw.device || null,
     repo: raw.repo || null,
     event_id: raw.event_id || null,
+    device_seq: Number.isInteger(raw.device_seq) ? raw.device_seq : null,
+    pr: Number.isInteger(d.pr) ? d.pr : null,
+    regime: typeof raw.regime === "string" && raw.regime !== "" ? raw.regime : null,
+    session_id: typeof raw.session_id === "string" && raw.session_id !== "" ? raw.session_id : null,
   };
   const rec = (state, note, at = ts) => ({ ...base, state, ts: at, note });
   switch (raw.type) {
     case "transition": {
       const at = iso(get("seq_at")) || ts;
-      const note = tokens({ life: get("life"), seq: get("seq"), row: get("table_row"), from: get("from_state"), to: get("to_state"), via: get("via"), step: get("step"), round: get("round") });
+      const note = tokens({ life: get("life"), seq: get("seq"), row: get("table_row"), from: get("from_state"), to: get("to_state"), via: get("via"), step: get("step"), round: get("round"), why: get("why"), question: get("question") === null ? null : "yes" });
       const out = [rec("transition", note, at)];
       const old = SYNTHESIZED[get("to_state")];
       if (old && get("from_state") !== get("to_state")) out.push(rec(old, null, at));
@@ -70,12 +77,20 @@ function mapEvent(raw) {
       const prefix = get("outcome") === "fixed" ? "CORRECT" : get("outcome") === "declined" ? "WRONG" : null;
       return prefix ? [rec("verdict", `${prefix}: ${get("finding") || "-"}`)] : [];
     }
+    case "merged": {
+      // the size fields are record fields, not note tokens: a list is no token. Null unless of the right type.
+      const files = Array.isArray(d.files) && d.files.every((f) => typeof f === "string" && f !== "") ? d.files : null;
+      const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+      const lineEntry = (x) => x && typeof x === "object" && typeof x.path === "string" && x.path !== "" && count(x.additions) !== null && count(x.deletions) !== null;
+      const file_lines = Array.isArray(d.file_lines) ? d.file_lines.filter(lineEntry).map((x) => ({ path: x.path, additions: x.additions, deletions: x.deletions })) : null;
+      return [{ ...rec("merged", tokens({ by: get("by"), recovered: get("recovered") })), files, file_lines, additions: count(d.additions), deletions: count(d.deletions) }];
+    }
     case "claim_renewed":
       return [rec("renewed", null)];
     case "requeued":
       return [rec("reclaimed", null)];
     case "loop_entry":
-      return [rec("loop", tokens({ kind: get("kind"), key: get("key"), status: get("status") }))];
+      return [rec("loop", tokens({ kind: get("kind"), key: get("key"), status: get("status"), wake: get("wake") }))];
     case "loop_passes":
       return [rec("loop", tokens({ kind: "passes" }))];
     case "intervention":
@@ -98,10 +113,44 @@ const transitionKey = (raw) => {
   return d.life !== undefined && d.life !== null && d.seq !== undefined && d.seq !== null ? `${raw.issue}|${d.life}|${d.seq}` : null;
 };
 
-// loadNewEvents(file): { events, reason }. A missing file reads as events null with the reason, as the
-// old loader does; a line that is not JSON is skipped.
+// factory-event-shapes.json is found beside this module, else in $DEV_SYSTEM_SHARE, else in
+// /usr/local/share/dev-system (the image copies it there beside this module).
+let shapeVersions = null;
+function currentShapes() {
+  if (shapeVersions) return shapeVersions;
+  const dirs = [__dirname, process.env.DEV_SYSTEM_SHARE || "/usr/local/share/dev-system"];
+  const hit = dirs.map((d) => path.join(d, "factory-event-shapes.json")).find((f) => fs.existsSync(f));
+  if (!hit) throw new Error(`cannot find factory-event-shapes.json beside the module or in ${dirs[1]}`);
+  shapeVersions = JSON.parse(fs.readFileSync(hit, "utf8")).current;
+  return shapeVersions;
+}
+
+// isCurrent(current, raw): whether the event's (type, type_version) is the pair the shapes file lists.
+// A line with no type_version at all (every writer stamps one, so only a hand-made line lacks it) is
+// not a newer writer's: only its type is checked.
+const isCurrent = (current, raw) => Object.prototype.hasOwnProperty.call(current, raw.type)
+  && (raw.type_version === undefined || current[raw.type] === raw.type_version);
+
+// skippedList(counts): the Map of "type\0version" -> count as [{type, type_version, count}] sorted by type, then version.
+function skippedList(counts) {
+  return [...counts].map(([k, count]) => {
+    const [type, v] = k.split("\0");
+    return { type, type_version: JSON.parse(v), count };
+  }).sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0) || (a.type_version < b.type_version ? -1 : a.type_version > b.type_version ? 1 : 0));
+}
+const countSkip = (counts, raw) => {
+  const k = `${raw.type}\0${JSON.stringify(raw.type_version === undefined ? null : raw.type_version)}`;
+  counts.set(k, (counts.get(k) || 0) + 1);
+};
+
+// loadNewEvents(file): { events, reason, skipped }. A missing file reads as events null with the reason, as the
+// old loader does; a line that is not JSON is skipped. A line whose (type, type_version) is not current
+// in the shapes file (a newer writer) is left out and counted in `skipped`; a current type the metrics do
+// not read is still dropped by mapEvent and is not counted.
 function loadNewEvents(file) {
-  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}` };
+  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}`, skipped: [] };
+  const current = currentShapes();
+  const counts = new Map();
   const seen = new Set();
   const events = [];
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
@@ -110,6 +159,10 @@ function loadNewEvents(file) {
     try {
       raw = JSON.parse(line);
     } catch {
+      continue;
+    }
+    if (raw && typeof raw === "object" && typeof raw.type === "string" && !isCurrent(current, raw)) {
+      countSkip(counts, raw);
       continue;
     }
     if (raw && raw.type === "transition") {
@@ -121,7 +174,7 @@ function loadNewEvents(file) {
     }
     events.push(...mapEvent(raw));
   }
-  return { events, reason: null };
+  return { events, reason: null, skipped: skippedList(counts) };
 }
 
 const localLog = (eventsDir, repo) => path.join(eventsDir || "/persist/events", "factory", `${repo.replace("/", "__")}.jsonl`);
@@ -138,10 +191,16 @@ function normalize(report) {
   const out = JSON.parse(JSON.stringify(report));
   delete out.sources;
   for (const k of Object.keys(NA_METRICS)) if (k in out) out[k] = "n/a (v1-only input)";
+  // the merges, prs and gaps sections read the new events' pr, by and recovered fields, which the old
+  // log has no equivalent of: n/a under --source old, so a shadow run records no difference for them
+  for (const k of MERGE_SECTIONS) delete out[k];
+  // by_regime has no counterpart under the old source, whose records carry no regime
+  if (out.throughput && typeof out.throughput === "object") delete out.throughput.by_regime;
+  if (out.spend && typeof out.spend === "object") delete out.spend.by_regime;
   if (out.throughput && Array.isArray(out.throughput.issues)) {
     for (const i of out.throughput.issues) for (const f of STAGE_FIELDS) delete i[f];
   }
   return out;
 }
 
-module.exports = { SYNTHESIZED, mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };
+module.exports = { MERGE_SECTIONS, SYNTHESIZED, mapEvent, loadNewEvents, currentShapes, isCurrent, skippedList, countSkip, localLog, normalize, NA_METRICS, NOTES };

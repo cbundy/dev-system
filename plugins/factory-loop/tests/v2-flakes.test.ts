@@ -54,7 +54,7 @@ describe('logFailedNames', () => {
 function record(): IssueRecord {
   return {
     issue: N, life: LIFE, seq: 5, seqAt: NOW - 30 * MIN, state: 'reviewing', since: NOW - 30 * MIN, resumeTo: null, branch: `issue-${N}`, pr: 621, head: HEAD, approvedPatch: null, brief: null,
-    step: 'review', attempt: 1, cut: false, triages: 0, fixes: 0, round: 1, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
+    step: 'review', attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 1, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
   }
 }
 
@@ -222,7 +222,7 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
       await clock.advance(ms)
     }
     const key = rerunKey(r, 1, RUN)
-    const flakeRows = () => h.events().filter(e => e[1] === 'intervention' && (e.at(-1) ?? '').includes('flaky='))
+    const flakeRows = () => h.native('intervention').filter(e => e.data.flaky !== null)
     // passes until the re-run is done (the log read first, then gh run rerun)
     const rerunDone = async () => {
       for (let i = 0; i < 6 && h.entry(key)?.status !== 'done'; i++) await pass(60_000)
@@ -249,12 +249,7 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
     for (let i = 0; i < 4; i++) await w.pass(60_000)
     const rows = w.flakeRows()
     expect(rows).toHaveLength(1)
-    const note = rows[0]?.at(-1) ?? ''
-    expect(note).toContain('cause=ci-rerun')
-    expect(note).toContain('flaky=yes')
-    expect(note).toContain('failed_tests=tests/cli.test.js,a%2Cb')
-    expect(note).toContain('failed_jobs=ci,lint')
-    expect(note).toContain(`head=${HEAD}`)
+    expect(rows[0]?.data).toMatchObject({ cause: 'ci-rerun', flaky: true, failed_tests: ['tests/cli.test.js', 'a,b'], failed_jobs: ['ci', 'lint'], head: HEAD })
   })
 
   test('the run red again after the re-run: one flaky=no row', ENGINE_TEST, async ($, on) => {
@@ -267,9 +262,7 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
     for (let i = 0; i < 4; i++) await w.pass(60_000)
     const rows = w.flakeRows()
     expect(rows).toHaveLength(1)
-    const note = rows[0]?.at(-1) ?? ''
-    expect(note).toContain('flaky=no')
-    expect(note).toContain('failed_jobs=ci,lint')
+    expect(rows[0]?.data).toMatchObject({ flaky: false, failed_jobs: ['ci', 'lint'] })
   })
 
   test('a push of a new head with a green run: no flake row', ENGINE_TEST, async ($, on) => {

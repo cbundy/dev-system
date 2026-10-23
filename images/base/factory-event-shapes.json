@@ -11,6 +11,7 @@
     "finding_handled": 1,
     "gate_run": 1,
     "implementer_routed": 1,
+    "intake_stamp": 1,
     "intervention": 1,
     "loop_entry": 1,
     "loop_passes": 1,
@@ -19,6 +20,7 @@
     "milestone_state": 1,
     "prompt_denied": 1,
     "prompt_waiting": 1,
+    "queue_snapshot": 1,
     "ready": 1,
     "released": 1,
     "requeued": 1,
@@ -372,6 +374,18 @@
             "string"
           ]
         },
+        "regime": {
+          "enum": [
+            "factory_loop_v2",
+            "manual",
+            "testbed",
+            null
+          ],
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "repo": {
           "pattern": "^[^/\\s]+/[^/\\s]+$",
           "type": "string"
@@ -511,6 +525,27 @@
           "pattern": "^[0-9a-z]+$",
           "type": "string"
         },
+        "mem_limit_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mem_peak_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mem_start_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "queued_behind": {
           "minimum": 0,
           "type": "integer"
@@ -587,6 +622,117 @@
         "model",
         "opus_pct",
         "reason"
+      ],
+      "type": "object",
+      "x-issue": "required"
+    },
+    "intake_stamp.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "area": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "cache_creation_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "dropped": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "labels_kept": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "labels_set": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "dry",
+            "run"
+          ]
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "needs_owner": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "dropped",
+            "failed",
+            "ok"
+          ]
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "touches": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "area",
+        "dropped",
+        "labels_kept",
+        "labels_set",
+        "mode",
+        "model",
+        "needs_owner",
+        "outcome",
+        "reason",
+        "touches",
+        "version"
       ],
       "type": "object",
       "x-issue": "required"
@@ -688,6 +834,20 @@
           "minimum": 0,
           "type": "integer"
         },
+        "cache_creation_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "class": {
           "enum": [
             "develop",
@@ -771,6 +931,13 @@
             "null"
           ]
         },
+        "input_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "key": {
           "minLength": 1,
           "type": "string"
@@ -782,6 +949,12 @@
             "tell"
           ]
         },
+        "model": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "outcome": {
           "enum": [
             "current",
@@ -789,6 +962,13 @@
             "migrated",
             "timed-out",
             null
+          ]
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "rule": {
@@ -892,6 +1072,34 @@
             "act",
             "observe",
             "off"
+          ]
+        },
+        "observe_commands_mean_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observe_in_process_max_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observe_in_process_mean_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observe_mean_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "p50_ms": {
@@ -1118,6 +1326,35 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "file_lines": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "additions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "deletions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "additions",
+              "deletions",
+              "path"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -1438,6 +1675,182 @@
       ],
       "type": "object",
       "x-issue": "required"
+    },
+    "queue_snapshot.v1": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "claimable": {
+                "type": "boolean"
+              },
+              "factors": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "points": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "points"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "issue": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rank": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "score": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "why": {
+                "enum": [
+                  "blocked",
+                  "exhausted",
+                  "held",
+                  "new_off",
+                  "no_slot",
+                  "outside_only",
+                  "paused",
+                  "rejected",
+                  "skipped",
+                  "tracker",
+                  "unknown",
+                  "untrusted",
+                  "usage_tier",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "claimable",
+              "factors",
+              "issue",
+              "rank",
+              "score",
+              "why"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "considered": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "folded": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "free_slots": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "owner_new_off": {
+          "type": "boolean"
+        },
+        "owner_only": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "owner_priority": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "owner_serial": {
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "changed",
+            "heartbeat"
+          ]
+        },
+        "rest": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "why": {
+                "enum": [
+                  "blocked",
+                  "exhausted",
+                  "held",
+                  "new_off",
+                  "no_slot",
+                  "outside_only",
+                  "paused",
+                  "rejected",
+                  "skipped",
+                  "tracker",
+                  "unknown",
+                  "untrusted",
+                  "usage_tier",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "count",
+              "why"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "taken_at": {
+          "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidates",
+        "considered",
+        "folded",
+        "free_slots",
+        "owner_new_off",
+        "owner_only",
+        "owner_priority",
+        "owner_serial",
+        "reason",
+        "rest",
+        "taken_at"
+      ],
+      "type": "object",
+      "x-issue": "none"
     },
     "ready.v1": {
       "additionalProperties": false,

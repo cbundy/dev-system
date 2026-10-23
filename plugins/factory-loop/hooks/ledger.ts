@@ -7,7 +7,7 @@
 // log after a lost store, is derive.ts's deriveLedger. Every function returns a new array and
 // replaces only the entries it changes, so changedEntries() can tell the driver what moved.
 import { ACTION_KINDS, DEFAULT_CONFIG } from './config'
-import { loopEventArgs } from './derive'
+import { loopEntryArgv } from './derive'
 import type { Exec } from './exec'
 import { maxAttemptsOf, turnEnded } from './foundation'
 import type {
@@ -21,6 +21,7 @@ import type {
   Ms,
   Outcome,
 } from './types'
+import type { TokenFields } from './v2/step-tokens'
 import { AGENT_STEPS } from './v2/types'
 
 const DAY = 86_400_000
@@ -71,8 +72,14 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
     startedAt: now,
     endedAt: null,
   }
-  if (action.kind === 'agent-step') entry.step = action.step
-  else if (action.kind === 'transition') {
+  if (action.kind === 'agent-step') {
+    entry.step = action.step
+    // the spawning session names the transcript the token totals are read from, also after a restart
+    if (session !== '') entry.session = session
+  } else if (action.kind === 'intake-stamp') {
+    // the same for an intake run's tokens (v2/act-intake.ts); it is no LOOP_KIND, so it writes no loop_entry
+    if (session !== '') entry.session = session
+  } else if (action.kind === 'transition') {
     entry.outcome = {
       kind: 'transition',
       row: action.row,
@@ -148,6 +155,11 @@ export function finish(
     next.attempts = Math.max(next.attempts, next.maxAttempts ?? maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, next.kind))
   }
   let out = put(ledger, next)
+  // a settle of an intake run that ended (rule I1) ends the run's entry too: the try is settled, so the run no longer counts
+  if (next.kind === 'intake-stamp' && next.status === 'done' && key.endsWith('/settle')) {
+    const runKey = key.slice(0, -'/settle'.length)
+    out = out.map(e => (e.key === runKey && e.status === 'running' ? ended(e, 'timed-out', now, 'timed out: settled') : e))
+  }
   if (next.kind === 'stop-agent' && next.rule === 'A1' && next.status !== 'running' && key.startsWith('stop:')) {
     const agentId = key.slice('stop:'.length)
     const why = next.status === 'done' ? 'timed out: stopped' : 'timed out: the stop failed, the agent may still run'
@@ -321,11 +333,11 @@ export function exhausted(entry: LedgerEntry, config: Config): boolean {
 
 // --- the loop's own events (D-09, v2 SPEC 13.7.4) -------------------------------------------------
 
-// loopEvent: the callum-flow-event argv for a `loop` event about this entry, for agent and wake
-// entries (owner notices and rate-cap notices are tells) at their start and end; null for CLI
-// kinds, which log their own events.
-export function loopEvent(entry: LedgerEntry): string[] | null {
-  return LOOP_KINDS.includes(entry.kind) ? ['callum-flow-event', ...loopEventArgs(entry)] : null
+// loopEvent: the native callum-flow-event argv for a `loop_entry` event about this entry, for agent
+// and wake entries (owner notices and rate-cap notices are tells) at their start and end; null for
+// CLI kinds, which log their own events, and for a judge, which has no event type.
+export function loopEvent(entry: LedgerEntry, tokens?: TokenFields): string[] | null {
+  return LOOP_KINDS.includes(entry.kind) ? loopEntryArgv(entry, tokens) : null
 }
 
 // changedEntries: the entries `after` holds that `before` did not hold as they are: new or

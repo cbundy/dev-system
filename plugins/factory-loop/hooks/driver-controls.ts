@@ -18,6 +18,7 @@ import { ANSWER_TOOL } from './wake'
 import { actIo, acting, configDir, fileIo, killed, runtime, v2StoreIo } from './driver-io'
 import { hookEnv, noteConfigOp, persist } from './driver-store'
 import { rearm, request } from './driver-pass'
+import { startStamp, stampJob } from './driver-stamp'
 import { afterwards, bounded, held, hook, kept, later, lateDrop } from './driver-between'
 import type { OpAnswer } from './driver-between'
 import { FIRST_PASS_AFTER_MS, S, live, liveV2 } from './driver-state'
@@ -44,12 +45,14 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
       const parked = parkedOf(S.lastState?.v2?.records)
-      const view = viewOf(rt)
+      const view = viewOf(rt, S.lastState?.v2?.interventions.gates)
       const from = agentId === undefined ? { last, parked, view } : { last, agentId, parked, view }
       const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
+      // a dry-run stamp answers at once and runs in the background (driver-stamp.ts); a late answer starts nothing
+      if (reply.ok && reply.op?.op === 'stamp') said = claim() ? startStamp(rt, reply.op.issue, now) : OP_LATE.text
       // a setting a config op changed: the next pass's settings diff says who changed it (rule N1)
       if (reply.logged !== null && reply.op?.op === 'config' && reply.op.change !== undefined && claim()) await noteConfigOp($, rt.repo, reply.op.change.key, by, now)
       const landed = reply.op === null ? null : opLanded({ mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now, by)
@@ -132,6 +135,8 @@ export function ensure($: EngineInterface) {
     S.ask = (source, why) => void request($, source, why).catch(() => undefined)
     S.background = after => void hook(() => afterwards($, after))
     S.saveNow = rt => void persist($, rt)
+    // not in the hook queue: a spawn that hangs (up to SPAWN_TIMEOUT_MS) must not hold the turn ends behind it
+    S.stampJob = (rt, run) => void stampJob($, rt, run)
     await registerControls($)
     // the first pass after a load: a session start or a reload
     $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))

@@ -27,7 +27,7 @@ function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
 // releaseInProgress: the newest release task the judge answered `done` (it started a release) that is still
 // inside the releaseInProgress window and whose tag is still the newest known one; null when none. Its tag
 // is the key's `<tag>` segment: `unknown` ends only by the window, `none` ends once any tag is known.
-export function releaseInProgress(ctx: PlanCtx & { v2: { tag: string | null } }): { entry: LedgerEntry; tag: string } | null {
+export function releaseInProgress(ctx: PlanCtx & { v2: { tag?: string | null } }): { entry: LedgerEntry; tag: string } | null {
   const { state, config } = ctx
   if (config.releaseInProgressMs <= 0) return null
   let last: LedgerEntry | undefined
@@ -61,7 +61,7 @@ export function fleetRules(ctx: V2Ctx): void {
   const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains' && c.repo === undefined)).map(r => r.issue).sort((a, b) => a - b)
   for (const a of reopenedOffNext(ctx)) want(ctx, a)
   const newest = ctx.v2.tag
-  const due = releaseDue(state, config, waiting, newest)
+  const due = releaseDue(state, config, waiting, newest ?? null)
   const going = due === null ? null : releaseInProgress(ctx)
   if (due !== null && going !== null) skip(ctx, 'O3', null, `release in progress: ${going.entry.key} answered done at ${isoOf(going.entry.endedAt ?? 0)}, tag ${going.tag}; until a newer tag or ${isoOf((going.entry.endedAt ?? 0) + config.releaseInProgressMs)}`)
   else if (due !== null) want(ctx, { ...wake('task', 'release', due.key, 'O3', null, due.fields), ...(due.fresh.length > 0 ? { reason: `task release: ${due.fresh.map(n => `#${n}`).join(', ')} started waiting` } : {}) })
@@ -82,6 +82,9 @@ export function fleetTells(ctx: PlanCtx): void {
 // The work R2 waits for with wind-down off, and names as unwaited-for with it on: a merge-queue action or the release task, running.
 const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || (e.kind === 'task' && e.wake === 'release'))
 
+// A running merge is never cut by a restart, with wind-down on or off: it is the loop's one irreversible act.
+const HOLDS_ALWAYS = (e: LedgerEntry) => e.status === 'running' && e.kind === 'queue-merge'
+
 // restartOf (R2): the restart for an update that is due, last in the pass, once no queue action or
 // release task runs, and only on a pass that admitted nothing else (kept), as v1's H4 did: what
 // starts in the pass the restart ends would only be cut, a release task or a queue action among
@@ -99,6 +102,11 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
   // wind-down finish it up to the cap); with it off, it waits as before
   const windDown = ctx.config.windDownMinutes > 0
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
+  const merging = ctx.state.ledger.filter(HOLDS_ALWAYS).map(e => e.key)
+  if (merging.length > 0) {
+    skip(ctx, 'R2', null, `update due: waiting on ${(windDown ? merging : holding).join(', ')}`)
+    return null
+  }
   if (!windDown && holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
     return null

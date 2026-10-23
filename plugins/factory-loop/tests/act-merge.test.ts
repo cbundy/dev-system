@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { failure, mergeExecutors, parseRollout } from '../hooks/act-merge'
-import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
+import type { ActIo, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, LedgerEntry } from '../hooks/types'
 import { DEVICE, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
@@ -34,13 +34,13 @@ function runtime(): Runtime {
   }
 }
 
-type Over = { ledger?: LedgerEntry[]; attempts?: number; event?: (state: string, fields: EventFields) => Promise<void> }
+type Over = { ledger?: LedgerEntry[]; attempts?: number; event?: (type: string, data: Record<string, unknown>, at: { issue: number }) => Promise<void> }
 
 // harness: a fake ExecCtx whose commands answer from `replies` in order (a missing reply is a
 // quiet exit 0), recording every command and event.
 function harness(replies: Reply[] = [], over: Over = {}) {
   const calls: Call[] = []
-  const events: { state: string; fields: EventFields }[] = []
+  const events: { type: string; data: Record<string, unknown>; issue: number }[] = []
   let next = 0
   const io: ActIo = {
     now: async () => NOW,
@@ -67,9 +67,9 @@ function harness(replies: Reply[] = [], over: Over = {}) {
       if (reply instanceof Error) throw reply
       return { exitCode: 0, stdout: '', stderr: '', ...reply }
     },
-    event: async (st, fields) => {
-      events.push({ state: st, fields })
-      if (over.event !== undefined) await over.event(st, fields)
+    event: async (type, data, at) => {
+      events.push({ type, data, issue: at.issue })
+      if (over.event !== undefined) await over.event(type, data, at)
     },
     wakeId: () => 'w1',
   }

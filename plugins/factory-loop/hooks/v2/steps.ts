@@ -16,7 +16,8 @@
 //   its turn without a valid answer (D-68); a second miss is unknown (bad-answer).
 // - Every read result is a done entry with the outcome { kind: 'step', step, result }, unknown
 //   ones included, so plan reads why; a turn that ended in error, aborted or refused is unknown
-//   (rate-limited for a 429, api for another API error, else agent-dead), unless a valid answer
+//   (stopped when the loop stopped its agent, rate-limited for a 429, api for another API error, else
+//   agent-dead), unless a valid answer
 //   was recorded before it, which is the result (a writer's ok excepted: the stop gate never ran).
 // act.ts applies what these give to the live ledger.
 import { V2_CONTRACTS, jobPathOf, jobText, parseAnswer } from '../contract.mjs'
@@ -26,6 +27,7 @@ import type { AgentAnswer, Exec, ExecCtx, Executor } from '../exec'
 import { scriptShaped } from '../prompts'
 import type { ScriptPlace } from '../prompts'
 import type { Action, ActionKind, LedgerEntry, Ms } from '../types'
+import { stoppedBy } from './keys'
 import { companionGates, gateHoldMs, gateNote, gateSettled, holdNote } from './steps-gate'
 import { STEPS as QUEUE } from './steps-queue'
 import { STEPS as REVIEW } from './steps-review'
@@ -288,16 +290,17 @@ const WORDS_MAX = 120
 
 // lostTurn: the unknown of a turn that ended in error, aborted or refused, with an excerpt of its
 // last words, so triage and the decision log see what it said.
-function lostTurn(answer: AgentAnswer): StepResult {
-  const why: UnknownWhy = RATE_LIMIT.test(answer.answer) ? 'rate-limited' : API_ERROR.test(answer.answer) ? 'api' : 'agent-dead'
+function lostTurn(answer: AgentAnswer, stop: LedgerEntry | null): StepResult {
+  const why: UnknownWhy = stop !== null ? 'stopped' : RATE_LIMIT.test(answer.answer) ? 'rate-limited' : API_ERROR.test(answer.answer) ? 'api' : 'agent-dead'
   const words = answer.answer.replace(/\s+/g, ' ').trim()
   const excerpt = words.length > WORDS_MAX ? `${words.slice(0, WORDS_MAX - 3)}...` : words
-  return unknownResult(why, `its turn ended: ${answer.reason}${excerpt === '' ? '' : `: ${excerpt}`}`)
+  const said = `${answer.reason}${excerpt === '' ? '' : `: ${excerpt}`}`
+  return unknownResult(why, stop !== null ? `its turn ended after the loop stopped it (${stop.key}): ${said}` : `its turn ended: ${said}`)
 }
 
 // stepAnswered: an agent step's turn ended. Its final words are saved for the owner and the
 // triage (exec.ts answerPath), then its recorded answer is read.
-export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer, deps: StepDeps = STEP_DEPS, hold: Map<string, Ms> = new Map()): Promise<StepTaken> {
+export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer, deps: StepDeps = STEP_DEPS, hold: Map<string, Ms> = new Map(), ledger: readonly LedgerEntry[] = ctx.state.ledger): Promise<StepTaken> {
   const record = await recordOf(ctx, entry.key, deps)
   const step = record?.step ?? entry.step ?? 'build'
   const subagentType = agentTypeOf(record?.subagentType) ?? STEP_AGENT[step]
@@ -314,7 +317,7 @@ export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: Age
     // a valid answer recorded before the turn ended in error is the result (10.8), but a writer's
     // ok, which the stop gate never passed
     const kept = read !== null && 'answer' in read && !waitsForOk(record, read.answer, deps) ? read : null
-    const result = kept !== null ? await resultOf(ctx, record, kept.answer, deps) : lostTurn(answer)
+    const result = kept !== null ? await resultOf(ctx, record, kept.answer, deps) : lostTurn(answer, stoppedBy(ledger, entry))
     const tail = kept !== null ? ` (recorded before its turn ended: ${answer.reason})` : ''
     return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}${tail}`)), problem: null, repair: null, subagentType }
   }

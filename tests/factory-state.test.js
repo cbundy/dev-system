@@ -6,6 +6,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -17,6 +18,7 @@ const SCRIPT = path.join(ROOT, "images", "base", "callum-flow-factory-state");
 const FIX = path.join(__dirname, "fixtures", "factory-state");
 const mod = require(SCRIPT);
 const { extractRunLink } = require("./metrics-blocks.js");
+const { available, createDb } = require("./lib/factory-db.js");
 
 const names = fs.readdirSync(FIX).filter((f) => f.endsWith(".input.json")).map((f) => f.replace(".input.json", "")).sort();
 const input = (n) => JSON.parse(fs.readFileSync(path.join(FIX, `${n}.input.json`), "utf8"));
@@ -26,6 +28,7 @@ const derive = (i, over = {}) => mod.deriveState({
 });
 const issue = (report, repo, n) => report.repos.find((r) => r.repo === repo).issues.concat(report.repos.find((r) => r.repo === repo).recent).find((i) => i.issue === n);
 const A = "acme/widgets";
+const OLD_QUEUE = { available: false, reason: "the old store has no queue snapshots" };
 
 test("every fixture's output matches its reviewed expected JSON", () => {
   assert.ok(names.length >= 10);
@@ -70,6 +73,22 @@ test("implementer_routed (#506) is a delegation decision: implementing, and a ne
   });
   assert.equal(issue(r, A, 90).stage, "implementing", "routed after a live claim");
   assert.equal(issue(r, A, 91).stage, "implementing", "routed after abandoned starts a new life");
+});
+
+test("a merged event with no issue (the sweep's unrecorded main merge, cbundy/dev-system#752) changes no issue's stage and throws nothing", () => {
+  const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
+  const base = {
+    at: "2026-10-10T12:00:00.000Z", repos: [], runs: [], workers: { available: false, reason: "test" },
+    events: [e(95, "2026-10-10T11:00:00.000Z", "claimed", { note: "lease: 120" })],
+  };
+  const orphan = e(null, "2026-10-10T11:30:00.000Z", "merged", { actor: "sweep", pr: 77, head: "1".repeat(40) });
+  const without = derive(base);
+  const withOrphan = derive({ ...base, events: [...base.events, orphan] });
+  const issuesOf = (r) => r.repos.map((x) => ({ issues: x.issues, recent: x.recent }));
+  assert.deepEqual(issuesOf(withOrphan), issuesOf(without), "the null-issue merged row changes no issue");
+  assert.equal(issue(withOrphan, A, 95).stage, issue(without, A, 95).stage);
+  // alone, it places no issue
+  assert.deepEqual(derive({ ...base, events: [orphan] }).repos.flatMap((r) => r.issues.concat(r.recent)), []);
 });
 
 test("loop events (the factory loop's bookkeeping, D-09) never derive anything about an issue", () => {
@@ -193,7 +212,7 @@ test("the SQL carries the canonical run_link CTE from docs/factory-state.md verb
 });
 
 test("every query is read-only SQL bounded by --at", () => {
-  for (const sql of [mod.SQL_EVENTS, mod.SQL_RUNS]) {
+  for (const sql of [mod.SQL_EVENTS, mod.SQL_RUNS, mod.SQL_QUEUE]) {
     assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
     assert.match(sql, /<= :'at'::timestamptz/);
   }
@@ -223,6 +242,21 @@ else if (m === "-- fs:events") console.log(JSON.stringify(fx.events));
 else if (m === "-- fs:event_log") {
   if (process.env.FS_NEW_FAIL) { console.error("psql: no factory database"); process.exit(Number(process.env.FS_NEW_FAIL)); }
   console.log(JSON.stringify(process.env.FS_EVENT_LOG ? JSON.parse(fs.readFileSync(process.env.FS_EVENT_LOG, "utf8")) : fx.event_log));
+}
+else if (m === "-- fs:queue_meta") console.log(JSON.stringify({ columns: process.env.FS_QUEUE_COLUMNS !== "0" }));
+else if (m === "-- fs:queue") {
+  if (process.env.FS_QUEUE_FAIL) { console.error("psql: queue exploded"); process.exit(Number(process.env.FS_QUEUE_FAIL)); }
+  // like the real SQL: the newest snapshot of each repo at or before :'at', only the repos asked for
+  const at = Date.parse(vars.at);
+  const want = vars.repos ? vars.repos.split(",") : null;
+  const best = new Map();
+  for (const q of fx.queue_rows || []) {
+    const k = q.repo.toLowerCase();
+    if (Date.parse(q.taken_at) > at || (want && !want.includes(k))) continue;
+    const c = best.get(k);
+    if (!c || (q.taken_at + q.ts) > (c.taken_at + c.ts)) best.set(k, q);
+  }
+  console.log(JSON.stringify([...best.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map((e) => e[1])));
 }
 else if (m === "-- fs:runs" && process.env.FS_NORUNS !== "1") console.log(JSON.stringify(fx.runs));
 else process.exit(9);
@@ -267,11 +301,13 @@ test("CLI: json output equals the pure derivation, passes --at and --repo to the
   const b = cli(args);
   assert.equal(a.status, 0, a.stderr);
   assert.equal(a.stdout, b.stdout);
-  const want = JSON.parse(JSON.stringify(derive({ ...input("missing-run-started"), repos: [A] })));
+  const want = JSON.parse(JSON.stringify(derive({ ...input("missing-run-started"), repos: [A] }, { queue: OLD_QUEUE })));
+  want.skipped_events = [];
   assert.deepEqual(JSON.parse(a.stdout), want);
   assert.deepEqual(a.calls.filter((c) => c.marker !== "-- fs:meta").map((c) => c.vars), [
     { at: "2026-10-10T12:00:00.000Z", repos: A }, { at: "2026-10-10T12:00:00.000Z", repos: A },
   ]);
+  assert.equal(a.calls.some((c) => c.marker.startsWith("-- fs:queue")), false, "--source old never reads the queue");
 });
 
 test("CLI: without --at the database clock is used and named", () => {
@@ -285,7 +321,8 @@ test("CLI: without --at the database clock is used and named", () => {
 test("CLI: github facts come from callum-flow-issue-read and match the pure derivation", () => {
   const r = cli(["--at", "2026-10-10T12:00:00Z", "--format", "json"], {}, "github");
   assert.equal(r.status, 0, r.stderr);
-  const want = JSON.parse(JSON.stringify(derive(input("github"))));
+  const want = JSON.parse(JSON.stringify(derive(input("github"), { queue: OLD_QUEUE })));
+  want.skipped_events = [];
   assert.deepEqual(JSON.parse(r.stdout), want);
 });
 
@@ -561,9 +598,9 @@ test("mapping: the new store's row becomes the common event the old line becomes
 });
 
 test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
-  for (const type of ["gate_run", "wind_down", "reviewed", "intervention", "usage", "untrusted_stripped", "test_weakened", "claim_lost", "shadow_read", "prompt_denied", "prompt_waiting"]) {
+  for (const type of mod.IGNORED_TYPES) {
     const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
-    assert.equal(m.type, type);
+    assert.equal(m.type, type.startsWith("loop_") ? "loop" : type, "loop_entry and loop_passes map to loop");
   }
   assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "mystery" }), /unknown factory event: mystery v1/);
   assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "claimed", type_version: 2 }), /unknown factory event: claimed v2/);
@@ -593,27 +630,46 @@ test("CLI new: the lease and the stages equal the old path's for the same claims
   assert.deepEqual(b, a);
 });
 
-test("CLI new: an event_log row of an unknown type or version fails with exit 1; shadow prints the old answer and records new_error", () => {
+test("DERIVED_TYPES and IGNORED_TYPES partition the current types of the shapes file", () => {
+  const current = Object.keys(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "images", "base", "factory-event-shapes.json"), "utf8")).current);
+  assert.ok(current.length >= 20);
+  for (const t of current) assert.equal([mod.DERIVED_TYPES, mod.IGNORED_TYPES].filter((set) => set.includes(t)).length, 1, t);
+  for (const t of [...mod.DERIVED_TYPES, ...mod.IGNORED_TYPES]) assert.ok(current.includes(t), `${t} is not a current type`);
+});
+
+test("CLI new: an event_log row of an unknown type or version is left out and named; shadow records no difference", () => {
   const fx = input("v2-waiting");
-  for (const [bad, msg] of [[{ type: "mystery" }, "unknown factory event: mystery v1"], [{ type_version: 2 }, "unknown factory event: claimed v2"]]) {
-    const rows = fx.events.map(toEventLog).filter(Boolean);
-    rows.push({ ...rows.find((r) => r.type === "claimed"), ...bad });
-    const file = withEventLog("bad", rows);
-    const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
-    assert.equal(nu.status, 1);
-    assert.equal(nu.stdout, "");
-    assert.ok(nu.stderr.includes(msg), nu.stderr);
-    fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
-    const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
-    const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
-    assert.equal(sh.status, 0, sh.stderr);
-    assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
-    const rec = shadowRecords();
-    assert.equal(rec.length, 1);
-    assert.equal(rec[0].tool, "factory-state");
-    assert.equal(rec[0].differences, null);
-    assert.ok(rec[0].new_error.includes(msg));
-  }
+  const good = fx.events.map(toEventLog).filter(Boolean);
+  const rows = [...good];
+  const claimed = good.find((r) => r.type === "claimed");
+  rows.push({ ...claimed, type: "mystery" }, { ...claimed, type_version: 2 });
+  const file = withEventLog("bad", rows);
+  const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
+  assert.equal(nu.status, 0, nu.stderr);
+  const report = JSON.parse(nu.stdout);
+  assert.deepEqual(report.skipped_events, [
+    { type: "claimed", type_version: 2, count: 1, derived: true },
+    { type: "mystery", type_version: 1, count: 1, derived: false },
+  ]);
+  const clean = cli([...AT, "--source", "new"], { FS_EVENT_LOG: withEventLog("good", good) }, "v2-waiting");
+  assert.deepEqual(clean.status, 0, clean.stderr);
+  assert.deepEqual(JSON.parse(clean.stdout).skipped_events, []);
+  assert.deepEqual(mod.normalizeForCompare(report), mod.normalizeForCompare(JSON.parse(clean.stdout)));
+  const text = cli(["--at", fx.at, "--github", "off", "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /^skipped events: claimed v2 x1 \(derived\), mystery v1 x1$/m);
+  assert.doesNotMatch(clean.stdout, /skipped events/);
+  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
+  const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
+  const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
+  assert.deepEqual(JSON.parse(old.stdout).skipped_events, []);
+  const rec = shadowRecords();
+  assert.equal(rec.length, 1);
+  assert.equal(rec[0].tool, "factory-state");
+  assert.equal(rec[0].differences, 0);
+  assert.equal(rec[0].new_error, null);
 });
 
 test("CLI shadow: a matching run records zero differences, a seeded difference is recorded by path; the exit follows the old read", () => {
@@ -643,6 +699,133 @@ test("CLI shadow: a matching run records zero differences, a seeded difference i
   // and a failing old read fails the tool, as before
   const oldDown = cli(AT, { FS_FAIL: "3", CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" });
   assert.equal(oldDown.status, 1);
+});
+
+// ---------------------------------------------------------------- the queue snapshot (#1147)
+
+const QA = "acme/widgets";
+const queueRepo = (r, repo) => r.repos.find((x) => x.repo === repo).queue;
+
+test("queue fixture: the newest snapshot wins, the top is 10 entries without factors, a repo without one is n/a", () => {
+  const r = derive(input("queue"));
+  const q = queueRepo(r, QA);
+  assert.equal(q.reason, "heartbeat");
+  assert.equal(q.age_minutes, 5);
+  assert.equal(q.top.length, 10);
+  assert.ok(q.top.every((c) => !("factors" in c)));
+  assert.deepEqual(q.top.map((c) => c.rank), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(q.rest, [{ why: "blocked", count: 2 }]);
+  assert.deepEqual(queueRepo(r, "acme/gadgets"), { "n/a": "no queue_snapshot for this repo at or before --at" });
+  assert.deepEqual(derive(input("queue"), { queue: undefined }).repos[0].queue, { "n/a": "not read" });
+});
+
+test("queue: shuffled rows give the same report, and a repo only in the queue rows is not added", () => {
+  const i = input("queue");
+  const shuffled = { ...i, queue: { available: true, rows: [...i.queue.rows].reverse().concat([{ ...i.queue.rows[0], repo: "acme/other" }]) } };
+  assert.equal(JSON.stringify(derive(shuffled)), JSON.stringify(derive(i)));
+});
+
+test("queue: renderText prints the snapshot line, the controls line and the n/a line", () => {
+  const text = mod.renderText(JSON.parse(JSON.stringify(derive(input("queue")))));
+  assert.ok(text.includes("queue (snapshot 5m old, heartbeat): #200 score 100, #201 score 95, #202 score 90 (blocked), #203 score - (unknown), #204 score 80 (blocked), #205 score 75 (blocked), #206 score 70 (blocked), #207 score 65 (blocked), #208 score 60 (blocked), #209 score 55 (blocked), +4 more\n"));
+  assert.ok(text.includes("queue controls: free slots 1, priority #300 #301, only none, one at a time off, no new work on\n"));
+  assert.ok(text.includes("queue: n/a: no queue_snapshot for this repo at or before --at\n"));
+  const i = input("queue");
+  const empty = { ...i, queue: { available: true, rows: [{ ...i.queue.rows[1], candidates: [], considered: 0, free_slots: null, owner_priority: [], owner_serial: true, owner_new_off: false }] } };
+  const t2 = mod.renderText(JSON.parse(JSON.stringify(derive(empty))));
+  assert.ok(t2.includes("queue (snapshot 5m old, heartbeat): empty\n"));
+  assert.ok(t2.includes("queue controls: free slots unset, priority none, only none, one at a time on, no new work off\n"));
+});
+
+const queueFixture = (name, extra = {}) => {
+  const fx = input("queue");
+  const late = { ...fx.queue.rows[1], ts: "2026-10-10T12:30:01.000Z", taken_at: "2026-10-10T12:30:00.000Z", reason: "changed" };
+  const f = path.join(tmp, `${name}.input.json`);
+  fs.writeFileSync(f, JSON.stringify({ ...fx, queue_rows: [...fx.queue.rows, late], event_log: fx.events.map(toEventLog).filter(Boolean), ...extra }));
+  return f;
+};
+
+test("CLI new: reads the queue through --factory, bounded by --at, byte-identical twice, equal to the pure derivation", () => {
+  const file = queueFixture("queue-cli");
+  const args = [...AT, "--source", "new"];
+  const a = cli(args, { FS_FIXTURE: file }, "queue");
+  const b = cli(args, { FS_FIXTURE: file }, "queue");
+  assert.equal(a.status, 0, a.stderr);
+  assert.equal(a.stdout, b.stdout);
+  const meta = a.calls.findIndex((c) => c.marker === "-- fs:queue_meta");
+  const q = a.calls.findIndex((c) => c.marker === "-- fs:queue");
+  assert.ok(meta >= 0 && q > meta && a.calls[meta].factory && a.calls[q].factory);
+  assert.equal(a.calls[q].vars.at, "2026-10-10T12:00:00.000Z");
+  assert.match(a.calls[q].sql, /row_number\(\) OVER \(PARTITION BY lower\(repo\) ORDER BY taken_at DESC, ts DESC, device DESC, event_id DESC\)/);
+  assert.doesNotMatch(a.calls[q].sql, /DISTINCT ON|@>|\bdata\b/);
+  const out = JSON.parse(a.stdout);
+  assert.deepEqual(queueRepo(out, QA), JSON.parse(JSON.stringify(queueRepo(derive(input("queue")), QA))), "the snapshot after --at is not shown");
+});
+
+test("CLI new: a database before migration 0023 is n/a with exit 0 and the queue is never read; a failing read is n/a too", () => {
+  const file = queueFixture("queue-cli-n");
+  const args = [...AT, "--source", "new"];
+  const old = cli(args, { FS_FIXTURE: file, FS_QUEUE_COLUMNS: "0" }, "queue");
+  assert.equal(old.status, 0, old.stderr);
+  assert.equal(old.calls.some((c) => c.marker === "-- fs:queue"), false);
+  for (const r of JSON.parse(old.stdout).repos) assert.deepEqual(r.queue, { "n/a": "factory.event_log has no queue_snapshot columns (the factory database predates migration 0023)" });
+  const bad = cli(args, { FS_FIXTURE: file, FS_QUEUE_FAIL: "4" }, "queue");
+  assert.equal(bad.status, 0, bad.stderr);
+  for (const r of JSON.parse(bad.stdout).repos) {
+    assert.match(r.queue["n/a"], /^cannot read the queue snapshot: cannot read the factory database through dev-query --factory \(exit 4\): psql: queue exploded$/);
+  }
+  assert.equal(JSON.parse(bad.stdout).repos[0].coverage.events, 1, "the events are still read");
+});
+
+test("CLI old: no queue query runs and every repo shows the old-store n/a", () => {
+  const r = cli([...AT, "--source", "old"], {}, "queue");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.calls.some((c) => c.marker.startsWith("-- fs:queue")), false);
+  for (const repo of JSON.parse(r.stdout).repos) assert.deepEqual(repo.queue, { "n/a": "the old store has no queue snapshots" });
+  assert.match(cli(["--at", "2026-10-10T12:00:00Z", "--source", "old", "--github", "off"], {}, "queue").stdout, /queue: n\/a: the old store has no queue snapshots/);
+});
+
+test("CLI shadow: a queue on the new side only is no difference, and the printed old answer carries the old-store n/a", () => {
+  const file = queueFixture("queue-shadow");
+  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
+  const sh = cli([...AT, "--source", "shadow"], { FS_FIXTURE: file }, "queue");
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.ok(sh.calls.some((c) => c.marker === "-- fs:queue"), "the new side reads the queue");
+  assert.deepEqual(shadowRecords().map((r) => [r.differences, r.new_error]), [[0, null]]);
+  for (const repo of JSON.parse(sh.stdout).repos) assert.deepEqual(repo.queue, { "n/a": "the old store has no queue snapshots" });
+});
+
+test("real PostgreSQL: SQL_QUEUE_META sees the 0023 columns and SQL_QUEUE picks each repo's newest snapshot at or before --at", { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" }, (t) => {
+  const db = createDb(t);
+  const sub = (sql, vars) => Object.entries(vars).reduce((q, [k, v]) => q.replaceAll(`:'${k}'`, `'${v}'`), sql);
+  const run = (sql, vars) => JSON.parse(db.query(sub(sql, vars), "reader"));
+  assert.deepEqual(run(mod.SQL_QUEUE_META, {}), { columns: true });
+  let seq = 0;
+  const put = (repo, taken, type = "queue_snapshot", extra = {}) => {
+    seq += 1;
+    const data = { taken_at: taken, reason: "changed", considered: 1, candidates: [{ issue: seq, rank: 1, score: 5, factors: [], claimable: true, why: null }], rest: [], free_slots: null, owner_priority: [], owner_only: [], owner_serial: false, owner_new_off: false, folded: 0, ...extra };
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data)
+      VALUES (1, '${crypto.randomUUID()}', '${taken}', '${type}', 1, '${repo}', 'dev', 'agent', ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  };
+  put("Acme/Widgets", "2026-10-10T09:00:00.000Z");
+  put("acme/widgets", "2026-10-10T11:00:00.000Z", "queue_snapshot", { reason: "heartbeat" });
+  put("acme/widgets", "2026-10-10T13:00:00.000Z");
+  put("acme/gadgets", "2026-10-10T10:00:00.000Z");
+  const rows = run(mod.SQL_QUEUE, { at: "2026-10-10T12:00:00.000Z", repos: "" });
+  assert.deepEqual(rows.map((r) => [r.repo.toLowerCase(), r.taken_at, r.reason]), [
+    ["acme/gadgets", "2026-10-10T10:00:00.000Z", "changed"], ["acme/widgets", "2026-10-10T11:00:00.000Z", "heartbeat"],
+  ]);
+  assert.deepEqual(run(mod.SQL_QUEUE, { at: "2026-10-10T12:00:00.000Z", repos: "acme/gadgets" }).map((r) => r.repo), ["acme/gadgets"]);
+  assert.deepEqual(run(mod.SQL_QUEUE, { at: "2026-10-10T08:00:00.000Z", repos: "" }), []);
+});
+
+test("SQL_EVENT_LOG leaves queue_snapshot out, so a snapshot never changes coverage", () => {
+  assert.match(mod.SQL_EVENT_LOG, /AND type <> 'queue_snapshot'/);
+});
+
+test("normalizeForCompare drops the queue", () => {
+  const n = mod.normalizeForCompare(derive(input("queue")));
+  assert.ok(n.repos.length === 2 && n.repos.every((r) => r.queue === undefined));
 });
 
 test("normalizeForCompare drops only the counts, the v1 run id and an abandoned final's free text", () => {

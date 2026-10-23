@@ -921,8 +921,9 @@ function writeLife(dir) {
 
 const NO_NM = () => path.join(tmp, "no-nm");
 const sectionsFrom = (r) => {
-  // the sources block names the input; the two n/a metrics have no new value; scope.events says which file
-  const { sources, waiting, adjudicator_agreement, window, ...rest } = r;
+  // the sources block names the input; the two n/a metrics have no new value; merges, prs, gaps, size and overlap read
+  // the new events' pr, by and recovered, so they are n/a under old; scope.events says which file
+  const { sources, waiting, adjudicator_agreement, merges, prs, gaps, size, overlap, window, ...rest } = r;
   const { events, ...scope } = window.scope;
   return { ...rest, window: { ...window, scope } };
 };
@@ -981,6 +982,93 @@ test("new source: the local log and a view export give the same report, and it m
   }
 });
 
+// ---- merges, PRs and gaps (#749, docs/metrics.md 9c): tests/fixtures/evaluate/v2/new-events.jsonl,
+// the new-format events (payload under `data`) of one repo, window 2026-10-16 00:00-12:00Z. #30 is a
+// factory merge (01:50) whose reviewing transition and review are logged twice and whose queue:patch
+// is logged twice; #31 swaps PR 91 for 92 (a push and a queue:patch) and merges at 03:10; #32 is a
+// hand merge seen by a transition (04:59, no pr), an intervention (05:00, no pr) and a recovered
+// merged event (05:10); #34 is a hand merge that never names a pr; #35 merges at 10:30; #39 merged the
+// day before. #36 parks on a question for an hour, #37 builds throughout, #38 holds two states for
+// the same time, #40 is dropped. Judge tasks: k1 (two rows, the later logged first) is overridden by a
+// person within the hour, k2 has no issue and failed, k3 is done.
+const MERGE_ARGS = [...NEW_WINDOW, "--source", "new", "--new-events", path.join(FIX, "v2", "new-events.jsonl")];
+
+test("merges: one per (issue, pr) across the three signals, counted by who merged and whether it was recovered", () => {
+  const m = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).merges;
+  assert.equal(m.total, 5, "#32's three signals are one merge; #39 merged before the window");
+  assert.deepEqual(m.by, [
+    { by: "factory", recovered: false, count: 3 }, { by: "hand", recovered: true, count: 1 }, { by: "hand", recovered: null, count: 1 },
+  ]);
+  assert.deepEqual(m.per_day, [
+    { day: "2026-10-16", by: "factory", recovered: false, merges: 3 }, { day: "2026-10-16", by: "hand", recovered: true, merges: 1 },
+    { day: "2026-10-16", by: "hand", recovered: null, merges: 1 },
+  ]);
+  assert.deepEqual(m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered]), [
+    [30, 90, "2026-10-16T01:50:00.000Z", "factory", false], [31, 92, "2026-10-16T03:10:00.000Z", "factory", false],
+    [32, 93, "2026-10-16T04:59:00.000Z", "hand", true], [34, null, "2026-10-16T08:00:00.000Z", "hand", null],
+    [35, 95, "2026-10-16T10:30:00.000Z", "factory", false],
+  ]);
+});
+
+test("prs: PR open to merge from the first row naming it, PRs per issue, supersedes and head moves, once each", () => {
+  const p = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).prs;
+  assert.deepEqual(p.issues, [
+    { issue: 30, pr: 90, pr_open_to_merge_seconds: 1800, prs: 1, supersedes: 0, head_moves: 1 },
+    { issue: 31, pr: 92, pr_open_to_merge_seconds: 1200, prs: 2, supersedes: 1, head_moves: 2 },
+    { issue: 32, pr: 93, pr_open_to_merge_seconds: 2640, prs: 1, supersedes: 0, head_moves: 0 },
+    { issue: 34, pr: null, pr_open_to_merge_seconds: null, prs: 0, supersedes: 0, head_moves: 0 },
+    { issue: 35, pr: 95, pr_open_to_merge_seconds: 1800, prs: 1, supersedes: 0, head_moves: 0 },
+  ]);
+  assert.deepEqual(p.pr_open_to_merge_seconds, { median: 1800, max: 2640, total: 7440 }, "the merge with no pr is left out");
+  assert.deepEqual([p.prs.max, p.supersedes.max, p.head_moves.max, p.head_moves.median], [2, 1, 2, 0]);
+});
+
+test("gaps: the longest gaps between merges, with the issues in flight, their longest state and a parked question", () => {
+  const g = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).gaps;
+  assert.equal(g.merges, 5);
+  assert.deepEqual(g.gaps.map((x) => [x.gap_seconds, x.before.issue, x.after.issue]), [[10860, 32, 34], [9000, 34, 35], [6540, 31, 32], [4800, 30, 31]]);
+  const flight = (n) => g.gaps[n].in_flight.map((i) => `${i.issue}:${i.state}:${i.parked_with_question}`);
+  // #32 closed at 04:59 and #30, #31, #40 earlier: none in flight; #36 holds building longest though parked an hour
+  assert.deepEqual(flight(0), ["34:building:false", "36:building:true", "37:building:false", "38:building:false"]);
+  assert.deepEqual(flight(1), ["34:building:false", "35:reviewing:false", "36:building:false", "37:building:false", "38:building:false"]);
+  assert.deepEqual(flight(2), ["31:merge-queue:false", "32:reviewing:false", "36:building:false", "37:building:false", "38:queued:false", "40:building:false"]);
+  assert.deepEqual(flight(3), ["30:merge-queue:false", "31:reviewing:false", "37:building:false"]);
+});
+
+test("v2 judgement calls count a judge task once per key: wake and latest status, overridden by a person within the hour", () => {
+  const tasks = json(MERGE_ARGS, { NO_MISTAKES_HOME: NO_NM() }).judgement_calls.by_kind.filter((k) => k.kind === "task");
+  assert.deepEqual(tasks, [
+    { kind: "task", outcome: "merge:done", count: 1, overridden: 0 },
+    { kind: "task", outcome: "parked:done", count: 1, overridden: 1 },
+    { kind: "task", outcome: "ready:failed", count: 1, overridden: 0 },
+  ]);
+});
+
+test("merges, prs and gaps read n/a with a reason: no events, one merge, no merge in the window, and under --source old", () => {
+  const env = { NO_MISTAKES_HOME: NO_NM() };
+  const absent = json([...NEW_WINDOW, "--source", "new", "--new-events", path.join(tmp, "absent.jsonl")], env);
+  for (const k of mod.MERGE_SECTIONS) assert.match(absent[k]["n/a"], /file not found/, k);
+  const empty = json(["--repo", "acme/widgets", "--since", "2026-10-17T00:00:00Z", "--until", "2026-10-17T12:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
+  for (const k of ["merges", "prs", "size", "overlap"]) assert.equal(empty[k]["n/a"], "0 merges in the window", k);
+  assert.match(empty.gaps["n/a"], /fewer than 2 merges/);
+  const one = json(["--repo", "acme/widgets", "--since", "2026-10-16T00:00:00Z", "--until", "2026-10-16T02:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
+  assert.equal(one.merges.total, 1);
+  assert.equal(one.prs.issues.length, 1);
+  assert.match(one.gaps["n/a"], /fewer than 2 merges/);
+  const old = json(V2_WINDOW);
+  for (const k of mod.MERGE_SECTIONS) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
+  const md = run([...MERGE_ARGS, "--format", "markdown"], env).out;
+  assert.match(md, /\| 31 \| 92 \| 1200 \| 2 \| 1 \| 2 \|/);
+  assert.match(md, /\| 2026-10-16T04:59:00.000Z \| 2026-10-16T08:00:00.000Z \| 10860 \| #32 \| #34 \| #34:building #36:building\? #37:building #38:building \|/);
+  assert.match(md, /## gaps/);
+});
+
+test("normalize leaves out the merge sections, so a shadow run records no difference for them", () => {
+  const { normalize } = require("../images/base/evaluate-new-events.js");
+  const out = normalize({ window: {}, merges: { total: 1 }, prs: { merges: 1 }, gaps: { merges: 2 }, size: { merges: 1 }, overlap: { merges: 1 }, rounds: { merged_issues: 0 } });
+  assert.deepEqual(Object.keys(out).sort(), ["rounds", "window"]);
+});
+
 test("new source: metrics that need a v1-only event read n/a, named in sources, never 0", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-new-"));
   try {
@@ -1012,6 +1100,33 @@ test("new source: the mapping drops what a guard needs to drop (a transition twi
     // a transition that stays in its state (a new attempt) is not a new delegation
     assert.deepEqual(mapEvent({ ...tr("d", 3, "building"), data: { ...tr("d", 3, "building").data, from_state: "building" } }).map((e) => e.state), ["transition"]);
     assert.deepEqual(mapEvent({ type: "finding_handled", ts: "2026-10-16T01:00:00Z", issue: 1, data: { outcome: "fixed", finding: "r1-1" } }).map((e) => e.note), ["CORRECT: r1-1"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("new source: a line of a type or version the shapes file does not list as current is left out and named in sources", () => {
+  const { normalize, loadNewEvents } = require("../images/base/evaluate-new-events.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-skipped-"));
+  try {
+    const src = path.join(FIX, "v2", "new-events.jsonl");
+    const lines = fs.readFileSync(src, "utf8").split("\n").filter(Boolean);
+    const first = JSON.parse(lines.find((l) => JSON.parse(l).type === "transition"));
+    const extra = [{ ...first, type_version: 2, event_id: "x-1" }, { ...first, type: "mystery", type_version: 1, event_id: "x-2" }];
+    const file = path.join(dir, "e.jsonl");
+    fs.writeFileSync(file, [...lines, ...extra.map((e) => JSON.stringify(e))].join("\n") + "\n");
+    assert.deepEqual(loadNewEvents(file).skipped, [{ type: "mystery", type_version: 1, count: 1 }, { type: "transition", type_version: 2, count: 1 }]);
+    assert.deepEqual(loadNewEvents(src).skipped, []);
+    assert.deepEqual(loadNewEvents(path.join(dir, "absent.jsonl")).skipped, []);
+    const env = { NO_MISTAKES_HOME: NO_NM() };
+    const base = json([...MERGE_ARGS], env);
+    const got = json([...NEW_WINDOW, "--source", "new", "--new-events", file], env);
+    assert.deepEqual(normalize(got), normalize(base), "neither line counts in any metric");
+    assert.deepEqual(got.sources.filter((s) => s.kind === "new-events-skipped"), [
+      { kind: "new-events-skipped", path: "mystery v1", found: false, rows: 1 },
+      { kind: "new-events-skipped", path: "transition v2", found: false, rows: 1 },
+    ]);
+    assert.deepEqual(base.sources.filter((s) => s.kind === "new-events-skipped"), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1099,4 +1214,233 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- --regime and the by_regime breakdowns (docs/metrics.md, "Offline computation"). The events and
+// transcripts are built here from one table, so the local log and the view export are the same events.
+const RG_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-20T00:00:00Z", "--until", "2026-10-21T00:00:00Z"];
+
+function writeRegime(dir) {
+  const ev = (n, ts, type, issue, session, regime, data = {}) => ({
+    envelope: 1, event_id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, ts: `2026-10-20T${ts}:00.000Z`, type, type_version: 1,
+    repo: "acme/widgets", device: "L", actor: "agent", ...(session === undefined ? {} : { session_id: session }),
+    ...(regime === undefined ? {} : { regime }), issue, data,
+  });
+  const events = [
+    ev(1, "10:00", "claimed", 1, "S-tb", "testbed", { lease_minutes: 120 }),
+    ev(2, "10:30", "merged", 1, "S-tb", "testbed", { pr: 11, by: "factory", recovered: false }),
+    ev(3, "11:00", "claimed", 2, "S-sw", "manual", { lease_minutes: 120 }),
+    ev(4, "11:10", "closed", 2, "S-sw", "manual"),
+    ev(5, "12:00", "claimed", 3, "S-sw", "factory_loop_v2", { lease_minutes: 120 }),
+    ev(6, "12:10", "claimed", 4, "S-sw", "factory_loop_v2", { lease_minutes: 120 }),
+    ev(7, "12:30", "merged", 3, "S-sw", "factory_loop_v2", { pr: 13, by: "factory", recovered: false }),
+    ev(8, "13:00", "claimed", 5, undefined, undefined, { lease_minutes: 120 }), // written before regime existed
+    ev(9, "13:30", "merged", 5, null, "", { pr: 15, by: "factory", recovered: false }), // empty regime reads as unknown
+  ];
+  const local = path.join(dir, "ev", "factory", "acme__widgets.jsonl");
+  fs.mkdirSync(path.dirname(local), { recursive: true });
+  fs.writeFileSync(local, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  // a factory.event_log row_to_json export: flat columns, regime and session_id null when unset
+  const view = path.join(dir, "view.jsonl");
+  fs.writeFileSync(view, `${events.map((e, i) => JSON.stringify({ id: i + 1, session_id: null, regime: null, ...e })).join("\n")}\n`);
+  const proj = path.join(dir, "projects", "-rg");
+  const turn = (id, ts) => JSON.stringify({ type: "assistant", timestamp: `2026-10-20T${ts}:00Z`, requestId: id,
+    message: { model: "claude-opus-5-5", usage: { input_tokens: 1, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [] } });
+  const put = (file, lines) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${lines.join("\n")}\n`); };
+  put(path.join(proj, "S-tb.jsonl"), [turn("a1", "10:05"), turn("a2", "10:20")]);
+  put(path.join(proj, "S-tb", "subagents", "agent-x.jsonl"), [turn("b1", "10:10")]);
+  fs.writeFileSync(path.join(proj, "S-tb", "subagents", "agent-x.meta.json"), JSON.stringify({ agentType: "callum-flow:implementer" }));
+  put(path.join(proj, "S-sw.jsonl"), [turn("c1", "10:50"), turn("c2", "11:30"), turn("c3", "12:20")]);
+  put(path.join(proj, "S-none.jsonl"), [turn("d1", "13:00")]);
+  return { local, view, evDir: path.join(dir, "ev"), projects: path.join(dir, "projects", "-rg") };
+}
+
+const rgOf = (r, k) => Object.fromEntries(r[k].by_regime.map((x) => [x.regime, x]));
+const spendTurns = (rows) => Object.fromEntries(rows.map((x) => [`${x.role}|${x.model}`, x.turns]));
+
+test("regime: by_regime breakdowns, attribution through the session, and the filter, on the local log and the view export alike", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-regime-"));
+  try {
+    const f = writeRegime(dir);
+    const env = { NO_MISTAKES_HOME: NO_NM(), CALLUM_EVENTS_DIR: f.evDir };
+    const base = [...RG_WINDOW, "--projects-dir", f.projects];
+    const local = json([...base, "--source", "new"], env);
+    const view = json([...base, "--source", "new", "--new-events", f.view], env);
+    assert.equal(local.window.regime, "all");
+    assert.equal(local.throughput.merged_issues, 3);
+    assert.deepEqual(local.throughput.by_regime, [
+      { regime: "factory_loop_v2", merged_issues: 1, closed_issues: 0, claims: 2 },
+      { regime: "manual", merged_issues: 0, closed_issues: 1, claims: 1 },
+      { regime: "testbed", merged_issues: 1, closed_issues: 0, claims: 1 },
+      { regime: "unknown", merged_issues: 1, closed_issues: 0, claims: 1 },
+    ]);
+    // the view export's null session_id and regime read as unknown; its session-less rows give the same unknown numbers
+    assert.equal(view.throughput.merged_issues, 3);
+    assert.deepEqual(view.throughput.by_regime, local.throughput.by_regime);
+    assert.deepEqual(view.spend.by_regime, local.spend.by_regime);
+    // turns: S-tb and its sub-agent are testbed; S-sw is manual until 12:00 (its first turn, before every event, takes the first regime), then factory_loop_v2; S-none is unknown
+    const spend = Object.fromEntries(local.spend.by_regime.map((g) => [g.regime, spendTurns(g.rows)]));
+    assert.deepEqual(spend, {
+      factory_loop_v2: { "orchestrator|claude-opus-5-5": 1 },
+      manual: { "orchestrator|claude-opus-5-5": 2 },
+      testbed: { "callum-flow:implementer|claude-opus-5-5": 1, "orchestrator|claude-opus-5-5": 2 },
+      unknown: { "orchestrator|claude-opus-5-5": 1 },
+    });
+    assert.deepEqual(local.spend.by_regime.map((g) => g.regime), ["factory_loop_v2", "manual", "testbed", "unknown"]);
+    // the rows across regimes add up to spend.rows
+    const total = {};
+    for (const g of local.spend.by_regime) for (const [k, n] of Object.entries(spendTurns(g.rows))) total[k] = (total[k] || 0) + n;
+    assert.deepEqual(total, spendTurns(local.spend.rows));
+    for (const [regime, want] of Object.entries({
+      factory_loop_v2: [1, 2, 1], manual: [0, 1, 2], testbed: [1, 1, 3], unknown: [1, 1, 1],
+    })) {
+      const r = json([...base, "--source", "new", "--regime", regime], env);
+      assert.equal(r.window.regime, regime);
+      assert.equal(r.throughput.merged_issues, want[0], regime);
+      assert.equal(r.claims.reclaimed, 0);
+      assert.equal(r.per_device[0] ? r.per_device[0].claims : 0, want[1], regime);
+      assert.equal(sum(r.spend.rows.map((x) => x.turns)), want[2], regime);
+      assert.ok(!("by_regime" in r.throughput) && !("by_regime" in r.spend), regime);
+    }
+    // markdown shows the tables; two runs are byte-identical
+    const md = run([...base, "--source", "new", "--format", "markdown"], env);
+    assert.match(md.out, /\| regime \| merged_issues \| closed_issues \| claims \|/);
+    assert.match(md.out, /Spend for regime testbed:/);
+    assert.equal(run([...base, "--source", "new", "--format", "markdown"], env).out, md.out);
+    assert.equal(run([...base, "--source", "new"], env).out, run([...base, "--source", "new"], env).out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function sum(xs) { return xs.reduce((a, b) => a + b, 0); }
+
+test("regime: an unknown or missing value exits 2 with the usage line; old-source records read as unknown", () => {
+  for (const args of [["--regime", "bogus"], ["--regime"]]) {
+    const r = run([...WINDOW, ...args]);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.err, /--regime/);
+    assert.match(r.err, /\[--regime <value>\]/);
+  }
+  const r = json(WINDOW);
+  assert.equal(r.window.regime, "all");
+  assert.deepEqual(r.throughput.by_regime.map((x) => [x.regime, x.merged_issues]), [["unknown", r.throughput.merged_issues]]);
+  assert.deepEqual(r.spend.by_regime.map((g) => g.regime), ["unknown"]);
+  assert.deepEqual(r.spend.by_regime[0].rows, r.spend.rows);
+});
+
+test("regime: pipeline rows count only for unknown; normalize drops both by_regime keys", () => {
+  const inv = [{ step_name: "review", model: "m", model_roundtrips: 3, input_tokens: 1, output_tokens: 2 }];
+  const files = [{ role: "orchestrator", turns: [{ model: "m", regime: "testbed", usage: { input: 1, output: 1, cache_read: 0, cache_creation: 0 } }] }];
+  assert.deepEqual(mod.computeSpend(files, inv, "testbed").map((x) => x.role), ["orchestrator"]);
+  assert.deepEqual(mod.computeSpend(files, inv, "unknown").map((x) => x.role), ["pipeline:review"]);
+  assert.deepEqual(mod.computeSpend(files, inv).map((x) => x.role), ["orchestrator", "pipeline:review"]);
+  const { normalize } = require("../images/base/evaluate-new-events.js");
+  const out = normalize({ throughput: { merged_issues: 1, by_regime: [] }, spend: { rows: [], by_regime: [] } });
+  assert.deepEqual(out, { throughput: { merged_issues: 1 }, spend: { rows: [] } });
+});
+
+// ---- issue size, overlap and merges by kind (#1219, docs/metrics.md 9c): tests/fixtures/evaluate/v2/size-overlap-events.jsonl.
+// The story, all on 2026-10-20 (acme/widgets): 101 (A) and 102 (B) have windows that overlap and share
+// src/shared.js and docs/guide.md; A also changes package-lock.json. 103 (C) is later and touches shared.js too.
+// 106 (D) shares shared.js with A but its window only ends where A's begins; it overlaps 107 (Z, merged the
+// day before, so outside the window) on lib/old.js. 104 (E) has no files, 105 (F) no file_lines, 108 (G) was never
+// claimed, 109 (H) is a hand merge whose window meets C's without a shared file. Two merged events name no issue
+// (the sweep's, one logged twice).
+const SIZE_FIXTURE = path.join(FIX, "v2", "size-overlap-events.jsonl");
+const SIZE_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-20T00:00:00Z", "--until", "2026-10-21T00:00:00Z", "--source", "new"];
+const sizeRun = (file, extra = []) => json([...SIZE_WINDOW, "--new-events", file, ...extra], { NO_MISTAKES_HOME: NO_NM() });
+const rewrite = (name, f) => {
+  const file = path.join(tmp, name);
+  fs.writeFileSync(file, fs.readFileSync(SIZE_FIXTURE, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.stringify(f(JSON.parse(l)))).join("\n") + "\n");
+  return file;
+};
+
+test("size: counts, medians and p90 over the merges with files; the lockfile and documents are left out of the code lines", () => {
+  const { size } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual([size.merges, size.known, size.code_lines_known], [8, 7, 6], "E has no files, F no file_lines");
+  assert.deepEqual(size.files, { median: 2, p90: 4 });
+  assert.deepEqual(size.lines, { median: 10, p90: 192 });
+  assert.deepEqual(size.code_files, { median: 2, p90: 3 });
+  assert.deepEqual(size.code_lines, { median: 16, p90: 37 });
+  const a = size.issues.find((i) => i.issue === 101);
+  assert.deepEqual(a, { issue: 101, pr: 201, files: 4, lines: 192, code_files: 2, code_lines: 37 }, "package-lock.json (150 lines) and guide.md are not code");
+  assert.deepEqual(size.issues.find((i) => i.issue === 104), { issue: 104, pr: 204, files: null, lines: null, code_files: null, code_lines: null });
+  assert.deepEqual(size.issues.find((i) => i.issue === 105), { issue: 105, pr: 205, files: 2, lines: 10, code_files: 1, code_lines: null });
+});
+
+test("overlap: windows that meet and share a code file; the hottest files hold code only", () => {
+  const { overlap } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual([overlap.merges, overlap.overlapping, overlap.share], [7, 3, 0.429]);
+  const flags = Object.fromEntries(overlap.issues.map((i) => [i.issue, i.overlaps]));
+  assert.deepEqual(flags, { 101: [102], 102: [101], 103: [], 105: [], 106: [107], 108: [], 109: [] },
+    "A and B; D with Z (merged before the window); not D with A (windows only touch), nor C with H (no shared file)");
+  assert.deepEqual(overlap.issues.filter((i) => i.overlapping).map((i) => i.issue), [106, 101, 102]);
+  assert.deepEqual(overlap.hottest_files, [{ path: "src/shared.js", issues: 2 }, { path: "lib/old.js", issues: 1 }], "docs/guide.md is shared but not code");
+});
+
+test("merges.per_day_by_kind counts unlinked merges, a retried one once; per_day is unchanged", () => {
+  const { merges } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual(merges.per_day_by_kind, [
+    { day: "2026-10-20", kind: "factory", merges: 6 },
+    { day: "2026-10-20", kind: "hand", merges: 1 },
+    { day: "2026-10-20", kind: "unlinked", merges: 3 },
+  ], "G was never claimed; the sweep's two prs, 300 logged twice");
+  assert.deepEqual(merges.per_day, [{ day: "2026-10-20", by: "factory", recovered: false, merges: 7 }, { day: "2026-10-20", by: "hand", recovered: false, merges: 1 }]);
+  assert.equal(merges.total, 8);
+});
+
+test("size, overlap and the kind table render as markdown", () => {
+  const md = run([...SIZE_WINDOW, "--new-events", SIZE_FIXTURE, "--format", "markdown"], { NO_MISTAKES_HOME: NO_NM() }).out;
+  const headings = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(headings.slice(headings.indexOf("gaps"), headings.indexOf("gaps") + 3), ["gaps", "size", "overlap"]);
+  assert.match(md, /\| code_lines \| 16 \| 37 \|/);
+  assert.match(md, /\| 101 \| 201 \| 4 \| 192 \| 2 \| 37 \|/);
+  assert.match(md, /\| 106 \| 206 \| true \| #107 \|/);
+  assert.match(md, /\| src\/shared\.js \| 2 \|/);
+  assert.match(md, /\| 2026-10-20 \| unlinked \| 3 \|/);
+});
+
+test("size and overlap: no files anywhere reads n/a with a reason; no file_lines reads n/a for the code-only line stats only", () => {
+  const bare = sizeRun(rewrite("no-files.jsonl", (e) => {
+    if (e.type === "merged") for (const k of ["files", "file_lines", "additions", "deletions"]) delete e.data[k];
+    return e;
+  }));
+  for (const k of ["size", "overlap"]) assert.equal(bare[k]["n/a"], "no merge in the window has files (recorded from #752's release on)", k);
+  assert.equal(bare.merges.total, 8, "the other sections are unaffected");
+  const noLines = sizeRun(rewrite("no-file-lines.jsonl", (e) => {
+    if (e.type === "merged" && e.data.file_lines) e.data.file_lines = null;
+    return e;
+  }));
+  assert.equal(noLines.size.code_lines["n/a"], "no known merge has file_lines");
+  assert.equal(noLines.size.code_lines_known, 0);
+  assert.deepEqual(noLines.size.files, { median: 2, p90: 4 }, "every other stat is still reported");
+  assert.equal(noLines.size.issues.find((i) => i.issue === 101).code_files, 2);
+  assert.equal(noLines.overlap.overlapping, 3);
+  const md = run([...SIZE_WINDOW, "--new-events", path.join(tmp, "no-file-lines.jsonl"), "--format", "markdown"], { NO_MISTAKES_HOME: NO_NM() }).out;
+  assert.match(md, /\| code_lines \| n\/a \| no known merge has file_lines \|/);
+});
+
+test("a merged event's size fields are record fields, null when absent or of the wrong type, and other states do not get them", () => {
+  const { mapEvent } = require("../images/base/evaluate-new-events.js");
+  const merged = (data) => mapEvent({ type: "merged", ts: "2026-10-20T01:00:00Z", issue: 1, repo: "acme/widgets", data: { pr: 1, by: "factory", recovered: false, ...data } })[0];
+  const full = merged({ files: ["a.js"], file_lines: [{ path: "a.js", additions: 1, deletions: 2 }, { path: "bad", additions: "x", deletions: 0 }], additions: 1, deletions: 2 });
+  assert.deepEqual([full.files, full.file_lines, full.additions, full.deletions], [["a.js"], [{ path: "a.js", additions: 1, deletions: 2 }], 1, 2], "an entry with bad counts is left out");
+  assert.doesNotMatch(full.note, /files|additions/, "not note tokens");
+  const wrong = merged({ files: "a.js", file_lines: { a: 1 }, additions: "3", deletions: -1 });
+  assert.deepEqual([wrong.files, wrong.file_lines, wrong.additions, wrong.deletions], [null, null, null, null]);
+  const bare = merged({});
+  assert.deepEqual([bare.files, bare.file_lines, bare.additions, bare.deletions], [null, null, null, null]);
+  const other = mapEvent({ type: "claimed", ts: "2026-10-20T01:00:00Z", issue: 1, repo: "acme/widgets", data: { files: ["a.js"] } })[0];
+  assert.ok(!("files" in other) && !("additions" in other));
+});
+
+test("the two MERGE_SECTIONS lists are equal and TOP_KEYS places size and overlap after gaps", () => {
+  assert.deepEqual(require("../images/base/evaluate-new-events.js").MERGE_SECTIONS, mod.MERGE_SECTIONS);
+  assert.deepEqual(mod.TOP_KEYS.slice(mod.TOP_KEYS.indexOf("merges"), mod.TOP_KEYS.indexOf("merges") + 5), ["merges", "prs", "gaps", "size", "overlap"]);
+});
+
+test("size and overlap read n/a under --source old, with the merge sections' reason", () => {
+  const old = json(V2_WINDOW);
+  for (const k of ["size", "overlap"]) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
 });

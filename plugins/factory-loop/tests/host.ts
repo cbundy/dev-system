@@ -94,6 +94,8 @@ export type HostOptions = {
   // the workspace config file (config.json)
   config?: Record<string, unknown>
   env?: Record<string, string>
+  // the id $.session.id answers (default SESSION); '' is a session with no id
+  session?: string
   files?: Record<string, string>
   store?: Record<string, unknown>
   // answers a command, at once or later; undefined falls through to a quiet exit 0
@@ -107,6 +109,8 @@ export type HostOptions = {
   // answers $.session.send (an agent's repair message), at once or later (or never): undefined
   // delivers it as the engine does, a string refuses it
   send?: (to: string, text: string) => string | undefined | Promise<string | undefined>
+  // answers /rename, at once or later (or never); undefined answers at once
+  rename?: (title: string) => Promise<void> | undefined
   // holds a file's read ($.fs.exists, $.fs.read) or write until the promise it returns resolves
   hold?: (path: string, op: 'read' | 'write') => Promise<void> | undefined
   // the test's engine: with it, $.session.send resumes an agent as the engine does, only as a type
@@ -148,6 +152,8 @@ export function host(on: On, opts: HostOptions = {}) {
     registered,
     agents,
     usage: [] as { kind: string; percentUsed: number }[],
+    // session usage cost.usd (the process-wide cost); undefined: the engine reports none
+    cost: undefined as number | undefined,
     // the directories $.fs.list read
     listed: [] as string[],
     // the decision log's appends fail (a full disk), so every pass throws at its end
@@ -198,6 +204,15 @@ export function host(on: On, opts: HostOptions = {}) {
     },
     events(): string[][] {
       return seen.filter(s => s.argv[0] === 'callum-flow-event').map(s => s.argv)
+    },
+    // the native events logged of one type: `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`
+    native(type: string): { issue: number | null; actor: string | null; data: Record<string, unknown> }[] {
+      return seen
+        .filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === type)
+        .map(s => {
+          const at = (flag: string) => s.argv[s.argv.indexOf(flag) + 1]
+          return { issue: s.argv.includes('--issue') ? Number(at('--issue')) : null, actor: s.argv.includes('--actor') ? (at('--actor') ?? null) : null, data: JSON.parse(at('--data') ?? '{}') as Record<string, unknown> }
+        })
     },
     ledger(): Stored[] {
       const stored = store.get(`ledger:${REPO}`) as { entries?: unknown[] } | undefined
@@ -257,6 +272,11 @@ export function host(on: On, opts: HostOptions = {}) {
     if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('availableParallelism')) {
       return { value: { exitCode: 0, stdout: '8\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    // the container's memory, read once per loop process: 64 GiB, so no test's cap meets the memory ceiling
+    // unless it sets a memory of its own (the command prints memory.max and /proc/meminfo as JSON)
+    if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('memory.max')) {
+      return { value: { exitCode: 0, stdout: `${JSON.stringify({ max: '68719476736\n', info: '' })}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const s: Seen = { argv, env: { ...(e.init?.env ?? {}) }, stdin: e.init?.stdin, cwd: e.init?.cwd }
     seen.push(s)
     const done = (r: Reply) => ({
@@ -293,14 +313,16 @@ export function host(on: On, opts: HostOptions = {}) {
     if (batch !== undefined) return done(await batch)
     return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? checkout(argv) ?? {})
   })
-  on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage } }))
-  on('session.id', async () => ({ value: SESSION }))
+  on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage, ...(h.cost === undefined ? {} : { cost: { usd: h.cost } }) } }))
+  on('session.id', async () => ({ value: opts.session ?? SESSION }))
   on('agent.list', async () => (h.failList ? { deny: 'agent list unavailable' } : { value: agents.map(a => ({ ...a })) }))
   on('agent.spawn', async ($, e) => {
-    spawns.push({ subagentType: e.subagentType, name: e.name, model: e.model, prompt: e.prompt, description: e.description })
+    // the engine's event names the type `subagent_type` (the typed field is never set), so a recorded spawn reads both
+    const type = e.subagentType ?? (e as unknown as { subagent_type?: string }).subagent_type
+    spawns.push({ subagentType: type, name: e.name, model: e.model, prompt: e.prompt, description: e.description })
     const r = (await opts.spawn?.(e)) ?? { agentId: `agent-${++nextAgent}` }
     if (r.deny !== undefined) return { deny: r.deny }
-    if (r.agentId !== undefined) agents.push({ id: r.agentId, type: e.subagentType, status: 'running', description: e.description })
+    if (r.agentId !== undefined) agents.push({ id: r.agentId, type: type ?? '', status: 'running', description: e.description })
     return { model: e.model ?? 'opus', agentId: r.agentId }
   })
   // the engine offers the model every agent type no hook hides
@@ -325,7 +347,10 @@ export function host(on: On, opts: HostOptions = {}) {
     return { isDelivered: true }
   })
   on('command.run', async ($, e) => {
-    if (e.command === 'rename') titles.push(e.args)
+    if (e.command === 'rename') {
+      titles.push(e.args)
+      await opts.rename?.(e.args)
+    }
     return {}
   })
   on('command.register', async ($, e) => {
@@ -370,6 +395,6 @@ export function factoryDoc(issues: Record<string, unknown>[], recent: Record<str
 }
 
 // The heartbeat guard's query (rails.ts HEARTBEAT_SQL) reads no other orchestrator.
-export const QUIET_BEATS = 'device,age_s\n'
+export const QUIET_BEATS = 'device,age_s,coder_workspace\n'
 // The event log's columns (derive.ts EVENTS_SQL), no rows.
 export const NO_EVENTS = 'ts,state,issue,run_id,branch,pr,head,note,actor,device\n'

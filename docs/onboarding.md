@@ -267,6 +267,23 @@ for that, `dev-doctor` shows a WARN with the fix: `gh auth refresh -h github.com
 A PR opened before `ci.yml` reaches the default branch gets no checks until a new
 `pull_request` event (push a commit, or close and reopen it).
 
+### 3g. Release workflow (only if the repo cuts releases from its own workflow)
+
+Skip this when the repo does not create GitHub Releases in a workflow. Otherwise add one step
+after the step that creates the Release, so its `released` event reaches the factory store:
+
+```yaml
+- uses: cbundy/dev-system/.github/actions/released-event@vX.Y.Z   # the dev-system release you use
+  env:
+    GH_TOKEN: ${{ github.token }}   # the job needs `contents: write`
+  with:
+    tag: ${{ steps.release.outputs.tag }}   # the tag the Release was created for
+```
+
+The step attaches `factory-released.json` to the Release. A device running the factory push loop
+collects it: set `FACTORY_RELEASE_REPOS=owner/name` on the device for a repo it has never logged an
+event for (a repo it already has a factory log for is watched without it).
+
 ### Existing consumers
 
 A repo onboarded before the factory-loop-only setup keeps its files. `npx callum-dev update`
@@ -400,7 +417,9 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 |---|---|---|
 | `gateCommands` | none | The stop gate's commands, run in order in the agent's worktree (lint, then test). Empty means no gate. |
 | `gateTimeoutMs` | 10 minutes | The budget for all of the gate commands together, in milliseconds (or `gateTimeout` as a duration, like `"15m"`). A gate that runs out is recorded as unknown, never as a pass, and CI decides. |
-| `maxInFlightIssues` | 3 | How many issues the loop works on at once. Parked and waiting issues do not count. |
+| `maxInFlightIssues` | 3 | How many issues the loop works on at once. Parked and waiting issues do not count. The loop also holds fewer when the container's memory cannot hold that many (see `slotMemoryMiB`). |
+| `slotMemoryMiB` | `auto` | The memory one issue's slot is assumed to use, in MiB. `auto` measures it from the stop gates' memory and uses 3072 until three runs are measured. The container's memory less `memoryReserveMiB`, over this, is the most issues held at once. |
+| `memoryReserveMiB` | 2048 | The container's memory kept free of slots, in MiB. |
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
 | `minimumReleaseCadence` | `"6h"` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
 | `releaseBranchPrefix` | none | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
@@ -508,7 +527,7 @@ comment on the issue), built, PR opened, CI, reviewed and merged. The labels sho
 | Symptom | What shows it | Fix |
 |---|---|---|
 | Act mode does nothing: the role | `rails`: `role: DEV_ROLE is dev, act needs orchestrator` | The workspace is not from the `orchestrator-loop` template. Create one from it. |
-| Act mode does nothing: another orchestrator | `rails`: `heartbeat: another orchestrator on this repo is up (<device> ...)` | Another orchestrator workspace runs on the repo. Stop it: one loop per repo. |
+| Act mode does nothing: another orchestrator | `rails`: `heartbeat: another orchestrator on this repo is up (<device> ...)` | Another orchestrator workspace runs on the repo. Stop it: one loop per repo. A beat from this loop's own Coder workspace under another device name never blocks; it shows as `railTwins`. |
 | Act mode does nothing: the act lock | `rails`: `act lock: session <id> holds it until <time>` | Another session in this workspace holds the loop. Close it; the lock frees itself when its lease runs out. |
 | Act mode does nothing: the factory database | `rails`: `heartbeat: query failed (...)` | The workspace cannot query the factory database. `coder ssh <repo>-loop -- dev-doctor` shows its database checks, with the fix for each. |
 | Act mode does nothing: the repo | `rails`: `repo: the checkout ... is ..., not <owner>/<repo>` | The checkout's `origin` is another repo. Fix `repo_url`, or `repo` in the workspace file. |

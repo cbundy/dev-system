@@ -191,6 +191,53 @@ test("settings_changed: a full event is written and validates; one without who i
   assert.deepEqual(missing.lines, []);
 });
 
+test("queue_snapshot: a full event is written and validates; one without taken_at is refused with exit 2; a 51st candidate fails strict validation", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "queue_snapshot.v1.json"), "utf8")).examples[0];
+  const { r, lines } = native(["--type", "queue_snapshot", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("queue_snapshot", 1, JSON.parse(lines[0]).data), []);
+  const { taken_at: _omit, ...noTaken } = good;
+  const missing = native(["--type", "queue_snapshot", "--data", JSON.stringify(noTaken)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /queue_snapshot v1: field taken_at is missing/);
+  assert.deepEqual(missing.lines, []);
+  const many = Array.from({ length: 51 }, (_, i) => ({ issue: i + 1, rank: i + 1, score: 0, factors: [], claimable: true, why: null }));
+  const over = native(["--type", "queue_snapshot", "--data", JSON.stringify({ ...good, considered: 51, candidates: many })]);
+  // the native writer checks required fields and JSON types only; the bounds are the strict reader's
+  assert.equal(over.r.status, 0, over.r.stderr);
+  assert.ok(reader.validateStrict("queue_snapshot", 1, JSON.parse(over.lines[0]).data).some((p) => /candidates.*at most 50 items/.test(p)));
+});
+
+test("intake_stamp: a full event is written and validates; one without version is refused with exit 2; an outcome outside the enum fails strict validation", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "intake_stamp.v1.json"), "utf8")).examples[0];
+  const { r, lines } = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(good)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(reader.validateStrict("intake_stamp", 1, JSON.parse(lines[0]).data), []);
+  const { version: _omit, ...noVersion } = good;
+  const missing = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(noVersion)]);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.match(missing.r.stderr, /intake_stamp v1: field version is missing/);
+  assert.deepEqual(missing.lines, []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...good, outcome: "maybe" }), []);
+});
+
+test("intake_stamp: a run with token totals and one with null tokens are written and validate; an event without the tokens (an older loop) still does; a negative or text total fails strict validation", () => {
+  const [withTokens, nullTokens] = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "intake_stamp.v1.json"), "utf8")).examples;
+  assert.equal(withTokens.mode, "run");
+  assert.equal(withTokens.input_tokens, 1840);
+  assert.equal(nullTokens.mode, "run");
+  assert.equal(nullTokens.input_tokens, null);
+  for (const data of [withTokens, nullTokens]) {
+    const { r, lines } = native(["--type", "intake_stamp", "--issue", "7", "--data", JSON.stringify(data)]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(reader.validateStrict("intake_stamp", 1, JSON.parse(lines[0]).data), []);
+  }
+  const { input_tokens: _a, output_tokens: _b, cache_read_tokens: _c, cache_creation_tokens: _d, ...older } = withTokens;
+  assert.deepEqual(reader.validateStrict("intake_stamp", 1, older), []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...withTokens, output_tokens: -1 }), []);
+  assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...withTokens, cache_read_tokens: "many" }), []);
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });
@@ -326,4 +373,131 @@ test("usage: a spend reading is written with no warning through --data and --not
   assert.equal(events.length, 1, "the note is dual-written as a usage event");
   assert.equal(events[0].data.spend_usd, 42.5);
   assert.deepEqual(reader.validateStrict("usage", 1, events[0].data), []);
+});
+
+// The tools write the new events natively (dev-system#1140): for every call shape a tool makes, the
+// type and data are what translate() makes from the old-state line the tool used to write, so no
+// reader of the new store can tell the difference. tests/fixtures/factory-events/tool-calls.json holds
+// each shape: the old line, and the native call as the tool now makes it (for usage, the data comes
+// from the real `usage-check.sh --to-data`). The shell suites of the tools assert the same data
+// from the tools themselves.
+const TRANSLATE = require(path.join(ROOT, "images", "base", "factory-event-translate.js"));
+const USAGE_CHECK = path.join(ROOT, "features", "src", "callum-tools", "usage-check.sh");
+const TOOL_CALLS = JSON.parse(fs.readFileSync(path.join(ROOT, "tests", "fixtures", "factory-events", "tool-calls.json"), "utf8"));
+
+function oldLine(old) {
+  return {
+    v: 2, ts: "2026-10-20T12:00:00Z", repo: "cbundy/dev-system", device: "box", session_id: null, actor: "agent", issue: null,
+    run_id: null, branch: null, pr: null, head: null, note: null, event_id: "c2ceb199-8eed-4bc9-a308-37482c6234f5",
+    base_image: null, dev_image: null, template_version: null, plugin_version: null, ...old,
+  };
+}
+
+test("every tool call shape makes the type and data translate() makes from the old line it used to write", () => {
+  assert.ok(TOOL_CALLS.length >= 30, "the fixture covers every tool");
+  for (const c of TOOL_CALLS) {
+    const t = TRANSLATE.translate(oldLine(c.old), c.old_data === undefined ? undefined : { data: c.old_data, ts: null, sessionId: null });
+    assert.ok(t.event, `${c.tool}: the old line translates: ${JSON.stringify(t)}`);
+    let nativeCall = c.native;
+    if (nativeCall === undefined) {
+      const r = spawnSync("/bin/sh", [USAGE_CHECK, "--to-data"], { encoding: "utf8", input: `${c.old.note}\n`, env: { PATH: process.env.PATH, HOME: tmp } });
+      assert.equal(r.status, 0, `${c.tool}: ${r.stderr}`);
+      nativeCall = { type: "usage", data: JSON.parse(r.stdout) };
+    }
+    assert.equal(nativeCall.type, t.event.type, c.tool);
+    assert.deepEqual(nativeCall.data, t.event.data, c.tool);
+    // the real writer takes the native call, validates it strictly and writes that type and data
+    const args = ["--type", nativeCall.type, "--data", JSON.stringify(nativeCall.data)];
+    if (c.old.issue !== undefined) args.push("--issue", String(c.old.issue));
+    if (c.old.actor !== undefined) args.push("--actor", c.old.actor);
+    const { r, lines, old } = native(args);
+    assert.equal(r.status, 0, `${c.tool}: ${r.stderr}`);
+    assert.equal(r.stderr, "", c.tool);
+    assert.deepEqual(old, [], `${c.tool}: nothing goes to the old log`);
+    assert.equal(lines.length, 1, c.tool);
+    const e = JSON.parse(lines[0]);
+    assert.equal(e.type, t.event.type, c.tool);
+    assert.deepEqual(e.data, t.event.data, c.tool);
+    assert.equal(e.issue, t.event.issue, c.tool);
+    assert.equal(e.actor, t.event.actor, c.tool);
+  }
+});
+
+test("the old-state lines of the tools that stopped logging make no new event", () => {
+  // design_routed (callum-flow-design-route), superseded (callum-flow-regate) and the pipeline watcher's states
+  // (parked, merge_ready, ci_stalled, head_mismatch, conflict, failed, watcher_error) are skipped by name
+  for (const state of ["design_routed", "superseded", "parked", "merge_ready", "ci_stalled", "head_mismatch", "conflict", "failed", "watcher_error"]) {
+    const t = TRANSLATE.translate(oldLine({ state, issue: 7, note: "x" }));
+    assert.deepEqual(t, { skip: state }, state);
+  }
+  // a dependency strip of the issue reader is a miss, not an event
+  const t = TRANSLATE.translate(oldLine({ state: "untrusted_stripped", issue: 7, note: "dependencies=3" }));
+  assert.ok(t.miss, JSON.stringify(t));
+});
+
+test("regime: the flag, FACTORY_REGIME, and null; the flag wins; every good output is strictly valid", () => {
+  const regimeOf = (args, env) => {
+    const { r, lines } = native([...claimed, ...args], { env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    const e = JSON.parse(lines[0]);
+    assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
+    assert.ok("regime" in e, "the key is always present");
+    assert.deepEqual(Object.keys(e).slice(Object.keys(e).indexOf("plugin_version")), ["plugin_version", "regime", "data"]);
+    return e.regime;
+  };
+  assert.equal(regimeOf(["--regime", "testbed"], {}), "testbed");
+  assert.equal(regimeOf([], { FACTORY_REGIME: "manual" }), "manual");
+  assert.equal(regimeOf(["--regime", "testbed"], { FACTORY_REGIME: "manual" }), "testbed");
+  assert.equal(regimeOf([], {}), null);
+  assert.equal(regimeOf(["--regime", ""], { FACTORY_REGIME: "" }), null, "an empty value counts as unset");
+  assert.equal(regimeOf(["--regime", ""], { FACTORY_REGIME: "manual" }), null, "an empty flag is unset, not a fallback to the variable");
+});
+
+test("regime: a value the enum lacks is written as given with exactly one warning and exit 0", () => {
+  const { r, lines } = native([...claimed, "--regime", "bogus"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr.trim().split("\n").length, 1, r.stderr);
+  assert.match(r.stderr, /callum-flow-event: warning: unknown regime 'bogus' - written as given/);
+  const e = JSON.parse(lines[0]);
+  assert.equal(e.regime, "bogus");
+  assert.notDeepEqual(reader.validateStrict("envelope", 1, e), [], "strict validation still rejects it");
+});
+
+test("regime: the old-state mode passes FACTORY_REGIME to the translator, and without it writes null", () => {
+  const withIt = native(["ready", "--issue", "7"], { env: { FACTORY_REGIME: "manual", HOME: tmp } });
+  assert.equal(withIt.r.status, 0, withIt.r.stderr);
+  assert.equal(JSON.parse(withIt.lines[0]).regime, "manual");
+  const without = native(["ready", "--issue", "7"], { env: { HOME: tmp } });
+  assert.equal(JSON.parse(without.lines[0]).regime, null);
+  assert.deepEqual(reader.validateStrict("envelope", 1, JSON.parse(without.lines[0])), []);
+});
+
+// The hand-recorded rescue of docs/metrics.md (section 9), run through the writer as the document shows it.
+test("the documented rescue command writes a manual intervention, and reads null without --regime", () => {
+  const md = fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8");
+  const block = md.match(/```sh\n(callum-flow-event --type intervention[\s\S]*?)```/);
+  assert.ok(block, "docs/metrics.md shows the rescue command");
+  const cmd = block[1].replace(/\\\n\s*/g, "").trim().replace(/^callum-flow-event\s+/, "")
+    .replace("--issue N", "--issue 7").replace("<what was done>", "patched the trust file");
+  const m = cmd.match(/^(.*?) --data '(.*)'$/);
+  assert.ok(m, `the command has a --data argument: ${cmd}`);
+  const args = [...m[1].split(/\s+/), "--data", m[2]];
+  assert.ok(args.includes("--regime") && args[args.indexOf("--regime") + 1] === "manual");
+
+  const { r, lines } = native(args);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "", "no warning");
+  assert.equal(lines.length, 1);
+  const e = JSON.parse(lines[0]);
+  assert.equal(e.regime, "manual");
+  assert.equal(e.type, "intervention");
+  assert.equal(e.issue, 7);
+  assert.deepEqual(reader.validateStrict("intervention", 1, e.data), []);
+  assert.deepEqual([e.data.who, e.data.cause, e.data.detail], ["person", "rescue", "patched the trust file"]);
+
+  const bare = args.filter((a, i) => a !== "--regime" && args[i - 1] !== "--regime");
+  const none = native(bare);
+  assert.equal(none.r.status, 0, none.r.stderr);
+  assert.equal(JSON.parse(none.lines[0]).regime, null);
 });

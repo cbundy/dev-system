@@ -52,17 +52,34 @@ check "piped stdin reaches the command" bash -c "
   echo \"stdout=\$out\"
   [ \"\$out\" = hi ]"
 # A --final that hangs is cut off after 10s, and its stdout never reaches the container's stdout.
+# The stub timestamps its own start and its TERM (only the entrypoint's `timeout 10` sends it: tini forwards the stop
+# signal to the entrypoint alone), so the check measures the cut-off itself and not the wall time of `docker stop`,
+# which also holds container teardown on a busy runner. The 15000ms bound is the 10s cut-off plus 5s of scheduling
+# slack, still half of docker's 30s kill; it is not a raised timeout. Exit 143 proves the container ended by itself:
+# without the cut-off the stub runs 60s and docker kills the container at 30s (137).
 WORKDIR=${WORKDIR:-$(mktemp -d)} # section 7 sets it only when it runs; lib.sh's cleanup removes it
-printf '#!/bin/sh\necho STUB-FINAL-OUTPUT\nsleep 60\n' > "$WORKDIR/hang-final"
+cat > "$WORKDIR/hang-final" <<'STUB'
+#!/bin/sh
+echo STUB-FINAL-OUTPUT
+echo "STUB-FINAL-START $(date +%s%N)"
+trap 'echo "STUB-FINAL-TERM $(date +%s%N)"; exit 143' TERM
+sleep 60 & wait
+STUB
 chmod 755 "$WORKDIR/hang-final"
 c=$(run_bg -v "$WORKDIR/hang-final:/usr/local/share/dev-system/heartbeat-loop:ro" "$IMAGE" bash -c 'sleep infinity')
-check "a hanging heartbeat-loop --final is cut off: docker stop under 13s, its stdout kept off the command's" bash -c "
+check "a hanging heartbeat-loop --final is cut off by its 10s timeout (container exits itself, not killed), its stdout kept off the command's" bash -c "
   for _ in \$(seq 60); do docker exec '$c' pgrep -x sleep >/dev/null 2>&1 && break; sleep 1; done
   $(declare -f stop_status)
   read -r rc ms < <(stop_status '$c')
-  echo \"rc=\$rc ms=\$ms\"
+  err=\$(docker logs '$c' 2>&1 >/dev/null)
+  start=\$(echo \"\$err\" | sed -n 's/^STUB-FINAL-START //p')
+  term=\$(echo \"\$err\" | sed -n 's/^STUB-FINAL-TERM //p')
+  final_ms=
+  [ -n \"\$start\" ] && [ -n \"\$term\" ] && final_ms=\$(((term - start) / 1000000))
+  echo \"rc=\$rc ms=\$ms final_ms=\$final_ms\"
   ! docker logs '$c' 2>/dev/null | grep -q STUB-FINAL-OUTPUT &&
-  [ \$ms -lt 13000 ]"
+  [ \$rc = 143 ] &&
+  [ -n \"\$final_ms\" ] && [ \$final_ms -lt 15000 ]"
 docker rm -f "$c" >/dev/null
 
 # No login, no command: waits for a login without starting Claude. A 1s poll
@@ -95,6 +112,58 @@ check "an API-key login: dev-login leaves it alone (no Claude login started)" ba
   docker exec '$c' dev-login status
   docker exec '$c' dev-login status | grep -qx 'claude: other' && ! docker exec '$c' tmux has-session -t login-claude"
 docker rm -f "$c" >/dev/null
+
+# API-key mode (cbundy/dev-system#1113): DEV_CLAUDE_AUTH=api-key and a key file.
+# A missing file waits with one hint per period and starts nothing; a file leads
+# to a headless Claude (no --remote-control) and Claude's apiKeyHelper reads the
+# key. The key never shows in a process list or a process environment.
+APIKEY_FAKE="sk-ant-api03-dsb-fake-$$-key"
+APIKEY_DIR=$(mktemp -d)
+printf '%s\n' "$APIKEY_FAKE" > "$APIKEY_DIR/anthropic-api-key"
+chmod 755 "$APIKEY_DIR"
+chmod 644 "$APIKEY_DIR/anthropic-api-key"
+c=$(run_bg -e DEV_CLAUDE_AUTH=api-key -e DEV_CLAUDE_API_KEY_FILE=/run/secrets/ws/anthropic-api-key \
+  -e DEV_REMOTE_CONTROL_POLL=1 "$IMAGE")
+check "API-key mode, no key file: logs the provisioning hint and starts no Claude, no crash loop" bash -c "
+  for _ in \$(seq 60); do docker logs '$c' 2>&1 | grep -q 'Claude API-key mode: /run/secrets/ws/anthropic-api-key is missing, empty or unreadable' && break; sleep 1; done
+  sleep 3
+  docker logs '$c' 2>&1 | grep 'dev-remote-control'
+  [ \"\$(docker logs '$c' 2>&1 | grep -c 'Claude API-key mode: .* is missing')\" = 1 ] &&
+  [ \"\$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' '$c')\" = 'true 0' ] &&
+  docker exec '$c' bash -c '! tmux has-session -t claude 2>/dev/null' &&
+  ! docker logs '$c' 2>&1 | grep -q 'Claude is not logged in'"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_CLAUDE_AUTH=api-key -e DEV_CLAUDE_API_KEY_FILE=/run/secrets/ws/anthropic-api-key \
+  -e DEV_REMOTE_CONTROL_POLL=1 -e DEV_REMOTE_CONTROL_NAME=rc-test -v "$APIKEY_DIR:/run/secrets/ws:ro" \
+  "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
+check "API-key mode, stub: starts Claude headless without --remote-control and logs it" bash -c "
+  for _ in \$(seq 30); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp ' ] &&
+  docker logs '$c' 2>&1 | grep -q 'started Claude headless on the API key (no Remote Control) in /tmp - attach: docker exec -it ${c:0:12} tmux attach -t claude' &&
+  docker exec '$c' tmux has-session -t claude &&
+  [ \"\$(docker inspect -f '{{.RestartCount}}' '$c')\" = 0 ]"
+check "API-key mode: dev-init set apiKeyHelper to the image's helper in Claude's settings" bash -c "
+  docker exec '$c' jq -e '.apiKeyHelper == \"/usr/local/bin/dev-claude-api-key /run/secrets/ws/anthropic-api-key\"' /persist/claude/settings.json"
+check "API-key mode: the helper prints the key; dev-login shows claude off" bash -c "
+  [ \"\$(docker exec '$c' dev-claude-api-key /run/secrets/ws/anthropic-api-key)\" = '$APIKEY_FAKE' ] &&
+  docker exec '$c' dev-login status | grep -q '^claude: *off'"
+check "API-key mode: neither ps nor any process environment holds the key" bash -c "
+  ! docker exec '$c' ps -eo args | grep -qF '$APIKEY_FAKE' &&
+  ! docker exec '$c' bash -c 'cat /proc/[0-9]*/environ 2>/dev/null' | grep -qaF '$APIKEY_FAKE' &&
+  ! docker logs '$c' 2>&1 | grep -qF '$APIKEY_FAKE'"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e DEV_CLAUDE_AUTH=api-key -e DEV_CLAUDE_API_KEY_FILE=/run/secrets/ws/anthropic-api-key \
+  -e DEV_REMOTE_CONTROL=0 -v "$APIKEY_DIR:/run/secrets/ws:ro" "$IMAGE")
+check "API-key mode, real CLI: claude auth status reports logged in through the helper" bash -c "
+  for _ in \$(seq 30); do docker exec '$c' jq -e .apiKeyHelper /persist/claude/settings.json >/dev/null 2>&1 && break; sleep 1; done
+  out=\$(docker exec '$c' claude auth status --json)
+  echo \"\$out\" | sed 's/$APIKEY_FAKE/<key>/g'
+  echo \"\$out\" | jq -e '.loggedIn == true and .authMethod == \"api_key_helper\"'"
+docker rm -f "$c" >/dev/null
+rm -rf "${APIKEY_DIR:?}"
 
 c=$(run_bg -e DEV_REMOTE_CONTROL=0 "$IMAGE")
 check "DEV_REMOTE_CONTROL=0: logs that Claude is not started" \

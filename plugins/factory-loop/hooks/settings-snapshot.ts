@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG } from './config'
 import { originOf, sourceOf } from './config-view'
 import type { Source, ViewInputs } from './config-view'
 import type { Runtime } from './observe'
+import type { CapInfo } from './v2/capacity'
 import type { Config, Control, Ms } from './types'
 import { WIND_DOWN_WRITE_SCRIPT } from './v2/wind-down-files'
 
@@ -56,6 +57,9 @@ export type Snapshot = {
   derived: {
     gateConcurrency: number | null
     cpus: number | null
+    // the container's memory and the cap the loop held to; optional: a snapshot from before them has neither
+    memoryBytes?: number | null
+    effectiveCap?: number | null
     models: Record<'designer' | 'builder' | 'fixer' | 'triage' | 'reviewer' | 'adjudicator', string | null>
     experiment: { implementerOpusPct: number | null; designSessionPct: number | null }
   }
@@ -70,7 +74,7 @@ export function snapshotFrom(raw: unknown): { snap: Snapshot; at: Ms } | null {
   return Number.isNaN(at) ? null : { snap: raw as unknown as Snapshot, at }
 }
 
-export function snapshotOf(rt: Runtime & Partial<ViewInputs>, control: Control, agentModels: AgentModels, env: ShareEnv, at: Ms): Snapshot {
+export function snapshotOf(rt: Runtime & Partial<ViewInputs>, control: Control, agentModels: AgentModels, env: ShareEnv, at: Ms, cap?: Pick<CapInfo, 'effective'>): Snapshot {
   const repoRaw = rt.repoSettings ?? null
   const workspaceRaw = rt.workspaceRaw ?? {}
   const record = rt.config as unknown as Record<string, unknown>
@@ -102,6 +106,8 @@ export function snapshotOf(rt: Runtime & Partial<ViewInputs>, control: Control, 
     derived: {
       gateConcurrency: rt.gateConcurrency ?? null,
       cpus: rt.cpus ?? null,
+      memoryBytes: rt.memoryBytes ?? null,
+      effectiveCap: cap?.effective ?? null,
       models: {
         designer: agentModels.designer ?? null,
         builder: agentModels.builder ?? null,

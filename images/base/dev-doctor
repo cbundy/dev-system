@@ -120,7 +120,14 @@ check_login() {
   fi
 }
 
-check_login claude "claude auth login" claude auth status
+# shellcheck source=claude-auth.sh
+. /usr/local/share/dev-system/claude-auth.sh
+if claude_api_key_mode; then
+  claude_api_key_doctor
+else
+  info "Claude auth mode: $(claude auth status --json 2>/dev/null | jq -r 'if .loggedIn == true then .authMethod else "none" end' 2>/dev/null | grep . || echo none)"
+  check_login claude "claude auth login" claude auth status
+fi
 check_login codex "codex login --device-auth" codex login status
 check_login gh "gh auth login, then dev-init" gh auth status
 
@@ -421,9 +428,11 @@ else
   info "evidence storage: no workspace checkout with an origin remote, not checked"
 fi
 
-# Factory event log (cbundy/dev-system#218): when it was last written and last
-# pushed, and how many lines still wait. Information only, except that a
-# configured push whose loop is not running is a failure.
+# The old factory event log (cbundy/dev-system#218): when it was last written and last
+# pushed, and how many lines still wait. Information only, and history: callum-flow-event
+# writes no new lines to it (cbundy/dev-system#1143) and dev-init no longer starts its push
+# loop, so a count that waits does not mean anything is wrong. The one failure here is a
+# configured database with no psql to push the new log with.
 ev_dir="${CALLUM_EVENTS_DIR:-/persist/events}"
 ev_lines=0
 ev_pushed=0
@@ -449,11 +458,9 @@ for ev_f in "$ev_dir"/*.jsonl; do
   [ "$ev_m" -le "$ev_last_pushed" ] || ev_last_pushed=$ev_m
 done
 ev_when() { if [ "$1" -gt 0 ]; then date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; else echo never; fi; }
-info "factory events: $ev_lines recorded (last written $(ev_when "$ev_last_written")), $ev_pushed pushed (last pushed $(ev_when "$ev_last_pushed")), $ev_waiting waiting"
+info "old factory event log (gets no new lines): $ev_lines recorded (last written $(ev_when "$ev_last_written")), $ev_pushed pushed (last pushed $(ev_when "$ev_last_pushed")), $ev_waiting waiting"
 if [ "$av_rc" -eq 0 ]; then
-  if flock -n /tmp/dev-event-push.lock true 2>/dev/null; then
-    fail "factory event push is not running" "run: dev-init (log: /tmp/dev-event-push.log)"
-  elif ! command -v psql >/dev/null 2>&1; then
+  if ! command -v psql >/dev/null 2>&1; then
     fail "psql is not on PATH, so factory events cannot be pushed" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
   fi
 fi
@@ -553,6 +560,44 @@ unset ta_msg
 if gh_token_mode; then
   gh_token_doctor
   gh_token_access_doctor "${DEV_REPO_URL:-$(git -C "$workspace" remote get-url origin 2>/dev/null || true)}"
+fi
+
+# Memory (cbundy/dev-system#1124): the container's cgroup usage and pressure, one line. INFO when calm,
+# WARN (never FAIL) when the cgroup hit its memory limit since the heartbeat's last reading, killed
+# anything for memory, or tasks stall on memory (PSI full avg10 at or above MEM_PSI_FULL_WARN).
+# Nothing is printed without a cgroup v2 memory.events or memory.pressure. The heartbeat's state file
+# is only read here, never updated.
+# shellcheck source=mem-pressure.sh
+. /usr/local/share/dev-system/mem-pressure.sh
+mem_cg="${HEARTBEAT_CGROUP_DIR:-/sys/fs/cgroup}"
+if [ -r "$mem_cg/memory.events" ] || [ -r "$mem_cg/memory.pressure" ]; then
+  mem_pressure_read "$mem_cg"
+  mem_cur='' mem_max=''
+  { read -r mem_cur < "$mem_cg/memory.current"; } 2> /dev/null || :
+  { read -r mem_max < "$mem_cg/memory.max"; } 2> /dev/null || :
+  case "$mem_cur" in '' | *[!0-9]*) mem_used_txt='memory used unknown' ;; *) mem_used_txt="$((mem_cur / 1048576)) MiB" ;; esac
+  case "$mem_max" in
+    max) mem_lim_txt='no limit' ;;
+    '' | *[!0-9]*) mem_lim_txt='limit unknown' ;;
+    *) mem_lim_txt="$((mem_max / 1048576)) MiB" ;;
+  esac
+  mem_rate=''
+  if [ -n "$mp_max_events" ]; then
+    mem_rate=$(mem_pressure_rate "${DEV_HEARTBEAT_DIR:-/tmp}/dev-heartbeat.mem" "$mp_max_events" "$(($(date +%s%N) / 1000))")
+  fi
+  if [ -n "$mem_rate" ]; then mem_rate_txt="$mem_rate/min since the last heartbeat reading"; else mem_rate_txt="rate unknown"; fi
+  mem_line="memory: $mem_used_txt / $mem_lim_txt, max events ${mp_max_events:-unknown} ($mem_rate_txt), OOM kills ${mp_oom_kills:-unknown}, PSI avg10 some ${mp_psi_some_avg10:-unknown} / full ${mp_psi_full_avg10:-unknown}"
+  mem_hot=false
+  case "$mem_rate" in '' | 0.00) ;; *) mem_hot=true ;; esac
+  case "${mp_oom_kills:-0}" in 0) ;; *) mem_hot=true ;; esac
+  if [ -n "$mp_psi_full_avg10" ] && [ "${mp_psi_full_avg10%%.*}" -ge "$MEM_PSI_FULL_WARN" ]; then mem_hot=true; fi
+  if $mem_hot; then
+    warn "$mem_line" \
+      "the container is short of memory: lower the loop's maxInFlightIssues (factory-loop settings) or raise the workspace memory"
+  else
+    info "$mem_line"
+  fi
+  unset mem_cg mem_cur mem_max mem_used_txt mem_lim_txt mem_rate mem_rate_txt mem_line mem_hot
 fi
 
 # Telemetry export (cbundy/dev-system#68) is opt-in, so this line is only

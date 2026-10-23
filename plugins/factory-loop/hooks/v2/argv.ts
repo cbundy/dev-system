@@ -4,7 +4,9 @@
 // only on its own line here, and plugins/factory-loop/tests/safety.test.ts runs every builder
 // through its bans. A v2 executor builds its commands here, never from literals of its own. Every
 // gh command carries --repo, but `gh api`, whose repo is in its path. Pure.
+import type { PrSize } from './event-data'
 import type { FactoryLabel } from './types'
+import type { ScoreResult } from './score'
 
 // --- labels (3.4) -----------------------------------------------------------------------------------
 
@@ -28,6 +30,19 @@ export function labelReleaseArgv(repo: string, issue: number, add: string, remov
 // One of the eight, made or updated (op ensure).
 export function labelCreateArgv(repo: string, label: { name: string; color: string; description: string }): string[] {
   return ['gh', 'label', 'create', label.name, '--repo', repo, '--color', label.color, '--description', label.description, '--force']
+}
+
+// One label made if the repo lacks it: no --force, so a label that exists, with the owner's colour and
+// description, is left as it is (the command then fails with "already exists", which the caller reads as
+// present). The intake stamp's labels (act-intake.ts) are made this way.
+export function labelMakeArgv(repo: string, label: { name: string; color: string; description: string }): string[] {
+  return ['gh', 'label', 'create', label.name, '--repo', repo, '--color', label.color, '--description', label.description]
+}
+
+// The intake stamp's labels (`area:<area>`, `needs-decision`) on, in one call. Taking one off is
+// labelClearArgv's.
+export function labelsAddArgv(repo: string, issue: number, add: readonly string[]): string[] {
+  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add.join(',')]
 }
 
 // --- comments (4.5, 8.3) ------------------------------------------------------------------------------
@@ -244,6 +259,36 @@ export function queueMergeArgv(pr: number, patch: string, issue: number): string
   return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue)]
 }
 
+// A merged PR's size, for the recovered `merged` event (event-data.ts PrSize).
+export function prSizeArgv(repo: string, pr: number): string[] {
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'files,additions,deletions']
+}
+
+// prSizeOf: the size `prSizeArgv` read, or null when it does not parse or lacks the counts. The files
+// are the paths, empty ones dropped; fileLines are the per-file counts, an entry with a bad count dropped.
+export function prSizeOf(stdout: string): PrSize | null {
+  let v: unknown
+  try {
+    v = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (v === null || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (!Array.isArray(o.files) || typeof o.additions !== 'number' || typeof o.deletions !== 'number') return null
+  const files: string[] = []
+  const fileLines: { path: string; additions: number; deletions: number }[] = []
+  const count = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
+  for (const f of o.files) {
+    const r = f !== null && typeof f === 'object' ? (f as Record<string, unknown>) : {}
+    const path = r.path
+    if (typeof path !== 'string' || path === '') continue
+    files.push(path)
+    if (count(r.additions) && count(r.deletions)) fileLines.push({ path, additions: r.additions, deletions: r.deletions })
+  }
+  return { files, fileLines, additions: o.additions, deletions: o.deletions }
+}
+
 // A head's patch id against the base (8.4).
 export function patchIdArgv(ref: string, base: string): string[] {
   return ['callum-flow-patch-id', ref, base]
@@ -284,6 +329,33 @@ export function isAncestorArgv(commit: string, head: string): string[] {
   return ['git', 'merge-base', '--is-ancestor', commit, head]
 }
 
+// --- the in-flight paths (sources-paths.ts) ---------------------------------------------------------
+
+// The base branch on origin, fetched into its remote-tracking ref.
+export function fetchBaseArgv(base: string): string[] {
+  return ['git', 'fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`]
+}
+
+// Whether a commit is here: exit 0 yes.
+export function catFileArgv(sha: string): string[] {
+  return ['git', 'cat-file', '-e', `${sha}^{commit}`]
+}
+
+// A commit brought in from origin by its id.
+export function fetchShaArgv(sha: string): string[] {
+  return ['git', 'fetch', '--quiet', 'origin', sha]
+}
+
+// The commit the head branched from origin's default branch at.
+export function mergeBaseArgv(base: string, head: string): string[] {
+  return ['git', 'merge-base', `refs/remotes/origin/${base}`, head]
+}
+
+// The paths a branch changed since the merge base, one per line, renames as a delete and an add.
+export function diffNamesArgv(mergeBase: string, head: string): string[] {
+  return ['git', 'diff', '--name-only', '--no-renames', `${mergeBase}..${head}`]
+}
+
 // --- the builder's model (7.1) ---------------------------------------------------------------------
 
 // The model the builder runs on; the tool logs `implementer_routed` itself.
@@ -313,7 +385,10 @@ export function designerFallbackArgv(issue: number, model: string): string[] {
 
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------
 
-export function claimArgv(issue: number): string[] {
+// A claim with a score (S1) runs under `env CALLUM_FLOW_CLAIM_SCORE=<JSON>`, which the claim tool
+// records on the claimed event; the others run the tool alone.
+export function claimArgv(issue: number, score?: ScoreResult): string[] {
+  if (score !== undefined) return ['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify({ score: score.score, factors: score.factors })}`, 'callum-flow-claim', String(issue)]
   return ['callum-flow-claim', String(issue)]
 }
 

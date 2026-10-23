@@ -80,6 +80,9 @@ log's `rails` field says why (`executed` says whether a pass acted). An armed ol
 another orchestrator's heartbeat is also told to you, once each time it starts. `/factory mode
 observe` or the `OFF` file stops act mode at the next pass.
 
+An acting pass also writes the claim queue it saw as a `queue_snapshot` event (when it changes, as a
+quarter-hour heartbeat otherwise, and at once on a pass that claims); it never waits on the write.
+
 ## The `/factory` command
 
 `/factory <op>` sets the loop's owner directives from any client, at once, even during a long
@@ -91,7 +94,7 @@ Each change is logged and asks for a pass at once. The ops:
   plugin or directive), read-only; "what is this factory's config?" is answered with it;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order, then issues labelled `priorityLabel` (default `priority`), then the rest;
+- `priority <N...>|off`: claim these first, in order; the rest go by score (highest first), where the `priorityLabel` label (default `priority`) is one factor among bug, what it unblocks, its epic, waiting time and earlier failed lives (weights: `queueScore`); with `intakeStamp` on (off by default) an issue with a stamp also scores `area-factory`, `needs-owner` and `overlap`, and the loop stamps each ready issue once per body version (rule I1: a reader on `intakeModel` per issue, at most two at once, none for a version already tried, the edited body once more) and sets `area:<area>` and, when it needs the owner, `needs-decision` on it, the owner's own labels always winning: a label group the owner changed, or that the issue carried before the first stamp, is never touched again, and the loop removes only labels it set; each try writes one `intake_stamp` event with its token cost;
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;
@@ -102,6 +105,7 @@ Each change is logged and asks for a pass at once. The ops:
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: winds down (up to windDownMinutes), then restarts this workspace;
 - `drop <N>`: abandon N and stop its agents;
+- `stamp <N>`: dry-run the intake reader on N and report its answer when it ends; writes nothing (no label, comment, event, stamp or ledger change), and works with `intakeStamp` off and in observe mode;
 - `note [<N>] <text>`: an instruction the next agent prompts carry, for N or for all;
 - `mode off|observe|act`: written to the workspace file, from the next pass;
 - `trace on|off`: trace mode (below), written to the workspace file, from the next pass.
@@ -115,7 +119,7 @@ For more, turn trace mode on: `/factory trace on`, `"trace": true` in the worksp
 `"trace": true` in the repo's `.claude/factory-loop.json` (the workspace file wins). Each pass
 then writes one record to `trace-YYYY-MM-DD.jsonl` beside the decision log: each phase's time,
 every command with its time, exit and bytes, which sources came from the cache, each action's
-times, the wakes' latencies, and what each issue waits on and since when. The trace files are
+times, the wakes' latencies, and what each issue waits on and since when. The sweep, the heartbeat, the merge and the session title's rename run off the pass: their action row says `off` and the next record's `offPass` lists the commands that finished, with their time and exit (and, for a title rename that failed, its `error`). The trace files are
 kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
 fills the cap is cut short. [v2 SPEC 13.12.1](../../docs/factory-loop/v2/SPEC.md#13121-trace-mode) explains each field, with `jq` examples.
 

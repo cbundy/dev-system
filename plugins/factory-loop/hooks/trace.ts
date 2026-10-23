@@ -9,6 +9,7 @@
 import type { ActOutcome } from './act'
 import type { ActIo, RunResult } from './exec'
 import type { Io } from './observe'
+import type { ObserveSplit } from './observe-clock'
 import type { ActionKind, LedgerEntry, LedgerStatus, Ms, PlanResult, Skip, SourceName, Stage, State } from './types'
 
 // A pass's phases in the order they run, each ending where the next begins: setup (the settings,
@@ -173,7 +174,8 @@ export function tracedActIo(tr: Tracer, io: ActIo): ActIo {
     spawnAgent: input => timed(tr, `agent.spawn ${input.name ?? input.subagentType}`, () => io.spawnAgent(input), refused),
     stopAgent: agentId => timed(tr, `TaskStop ${agentId}`, () => io.stopAgent(agentId), refused),
     submit: text => timed(tr, `prompt.submit ${text.split('\n', 1)[0] ?? ''}`, () => io.submit(text)),
-    rename: title => timed(tr, 'rename', () => io.rename(title)),
+    rename: title => timed(tr, 'rename', // the launch only: the rename itself runs off the pass
+       () => io.rename(title)),
     usage: () => timed(tr, 'session.usage', () => io.usage()),
     readFile: path => timed(tr, `fs.read ${path}`, () => io.readFile(path), text => (text === null ? {} : { bytes: byteLength(text) })),
     writeFile: (path, text) => timed(tr, `fs.write ${path}`, () => io.writeFile(path, text), () => ({ bytes: byteLength(text) })),
@@ -219,7 +221,7 @@ export function sourceRows(state: State, commands: readonly Command[], made: rea
 // One executed action: when plan handed it over, when it started and ended (ms into the pass;
 // null for one held before it started), and how long it ran. A spawn's ms is its time to start:
 // it returns once the agent started.
-export type ActionRow = { key: string; kind: ActionKind; status: ActOutcome['status']; queued: number | null; started: number | null; ended: number | null; ms: Ms }
+export type ActionRow = { key: string; kind: ActionKind; status: ActOutcome['status']; queued: number | null; started: number | null; ended: number | null; ms: Ms; off?: true }
 
 export function actionRows(tr: Tracer, outcomes: readonly ActOutcome[], queuedAt: Ms | null): ActionRow[] {
   return outcomes.map(o => {
@@ -232,9 +234,14 @@ export function actionRows(tr: Tracer, outcomes: readonly ActOutcome[], queuedAt
       started,
       ended: started === null ? null : tenth(started + o.ms),
       ms: o.ms,
+      ...(o.off === true ? { off: true as const } : {}),
     }
   })
 }
+
+// One off-pass command that finished since the last record (act-off.ts): its command and key, how
+// long it ran, its exit (-1: it never exited) and when it ended (ISO); error: why a title rename failed.
+export type OffPassRow = { cmd: ActionKind; key: string; ms: Ms; exit: number; endedAt: string; error?: string }
 
 // attemptOf: one attempt of a ledger entry (a retry keeps the key, not the start).
 export function attemptOf(e: LedgerEntry): string {
@@ -337,6 +344,10 @@ export type TraceInput = {
   queuedAt: Ms | null
   wakes: WakeRow[]
   waiting: WaitRow[]
+  // the observe call's wall time and its split (observe-clock.ts)
+  observe?: ObserveSplit
+  // the off-pass commands that finished since the last record
+  offPass?: readonly OffPassRow[]
 }
 
 // traceRecord: the pass's record, its log phase ending now: start and end on the loop's clock
@@ -356,11 +367,13 @@ export function traceRecord(input: TraceInput): Record<string, unknown> {
     persistMs: tenth(tr.persistMs),
     eventsMs: tenth(tr.eventsMs),
     lockMs: tenth(tr.lockMs),
+    ...(input.observe === undefined ? {} : { observe: { ms: tenth(input.observe.ms), commandsMs: tenth(input.observe.commandsMs), inProcessMs: tenth(input.observe.inProcessMs) } }),
     sources: sourceRows(input.state, tr.commands, input.made),
     commands: tr.commands,
     actions: actionRows(tr, input.outcomes, input.queuedAt),
     wakes: input.wakes,
     waiting: input.waiting,
+    offPass: input.offPass ?? [],
   }
 }
 

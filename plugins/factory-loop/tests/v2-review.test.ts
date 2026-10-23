@@ -493,17 +493,56 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect([...notes, question].join('\n')).not.toMatch(/\bevery\b/)
   })
 
-  test('a conflict ends the step at once, even while the reviewer runs: T9 for the conflict, with the merge to make', () => {
-    const r = rec(623)
+  test('a conflict holds for this seq\'s running reviewer of the head\'s patch, so one fixer gets both; it plans no re-run meanwhile', () => {
+    const r = rec(623, { seqAt: NOW - 40 * MIN, since: NOW - 40 * MIN })
     const runningReview = { ...reviewed(r, {}), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN }
-    const p = plan(withLedger(world([r], [view(623, { mergeable: 'dirty' })]), [ensured(r), prepared(r), runningReview]))
-    const t = transitionOf(p, 623)
-    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', pr: PR } })
-    expect(t?.next.notes[0]).toContain('merge origin/main into issue-623')
-    // with no reviewer yet, none starts beside the transition, and no re-run either
-    const fresh = plan(withLedger(world([r], [view(623, { mergeable: 'dirty', checks: [check('test', 'fail')] })]), [ensured(r), prepared(r)]))
-    expect(transitionOf(fresh, 623)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
-    expect(of(fresh, 623).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    const dirty = (extra: Partial<PrView> = {}) => world([r], [view(623, { mergeable: 'dirty', checks: [check('test', 'fail')], ...extra })])
+    const p = plan(withLedger(dirty(), [ensured(r), prepared(r), runningReview]))
+    expect(transitionOf(p, 623)).toBeUndefined()
+    expect(said(p, 623)).toEqual([`review: PR #${PR} conflicts; waits for the reviewer of patch ${short(PATCH)} so one fixer gets both`])
+    expect(of(p, 623).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    // its clock is the reviewer's
+    const late = plan(withLedger(dirty(), [ensured(r), prepared(r), { ...runningReview, startedAt: NOW - 31 * MIN }]))
+    expect(transitionOf(late, 623)).toMatchObject({ row: 'U2', via: 'unknown:timeout' })
+  })
+
+  test('the reviewer ends: T9 for the conflict whatever it said; changes add its findings to the merge lead, the reviewed event and comment come first', () => {
+    const r = rec(624)
+    const s = (e: LedgerEntry) => withLedger(world([r], [view(624, { mergeable: 'dirty' })]), [ensured(r), prepared(r), e])
+    const changes = s(changed(r))
+    const first = plan(changes)
+    expect(transitionOf(first, 624)).toBeUndefined()
+    expect(of(first, 624).map(a => a.kind).sort()).toEqual(['comment', 'event'])
+    const t = transitionOf(plan(settled(changes, first)), 624)
+    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', conflicts: 1, pr: PR } })
+    expect(t?.next.notes[0]).toContain('merge origin/main into issue-624')
+    expect(t?.next.notes.join('\n')).toContain('a moved HEAD is accepted')
+    const ok = s(approved(r))
+    const t2 = transitionOf(plan(settled(ok, plan(ok))), 624)
+    expect(t2).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+    expect(t2?.next.notes.join('\n')).toContain('merge origin/main into issue-624')
+    expect(t2?.next.notes.join('\n')).not.toContain('a moved HEAD')
+    const unk = s(reviewed(r, { event: 'unknown', why: 'agent-dead' }))
+    expect(transitionOf(plan(settled(unk, plan(unk))), 624)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+  })
+
+  test('a conflict with no reviewer, or none of this seq for the head\'s patch, ends the step at once with nothing started', () => {
+    const r = rec(625)
+    const run = (over: Partial<LedgerEntry>, k = 1, patch = PATCH) => ({ ...reviewed(r, {}, {}, k, patch), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN, ...over })
+    const stopKey = `${entryKey(r, 'stop')}/review/${short(PATCH)}/r1/a1`
+    const cases: LedgerEntry[][] = [[], [run({}, 1, PATCH2)], [run({}), done(stopKey, 'stop-agent', { issue: 625 })], [run({ startedAt: r.seqAt - 1 })]]
+    for (const extra of cases) {
+      const p = plan(withLedger(world([r], [view(625, { mergeable: 'dirty', checks: [check('test', 'fail')] })]), [ensured(r), prepared(r), ...extra]))
+      expect(transitionOf(p, 625)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+      expect(of(p, 625).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    }
+  })
+
+  test('a conflict at the review fix cap still goes to fixing: it has its own cap, so fixes stays and conflicts counts it', () => {
+    const r = { ...rec(626), fixes: CFG.reviewFixCap }
+    const p = plan(withLedger(world([r], [view(626, { mergeable: 'dirty' })]), [ensured(r), prepared(r)]))
+    const t = transitionOf(p, 626)
+    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1, pr: PR } })
   })
 
   test('a failed check is re-run once per round, once its run has finished; a fail after the re-run is ci-red; a fail from before it waits', () => {
@@ -668,13 +707,15 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
     expect(long).toMatch(/- \.\.\. and \d+ more findings not shown here$/)
   })
 
-  test('the reviewed event carries its verdict, round, patch, counts, reviewer and answer, and its note reads back', () => {
+  test('the reviewed event carries its verdict, round, patch, counts, reviewer and answer as native data, and its old note reads back', () => {
     const r = rec(631)
     const e = reviewedEvent({ issue: 631, branch: 'issue-631', pr: PR, head: HEAD, round: 1, patch: PATCH, reviewer: 'adjudicator', answer: '/cfg/answers/a b.json' }, reviewData(r, 'changes'))
     const argv = eventArgv(e)
-    expect(argv.slice(0, 10)).toEqual(['callum-flow-event', 'reviewed', '--issue', '631', '--branch', 'issue-631', '--pr', String(PR), '--head', HEAD])
-    const note = argv[argv.indexOf('--note') + 1] ?? ''
-    expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note })).toEqual(e)
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'reviewed', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', '631'])
+    expect(JSON.parse(argv[4] ?? '')).toEqual({ branch: 'issue-631', pr: PR, head: HEAD, verdict: 'changes', round: 1, patch: PATCH, errors: 1, warnings: 1, infos: 0, reviewer: 'adjudicator', answer_path: '/cfg/answers/a b.json' })
+    // the old note, which the old source's readers still parse, reads back
+    expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note: eventNote(e) })).toEqual(e)
     expect(e).toMatchObject({ verdict: 'changes', errors: 1, warnings: 1, infos: 0 })
   })
 
@@ -1087,7 +1128,8 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     await $.session.start(START)
     await pass(6_000)
     // the seq's entry actions, then the ensure, which opens the PR: the ledger names it, the record not yet (8.1)
-    for (let i = 0; i < 4 && h.entry(prKey(r, 'ensure'))?.status !== 'done'; i++) await pass(60_000)
+    // (the first sweep's completion pings a pass 5 s on, which runs the ensure: step in seconds so the pass after it is the timer's)
+    for (let i = 0; i < 4 && h.entry(prKey(r, 'ensure'))?.status !== 'done'; i++) await pass(6_000)
     expect(opened).toBe(true)
     expect(h.entry(prKey(r, 'ensure'))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr, created: true } })
     // the next pass reads the PR, its checks and its patch, and starts the reviewer in the slot
@@ -1160,7 +1202,8 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     }
     await $.session.start(START)
     await pass(6_000)
-    for (let i = 0; i < 4 && recs.some(r => h.entry(prKey(r, 'ensure'))?.status !== 'done'); i++) await pass(60_000)
+    // (the first sweep's completion pings a pass 5 s on, which runs the ensure: step in seconds so the pass after it is the timer's)
+    for (let i = 0; i < 4 && recs.some(r => h.entry(prKey(r, 'ensure'))?.status !== 'done'); i++) await pass(6_000)
     expect(recs.map(r => h.entry(prKey(r, 'ensure'))?.status)).toEqual(['done', 'done'])
     // the next pass reads both PRs: #33's patch id fails, #36's reviewer starts all the same
     await pass(60_000)

@@ -513,6 +513,8 @@ describe('timeouts: the fallback never acts (v2 SPEC 13.8.2, 13.10 item 8)', () 
       // rebuilt from the event log, or an older build: no session, so its start decides
       open('rebuilt', 'judge', at(13)),
       open('since-load', 'tell', at(1)),
+      // an agent step carries its session too and is none of this filter's business (#657)
+      entry('agent', 'agent-step', { status: 'running', startedAt: at(1), endedAt: null, session: 'old' }),
       entry('done', 'judge', { wake: 'x', status: 'done', startedAt: at(13), endedAt: at(12) }),
     ]
     const updates = orphanedWakes(ledger, 'now', loadedAt)

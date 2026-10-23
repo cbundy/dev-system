@@ -33,6 +33,7 @@ export const CURRENT: Record<string, number> = {
   "finding_handled": 1,
   "gate_run": 1,
   "implementer_routed": 1,
+  "intake_stamp": 1,
   "intervention": 1,
   "loop_entry": 1,
   "loop_passes": 1,
@@ -41,6 +42,7 @@ export const CURRENT: Record<string, number> = {
   "milestone_state": 1,
   "prompt_denied": 1,
   "prompt_waiting": 1,
+  "queue_snapshot": 1,
   "ready": 1,
   "released": 1,
   "requeued": 1,
@@ -57,10 +59,7 @@ export const CURRENT: Record<string, number> = {
 // Every shape of every version, keyed <type>.v<N>.
 export const SCHEMAS: Record<string, Shape> = {
   "abandoned.v1": {
-    "additionalProperties": false,
-    "required": ["branch","detail","lives","pr","reason","split_into","stage"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["branch","detail","lives","pr","reason","split_into","stage"], "type": "object", "x-issue": "required",
     "properties": {
       "branch": {"type":["null","string"]},
       "child_whys": {"items":{"type":"string"},"type":["array","null"]},
@@ -77,10 +76,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "claim_lost.v1": {
-    "additionalProperties": false,
-    "required": ["holder","holder_since","race"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["holder","holder_since","race"], "type": "object", "x-issue": "required",
     "properties": {
       "holder": {"type":["null","string"]},
       "holder_since": {"type":["null","string"]},
@@ -88,19 +84,13 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "claim_renewed.v1": {
-    "additionalProperties": false,
-    "required": ["lease_minutes"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["lease_minutes"], "type": "object", "x-issue": "required",
     "properties": {
       "lease_minutes": {"minimum":1,"type":"integer"},
     },
   },
   "claimed.v1": {
-    "additionalProperties": false,
-    "required": ["lease_minutes"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["lease_minutes"], "type": "object", "x-issue": "required",
     "properties": {
       "factors": {"items":{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"points":{"type":"integer"}},"required":["name","points"],"type":"object"},"type":["array","null"]},
       "labels": {"items":{"type":"string"},"type":["array","null"]},
@@ -111,19 +101,13 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "closed.v1": {
-    "additionalProperties": false,
-    "required": ["reason"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["reason"], "type": "object", "x-issue": "required",
     "properties": {
       "reason": {"type":["null","string"]},
     },
   },
   "comment_posted.v1": {
-    "additionalProperties": false,
-    "required": ["comment_url","life","seq","to_state"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["comment_url","life","seq","to_state"], "type": "object", "x-issue": "required",
     "properties": {
       "comment_url": {"maxLength":500,"pattern":"^https://\\S+$","type":"string"},
       "life": {"pattern":"^[0-9a-z]+$","type":"string"},
@@ -132,10 +116,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "designer_routed.v1": {
-    "additionalProperties": false,
-    "required": ["bucket","model","reason","sonnet_pct"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["bucket","model","reason","sonnet_pct"], "type": "object", "x-issue": "required",
     "properties": {
       "bucket": {"maximum":99,"minimum":0,"type":["integer","null"]},
       "model": {"minLength":1,"type":"string"},
@@ -144,9 +125,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "envelope.v1": {
-    "additionalProperties": false,
-    "required": ["actor","base_image","data","dev_image","device","envelope","event_id","issue","plugin_version","repo","session_id","template_version","ts","type","type_version"],
-    "type": "object",
+    "additionalProperties": false, "required": ["actor","base_image","data","dev_image","device","envelope","event_id","issue","plugin_version","repo","session_id","template_version","ts","type","type_version"], "type": "object",
     "properties": {
       "actor": {"minLength":1,"type":"string"},
       "base_image": {"type":["null","string"]},
@@ -157,6 +136,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "event_id": {"pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$","type":"string"},
       "issue": {"minimum":1,"type":["integer","null"]},
       "plugin_version": {"type":["null","string"]},
+      "regime": {"enum":["factory_loop_v2","manual","testbed",null],"type":["null","string"]},
       "repo": {"pattern":"^[^/\\s]+/[^/\\s]+$","type":"string"},
       "session_id": {"type":["null","string"]},
       "template_version": {"type":["null","string"]},
@@ -166,10 +146,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "finding_handled.v1": {
-    "additionalProperties": false,
-    "required": ["branch","detail","finding","head","outcome","pr"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["branch","detail","finding","head","outcome","pr"], "type": "object", "x-issue": "required",
     "properties": {
       "branch": {"minLength":1,"type":"string"},
       "detail": {"type":"string"},
@@ -180,10 +157,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "gate_run.v1": {
-    "additionalProperties": false,
-    "required": ["concurrency","head","life","queued_behind","result","run_ms","seq","started_at","wait_ms"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["concurrency","head","life","queued_behind","result","run_ms","seq","started_at","wait_ms"], "type": "object", "x-issue": "required",
     "properties": {
       "concurrency": {"minimum":1,"type":["integer","null"]},
       "failed_at": {"format":"date-time","type":["null","string"]},
@@ -191,6 +165,9 @@ export const SCHEMAS: Record<string, Shape> = {
       "flaky": {"type":["boolean","null"]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},
       "life": {"pattern":"^[0-9a-z]+$","type":"string"},
+      "mem_limit_bytes": {"minimum":0,"type":["integer","null"]},
+      "mem_peak_bytes": {"minimum":0,"type":["integer","null"]},
+      "mem_start_bytes": {"minimum":0,"type":["integer","null"]},
       "queued_behind": {"minimum":0,"type":"integer"},
       "result": {"enum":["fail","pass","unknown"]},
       "run_ms": {"minimum":0,"type":"integer"},
@@ -200,10 +177,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "implementer_routed.v1": {
-    "additionalProperties": false,
-    "required": ["bucket","model","opus_pct","reason"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["bucket","model","opus_pct","reason"], "type": "object", "x-issue": "required",
     "properties": {
       "bucket": {"maximum":99,"minimum":0,"type":["integer","null"]},
       "model": {"minLength":1,"type":"string"},
@@ -211,11 +185,28 @@ export const SCHEMAS: Record<string, Shape> = {
       "reason": {"enum":["default","fallback","hash","label"]},
     },
   },
+  "intake_stamp.v1": {
+    "additionalProperties": false, "required": ["area","dropped","labels_kept","labels_set","mode","model","needs_owner","outcome","reason","touches","version"], "type": "object", "x-issue": "required",
+    "properties": {
+      "area": {"type":["null","string"]},
+      "cache_creation_tokens": {"minimum":0,"type":["integer","null"]},
+      "cache_read_tokens": {"minimum":0,"type":["integer","null"]},
+      "dropped": {"items":{"type":"string"},"type":"array"},
+      "input_tokens": {"minimum":0,"type":["integer","null"]},
+      "labels_kept": {"items":{"type":"string"},"type":"array"},
+      "labels_set": {"items":{"type":"string"},"type":"array"},
+      "mode": {"enum":["dry","run"]},
+      "model": {"minLength":1,"type":"string"},
+      "needs_owner": {"type":["boolean","null"]},
+      "outcome": {"enum":["dropped","failed","ok"]},
+      "output_tokens": {"minimum":0,"type":["integer","null"]},
+      "reason": {"type":["null","string"]},
+      "touches": {"items":{"type":"string"},"type":"array"},
+      "version": {"minLength":1,"type":"string"},
+    },
+  },
   "intervention.v1": {
-    "additionalProperties": false,
-    "required": ["cause","detail","fact","life","pr","who"],
-    "type": "object",
-    "x-issue": "optional",
+    "additionalProperties": false, "required": ["cause","detail","fact","life","pr","who"], "type": "object", "x-issue": "optional",
     "properties": {
       "cause": {"pattern":"^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$","type":"string"},
       "detail": {"type":"string"},
@@ -230,13 +221,12 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "loop_entry.v1": {
-    "additionalProperties": false,
-    "required": ["agent_id","attempts","class","ended_at","key","kind","rule","started_at","status","wake"],
-    "type": "object",
-    "x-issue": "optional",
+    "additionalProperties": false, "required": ["agent_id","attempts","class","ended_at","key","kind","rule","started_at","status","wake"], "type": "object", "x-issue": "optional",
     "properties": {
       "agent_id": {"type":["null","string"]},
       "attempts": {"minimum":0,"type":"integer"},
+      "cache_creation_tokens": {"minimum":0,"type":["integer","null"]},
+      "cache_read_tokens": {"minimum":0,"type":["integer","null"]},
       "class": {"enum":["develop","drive","free","owner","start"]},
       "database": {"type":["null","string"]},
       "decision": {"type":["null","string"]},
@@ -249,9 +239,12 @@ export const SCHEMAS: Record<string, Shape> = {
       "flake_test": {"maxLength":512,"type":["null","string"]},
       "flakes": {"minimum":0,"type":["integer","null"]},
       "from_version": {"minimum":0,"type":["integer","null"]},
+      "input_tokens": {"minimum":0,"type":["integer","null"]},
       "key": {"minLength":1,"type":"string"},
       "kind": {"enum":["agent-step","task","tell"]},
+      "model": {"type":["null","string"]},
       "outcome": {"enum":["current","failed","migrated","timed-out",null]},
+      "output_tokens": {"minimum":0,"type":["integer","null"]},
       "rule": {"minLength":1,"type":"string"},
       "started_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
       "status": {"enum":["done","failed","lost","running","timed-out"]},
@@ -261,10 +254,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "loop_passes.v1": {
-    "additionalProperties": false,
-    "required": ["acting","acting_mean_ms","errors","from_at","idle_mean_ms","max_ms","mean_ms","mode","p50_ms","p90_ms","pass_every_ms","passes","planner","to_at"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["acting","acting_mean_ms","errors","from_at","idle_mean_ms","max_ms","mean_ms","mode","p50_ms","p90_ms","pass_every_ms","passes","planner","to_at"], "type": "object", "x-issue": "none",
     "properties": {
       "acting": {"minimum":0,"type":"integer"},
       "acting_mean_ms": {"minimum":0,"type":["integer","null"]},
@@ -274,6 +264,10 @@ export const SCHEMAS: Record<string, Shape> = {
       "max_ms": {"minimum":0,"type":["integer","null"]},
       "mean_ms": {"minimum":0,"type":["integer","null"]},
       "mode": {"enum":["act","observe","off"]},
+      "observe_commands_mean_ms": {"minimum":0,"type":["integer","null"]},
+      "observe_in_process_max_ms": {"minimum":0,"type":["integer","null"]},
+      "observe_in_process_mean_ms": {"minimum":0,"type":["integer","null"]},
+      "observe_mean_ms": {"minimum":0,"type":["integer","null"]},
       "p50_ms": {"minimum":0,"type":["integer","null"]},
       "p90_ms": {"minimum":0,"type":["integer","null"]},
       "pass_every_ms": {"minimum":1,"type":"integer"},
@@ -283,10 +277,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "main_state.v1": {
-    "additionalProperties": false,
-    "required": ["branch","changed","conclusions","deploy_environments","deploy_ids","deploy_states","green","head","observed_at","pr","run_attempts","run_events","run_heads","run_ids","running","workflow_ids","workflows"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["branch","changed","conclusions","deploy_environments","deploy_ids","deploy_states","green","head","observed_at","pr","run_attempts","run_events","run_heads","run_ids","running","workflow_ids","workflows"], "type": "object", "x-issue": "none",
     "properties": {
       "branch": {"minLength":1,"type":"string"},
       "changed": {"pattern":"^[a-z_]+$","type":"string"},
@@ -308,15 +299,13 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "merged.v1": {
-    "additionalProperties": false,
-    "required": ["branch","by","head","pr","recovered"],
-    "type": "object",
-    "x-issue": "optional",
+    "additionalProperties": false, "required": ["branch","by","head","pr","recovered"], "type": "object", "x-issue": "optional",
     "properties": {
       "additions": {"minimum":0,"type":["integer","null"]},
       "branch": {"type":["null","string"]},
       "by": {"enum":["factory","hand"]},
       "deletions": {"minimum":0,"type":["integer","null"]},
+      "file_lines": {"items":{"additionalProperties":false,"properties":{"additions":{"minimum":0,"type":"integer"},"deletions":{"minimum":0,"type":"integer"},"path":{"minLength":1,"type":"string"}},"required":["additions","deletions","path"],"type":"object"},"type":["array","null"]},
       "files": {"items":{"minLength":1,"type":"string"},"type":["array","null"]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
@@ -324,10 +313,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "milestone_state.v1": {
-    "additionalProperties": false,
-    "required": ["expected","hold_reason","holding","last_tag","milestone_closed","milestone_open","oldest_closed_at","oldest_unreleased_merge_at"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["expected","hold_reason","holding","last_tag","milestone_closed","milestone_open","oldest_closed_at","oldest_unreleased_merge_at"], "type": "object", "x-issue": "none",
     "properties": {
       "expected": {"enum":["major","minor","patch",null]},
       "hold_reason": {"maxLength":200,"type":["null","string"]},
@@ -340,10 +326,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "prompt_denied.v1": {
-    "additionalProperties": false,
-    "required": ["agent_id","agent_type","ask_reason","attempt","branch","life","pr","seq","session","slot","step","tool_input","tool_name","transcript"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["agent_id","agent_type","ask_reason","attempt","branch","life","pr","seq","session","slot","step","tool_input","tool_name","transcript"], "type": "object", "x-issue": "required",
     "properties": {
       "agent_id": {"type":["null","string"]},
       "agent_type": {"type":["null","string"]},
@@ -362,10 +345,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "prompt_waiting.v1": {
-    "additionalProperties": false,
-    "required": ["agent_id","agent_type","attempt","branch","life","pr","seq","session","slot","step","tool_input","tool_name","transcript"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["agent_id","agent_type","attempt","branch","life","pr","seq","session","slot","step","tool_input","tool_name","transcript"], "type": "object", "x-issue": "required",
     "properties": {
       "agent_id": {"type":["null","string"]},
       "agent_type": {"type":["null","string"]},
@@ -382,11 +362,24 @@ export const SCHEMAS: Record<string, Shape> = {
       "transcript": {"type":["null","string"]},
     },
   },
+  "queue_snapshot.v1": {
+    "additionalProperties": false, "required": ["candidates","considered","folded","free_slots","owner_new_off","owner_only","owner_priority","owner_serial","reason","rest","taken_at"], "type": "object", "x-issue": "none",
+    "properties": {
+      "candidates": {"items":{"additionalProperties":false,"properties":{"claimable":{"type":"boolean"},"factors":{"items":{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"points":{"type":"integer"}},"required":["name","points"],"type":"object"},"type":["array","null"]},"issue":{"minimum":1,"type":"integer"},"rank":{"minimum":1,"type":"integer"},"score":{"type":["integer","null"]},"why":{"enum":["blocked","exhausted","held","new_off","no_slot","outside_only","paused","rejected","skipped","tracker","unknown","untrusted","usage_tier",null]}},"required":["claimable","factors","issue","rank","score","why"],"type":"object"},"maxItems":50,"type":"array"},
+      "considered": {"minimum":0,"type":"integer"},
+      "folded": {"minimum":0,"type":"integer"},
+      "free_slots": {"minimum":0,"type":["integer","null"]},
+      "owner_new_off": {"type":"boolean"},
+      "owner_only": {"items":{"minimum":1,"type":"integer"},"type":"array"},
+      "owner_priority": {"items":{"minimum":1,"type":"integer"},"type":"array"},
+      "owner_serial": {"type":"boolean"},
+      "reason": {"enum":["changed","heartbeat"]},
+      "rest": {"items":{"additionalProperties":false,"properties":{"count":{"minimum":1,"type":"integer"},"why":{"enum":["blocked","exhausted","held","new_off","no_slot","outside_only","paused","rejected","skipped","tracker","unknown","untrusted","usage_tier",null]}},"required":["count","why"],"type":"object"},"type":"array"},
+      "taken_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
+    },
+  },
   "ready.v1": {
-    "additionalProperties": false,
-    "required": [],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": [], "type": "object", "x-issue": "required",
     "properties": {
       "labels": {"items":{"type":"string"},"type":["array","null"]},
       "parent": {"minimum":1,"type":["integer","null"]},
@@ -394,10 +387,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "released.v1": {
-    "additionalProperties": false,
-    "required": ["commit","headlines","issues","issues_closed","previous_tag","prs","released_at","source","tag"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["commit","headlines","issues","issues_closed","previous_tag","prs","released_at","source","tag"], "type": "object", "x-issue": "none",
     "properties": {
       "commit": {"pattern":"^[0-9a-f]{7,40}$","type":"string"},
       "headlines": {"items":{"maxLength":200,"type":"string"},"type":"array"},
@@ -411,10 +401,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "requeued.v1": {
-    "additionalProperties": false,
-    "required": ["branch","detail","lives","pr","reason","stage"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["branch","detail","lives","pr","reason","stage"], "type": "object", "x-issue": "required",
     "properties": {
       "branch": {"type":["null","string"]},
       "detail": {"type":["null","string"]},
@@ -425,10 +412,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "reviewed.v1": {
-    "additionalProperties": false,
-    "required": ["answer_path","branch","errors","head","infos","patch","pr","reviewer","round","verdict","warnings"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["answer_path","branch","errors","head","infos","patch","pr","reviewer","round","verdict","warnings"], "type": "object", "x-issue": "required",
     "properties": {
       "answer_path": {"minLength":1,"type":"string"},
       "branch": {"minLength":1,"type":"string"},
@@ -444,10 +428,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "settings_changed.v1": {
-    "additionalProperties": false,
-    "required": ["fact","key","layer","new_value","old_value","who"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["fact","key","layer","new_value","old_value","who"], "type": "object", "x-issue": "none",
     "properties": {
       "detail": {"maxLength":500,"type":["null","string"]},
       "fact": {"type":"string"},
@@ -459,10 +440,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "shadow_read.v1": {
-    "additionalProperties": false,
-    "required": ["compared","detail","diff_keys","differences","live_differences","new_ok","old_ok","reader","settle_seconds","tool"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["compared","detail","diff_keys","differences","live_differences","new_ok","old_ok","reader","settle_seconds","tool"], "type": "object", "x-issue": "none",
     "properties": {
       "compared": {"minimum":0,"type":"integer"},
       "detail": {"maxLength":500,"type":["null","string"]},
@@ -479,10 +457,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "test_weakened.v1": {
-    "additionalProperties": false,
-    "required": ["branch","commit","files","head","kinds","pr","restored"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["branch","commit","files","head","kinds","pr","restored"], "type": "object", "x-issue": "required",
     "properties": {
       "branch": {"minLength":1,"type":"string"},
       "commit": {"pattern":"^[0-9a-f]{7,40}$","type":"string"},
@@ -494,10 +469,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "transition.v1": {
-    "additionalProperties": false,
-    "required": ["approved_patch","attempt","branch","brief_url","cut","fixes","from_state","head","life","lives","notes","pr","pr_closed_at","question","resume_to","round","seq","seq_at","state_since","step","table_row","to_state","triages","via","why"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["approved_patch","attempt","branch","brief_url","cut","fixes","from_state","head","life","lives","notes","pr","pr_closed_at","question","resume_to","round","seq","seq_at","state_since","step","table_row","to_state","triages","via","why"], "type": "object", "x-issue": "required",
     "properties": {
       "approved_patch": {"type":["null","string"]},
       "attempt": {"minimum":1,"type":"integer"},
@@ -534,10 +506,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "untrusted_stripped.v1": {
-    "additionalProperties": false,
-    "required": ["count","pr","refused","source"],
-    "type": "object",
-    "x-issue": "required",
+    "additionalProperties": false, "required": ["count","pr","refused","source"], "type": "object", "x-issue": "required",
     "properties": {
       "count": {"minimum":0,"type":["integer","null"]},
       "pr": {"minimum":1,"type":["integer","null"]},
@@ -546,10 +515,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "usage.v1": {
-    "additionalProperties": false,
-    "required": ["available","five_hour_pct","five_hour_resets_at","reasons","seven_day_pct","seven_day_resets_at","source"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["available","five_hour_pct","five_hour_resets_at","reasons","seven_day_pct","seven_day_resets_at","source"], "type": "object", "x-issue": "none",
     "properties": {
       "auth": {"enum":["api-key","subscription",null]},
       "available": {"type":"boolean"},
@@ -565,10 +531,7 @@ export const SCHEMAS: Record<string, Shape> = {
     },
   },
   "wind_down.v1": {
-    "additionalProperties": false,
-    "required": ["cap_ms","cut_at_stop","cut_at_stop_keys","outcome","requested_at","running_at_request","running_at_request_keys","stopped_at","trigger","waited_ms"],
-    "type": "object",
-    "x-issue": "none",
+    "additionalProperties": false, "required": ["cap_ms","cut_at_stop","cut_at_stop_keys","outcome","requested_at","running_at_request","running_at_request_keys","stopped_at","trigger","waited_ms"], "type": "object", "x-issue": "none",
     "properties": {
       "cap_ms": {"minimum":0,"type":"integer"},
       "cut_at_stop": {"minimum":0,"type":"integer"},

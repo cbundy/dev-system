@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
-import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
+import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEntryArgv, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
 import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from '../hooks/observe-milestone'
 import type { MilestoneCache } from '../hooks/observe-milestone'
@@ -29,6 +29,7 @@ import {
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
+import { validateStrict } from '../hooks/v2/event-reader'
 import { NEW_EVENTS_SQL, NEW_FLOORS_SQL } from '../hooks/v2/sources-facts'
 import { FLAKES_SQL } from '../hooks/v2/sources-flakes'
 import { parseCompareStatus } from '../hooks/v2/sources-waits'
@@ -54,8 +55,8 @@ const pl = (s: RunState, branch: string, run: string, over: Partial<PipelineRun>
   ...over,
 })
 
-function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = []) {
-  return JSON.stringify({ at: iso(NOW), at_source: '--at', repos: [{ repo: REPO, issues, recent }] })
+function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], extra: Record<string, unknown> = {}) {
+  return JSON.stringify({ at: iso(NOW), at_source: '--at', ...extra, repos: [{ repo: REPO, issues, recent }] })
 }
 const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) => ({
   issue: n,
@@ -102,6 +103,22 @@ describe('parse', () => {
     ])
     expect(parseFactoryState(json, 'other/repo')).toBeNull()
     expect(parseFactoryState('not json', REPO)).toBeNull()
+  })
+
+  test('factory-state: skipped_events map type_version to version; absent, malformed or non-array give none', () => {
+    const skipped = (v: unknown) => parseFactoryState(factoryJson([], [], v === undefined ? {} : { skipped_events: v }), REPO)?.skipped
+    expect(skipped([{ type: 'mystery', type_version: 1, count: 3, derived: false }, { type: 'transition', type_version: 3, count: 4, derived: true }])).toEqual([
+      { type: 'mystery', version: 1, count: 3, derived: false },
+      { type: 'transition', version: 3, count: 4, derived: true },
+    ])
+    // an older image prints no field
+    expect(skipped(undefined)).toEqual([])
+    expect(skipped('x')).toEqual([])
+    expect(skipped({ type: 'a' })).toEqual([])
+    // a bad entry is dropped; derived is true only when it is true
+    expect(
+      skipped([{ type: 'a', type_version: '1', count: 1 }, { type: 7, type_version: 1, count: 1 }, { type: 'b', type_version: 1.5, count: 1 }, { type: 'c', type_version: 1, count: '2' }, null, { type: 'd', type_version: 2, count: 5, derived: 'true' }]),
+    ).toEqual([{ type: 'd', version: 2, count: 5, derived: false }])
   })
 
   test('CSV: quoted commas, quotes and newlines survive', () => {
@@ -481,11 +498,12 @@ describe('parse', () => {
       })
 
       test('newestTag: the newer of the release read and the tag view; waitsOnTag: waiting records with a tag-contains condition', () => {
-        expect(newestTag({})).toBeNull()
+        expect(newestTag({})).toBeUndefined()
         expect(newestTag({ tag: { at: 1, value: 'v1' } })).toBe('v1')
         expect(newestTag({ release: { at: 5, value: { tag: 'v2', oldest: null } }, tag: { at: 1, value: 'v1' } })).toBe('v2')
         expect(newestTag({ release: { at: 1, value: { tag: 'v2', oldest: null } }, tag: { at: 5, value: 'v3' } })).toBe('v3')
         expect(newestTag({ release: { at: 1, value: { tag: null, oldest: null } } })).toBeNull()
+        expect(newestTag({ tag: { at: 1, value: null } })).toBeNull()
         const tag = { kind: 'tag-contains', sha: '35bb655' }
         expect(waitsOnTag([{ state: 'waiting', wait: [{ kind: 'issue-closed' }, tag] }])).toBe(true)
         expect(waitsOnTag([{ state: 'designing', wait: [tag] }, { state: 'waiting', wait: [{ kind: 'pr-merged' }] }, { state: 'waiting', wait: null }])).toBe(false)
@@ -770,6 +788,12 @@ describe('config (v2 SPEC 13.4.2)', () => {
       'trackerTitle: "(" is not a regular expression',
       'colour: unknown setting',
     ])
+    // queueScore: whole numbers of at least 0, an entry at a time
+    const scored = loadConfig({ queueScore: { bug: 40, size: 1, epicStarted: -1, waitingCap: 1.5 } })
+    expect(scored.config.queueScore).toEqual({ ...DEFAULT_CONFIG.queueScore, bug: 40 })
+    expect(scored.problems).toEqual(['queueScore.size: unknown', 'queueScore.epicStarted: -1 is not a whole number', 'queueScore.waitingCap: 1.5 is not a whole number'])
+    expect(loadConfig({ queueScore: { bug: 0 } }).config.queueScore.bug).toBe(0)
+    expect(DEFAULT_CONFIG.queueScore.bug).toBe(25)
     // the defaults themselves are untouched, and later layers win
     expect(DEFAULT_CONFIG.rateCaps.start).toBe(30)
     expect(loadConfig({ slowGap: '5m' }, { slowGapMs: 60_000 }).config.slowGapMs).toBe(60_000)
@@ -946,10 +970,24 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
     })
   })
 
-  test('the arguments that log an entry put its subject in the columns', () => {
-    const e = entry('judge:sequence:550:head50', 'judge', { ...base, class: 'drive', wake: 'sequence' })
-    expect(loopEventArgs(e)).toEqual(['loop', '--issue', '50', '--run', '01M4RQ0050AAAA', '--pr', '550', '--head', 'head50', '--note', loopNote(e)])
-    expect(loopEventArgs(entry('tell:blind:0', 'tell', { wake: 'blind' }))).toEqual(['loop', '--note', loopNote(entry('tell:blind:0', 'tell', { wake: 'blind' }))])
+  test('the native call that logs an entry carries its issue and the translator-named data', () => {
+    const e = entry('task:sequence:550:head50', 'task', { ...base, class: 'drive', wake: 'sequence', startedAt: 1_000, endedAt: 2_000 })
+    const argv = loopEntryArgv(e) as string[]
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_entry', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', '50'])
+    expect(JSON.parse(argv[4] as string)).toMatchObject({ kind: 'task', key: e.key, status: e.status, class: 'drive', wake: 'sequence', started_at: '1970-01-01T00:00:01.000Z', ended_at: '1970-01-01T00:00:02.000Z', agent_id: null })
+    const noIssue = loopEntryArgv(entry('tell:blind:0', 'tell', { wake: 'blind' })) as string[]
+    expect(noIssue).not.toContain('--issue')
+    // a judge has no event type
+    expect(loopEntryArgv(entry('judge:sequence:550:head50', 'judge', base))).toBeNull()
+  })
+
+  test('an oversized task wake entry carries no decision, as loopNote drops its outcome', () => {
+    const task = (key: string) => entry(key, 'task', { class: 'drive', wake: 'release', outcome: wakeAnswer('hold', { reason: 'why' }) })
+    const e = task(`task:release:2:${'k'.repeat(450)}`)
+    expect(JSON.parse((loopEntryArgv(e) as string[])[4] as string)).not.toHaveProperty('decision')
+    const small = task('task:release:2:k')
+    expect(JSON.parse((loopEntryArgv(small) as string[])[4] as string)).toMatchObject({ decision: 'hold', decision_reason: 'why' })
   })
 
   test('a lost store is rebuilt from the loop events, the latest per key winning over the rest', () => {
@@ -1038,6 +1076,10 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // the pool, and what git answers in a slot, by `<path> <reflog|status>` (#563)
     pool: Reply
     slots: Record<string, Reply>
+    // API-key mode: the session's cost.usd, the session's rate limits, and the stored tally
+    cost?: number | null
+    limits?: { kind: string; percentUsed: number }[]
+    tally?: unknown
     // a fixed answer to the batched `--issues` call (#922); undefined composes it from the single-read replies
     batch?: Reply
   }
@@ -1100,14 +1142,15 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
         return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
       },
       readFile: async path => world.files[path] ?? null,
-      sessionLimits: async () => [],
+      sessionLimits: async () => world.limits ?? [],
+      sessionCost: async () => world.cost ?? null,
       agents: async () => [],
     }
     const cache: Cache = emptyCache()
     const pass = (rt: Runtime, stored?: Stored, at = now): Promise<Observation> => {
       now = at
       calls.length = 0
-      return observe(io, rt, cache, NOW - 60 * MIN, null, null, stored)
+      return observe(io, rt, cache, NOW - 60 * MIN, null, null, stored, undefined, world.tally)
     }
     const commands = () => calls.map(c => c.argv.join(' '))
     return { world, calls, cache, pass, commands }
@@ -1153,6 +1196,75 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     await o.pass(runtime({ mode: 'observe', sink: `${LOOP}/sink-events`, env: sinkEnv }))
     expect(o.calls.every(c => c.env === sinkEnv && c.cwd === '/work')).toBe(true)
     expect(o.commands()).toContain(`${TOOLS}/usage-check.sh`)
+  })
+
+  describe('API-key mode', () => {
+    const apiKey = { budgetUsd: '100', resetDay: '1' }
+    const keyRt = (over: Partial<Runtime> = {}) => runtime({ apiKey, workspace: { session: 's1', process: 'p1' }, ...over })
+    const events = (h: { calls: Call[] }) => h.calls.filter(c => c.argv[0] === 'callum-flow-event' && c.argv[2] === 'usage')
+
+    test('usage-check.sh is not run, the session rate limits are ignored, and the reading is spend', async () => {
+      const h = host({ cost: 91, limits: [{ kind: 'five_hour', percentUsed: 99 }] })
+      const o = await h.pass(keyRt(), stored())
+      expect(h.commands().some(c => c.includes('usage-check'))).toBe(false)
+      expect(o.state.usage).toMatchObject({ auth: 'api-key', unavailable: false, fiveHour: null, sevenDay: null, spend: { usd: 91, budgetUsd: 100 } })
+      expect(o.spend).toMatchObject({ v: 1, spentUsd: 91, counter: { process: 'p1', session: 's1', lastUsd: 91 } })
+      expect(o.state.sources.usage.ok).toBe(true)
+    })
+
+    test('the usage event carries the spend data, valid against usage.v1, once per usageEveryMs', async () => {
+      const h = host({ cost: 42.5 })
+      await h.pass(keyRt(), stored())
+      const [first, ...rest] = events(h)
+      expect(rest).toEqual([])
+      expect(first?.argv.slice(0, 5)).toEqual(['callum-flow-event', '--type', 'usage', '--actor', 'watcher'])
+      expect(first?.argv[5]).toBe('--data')
+      const data = JSON.parse(first?.argv[6] ?? '{}')
+      expect(data).toMatchObject({ available: true, source: 'spend', auth: 'api-key', spend_usd: 42.5, budget_usd: 100, reasons: [] })
+      expect(validateStrict('usage', 1, data)).toEqual([])
+      await h.pass(keyRt(), stored(), NOW + MIN)
+      expect(events(h)).toEqual([])
+      await h.pass(keyRt(), stored(), NOW + 6 * MIN)
+      expect(events(h)).toHaveLength(1)
+    })
+
+    test('a missing reading is unavailable with its reason in the event, and the tally is left alone', async () => {
+      const h = host({ cost: null })
+      const o = await h.pass(keyRt(), stored())
+      expect(o.state.usage).toMatchObject({ auth: 'api-key', unavailable: true, spend: null, reason: 'spend:no-session-cost' })
+      expect(o.spend).toBeNull()
+      const data = JSON.parse(events(h)[0]?.argv[6] ?? '{}')
+      expect(data).toMatchObject({ available: false, auth: 'api-key', reasons: ['spend:no-session-cost'] })
+      expect(validateStrict('usage', 1, data)).toEqual([])
+    })
+
+    test('a reading older than usageStaleMs becomes spend:stale, and the stored tally carries over', async () => {
+      const h = host({ cost: 10 })
+      await h.pass(keyRt(), stored())
+      h.world.cost = null
+      const soon = await h.pass(keyRt(), stored(), NOW + 10 * MIN)
+      expect(soon.state.usage).toMatchObject({ unavailable: false, spend: { usd: 10 } })
+      const late = await h.pass(keyRt(), stored(), NOW + 16 * MIN)
+      expect(late.state.usage).toMatchObject({ unavailable: true, reason: 'spend:stale' })
+    })
+
+    test('a stored tally is added to, in observe mode too, which keeps the sink environment', async () => {
+      const sinkEnv = { ...ENV, CALLUM_EVENTS_DIR: `${LOOP}/sink-events` }
+      const h = host({ cost: 7, tally: { v: 1, periodStart: Date.parse('2026-10-01T00:00:00Z'), spentUsd: 30, counter: { process: 'p1', session: 's1', lastUsd: 5 }, at: NOW } })
+      const o = await h.pass(keyRt({ mode: 'observe', sink: `${LOOP}/sink-events`, env: sinkEnv }), undefined)
+      expect(o.state.usage?.spend?.usd).toBe(32)
+      expect(events(h).every(c => c.env === sinkEnv)).toBe(true)
+      expect(events(h)).toHaveLength(1)
+    })
+
+    test('without the runtime field every pass is as before: usage-check.sh runs and no event is written', async () => {
+      const h = host({ cost: 91 })
+      const o = await h.pass(runtime(), stored())
+      expect(h.commands()).toContain(`${TOOLS}/usage-check.sh`)
+      expect(events(h)).toEqual([])
+      expect(o.spend).toBeNull()
+      expect(o.state.usage?.auth).toBeUndefined()
+    })
   })
 
   test('a pass for another repo reads everything again: nothing cached for one repo stands in for another', async () => {
@@ -1213,6 +1325,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(o.commands()).toContain('callum-flow-issue-read --json --list --label ready')
     expect(o.commands().some(c => c.includes('queue-watch'))).toBe(false)
     expect([shadow.state.queue, shadow.queueKnown]).toEqual([[114, 470], null])
+  })
+
+  test('an empty ready list that the members\' own reads contradict is a failed source and the last list stands', async () => {
+    for (const mode of ['act', 'observe'] as const) {
+      const rt = mode === 'act' ? runtime() : runtime({ mode: 'observe', runSource: 'events' })
+      const h = host({ queue: { stdout: 'queue known=114 now=114,470\n' } })
+      const st = (known: number[] | null) => (mode === 'act' ? stored({ queueKnown: known }) : undefined)
+      const first = await h.pass(rt, st(null))
+      expect(first.state.queue).toEqual([114, 470])
+      expect(h.cache.github.get(114)?.value.facts?.labels).toContain('ready')
+      const listEmpty = { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      const empty = () => {
+        if (mode === 'act') h.world.queue = { stdout: 'queue known=114,470 now=none\n' }
+        else h.world.issues['--json --list --label ready'] = listEmpty
+      }
+      empty()
+      const held = await h.pass(rt, st([114, 470]), NOW + 3 * MIN)
+      expect(held.state.queue).toEqual([114, 470])
+      expect(held.state.sources.queue).toEqual({
+        ok: false,
+        at: NOW,
+        error: 'the ready list came back empty while #114, #470 carry ready by their own reads; the last list stands',
+      })
+      expect(held.queueKnown).toBeNull()
+      // the members no longer carry the label by their own reads: the empty list is accepted
+      for (const n of [114, 470]) {
+        const c = h.cache.github.get(n)
+        if (c?.value.facts) c.value.facts.labels = []
+      }
+      const taken = await h.pass(rt, st([114, 470]), NOW + 6 * MIN)
+      expect(taken.state.queue).toEqual([])
+      expect(taken.state.sources.queue).toEqual({ ok: true, at: NOW + 6 * MIN })
+      if (mode === 'act') expect(taken.queueKnown).toEqual([])
+    }
   })
 
   test('the store wins whenever it holds a ledger; observe mode derives it from the 3-day log', async () => {
@@ -1573,6 +1719,9 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(issueReads(h)).toEqual(['45', '114', '470'])
     expect(first.state.issues.find(i => i.number === 45)?.blockingList).toEqual([900])
     expect(first.state.issues.find(i => i.number === 114)?.blockingList).toBeNull()
+    // the block graph holds the read issues' lists (the claim score's transitive count); an unread list has no entry
+    expect(first.state.blockGraph?.[45]).toEqual([900])
+    expect(first.state.blockGraph).not.toHaveProperty('114')
 
     // the next pass: one call, 900 after the others
     await h.pass(runtime(), stored(), NOW + 6 * MIN)
@@ -1666,6 +1815,28 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // closed, it is not read again
     await h.pass(runtime(), kept, NOW + 6 * MIN)
     expect(issueReads(h)).toEqual(['45', '114', '470'])
+  })
+
+  test('a derived skip makes the factory source fail and is not cached; a non-derived skip is kept', async () => {
+    const report = (skipped: unknown[]) => factoryJson([fsIssue(45, 'parked', { run: 'R45' })], [], { skipped_events: skipped })
+    const ioOf = (stdout: string): Io => ({
+      now: async () => NOW,
+      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      readFile: async () => null,
+      sessionLimits: async () => [],
+      agents: async () => [],
+    })
+    const old = parseFactoryState(factoryJson([]), REPO)!
+    const cache = emptyCache()
+    cache.repo = REPO
+    cache.factory = { at: NOW - 5 * MIN, value: old }
+    const derived = await observe(ioOf(report([{ type: 'transition', type_version: 3, count: 4, derived: true }, { type: 'x', type_version: 2, count: 1, derived: true }])), runtime(), cache, NOW, null, null, stored())
+    expect(derived.state.sources.factory.ok).toBe(false)
+    expect(derived.state.sources.factory.error).toBe("the image's readers are older than this loop: skipped derived events transition v3 x4, x v2 x1")
+    expect(cache.factory?.value).toBe(old)
+    const kept = await observe(ioOf(report([{ type: 'mystery', type_version: 1, count: 3, derived: false }])), runtime(), cache, NOW, null, null, stored())
+    expect(kept.state.sources.factory.ok).toBe(true)
+    expect(cache.factory?.value.skipped).toEqual([{ type: 'mystery', version: 1, count: 3, derived: false }])
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {

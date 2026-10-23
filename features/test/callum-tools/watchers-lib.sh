@@ -339,8 +339,9 @@ quiet_run() {
   stop_bg
 }
 
-# real_event_log: the real callum-flow-event writes a real log (evlog) under a
-# private directory; the watchers print as always (cbundy/dev-system#344).
+# real_event_log: the real callum-flow-event writes a real new-format log (evlog) under a
+# private directory; the watchers print as always (cbundy/dev-system#344). It never writes the old
+# log (oldevlog; cbundy/dev-system#1143).
 real_event_log() {
   evdir="$tmpdir/real-events"
   mkdir -p "$evdir"
@@ -348,12 +349,18 @@ real_event_log() {
   for t in node mktemp rm mkdir chmod touch; do
     [ -e "$toolbin/$t" ] || ln -s "$(command -v "$t")" "$toolbin/$t"
   done
-  evlog="$evdir/o__r.jsonl"
+  evlog="$evdir/factory/o__r.jsonl"
+  oldevlog="$evdir/o__r.jsonl"
   cat > "$fakebin/callum-flow-event" <<EOF
 #!/bin/sh
 PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s DEV_SYSTEM_SHARE="$SHARE" exec "$SHARE/callum-flow-event" "\$@"
 EOF
   chmod +x "$fakebin/callum-flow-event"
+}
+# no_event_log <what>: the real event log (real_event_log) holds nothing, old or new
+no_event_log() {
+  [ ! -e "$oldevlog" ] || fail "$1: the watcher wrote the old event log: $(cat "$oldevlog")"
+  [ ! -e "$evdir/factory" ] || fail "$1: the watcher wrote the new event log: $(ls -A "$evdir/factory")"
 }
 # wait_events <pattern> <n>: wait up to 15s for n log lines matching the pattern
 # (the watcher prints a line before it logs it).

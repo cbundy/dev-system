@@ -325,9 +325,9 @@ function buildTs(newLock, byType) {
   for (const key of Object.keys(newLock).sort()) {
     const shape = newLock[key];
     lines.push(`  ${JSON.stringify(key)}: {`);
-    for (const k of Object.keys(shape)) {
-      if (k !== "properties") lines.push(`    ${JSON.stringify(k)}: ${JSON.stringify(shape[k])},`);
-    }
+    // The keys other than properties share one line, so the file stays under the hooks size guard.
+    const heads = Object.keys(shape).filter((k) => k !== "properties").map((k) => `${JSON.stringify(k)}: ${JSON.stringify(shape[k])},`);
+    if (heads.length > 0) lines.push(`    ${heads.join(" ")}`);
     if (shape.properties) {
       lines.push('    "properties": {');
       for (const name of Object.keys(shape.properties)) lines.push(`      ${JSON.stringify(name)}: ${JSON.stringify(shape.properties[name])},`);

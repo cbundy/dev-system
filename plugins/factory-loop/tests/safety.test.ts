@@ -15,7 +15,7 @@
 // hooks/v2/argv.ts is held to the bans with that widening and no other.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
+import { EXECUTORS, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { ACTION_KINDS } from '../hooks/config'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
@@ -26,6 +26,7 @@ import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
 import type { Action, LedgerEntry, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { emptyV2State } from '../hooks/v2/observe'
+import { INTAKE_AGENT } from '../hooks/v2/intake'
 import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
@@ -54,7 +55,7 @@ function runtime(): Runtime {
     env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: READY, CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
     pluginRoot: PLUGIN_ROOT,
-    config: config({ readyLabel: READY }),
+    config: config({ readyLabel: READY, intakeStamp: 'on' }),
     configProblems: [],
   }
 }
@@ -109,6 +110,7 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
 type Recorded = { argvs: string[][]; spawns: SpawnInput[]; prompts: string[]; titles: string[]; stops: string[]; writes: string[] }
 
 function recorder(): { io: ActIo; seen: Recorded } {
+  const stamps: { value: unknown } = { value: null }
   const seen: Recorded = { argvs: [], spawns: [], prompts: [], titles: [], stops: [], writes: [] }
   const io: ActIo = {
     now: async () => NOW,
@@ -129,6 +131,18 @@ function recorder(): { io: ActIo; seen: Recorded } {
     usage: async () => ({ fiveHour: 10, sevenDay: 10 }),
     readFile: async () => null,
     writeFile: async path => void seen.writes.push(path),
+    // the live records are none; stamps:<repo> is a value in memory (the intake stamp's try, v2/act-intake.ts)
+    v2: {
+      records: () => [],
+      updateRecords: async () => ({ changed: false, saved: false }),
+      updateStamps: async fn => {
+        const next = fn(stamps.value)
+        if (next === null) return { changed: false, saved: true }
+        stamps.value = next
+        return { changed: true, saved: true }
+      },
+      ping: () => undefined,
+    },
   }
   return { io, seen }
 }
@@ -159,6 +173,7 @@ const ACTIONS: Action[] = [
 // --- v2: every new kind of appendix B, and every op of a kind that has several ---------------------------
 
 const LIFE = 'ss1x2k'
+const VERSION = '0123456789abcdef'
 const RECORD: IssueRecord = {
   issue: 470,
   life: LIFE,
@@ -177,6 +192,7 @@ const RECORD: IssueRecord = {
   cut: false,
   triages: 0,
   fixes: 0,
+  conflicts: 0,
   round: 0,
   question: null,
   parts: null,
@@ -211,6 +227,9 @@ const V2_ACTIONS: Action[] = [
   { ...base, issue: null, kind: 'released', key: `released:${REPO}:v1.2.0`, class: 'free', rule: 'O4', tag: 'v1.2.0', source: 'loop' },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
+  // I1's intake reader on a body version (v2 SPEC 13.4): the one agent besides the steps' it starts, and the only other writer of labels
+  { ...base, kind: 'intake-stamp', key: `intake/470/${VERSION}`, class: 'develop', rule: 'I1', op: 'run', version: VERSION },
+  { ...base, kind: 'intake-stamp', key: `intake/470/${VERSION}/settle`, class: 'free', rule: 'I1', op: 'settle', version: VERSION, why: 'timeout' },
   { ...base, kind: 'close-tracker', key: `i470/l${LIFE}/follow/close-tracker`, class: 'free', rule: 'D3' },
   { ...base, kind: 'link', key: `${at}/link/471`, class: 'free', rule: 'S3', blocker: 471 },
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
@@ -237,6 +256,12 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
       return is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', FACTORY) ||
         is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', FACTORY, '--remove-label', l => l.split(',').every(FACTORY)) ||
         is('gh', 'label', 'create', FACTORY, '--repo', REPO, '--color', c => /^[0-9a-f]{6}$/.test(c), '--description', text, '--force')
+        ? { labels: true }
+        : {}
+    case 'intake-stamp':
+      // `area:<area>` and `needs-decision`, put on and made when missing (never with --force), and the ones it set taken off
+      return is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', l => l.split(',').every(x => /^(area:[A-Za-z0-9._-]+|needs-decision)$/.test(x))) ||
+        is('gh', 'label', 'create', x => /^(area:[A-Za-z0-9._-]+|needs-decision)$/.test(x), '--repo', REPO, '--color', c => /^[0-9a-f]{6}$/.test(c), '--description', text)
         ? { labels: true }
         : {}
     case 'comment':
@@ -387,7 +412,7 @@ function bans(argv: readonly string[], action?: Action): string[] {
   // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
   const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true)) out.push(`git ${verb}`)
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote', 'ls-tree'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true)) out.push(`git ${verb}`)
   return out
 }
 
@@ -429,6 +454,11 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['flake-bug', ARGV.subIssuesReadArgv(REPO, 864)],
   ['flake-bug', ARGV.subIssueArgv(REPO, 864, 3_100_601)],
   ['flake-bug', ARGV.childReadyArgv(REPO, 601, READY)],
+  ['intake-stamp', ARGV.labelMakeArgv(REPO, { name: 'area:factory', color: 'c5def5', description: 'Factory loop: the area' })],
+  ['intake-stamp', ARGV.labelMakeArgv(REPO, { name: 'needs-decision', color: 'fbca04', description: 'Factory loop: waits on a decision' })],
+  ['intake-stamp', ARGV.labelsAddArgv(REPO, 470, ['area:factory'])],
+  ['intake-stamp', ARGV.labelsAddArgv(REPO, 470, ['area:factory', 'needs-decision'])],
+  ['intake-stamp', ARGV.labelClearArgv(REPO, 470, ['area:product'])],
   ['close-tracker', ARGV.issueReadArgv(471)],
   ['close-tracker', ARGV.subIssueStatesArgv(REPO, 470)],
   ['close-tracker', ARGV.trackerCloseArgv(REPO, 470, 'Every sub-issue is finished.')],
@@ -448,6 +478,7 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['agent-step', ARGV.isAncestorArgv('abc1234', 'def5678')],
   ['agent-step', ARGV.implementerRouteArgv(470)],
   ['claim', ARGV.claimArgv(470)],
+  ['claim', ARGV.claimArgv(470, { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] })],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
   ['slot', ARGV.slotLeaseArgv(470, LIFE)],
   ['slot', ARGV.slotPrepareArgv(SLOT, 'lease-2', 'issue-470', '{"v":1}')],
@@ -464,7 +495,7 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       expect({ key: action.key, ran: r.status !== 'failed' || stub }).toEqual({ key: action.key, ran: true })
       if (stub) expect({ key: action.key, argvs: r.argvs, spawns: r.spawns.length }).toEqual({ key: action.key, argvs: [], spawns: 0 })
       for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv, action) }).toEqual({ key: action.key, argv, bans: [] })
-      for (const sp of r.spawns) expect(sp.subagentType).toBe(action.kind === 'agent-step' ? STEP_AGENT[action.step] : `no spawn from ${action.kind}`)
+      for (const sp of r.spawns) expect(sp.subagentType).toBe(action.kind === 'agent-step' ? STEP_AGENT[action.step] : action.kind === 'intake-stamp' ? INTAKE_AGENT : `no spawn from ${action.kind}`)
     }
   })
 
@@ -504,6 +535,13 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'ready'], kindAction('comment')],
       [['gh', 'issue', 'edit', '601', '--repo', REPO, '--add-label', 'bug'], kindAction('flake-bug')],
       [['gh', 'label', 'create', 'ready', '--repo', REPO, '--color', 'ffffff', '--description', 'x', '--force'], kindAction('flake-bug')],
+      // the intake stamp's labels are area:* and needs-decision alone, made without --force, and no other kind may add them
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'], kindAction('intake-stamp')],
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'area:factory,ready'], kindAction('intake-stamp')],
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'area:factory'], kindAction('comment')],
+      [['gh', 'label', 'create', 'area:factory', '--repo', REPO, '--color', 'c5def5', '--description', 'x', '--force'], kindAction('intake-stamp')],
+      [['gh', 'label', 'create', 'ready', '--repo', REPO, '--color', 'c5def5', '--description', 'x'], kindAction('intake-stamp')],
+      [['gh', 'label', 'create', 'area:factory', '--repo', REPO, '--color', 'c5def5', '--description', 'x'], label],
       [['gh', 'issue', 'close', '470', '--reason', 'completed', '--comment', 'x'], kindAction('close-tracker')],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
       // the delete is leased, of the issue's own branch, and the only push there is
@@ -618,7 +656,7 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {
-    const own: string[][] = [eventArgv('loop', { note: 'kind=tell key=k status=running' }), capEventArgv('claim:470', NOW), capEventArgv('spawn', NOW)]
+    const own: string[][] = [eventArgv('closed', { reason: 'completed' }, { issue: 470 })]
     for (const e of [entry('design:470:1', 'agent-step', { step: 'design' }), entry('tell:x', 'tell', { wake: 'blind' })]) {
       const argv = loopEvent(e)
       if (argv !== null) own.push(argv)

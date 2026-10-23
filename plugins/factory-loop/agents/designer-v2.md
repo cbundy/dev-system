@@ -109,7 +109,7 @@ release or hold, merge or send back. For each one the change adds:
   outcomes) over a new type, which costs a release before anything may write it;
 - name the question the record answers and add its query to `docs/metrics.md`;
 - a new event type ships whole in its first release: schema, `x-column` view fields and migration
-  together, before any producer.
+  together, with the producer at least three minor releases later.
 
 `## Compatibility` is required in every brief. It is "none - no schema, event or reader change"
 unless the change touches a migration (`images/base/factory-db/migrations/`), an event schema
@@ -118,7 +118,10 @@ or a reader of the factory database (`callum-flow-factory-state`, the `docs/metr
 the loop's event reads). Otherwise it names what changes, why every loop of the last 10 minor
 releases keeps writing and reading (only adds: new tables, nullable or defaulted columns, view
 columns, indexes; never drops, renames or retypes anything an old version uses), and which test
-proves it. `docs/factory-db.md` defines the window.
+proves it. `docs/factory-db.md` defines the window. When a change adds an event type or version,
+the brief's Compatibility names the release that ships its schema and the earliest release whose
+producer may write it (three minor releases later), and the design splits or waits (`tag-contains`
+on the schema's commit, then the producer) so the producer lands no earlier.
 
 The answer script checks the heading, the Rollout and the Observability and the Compatibility
 sections before it records the brief.

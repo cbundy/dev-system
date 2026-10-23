@@ -4,14 +4,17 @@ import type { EngineInterface } from 'claude-code'
 
 import { logLoop, transition } from './act'
 import type { ActEnv } from './act'
-import { agentAnswered, keep, wakeEnded, wakeStarted } from './act-between'
+import { completeOff } from './act-off'
+import type { OffDone } from './act-off'
+import { agentAnswered, intakeAnswered, keep, wakeEnded, wakeStarted } from './act-between'
 import type { Answered, Claim, Repair } from './act-between'
 import type { Runtime } from './observe'
 import { actLockPath, releaseActLock } from './rails'
 import { attemptOf } from './trace'
 import type { LedgerEntry } from './types'
 import { within } from './within'
-import { appendLine, killed, lockIo, lockOp, message, runtime } from './driver-io'
+import { appendLine, killed, lockIo, lockOp, mayWrite, message, runtime } from './driver-io'
+import { stampEnded } from './driver-stamp'
 import { bareState, ensureLedger, hookEnv, persist } from './driver-store'
 import { REPAIR_TIMEOUT_MS, S, TOOL_ANSWER_MS, between, delivered, live, ping, resuming } from './driver-state'
 import type { After } from './driver-state'
@@ -70,6 +73,27 @@ export async function afterwards($: EngineInterface, after: After) {
   const notes = after.run === undefined ? [] : await after.run(env)
   if (after.line !== undefined) await appendLine($, after.rt, after.line([...notes, ...env.problems]))
   if (after.ping !== undefined) ping(after.ping)
+}
+
+// offPassDone: an off-pass command ended (act-off.ts): its completion runs in the hook queue, never in a
+// pass. It changes nothing and writes nothing unless this session still holds the loaded ledger and the
+// act lock; a completion for an attempt that already ended is dropped. One decision-log line names it,
+// the trace gets its row, a rate limit is left for the next pass's backoff, and a pass is pinged.
+export function offPassDone($: EngineInterface, rt: Runtime, done: OffDone): Promise<void> {
+  return hook(async () => {
+    let applied = false
+    if (live.loaded && live.repo === rt.repo) {
+      if (await mayWrite($, rt)) applied = await completeOff(hookEnv($, rt, await $.clock.now()), done)
+      else live.loaded = false
+    }
+    const failed = done.exec.status === 'failed'
+    const cli = done.exec.status === 'done' ? 0 : done.exec.status === 'failed' && done.exec.outcome?.kind === 'cli' ? done.exec.outcome.exit : -1
+    S.offFinished.push({ cmd: done.kind, key: done.key, ms: Math.round(done.ms * 10) / 10, exit: cli, endedAt: new Date(done.endedAt).toISOString() })
+    S.offFinished.splice(0, S.offFinished.length - 100)
+    if (applied && failed && done.exec.rateLimited === true) S.offRateLimited = true
+    await appendLine($, rt, { offPass: { key: done.key, kind: done.kind, status: done.exec.status, ms: Math.round(done.ms), summary: done.exec.summary, ...(applied ? {} : { dropped: true }) } })
+    ping(`off-pass ${done.key}`)
+  }).catch(() => undefined)
 }
 
 // kept: an After's ledger work for a transition a hook made at once: saved, then logged.
@@ -150,10 +174,21 @@ export async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
 // An unreadable one first gets its one repair message, while the loop may start things (#548). The
 // decision log says which path each answer took (answerLine).
 export async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: string }) {
+  // a dry-run stamp's reader (driver-stamp.ts) is no ledger entry: its notice goes out in any mode
+  if (await stampEnded($, e)) return
   const rt = await ledgerFor($)
   if (rt === null) return
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
+  // an intake reader of rule I1 (v2/act-intake.ts) is a ledger entry of its own kind: its answer is the stamp
+  const intake = await intakeAnswered(env, S.lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason })
+  if (intake !== null) {
+    const done = live.ledger.find(x => x.key === intake.key)
+    const line = intake.result === 'applied' ? { key: intake.key, intake: done?.status, summary: done?.summary } : { agent: e.agentId, intake: 'dropped', why: intake.why }
+    await appendLine($, rt, { ...line, problems: env.problems.length > 0 ? env.problems : undefined })
+    if (intake.result === 'applied') ping(`agent ${e.agentId}`)
+    return
+  }
   const repair: Repair = (await actsNow($, rt)) ? (id, text, type) => repairTo($, id, text, type) : async () => 'the loop starts nothing until its restart'
   const r = await agentAnswered(env, S.lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, repair)
   const why = r.why === undefined || r.result === 'repair' ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]

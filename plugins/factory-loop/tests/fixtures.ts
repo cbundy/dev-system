@@ -107,6 +107,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     blockersClosedAt: null,
     parent: null,
     siblings: null,
+    bodyVersion: null,
     epic: false,
     subIssueList: null,
     brief: null,
@@ -245,6 +246,7 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     cut: r.cut,
     triages: r.triages,
     fixes: r.fixes,
+    conflicts: r.conflicts,
     round: r.round,
     question: r.question,
     // the parts of a structured park question; absent keys are read as null

@@ -15,8 +15,15 @@ callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format t
 
 Exit 0 ok, 2 bad arguments (a bad `--source` or `CALLUM_FLOW_FACTORY_STATE_SOURCE` included), 1 the required
 source that cannot be read: `factory.events` for `old` and `shadow`, `factory.event_log` (through
-`dev-query --factory`) for `new`, which also fails with `unknown factory event: <type> v<N>` on an event
-type or version `factory-event-shapes.json` does not list as current. An optional
+`dev-query --factory`) for `new`. Under `new` (and the new half of `shadow`) a `factory.event_log` row
+whose type and version `factory-event-shapes.json` does not list as current (a newer writer's event) is
+left out, not a failed read: the report's top-level `skipped_events` lists `{type, type_version, count,
+derived}` sorted by type then version (`[]` when nothing was skipped and always under `old`), and the text
+format adds a line such as `skipped events: claimed v2 x1 (derived), mystery v1 x1`. `derived` is true
+when the derivation reads that type (`DERIVED_TYPES`), so the view may be incomplete; every other current
+type is in `IGNORED_TYPES`, and a test requires each current type in exactly one of the two. `shadow`
+leaves `skipped_events` out of its comparison. `mapEventLogRow` itself still throws `unknown factory
+event: <type> v<N>`, so the replay reader keeps failing loudly. An optional
 source (`nomistakes.runs`, `factory.workers_status`, GitHub) that is missing shows as `n/a: <reason>`
 (`runs` and `workers` in the JSON), so no-mistakes data can never blind a reader of the factory. With
 no `nomistakes.runs`, no run places an issue.
@@ -197,7 +204,36 @@ other `factory:*` label (but `factory:rejected` on a closed one: the loop reject
 last life, v2 SPEC 6.4, and that label is not a state); for any other issue, a `queued` one without `ready`; a GitHub claim comment
 held by another device than the events say; a GitHub state that could not be read. No label marks a
 claim: `In development` is gone (v2 SPEC 3.6). An open issue at `ready to merge` that carries the issue label `don't-merge` (any case) shows the flag `held: don't-merge (waits on the owner)`, and S4 does not trip for it: the owner holds it, not the factory. The tool reads issue labels only, so a `don't-merge` label on the PR alone is not seen here (the loop's own merge queue reads both). Also per repo: recently ended issues, `other_runs` (running runs on a branch
-with no issue number), and coverage. Across repos: the stuck list, and the workers section.
+with no issue number), `queue` and coverage. Across repos: the stuck list, and the workers section.
+
+### Queue
+
+`queue` is the factory loop's claim queue as of the repo's newest `queue_snapshot` event at or before
+`--at`: `{ taken_at, age_minutes, reason, considered, free_slots, owner, top, rest }`.
+
+- `taken_at` is when the claim pass that made the view ended, and `age_minutes` the minutes from it to
+  `--at` (a heartbeat is written when the view does not change, so an old snapshot means the loop has
+  not looked since, not that the queue is stable). `reason` is `changed` or `heartbeat`.
+- `top` is the snapshot's first 10 candidates in its order: `{ issue, rank, score, claimable, why }`
+  (`why` is null exactly when the claim rule would take the issue; the score factors are left out).
+  `considered` is the number of candidates the rule looked at and `rest` the snapshot's own count of
+  those past the first 50, by `why`.
+- `free_slots` is the claims left under the in-flight cap (null: unset). `owner` is the owner's
+  controls in force: `priority` and `only` (issue lists, empty when off), `serial` (one at a time)
+  and `new_off` (no new work).
+
+`queue` is `{ "n/a": <reason> }` when there is nothing to show, never an empty queue: `not read`
+(the pure derivation was given no queue), `the old store has no queue snapshots` (`--source old`, and
+the printed answer of `shadow`), `factory.event_log has no queue_snapshot columns (the factory
+database predates migration 0023)`, `cannot read the queue snapshot: <error>` (the read failed; the
+tool still exits 0, as for the workers) and `no queue_snapshot for this repo at or before --at`. Only
+repos already listed (from `--repo`, events or runs) get a `queue`.
+
+Text output adds, under each repo's `==` block after its notes, `queue (snapshot <age> old, <reason>):
+#N score S, #M score T (blocked), ..., +K more` (`score -` when unscored, the `why` in parentheses
+when set, `+K more` when `considered` is above the entries shown, `empty` for no candidates), then
+`queue controls: free slots <n|unset>, priority <#a #b|none>, only <#a #b|none>, one at a time
+<on|off>, no new work <on|off>`; without a snapshot the line is `queue: n/a: <reason>`.
 
 An open issue labelled `factory:<state>` or `ready` that the database has never seen is listed with
 source `github`, its stage from the `factory:*` label (as in the table above), else `queued`, so a
@@ -266,6 +302,10 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
   new life), #106's record closed as `claim-lost` while another device holds it (`designing`, held by
   `dev-b`), #107 is `queued` and #109 `designing`, both with a lapsed lease, and #108 is labelled
   `factory:fixing` with no events (`in pipeline` from GitHub).
+- `queue`: `acme/widgets` has two snapshots, an older `changed` one with 12 candidates and a newer
+  `heartbeat` 5 minutes before `--at`, which is shown: the first 10 of its 14 considered candidates
+  (one unscored, most blocked), free slots 1, priority `#300 #301`, no new work on. `acme/gadgets` has
+  events and no snapshot, so its `queue` is n/a.
 - `v2-waiting`: the `waiting` stage. #200 is `waiting` for 30 hours with no stuck rule, #201 is
   `waiting` but labelled `factory:parked` (flagged), #202 is `parked` and #203 `queued` (they sort
   before the waiting ones), #204 is labelled `factory:waiting` with no events (`waiting` from GitHub)
@@ -286,6 +326,12 @@ claim's lease, the closing reason) and one derivation runs over it. On the new s
 `reclaimed`, `claim_renewed` is `renewed`, `finding_handled` is `verdict`, `loop_entry` and `loop_passes` are the
 loop's bookkeeping; `gate_run`, `wind_down`, `reviewed`, `intervention`, `usage`, `untrusted_stripped`,
 `test_weakened`, `claim_lost`, `shadow_read`, `prompt_denied` and `prompt_waiting` are ignored by name.
+`queue_snapshot` is ignored by name too: the event read leaves it out (`type <> 'queue_snapshot'`), so a
+snapshot never places an issue, sets a stage or counts in `coverage`. On the new side the snapshots are
+read apart, after the events, through `dev-query --factory` with named columns only. A first query checks
+`information_schema.columns` for `factory.event_log.taken_at` (the marker of migration 0023); when it is
+missing the second is not run and `queue` is n/a. The second picks each repo's newest `queue_snapshot` with
+`taken_at <= --at` (`row_number()` over the repo, ordered by `taken_at`, `ts`, `device`, `event_id`).
 
 What the shadow comparison leaves out, because the two reports differ there by construction and nowhere else:
 
@@ -293,4 +339,5 @@ What the shadow comparison leaves out, because the two reports differ there by c
   `devices[].last_event_at`): the new store holds no line of the skipped old states and holds new-only types;
 - the v1 `run` id of an issue: no new event carries a `run_id`;
 - an abandoned final's free-text detail: the old note is free text and the new `reason` an enum, so
-  `abandoned (...)` is compared as `abandoned`.
+  `abandoned (...)` is compared as `abandoned`;
+- the repo's `queue`: the old store has no queue snapshots, so only the new side can show one.

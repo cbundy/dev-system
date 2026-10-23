@@ -13,7 +13,7 @@
 // and unknown fields are checked in `npm test` only. An unknown type or version is written with a warning.
 //
 // CLI: node factory-event-write.js --type T [--type-version N] --data JSON [--issue N] --repo O/N
-//   --device D --actor A [--session-id S] [--event-id UUID] [--snapshot JSON] [--ts ISO]
+//   --device D --actor A [--session-id S] [--regime R] [--event-id UUID] [--snapshot JSON] [--ts ISO]
 // Prints the event as one JSON line on stdout and warnings on stderr. Exit 2 on a refusal (one
 // `callum-flow-event:` line on stderr, nothing on stdout), 1 on a crash.
 
@@ -102,6 +102,15 @@ function buildEvent(input, shapes) {
     }
   }
 
+  // The regime is written as given and never refused; a value the shapes' enum lacks only warns.
+  const regime = input.regime ? input.regime : null;
+  if (regime !== null && shapes && shapes.schemas) {
+    const spec = shapes.schemas["envelope.v1"] && shapes.schemas["envelope.v1"].properties && shapes.schemas["envelope.v1"].properties.regime;
+    if (spec && Array.isArray(spec.enum) && !spec.enum.includes(regime)) {
+      warnings.push(`warning: unknown regime '${regime}' - written as given`);
+    }
+  }
+
   const eventId = UUID_RE.test(input.eventId || "") ? input.eventId : crypto.randomUUID();
   const snap = input.snapshot || "";
   const event = {
@@ -119,6 +128,7 @@ function buildEvent(input, shapes) {
     dev_image: pickVersion(snap, "dev_image"),
     template_version: pickVersion(snap, "template_version"),
     plugin_version: pickVersion(snap, "plugin_version"),
+    regime,
     data,
   };
   return { event, warnings };
@@ -145,7 +155,7 @@ function loadShapes(env, warnings) {
 
 const OPTIONS = {
   "--type": "type", "--type-version": "typeVersion", "--data": "data", "--issue": "issue", "--repo": "repo",
-  "--device": "device", "--actor": "actor", "--session-id": "sessionId", "--event-id": "eventId",
+  "--device": "device", "--actor": "actor", "--session-id": "sessionId", "--regime": "regime", "--event-id": "eventId",
   "--snapshot": "snapshot", "--ts": "ts",
 };
 

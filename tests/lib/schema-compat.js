@@ -150,6 +150,8 @@ const cleanEnv = (extra) => {
   const env = { ...process.env };
   for (const k of ["AGENTSVIEW_PG_URL", "FACTORY_DB_WRITER_URL", "FACTORY_DB_READER_URL", "FACTORY_DB_MIGRATOR_URL", "CALLUM_FLOW_FACTORY_STATE_SOURCE"]) delete env[k];
   for (const k of ["DEV_SECRETS_DIR", "DEV_WORKSPACE_SECRETS_DIR", "DEV_MIGRATOR_SECRETS_DIR"]) env[k] = path.join(NO_SECRETS, k);
+  // no release collection from GitHub: a real release would be one more row than the events written
+  env.DEV_FACTORY_RELEASE_COLLECT_INTERVAL = "0";
   return { ...env, ...extra };
 };
 
@@ -350,6 +352,11 @@ function parseCsv(text) {
   return rows;
 }
 
+// pinNow(sql, at): the read with now() replaced by `at`, so a read that measures an age ("seconds since
+// the newest snapshot") answers the same on A and on B, which run at different moments. The reader role
+// may not create a temp function to shadow now(), so the text is rewritten.
+const pinNow = (sql, at) => sql.replace(/\bnow\(\)/gi, `'${at}'::timestamptz`);
+
 // readOne(reader, db, { at, tagDir, share }): the answer of one read as the reader role:
 // { id, ok: true, cols, rows, workers, ordered, raw } or { id, ok: false, error, outside } or
 // { id, fault } when the read itself is not runnable (an unknown variable).
@@ -368,7 +375,7 @@ async function readOne(reader, db, { at, tagDir, share }) {
   const args = ["-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1"];
   for (const [k, v] of Object.entries(vars)) args.push("-v", `${k}=${v}`);
   args.push(db.readerUrl, "-f", "-");
-  const r = await run("psql", args, { env: cleanEnv({ PGOPTIONS: "-c client_min_messages=warning" }), input: reader.sql });
+  const r = await run("psql", args, { env: cleanEnv({ PGOPTIONS: "-c client_min_messages=warning" }), input: pinNow(reader.sql, at) });
   if (r.status !== 0) {
     const error = r.stderr.trim().split("\n").filter((l) => /ERROR|error|FATAL/.test(l))[0] ?? r.stderr.trim();
     return { id: reader.id, ok: false, error, outside: isOutsideRead(r.stderr, reader.sql) };

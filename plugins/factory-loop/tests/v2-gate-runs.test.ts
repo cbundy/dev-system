@@ -86,6 +86,18 @@ describe('one gate line, one gate_run', () => {
     ])
   })
 
+  test('an old line without memory fields gives the data it always did; a line with them carries them, a null limit left out', () => {
+    const [plain] = dataOf(text(line()))
+    expect(Object.keys(plain ?? {}).filter(k => k.startsWith('mem_'))).toEqual([])
+    const mem = { memStartBytes: 3221225472, memPeakBytes: 5368709120, memLimitBytes: 17179869184, memSamples: 4 }
+    const [full] = dataOf(text(line(mem)))
+    expect(full).toEqual({ ...plain, mem_start_bytes: 3221225472, mem_peak_bytes: 5368709120, mem_limit_bytes: 17179869184 })
+    const [open] = dataOf(text(line({ ...mem, memLimitBytes: null })))
+    expect(open).toEqual({ ...plain, mem_start_bytes: 3221225472, mem_peak_bytes: 5368709120 })
+    const [bad] = dataOf(text(line({ ...mem, memPeakBytes: -1, memStartBytes: 1.5 })))
+    expect(bad).toEqual({ ...plain, mem_limit_bytes: 17179869184 })
+  })
+
   test('the result follows the cause; no limit is a null concurrency and a null head is kept', () => {
     const got = dataOf(text(line({ cause: 'gate-fail', startedAt: new Date(NOW - 30 * MIN).toISOString() }), line({ cause: 'gate-unknown', head: null, concurrency: null, waitMs: 0, queuedBehind: 0 })))
     expect(got.map(d => d?.result).sort()).toEqual(['fail', 'unknown'])
@@ -102,6 +114,22 @@ describe('one gate line, one gate_run', () => {
 
   test('two lines of one run (the file read twice) are one event', () => {
     expect(runs(plan(stateOf(text(line(), line()))))).toHaveLength(1)
+  })
+})
+
+describe('the agents\' own gate runs (agent-gate, written by factory-gate-slot)', () => {
+  const agent = (over: Record<string, unknown> = {}) => ({ at: NOW - 5 * MIN, issue: N, life: LIFE, seq: 7, cause: 'agent-gate', reason: 'an agent\'s gate command ran in gate slot 0', command: 'npm test', waitMs: 4_000, slot: 0, exit: 0, ms: 90_000, refused: false, ...over })
+
+  test('a line of it is no gate line, no intervention and no gate_run', () => {
+    const t = text(agent(), agent({ slot: null, exit: null, ms: 0, refused: true, reason: 'refused' }))
+    expect(gateLines(t, NOW)).toEqual([])
+    expect(companionLines(t, NOW)).toEqual([])
+    expect(runs(plan(stateOf(t)))).toEqual([])
+  })
+
+  test('among real gate lines it changes none of their gate_runs', () => {
+    const real = line()
+    expect(dataOf(text(agent(), real, agent({ refused: true })))).toEqual(dataOf(text(real)))
   })
 })
 
@@ -334,7 +362,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     await clock.advance(6_000)
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
-    const writes = () => h.events().filter(e => e[1] === '--type')
+    const writes = () => h.events().filter(e => e[1] === '--type' && e[2] === 'gate_run')
     expect(writes()).toHaveLength(2)
     const argv = writes().find(e => (JSON.parse(e[4] ?? '{}') as { queued_behind: number }).queued_behind === 1) as string[]
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'gate_run', '--data'])
@@ -361,7 +389,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     await clock.advance(60_000)
     await clock.advance(60_000)
     await clock.advance(60_000)
-    const writes = h.events().filter(e => e[1] === '--type').map(e => JSON.parse(e[4] ?? '{}') as Record<string, unknown>)
+    const writes = h.events().filter(e => e[1] === '--type' && e[2] === 'gate_run').map(e => JSON.parse(e[4] ?? '{}') as Record<string, unknown>)
     expect(writes).toHaveLength(2)
     const got = writes.find(d => d.result === 'pass')
     expect(got?.flaky).toBe(flaky)

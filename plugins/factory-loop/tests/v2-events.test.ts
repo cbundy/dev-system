@@ -1,8 +1,10 @@
 // The event seam (docs/factory-loop/v2/SPEC.md 7.1, property 18 of 17.1): every event v2 writes is
-// built by hooks/v2/events.ts in today's format, and its note parses back to the same fields,
-// whole. Properties over generated events, not exact notes: the one exact
-// note is the format's own example. tests/factory-loop-v2-events.test.js runs the same argvs
-// through the real callum-flow-event.
+// built by hooks/v2/events.ts as a native call of callum-flow-event (its type and data), and the
+// old format's note, which the readers of the old source still parse, parses back to the same
+// fields, whole. Properties over generated events, not exact notes: the one exact note is the
+// format's own example. oldArgv below is the fixture-side builder of the old line the loop wrote
+// before it went native. tests/factory-loop-v2-events.test.js holds the native data to the
+// translator's and runs the argvs through the real callum-flow-event.
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
@@ -13,16 +15,19 @@ import {
   dec,
   enc,
   eventArgv,
+  eventColumns,
   eventNote,
   intervention,
+  list,
   noteToken,
   parseEvent,
   parseIntervention,
   parseTransition,
-  splitNote,
   tokensOf,
 } from '../hooks/v2/events'
+import { prSizeOf } from '../hooks/v2/argv'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
+import type { PrSize } from '../hooks/v2/event-data'
 import { endedOf } from '../hooks/v2/lives'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from '../hooks/v2/types'
 import type { IssueRecord, IssueState, OptionKey, ParkParts, WaitCondition } from '../hooks/v2/types'
@@ -91,6 +96,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     cut: g.next() < 0.5,
     triages: g.int(3),
     fixes: g.int(4),
+    conflicts: g.int(6),
     round: g.int(6),
     question: maybe(g, text(g, free)),
     parts: maybe(g, parts(g, free)),
@@ -117,7 +123,29 @@ function rowOf(argv: string[]): EventRow {
   return { state: argv[1] ?? '', issue: n('--issue'), branch: flag('--branch'), pr: n('--pr'), head: flag('--head'), note: flag('--note') }
 }
 
-const roundTrip = (e: V2Event) => parseEvent(rowOf(eventArgv(e)))
+// oldArgv: the argv the loop wrote before it went native: the old state, its columns, a fixer's
+// actor and the note (kept builders, for the readers of the old source).
+function oldArgv(e: V2Event): string[] {
+  const c = eventColumns(e)
+  const argv = ['callum-flow-event', e.state]
+  if (c.issue !== null) argv.push('--issue', String(c.issue))
+  if (c.branch !== null) argv.push('--branch', c.branch)
+  if (c.pr !== null) argv.push('--pr', String(c.pr))
+  if (c.head !== null) argv.push('--head', c.head)
+  if (e.state === 'verdict') argv.push('--actor', 'fixer')
+  argv.push('--note', eventNote(e))
+  return argv
+}
+
+// splitNote: the note of a v2 split's `abandoned` event as the loop wrote it, in the token shape the
+// translator reads, with the designer's four reasons and each child's why.
+function splitNote(created: readonly number[], reasons: { why_split: string; why_count: string; why_parts: string; why_order: string } | null, childWhys: readonly string[] | null): string {
+  const words = `split into ${created.join(',')}`
+  if (reasons === null) return words
+  return ['reason=split', `note=${enc(words)}`, `why_split=${enc(reasons.why_split)}`, `why_count=${enc(reasons.why_count)}`, `why_parts=${enc(reasons.why_parts)}`, `why_order=${enc(reasons.why_order)}`, `child_whys=${list(childWhys ?? [])}`].join(' ')
+}
+
+const roundTrip = (e: V2Event) => parseEvent(rowOf(oldArgv(e)))
 
 // --- the format ----------------------------------------------------------------------------------------
 
@@ -155,6 +183,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
         cut: false,
         triages: 0,
         fixes: 1,
+        conflicts: 2,
         round: 1,
         question: null,
         parts: null,
@@ -166,7 +195,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
       },
     }
     expect(eventNote(e)).toBe(
-      'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
+      'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 conflicts=2 round=1 why=none ' +
         'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
     )
   })
@@ -196,6 +225,7 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       cut: false,
       triages: 0,
       fixes: 0,
+      conflicts: 0,
       round: 0,
       question: null,
       parts: null,
@@ -205,6 +235,16 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       wait,
       lives: 1,
     },
+  })
+
+  test('conflicts=<n> follows fixes=<n>; a note without the token reads 0, a bad one is no transition', () => {
+    const e = { ...waiting(null), record: { ...waiting(null).record, conflicts: 3 } }
+    const note = eventNote(e)
+    expect(note).toContain(' fixes=0 conflicts=3 round=0')
+    expect(roundTrip(e)).toEqual(e)
+    const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note: note.replace(' conflicts=3', '') }
+    expect(parseTransition(row)?.record.conflicts).toBe(0)
+    for (const bad of ['-1', '1.5', 'x', 'none']) expect(parseTransition({ ...row, note: `${row.note} conflicts=${bad}` })).toBeNull()
   })
 
   test('issue:<n>, pr:<n> and tag:<sha>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {
@@ -311,20 +351,17 @@ describe('every event events.ts builds parses back to the same fields (property 
 describe('columns and notes per state', () => {
   test('a transition carries the record\'s issue, branch, PR and head as columns, never in the note', () => {
     const e = transition(rng(3), true)
-    const argv = eventArgv(e)
+    const argv = oldArgv(e)
     expect(rowOf(argv)).toMatchObject({ state: 'transition', issue: e.record.issue, branch: e.record.branch, pr: e.record.pr, head: e.record.head })
     const t = tokensOf(rowOf(argv).note)
     for (const k of ['issue', 'branch', 'pr', 'head']) expect(t.has(k)).toBe(false)
     for (const k of ['life', 'seq', 'from', 'to']) expect(t.get(k)).toBeTruthy()
   })
 
-  test('the reused states keep the note today\'s queries read, verbatim; a fixer\'s verdict is logged as the fixer', () => {
-    const verdict = eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: 9, head: 'abc', note: 'CORRECT: r1-1 fixed the off-by-one' })
+  test('the reused states keep the old note, verbatim; a fixer\'s verdict was logged as the fixer', () => {
+    const verdict = oldArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: 9, head: 'abc', note: 'CORRECT: r1-1 fixed the off-by-one' })
     expect(verdict.slice(-4)).toEqual(['--actor', 'fixer', '--note', 'CORRECT: r1-1 fixed the off-by-one'])
-    expect(eventArgv({ state: 'delegated', issue: 5, branch: 'issue-5', pr: null, head: null, note: 'brief https://x/1' })).toEqual([
-      'callum-flow-event', 'delegated', '--issue', '5', '--branch', 'issue-5', '--note', 'brief https://x/1',
-    ])
-    for (const note of ['review', 'ci', 'conflict', 'triage']) expect(eventArgv({ state: 'fix_requested', issue: 5, branch: null, pr: 9, head: null, note }).at(-1)).toBe(note)
+    expect(oldArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr: 9, head: null, note: 'merged by the factory loop' }).slice(-2)).toEqual(['--note', 'merged by the factory loop'])
   })
 
   test('an abandoned event says why with reason=: a drop, a split, a triage drop, a reconcile release', () => {
@@ -367,7 +404,7 @@ describe('columns and notes per state', () => {
     const old = (state: string) => ({ state, issue: 7, branch: null, pr: null, head: null, note: 'reason=reconcile stage=implementing pr=none checked=x' })
     expect(parseEvent(old('reclaimed'))).toMatchObject({ outcome: 'requeue', lives: null })
     expect(parseEvent(old('abandoned'))).toMatchObject({ outcome: 'leave', lives: null })
-    const row = rowOf(eventArgv(transition(rng(6), true)))
+    const row = rowOf(oldArgv(transition(rng(6), true)))
     expect(parseTransition({ ...row, note: (row.note ?? '').replace(/ lives=\d+/, '') })?.record.lives).toBe(1)
     expect(parseTransition({ ...row, note: (row.note ?? '').replace(/ lives=\d+/, ' lives=0') })).toBeNull()
   })
@@ -376,7 +413,7 @@ describe('columns and notes per state', () => {
 // --- the parser ---------------------------------------------------------------------------------------
 
 describe('the parser', () => {
-  const ok = eventArgv(transition(rng(5), true))
+  const ok = oldArgv(transition(rng(5), true))
   const good = rowOf(ok)
 
   test('a transition with a missing or bad identifying token is not a record', () => {
@@ -409,5 +446,98 @@ describe('the parser', () => {
     expect(parseEvent({ state: 'loop', issue: 5, branch: null, pr: null, head: null, note: 'kind=x key=y status=done' })).toBeNull()
     expect(parseEvent({ state: 'reclaimed', issue: 5, branch: null, pr: null, head: null, note: 'lease expired' })).toBeNull()
     expect(parseEvent({ state: 'claimed', issue: 5, branch: null, pr: null, head: null, note: null })).toBeNull()
+  })
+})
+
+// --- the native call (v2 SPEC 7.1): the type and data callum-flow-event takes ---------------------------
+
+describe('eventArgv: the native call of every event', () => {
+  const data = (argv: string[]) => JSON.parse(argv[4] as string) as Record<string, unknown>
+
+  test('the shape: --type, --data, then --issue and --actor when the event has them; never a state, a column, --note or --new-only', () => {
+    const g = rng(7)
+    const t = transition(g, true)
+    const argv = eventArgv(t)
+    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'transition', '--data'])
+    expect(argv.slice(5)).toEqual(['--issue', String(t.record.issue)])
+    for (const flag of ['--note', '--branch', '--pr', '--head', '--new-only']) expect(argv).not.toContain(flag)
+    expect(eventArgv.length).toBe(1)
+  })
+
+  test('a transition: the translator\'s field names, the times as ISO, the parts and wait as data', () => {
+    const e = transition(rng(5), true)
+    const d = data(eventArgv(e))
+    expect(d).toMatchObject({ life: e.record.life, seq: e.record.seq, table_row: e.row, from_state: e.from, to_state: e.record.state, via: e.via, lives: e.record.lives, conflicts: e.record.conflicts, cut: e.record.cut })
+    expect(d.seq_at).toBe(new Date(e.record.seqAt).toISOString())
+    expect(d.state_since).toBe(new Date(e.record.since).toISOString())
+    expect(d.wait).toEqual(e.record.wait === null || e.record.wait.length === 0 ? null : e.record.wait)
+    expect(Object.keys(d)).toContain('decision')
+  })
+
+  test('a fixer\'s verdict is a finding_handled for the fixer; a bad verdict note is no event', () => {
+    const argv = eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: 9, head: 'abc1234', note: 'WRONG: r1-1 the test covers it' })
+    expect(argv).toEqual(['callum-flow-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: 'issue-5', pr: 9, head: 'abc1234', finding: 'r1-1', outcome: 'declined', detail: 'the test covers it' }), '--issue', '5', '--actor', 'fixer'])
+    expect(data(eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: null, head: null, note: 'CORRECT: r2-3: fixed' }))).toMatchObject({ finding: 'r2-3', outcome: 'fixed', detail: 'fixed', pr: null, head: null })
+    expect(() => eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: null, head: null, note: 'maybe' })).toThrow(/neither CORRECT nor WRONG/)
+  })
+
+  test('prSizeOf: per-file counts kept, an empty path or a bad count dropped from file_lines, null on bad JSON or missing totals', () => {
+    const out = prSizeOf(JSON.stringify({
+      files: [{ path: 'a.js', additions: 3, deletions: 1 }, { path: '', additions: 1, deletions: 1 }, { path: 'b.md', additions: 'x', deletions: 0 }, { path: 'c.md', additions: -1, deletions: 0 }, { path: 'd.md', additions: 1.5, deletions: 0 }, null],
+      additions: 9,
+      deletions: 4,
+    }))
+    expect(out).toEqual({ files: ['a.js', 'b.md', 'c.md', 'd.md'], fileLines: [{ path: 'a.js', additions: 3, deletions: 1 }], additions: 9, deletions: 4 })
+    expect(prSizeOf('not json')).toBeNull()
+    expect(prSizeOf('{"files": []}')).toBeNull()
+  })
+
+  test('a merge: by the factory when the loop merged it, by hand otherwise; recovered when logged afterwards', () => {
+    const merged = (note: string) => data(eventArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr: 9, head: 'abc1234', note }))
+    expect(merged('merged by the factory loop')).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'factory', recovered: true, files: null, file_lines: null, additions: null, deletions: null })
+    expect(merged('merged by hand')).toMatchObject({ by: 'hand', recovered: true })
+    expect(merged('')).toMatchObject({ by: 'factory', recovered: false })
+    // the size the executor read rides along; without one, a failed read or no pull request it is null
+    const sized = (pr: number | null, size?: PrSize | null) => data(eventArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr, head: 'abc1234', note: 'merged by hand', ...(size === undefined ? {} : { size }) }))
+    const fileLines = [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }]
+    const size = { files: ['a.js', 'b/c.sh'], fileLines, additions: 12, deletions: 3 }
+    expect(sized(9, size)).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'hand', recovered: true, files: ['a.js', 'b/c.sh'], file_lines: fileLines, additions: 12, deletions: 3 })
+    expect(sized(9, null)).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
+    expect(sized(9, { files: null, fileLines: null, additions: null, deletions: null })).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
+    expect(sized(null, size)).toMatchObject({ pr: null, files: null, file_lines: null, additions: null, deletions: null })
+  })
+
+  test('an abandoned: a drop, a split with its children, a triage drop, and a release by its outcome', () => {
+    const abandoned = (note: string) => data(eventArgv({ state: 'abandoned', issue: 5, branch: null, pr: null, head: null, note }))
+    expect(abandoned('dropped by the owner')).toMatchObject({ reason: 'dropped', split_into: [], detail: 'dropped by the owner', branch: null, pr: null })
+    expect(abandoned('split into 12, 13')).toMatchObject({ reason: 'split', split_into: [12, 13] })
+    expect(abandoned('triage: duplicate')).toMatchObject({ reason: 'triage' })
+    const release = (outcome: ReleaseEvent['outcome'], lives: number | null) => {
+      const e: ReleaseEvent = { state: outcome === 'requeue' ? 'reclaimed' : 'abandoned', issue: 7, branch: 'issue-7', pr: 31, stage: 'in pipeline', checked: 'no run', reason: 'reconcile', outcome, lives }
+      return eventArgv(e)
+    }
+    expect(release('requeue', 2).slice(0, 3)).toEqual(['callum-flow-event', '--type', 'requeued'])
+    expect(data(release('requeue', 2))).toEqual({ reason: 'reconcile', stage: 'in pipeline', lives: 2, branch: 'issue-7', pr: 31, detail: 'no run' })
+    expect(data(release('leave', null))).toMatchObject({ reason: 'reconcile', lives: null, split_into: [], child_whys: null, detail: 'no run' })
+    expect(data(release('reject', 3))).toMatchObject({ reason: 'rejected', lives: 3 })
+  })
+
+  test('an intervention: the flake fields only on a flake row, the jobs and head on a refused check\'s', () => {
+    const base = intervention('loop', 'ci-rerun', 'i5/lx/rerun/r1/9', 'a failed check re-run', { issue: 5, life: 'x', pr: 9 })
+    expect(data(eventArgv(base))).toEqual({ who: 'loop', cause: 'ci-rerun', life: 'x', fact: 'i5/lx/rerun/r1/9', pr: 9, detail: 'a failed check re-run', flaky: null, failed_tests: null, failed_jobs: null, head: null })
+    expect(data(eventArgv({ ...base, flaky: true, head: 'abc1234', failed_jobs: ['ci'], failed_tests: ['a, b'] }))).toMatchObject({ flaky: true, head: 'abc1234', failed_jobs: ['ci'], failed_tests: ['a, b'] })
+    expect(data(eventArgv({ ...base, flaky: false, failed_jobs: null, failed_tests: [] }))).toMatchObject({ flaky: false, failed_jobs: null, failed_tests: null, head: null })
+    expect(data(eventArgv({ ...base, failed_jobs: ['ci'], head: 'abc1234' }))).toMatchObject({ flaky: null, failed_tests: null, failed_jobs: ['ci'], head: 'abc1234' })
+  })
+
+  test('a fleet-level intervention names no issue; the new-format events keep their argv', () => {
+    const iv = intervention('person', 'op:mode', 'op/fleet/mode', 'mode act', { issue: null, life: null, pr: null })
+    expect(eventArgv(iv)).not.toContain('--issue')
+    expect(eventArgv({ state: 'comment_posted', issue: 5, data: { life: 'x', seq: 1, to_state: 'parked', comment_url: 'https://x/1' } })).toEqual(['callum-flow-event', '--type', 'comment_posted', '--data', '{"life":"x","seq":1,"to_state":"parked","comment_url":"https://x/1"}', '--issue', '5'])
+  })
+
+  test('the states the loop no longer writes build no event', () => {
+    for (const state of ['delegated', 'fix_requested', 'merge_ready']) expect(() => eventArgv({ state, issue: 5, branch: null, pr: null, head: null, note: 'x' } as never)).toThrow(/not an event v2 writes/)
+    expect(REUSED_STATES).toEqual(['abandoned', 'merged', 'verdict'])
   })
 })

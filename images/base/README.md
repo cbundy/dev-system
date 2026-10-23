@@ -84,8 +84,8 @@ only signal-terminated sleeps (status above 128) are retried.
 one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
 usage gate. It reads the claude.ai usage endpoint with the logged-in OAuth token, falls back
 to a recent status line snapshot (its `--record` mode is a status line command), and prints
-`usage=unavailable reason=...` when neither answers. It spends no model tokens and runs no
-background process. Only the image ships it, not the deprecated feature.
+`usage=unavailable reason=...` when neither answers. It also logs the reading as a native `usage` event (`--to-data` prints the event's data for a line on stdin). It spends no model tokens and runs no
+background process. With `DEV_CLAUDE_AUTH=api-key` (the Coder template's API-key login) it tries neither source and prints `usage=unavailable reason=subscription:api-key-mode auth=api-key`; the factory loop reads its own spend against a budget there instead. Only the image ships it, not the deprecated feature.
 
 ## What the image does not own
 
@@ -198,6 +198,31 @@ holds the shared login, and logging out (`claude auth logout`) in one logs out e
   "/persist/claude-auth"}` and the mount `{ "type": "volume", "source": "dev-system-claude-auth",
   "target": "/persist/claude-auth" }`; every repo with both shares one login per Docker host.
 - **docker run, compose**: the same variable, plus `-v dev-system-claude-auth:/persist/claude-auth`.
+
+#### Claude API-key mode
+
+A workspace can run Claude on its own Anthropic API key instead of a claude.ai login. The
+runtime sets two variables, never the key:
+
+| Variable | Meaning |
+|---|---|
+| `DEV_CLAUDE_AUTH` | `api-key` turns the mode on. Unset keeps the claude.ai login. |
+| `DEV_CLAUDE_API_KEY_FILE` | The file holding the key (first non-blank line), e.g. `/run/secrets/dev-system-workspace/anthropic-api-key`. |
+
+`dev-init` sets `apiKeyHelper` in `$CLAUDE_CONFIG_DIR/settings.json` (Claude's user
+settings, which every Claude in the workspace reads, sub-agents and `claude -p` included)
+to `/usr/local/bin/dev-claude-api-key <file>`, keeping every other setting. That helper
+prints the file's first non-blank line, so the key lives only in the file and in Claude's
+memory: never an environment variable, an argument, a Terraform value or a log line.
+Leaving the mode removes `apiKeyHelper` again, but only when it is that helper; a helper
+you set yourself stays. `dev-login` does not run a claude.ai login in this mode (codex and
+gh are unchanged), and `dev-doctor` prints the auth mode, fails when the file is missing,
+empty or unreadable or `settings.json` lacks the helper, and notes that Remote Control is
+off by design.
+
+Remote Control rejects API keys, so there is none: Claude runs headless in the tmux
+session `claude`. Reach it with `coder ssh <workspace>`, then `tmux attach -t claude`
+(`docker exec -it <container> tmux attach -t claude` on a plain Docker host).
 
 ### How runtimes should mount it
 
@@ -642,8 +667,8 @@ container never fails to start because of it.
    `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
-   cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the event and
-   no-mistakes push loops (see [Factory event log](#factory-event-log)) and the
+   cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the
+   no-mistakes push loop (see [Factory event log](#factory-event-log)) and the
    [worker heartbeat](#worker-heartbeat). Separately, with the factory database's writer secret
    (`factory-db-writer-url` or `FACTORY_DB_WRITER_URL`) and `psql`, starts `factory-event-push-loop`
    (log: `/tmp/dev-factory-event-push.log`); an unreadable secret gets a `WARNING`.
@@ -971,8 +996,19 @@ well under a second instead of hitting the 10s kill timeout.
    `Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it <container> dev-login <code>`
    (see [First-run logins](#first-run-logins) for runtime-specific command hints; when `DEV_LOGIN_PAGE_URL` is set the line names that URL) once, then every 10 checks (5 minutes),
    checking every 30s. It starts Claude as soon as the login appears; no restart needed.
-   An API key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote
-   Control rejects both, and `dev-login` leaves it alone.
+   A login by an API key in the environment or `CLAUDE_CODE_OAUTH_TOKEN` gets its own
+   message, since Remote Control rejects both, and `dev-login` leaves it alone. The
+   supervised API-key mode below is the exception: there the supervisor starts Claude
+   without Remote Control.
+   **API-key mode** (`DEV_CLAUDE_AUTH=api-key`, see
+   [Claude API-key mode](#claude-api-key-mode)): it waits for the key file instead
+   (`Claude API-key mode: <file> is missing, empty or unreadable - provision it on the Docker host (...); Claude starts as soon as it is readable`,
+   once, then every 10 checks), then starts interactive Claude headless in the tmux
+   session `claude` without `--remote-control`, and logs
+   `started Claude headless on the API key (no Remote Control) in <dir> - attach: ...`.
+   Session-mode resume, the fresh marker, the first prompt and skip-permissions behave as
+   usual, `server` mode falls back to this same session, and no Remote Control sessions
+   are snapshotted or restored.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`),
    Remote Control as accepted (`remoteDialogSeen`), the one-time "Try the new fullscreen
@@ -1033,6 +1069,8 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | `DEV_REMOTE_CONTROL_RESTORE_HOURS` | `24` | After a container restart, the other Remote Control sessions that were live at the restart and last seen live within this many hours are resumed, however long they sat idle. `0` turns it off. See [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart). |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
+| `DEV_CLAUDE_AUTH` | unset | `api-key` runs Claude on the key in `DEV_CLAUDE_API_KEY_FILE` through `apiKeyHelper`, headless in tmux, with no Remote Control. See [Claude API-key mode](#claude-api-key-mode). |
+| `DEV_CLAUDE_API_KEY_FILE` | unset | The file holding the Anthropic API key in API-key mode. Only the path is ever set, never the key. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` with `DEV_REPO_URL` set, else the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run (see [Workspace and repo](#workspace-and-repo)). Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
 
 `server` mode ignores the four conversation settings (`_NAME_FORMAT`, `_RESUME`,
@@ -1558,7 +1596,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 
 ## Factory event log
 
-`callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
+`callum-flow-event <state> --issue N ...` records one event per lifecycle transition
 (`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
 transition reviewed intervention prompt_denied prompt_waiting`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
@@ -1573,33 +1611,36 @@ the factory loop companion's (a loop agent's call refused, or waiting, on a prom
 `--issue` required, never a stage, progress or final. The current companion writes the native types
 (`--type`, `--data`); the states are kept for older companions and the history, with a `key=value`
 note and no token required. A rescue the loop cannot see is
-recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
-reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
-`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
-`/persist/events/<owner>__<repo>.jsonl`. In the same call it also writes the translated new event (dual write, #649) to
-`/persist/events/factory/<owner>__<repo>.jsonl`; the `factory/` dir is invisible to everything that
-reads the old file. It needs no network and never fails its caller: a miss, a missing `node` or
-translator, or a crashing translator keeps the old line and prints one `callum-flow-event: warning:`
-line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
-and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
-A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
-`--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
-restart never replays old events; transitions a watcher observes are always logged.
-`callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
-`CALLUM_EVENTS_DIR` default as a write) and writes nothing; `--new-path` does the same for the new
-log (an older image answers it with exit 2, which makes it the capability probe). The translator is
+recorded by hand: `callum-flow-event --type intervention --issue N --regime manual --data
+'{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"what was done"}'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
+`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary)).
+It builds the old-format line, translates it and appends only the new event to
+`/persist/events/factory/<owner>__<repo>.jsonl`. The old log `/persist/events/<owner>__<repo>.jsonl` and
+`factory.events` get no new lines (#1143). It needs no network and never fails its caller: a state the
+translator skips writes nothing, and a miss, a missing `node` or translator, or a crashing translator writes
+nothing and prints one `callum-flow-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
+and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form; `pipeline-watch.sh` no longer logs; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
+A re-armed queue watcher's first sight of a queued issue (one it did not see change) is logged with
+`--if-changed`, which translates first and skips an event with the same `type` and `data` as the issue's newest one in the
+new log (`loop_entry` and `loop_passes` skipped; `--branch` does not narrow it), so a restart never replays old events and a
+ready issue whose title, labels or parent changed is logged again; transitions a watcher observes are always logged.
+`callum-flow-event --path [--repo O/N]` prints the old log's path (kept for older callers; it gets no new lines) and writes nothing; `--new-path` prints
+the new log's path (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
-`--new-only` (old-state mode, not with `--if-changed`) writes the translated event to the new log only and never the old one; `--new-only --new-path` is its capability probe (an older image exits 2).
-`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload and leaves the old line as it is: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (old line kept, no new event, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` and `callum-flow-claim` then log the event again without it. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
+`--type` takes `--regime R` (else `FACTORY_REGIME`; the flag wins and an empty value counts as unset): the envelope's `regime`
+(`factory_loop_v2`, `testbed` or `manual`; null when unset, never guessed). A value outside that list is written as given with
+one `callum-flow-event: warning: unknown regime` line. The old-state form takes no flag but passes `FACTORY_REGIME` on.
+`--new-only` is a no-op kept for older callers (the old-state mode writes the new log only), allowed with `--if-changed`; `--new-only --new-path` is the capability probe (an older image exits 2). Removing `--new-only` and `--path` is #656.
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (nothing written, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
-Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
+Every event also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
 `${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`; they are null when the snapshot is missing or unreadable, and the
-line's `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `event-push-loop`.
+event's old-format line `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `factory-event-push-loop`.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
-[--source old|new|shadow] [--new-events <file>]`
+[--source old|new|shadow] [--new-events <file>] [--regime <value>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
@@ -1645,7 +1686,7 @@ the command is in the synced allow list. Its one writing mode, `--update-behind`
 the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
 The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
-`--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
+`--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `file_lines`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions`, read after the merge; null with a warning when the read fails); it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
@@ -1708,9 +1749,9 @@ are leased on the tips the check saw: a commit a live run adds before it stops m
 and ask for a rerun. `--new-branch` (after the live run is
 stopped), a sync recovery or gate-ref deletion that cannot finish, a recovery that moves HEAD, or a code
 with no safe action moves the rebased head to `<branch>-v<N>` (first name free locally, on origin and on
-the gate), logs `superseded` and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
-`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch
-re-gate also logs `superseded`.
+the gate) and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
+`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`. The helper
+logs no event: the event store has no `superseded` type.
 Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. Preflight and
 dropped-commit refusals change nothing, but a later one (a run that did not stop, a refused lease push)
 may leave the run aborted or recovered and the gate ref deleted, with the archives kept. The behind-only
@@ -1735,16 +1776,17 @@ not count). Each commit it cannot see restored prints an advisory `GUARD test-we
 step=<s> files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
 orchestrator sends each one to the adjudicator before merging. After a successful merge
 `callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
-(`docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
+(`callum-flow-event --type test_weakened --data`; `docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
 adds an ERE of extra test paths.
-After the merge and the `merged` event, `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
+After the merge and the `merged` event (`callum-flow-event --type merged --data`; it needs an issue, so with none known the merge still succeeds, a warning says so and no `merged` event is written), `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
 (override: `CALLUM_FLOW_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
 because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
 `callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
 
-`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run]` writes the `released`
+`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]` and
+`callum-flow-released --collect [--repo O/N]...` write the `released`
 factory event for one release tag. It reads GitHub only through `gh api` (the tag's commit, the `v*` tags,
 the compare with the previous final tag, each PR's body and closing issues, and the GitHub Release for the
 headlines; no Release gives empty headlines), builds the payload with `release-contents.js` (the one rule
@@ -1754,6 +1796,19 @@ already in the factory log is skipped on stderr with its event id (exit 0). `--d
 and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
 2 usage error. The factory loop calls it on each new release tag of a repo with a Next release milestone
 (`--source loop` for a release its own release task cut, else `workflow`).
+
+For a repo that cuts releases from its own workflow, `--attach` is the CI half: it builds the same payload and
+uploads `{"type":"released","type_version":1,"data":<payload>}` to the tag's GitHub Release as the asset
+`factory-released.json` (`gh release upload --clobber`, so a re-run replaces it; it writes no local event and
+needs no events dir; no Release for the tag is exit 1). The composite action
+`cbundy/dev-system/.github/actions/released-event@vX.Y.Z` (`tag`, `source` default `workflow`; the caller sets
+`GH_TOKEN` with `contents: write`) runs it as one step after the step that creates the Release. `--collect` is the
+device half: for each watched repo it reads the newest 20 releases (drafts skipped) and writes the `released`
+event of each valid asset whose tag the local log does not hold, with one stderr line per release
+(`collect <repo> <tag>: collect | skip already-logged | skip unknown-version | refuse (reason)`). An asset with a
+`type_version` this image's shapes lack is skipped, not written, so a newer image collects it later. Watched repos
+are the `--repo` flags, else `FACTORY_RELEASE_REPOS` (comma or space separated `owner/name`) plus the repos the
+device's own factory logs name. `factory-event-push-loop` runs it (below).
 For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line
@@ -1797,8 +1852,8 @@ labels, title?}` with the title kept only for a trusted author, an untrusted one
 `stripped`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
 (conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
 stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
-(non-zero, nothing on stdout) and logs an `untrusted_stripped` event with the count, never the
-content. The factory scripts that read issue, PR or comment content go through it and so only
+(non-zero, nothing on stdout) and logs an `untrusted_stripped` event (`callum-flow-event --type untrusted_stripped --data`: source, refused, count, pr) with the count, never the
+content. A stripped dependency node is counted but writes no event, as the type has no source for it. The factory scripts that read issue, PR or comment content go through it and so only
 see trusted content (cbundy/dev-system#310; the agent and skill prose follows in #311, the deny
 hook in #312): `callum-flow-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
 a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author` guard fails a PR
@@ -1834,11 +1889,11 @@ overrides the identity. Without `DEV_GH_TOKEN_FILE` nothing changes.
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
-and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assigns the issue and logs `claimed` with the note `lease: <minutes>`.
+and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since` and `race`), then removes `ready`, assigns the issue and logs `claimed` with `lease_minutes`, the issue's title, labels and parent and, when `CALLUM_FLOW_CLAIM_SCORE` is set and valid, the score and factors (all through `callum-flow-event --type claimed --data`).
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
-[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log; the way back, `CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old`) or `shadow`, set to re-measure. `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old; a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
+[issue...]` renews this device's claim comments in place and logs one `claim_renewed` event (`lease_minutes`) per comment it actually extended;
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -1849,12 +1904,16 @@ event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as t
 already ended (the shared rule above, over both logs: its last claim event is one that ends it, whichever device logged it, even
 when this device's own log still shows `claimed`; no other event revives an ended claim), or when it has no claim comment.
 A PR merged after the newest claim comment on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`) is a merge
-made outside the factory: the sweep logs `merged --pr <P> [--head <sha>] --actor sweep` whoever holds the claim and however live it is
+made outside the factory: the sweep logs a `merged` event (pr, head when known, the PR's size, by `factory`; actor `sweep`) whoever holds the claim and however live it is
 (checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
-expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
-any other label: the factory loop is the only writer of its `factory:*` labels. It has no
-time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
-latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
+expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `requeued` event (reason `lease-expired`). The sweep never touches
+any other label: the factory loop is the only writer of its `factory:*` labels. Rules 1-6 have no
+time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Rule 7 is bounded: a PR merged into the default branch
+inside the last `CALLUM_FLOW_SWEEP_MERGE_WINDOW_SECONDS` (default 604800) and at least `CALLUM_FLOW_SWEEP_MERGE_SETTLE_SECONDS` ago (default 3600, so another
+device's `merged` event has time to arrive) that no `merged` event names by PR (central `factory.event_log` plus this device's new log) gets a `merged` event
+as actor `sweep`, by hand and recovered, with the issue only when a trusted author wrote the lowest in-repo issue the PR closes. It needs the central store (without it
+the sweep warns once and logs nothing), skips on a read failure with exit 1, and sees merged PRs only: a direct push to the default branch is out of scope. A
+latest event of `superseded` (an old-log state; nothing writes it any more) is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
@@ -1862,7 +1921,7 @@ reader exits 1 after the rest are swept. Liveness uses GitHub server times; the 
 `callum-flow-design-route <issue>` prints `session` or `subagent`: how an issue is designed (epic #286). The label
 `design:subagent` wins, then `design:session`, else `CALLUM_FLOW_DESIGN_SESSION_PCT` (default `0`, a number from 0 to 100; anything else
 exits 2) sends that percentage of issues to `session` by a stable hash (`cksum` of the lower-cased `<owner/repo>#<issue>` mod 100), so
-every device decides alike. Unreadable labels print `subagent` with a warning. Each call logs a `design_routed` event, and it is in the
+every device decides alike. Unreadable labels print `subagent` with a warning. It logs no event (the event store has no `design_routed` type), and it is in the
 synced allow list. Set the percentage in a repo-owned place, not the synced `.claude/settings.json` keys. Consumer repos create the
 labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
 `gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
@@ -1876,7 +1935,7 @@ lower-cased, mod 100). The `implementer:` salt keeps it independent of the desig
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
 pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
-`implementer_routed` event (`model=.. reason=label|default|hash|fallback bucket=.. pct=..`), and it is in the synced
+`implementer_routed` event (`callum-flow-event --type implementer_routed --data` with `model`, `reason` (`label`, `default`, `hash` or `fallback`), `bucket` and `opus_pct`), and it is in the synced
 allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
 `.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
 share), keep the share fixed while it runs, and read the result with the
@@ -1899,7 +1958,9 @@ label|default|hash|fallback, `bucket`, `sonnet_pct`), and the tool is in the syn
 `callum-dev update` keeps it). With exactly one argument, `-h` or `--help` prints the usage line on stdout and exits 0 with no
 event, even when the percentage is invalid; usage errors print to stderr, exit 2 and log no event.
 
-`event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
+`event-push-loop` shipped the lines of the old log to `factory.events` in the agentsview PostgreSQL. `callum-flow-event`
+writes no old lines any more (#1143) and `dev-init` no longer starts it; it stays installed and runnable by hand
+for the history (removing it is #656). It used
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
 first push and keeps its progress in `/persist/events/.pushed/`. Every line carries an `event_id` (a UUID made
@@ -1908,8 +1969,7 @@ its new events. Lines without one (older files) keep the `(device, repo, seq)` r
 its marker was replaced: the loop pushes it again from the start and `dev-doctor` warns. The loop also migrates an
 existing table in place (adds `event_id`, swaps the old primary key for two partial unique indexes), guarded so a
 repeat takes no exclusive lock; the role in the URL must own the table. The URL is split into `PG*` variables in `psql`'s environment only, never its
-argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
-and `dev-doctor` reports when events were last written and last pushed. Variables:
+argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-doctor` still reports, as information labelled as the old log, when its lines were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
 `CREATE` on the database (or the schema and table created for it by an admin).
 The loop polls the `.wake` file about once a second and starts a pass as soon as it changes, so a new event reaches
@@ -1932,13 +1992,18 @@ past it; when the database is unreachable (or the writer is denied) nothing is s
 Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is bounded by
 `FACTORY_EVENT_PUSH_TIMEOUT` seconds (default 60), and `.wake` or `DEV_FACTORY_EVENT_PUSH_INTERVAL` (default 30 s)
 starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
-`dev-doctor` reports its counts and fails when it is not running. The old `event-push-loop` is unchanged.
+`dev-doctor` reports its counts and fails when it is not running. It is the only event push loop `dev-init` starts.
+At the start of a pass, at most every `DEV_FACTORY_RELEASE_COLLECT_INTERVAL` seconds (default 900; 0 turns it off;
+stamp: `factory/.released-collect`), it runs the release collector (`FACTORY_RELEASE_COLLECT_BIN`, default
+`callum-flow-released --collect`) bounded by `FACTORY_RELEASE_COLLECT_TIMEOUT` seconds (default 120), so what it
+writes is pushed in the same pass. Its output goes to the log, masked; a missing tool, a timeout or a failure is one
+warning line and never stops the push.
 
 `callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
-holds (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
+held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
 URL and `factory.event_store` with the factory reader URL only, in read-only transactions bounded by timeout, passes
 each old row through the translator and matches by `event_id`. Per old state it prints old lines, skipped, expected,
-found, missing and translator misses, then the extra new events per type. `--device` defaults to this device, `--repo`
+found, missing and translator misses, then the extra new events per type. New events of a type the translator never makes (such as `gate_run`) are counted per type as `new-only` and reported in the verdict line (`new-only=K`) but never fail the check. `--device` defaults to this device, `--repo`
 to every repo, and `--since` to the device's earliest new event. It exits 0 only when missing, misses and extras are all
 zero, 1 otherwise, and 2 on a usage error, an unreachable or unconfigured store, or no new rows to start from.
 
@@ -2065,6 +2130,11 @@ or skips the other target. The stopped beat sends none and leaves the stats colu
 | `mem_used_bytes`, `mem_limit_bytes` | cgroup `memory.current`, `memory.max` (NULL when `max`). |
 | `claude_interactive`, `claude_headless` | `heartbeat-state`'s `claude_sessions`: live top-level sessions in the registry whose `entrypoint` starts with `sdk-` (`claude -p`) are headless, any other is interactive. |
 | `claude_procs`, `procs` | processes whose `/proc/<pid>/comm` is `claude`, and every pid in `/proc`. |
+| `mem_max_events`, `mem_oom_kills` | cgroup `memory.events`: the `max` count (times the cgroup hit its memory limit) and the `oom_kill` count, both since the cgroup started. |
+| `mem_max_rate_per_min` | `max` events per minute since the previous beat, rounded to 2 decimals. The previous reading is in `$DEV_HEARTBEAT_DIR/dev-heartbeat.mem`. NULL on a process's first beat and after a counter reset. |
+| `mem_psi_some_avg10`, `mem_psi_full_avg10` | the `avg10` of the `some` and `full` lines of cgroup `memory.pressure` (percent of the last 10 s that tasks stalled on memory). |
+
+The memory pressure columns (migration 0020, parsed by `mem-pressure.sh`) are NULL when their file or line is missing or not a number. `dev-doctor` prints one `memory:` line from the same files (used / limit in MiB, `max` events and their rate since the heartbeat's last reading, OOM kills, PSI): INFO when calm, WARN (never FAIL) when the rate is above 0, `oom_kill` is above 0 or PSI `full` avg10 is at or above 10; it reads the heartbeat's state file and never updates it, and prints nothing on cgroup v1.
 
 A value whose source file is missing or unreadable (cgroup v1, no `/proc`) is NULL, never a guess, and never fails
 the beat. The counts never read `/proc/<pid>/cmdline` or `environ`, which can hold secrets and prompts: the
@@ -2093,7 +2163,7 @@ unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
 run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it; the runs join by branch only) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the runs and chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
-that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
+that failed on this beat, `[]` when none: `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
 `latest_lookup_failing` (the background lookup has failed for over an hour), and

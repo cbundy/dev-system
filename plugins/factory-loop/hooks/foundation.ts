@@ -145,7 +145,8 @@ export function gate(ctx: PlanCtx, key: string, kind: ActionKind | AgentType, ca
 // want: plan the action unless its key is blocked, and say what blocked it. An owner notice counts
 // toward the title's owner items whether or not it goes out this pass. An exhausted key is named
 // in the decision log and kept in ctx.exhausted for its rule to tell; a cadenced kind that failed
-// its attempts in a row is kept there too, and keeps trying.
+// its attempts in a row is kept there too, and keeps trying: a running retry counts, since the
+// ledger counts its attempt (attempts - 1 earlier ones), so the tell stays while the retry runs.
 export function want(ctx: PlanCtx, action: Action): Gate {
   if (action.kind === 'tell' && ctx.ownerTells.includes(action.wake)) ctx.owner.add(action.key)
   const kind = action.kind
@@ -160,8 +161,9 @@ export function want(ctx: PlanCtx, action: Action): Gate {
     if (WAKES.includes(action.kind) && action.kind !== 'task') ctx.owner.add(action.key)
     else ctx.exhausted.push(action.key)
   } else if (cadenceOf(ctx.config, kind) !== null) {
-    if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttemptsOf(ctx.config, kind, entry.maxAttempts)) {
-      ctx.exhausted.push(action.key)
+    if (entry !== undefined && entry.status !== 'done') {
+      const earlier = entry.status === 'running' ? entry.attempts - 1 : entry.attempts
+      if (earlier >= maxAttemptsOf(ctx.config, kind, entry.maxAttempts)) ctx.exhausted.push(action.key)
     }
   }
   return g
@@ -190,7 +192,7 @@ export function blindPass(ctx: PlanCtx): void {
   const since = state.sources.factory.at
   skip(ctx, 'G2', null, `factory source unavailable${state.sources.factory.error ? `: ${state.sources.factory.error}` : ''}`)
   if (since === null || state.now - since >= config.blindNoticeAfterMs) {
-    want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never' }))
+    want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never', error: state.sources.factory.error?.slice(0, 300) ?? null }))
   }
 }
 
@@ -422,18 +424,24 @@ export function titleOf(f: TitleFrame): string {
 export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
 // tierOf: the usage tier (rule G3, v2 SPEC 13.5.2). The higher of the two windows decides; a missing
-// reading is Normal (the skill fails open); an owner override keeps Normal below its pct.
+// reading is Normal (stop-new in API-key mode) (the skill fails open); an owner override keeps Normal below its pct.
 export function tierOf(
   usage: Usage,
   config: Config,
   override: State['control']['usageOverride'],
   now: number,
 ): { tier: Tier; overridden: boolean } {
-  if (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null)) {
+  // API-key mode (spend.ts): spend against the budget is the one reading; a missing one stops new work and
+  // no override lifts it, because nothing then says how much was spent
+  const spend = usage.auth === 'api-key' ? (usage.unavailable ? null : (usage.spend ?? null)) : undefined
+  if (spend === null) return { tier: 'stop-new', overridden: false }
+  if (spend === undefined && (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null))) {
     return { tier: 'normal', overridden: false }
   }
   const live = (pct: number | null, resetsAt: number | null) => (resetsAt !== null && now >= resetsAt ? 0 : (pct ?? 0))
-  const binding = Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
+  const binding = spend !== undefined
+    ? live(Math.ceil((100 * spend.usd) / spend.budgetUsd), spend.resetsAt) // spend.ts spendPct
+    : Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
   const base: Tier =
     binding >= config.usageStopAllPct
       ? 'stop-all'

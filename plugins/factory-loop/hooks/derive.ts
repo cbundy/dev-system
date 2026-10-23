@@ -4,6 +4,9 @@
 // the work as done. The loop's own `loop` events (D-09) carry its ledger entries, so a lost store
 // is rebuilt from them.
 import { ACTION_KINDS } from './config'
+import { iso } from './v2/event-native'
+import { NO_TOKENS } from './v2/step-tokens'
+import type { TokenFields } from './v2/step-tokens'
 import type { Factory, FactoryIssue } from './parse'
 import type { ActionClass, Bump, LedgerEntry, LedgerStatus, Outcome, Rollout, RunState, RunView } from './types'
 
@@ -284,7 +287,7 @@ const yn = (v: boolean) => (v ? 'yes' : 'no')
 // loopNote: a ledger entry as a `loop` event's note: `kind=<kind> key=<key> status=<status>
 // attempts=<n>`, then class, rule, the start and end times, the agent id and wake name when set,
 // and `out=<outcome kind>` with the outcome fields plan reads. The entry's issue, run, PR and
-// head travel in the event's own columns (loopEventArgs). A wake's non-empty reason ends the note as
+// head are not carried (loopEntryArgv). A wake's non-empty reason ends the note as
 // `reason=<one line, at most 200 characters>`; when the note would pass LOOP_NOTE_MAX the reason is
 // shortened (ending `...`, never inside a percent-encoded sequence), then dropped when fewer than
 // REASON_FLOOR characters fit, and the outcome is dropped only when it is too long without it.
@@ -319,17 +322,45 @@ export function loopNote(entry: LedgerEntry): string {
   return base
 }
 
-// loopEventArgs: the callum-flow-event arguments that log an entry: its issue, run, PR and head
-// as columns, and loopNote as the note.
-export function loopEventArgs(entry: LedgerEntry): string[] {
-  const args = ['loop']
-  if (entry.issue !== null) args.push('--issue', String(entry.issue))
-  if (entry.run !== null) args.push('--run', entry.run)
-  if (entry.pr !== null) args.push('--pr', String(entry.pr))
-  if (entry.head !== null) args.push('--head', entry.head)
-  args.push('--note', loopNote(entry))
-  if (entry.loopData !== undefined) args.push('--data', JSON.stringify(entry.loopData))
-  return args
+// loopEntryArgv: the native call that logs an entry as a `loop_entry` event (v2 SPEC 13.7.4): its
+// issue as --issue and the data the translator makes of loopNote(entry), with loopData merged on top
+// the way an old line's --data was. Null for a judge, which the event type has no kind for. The
+// run, PR and head are not carried. An agent step's event also has the five token fields: tokens
+// when it ended, null while it runs and when nothing was read.
+export function loopEntryArgv(entry: LedgerEntry, tokens: TokenFields = NO_TOKENS): string[] | null {
+  if (entry.kind === 'judge') return null
+  // the translator reads the string `none` as null
+  const str = (v: string | undefined) => (v === undefined || v === 'none' ? null : v)
+  const data: Record<string, unknown> = {}
+  const o = entry.outcome
+  const note = loopNote(entry)
+  // loopNote drops the whole outcome from a note too long for one row, and then there is no decision
+  if (entry.kind === 'task' && o !== undefined && o.kind === 'wake' && note.split(' ').includes('out=wake')) {
+    const decision = str(o.decision)
+    if (decision !== null) {
+      data.decision = decision
+      const word = note.split(' ').find(w => w.startsWith('reason='))
+      if (word !== undefined) data.decision_reason = (str(dec(word.slice('reason='.length))) ?? '').slice(0, 200) || null
+    } else data.decision = null
+  }
+  Object.assign(data, {
+    kind: entry.kind,
+    key: str(entry.key),
+    status: entry.status,
+    attempts: entry.attempts,
+    class: entry.class,
+    rule: str(entry.rule),
+    started_at: iso(entry.startedAt),
+    ended_at: entry.endedAt === null ? null : iso(entry.endedAt),
+    agent_id: str(entry.agentId),
+    wake: str(entry.wake),
+    ...entry.loopData,
+  })
+  // an agent step's end carries the token totals and model of its transcript (step-tokens.ts)
+  if (entry.kind === 'agent-step') Object.assign(data, entry.status === 'running' ? NO_TOKENS : tokens)
+  const argv = ['callum-flow-event', '--type', 'loop_entry', '--data', JSON.stringify(data)]
+  if (entry.issue !== null) argv.push('--issue', String(entry.issue))
+  return argv
 }
 
 function outcomeTokens(o: Outcome | undefined): string[] {

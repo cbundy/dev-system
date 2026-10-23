@@ -5,8 +5,8 @@
 // their output are pure functions below, so tests, the replay harness and the argv safety test
 // read them without the engine.
 import { detailOf, rateLimited } from './exec'
-import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
-import { splitNote } from './v2/events'
+import type { Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
+import { closedData, splitAbandonedData } from './v2/event-native'
 import type { Action, ActionKind, LedgerEntry } from './types'
 import { WIND_DOWN_WRITE_SCRIPT } from './v2/wind-down-files'
 import { windDownPaths } from './v2/wind-down'
@@ -46,7 +46,7 @@ export const NO_EXIT = -1
 // lists the exits that are an answer, not a failure (default: 0 only).
 export type Step =
   | { argv: string[]; timeoutMs: number; stdin?: string; ok?: number[] }
-  | { event: string; fields: EventFields }
+  | { event: string; data: Record<string, unknown>; issue: number }
 
 // stepsOf: the steps one action runs, in order (v2 SPEC 13.6.1), or why it is refused: a loop bug,
 // never retried. Every command runs from the main checkout. gh gets --repo, so a write can
@@ -72,7 +72,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDi
         ? noIssue
         : [
             { argv: ['gh', 'issue', 'close', n, '--repo', repo, '--reason', 'completed'], timeoutMs: CLI_TIMEOUT_MS['close-issue'] },
-            ...(action.logClosed === true ? [{ event: 'closed', fields: { issue: action.issue, note: 'completed' } }] : []),
+            ...(action.logClosed === true ? [{ event: 'closed', data: closedData('completed'), issue: action.issue as number }] : []),
           ]
     case 'delete-branch':
       // leased on the head plan read: a branch that moved since is kept (exit 1, "stale info"), which
@@ -85,7 +85,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDi
       // that happened, and a retry after a failed event repeats only the label edit.
       return n === null
         ? noIssue
-        : [unlabel(n), { event: 'abandoned', fields: { issue: action.issue, note: splitNote(action.created, action.reasons ?? null, action.childWhys ?? null) } }]
+        : [unlabel(n), { event: 'abandoned', data: splitAbandonedData(action.created, action.reasons ?? null, action.childWhys ?? null), issue: action.issue as number }]
     case 'restart-self':
       // only once the drain for an update is complete (rule H4, D-15), or v2's restart after a
       // capped wind-down (rule R2, v2 SPEC 14.1): R2 with wind-down on first writes the request,
@@ -182,7 +182,7 @@ async function runSteps(ctx: ExecCtx, steps: Step[]): Promise<{ results: RunResu
   for (const step of steps) {
     if ('event' in step) {
       try {
-        await ctx.event(step.event, step.fields)
+        await ctx.event(step.event, step.data, { issue: step.issue })
       } catch (err) {
         return { failed: eventFailure(step.event, err) }
       }
@@ -262,7 +262,8 @@ const stopAgent: Executor = async (ctx, action) => {
   return { status: 'failed', summary: clip(`not stopped ${action.agentId}: ${r.error ?? 'no reason given'}`) }
 }
 
-// title: /rename through ActIo (rule O1, v2 SPEC 13.9.1).
+// title: /rename through ActIo (rule O1, v2 SPEC 13.9.1). The rename runs off the pass (title-flight.ts):
+// this starts it and returns; its time and status reach the trace as an off-pass row.
 const title: Executor = async (ctx, action) => {
   if (action.kind !== 'title') return refused(`the title executor got a ${action.kind} action`)
   try {
@@ -270,7 +271,7 @@ const title: Executor = async (ctx, action) => {
   } catch (err) {
     return { status: 'failed', summary: clip(`rename failed: ${message(err)}`) }
   }
-  return { status: 'done', summary: clip(action.text) }
+  return { status: 'running', summary: clip(`renaming off the pass: ${action.text}`) }
 }
 
 export const cliExecutors: Partial<Record<ActionKind, Executor>> = {

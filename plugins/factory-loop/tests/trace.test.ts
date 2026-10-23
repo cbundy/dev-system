@@ -151,6 +151,12 @@ describe('trace on', () => {
       expect(ms).toBeLessThanOrEqual(total)
     }
     for (const key of ['persistMs', 'eventsMs', 'lockMs']) expect(typeof t1[key]).toBe('number')
+    // the observe split: the wall time, the part with a read in flight, the rest the loop's own
+    const split = t1.observe as { ms: number; commandsMs: number; inProcessMs: number }
+    expect(Object.keys(split)).toEqual(['ms', 'commandsMs', 'inProcessMs'])
+    for (const v of Object.values(split)) expect(typeof v).toBe('number')
+    expect(split.inProcessMs).toBeGreaterThanOrEqual(0)
+    expect(split.commandsMs).toBeLessThanOrEqual(split.ms)
 
     // every command of the pass, each with the source it read, its time, exit and bytes
     expect(commandsOf(t1)[0]).toMatchObject({ phase: 'setup', cmd: 'agent.list' })
@@ -261,9 +267,11 @@ describe('act mode, traced', () => {
     const actions = t.actions as Rec[]
     expect(actions.map(a => [a.key, a.kind, a.status])).toEqual([
       [expect.stringMatching(/^i470\/claim\//), 'claim', 'done'],
-      ['sweep:0', 'sweep', 'done'],
-      ['title', 'title', 'done'],
+      ['sweep:0', 'sweep', 'running'],
+      ['title', 'title', 'running'],
     ])
+    // the sweep runs off the pass, so its row says so; the claim's keeps its shape
+    expect(actions.map(a => a.off)).toEqual([undefined, true, true]) // the title's rename runs off the pass too
     let last = 0
     for (const a of actions) {
       expect(a.started as number).toBeGreaterThanOrEqual(a.queued as number)
@@ -273,9 +281,33 @@ describe('act mode, traced', () => {
     }
     // the rails took the act lock; the claim ran in the act phase
     expect(commandsOf(t).find(c => c.cmd === 'act lock')).toMatchObject({ phase: 'rails', exit: 0 })
-    expect(commandsOf(t).find(c => c.cmd.startsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
+    expect(commandsOf(t).find(c => c.cmd.endsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
     expect(t.lockMs as number).toBeGreaterThanOrEqual(0)
     expect(t.persistMs as number).toBeGreaterThanOrEqual(0)
+  })
+
+  test('an off-pass action: its row says off, the next record lists the command that finished, the one after lists none', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT, trace: true }, run: world() })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // the first record: the sweep started off the pass, nothing finished yet
+    const first = h.traces()[0] as Rec
+    expect((first.actions as Rec[]).find(a => a.kind === 'sweep')).toMatchObject({ key: 'sweep:0', status: 'running', off: true })
+    expect((first.actions as Rec[]).find(a => a.kind === 'claim')?.off).toBeUndefined()
+    await clock.advance(60_000)
+    // the stub sweep ends at once, so its completion lands between this pass's work and its record or just after:
+    // the record that follows lists it once, with the command's exit, and no record repeats it
+    const records = h.traces() as Rec[]
+    const listed = records.flatMap((r, at) => ((r.offPass as Rec[]).length > 0 ? [[at, r.offPass]] : []))
+    expect(listed).toHaveLength(1)
+    // the title's rename runs off the pass too, and its row comes with the sweep's
+    expect(listed[0]?.[1]).toEqual([
+      { cmd: 'title', key: 'title', ms: expect.any(Number), exit: 0, endedAt: iso(NOW + 5_000) },
+      { cmd: 'sweep', key: 'sweep:0', ms: expect.any(Number), exit: 0, endedAt: iso(NOW + 5_000) },
+    ])
+    expect(records.length).toBeGreaterThan(Number(listed[0]?.[0]) + 1)
+    expect(records.every(r => Array.isArray(r.offPass))).toBe(true)
   })
 
   test("a wake's row: queued by its action, delivered when its turn starts, answered when its turn ends", ENGINE_TEST, async ($, on) => {

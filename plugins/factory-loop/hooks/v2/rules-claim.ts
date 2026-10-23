@@ -21,10 +21,15 @@
 //
 // Pure: the time is state.now.
 import { gate, skip, wake, want } from '../foundation'
-import type { IssueView, LedgerEntry, Ms } from '../types'
+import type { Config, IssueView, LedgerEntry, Ms } from '../types'
+import { capOf, capText } from './capacity'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
+import { newView, noteRow } from './queue-view'
+import type { Why } from './queue-view'
 import { lifeEntries } from './rules-agent'
-import { livesBefore } from './lives'
+import { failedLivesBefore, livesBefore } from './lives'
+import { claimableAt, compareRanked, score, scoreReason } from './score'
+import type { ScoreCtx, ScoreResult } from './score'
 import { ROW_S0, ROW_S7, madeRecord } from './table'
 import type { Claimed } from './table'
 import { REJECTED_LABEL, sameLabel } from './types'
@@ -172,9 +177,10 @@ function blockedWhy(count: number): string {
   return `blocked by ${count} open issue${count > 1 ? 's' : ''}`
 }
 
-// candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
-function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
-  const { config, state } = ctx
+// readyProblem: why a queue issue is not one S1 would look at, before its blocked and claim checks, or
+// null: observed, open, trusted, labels read, not rejected, labelled ready, no skip label. I1 (the intake
+// stamp) uses the same filters, so a stamp is made for the issues S1 may come to claim.
+export function readyProblem(config: Pick<Config, 'readyLabel' | 'skipLabels'>, issue: IssueView | undefined): string | null {
   if (issue === undefined) return 'not observed'
   if (issue.open !== true) return issue.open === false ? 'closed' : 'GitHub state unknown'
   if (issue.trusted !== true) return issue.trusted === false ? 'untrusted author' : 'author unknown'
@@ -182,7 +188,14 @@ function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): 
   if (issue.labels.some(l => sameLabel(l, REJECTED_LABEL.name))) return `label ${REJECTED_LABEL.name}: the owner removes it to try again`
   if (!issue.labels.some(l => sameLabel(l, config.readyLabel))) return `no ${config.readyLabel} label`
   const skipLabel = issue.labels.find(l => config.skipLabels.some(s => sameLabel(s, l)))
-  if (skipLabel !== undefined) return `label ${skipLabel}`
+  return skipLabel === undefined ? null : `label ${skipLabel}`
+}
+
+// candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
+function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
+  const { config, state } = ctx
+  const ready = readyProblem(config, issue)
+  if (ready !== null || issue === undefined) return ready
   if (issue.blockedBy === null) return 'blockers unknown'
   if (issue.blockedBy > 0) return blockedWhy(issue.blockedBy)
   if (issue.subIssues === null) return 'sub-issues unknown'
@@ -225,38 +238,60 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const only = onlyIssues(ctx, issues)
   for (const n of only) if (!state.queue.includes(n)) skip(ctx, 'S1', n, 'owner: only names it, but it is not in the ready queue')
   const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
-  const rest = [...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)
-  const labelled = (n: number) => issues.get(n)?.labels?.some(l => sameLabel(l, config.priorityLabel)) === true
+  const rest = [...state.queue].filter(n => !listed.includes(n))
   const listedTier = control.only.length > 0 ? 'owner only' : 'owner priority'
-  // the label only changes the order: every filter and limit below applies to a labelled issue as to any
-  const order: Array<[number, string]> = [
-    ...listed.map((n): [number, string] => [n, listedTier]),
-    ...rest.filter(labelled).map((n): [number, string] => [n, `label ${config.priorityLabel}`]),
-    ...rest.filter(n => !labelled(n)).map((n): [number, string] => [n, 'number']),
-  ]
   const live = ctx.v2.records.filter(r => r.state !== 'closed')
   const firsts = firstClaims(ctx)
   const inFlight = inFlightClaims(ctx)
+  // the order: the owner's list first, then by score (score.ts); the label only changes the order, and every filter and limit below applies to a labelled issue as to any
+  const scoreCtx: ScoreCtx = {
+    now: state.now,
+    weights: config.queueScore,
+    priorityLabel: config.priorityLabel,
+    held: new Set([...live.map(r => r.issue), ...inFlight]),
+    blocking: n => state.blockGraph?.[n] ?? null,
+    failedLives: n => failedLivesBefore(ctx.v2.records, state.ledger, n),
+    // the intake stamp's factors, only while the switch is on
+    ...(config.intakeStamp === 'on' ? { intake: { stamp: (n: number) => ctx.v2.stamps?.[String(n)] ?? null, inFlightPaths: ctx.v2.inFlightPaths ?? {} } } : {}),
+  }
+  const scoredOf = (n: number): ScoreResult => {
+    const issue = issues.get(n)
+    return issue === undefined ? { score: 0, factors: [] } : score(issue, scoreCtx)
+  }
+  const ranked = rest
+    .map(n => ({ issue: n, ...scoredOf(n), claimableAt: ((i: IssueView | undefined) => (i === undefined ? null : claimableAt(i)))(issues.get(n)) }))
+    .sort(compareRanked)
+  const order: Array<[number, string, ScoreResult]> = [
+    ...listed.map((n): [number, string, ScoreResult] => [n, listedTier, scoredOf(n)]),
+    ...ranked.map((r): [number, string, ScoreResult] => [r.issue, scoreReason(r), { score: r.score, factors: r.factors }]),
+  ]
   const held = live.filter(r => r.state !== 'parked' && r.state !== 'waiting').length + inFlight.size
-  const cap = config.maxInFlightIssues
+  const capInfo = capOf(ctx)
+  const cap = capInfo.effective
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
   let started = 0
   // the starved verdict (rules-starved.ts): true while every queue issue ends at a claim filter
   const verdict: StarvedVerdict = { starved: false, skips: new Map(), blocked: [] }
   let past = false
-  for (const [n, orderTier] of order) {
+  const view = newView(order.length, control.priority, control.only, control.serial, control.noNewWork)
+  // the view's row: the issue's place in the order, its score (null: not read), and why it is not claimed
+  const row = (n: number, scored: ScoreResult, why: string | null, code?: Why) => noteRow(view, n, issues.has(n) ? scored : null, why, code)
+  for (const [n, orderText, scored] of order) {
     const record = live.find(r => r.issue === n)
     if (record !== undefined) {
       past = true
       skip(ctx, 'S1', n, `in the factory as ${record.state}`)
+      row(n, scored, `in the factory as ${record.state}`)
       continue
     }
     if (inFlight.has(n) || handled.has(n)) {
       past = true
+      row(n, scored, 'claim in flight', 'held')
       continue
     }
     const why = candidateProblem(ctx, issues.get(n), n)
     if (why !== null) {
+      row(n, scored, why)
       verdict.skips.set(n, why)
       const by = issues.get(n)?.blockedBy
       if (by !== null && by !== undefined && why === blockedWhy(by)) verdict.blocked.push(n)
@@ -270,19 +305,21 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
       // a claim that failed runs again under its own key, until its attempts are used up
       if (gate(ctx, latest.key, 'claim') === 'exhausted') {
         skip(ctx, 'S1', n, `exhausted: ${latest.key}`)
+        row(n, scored, `exhausted: ${latest.key}`)
         want(ctx, wake('tell', 'stalled', `tell:stalled:${latest.key}:${latest.endedAt ?? latest.startedAt}`, 'S1', n, { issue: n, key: latest.key }, [`error: ${latest.summary ?? latest.status}`]))
         continue
       }
       key = latest.key
     } else if (latest !== undefined && claimedOf(latest) === 'lost' && latest.startedAt > (issues.get(n)?.stageSince ?? 0)) {
       skip(ctx, 'S1', n, 'another device holds it')
+      row(n, scored, 'another device holds it')
       continue
     }
     let limit: string | null = null
     if (control.noNewWork) limit = 'owner: no new work'
     else if (control.only.length > 0 && !only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
     else if (tier === 'stop-new' || tier === 'stop-all') limit = `tier ${tier}`
-    else if (cap !== null && held + started >= cap) limit = `capacity: ${held + started} of ${cap} queued or in flight`
+    else if (cap !== null && held + started >= cap) limit = capText(capInfo, held + started, 'queued or in flight')
     else if (control.serial && held + started > 0) limit = 'owner: one at a time'
     else if (tier === 'slow' && started > 0) limit = 'slow: one claim per pass'
     else if (tier === 'slow' && lastClaim > 0 && state.now - lastClaim < config.slowGapMs) limit = 'slow: too soon after the last claim'
@@ -290,10 +327,16 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
     if (limit !== null) {
       if (limit.startsWith('capacity')) ctx.atCap = true
       skip(ctx, 'S1', n, limit)
+      row(n, scored, limit)
       continue
     }
-    if (want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderTier})`, issue: n }) === 'go') started += 1
+    const got = want(ctx, { kind: 'claim', key, class: 'start', rule: 'S1', reason: `ready and unblocked (order: ${orderText})`, issue: n, score: scored })
+    if (got === 'go') started += 1
+    // a want that is not go is held (running, done), used up (exhausted) or not due (wait); planV2 drops a claim that admission refuses
+    row(n, scored, got === 'go' ? null : 'claim not started', got === 'go' ? undefined : got === 'exhausted' ? 'exhausted' : got === 'wait' ? 'no_slot' : 'held')
   }
+  view.free_slots = cap === null ? null : Math.max(0, cap - held - started)
+  ctx.queue = view
   verdict.starved = state.queue.length > 0 && !past && held === 0 && handled.size === 0 && !control.noNewWork && control.only.length === 0 && tier !== 'stop-new' && tier !== 'stop-all'
   ctx.starved = verdict
 }

@@ -806,7 +806,7 @@ const summary = {
   args: { k: K, variant: VARIANT, seed: SEED, from: iso(from), to: iso(to), takeover: Boolean(A.takeover) },
   passes: n,
   crashes,
-  records: [...lives.values()].map(r => ({ issue: r.issue, life: r.life, state: r.state, why: r.why, step: r.step, pr: r.pr, branch: r.branch, fixes: r.fixes, triages: r.triages, round: r.round, question: r.question })),
+  records: [...lives.values()].map(r => ({ issue: r.issue, life: r.life, state: r.state, why: r.why, step: r.step, pr: r.pr, branch: r.branch, fixes: r.fixes, conflicts: r.conflicts, triages: r.triages, round: r.round, question: r.question })),
   merged: W.records.filter(r => r.why === 'merged').map(r => r.issue),
   prsCreated: Object.fromEntries(W.prCreated),
   violations: W.violations,

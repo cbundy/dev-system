@@ -4,6 +4,7 @@
 // too, and v2's vocabulary (v2/types.ts), which holds constants alone.
 import type { ActionKind, AgentType, AnswerChannel, Config, Control, EventsSource, Ms } from './types'
 import { MODELS, V2_ACTION_KINDS } from './v2/types'
+import type { Model } from './v2/types'
 
 const MIN = 60_000
 
@@ -36,6 +37,7 @@ export const DEFAULT_CONFIG: Config = {
   maxInFlightIssues: 3,
   worktreeReserve: 2,
   reviewFixCap: 3,
+  conflictFixCap: 5,
   guardRecheckMs: 3 * MIN,
   // a backstop: a repair re-guards at once, and a failure is judged once (#550)
   guardTtlMs: 5 * MIN,
@@ -76,6 +78,24 @@ export const DEFAULT_CONFIG: Config = {
   },
   retryBackoffMs: 2 * MIN,
   rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
+  // the claim score's weights (v2/score.ts); penalties are magnitudes
+  queueScore: {
+    priorityLabel: 30,
+    bug: 25,
+    unblocksDirect: 10,
+    unblocksTransitive: 5,
+    unblocksCap: 40,
+    closesEpic: 20,
+    nearlyClosesEpic: 10,
+    epicStarted: 10,
+    waitingPerHour: 2,
+    waitingCap: 20,
+    failedLife: 10,
+    failedLivesCap: 30,
+    areaFactory: 20,
+    needsOwner: 40,
+    overlap: 15,
+  },
   allowActOutsideOrchestrator: false,
   // off: the decision log alone carries each pass's time and trigger (#552)
   trace: false,
@@ -117,6 +137,11 @@ export const DEFAULT_CONFIG: Config = {
   flakeEpic: null,
   maxLives: 3,
   triageModel: 'opus',
+  // the intake stamp (#995): off until the owner turns it on; its agent's model, never larger than triageModel; the areas a stamp may name
+  regime: 'factory_loop_v2',
+  intakeStamp: 'off',
+  intakeModel: 'haiku',
+  intakeAreas: ['factory', 'product'],
   reviewer: 'adjudicator',
   reviewerModel: 'opus',
   // the plugin ships no repo's commands: a repo sets its own (dev-system: npm run lint, npm test)
@@ -124,6 +149,8 @@ export const DEFAULT_CONFIG: Config = {
   gateTimeoutMs: 10 * MIN,
   gateConcurrency: 'auto',
   gateWaitTimeoutMs: 30 * MIN,
+  slotMemoryMiB: 'auto',
+  memoryReserveMiB: 2048,
 }
 
 // The CPUs one full stop gate is assumed to use: scripts/test.sh sizes its pool to the whole
@@ -135,16 +162,61 @@ export const GATE_CPUS = 8
 // reads it. Anything but a positive integer counts as 1.
 let cpusRead: Promise<number> | undefined
 
-// gateLimits: what the Runtime carries for the stop gate: the CPU count and the resolved concurrency.
+// The container's memory, read once per process beside the CPU count: one command prints the cgroup's
+// memory.max and /proc/meminfo as JSON (an unreadable file as ""), which parseMemory
+// reads. Anything unreadable is null: no memory ceiling.
+const MEMORY_READ = `const r=p=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};console.log(JSON.stringify({max:r('/sys/fs/cgroup/memory.max'),info:r('/proc/meminfo')}))`
+let memoryRead: Promise<number | null> | undefined
+
+const wholeBytes = (text: string): number | null => {
+  const t = text.trim()
+  if (!/^[0-9]+$/.test(t)) return null
+  const n = Number(t)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
+// parseMemory: the container's memory in bytes: the cgroup's memory.max, or /proc/meminfo's MemTotal
+// (kB) when that is `max` or absent. null: neither reads, which means no memory ceiling.
+export function parseMemory(maxText: string | null, meminfoText: string | null): number | null {
+  const max = maxText === null ? null : wholeBytes(maxText)
+  if (max !== null) return max
+  const total = meminfoText?.match(/^MemTotal:\s+([0-9]+)\s*kB\s*$/m)
+  if (total?.[1] === undefined) return null
+  const bytes = Number(total[1]) * 1024
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null
+}
+
+// parseMemoryRead: the output of the one command that prints both files as JSON
+// (`{"max": "...", "info": "..."}`); anything else gives null.
+export function parseMemoryRead(stdout: string): number | null {
+  try {
+    const o: unknown = JSON.parse(stdout)
+    if (typeof o !== 'object' || o === null) return null
+    const { max, info } = o as Record<string, unknown>
+    return parseMemory(typeof max === 'string' ? max : null, typeof info === 'string' ? info : null)
+  } catch {
+    return null
+  }
+}
+
+// readMemory: the container's memory in bytes; null when the command fails or prints nothing readable.
+export function readMemory(run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>): Promise<number | null> {
+  return run(['node', '-e', MEMORY_READ])
+    .then(r => (r.exitCode === 0 ? parseMemoryRead(r.stdout) : null))
+    .catch(() => null)
+}
+
+// gateLimits: what the Runtime carries for the stop gate and the memory ceiling: the CPU count, the resolved concurrency and the container's memory.
 export async function gateLimits(
   run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>,
   config: Pick<Config, 'gateConcurrency'>,
-): Promise<{ cpus: number; gateConcurrency: number }> {
+): Promise<{ cpus: number; gateConcurrency: number; memoryBytes: number | null }> {
   cpusRead ??= run(['node', '-e', 'console.log(os.availableParallelism())'])
     .then(r => (r.exitCode === 0 && /^[1-9][0-9]*$/.test(r.stdout.trim()) ? Number(r.stdout.trim()) : 1))
     .catch(() => 1)
   const cpus = await cpusRead
-  return { cpus, gateConcurrency: resolveGateConcurrency(config.gateConcurrency, cpus) }
+  memoryRead ??= readMemory(run)
+  return { cpus, gateConcurrency: resolveGateConcurrency(config.gateConcurrency, cpus), memoryBytes: await memoryRead }
 }
 
 // resolveGateConcurrency: the whole number of gates that may run at once; `auto` is
@@ -199,7 +271,7 @@ export const ACTION_KINDS: readonly ActionKind[] = [
 // maxAttempts may name any action kind or agent type.
 export const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
 export const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
-export const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
+export const COUNT_MAPS = ['maxAttempts', 'rateCaps', 'queueScore'] as const
 
 // The settings the layers give, and what was wrong with them.
 export type LoadedConfig = { config: Config; problems: string[] }
@@ -232,11 +304,13 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
   const out: Record<string, unknown> = {
     ...d,
     skipLabels: [...d.skipLabels],
+    intakeAreas: [...d.intakeAreas],
     agentTimeoutMs: { ...d.agentTimeoutMs },
     wakeTimeoutMs: { ...d.wakeTimeoutMs },
     stateTimeoutMs: { ...d.stateTimeoutMs },
     maxAttempts: { ...d.maxAttempts },
     rateCaps: { ...d.rateCaps },
+    queueScore: { ...d.queueScore },
     gateCommands: [...d.gateCommands],
   }
   const defaults = d as unknown as Record<string, unknown>
@@ -314,6 +388,21 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'gateConcurrency') {
         if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
         else bad(raw, value, 'auto or a whole number of at least 1')
+      } else if (key === 'slotMemoryMiB') {
+        if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
+        else bad(raw, value, 'auto or a whole number of at least 1')
+      } else if (key === 'memoryReserveMiB') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
+        else bad(raw, value, 'a whole number of at least 0')
+      } else if (key === 'regime') {
+        if (value === 'factory_loop_v2' || value === 'testbed') out[key] = value
+        else bad(raw, value, 'factory_loop_v2 or testbed')
+      } else if (key === 'intakeStamp') {
+        if (value === 'off' || value === 'on') out[key] = value
+        else bad(raw, value, 'off or on')
+      } else if (key === 'intakeAreas') {
+        if (validAreas(value)) out[key] = [...value]
+        else bad(raw, value, 'a list of distinct area names (lower case letters, digits and -) that holds factory and product')
       } else if (key.endsWith('Model')) {
         if (MODELS.some(m => m === value)) out[key] = value
         else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
@@ -356,7 +445,34 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       }
     }
   }
-  return { config: out as unknown as Config, problems }
+  const cfg = out as unknown as Config
+  const capped = capIntakeModel(cfg.intakeModel, cfg.triageModel)
+  if (capped !== null) {
+    problems.push(`intakeModel: ${cfg.intakeModel} is larger than triageModel ${cfg.triageModel}; ${cfg.triageModel} used`)
+    cfg.intakeModel = capped
+  }
+  return { config: cfg, problems }
+}
+
+// validAreas: a list of distinct names, each lower case letters, digits and -, starting with a letter,
+// that holds the two areas the intake always knows.
+function validAreas(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(v => typeof v === 'string' && /^[a-z][a-z0-9-]*$/.test(v)) &&
+    new Set(value).size === value.length &&
+    value.includes('factory') &&
+    value.includes('product')
+  )
+}
+
+// MODEL_SIZES: the models from smallest to largest. fable ranks largest, since no smaller size is
+// known for it, which is the conservative reading.
+export const MODEL_SIZES: readonly Model[] = ['haiku', 'sonnet', 'opus', 'fable']
+
+// capIntakeModel: triageModel when the intake model is larger than it; null when it may stand.
+function capIntakeModel(intake: Model, triage: Model): Model | null {
+  return MODEL_SIZES.indexOf(intake) > MODEL_SIZES.indexOf(triage) ? triage : null
 }
 
 function compiles(pattern: string) {

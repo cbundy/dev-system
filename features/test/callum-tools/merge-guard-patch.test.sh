@@ -187,7 +187,7 @@ passed=$((passed + 1))
 patch_setup; m 7 --patch "$PID"
 [ "$rc" = 0 ] || fail "merge with the approved patch: rc=$rc out=$out err=$(cat "$tmpdir/err")"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $PH" ] || fail "merge call: $(cat "$st/gh-calls")"
-jq -e --arg sha "$PH" '.state == "merged" and .pr == 7 and .head == $sha and .issue == 12 and ((.run_id // "") == "")' "$events/o__r.jsonl" > /dev/null || fail "merged event: $(cat "$events/o__r.jsonl")"
+jq -e --arg sha "$PH" '.type == "merged" and .data.pr == 7 and .data.head == $sha and .issue == 12' "$events/factory/o__r.jsonl" > /dev/null || fail "merged event: $(cat "$events/factory/o__r.jsonl")"
 passed=$((passed + 1))
 patch_setup; m 7 --patch "$OTHER"
 [ "$rc" = 1 ] && [ ! -f "$st/gh-calls" ] && [ ! -e "$events" ] || fail "merge with another patch must not merge: rc=$rc out=$out"

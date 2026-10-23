@@ -62,6 +62,8 @@ function starts(a: Action): boolean {
       return true
     case 'slot':
       return a.op === 'lease'
+    case 'intake-stamp':
+      return a.op === 'run'
     default:
       return false
   }

@@ -17,11 +17,11 @@
 # the collision rule - the EARLIEST live claim (server created_at, then id)
 # wins, so any interleaving has exactly one winner. The loser deletes only its
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
-# 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
-# The winner removes `ready`, assigns @me and logs `callum-flow-event claimed`
-# with the note `lease: <minutes>` and, as --data, the issue's title, labels (without `ready`) and
-# parent from the comments read, plus the score and factors of CALLUM_FLOW_CLAIM_SCORE when set and
-# valid (an older callum-flow-event that answers exit 2 gets the call again without it). It adds no label: the claim is the comment
+# 3. Both exit-3 paths log a `claim_lost` event (its data says who holds it: holder, holder_since, race).
+# The winner removes `ready`, assigns @me and logs a
+# `claimed` event (`callum-flow-event --type claimed --data`) with the lease minutes, the issue's title,
+# labels (without `ready`) and parent from the comments read, plus the score and factors of
+# CALLUM_FLOW_CLAIM_SCORE when set and valid. It adds no label: the claim is the comment
 # and its events, and the factory loop's `factory:*` labels show the state
 # (docs/factory-loop/v2/SPEC.md 3.6).
 # --heartbeat: edits this device's live claim comment in place (a `renewed:` line,
@@ -34,7 +34,7 @@
 # logged stops the heartbeat and a claim whose push has not arrived yet is still renewed.
 # A failed central read warns and falls back to this device's log. It fails only when this
 # device's log cannot be located. Nothing to renew is still exit 0. Each claim comment
-# actually PATCHed logs one `renewed` event (note `lease: <minutes>`) - none when the PATCH
+# actually PATCHed logs one `claim_renewed` event (data `lease_minutes`) - none when the PATCH
 # fails - so the event log, which callum-flow-factory-state reads, can see the lease is live.
 #
 # A claim is live while the comment's server updated_at + its own lease is in
@@ -80,7 +80,12 @@ usage() {
 err() { echo "callum-flow-claim: $*" >&2; }
 # A lost claim leaves a trace: the two-device trial (#222) reports claim_lost
 # events as the proof that the lanes contended.
-lost() { "$EVENT" claim_lost --issue "$n" --note "$1" >/dev/null 2>&1 || err "warning: could not log the claim_lost event"; }
+# lost HOLDER SINCE RACE: HOLDER and SINCE are empty when unknown (written as null), RACE is true or false.
+lost() {
+  _d=$(jq -nc --arg h "$1" --arg s "$2" --argjson r "$3" \
+    '{holder: (if $h == "" then null else $h end), holder_since: (if $s == "" then null else $s end), race: $r}') || { err "warning: could not log the claim_lost event"; return 0; }
+  "$EVENT" --type claim_lost --issue "$n" --data "$_d" >/dev/null 2>&1 || err "warning: could not log the claim_lost event"
+}
 
 case "$LEASE" in '' | *[!0-9]* | 0) usage "CALLUM_FLOW_LEASE_MINUTES must be a positive number" ;; esac
 [ $# -ge 1 ] || usage
@@ -172,7 +177,7 @@ if [ "$mode" = heartbeat ]; then
     if "$GH" api -X PATCH "repos/$repo/issues/comments/$id" -f "body=$body" >/dev/null; then
       # the lease the comment itself carries, so the log matches the claim
       ll=$(printf '%s' "$mine" | jq -r .lease)
-      "$EVENT" renewed --issue "$n" --note "lease: $ll" >/dev/null 2>&1 || err "warning: could not log the renewed event"
+      "$EVENT" --type claim_renewed --issue "$n" --data "$(jq -nc --argjson l "$ll" '{lease_minutes: $l}')" >/dev/null 2>&1 || err "warning: could not log the renewed event"
     else
       err "cannot renew the claim on #$n"
       rc=1
@@ -197,7 +202,7 @@ foreign=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
   "$CLAIMS_JQ"' | map(select(.dev != $dev and .exp > $now)) | first | if . then "\(.dev) since \(.at)" else empty end')
 if [ -n "$foreign" ]; then
   err "#$n is held by $foreign"
-  lost "held by $foreign"
+  lost "${foreign%% since *}" "${foreign##* since }" false
   exit 3
 fi
 # A live claim of our own is kept (`ready` off, assigned, nothing new posted)
@@ -248,7 +253,7 @@ winner=$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(sele
 if [ "$winner" != "$mine" ]; then
   drop_mine
   err "lost the claim on #$n to another device"
-  lost "race lost to $(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .dev // "another device"')"
+  lost "$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .dev // empty')" "" true
   exit 3
 fi
 
@@ -259,7 +264,6 @@ if ! set_labels; then
 fi
 # The claimed event also carries the issue's title, labels (the ready label the claim just removed
 # left out) and parent, from the comments read above (callum-flow-event --data, cbundy/dev-system#870).
-# A writer that does not know --data answers exit 2: the event is then logged again without it.
 facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
   {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
    labels: (if (.labels | type) == "array" then [.labels[] | .name | strings | select(. != $ready)] else null end),
@@ -282,14 +286,11 @@ if [ -n "$score" ]; then
   [ -n "$facts" ] || facts='{}'
   facts=$(printf '%s' "$facts" | jq -c --argjson s "$score" '. + $s' 2>/dev/null) || facts=
 fi
-claimed_rc=2
-if [ -n "$facts" ]; then
-  claimed_rc=0
-  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" --data "$facts" >/dev/null 2>&1 || claimed_rc=$?
+# The claimed event's data: the lease and, when the facts were read, the facts (title, labels, parent
+# and the score and factors).
+[ -n "$facts" ] || facts='{}'
+if ! claimed=$(printf '%s' "$facts" | jq -c --argjson l "$LEASE" '{lease_minutes: $l} + .' 2>/dev/null); then
+  claimed=$(jq -nc --argjson l "$LEASE" '{lease_minutes: $l}')
 fi
-if [ "$claimed_rc" -eq 2 ]; then
-  claimed_rc=0
-  "$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || claimed_rc=$?
-fi
-[ "$claimed_rc" -eq 0 ] || err "warning: could not log the claimed event"
+"$EVENT" --type claimed --issue "$n" --data "$claimed" >/dev/null 2>&1 || err "warning: could not log the claimed event"
 exit 0

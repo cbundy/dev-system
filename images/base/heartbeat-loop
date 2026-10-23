@@ -6,7 +6,7 @@
 #
 # Two targets, each resolved again on every beat:
 #   old  the agentsview PostgreSQL (agentsview.sh: the same secret and rules as
-#        event-push-loop). It gets the guarded DDL plus the UPSERT.
+#        the agentsview push loops). It gets the guarded DDL plus the UPSERT.
 #   new  the factory database as its writer role (factory-db.sh: FACTORY_DB_WRITER_URL or
 #        factory-db-writer-url). It gets the same UPSERT and never any DDL (the writer role
 #        cannot run it; factory-db-bootstrap made the tables), and has no DDL state.
@@ -20,7 +20,8 @@
 # left the loop stops. An unreadable secret counts as not configured.
 #
 # Row: identity and versions come from `dev-version --local --snapshot`
-# ($DEV_VERSIONS_FILE); `versions` is that document plus the cached `latest`
+# ($DEV_VERSIONS_FILE), except the device name: $DEV_MACHINE_NAME first, then the
+# snapshot's device, then the hostname; `versions` is that document plus the cached `latest`
 # lookup (`dev-version --json`, which uses the network). The lookup runs in the
 # background, at most every 15 minutes, under a lock, and a beat only reads the
 # cache. busy / idle, in_flight and sessions (the live Claude sessions and
@@ -30,7 +31,7 @@
 # the view factory.workers_status (age, stale), never their own rule.
 #
 # critical_failures is a JSON array of check codes, [] when all is well:
-#   events_push_not_running, nm_push_not_running, agentsview_push_not_running
+#   nm_push_not_running, agentsview_push_not_running
 #       (a push loop whose lock is free; the loop is configured because this
 #       loop runs only with a URL)
 #   factory_events_push_not_running   (the writer URL is configured and the
@@ -54,6 +55,11 @@
 #                                    against the previous reading in $DEV_HEARTBEAT_DIR/dev-heartbeat.cpu
 #                                    (NULL on the first beat and after a counter reset)
 #   mem_used_bytes, mem_limit_bytes  memory.current, memory.max (NULL when "max")
+#   mem_max_events, mem_oom_kills    memory.events "max" and "oom_kill" counts (mem-pressure.sh)
+#   mem_max_rate_per_min             "max" events per minute since the previous beat, against the reading in
+#                                    $DEV_HEARTBEAT_DIR/dev-heartbeat.mem (NULL on the first beat and after a
+#                                    counter reset)
+#   mem_psi_some_avg10, mem_psi_full_avg10  avg10 of the "some" and "full" lines of memory.pressure
 #   claude_interactive, claude_headless  from heartbeat-state's claude_sessions (the session
 #                                    registry; NULL when it does not say)
 #   claude_procs, procs              processes whose /proc/<pid>/comm is claude, and all of them.
@@ -96,6 +102,8 @@ SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
 . "$SHARE/factory-db.sh"
 # shellcheck source=workspace.sh
 . "$SHARE/workspace.sh"
+# shellcheck source=mem-pressure.sh
+. "$SHARE/mem-pressure.sh"
 
 HB_DIR="${DEV_HEARTBEAT_DIR:-/tmp}"
 PIDFILE="$HB_DIR/dev-heartbeat.pid"
@@ -105,11 +113,11 @@ LATEST_LOCK="$HB_DIR/dev-heartbeat-latest.lock"
 LATEST_TRY="$HB_DIR/dev-heartbeat-latest.attempt"
 LATEST_FAIL="$HB_DIR/dev-heartbeat-latest.failing"
 CPUFILE="$HB_DIR/dev-heartbeat.cpu"
+MEMFILE="$HB_DIR/dev-heartbeat.mem"
 CGROUP_DIR="${HEARTBEAT_CGROUP_DIR:-/sys/fs/cgroup}"
 PROC_DIR="${HEARTBEAT_PROC_DIR:-/proc}"
 LATEST_EVERY=900
 LATEST_FAIL_AFTER=3600
-EVENT_LOCK="${HEARTBEAT_EVENT_LOCK:-/tmp/dev-event-push.lock}"
 NM_LOCK="${HEARTBEAT_NM_LOCK:-/tmp/dev-nm-push.lock}"
 AV_LOCK="${HEARTBEAT_AV_LOCK:-/tmp/dev-agentsview-push.lock}"
 FACTORY_EVENT_LOCK="${HEARTBEAT_FACTORY_EVENT_LOCK:-/tmp/dev-factory-event-push.lock}"
@@ -166,7 +174,8 @@ BEGIN
     ('cpu_pct', 'real'), ('cpu_limit_cores', 'numeric'), ('cpu_quota_set', 'boolean'),
     ('mem_used_bytes', 'bigint'), ('mem_limit_bytes', 'bigint'), ('claude_interactive', 'int'),
     ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz'),
-    ('config', 'jsonb')
+    ('config', 'jsonb'), ('mem_max_events', 'bigint'), ('mem_max_rate_per_min', 'real'),
+    ('mem_oom_kills', 'bigint'), ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN
@@ -220,6 +229,8 @@ BEGIN
 END
 $notify$;
 DO $samples$
+DECLARE
+  c record;
 BEGIN
   IF to_regclass('factory.worker_samples') IS NULL THEN
     PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples'));
@@ -237,10 +248,25 @@ BEGIN
         claude_headless int,
         claude_procs int,
         procs int,
+        mem_max_events bigint,
+        mem_max_rate_per_min real,
+        mem_oom_kills bigint,
+        mem_psi_some_avg10 real,
+        mem_psi_full_avg10 real,
         PRIMARY KEY (device, sampled_at)
       )
     $t$;
   END IF;
+  FOR c IN SELECT * FROM (VALUES
+    ('mem_max_events', 'bigint'), ('mem_max_rate_per_min', 'real'), ('mem_oom_kills', 'bigint'),
+    ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real')
+  ) AS v(name, type) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.worker_samples'::regclass
+                   AND attname = c.name AND NOT attisdropped) THEN
+      PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples migration'));
+      EXECUTE format('ALTER TABLE factory.worker_samples ADD COLUMN IF NOT EXISTS %I %s', c.name, c.type);
+    END IF;
+  END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'worker_samples_prune'
                  AND pronamespace = 'factory'::regnamespace) THEN
     PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples prune'));
@@ -304,14 +330,19 @@ UPDATE factory.workers SET
   cpu_quota_set = NULLIF(:'cpu_quota_set', '')::boolean, mem_used_bytes = NULLIF(:'mem_used_bytes', '')::bigint,
   mem_limit_bytes = NULLIF(:'mem_limit_bytes', '')::bigint, claude_interactive = NULLIF(:'claude_interactive', '')::int,
   claude_headless = NULLIF(:'claude_headless', '')::int, claude_procs = NULLIF(:'claude_procs', '')::int,
-  procs = NULLIF(:'procs', '')::int, stats_at = now()
+  procs = NULLIF(:'procs', '')::int, stats_at = now(),
+  mem_max_events = NULLIF(:'mem_max_events', '')::bigint, mem_max_rate_per_min = NULLIF(:'mem_max_rate_per_min', '')::real,
+  mem_oom_kills = NULLIF(:'mem_oom_kills', '')::bigint, mem_psi_some_avg10 = NULLIF(:'mem_psi_some_avg10', '')::real,
+  mem_psi_full_avg10 = NULLIF(:'mem_psi_full_avg10', '')::real
 WHERE device = :'device';
 INSERT INTO factory.worker_samples (device, sampled_at, state, cpu_pct, cpu_limit_cores, cpu_quota_set,
-  mem_used_bytes, mem_limit_bytes, claude_interactive, claude_headless, claude_procs, procs)
+  mem_used_bytes, mem_limit_bytes, claude_interactive, claude_headless, claude_procs, procs,
+  mem_max_events, mem_max_rate_per_min, mem_oom_kills, mem_psi_some_avg10, mem_psi_full_avg10)
 VALUES (:'device', now(), :'state', NULLIF(:'cpu_pct', '')::real, NULLIF(:'cpu_limit_cores', '')::numeric,
   NULLIF(:'cpu_quota_set', '')::boolean, NULLIF(:'mem_used_bytes', '')::bigint, NULLIF(:'mem_limit_bytes', '')::bigint,
   NULLIF(:'claude_interactive', '')::int, NULLIF(:'claude_headless', '')::int, NULLIF(:'claude_procs', '')::int,
-  NULLIF(:'procs', '')::int)
+  NULLIF(:'procs', '')::int, NULLIF(:'mem_max_events', '')::bigint, NULLIF(:'mem_max_rate_per_min', '')::real,
+  NULLIF(:'mem_oom_kills', '')::bigint, NULLIF(:'mem_psi_some_avg10', '')::real, NULLIF(:'mem_psi_full_avg10', '')::real)
 ON CONFLICT (device, sampled_at) DO NOTHING;
 SQL
 
@@ -386,7 +417,6 @@ is_running() { # LOCKFILE: 0 when something holds the lock
 
 critical_failures() { # prints a JSON array
   local out='' now age
-  is_running "$EVENT_LOCK" || out="$out events_push_not_running"
   is_running "$NM_LOCK" || out="$out nm_push_not_running"
   if ! is_running "$AV_LOCK"; then
     # a watcher of another container sharing the data dir also counts
@@ -436,6 +466,7 @@ machine_stats() {
   local state_json=$1 q p k v d c usage='' prev_usage prev_wall wall_us
   stats_cpu_pct='' stats_cores='' stats_quota_set='' stats_mem_used='' stats_mem_limit=''
   stats_procs='' stats_claude_procs=''
+  stats_mem_max_events='' stats_mem_oom_kills='' stats_mem_psi_some='' stats_mem_psi_full='' stats_mem_rate=''
   stats_interactive=$(jq -r '.claude_sessions.interactive // "" | tostring' <<< "$state_json" 2> /dev/null)
   stats_headless=$(jq -r '.claude_sessions.headless // "" | tostring' <<< "$state_json" 2> /dev/null)
   case "$stats_interactive" in *[!0-9]*) stats_interactive='' ;; esac
@@ -489,6 +520,14 @@ machine_stats() {
     done
   fi
   # mem.max "max" is not a number, so num left it empty: NULL
+
+  mem_pressure_read "$CGROUP_DIR"
+  stats_mem_max_events=$mp_max_events stats_mem_oom_kills=$mp_oom_kills
+  stats_mem_psi_some=$mp_psi_some_avg10 stats_mem_psi_full=$mp_psi_full_avg10
+  stats_mem_rate=''
+  if [ -n "$mp_max_events" ]; then
+    stats_mem_rate=$(mem_pressure_rate "$MEMFILE" "$mp_max_events" "$(($(date +%s%N) / 1000))" --update)
+  fi
   return 0
 }
 
@@ -569,8 +608,10 @@ beat() {
   chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
   sessions=$(jq -c '.sessions // []' <<< "$state_json")
   [ -z "${HEARTBEAT_STOPPING:-}" ] || sessions='[]'
-  device=$(jq -r '.device // empty' <<< "$snap")
-  [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
+  # the device names itself from its own environment first, so a snapshot cannot rename the row (#1051)
+  device=${DEV_MACHINE_NAME:-}
+  [ -n "$device" ] || device=$(jq -r '.device // empty' <<< "$snap")
+  [ -n "$device" ] || device=$(hostname)
   g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
   ARGS=(-v "device=$device" -v "repo=$repo" -v "role=$(g role)" -v "ring=$(g ring)"
     -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)"
@@ -585,7 +626,10 @@ beat() {
     STATS_ARGS=(-v "device=$device" -v "state=$state" -v "cpu_pct=$stats_cpu_pct" -v "cpu_limit_cores=$stats_cores"
       -v "cpu_quota_set=$stats_quota_set" -v "mem_used_bytes=$stats_mem_used" -v "mem_limit_bytes=$stats_mem_limit"
       -v "claude_interactive=$stats_interactive" -v "claude_headless=$stats_headless"
-      -v "claude_procs=$stats_claude_procs" -v "procs=$stats_procs")
+      -v "claude_procs=$stats_claude_procs" -v "procs=$stats_procs"
+      -v "mem_max_events=$stats_mem_max_events" -v "mem_max_rate_per_min=$stats_mem_rate"
+      -v "mem_oom_kills=$stats_mem_oom_kills" -v "mem_psi_some_avg10=$stats_mem_psi_some"
+      -v "mem_psi_full_avg10=$stats_mem_psi_full")
     config=$(jq -c '.config // empty | select(type == "object")' <<< "$state_json")
     CONFIG_ARGS=(-v "device=$device" -v "config=$config")
   fi

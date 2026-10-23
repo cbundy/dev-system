@@ -65,6 +65,15 @@ test("the envelope example passes validateStrict and readEvent takes the whole e
   assert.deepEqual(reader.readEvent(env), { type: "claimed", type_version: 1, data: { lease_minutes: 120, title: null, labels: null, parent: null, score: null, factors: null } });
 });
 
+test("readEvent gives the same result for an envelope with a regime as for one without it", () => {
+  const env = load("envelope.v1.json").examples[0];
+  const { regime, ...without } = env;
+  assert.equal(regime, "factory_loop_v2");
+  for (const value of ["factory_loop_v2", "testbed", "manual", null]) {
+    assert.deepEqual(reader.readEvent({ ...env, regime: value }), reader.readEvent(without));
+  }
+});
+
 test("readEvent refuses an unknown envelope, type and version with the exact message", () => {
   const env = load("envelope.v1.json").examples[0];
   assert.throws(() => reader.readEvent({ ...env, envelope: 2 }), /unknown factory event envelope: 2/);
@@ -96,6 +105,20 @@ test("validateStrict rejects a bad merged files, additions or deletions", () => 
   for (const extra of [{ additions: -1 }, { deletions: 1.5 }, { files: [1] }, { files: [""] }, { files: "a.js" }]) {
     assert.notDeepEqual(strict(extra), [], JSON.stringify(extra));
   }
+});
+
+test("validateStrict takes a good merged file_lines and null, and rejects a bad one", () => {
+  const base = { pr: 1, branch: "b", head: "f94eb46", by: "factory", recovered: false };
+  const strict = (file_lines) => reader.validateStrict("merged", 1, { ...base, file_lines });
+  const ok = { path: "a.js", additions: 3, deletions: 0 };
+  assert.deepEqual(strict(null), []);
+  assert.deepEqual(strict([]), []);
+  assert.deepEqual(strict([ok]), []);
+  const bad = [
+    [{ ...ok, additions: -1 }], [{ ...ok, deletions: 1.5 }], [{ ...ok, path: "" }],
+    [{ path: "a.js", additions: 1 }], [{ ...ok, extra: 1 }], "a.js", { path: "a.js" },
+  ];
+  for (const v of bad) assert.notDeepEqual(strict(v), [], JSON.stringify(v));
 });
 
 const shape2 = {

@@ -6,6 +6,7 @@ import type { EngineInterface } from 'claude-code'
 import { MINUTE_MS, closeMinute, minuteOf, notePass, passesEventArgv } from './passes'
 import type { PassBook } from './passes'
 
+import type { ObserveSplit } from './observe-clock'
 import type { Runtime } from './observe'
 
 export type SummaryHost = {
@@ -21,8 +22,8 @@ let lockHeld = false
 let timer: { cancel: () => void } | null = null
 
 // recordPass: a pass ended now and took ms.
-export function recordPass(at: number, ms: number, acted: boolean, error: boolean): void {
-  notePass(book, at, ms, acted, error)
+export function recordPass(at: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null): void {
+  notePass(book, at, ms, acted, error, split)
 }
 
 // holdsLock: the last pass this session finished did (or did not) hold the act lock.

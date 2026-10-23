@@ -15,8 +15,9 @@
 //   check gets one re-run per round and run id (`ci-rerun`, once its run has finished, retried
 //   with backoff on a transient error) before it counts as failed; only GitHub's own refusal of
 //   the re-run counts it failed at once; a re-run whose answer was lost, or one GitHub took though
-//   its call failed, is awaited; a conflicting PR (`dirty`) ends the step at once, since GitHub
-//   runs no workflow on it;
+//   its call failed, is awaited; a conflicting PR (`dirty`) ends the step once this seq's running
+//   reviewer of the head's patch has ended (at once when none runs), so one fixer gets both; GitHub
+//   runs no workflow on it, so no re-run is planned meanwhile;
 // - the step's result for the table (T8, T9, T10, U1 to U4): ok once the reviewer approved the
 //   head's patch in this round and every check passed or was skipped, with the approved patch and
 //   the PR; not-ok with `changes` (at once: a fixer will push a new head), `ci-red` (once the
@@ -36,7 +37,7 @@
 import { skip, want } from '../foundation'
 import type { Action, LedgerEntry, State } from '../types'
 import { logOnce } from './events'
-import { keyParts, lifeKey, prKey, rerunKey, reviewKey, reviewPrepareKey, short } from './keys'
+import { keyParts, lifeKey, prKey, rerunKey, reviewKey, reviewPrepareKey, short, stoppedBy } from './keys'
 import { isRefused, refusedLine } from './refused'
 import { agentStep, lifeEntries, timeoutOf, triggerOf, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
@@ -117,8 +118,7 @@ function reviewParts(key: string): { patch7: string; round: number; k: number } 
 // stopped: the loop stopped this reviewer (a stop-agent of the life names it, rules-entry.ts
 // stopKey): a push changed the patch under it, or its seq ended while it ran.
 function stopped(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry): boolean {
-  const rest = `/stop/${e.key.slice(lifeKey(r).length + 1)}`
-  return lifeEntries(ctx, r, 'stop-agent').some(s => s.key.endsWith(rest))
+  return stoppedBy(lifeEntries(ctx, r, 'stop-agent'), e) !== null
 }
 
 // reviewOf: a review attempt's recorded result, or null when it gave none. A reviewer the loop
@@ -437,8 +437,22 @@ export const reviewStep: StepPlan = env => {
   const patch = pv.patch
   const done = doneReview(ctx, r, patch)
   const changes = done !== null && done.data.verdict === 'changes' ? done.data : null
-  // a conflict ends the step at once (8.5): GitHub runs no workflow on a conflicting PR
+  // a conflict ends the step (8.5): GitHub runs no workflow on a conflicting PR. This seq's reviewer
+  // of the head's patch, still running, is waited for first, so one fixer gets the merge and the
+  // findings; with none running it ends at once.
   if (pv.mergeable === 'dirty') {
+    if (done === null) {
+      const running = lifeEntries(ctx, r, 'agent-step')
+        .filter(e => {
+          const parts = reviewParts(e.key)
+          return parts !== null && parts.round === r.round && parts.patch7 === short(patch) && e.status === 'running' && e.startedAt >= r.seqAt && !stopped(ctx, r, e)
+        })
+        .sort((a, b) => a.startedAt - b.startedAt)[0]
+      if (running !== undefined) {
+        skip(ctx, RULE, r.issue, `review: PR #${pr} conflicts; waits for the reviewer of patch ${short(patch)} so one fixer gets both`)
+        return { kind: 'running', since: running.startedAt, timeoutMs: timeoutOf(ctx, 'review'), key: running.key }
+      }
+    }
     const main = baseOf(ctx.state)
     const lead = `PR #${pr} conflicts with ${main} at head ${short(head)}: merge origin/${main} into ${r.branch}, resolve every conflict keeping both sides' intent, run the gates and push ${r.branch}`
     return result(notOk('conflict', pr, lead, changes === null ? [] : reviewNotes(changes), changes === null ? 'the PR' : reviewPlace(changes)), fact(`conflict:${pr}@${head}`))

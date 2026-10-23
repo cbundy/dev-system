@@ -62,7 +62,7 @@ export DEV_SECRETS_DIR="$tmpdir/secrets"
 mkdir -p "$DEV_SECRETS_DIR" "$tmpdir/hb" "$tmpdir/events" "$tmpdir/share"
 
 # the share: the real libraries and a heartbeat-state whose answer the test changes between beats
-for f in agentsview.sh factory-db.sh workspace.sh; do ln -s "$ROOT/images/base/$f" "$tmpdir/share/$f"; done
+for f in agentsview.sh factory-db.sh workspace.sh mem-pressure.sh; do ln -s "$ROOT/images/base/$f" "$tmpdir/share/$f"; done
 cat > "$tmpdir/share/heartbeat-state" <<STUB
 #!/bin/sh
 printf '{"state":"%s","in_flight":[],"chat_active_at":null,"sessions":[],"config":%s}\n' "\$(cat "$tmpdir/state")" "\$(cat "$tmpdir/config" 2>/dev/null || echo null)"
@@ -102,6 +102,24 @@ awk -v a="${first#*|}" -v b="${second#*|}" 'BEGIN { exit !(b > a) }' || fail "la
 grep -q 'stats write failed' "$tmpdir/beat.out" && fail "the stats write failed: $(cat "$tmpdir/beat.out")"
 grep -q 'permission denied\|ERROR' "$tmpdir/beat.out" && fail "the writer beat logged an error: $(cat "$tmpdir/beat.out")"
 echo "heartbeat-loop factory-db: ok"
+
+# memory pressure (cbundy/dev-system#1124): the five columns land in the worker row and in the sample.
+# From here on the beats read a fixture cgroup; the second beat finds the rate against the first.
+cg="$tmpdir/cg"
+mkdir -p "$cg"
+export HEARTBEAT_CGROUP_DIR="$cg"
+printf 'low 0\nhigh 0\nmax 10\noom 1\noom_kill 1\n' > "$cg/memory.events"
+printf 'some avg10=2.50 avg60=1.00 avg300=0.00 total=1\nfull avg10=1.25 avg60=0.50 avg300=0.00 total=1\n' > "$cg/memory.pressure"
+rm -f "$tmpdir/hb/dev-heartbeat.mem"
+beat || fail "beat with memory fixtures: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT mem_max_events || '|' || mem_oom_kills || '|' || mem_psi_some_avg10 || '|' || mem_psi_full_avg10 || '|' || coalesce(mem_max_rate_per_min::text, 'null') FROM factory.workers_status WHERE device = 'dev-box'")" = '10|1|2.5|1.25|null' ] || fail "memory columns of the first beat"
+printf '10 %s\n' $(($(date +%s%N) / 1000 - 60000000)) > "$tmpdir/hb/dev-heartbeat.mem"
+printf 'low 0\nhigh 0\nmax 40\noom 1\noom_kill 1\n' > "$cg/memory.events"
+beat || fail "second beat with memory fixtures: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT mem_max_events FROM factory.workers_status WHERE device = 'dev-box'")" = 40 ] || fail "mem_max_events should follow the new reading"
+[ "$(q "$db" "SELECT mem_max_rate_per_min > 0 AND mem_max_rate_per_min <= 30 FROM factory.workers_status WHERE device = 'dev-box'")" = t ] || fail "the rate should be set on the second beat"
+[ "$(q "$db" "SELECT count(*) FROM factory.worker_samples WHERE mem_max_events = 40 AND mem_oom_kills = 1 AND mem_psi_full_avg10 = 1.25 AND mem_max_rate_per_min > 0")" = 1 ] || fail "the sample should carry the memory columns"
+echo "heartbeat-loop memory pressure: ok"
 
 # the settings snapshot: the writer role's config UPDATE lands, and a null config clears it
 echo '{"v":1,"at":"2026-10-19T08:00:00Z","settings":{"a":1}}' > "$tmpdir/config"
@@ -153,6 +171,7 @@ av_beat || fail "agentsview beat 1: $(cat "$tmpdir/beat.out")"
 av_beat || fail "agentsview beat 2 (DDL again, no change): $(cat "$tmpdir/beat.out")"
 grep -q 'stats write failed' "$tmpdir/beat.out" && fail "the agentsview stats write failed: $(cat "$tmpdir/beat.out")"
 [ "$(q "$db3" "SELECT procs > 0 AND stats_at IS NOT NULL FROM factory.workers_status WHERE device = 'dev-box'")" = t ] || fail "the rebuilt view should show the stats"
+[ "$(q "$db3" "SELECT count(*) FROM factory.worker_samples WHERE mem_max_events = 40 AND mem_psi_some_avg10 = 2.5")" = 2 ] || fail "the agentsview samples should carry the memory columns, added by the loop's DDL"
 [ "$(q "$db3" "SELECT count(*) FROM factory.worker_samples")" = 2 ] || fail "two samples expected on the agentsview database"
 [ "$(q "$db3" "SELECT count(*) FROM pg_trigger WHERE tgname = 'worker_samples_prune' AND NOT tgisinternal")" = 1 ] || fail "one prune trigger expected"
 q "$db3" "INSERT INTO factory.worker_samples (device, sampled_at) VALUES ('dev-box', now() - interval '40 days')" > /dev/null
@@ -179,3 +198,18 @@ awk -v a="$before" -v b="$after" 'BEGIN { exit !(b > a) }' || fail "last_seen sh
 grep -q 'factory database config write failed' "$tmpdir/beat.out" || fail "the config failure is logged: $(cat "$tmpdir/beat.out")"
 grep -q 'stats write failed' "$tmpdir/beat.out" && fail "stats must still land: $(cat "$tmpdir/beat.out")"
 echo "heartbeat-loop config (column dropped): ok"
+
+# a factory database still without the memory columns (migration 0019): the beat is recorded, only the
+# stats call fails (logged), and the config call still lands
+q "$db" "ALTER TABLE factory.workers DROP COLUMN mem_max_events, DROP COLUMN mem_max_rate_per_min, DROP COLUMN mem_oom_kills,
+  DROP COLUMN mem_psi_some_avg10, DROP COLUMN mem_psi_full_avg10 CASCADE; ALTER TABLE factory.workers ADD COLUMN config jsonb" > /dev/null
+echo '{"v":1,"at":"2026-10-19T11:00:00Z"}' > "$tmpdir/config"
+before=$(q "$db" "SELECT extract(epoch FROM last_seen) FROM factory.workers WHERE device = 'dev-box'")
+sleep 1
+beat || fail "missing memory columns must not fail the beat: $(cat "$tmpdir/beat.out")"
+after=$(q "$db" "SELECT extract(epoch FROM last_seen) FROM factory.workers WHERE device = 'dev-box'")
+awk -v a="$before" -v b="$after" 'BEGIN { exit !(b > a) }' || fail "last_seen should still advance: $before -> $after"
+grep -q 'factory database stats write failed' "$tmpdir/beat.out" || fail "the stats failure is logged: $(cat "$tmpdir/beat.out")"
+grep -q 'config write failed' "$tmpdir/beat.out" && fail "config must still land: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT config->>'at' FROM factory.workers WHERE device = 'dev-box'")" = 2026-10-19T11:00:00Z ] || fail "config should land without the memory columns"
+echo "heartbeat-loop memory columns missing: ok"

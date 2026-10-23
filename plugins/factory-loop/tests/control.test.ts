@@ -33,6 +33,7 @@ import {
 } from '../hooks/control'
 import type { FileIo, Op } from '../hooks/control'
 import type { Control, Ms } from '../hooks/types'
+import { effectiveCap } from '../hooks/v2/capacity'
 import { MIN, NOW, control } from './fixtures'
 
 const HOUR = 60 * MIN
@@ -632,7 +633,7 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
 describe('config set and unset', () => {
   const view = (repo: Record<string, unknown> = {}, workspace: Record<string, unknown> = {}) => {
     const loaded = loadConfig(repo, workspace)
-    return { config: loaded.config, device: 'd', poolSize: 16, repoRaw: repo, workspaceRaw: workspace, problems: loaded.problems, modeFrom: 'plugin' as const, deviceFrom: 'env' as const, pluginVersion: '1' }
+    return { config: loaded.config, device: 'd', poolSize: 16, cap: effectiveCap(loaded.config, null, undefined), repoRaw: repo, workspaceRaw: workspace, problems: loaded.problems, modeFrom: 'plugin' as const, deviceFrom: 'env' as const, pluginVersion: '1' }
   }
   const run = (io: FileIo, text: string, from: Parameters<typeof runOp>[4] = {}) => runOp(io, PATHS, text, NOW, from)
   const file = (f: ReturnType<typeof files>) => JSON.parse(f.map.get(CONFIG_FILE) ?? 'null') as unknown

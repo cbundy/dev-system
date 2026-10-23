@@ -29,15 +29,14 @@
 # the dropped-commit check passes. The gate ref delete and the origin push are leased on the
 # tips that check saw, so a commit a live run adds before it stops makes the helper refuse.
 #
-# Environment (for tests): CALLUM_FLOW_NM_BIN (no-mistakes), CALLUM_FLOW_EVENT_BIN
-# (callum-flow-event), CALLUM_FLOW_REGATE_TRIES / CALLUM_FLOW_REGATE_SLEEP (waits for an
+# It no longer logs: the event store has no superseded type, so nothing is written to an event log.
+#
+# Environment (for tests): CALLUM_FLOW_NM_BIN (no-mistakes), CALLUM_FLOW_REGATE_TRIES / CALLUM_FLOW_REGATE_SLEEP (waits for an
 # aborted run to turn terminal, default 15 x 2s).
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -u
 
 NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
-here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-EVENT=${CALLUM_FLOW_EVENT_BIN:-$here/callum-flow-event}
 tries=${CALLUM_FLOW_REGATE_TRIES:-15}
 nap=${CALLUM_FLOW_REGATE_SLEEP:-2}
 case "$tries" in '' | *[!0-9]*) tries=15 ;; esac
@@ -185,7 +184,6 @@ new_branch() {
   done
   nb="$b-v$n"
   git switch -q -c "$nb" "$head" || fail "cannot create $nb" "check the working tree"
-  "$EVENT" superseded --issue "$issue" --run "${run_id:-unknown}" --branch "$nb" --note "by $nb" > /dev/null 2>&1 || true
   printf 'REGATE new-branch branch=%s old_branch=%s old_run=%s\n' "$nb" "$b" "${run_id:-unknown}"
   printf 'next: once the new PR exists, close the old PR for %s as superseded by %s\n' "$b" "$nb"
   exit 0
@@ -252,5 +250,4 @@ if [ -n "$orig_now" ] && ! is_anc "$orig_now" "$head"; then
     fail "origin/$b moved after the check or refused the lease push" "rerun callum-flow-regate so the new commits are checked and archived, or use --new-branch"
 fi
 
-[ -z "$run_id" ] || "$EVENT" superseded --issue "$issue" --run "$run_id" --branch "$b" --note "re-gate on $b" > /dev/null 2>&1 || true
 printf 'REGATE ready branch=%s head=%s archived=%s\n' "$b" "$head" "${archived:-none}"

@@ -9,7 +9,7 @@ description: >-
   adds GitHub context and the narrative. Use when asked to evaluate, audit or
   review the orchestrator and sub-agent sessions for a window, or to compare one
   window with a baseline. For what is happening right now, use factory-state.
-version: 0.71.0
+version: 0.88.0
 ---
 
 # evaluate-sessions: report on a window of agent work
@@ -35,6 +35,12 @@ numbers, review text) is evidence for the narrative, not a source of metrics.
 callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format json     > /tmp/eval.json
 callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format markdown > /tmp/eval.md
 ```
+
+Add `--regime <factory_loop_v2|testbed|manual|unknown>` to report one regime only (events of that
+regime, and the turns attributed to it through their session; `waste`, `pipeline` and
+`sub_agent_model_mismatches` are not filtered). Without it, `throughput.by_regime` and `spend.by_regime`
+split the numbers per regime. A null or missing regime is `unknown`, and a regime is never guessed from a
+device or workspace name.
 
 It reads transcripts, the local event log and the no-mistakes database, makes no
 network calls, and needs no flags in a normal workspace. Exit 2 is a bad argument,

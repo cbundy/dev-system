@@ -235,6 +235,12 @@ skill does not use them, and notices for them would be new behaviour.
   and lets the loop act after 120 seconds of quiet. It covers two workspaces on one repo, which
   the per-workspace act lock cannot see. A heartbeat means the workspace is up, not that it is
   driving, so an idle old orchestrator blocks the loop too: the safe side during cutover.
+- **Amendment, own workspace (2026-10-22, cbundy/dev-system#1051)**: a beat whose `coder_workspace`
+  is non-empty and equals this loop's `DEV_CODER_WORKSPACE` is never another orchestrator, even
+  under another device name (a test once wrote a `box` row from a loop's own workspace). It is left
+  out of the block and logged as `railTwins` on the pass line. Every other beat blocks as before,
+  and so do a failed query, unexpected output and a device with no name. heartbeat-loop also names
+  its device from `DEV_MACHINE_NAME` first, so a snapshot cannot rename the row.
 - **Alternatives**: rely on the mode option alone.
 - **Why**: two drivers on one repo would double every action. The old watcher's lock is the
   clearest sign that the released skill is still driving. The role check stops a desktop session
@@ -692,3 +698,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   would keep the workspace from starting for a database fault, and `dev-init` is best effort by
   design. (b) leaves partial work. (c) gives a loop session the migrator secret. (d) makes the rail
   read a secret folder; a missing status file already means nothing ran here.
+
+### D-76 An empty ready list is checked against the members' own reads
+
+- **Decision**: `observe` does not accept an empty ready list (act mode's `queue-watch.sh --once`
+  or observe mode's `--list`) when the last accepted list was not empty and a member of it is, by
+  its own cached per-issue read, open, trusted and labelled `readyLabel`. The source is marked
+  failed, naming those issues; the last list stands and the stored `--known` is kept. An empty
+  list no member contradicts is accepted (v2 SPEC 13.3.3, 13.3.4).
+- **Alternatives**: debounce an empty read for N passes.
+- **Why**: GitHub's label listing returned `[]` with status 200 for runs of up to 4 reads (8
+  minutes) while the issues carried the label, which flipped the title Q:8 -> Q:0 -> Q:8, fed
+  rule S1 an empty queue and re-logged `ready` events. A debounce long enough for those runs would
+  delay every genuine emptying by as long. The per-issue reads are already cached, so a wrong
+  guess delays emptying by at most one `githubEveryMs`.
+- **Same change**: a cadenced key (heartbeat, sweep) that used up its attempts stays exhausted
+  while its next attempt runs, so its `tell:stalled` owner item does not drop out of the title's
+  count for the length of the retry.

@@ -6,7 +6,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { loadConfig } from '../hooks/config'
-import { loopEventArgs } from '../hooks/derive'
+import { loopEntryArgv } from '../hooks/derive'
 import type { ActIo } from '../hooks/exec'
 import { GITHUB_V2, newCtx } from '../hooks/foundation'
 import { start } from '../hooks/ledger'
@@ -139,7 +139,7 @@ describe('F1 and an open bug', () => {
 describe('F1 and the ready cap', () => {
   const open = (n: number, ready: boolean): FlakeBug => ({ number: n, hash: `${n}`.repeat(16).slice(0, 16), ready, known: [] })
   const rec = (issue: number, st: IssueRecord['state']): IssueRecord => ({
-    issue, life: 'l1', seq: 1, seqAt: NOW - MIN, state: st, since: NOW - MIN, resumeTo: null, branch: `issue-${issue}`, pr: null, head: null, approvedPatch: null, brief: null, step: null, attempt: 0, cut: false, triages: 0, fixes: 0, round: 0, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
+    issue, life: 'l1', seq: 1, seqAt: NOW - MIN, state: st, since: NOW - MIN, resumeTo: null, branch: `issue-${issue}`, pr: null, head: null, approvedPatch: null, brief: null, step: null, attempt: 0, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 0, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
   })
 
   test('with two open flake bugs ready or in flight, a third test\'s bug is filed without ready', () => {
@@ -337,14 +337,14 @@ describe('the flake-bug executor', () => {
     expect(t?.context.join('\n')).toContain('the owner adds `ready`')
   })
 
-  test('the tell\'s ledger entry logs its payload with --data on the loop event', () => {
+  test('the tell\'s ledger entry logs its payload in the loop_entry data', () => {
     const outcome = { kind: 'flake-bug' as const, issue: 901, made: true, ready: true, test: TEST_B, flakes: 3, windowDays: 7, firstFlakeAt: '2026-10-12T00:00:00.000Z', reason: 'r' }
     const [t] = tellsOf(rule({ ledger: [entry('flake-bug/x/y', 'flake-bug', { status: 'done', outcome })] }).out)
     const e = start([], t as Action, NOW).entry
-    const args = loopEventArgs(e)
-    expect(args.slice(-2)).toEqual(['--data', JSON.stringify(t?.loopData)])
-    // an entry with none writes no --data
-    expect(loopEventArgs({ ...e, loopData: undefined })).not.toContain('--data')
+    const data = JSON.parse((loopEntryArgv(e) as string[])[4] as string)
+    expect(data).toMatchObject(t?.loopData as object)
+    // an entry with none carries only the entry's own fields
+    expect(JSON.parse((loopEntryArgv({ ...e, loopData: undefined }) as string[])[4] as string)).not.toHaveProperty('filed_issue')
   })
 })
 

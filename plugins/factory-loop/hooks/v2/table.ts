@@ -10,7 +10,7 @@
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
 import { waitKey } from './sources-waits'
-import type { EmitState, IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
+import type { IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -108,6 +108,10 @@ function commits(r: IssueRecord, e: TableEvent): boolean {
 const outside = (e: TableEvent) => e.cause !== undefined && e.cause !== null && (OUTSIDE_CAUSES as readonly string[]).includes(e.cause)
 const fixable = (e: TableEvent) => e.reason !== undefined && e.reason in FIX_REASONS
 const u1 = (r: IssueRecord, e: TableEvent) => outside(e) && !r.cut
+// baseCaused: a not-ok that other merges caused: a conflict, or red CI in the merge queue.
+const baseCaused = (r: IssueRecord, e: TableEvent) => e.reason === 'conflict' || (e.reason === 'ci-red' && r.state === 'merge-queue')
+// underCap: the counter of this not-ok's kind has room for one more fix round.
+const underCap = (r: IssueRecord, e: TableEvent, c: Config) => (baseCaused(r, e) ? r.conflicts < c.conflictFixCap : r.fixes < c.reviewFixCap)
 const fixValid = (r: IssueRecord, e: TableEvent, c: Config) => commits(r, e) && r.fixes < c.reviewFixCap
 
 // --- what the rows write -----------------------------------------------------------------------------------
@@ -201,10 +205,6 @@ const lifePrOf = (r: IssueRecord, e: TableEvent): number | null => r.pr ?? dataO
 
 // --- the rows ----------------------------------------------------------------------------------------------
 
-// The event a state logs on entry beside `transition` (4.5): every row that enters the state logs
-// it, a resume's T1 and a same-state entry (X2) included, so a reader counts every entry (7.1).
-export const ENTRY_EVENTS: Readonly<Partial<Record<IssueState, EmitState>>> = { building: 'delegated', fixing: 'fix_requested', 'merge-queue': 'merge_ready' }
-
 // T1 leads where resumeTo says, counting an entry to reviewing as a round and an entry to fixing as
 // a fix, as every other entry to them counts (3.2: round counts entries to reviewing, fixes entries
 // to fixing). Queued's own step, the lease, reads no notes: its notes (S0's, P1's resume note) are
@@ -275,19 +275,26 @@ const ROWS: readonly Row[] = [
     id: 'T9',
     states: ['reviewing', 'merge-queue'],
     on: 'not-ok',
-    when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes < c.reviewFixCap,
+    when: (r, e, c) => ownStep(r) && fixable(e) && underCap(r, e, c),
     next: 'fixing',
-    change: (r, e) => ({ fixes: r.fixes + 1, pr: dataOf(e).pr ?? r.pr, notes: own(...(dataOf(e).notes ?? [textOf(e, e.reason ?? 'changes')])) }),
+    change: (r, e) => ({ ...(baseCaused(r, e) ? { conflicts: r.conflicts + 1 } : { fixes: r.fixes + 1 }), pr: dataOf(e).pr ?? r.pr, notes: own(...(dataOf(e).notes ?? [textOf(e, e.reason ?? 'changes')])) }),
     via: 'fix:',
   },
   {
     id: 'T10',
     states: ['reviewing', 'merge-queue'],
     on: 'not-ok',
-    when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes >= c.reviewFixCap,
+    when: (r, e, c) => ownStep(r) && fixable(e) && !underCap(r, e, c),
     next: 'parked',
     change: (r, e) => ({
-      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${clauses([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')])}`, 2000),
+      question: clip(
+        `${
+          baseCaused(r, e)
+            ? `the cap of rounds for conflicts and red CI after other merges (${r.conflicts} rounds) is reached and the PR still needs changes`
+            : `the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes`
+        }: ${clauses([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')])}`,
+        2000,
+      ),
       resumeTo: 'fixing',
       pr: dataOf(e).pr ?? r.pr,
     }),
@@ -411,7 +418,7 @@ const ROWS: readonly Row[] = [
     states: ['parked', 'waiting'],
     on: 'unpark',
     next: 'queued',
-    change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
+    change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
     via: 'unpark:',
   },
 ]
@@ -544,6 +551,7 @@ function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
     cut: false,
     triages: 0,
     fixes: 0,
+    conflicts: 0,
     round: 0,
     question: null,
     parts: null,

@@ -2,8 +2,10 @@
 #
 # Tests for images/base/callum-flow-dual-write-check (cbundy/dev-system#743): the read-only check
 # that the old event table and the new event store agree, against a real PostgreSQL
-# (scripts/test-pg.sh). Lines are written by the real callum-flow-event and shipped by the real
-# event-push-loop (old table) and factory-event-push-loop (new store). Skips cleanly with no server.
+# (scripts/test-pg.sh). The new events are written by the real callum-flow-event; the old lines are
+# literal old-format lines the test writes itself (callum-flow-event no longer writes them,
+# cbundy/dev-system#1143). Both are shipped by the real event-push-loop (old table) and
+# factory-event-push-loop (new store). Skips cleanly with no server.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -eu
 
@@ -85,10 +87,41 @@ oldrows() { q "$olddb" "SELECT count(*) FROM factory.events"; }
 
 EVDIR=$tmpdir/ev
 mkdir -p "$EVDIR"
-# ev ARGS...: the real writer, repo acme/widgets unless CALLUM_FLOW_REPO is set, device dev-box
+# ev ARGS...: the real writer, repo acme/widgets unless CALLUM_FLOW_REPO is set, device dev-box.
+# An old-state call (not --type, not --new-only) also gets the literal old line the pre-cutover
+# writer appended, sharing the new event's id and second (a skipped state gets its own id).
 ev() {
-  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=${EVREPO:-acme/widgets} DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
+  _repo=${EVREPO:-acme/widgets}
+  _file=$(printf '%s' "$_repo" | sed 's#/#__#').jsonl
+  _new=$EVDIR/factory/$_file
+  _n=0
+  [ ! -f "$_new" ] || _n=$(wc -l < "$_new")
+  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=$_repo DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" bash "$EVENT" "$@" 2> /dev/null
+  [ "$1" != --type ] || return 0
+  case " $* " in *" --new-only "*) return 0 ;; esac
+  _state=$1
+  shift
+  _issue='' _branch='' _note=''
+  while [ $# -gt 0 ]; do
+    case "$1" in --issue) _issue=$2 ;; --branch) _branch=$2 ;; --note) _note=$2 ;; esac
+    shift 2
+  done
+  _line=
+  [ ! -f "$_new" ] || _line=$(sed -n "$((_n + 1))p" "$_new")
+  if [ -n "$_line" ]; then
+    _id=$(printf '%s' "$_line" | jq -r .event_id)
+    _ts=$(printf '%s' "$_line" | jq -r '.ts | sub("\\.[0-9]{3}Z$"; "Z")')
+  else
+    _id=$(cat /proc/sys/kernel/random/uuid)
+    _ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  fi
+  jq -nc --arg ts "$_ts" --arg repo "$_repo" --arg device "${EVDEV:-dev-box}" --arg state "$_state" --arg issue "$_issue" \
+    --arg branch "$_branch" --arg note "$_note" --arg id "$_id" \
+    '{v: 2, ts: $ts, repo: $repo, device: $device, session_id: null, actor: "agent", state: $state, issue: ($issue | tonumber),
+      run_id: null, branch: (if $branch == "" then null else $branch end), pr: null, head: null,
+      note: (if $note == "" then null else $note end), event_id: $id, base_image: null, dev_image: null,
+      template_version: null, plugin_version: null}' >> "$EVDIR/$_file"
 }
 ship() {
   CALLUM_EVENTS_DIR=$EVDIR AGENTSVIEW_PG_URL="$OURL" timeout 60 bash "$OLDLOOP" --once > "$tmpdir/ship.out" 2>&1 || fail "old push: $(cat "$tmpdir/ship.out")"
@@ -128,7 +161,7 @@ check
 [ "$rc" = 0 ] || fail "equal stores should exit 0, got $rc: $(cat "$tmpdir/chk.out")"
 grep -q '^claimed: old=3 skipped=0 expected=3 found=3 missing=0 misses=0$' "$tmpdir/chk.out" || fail "claimed counts: $(cat "$tmpdir/chk.out")"
 grep -q '^transition: old=1 skipped=0 expected=1 found=1 missing=0 misses=0$' "$tmpdir/chk.out" || fail "transition counts: $(cat "$tmpdir/chk.out")"
-grep -q '^OK: missing=0 misses=0 extras=0$' "$tmpdir/chk.out" || fail "OK line: $(cat "$tmpdir/chk.out")"
+grep -q '^OK: missing=0 misses=0 extras=0 new-only=0$' "$tmpdir/chk.out" || fail "OK line: $(cat "$tmpdir/chk.out")"
 echo "ok: mixed states are equal"
 
 # -- 3. a skipped state counts as skipped, never missing
@@ -211,6 +244,23 @@ nov=$(q "$db" "SELECT count(*) FROM factory.event_store WHERE type = 'transition
 check
 grep -q '^extra transition' "$tmpdir/chk.out" && fail "a new-only via=dual-write transition was reported: $(cat "$tmpdir/chk.out")"
 echo "ok: a new-only via=dual-write transition is not an extra"
+
+# -- 8d. a type the translator never makes (gate_run) with no old row is new-only: counted, never an extra
+q "$db" "DELETE FROM factory.event_store WHERE event_id = '11111111-1111-4111-8111-111111111111'" > /dev/null
+q "$db" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) VALUES (1, '33333333-3333-4333-8333-333333333333', now(), 'gate_run', 1, 'acme/widgets', 'dev-box', 'x', 101, '{\"life\":\"l1\",\"seq\":1,\"head\":\"abcdef0\",\"result\":\"pass\",\"wait_ms\":0,\"run_ms\":10,\"concurrency\":1,\"queued_behind\":0,\"started_at\":\"2026-10-18T00:00:00.000Z\"}')" > /dev/null
+check
+[ "$rc" = 0 ] || fail "a new-only gate_run should exit 0, got $rc: $(cat "$tmpdir/chk.out")"
+grep -q '^new-only gate_run: 1$' "$tmpdir/chk.out" || fail "new-only line: $(cat "$tmpdir/chk.out")"
+grep -q '^extra gate_run' "$tmpdir/chk.out" && fail "gate_run reported as extra: $(cat "$tmpdir/chk.out")"
+grep -q '^OK: missing=0 misses=0 extras=0 new-only=1$' "$tmpdir/chk.out" || fail "new-only OK line: $(cat "$tmpdir/chk.out")"
+# a missing translated row still fails, with new-only reported alongside
+victim2=$(q "$db" "SELECT event_id FROM factory.event_store WHERE type = 'ready'")
+q "$db" "DELETE FROM factory.event_store WHERE event_id = '$victim2'" > /dev/null
+check
+[ "$rc" = 1 ] || fail "a missing row beside new-only should exit 1, got $rc: $(cat "$tmpdir/chk.out")"
+grep -q '^DIFFERENT: missing=1 misses=0 extras=0 new-only=1$' "$tmpdir/chk.out" || fail "DIFFERENT line: $(cat "$tmpdir/chk.out")"
+q "$db" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data) SELECT 1, '$victim2', now(), 'ready', 1, 'acme/widgets', 'dev-box', 'x', 102, '{}'" > /dev/null
+echo "ok: a new-only type is counted and never fails the check"
 
 # -- 9. an old row the translator misses is reported as a miss
 q "$olddb" "INSERT INTO factory.events (device, repo, seq, ts, state, issue, raw, event_id) VALUES ('dev-box', 'acme/widgets', 900, now(), 'claimed', 77, '{\"state\":\"claimed\",\"repo\":\"acme/widgets\",\"device\":\"dev-box\",\"issue\":77,\"event_id\":\"22222222-2222-4222-8222-222222222222\",\"ts\":\"bad\"}', '22222222-2222-4222-8222-222222222222')" > /dev/null

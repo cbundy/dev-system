@@ -49,12 +49,12 @@ describe('dualWriteRules (H1)', () => {
     expect(acts.find(x => x.issue === 8)).toMatchObject({ event: { record: b, row: 'H1', from: null, via: 'dual-write' } })
   })
 
-  test('every action writes the new log only (target new), and nothing else sets a target', () => {
+  test('every action is a plain transition event: no target on it or on any other event action', () => {
     const acts = dwActions(world([rec(7), closedRec(8)], on()))
     expect(acts).toHaveLength(2)
-    for (const a of acts) expect(a.target).toBe('new')
-    const others = planV2(world([rec(7)], on()), CFG).actions.filter(a => a.kind === 'event' && !a.key.startsWith('dual-write:'))
-    for (const a of others) expect((a as { target?: string }).target).toBeUndefined()
+    for (const a of acts) expect(a).not.toHaveProperty('target')
+    const others = planV2(world([rec(7)], on()), CFG).actions.filter(a => a.kind === 'event')
+    for (const a of others) expect(a).not.toHaveProperty('target')
   })
 
   test('the second load: the record in seen plans nothing', () => {

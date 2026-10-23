@@ -147,6 +147,7 @@ function recordOfRow(row: Record<string, string>): { record: IssueRecord; ts: nu
     cut: d.cut as boolean,
     triages: d.triages as number,
     fixes: d.fixes as number,
+    conflicts: typeof d.conflicts === 'number' ? d.conflicts : 0,
     round: d.round as number,
     question: d.question as string | null,
     parts: partsOfData(d),

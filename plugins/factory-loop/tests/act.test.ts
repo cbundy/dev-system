@@ -10,8 +10,6 @@ import {
   EXECUTORS,
   REPAIR_GRACE_MS,
   actPass,
-  capEventArgv,
-  capKey,
   commandOf,
   eventArgv,
   eventOf,
@@ -145,16 +143,14 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
     expect(f.env.commands).toEqual(['treehouse return /slot', 'git switch b'])
   })
 
-  test('an event is callum-flow-event with its fields as flags; a failure throws with its exit code', async () => {
-    expect(eventArgv('delegated', { issue: 470, note: 'brief u' })).toEqual(['callum-flow-event', 'delegated', '--issue', '470', '--note', 'brief u'])
-    expect(eventArgv('verdict', { issue: 470, run: 'R', branch: 'b', pr: 5, head: 'h', note: 'n' })).toEqual([
-      'callum-flow-event', 'verdict', '--issue', '470', '--run', 'R', '--branch', 'b', '--pr', '5', '--head', 'h', '--note', 'n',
-    ])
-    const f = fake([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown state' }))
+  test('an event is callum-flow-event with its type, data and issue; a failure throws with its exit code', async () => {
+    expect(eventArgv('closed', { reason: 'completed' }, { issue: 470 })).toEqual(['callum-flow-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '470'])
+    const f = fake([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown type' }))
     const event = eventOf(commandOf(f.env.io, f.env.rt, f.env.commands))
-    const err = await event('nope', {}).then(() => null, (e: unknown) => e as Error & { exitCode?: number })
+    const err = await event('nope', {}, { issue: 1 }).then(() => null, (e: unknown) => e as Error & { exitCode?: number })
     expect(err?.exitCode).toBe(2)
-    expect(err?.message).toContain('unknown state')
+    expect(err?.message).toContain('unknown type')
+    expect(f.env.commands.at(-1)).toContain('--type nope --data {} --issue 1')
   })
 })
 
@@ -195,7 +191,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
   })
 
   test('a GitHub rate limit holds the pass\'s later GitHub writes, not its agents (v2 SPEC 13.10 item 2)', async () => {
-    const f = fake([], argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: RATE } : {}))
+    const f = fake([], argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: RATE } : {}))
     const report = await runActions(f.env, state(), [claim, closer, judge])
     expect(report.rateLimited).toBe(true)
     expect(report.outcomes.map(o => [o.key, o.status])).toEqual([
@@ -227,7 +223,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     let checks = 0
     // the switch is created while the claim runs
     const f = fake([], argv => {
-      if (argv[0] === 'callum-flow-claim') off = true
+      if (argv.includes('callum-flow-claim')) off = true
       return {}
     })
     f.env.killed = async () => {
@@ -243,7 +239,6 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
       ['title', 'skipped', 'kill switch'],
     ])
     expect(report.killed).toBe(true)
-    expect(report.title).toBeNull()
     // one check per action until the switch is seen, then the pass ends
     expect(checks).toBe(2)
     expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
@@ -304,19 +299,19 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     const replaced = { ...entry(claim.key, 'claim', { class: 'start', issue: 470, status: 'running', attempts: 2, startedAt: NOW + 1, endedAt: null }) }
     f = fake([], argv => {
       // a later attempt took the key meanwhile
-      if (argv[0] === 'callum-flow-claim') f.env.live.ledger = [replaced]
+      if (argv.includes('callum-flow-claim')) f.env.live.ledger = [replaced]
       return {}
     })
     await runActions(f.env, state(), [claim])
     expect(f.env.live.ledger).toEqual([replaced])
   })
 
-  test('the title runs without a ledger entry and says what it set', async () => {
+  test('the title runs without a ledger entry and starts its rename off the pass', async () => {
     const renamed: string[] = []
     const f = fake([], () => ({}), { rename: async t => void renamed.push(t) })
     const title: Action = { kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: '🔄 dev-system (Q:0 - D:0 - M:0)' }
     const report = await runActions(f.env, state(), [title])
-    expect(report.title).toBe('🔄 dev-system (Q:0 - D:0 - M:0)')
+    expect(report.outcomes.map(o => [o.kind, o.status, o.off])).toEqual([['title', 'running', true]])
     expect(renamed).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0)'])
     expect(f.env.live.ledger).toEqual([])
   })
@@ -336,14 +331,6 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(await sendNotice(f.env, state(), tell('tell:heartbeat-other:1'))).toBe('sent')
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toStartWith('TELL heartbeat-other id=w1 repo=cbundy/dev-system device=other')
-  })
-
-  test('a rate-cap hold is one loop event per cap per hour, status held (v2 SPEC 13.11.4)', () => {
-    expect(capKey('spawn', NOW)).toBe(`cap:spawn:${Math.floor(NOW / 3_600_000)}`)
-    expect(capEventArgv('spawn', NOW)).toEqual(['callum-flow-event', 'loop', '--note', `kind=spawn key=${capKey('spawn', NOW)} status=held`])
-    expect(capEventArgv('claim:470', NOW)).toEqual([
-      'callum-flow-event', 'loop', '--issue', '470', '--note', `kind=claim key=${capKey('claim:470', NOW)} status=held`,
-    ])
   })
 
   test('an answer in flight counts as running; a first completed sighting waits one pass', () => {
@@ -453,10 +440,10 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   })
 
   test('a loop event is logged once per change of what it says; a loaded entry counts as logged, a dropped key is forgotten (#536)', async () => {
-    const open = entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', status: 'running', endedAt: null, wakeId: 'w0' })
+    const open = entry('tell:runaway:start:1', 'tell', { wake: 'runaway', class: 'owner', status: 'running', endedAt: null, wakeId: 'w0' })
     const f = fake([open])
     f.env.live.logged = loggedOf([open])
-    const statuses = () => f.calls.map(c => /status=(\S+)/.exec(c.argv.at(-1) ?? '')?.[1])
+    const statuses = () => f.calls.map(c => (JSON.parse(c.argv[4] ?? '{}') as { status?: string }).status)
     // its turn taking its id, then its reminder: the event would say the same, so none is logged
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', turnId: 't1' }, NOW)))
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', reminded: true }, NOW)))
@@ -464,8 +451,58 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
     await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
     expect(statuses()).toEqual(['done'])
+    // a changed PR or head is not in the native data, so it logs nothing
+    await logLoop(f.env, transition(f.env.live, l => l.map(e => (e.key === open.key ? { ...e, pr: 777, head: 'beef123' } : e))))
+    expect(statuses()).toEqual(['done'])
     f.env.live.ledger = []
     await logLoop(f.env, [])
     expect(f.env.live.logged?.size).toBe(0)
   })
 })
+
+describe('an agent step\'s tokens in its loop event (#657)', () => {
+  const step = (status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}) =>
+    entry('i9/ltn0brb/review/abc/r1/a1', 'agent-step', { status, issue: 9, step: 'review', agentId: 'ag1', session: 'session-1', endedAt: status === 'running' ? null : NOW, ...over })
+  const transcript = JSON.stringify({ type: 'assistant', requestId: 'r', message: { model: 'claude-opus-5-5', usage: { input_tokens: 4, output_tokens: 5, cache_read_input_tokens: 6, cache_creation_input_tokens: 7 } } })
+  const dataOf = (f: Fake) => f.calls.filter(c => c.argv[0] === 'callum-flow-event').map(c => JSON.parse(c.argv[4] ?? '{}') as Record<string, unknown>)
+  const withTokens = (ledger: LedgerEntry[], files: Record<string, string> = {}) => {
+    const f = fake(ledger, () => ({}), { readFile: async p => files[p] ?? null })
+    f.env.rt = { ...f.env.rt, configDir: '/cfg', sessionCwd: '/work' }
+    return f
+  }
+  const PATH = '/cfg/projects/-work/session-1/subagents/agent-ag1.jsonl'
+
+  test('a running event has null fields; each ended status carries the reading, read once per ended entry', async () => {
+    for (const status of ['done', 'failed', 'timed-out', 'lost'] as const) {
+      const f = withTokens([step('running')], { [PATH]: transcript })
+      await logLoop(f.env, f.env.live.ledger)
+      const ended = transition(f.env.live, l => l.map(e => ({ ...e, status, endedAt: NOW })))
+      await logLoop(f.env, ended)
+      await logLoop(f.env, ended)
+      const [running, end] = dataOf(f)
+      expect(dataOf(f)).toHaveLength(2)
+      expect(running).toMatchObject({ status: 'running', input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null })
+      expect(end).toMatchObject({ status, input_tokens: 4, output_tokens: 5, cache_read_tokens: 6, cache_creation_tokens: 7, model: 'claude-opus-5-5' })
+      expect(f.env.problems).toEqual([])
+    }
+  })
+
+  test('a missing transcript still writes the event, with null fields and a problem naming the key', async () => {
+    const f = withTokens([step('failed')])
+    await logLoop(f.env, f.env.live.ledger)
+    expect(dataOf(f)).toHaveLength(1)
+    expect(dataOf(f)[0]).toMatchObject({ status: 'failed', input_tokens: null, model: null })
+    expect(f.env.problems).toEqual(['loop event i9/ltn0brb/review/abc/r1/a1: transcript not found'])
+  })
+
+  test('a tell carries none of the fields, and a runtime without a config dir reads nothing', async () => {
+    const f = withTokens([entry('tell:x:1', 'tell', { wake: 'runaway', class: 'owner', wakeId: 'w0' })])
+    await logLoop(f.env, f.env.live.ledger)
+    expect(Object.keys(dataOf(f)[0] ?? {})).not.toContain('input_tokens')
+    const g = fake([step('done')])
+    await logLoop(g.env, g.env.live.ledger)
+    expect(dataOf(g)[0]).toMatchObject({ input_tokens: null, model: null })
+    expect(g.env.problems).toEqual([])
+  })
+})
+

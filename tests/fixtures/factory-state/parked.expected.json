@@ -99,7 +99,10 @@
         }
       ],
       "recent": [],
-      "other_runs": []
+      "other_runs": [],
+      "queue": {
+        "n/a": "not read"
+      }
     }
   ]
 }

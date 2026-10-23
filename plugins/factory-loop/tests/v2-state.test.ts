@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { ctxOf, dispatch } from '../hooks/act'
+import { GITHUB_V2, newCtx } from '../hooks/foundation'
 import type { ActEnv } from '../hooks/act'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
 import type { ActIo, ExecCtx, SpawnInput } from '../hooks/exec'
@@ -18,6 +19,8 @@ import { eventArgv } from '../hooks/v2/events'
 import { claimKey, entryKey, followKey, interventionKey, lifeKey, lifeOf, prKey, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
+import { stepEvent } from '../hooks/v2/rules-agent'
+import { stopKey } from '../hooks/v2/rules-entry'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
 import type { TriageInput } from '../hooks/v2/prompts-triage'
 import { resultsOf, stepFiles, triageInput, triageResult } from '../hooks/v2/steps-triage'
@@ -25,8 +28,8 @@ import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { parkText } from '../hooks/v2/park-text'
 import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
-import { FACTORY_LABELS, SLOT_STATES } from '../hooks/v2/types'
-import type { IssueRecord, Lease, StepResult, V2Io, V2State } from '../hooks/v2/types'
+import { FACTORY_LABELS, SLOT_STATES, V2_OWNER_TELLS } from '../hooks/v2/types'
+import type { IssueRecord, Lease, StepResult, V2Ctx, V2Io, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, config, control, entry, issue, running, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -122,17 +125,17 @@ describe('S1: claims', () => {
     const r = plan(world([], { queue: [1, 2, 3, 4], issues }), cfg)
     expect(claims(r).map(a => a.issue)).toEqual([3, 1, 2, 4])
     expect(claims(r).map(a => a.reason)).toEqual([
-      'ready and unblocked (order: label priority)',
-      'ready and unblocked (order: number)',
-      'ready and unblocked (order: number)',
-      'ready and unblocked (order: number)',
+      'ready and unblocked (order: score 30: priority-label +30)',
+      'ready and unblocked (order: score 0)',
+      'ready and unblocked (order: score 0)',
+      'ready and unblocked (order: score 0)',
     ])
     // the owner's priority list goes first, then the label
     const listed = plan(world([], { queue: [1, 2, 4], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(4)], control: control({ priority: [4] }) }), cfg)
     expect(claims(listed).map(a => [a.issue, a.reason])).toEqual([
       [4, 'ready and unblocked (order: owner priority)'],
-      [2, 'ready and unblocked (order: label priority)'],
-      [1, 'ready and unblocked (order: number)'],
+      [2, 'ready and unblocked (order: score 30: priority-label +30)'],
+      [1, 'ready and unblocked (order: score 0)'],
     ])
     // `only` wins: the label never widens it
     const only = plan(world([], { queue: [1, 2], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] })], control: control({ only: [1] }) }), cfg)
@@ -143,6 +146,81 @@ describe('S1: claims', () => {
     expect(claims(upper).map(a => a.issue)).toEqual([2, 1])
     const urgent = world([], { queue: [1, 2, 3], issues: [issue(1), issue(2, { labels: ['ready', 'priority'] }), issue(3, { labels: ['ready', 'urgent'] })] })
     expect(claims(plan(urgent, { ...cfg, priorityLabel: 'urgent' })).map(a => a.issue)).toEqual([3, 1, 2])
+  })
+
+  test('the intake factors (#995): off, stamps and paths change nothing; on, the reason shows area-factory +20, needs-owner -40 and overlap -15', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.reason])
+    const issues = [issue(1), issue(2, { labels: ['ready', 'area:factory'] }), issue(3, { labels: ['ready', 'needs-decision'] }), issue(4)]
+    const stamp = { version: 'v1', area: 'factory', needsOwner: false, touches: ['plugins/x'], at: NOW, labels: [] }
+    const stamps = { '2': stamp, '3': stamp, '4': stamp }
+    const bare = world([], { queue: [1, 2, 3, 4], issues })
+    const withFacts = world([], { queue: [1, 2, 3, 4], issues }, { stamps, inFlightPaths: { 9: ['plugins'] } })
+    const baseline = plan(bare, cfg)
+    expect(claims(plan(withFacts, cfg))).toEqual(claims(baseline))
+    expect(claims(plan(withFacts, { ...cfg, intakeStamp: 'off' }))).toEqual(claims(baseline))
+    expect(claims(baseline).map(c => c[1])).toEqual(Array(4).fill('ready and unblocked (order: score 0)'))
+    // on: area first, then the unscored, the one held back by overlap and the one that needs the owner last
+    const on = plan(withFacts, { ...cfg, intakeStamp: 'on' })
+    expect(claims(on)).toEqual([
+      [2, 'ready and unblocked (order: score 5: area-factory +20, overlap -15)'],
+      [1, 'ready and unblocked (order: score 0)'],
+      [4, 'ready and unblocked (order: score -15: overlap -15)'],
+      [3, 'ready and unblocked (order: score -55: needs-owner -40, overlap -15)'],
+    ])
+  })
+
+  test('the rest go by score: a bug that unblocks outranks a priority label, a tie goes to the oldest claimable then the lowest number; the owner lists stay first; every claim carries its score', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter((a): a is Extract<Action, { kind: 'claim' }> => a.kind === 'claim')
+    const issues = [
+      issue(1),
+      issue(2, { readyAt: NOW - 2 * HOUR }),
+      issue(3, { labels: ['ready', 'priority'] }),
+      issue(4, { labels: ['ready', 'bug'], blockingList: [90, 91] }),
+      issue(5, { labels: ['ready', 'priority', 'bug'] }),
+      issue(6, { labels: ['ready'] }),
+    ]
+    const r = plan(world([], { queue: [1, 2, 3, 4, 5, 6], issues }), cfg)
+    expect(claims(r).map(a => [a.issue, a.reason, a.score])).toEqual([
+      [5, 'ready and unblocked (order: score 55: priority-label +30, bug +25)', { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] }],
+      [4, 'ready and unblocked (order: score 45: bug +25, unblocks +20)', { score: 45, factors: [{ name: 'bug', points: 25 }, { name: 'unblocks', points: 20 }] }],
+      [3, 'ready and unblocked (order: score 30: priority-label +30)', { score: 30, factors: [{ name: 'priority-label', points: 30 }] }],
+      [2, 'ready and unblocked (order: score 4: waiting +4)', { score: 4, factors: [{ name: 'waiting', points: 4 }] }],
+      [1, 'ready and unblocked (order: score 0)', { score: 0, factors: [] }],
+      [6, 'ready and unblocked (order: score 0)', { score: 0, factors: [] }],
+    ])
+    // the owner's priority list stays first and in its order, though the rest outscore it
+    const listed = claims(plan(world([], { queue: [1, 2, 3, 4, 5, 6], issues, control: control({ priority: [6, 1] }) }), cfg))
+    expect(listed.map(a => [a.issue, a.reason])).toEqual([
+      [6, 'ready and unblocked (order: owner priority)'],
+      [1, 'ready and unblocked (order: owner priority)'],
+      [5, 'ready and unblocked (order: score 55: priority-label +30, bug +25)'],
+      [4, 'ready and unblocked (order: score 45: bug +25, unblocks +20)'],
+      [3, 'ready and unblocked (order: score 30: priority-label +30)'],
+      [2, 'ready and unblocked (order: score 4: waiting +4)'],
+    ])
+    expect(listed.every(a => a.score !== undefined)).toBe(true)
+    // `only` is its own tier, scored too
+    const only = claims(plan(world([], { queue: [1, 5], issues, control: control({ only: [1] }) }), cfg))
+    expect(only.map(a => [a.issue, a.reason, a.score])).toEqual([[1, 'ready and unblocked (order: owner only)', { score: 0, factors: [] }]])
+  })
+
+  test('the score reads what the pass knows: a sibling in the factory starts the epic, earlier lives that did not merge count against, and the block graph walks the chain', () => {
+    const cfg = { ...CFG, maxInFlightIssues: null, maxStartsPerPass: 10 }
+    const claims = (r: ReturnType<typeof plan>) => r.actions.filter((a): a is Extract<Action, { kind: 'claim' }> => a.kind === 'claim')
+    const epic = { parent: 9, siblings: [{ number: 60, open: true }, { number: 61, open: true }] }
+    const issues = [issue(10, epic), issue(11, { blockingList: [20] })]
+    const s = world([rec(60)], { queue: [10, 11], issues: [...issues, issue(60)] })
+    const started = claims(plan(s, cfg))
+    expect(started.find(a => a.issue === 10)?.score).toEqual({ score: 10, factors: [{ name: 'epic-started', points: 10 }] })
+    const chain = claims(plan({ ...s, blockGraph: { 20: [21, 22], 21: [22], 22: [] } }, cfg))
+    expect(chain.find(a => a.issue === 11)?.score).toEqual({ score: 20, factors: [{ name: 'unblocks', points: 20 }] })
+    expect(claims(plan(s, cfg)).find(a => a.issue === 11)?.score).toEqual({ score: 10, factors: [{ name: 'unblocks', points: 10 }] })
+    const failed = rec(12, { life: lifeOf(NOW - 5 * HOUR), state: 'closed', step: null, why: 'dropped' })
+    const again = claims(plan(world([failed], { queue: [12], issues: [issue(12)] }), cfg))
+    expect(again[0]?.score).toEqual({ score: -10, factors: [{ name: 'failed-lives', points: -10 }] })
+    expect(again[0]?.reason).toBe('ready and unblocked (order: score -10: failed-lives -10)')
   })
 
   test('the priority label only orders: the capacity, the filters and unread labels apply as to any issue', () => {
@@ -202,9 +280,10 @@ describe('S1: claims', () => {
     const lost = done(claimKey(42, old), 'claim', { issue: 42, startedAt: NOW - 5 * MIN, outcome: { kind: 'claim', result: 'lost' } })
     const s = withLedger(world([dropped], { queue: [40, 41, 42], issues: [issue(40), issue(41), issue(42)], control: control({ dropped: [{ issue: 40, at: NOW - 3 * HOUR }] }) }), [failed, lost])
     const r = plan(s, { ...CFG, maxInFlightIssues: null })
+    // #40 had a life that ended dropped, so failed-lives -10 puts it after #41
     expect(r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.key])).toEqual([
-      [40, claimKey(40, lifeOf(NOW))],
       [41, claimKey(41, old)],
+      [40, claimKey(40, lifeOf(NOW))],
     ])
     expect(said(r, 42)).toContain('another device holds it')
     // queued again after the lost claim: a new claim
@@ -346,7 +425,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(next.actions.some(a => a.kind === 'label')).toBe(false)
   })
 
-  test('the events a row logs beside transition, as today\'s queries read them: delegated with its brief, fix_requested with its kind, merge_ready, abandoned when dropped; a park posts its question and tells the owner', () => {
+  test('the events a row logs beside transition: entering building, fixing and the merge queue logs only the transition (no delegated, fix_requested or merge_ready), a drop logs abandoned; a park posts its question and tells the owner', () => {
     const build = rec(71, { brief: BRIEF(71), seq: 5, seqAt: NOW - MIN, since: NOW - MIN })
     const fix = rec(72, { state: 'fixing', step: 'fix', seq: 6, seqAt: NOW - MIN, since: NOW - MIN })
     const queue = rec(73, { state: 'merge-queue', step: 'queue', pr: 773, head: HEAD, seq: 7, seqAt: NOW - MIN, since: NOW - MIN })
@@ -361,9 +440,11 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     ])
     const r = plan(s)
     const notes = (n: number) => of(r, n).flatMap(a => (a.kind === 'event' && a.event.state !== 'transition' && 'note' in a.event ? [`${a.event.state}: ${a.event.note}`] : []))
-    expect(notes(71)).toEqual([`delegated: brief ${BRIEF(71)}`])
-    expect(notes(72)).toEqual(['fix_requested: ci'])
-    expect(notes(73)).toEqual(['merge_ready: round 0'])
+    for (const n of [71, 72, 73]) expect([n, notes(n)]).toEqual([n, []])
+    for (const n of [71, 72, 73]) expect(of(r, n).filter(a => a.kind === 'event' && a.event.state !== 'intervention').map(a => (a.kind === 'event' ? a.event.state : ''))).toEqual(['transition'])
+    expect(of(r, 71).some(a => a.key.includes('event/delegated'))).toBe(false)
+    expect(of(r, 72).some(a => a.key.includes('event/fix_requested'))).toBe(false)
+    expect(of(r, 73).some(a => a.key.includes('event/merge_ready'))).toBe(false)
     expect(notes(74)).toEqual(['abandoned: dropped'])
     expect(kinds(r, 74)).toEqual(['event transition', 'label clear', 'event abandoned'])
     // a park is an intervention by the loop, logged beside its entry actions; so is a fixer for red
@@ -379,7 +460,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(r.owner).toBeGreaterThanOrEqual(1)
   })
 
-  test('every entry into a state logs that state\'s event, a resume\'s T1 included: fix_requested with the life\'s last fix reason (R4-F1)', () => {
+  test('an entry into building, fixing or the merge queue, a resume\'s T1 included, logs only its transition (the delegated, fix_requested and merge_ready events are no longer written)', () => {
     const fix = rec(81, { state: 'fixing', step: 'fix', fixes: 1, pr: 781, seq: 21, seqAt: NOW - MIN, since: NOW - MIN })
     const queue = rec(82, { state: 'merge-queue', step: 'queue', pr: 782, head: HEAD, round: 2, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
     const triage = rec(83, { state: 'fixing', step: 'fix', fixes: 2, pr: 783, seq: 7, seqAt: NOW - MIN, since: NOW - 10 * MIN })
@@ -396,7 +477,8 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     ])
     const r = plan(s)
     const notes = (n: number) => of(r, n).flatMap(a => (a.kind === 'event' && a.event.state !== 'transition' && a.event.state !== 'intervention' && 'note' in a.event ? [`${a.event.state}: ${a.event.note}`] : []))
-    expect([notes(81), notes(82), notes(83)]).toEqual([['fix_requested: conflict'], ['merge_ready: round 2'], ['fix_requested: triage']])
+    expect([notes(81), notes(82), notes(83)]).toEqual([[], [], []])
+    for (const n of [81, 82, 83]) expect(of(r, n).filter(a => a.kind === 'event' && a.event.state !== 'intervention').map(a => a.key.split('/').slice(-2).join('/'))).toEqual(['event/transition'])
   })
 
   test('a closed record ends its claim at once: once its entry actions are done the sweep is due, so a merged or closed issue is not live until the next timed sweep (R4-O1)', () => {
@@ -670,7 +752,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(plan(one), 79)).toEqual(['stop-agent'])
   })
 
-  test('a transition lost to a reload after the store took it keeps its row, its from-state and its via: the seq still logs the row\'s events and the park\'s comment', () => {
+  test('a transition lost to a reload after the store took it keeps its row, its from-state and its via: the seq still logs the row\'s transition and the park\'s comment', () => {
     const prev = rec(83, { state: 'designing', step: 'design', seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN })
     const plans = plan(withLedger(world([prev]), [transitioned(prev, 'T1', 'queued'), done(entryKey(prev, 'event/transition'), 'event', { issue: 83 }), done(entryKey(prev, 'label'), 'label', { issue: 83 }), ...designed(prev, BRIEF(83))]))
     const t = transitionOf(plans, 83)
@@ -681,7 +763,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const [lost] = onLoad([started], NOW + MIN)
     expect(lost).toMatchObject({ status: 'lost', outcome: { kind: 'transition', row: 'T2', from: 'designing', step: 'design', via: 'brief', stored: false } })
     const after = plan(withLedger({ ...world([t.next]), now: NOW + MIN }, [lost as LedgerEntry]))
-    expect(kinds(after, 83)).toEqual(['event transition', 'label set', 'event delegated'])
+    expect(kinds(after, 83)).toEqual(['event transition', 'label set'])
     expect(of(after, 83)[0]).toMatchObject({ event: { row: 'T2', from: 'designing', via: 'brief' } })
     // a park lost the same way still names what parked it
     const building = rec(84, { seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN, triages: 9 })
@@ -1491,14 +1573,49 @@ describe('the record\'s executors (act-state.ts)', () => {
     const w = actWorld([])
     expect(await w.run(action)).toMatchObject({ status: 'done', summary: 'logged transition' })
     expect(w.argvs).toEqual([eventArgv(e)])
-    const usage = actWorld([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown state' }))
+    const usage = actWorld([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown type' }))
     expect(await usage.run(action)).toMatchObject({ status: 'failed', noRetry: true })
     // a fixer's disposition is logged as the fixer's (v2 SPEC 7.1): the actor events.ts names
     const verdict = { state: 'verdict' as const, issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed the off-by-one' }
     const fixer = actWorld([])
     expect(await fixer.run({ ...action, event: verdict })).toMatchObject({ status: 'done', summary: 'logged verdict' })
     expect(fixer.argvs).toEqual([eventArgv(verdict)])
-    expect(fixer.argvs[0]?.slice(-4)).toEqual(['--actor', 'fixer', '--note', 'CORRECT: r1-1 fixed the off-by-one'])
+    expect(fixer.argvs[0]?.slice(-4)).toEqual(['--issue', '500', '--actor', 'fixer'])
+    expect(fixer.argvs[0]?.slice(1, 3)).toEqual(['--type', 'finding_handled'])
+  })
+
+  test('event: a merged event with a pr reads the PR size first and logs it; a failed read logs nulls and is no failure', async () => {
+    const merged = { state: 'merged' as const, issue: 500, branch: 'issue-500', pr: 621, head: 'abc1234', note: 'merged by hand' }
+    const action: Action = { kind: 'event', key: 'k', class: 'free', rule: 'S3', reason: 'x', issue: 500, event: merged }
+    const sizeArgv = ['gh', 'pr', 'view', '621', '--repo', REPO, '--json', 'files,additions,deletions']
+    const dataOf = (argv: string[] | undefined) => JSON.parse(argv?.[argv.indexOf('--data') + 1] ?? 'null')
+    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: '', additions: 1, deletions: 0 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 }) } : {}))
+    expect(await ok.run(action)).toMatchObject({ status: 'done', summary: 'logged merged' })
+    expect(ok.argvs[0]).toEqual(sizeArgv)
+    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, size: { files: ['a.js', 'b/c.sh'], fileLines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 } }))
+    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], file_lines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 })
+    // a read that fails (exit, throw, bad JSON, no counts) writes the three as null, and the summary says so
+    const bad: [string, (argv: string[]) => { exitCode?: number; stdout?: string }][] = [
+      ['exit', () => ({ exitCode: 1 })],
+      ['throw', () => {
+        throw new Error('gh timed out')
+      }],
+      ['json', () => ({ stdout: 'not json' })],
+      ['shape', () => ({ stdout: '{"files": []}' })],
+    ]
+    for (const [name, gh] of bad) {
+      const w = actWorld([], argv => (argv[0] === 'gh' ? gh(argv) : {}))
+      expect(await w.run(action), name).toMatchObject({ status: 'done', summary: expect.stringContaining('size of PR #621 was unread') })
+      expect(w.argvs[1], name).toEqual(eventArgv(merged))
+      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
+    }
+    // no pr: no size read; another event: no extra command
+    const nopr = actWorld([])
+    expect(await nopr.run({ ...action, event: { ...merged, pr: null } })).toMatchObject({ status: 'done', summary: 'logged merged' })
+    expect(nopr.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
+    const verdict = actWorld([])
+    await verdict.run({ ...action, event: { state: 'verdict', issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed' } })
+    expect(verdict.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
   })
 
   test('claim under planner v2: exit 3 is lost; a first claim adopts the newest open PR by a trusted author on a branch of the issue, the others named; a re-claim adopts nothing', async () => {
@@ -1532,6 +1649,12 @@ describe('the record\'s executors (act-state.ts)', () => {
     const again = actWorld([])
     expect(await again.run({ ...claim, rule: 'H1' })).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'claimed' } })
     expect(again.argvs).toEqual([['callum-flow-claim', '130']])
+    // a scored claim (S1) runs under env CALLUM_FLOW_CLAIM_SCORE, which the claim tool records on the claimed event
+    const score = { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] }
+    const scored = actWorld([], argv => (argv[0] === 'gh' ? { stdout: '[]' } : {}))
+    expect(await scored.run({ ...claim, score })).toMatchObject({ status: 'done', outcome: { kind: 'adopt' } })
+    expect(scored.argvs[0]).toEqual(['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify(score)}`, 'callum-flow-claim', '130'])
+    expect(JSON.parse((scored.argvs[0]?.[1] ?? '').slice('CALLUM_FLOW_CLAIM_SCORE='.length))).toEqual(score)
     expect(issueBranch('feat/issue-130', 130)).toBe(true)
     expect(issueBranch('issue-1300', 130)).toBe(false)
     expect(openPrsOf('nope', 130)).toBeNull()
@@ -1586,7 +1709,9 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     triages: 1,
     maxTriages: 2,
     fixes: 0,
+    conflicts: 0,
     fixCap: 3,
+    conflictFixCap: 5,
     round: 0,
     brief: BRIEF(150),
     branch: 'issue-150',
@@ -1611,7 +1736,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(p).not.toContain('/tmp')
     // with no slot there is no marker and no scratch folder to name
     expect(triagePrompt(input({ slot: null, scratch: null }))).not.toContain('scratch folder')
-    expect(p).toContain('1 of 2 triage calls, 0 of 3 fix rounds')
+    expect(p).toContain('1 of 2 triage calls, 0 of 3 fix rounds, 0 of 5 conflict rounds')
     expect(p).toContain('file: /l/spawns/x.json')
     expect(p).toContain('- fix: not valid here (the branch has no commits beyond the base)')
     expect(p).toContain(`${PLUGIN_ROOT}/bin/factory-answer --to ${LOOP_DIR}/answers/i150_lx_s6_triage_a1.answer.json <<'JSON'`)
@@ -1700,6 +1825,22 @@ describe('the title is a throttle (O1, titleEveryMs)', () => {
   })
 })
 
+describe('the title\'s owner count holds across a sweep retry (H2, O2)', () => {
+  test('the pass that starts the retry counts the same stalled sweep as the pass before it', () => {
+    // the fixture's own ledger holds a recent done sweep, which would be the last one: replace it
+    const lastDoneAt = NOW - 2 * HOUR
+    const key = `sweep:${lastDoneAt}`
+    const swept = done('sweep:0', 'sweep', { startedAt: lastDoneAt - MIN, endedAt: lastDoneAt })
+    const on = (retry: LedgerEntry) => plan({ ...world([]), ledger: [swept, retry] })
+    const before = on(entry(key, 'sweep', { status: 'failed', attempts: 3, startedAt: NOW - 20 * MIN, endedAt: NOW - 19 * MIN }))
+    const during = on(entry(key, 'sweep', { status: 'running', attempts: 4, startedAt: NOW, endedAt: null }))
+    expect(before.owner).toBe(1)
+    expect(during.owner).toBe(before.owner)
+    expect(before.title).toContain('owner 1')
+    expect(during.title).toBe(before.title)
+  })
+})
+
 // --- comment_posted (v2 SPEC 4.5, comment_posted.v1) ---------------------------------------------------------
 
 describe('a park or wait comment logs where it is (comment_posted)', () => {
@@ -1742,5 +1883,34 @@ describe('a park or wait comment logs where it is (comment_posted)', () => {
     const p = run(parked, comment(parked, URL), done(entryKey(parked, 'event/comment-posted'), 'event', { issue: 61 }))
     expect(posted(parked, p)).toEqual([])
     expect(posted(parked, plan(withLedger(world([parked]), [comment(parked, URL)])))).toEqual([])
+  })
+})
+
+describe('stepEvent: an ended agent step the loop stopped', () => {
+  const r = rec(171)
+  const ctxOver = (ledger: LedgerEntry[]): V2Ctx => {
+    const s = withLedger(world([r]), ledger)
+    return Object.assign(newCtx(s, CFG, { tier: 'normal', overridden: false }, V2_OWNER_TELLS, GITHUB_V2), { v2: s.v2 as V2State })
+  }
+  const step = (status: LedgerEntry['status'], summary: string): LedgerEntry => done(stepKey(r, 'build', 1), 'agent-step', { issue: 171, agentId: 'agent-9', status, summary, endedAt: NOW - MIN })
+  const stops = [
+    ['the v2 stopKey', (e: LedgerEntry) => done(stopKey(r, e.key), 'stop-agent', { issue: 171 })],
+    ['/stop/<agentId>', () => done(`i171/l${LIFE}/s9/stop/agent-9`, 'stop-agent', { issue: 171 })],
+    ['stop:<agentId>', () => done('stop:agent-9', 'stop-agent', { issue: 171 })],
+  ] as const
+  for (const [name, mk] of stops) {
+    for (const [status, summary] of [['lost', 'lost'], ['failed', 'agent killed']] as const) {
+      test(`a ${status} step with a stop-agent (${name}) is unknown stopped, naming the stop key`, () => {
+        const e = step(status, summary)
+        const stop = mk(e)
+        expect(stepEvent(ctxOver([e, stop]), r, e, 'build')).toMatchObject({ kind: 'unknown', why: 'stopped', reason: expect.stringContaining(stop.key) })
+      })
+    }
+  }
+  test('without a stop-agent a lost step, or one that failed killed, is unknown agent-dead', () => {
+    for (const [status, summary] of [['lost', 'lost'], ['failed', 'agent killed']] as const) {
+      const e = step(status, summary)
+      expect(stepEvent(ctxOver([e]), r, e, 'build')).toMatchObject({ kind: 'unknown', why: 'agent-dead' })
+    }
   })
 })

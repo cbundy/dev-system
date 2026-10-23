@@ -44,7 +44,7 @@ export type Op =
   // (no value). The key is as typed (`passEvery`, `stateTimeout.design`)
   | { op: 'config'; change?: { key: string; value?: unknown } }
   | { op: 'help' }
-  | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop'; issue: number }
+  | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop' | 'stamp'; issue: number }
   | { op: 'priority' | 'only'; issues: number[] }
   | { op: 'serial' | 'new' | 'trace'; on: boolean }
   // null: `override off`
@@ -119,7 +119,8 @@ export function parseOp(text: string): Parsed {
     case 'skip':
     case 'noskip':
     case 'retry':
-    case 'drop': {
+    case 'drop':
+    case 'stamp': {
       const issue = args.length === 1 ? issueOf(args[0]) : null
       return issue === null ? bad(name, 'takes one issue number') : { ok: true, op: { op: name, issue } }
     }
@@ -193,6 +194,7 @@ export function formatOp(op: Op): string {
     case 'noskip':
     case 'retry':
     case 'drop':
+    case 'stamp':
       return `${op.op} ${op.issue}`
     case 'priority':
     case 'only':
@@ -303,6 +305,7 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
         `Usage override: run past the usage tiers up to ${op.until.pct}% until ${clock(expiresAt, now)}.`,
       )
     }
+    case 'stamp': return keep('Stamp is started by the driver (driver-stamp.ts).')
     case 'retry':
       return keep(`Retry #${op.issue}: its exhausted actions are cleared.`, { retryIssue: op.issue })
     case 'update':
@@ -440,8 +443,10 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
     op = only.op
     aside = only.aside
   }
-  const viewOnly = op.op === 'status' || (op.op === 'config' && op.change === undefined)
+  const viewOnly = op.op === 'status' || op.op === 'stamp' || (op.op === 'config' && op.change === undefined)
   if (from.agentId !== undefined && !viewOnly) return refused('Not changed: only the main conversation sets owner directives.', op)
+  // the driver starts the dry run and answers (driver-stamp.ts); nothing is read or written here
+  if (op.op === 'stamp') return { ok: true, text: '', op, control: null, ping: false, retryIssue: null, mode: null, logged: null }
   if (op.op === 'stop-now') return stopNow(io, paths.loopDir, op, now)
   let loaded: LoadedControl
   try {
@@ -516,7 +521,7 @@ export const CONTROL_TOOL: ToolSpec = {
   description:
     "Set the factory loop's owner directives (control.json) when the owner asks, as `/factory <op>` does; " +
     'one op per call, answered in one line, and a malformed op changes nothing. Ops: ' +
-    'status (what the loop is doing); config [set <key> <value>|unset <key>] (no argument: the settings it runs with, each with its source; config set <key> <value> saves one setting in the workspace config file and config unset <key> removes it, checked as the loader reads it, only when the owner asks); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
+    'status (what the loop is doing); stamp <N> (dry-run the intake reader on one issue; writes nothing); config [set <key> <value>|unset <key>] (no argument: the settings it runs with, each with its source; config set <key> <value> saves one setting in the workspace config file and config unset <key> removes it, checked as the loader reads it, only when the owner asks); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +

@@ -64,6 +64,15 @@ describe('snapshotOf', () => {
     expect(Object.keys(s.layers).sort()).toEqual([...leaves].sort())
     expect(Object.keys(s.layers)).toContain('rateCaps.start')
     expect(Object.keys(s.layers)).not.toContain('rateCaps')
+    expect(Object.keys(s.layers)).toContain('queueScore.bug')
+    expect(s.settings).toHaveProperty(['queueScore', 'bug'], 25)
+    // the intake settings and weights (#995)
+    expect(s.settings).toMatchObject({ intakeStamp: 'off', intakeModel: 'haiku', intakeAreas: ['factory', 'product'] })
+    expect(s.settings).toHaveProperty(['queueScore', 'areaFactory'], 20)
+    expect(s.settings).toHaveProperty(['queueScore', 'needsOwner'], 40)
+    expect(s.settings).toHaveProperty(['queueScore', 'overlap'], 15)
+    expect(s.settings).toMatchObject({ regime: 'factory_loop_v2' })
+    for (const key of ['regime', 'intakeStamp', 'intakeModel', 'intakeAreas', 'queueScore.areaFactory', 'queueScore.needsOwner', 'queueScore.overlap']) expect(s.layers[key]).toBe('default')
   })
 
   test('a mode from the workspace file, and a pool size nobody set', () => {
@@ -90,6 +99,8 @@ describe('snapshotOf', () => {
     expect(t.derived).toEqual({
       gateConcurrency: 2,
       cpus: 16,
+      memoryBytes: null,
+      effectiveCap: null,
       models: { designer: 'opus', builder: 'sonnet', fixer: null, triage: 'sonnet', reviewer: DEFAULT_CONFIG.reviewerModel, adjudicator: null },
       experiment: { implementerOpusPct: 25, designSessionPct: null },
     })

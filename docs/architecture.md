@@ -18,7 +18,7 @@ Two more surfaces build on the layers:
 - `.devcontainer/`: dev-system's own dev environment, a per-repo image like any
   consumer's. `.devcontainer/Dockerfile` adds terraform, a PostgreSQL 17 server and TypeScript to the base image;
   `publish-dev-image.yml` publishes it as `ghcr.io/cbundy/dev-system/dev` (`latest` and
-  `sha-<short>`) on every change on main and weekly, after the base image's rebuild. No
+  `sha-<short>`) after every successful base image publish, on every `.devcontainer/` change on main, and weekly. No
   consumer pulls it.
 - `coder/dev-system/`: a Coder template that runs the base image. You push it to a Coder
   server; consumer repos never pull it.
@@ -59,9 +59,11 @@ scripts/test-reporter.js          node:test reporter: failing test, file:line an
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 scripts/release-bump.js           sets the release version everywhere and refreshes the stamp
 scripts/release-notes.js          validates release-notes/vX.Y.Z.md and builds the release body
+scripts/claude-code-canary-issue.sh  raises one bug issue per Claude Code version the canary fails on
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
-                                  publish-dev-image.yml, publish-features.yml, test-features.yml
+                                  publish-dev-image.yml, publish-features.yml, test-features.yml,
+                                  claude-code-canary.yml (daily; not a required check)
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs
 ```
@@ -74,6 +76,9 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 `*.test.sh` under `features/test/callum-tools/`, `coder/test/` and `images/base/test/`
 forms a shell job, and each mod's validation and tests form a job. See
 [mod testing](../plugins/factory-hud/README.md#develop-it) for Claude Code requirements.
+CI's Claude Code release is pinned in `.github/claude-code-version`; how to bump it is in the comment
+above the install step in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). A daily canary
+(`claude-code-canary.yml`) tests the newest release and raises a bug when the mods fail on it.
 `scripts/test-pool.sh` runs these jobs through `scripts/test-job.sh` with at most
 `TEST_JOBS` active jobs. For example, `TEST_JOBS=2 npm test` limits the pool to two;
 this does not limit Node's internal test concurrency. The default is the container-aware
@@ -173,7 +178,7 @@ and the workflow checks and commands.
 |---|---|---|---|
 | Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all set by `scripts/release-bump.js` in the bump PR) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | CLI and templates: npm resolves `semver:0.x` against git tags. Plugin: the refreshed template advances the marketplace `ref`; `dev-init` migrates the installation. |
 | Base image | `images/base/VERSION` | `Publish base image` workflow, plus a weekly rebuild of the current version | The next pull of the tag. Pin by digest if you need the exact image. |
-| Dev image (this repo only) | none: follows main | `Publish dev image` workflow, on every change to `.devcontainer/` on main, plus a weekly rebuild | Not a consumer layer. Workspaces for this repo pull `latest`. |
+| Dev image (this repo only) | none: follows main | `Publish dev image` workflow, after every successful base image publish, on every change to `.devcontainer/` on main, plus a weekly rebuild | Not a consumer layer. Workspaces for this repo pull `latest`. |
 | Feature (deprecated) | `features/src/callum-tools/devcontainer-feature.json` | `Publish features` workflow | The next rebuild of a container pinned to `callum-tools:1` |
 
 Semver for each: patch for wording fixes, minor for a new skill, template or capability,

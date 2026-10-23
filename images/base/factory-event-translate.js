@@ -17,11 +17,15 @@
 // CommonJS with no dependencies: callum-flow-event (dual write) and the replay script both use it.
 // Temporary: deleted with the old event path (dev-system#656).
 //
+// `opts.regime` (CLI --regime, dual write only) is the envelope's regime, set right after plugin_version
+// (null when absent). The replay has no regime key. The translator is pure and loads no shapes, so it
+// does not check the value against the envelope's enum; the native writer does.
+//
 // `opts.data` (CLI --data JSON, dual write only) is an object of extra payload fields merged into the
 // new event's data before the check (ready and claimed: title, labels, parent; dev-system#870). A key
 // the type does not accept, or a value of the wrong shape, is a miss. Replay (no opts) has none.
 //
-// CLI: node factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl
+// CLI: node factory-event-translate.js [--ts T --session-id S] [--regime R] [--data JSON] [--quiet] < old.jsonl > new.jsonl
 //   One stderr line per miss and a summary of counts per state (--quiet drops the summary); exit 1 on any miss, else 0.
 
 // --- the token codec (plugins/factory-loop/hooks/v2/events.ts: dec, tokensOf, noteToken) ---------
@@ -251,6 +255,10 @@ const SPECS = {
     mode: E("off", "observe", "act"),
     planner: E("v1", "v2"),
     pass_every_ms: I(1),
+    observe_mean_ms: opt(nul(I(0))),
+    observe_commands_mean_ms: opt(nul(I(0))),
+    observe_in_process_mean_ms: opt(nul(I(0))),
+    observe_in_process_max_ms: opt(nul(I(0))),
   },
 };
 
@@ -690,15 +698,18 @@ function usage(line) {
 const V1_LOOP_KINDS = ["spawn", "delegate", "judge"];
 const PASSES_KEYS = ["kind", "key", "status", "from", "to", "passes", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting", "acting_mean_ms", "idle_mean_ms", "errors", "mode", "planner", "pass_every_ms"];
 
+// Optional (a loop older than the observe split leaves them out): kept, never needed.
+const OBSERVE_KEYS = ["observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms"];
+
 function passes(line) {
-  const t = strictTokens(line.note ?? null, { keep: PASSES_KEYS, need: PASSES_KEYS });
+  const t = strictTokens(line.note ?? null, { keep: [...PASSES_KEYS, ...OBSERVE_KEYS], need: PASSES_KEYS });
   if (t.get("status") !== "done") miss(`passes status=${t.get("status")} is not done`);
   const from = t.get("from");
   const fromMs = ISO(from) ? Date.parse(from) : NaN;
   if (Number.isNaN(fromMs)) miss(`bad time from=${from}`);
   if (t.get("key") !== `passes:${fromMs}`) miss(`passes key=${t.get("key")} is not passes:<epoch ms of from> (passes:${fromMs})`);
   const ms = (k) => tInt(t, k, true);
-  return {
+  const out = {
     from_at: from,
     to_at: tStr(t, "to"),
     passes: tInt(t, "passes"),
@@ -714,6 +725,8 @@ function passes(line) {
     planner: tStr(t, "planner"),
     pass_every_ms: tInt(t, "pass_every_ms"),
   };
+  for (const k of OBSERVE_KEYS) if (t.has(k)) out[k] = ms(k);
+  return out;
 }
 
 // loop: skips first (they carry tokens the entry does not), then the passes summary, then an entry.
@@ -843,7 +856,7 @@ function envelope(line, type, data, opts) {
   const repo = text("repo");
   if (repo === null || !/^[^/\s]+\/[^/\s]+$/.test(repo)) miss(`repo is not owner/name: ${JSON.stringify(repo)}`);
   for (const k of ["device", "actor"]) if (!NE(line[k])) miss(`${k} is missing`);
-  return {
+  const env = {
     envelope: 1,
     event_id: line.event_id,
     ts,
@@ -858,8 +871,10 @@ function envelope(line, type, data, opts) {
     dev_image: text("dev_image"),
     template_version: text("template_version"),
     plugin_version: text("plugin_version"),
-    data,
   };
+  if (opts !== undefined && opts !== null) env.regime = opts.regime ?? null;
+  env.data = data;
+  return env;
 }
 
 // --- translate ------------------------------------------------------------------------------------
@@ -901,6 +916,7 @@ function main(argv) {
   const fs = require("node:fs");
   let ts;
   let sessionId;
+  let regime;
   let dual = false;
   let quiet = false;
   let extra;
@@ -910,6 +926,9 @@ function main(argv) {
       dual = true;
     } else if (argv[i] === "--session-id" && i + 1 < argv.length) {
       sessionId = argv[++i];
+      dual = true;
+    } else if (argv[i] === "--regime" && i + 1 < argv.length) {
+      regime = argv[++i];
       dual = true;
     } else if (argv[i] === "--data" && i + 1 < argv.length) {
       try {
@@ -922,11 +941,11 @@ function main(argv) {
     } else if (argv[i] === "--quiet") {
       quiet = true;
     } else {
-      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
+      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--regime R] [--data JSON] [--quiet] < old.jsonl > new.jsonl\n");
       return 2;
     }
   }
-  const opts = dual ? { ts, sessionId, data: extra } : undefined;
+  const opts = dual ? { ts, sessionId, regime, data: extra } : undefined;
   const counts = new Map();
   const bump = (state, what) => {
     const c = counts.get(state) ?? { translated: 0, skipped: 0, missed: 0 };
@@ -963,6 +982,9 @@ function main(argv) {
   return missed > 0 ? 1 : 0;
 }
 
-module.exports = { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, SPECS };
+// The types a replayed old line can become; the dual-write check uses it to tell new-only types apart.
+const TRANSLATED_TYPES = Object.freeze(Object.keys(SPECS));
+
+module.exports = { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, SPECS, TRANSLATED_TYPES };
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));

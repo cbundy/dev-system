@@ -1,8 +1,13 @@
 // `/factory config` (#698): the settings the loop runs with, grouped, each with where its value
 // came from. Pure: it renders the Runtime the last pass used (viewOf) and the control state, and
 // reads no file, so it shows what the pass runs with, not what the files say now.
+import { budgetOf } from './spend'
+import type { ApiKeySettings } from './spend'
 import { GATE_CPUS, resolveGateConcurrency, shortDuration } from './config'
 import type { Runtime } from './observe'
+import { effectiveCap } from './v2/capacity'
+import type { CapInfo } from './v2/capacity'
+import type { GateLine } from './v2/sources-interventions'
 import type { Config, Control, Ms } from './types'
 
 // Where a value came from. plugin, env and directive are for the few values that have no settings
@@ -19,12 +24,16 @@ export type ConfigView = {
   poolSize: number
   // the container's CPU count the loop read; undefined: not read (a test's, an older pass)
   cpus: number | undefined
+  // the cap the loop holds to, with the container's memory and the slot estimate it came from
+  cap: CapInfo
   repoRaw: Record<string, unknown>
   workspaceRaw: Record<string, unknown>
   problems: readonly string[]
   modeFrom: Source
   deviceFrom: Source
   pluginVersion: string
+  // API-key mode: the budget settings the container's environment gave (spend.ts); absent: subscription
+  apiKey?: ApiKeySettings
 }
 
 const WIDTH = 60
@@ -88,19 +97,21 @@ export function originOf(file: Record<string, unknown>, key: string): Source {
 
 // viewOf: the view of the settings a pass ran with. A Runtime without the provenance fields
 // (a test's, an older pass) reads as every value from its default.
-export function viewOf(rt: Runtime & Partial<ViewInputs>): ConfigView {
+export function viewOf(rt: Runtime & Partial<ViewInputs>, gates?: readonly GateLine[]): ConfigView {
   const file = rt.workspaceRaw ?? {}
   return {
     config: rt.config,
     device: rt.device,
     poolSize: rt.poolSize,
     cpus: rt.cpus,
+    cap: effectiveCap(rt.config, rt.memoryBytes ?? null, gates),
     repoRaw: rt.repoSettings ?? {},
     workspaceRaw: file,
     problems: rt.configProblems,
     modeFrom: originOf(file, 'mode'),
     deviceFrom: rt.deviceFrom ?? (rt.device === '' ? 'default' : 'env'),
     pluginVersion: rt.pluginVersion ?? 'unknown',
+    ...(rt.apiKey === undefined ? {} : { apiKey: rt.apiKey }),
   }
 }
 
@@ -123,12 +134,36 @@ function together(sources: Source[]): Source | 'mixed' {
   return sources.every(s => s === first) ? first : 'mixed'
 }
 
+// apiKeyRows: API-key mode's budget and reset day, which come from the workspace's parameters
+// (claude_budget_usd, claude_budget_reset_day), not from a config file.
+function apiKeyRows(k: ApiKeySettings): string[] {
+  const budget = budgetOf({ budgetUsd: k.budgetUsd, resetDay: '1' })
+  const day = budgetOf({ budgetUsd: '1', resetDay: k.resetDay })
+  return [
+    ...render({ label: 'budget', value: 'budgetUsd' in budget ? `$${budget.budgetUsd} a month` : 'none (new work stops)', source: 'env', note: 'from the workspace parameters, not a file' }),
+    ...render({ label: 'budget reset day', value: 'resetDay' in day ? `day ${day.resetDay}, 00:00 UTC` : `${k.resetDay || 'none'} (invalid, new work stops)`, source: 'env' }),
+  ]
+}
+
 // gateConcurrencyText: the gates that run at once and where that came from: `1 (auto: 8 CPUs / 8)`
 // for `auto`, `3 (repo)` for a number a file sets.
 function gateConcurrencyText(value: 'auto' | number, cpus: number | undefined, source: Source): string {
   if (value !== 'auto') return `${value} (${source})`
   const n = cpus ?? 1
   return `${resolveGateConcurrency(value, n)} (auto: ${n} CPUs / ${GATE_CPUS})`
+}
+
+const gib = (bytes: number): string => `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+
+// the memory rows of the Capacity group (v2/capacity.ts): what the container holds, the ceiling it gives and the cap in force
+function memoryRows(c: Config, cap: CapInfo, row: (label: string, key: string, value: string, note?: string) => Row): string[] {
+  return [
+    ...render(row('slotMemoryMiB', 'slotMemoryMiB', `${c.slotMemoryMiB === 'auto' ? 'auto' : `${c.slotMemoryMiB} MiB`} (${gib(cap.estimateBytes)}, ${cap.estimateSource})`)),
+    ...render(row('memoryReserveMiB', 'memoryReserveMiB', `${c.memoryReserveMiB} MiB`)),
+    ...render({ label: 'memory', value: cap.memoryBytes === null ? 'not readable: no memory ceiling' : gib(cap.memoryBytes) }),
+    ...render({ label: 'memory ceiling', value: cap.ceiling === null ? 'none' : String(cap.ceiling) }),
+    ...render({ label: 'effective cap', value: cap.effective === null ? 'no cap' : String(cap.effective) }),
+  ]
 }
 
 const MODE_NOTE = { off: 'runs nothing', observe: 'plans and logs only', act: 'does the work' }
@@ -153,6 +188,15 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
   const compact = timeouts.map(t => `${t.name} ${shortDuration(t.ms)}`)
   const half = Math.ceil(compact.length / 2)
 
+  const weights = Object.entries(c.queueScore).map(([name, v]) => ({ name, text: `${name} ${v}`, from: src(`queueScore.${name}`) }))
+  const scoreFrom = together(weights.map(w => w.from))
+  const scoreChanged = (['repo', 'workspace'] as const)
+    .map(s => ({ s, names: weights.filter(w => w.from === s).map(w => w.name) }))
+    .filter(g => g.names.length > 0)
+    .map(g => `${g.s}: ${g.names.join(' ')}`)
+  const scoreLines: string[] = []
+  for (let i = 0; i < weights.length; i += 3) scoreLines.push(clip(`    ${weights.slice(i, i + 3).map(w => w.text).join(' ')}`))
+
   const groups: [string, string[]][] = [
     [
       'Loop',
@@ -162,12 +206,14 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(ms('mainEveryMs')),
         ...render({ label: 'plugin', value: view.pluginVersion }),
         ...render({ label: 'device', value: view.device === '' ? '(none)' : view.device, source: view.deviceFrom }),
+        ...render(row('regime', 'regime', c.regime)),
       ],
     ],
     [
       'Capacity',
       [
         ...render(row('maxInFlight', 'maxInFlightIssues', c.maxInFlightIssues === null ? 'no cap' : String(c.maxInFlightIssues))),
+        ...memoryRows(c, view.cap, row),
         ...render({ label: 'poolSize', value: String(view.poolSize), source: typeof view.workspaceRaw.poolSize === 'number' ? 'workspace' : 'default' }),
         ...render(row('worktreeReserve', 'worktreeReserve', String(c.worktreeReserve))),
         ...render(row('maxStarts', 'maxStartsPerPass', String(c.maxStartsPerPass))),
@@ -181,12 +227,17 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('readyLabel', 'readyLabel', c.readyLabel)),
         ...render(row('priorityLabel', 'priorityLabel', c.priorityLabel)),
         ...render(row('skipLabels', 'skipLabels', c.skipLabels.length === 0 ? 'none' : c.skipLabels.join(', '))),
+        ...render({ label: 'queueScore', value: '', source: scoreFrom, ...(scoreFrom === 'mixed' && scoreChanged.length > 0 ? { note: scoreChanged.join('; ') } : {}) }),
+        ...scoreLines,
+        ...render(row('intakeStamp', 'intakeStamp', c.intakeStamp)),
+        ...render(row('intakeAreas', 'intakeAreas', c.intakeAreas.join(', '))),
       ],
     ],
     [
       'Limits',
       [
         ...render(row('reviewFixCap', 'reviewFixCap', String(c.reviewFixCap))),
+        ...render(row('conflictFixCap', 'conflictFixCap', String(c.conflictFixCap))),
         ...render(row('maxLives', 'maxLives', String(c.maxLives))),
         ...render(row('maxTriages', 'maxTriages', String(c.maxTriages))),
         ...render(row('windDown', 'windDownMinutes', c.windDownMinutes === 0 ? 'off' : `${c.windDownMinutes}m`)),
@@ -205,6 +256,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('reviewer', 'reviewer', c.reviewer)),
         ...render(row('reviewerModel', 'reviewerModel', c.reviewerModel)),
         ...render(row('triageModel', 'triageModel', c.triageModel)),
+        ...render(row('intakeModel', 'intakeModel', c.intakeModel)),
         ...render({ label: 'gateCommands', value: c.gateCommands.length === 0 ? 'none' : '', source: src('gateCommands') }),
         ...c.gateCommands.map(cmd => clip(`    ${cmd}`)),
         ...render(ms('gateTimeoutMs')),
@@ -229,6 +281,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
           value: live ? `to ${override.untilPct}% until ${clock(override.expiresAt, now)}` : 'none',
           source: 'directive',
         }),
+        ...(view.apiKey === undefined ? [] : apiKeyRows(view.apiKey)),
       ],
     ],
     ['Config problems', view.problems.length === 0 ? ['  none'] : view.problems.map(p => clip(`  ${p}`))],

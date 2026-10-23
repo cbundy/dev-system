@@ -27,7 +27,7 @@ const ROOT = path.join(__dirname, "..");
 const MODULE = path.join(ROOT, "images", "base", "factory-event-translate.js");
 const FIXTURES = path.join(__dirname, "fixtures", "factory-events");
 const HOOKS = path.join(ROOT, "plugins", "factory-loop", "hooks");
-const { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES } = require(MODULE);
+const { translate, tokensOf, noteToken, MAPPED_STATES, SKIPPED_STATES, TRANSLATED_TYPES } = require(MODULE);
 
 const jsonl = (file) =>
   fs
@@ -122,11 +122,10 @@ test("each event shares its old line's event_id, and the old line is left untouc
 
 test("coverage: the corpus produces every current type, and every writer state is mapped or skipped by name", () => {
   const made = new Set(expected.map((e) => e.type));
-  // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
-  // translator makes none. Each is named here with its issue, and the list may only hold such types.
-  const NEW_ONLY = ["gate_run", "wind_down", "shadow_read", "released", "milestone_state", "main_state", "comment_posted", "settings_changed", "designer_routed"]; // the stop gate's runs (#811): written by the loop once a writer exists
-  for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
-  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
+  // A schema type outside TRANSLATED_TYPES is new-only: the loop writes it straight to the new log.
+  assert.deepEqual([...made].sort(), [...TRANSLATED_TYPES].sort(), "the corpus produces exactly TRANSLATED_TYPES");
+  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || !TRANSLATED_TYPES.includes(type), `no corpus line produces ${type}`);
+  for (const e of expected) assert.ok(TRANSLATED_TYPES.includes(e.type), `${e.type} is produced but not in TRANSLATED_TYPES`);
   const states = writerStates();
   assert.ok(states.length > 20);
   for (const s of states) assert.ok(MAPPED_STATES.includes(s) || SKIPPED_STATES.includes(s), `callum-flow-event writes ${s}, which the translator neither maps nor skips`);
@@ -293,10 +292,13 @@ test("passes: a note built by the real passesNote from closeMinute translates to
   const book = new Map();
   passes.notePass(book, minute + 5000, 120.4, true, false);
   passes.notePass(book, minute + 15000, 3000, false, true);
-  passes.notePass(book, minute + 25000, 450, false, false);
+  passes.notePass(book, minute + 25000, 450, false, false, { ms: 40.6, commandsMs: 30.2, inProcessMs: 10.4 });
+  passes.notePass(book, minute + 26000, 450, false, false, { ms: 20.2, commandsMs: 5.2, inProcessMs: 15.1 });
   const busy = passes.closeMinute(book, minute, settings);
   const empty = passes.closeMinute(new Map(), minute + 60000, { mode: "off", planner: "v1", passEveryMs: 5000 });
-  assert.equal(busy.passes, 3);
+  assert.equal(busy.passes, 4);
+  assert.equal(busy.observeMean, 31);
+  assert.equal(busy.observeInProcessMax, 15);
   assert.equal(empty.passes, 0);
   const base = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
   for (const summary of [busy, empty]) {
@@ -314,9 +316,30 @@ test("passes: a note built by the real passesNote from closeMinute translates to
     assert.equal(r.event.data.acting_mean_ms, summary.actingMean);
     assert.equal(r.event.data.idle_mean_ms, summary.idleMean);
     assert.equal(r.event.data.errors, summary.errors);
+    assert.equal(r.event.data.observe_mean_ms, summary.observeMean);
+    assert.equal(r.event.data.observe_commands_mean_ms, summary.observeCommandsMean);
+    assert.equal(r.event.data.observe_in_process_mean_ms, summary.observeInProcessMean);
+    assert.equal(r.event.data.observe_in_process_max_ms, summary.observeInProcessMax);
     assert.equal(r.event.data.mode, summary.settings.mode);
     assert.equal(r.event.data.pass_every_ms, summary.settings.passEveryMs);
   }
+});
+
+test("passes: the optional observe tokens are carried when present, left out when absent, none is null, bad values are misses", () => {
+  const base = oldLines.find((l) => l.state === "loop" && /kind=passes/.test(l.note));
+  const OBSERVE = ["observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms"];
+  const today = translate(base).event.data;
+  for (const k of OBSERVE) assert.ok(!(k in today), `${k} is left out, not null`);
+  const withTokens = (extra) => translate(withNote(base, `${base.note} ${extra}`));
+  const all = withTokens("observe_mean_ms=2600 observe_commands_mean_ms=2300 observe_in_process_mean_ms=300 observe_in_process_max_ms=520").event.data;
+  assert.deepEqual({ ...all }, { ...today, observe_mean_ms: 2600, observe_commands_mean_ms: 2300, observe_in_process_mean_ms: 300, observe_in_process_max_ms: 520 });
+  assert.deepEqual(reader.validateStrict("loop_passes", 1, all), []);
+  const one = withTokens("observe_in_process_max_ms=7").event.data;
+  assert.deepEqual(one, { ...today, observe_in_process_max_ms: 7 });
+  const none = withTokens("observe_mean_ms=none observe_commands_mean_ms=none observe_in_process_mean_ms=none observe_in_process_max_ms=none").event.data;
+  for (const k of OBSERVE) assert.equal(none[k], null);
+  assert.deepEqual(reader.validateStrict("loop_passes", 1, none), []);
+  for (const bad of ["-1", "1.5", "x"]) assert.match(missOf(withNote(base, `${base.note} observe_mean_ms=${bad}`)), /bad number observe_mean_ms=/);
 });
 
 test("passes: an extra token, a missing token, a status other than done and a key not matching from are misses", () => {
@@ -420,7 +443,9 @@ test("determinism: the same line twice gives deep-equal output, and dual-write o
     assert.equal(r.event.ts, opts.ts);
     assert.equal(r.event.session_id, opts.sessionId);
     const replay = translate(line).event;
-    assert.deepEqual({ ...r.event, ts: 0, session_id: 0 }, { ...replay, ts: 0, session_id: 0 });
+    assert.equal(r.event.regime, null, "dual write carries regime: null when opts name none");
+    assert.ok(!("regime" in replay), "the replay has no regime key");
+    assert.deepEqual({ ...r.event, ts: 0, session_id: 0, regime: 0 }, { ...replay, ts: 0, session_id: 0, regime: 0 });
     assert.equal(replay.ts, `${line.ts.slice(0, -1)}.000Z`);
     assert.equal(replay.session_id, line.session_id);
     assert.equal(translate(line, { ts: opts.ts }).event.session_id, null);
@@ -724,4 +749,19 @@ test("usage: auth on today's two shapes, and the spend shape (dev-system#1114)",
     [`${sub.note} auth=other`, /bad auth=other/],
     [`${unavail.note} auth=nope`, /bad auth=nope/],
   ]) assert.match(missOf(withNote(sub, bad)), cause, bad);
+});
+
+test("CLI: --regime sets the envelope's regime after plugin_version in dual write, null without it, and the replay has no key", () => {
+  const line = JSON.stringify(oldLines.find((l) => l.state === "ready"));
+  const withRegime = JSON.parse(cli(["--ts", "2026-10-17T01:02:03.456Z", "--regime", "testbed"], `${line}\n`).out);
+  assert.equal(withRegime.regime, "testbed");
+  const keys = Object.keys(withRegime);
+  assert.equal(keys[keys.indexOf("plugin_version") + 1], "regime");
+  assert.equal(keys[keys.length - 1], "data");
+  assert.equal(JSON.parse(cli(["--ts", "2026-10-17T01:02:03.456Z"], `${line}\n`).out).regime, null);
+  assert.equal(JSON.parse(cli(["--regime", "manual"], `${line}\n`).out).regime, "manual", "--regime alone makes it dual write");
+  assert.ok(!("regime" in JSON.parse(cli([], `${line}\n`).out)), "the replay has no regime key");
+  const t = translate(line);
+  assert.ok(!("regime" in t.event));
+  assert.equal(translate(line, { ts: "2026-10-17T01:02:03.456Z" }).event.regime, null);
 });

@@ -15,8 +15,8 @@ check "no-mistakes is the pinned version from the image stamp, with update check
   [ -n "$pin" ] && no-mistakes --version | grep -q "^no-mistakes version v$pin " &&
   [ "$NO_MISTAKES_NO_UPDATE_CHECK" = 1 ] &&
   [ "$(readlink /home/node/.local/bin/no-mistakes)" = /home/node/.no-mistakes/bin/no-mistakes ]'
-check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
-  d=$(mktemp -d) && CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ "$(wc -l < "$d"/*.jsonl)" = 1 ] &&
+check "callum-flow-event writes one new event and no old line, rejects an unknown state, and event-push-loop is installed" in_image '
+  d=$(mktemp -d) && CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ -z "$(find "$d" -maxdepth 1 -name "*.jsonl")" ] &&
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && [ -r /usr/local/share/dev-system/factory-event-translate.js ] &&
   ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ] &&
   [ -x /usr/local/share/dev-system/factory-event-push-loop ]'
@@ -58,6 +58,7 @@ check "callum-flow-milestone is on PATH, shows usage, and exits 2 on a bad subco
   callum-flow-milestone bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-released is on PATH, shows usage, exits 2 on a bad flag, and release-contents.js loads" in_image '
   [ -x "$(command -v callum-flow-released)" ] && callum-flow-released --help | grep -q "^usage: callum-flow-released" &&
+  callum-flow-released --help | grep -q -e "--attach" && callum-flow-released --help | grep -q -e "--collect" &&
   node -e "const r=require(\"/usr/local/share/dev-system/release-contents.js\"); for (const f of [\"previousTag\",\"parseCommit\",\"gitRangeCommits\",\"firstParentChain\",\"prLinks\",\"contents\",\"headlines\"]) if (typeof r[f] !== \"function\") process.exit(1)" &&
   callum-flow-released --bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-test-weakening is on PATH, exits 2 on bad usage and 1 on an unknown ref" in_image '

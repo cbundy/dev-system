@@ -9,22 +9,23 @@
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake. The layer that plans is v2/plan.ts (v2 SPEC 2.3).
 import { cliExecutors } from './act-cli'
+import { isOffPass, launchOff, offPassExpired, sameAttempt } from './act-off'
+import type { OffPass } from './act-off'
 import { mergeExecutors } from './act-merge'
-import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
+import type { ActIo, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { GITHUB_V2, turnEnded } from './foundation'
 import { changedEntries, finish, loopEvent, reconcileAgents, start } from './ledger'
 import type { Runtime } from './observe'
 import { preCheck } from './rails'
-import type { BreakerNotice } from './rails'
 import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswers, stepRecorded } from './v2/steps'
+import { readStepTokens } from './v2/step-tokens'
 import { gateHoldMs } from './v2/steps-gate'
 import { V2_ACTION_KINDS } from './v2/types'
 import { expireWakes, wakeExecutors } from './wake'
 
-const HOUR = 3_600_000
 const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
@@ -68,26 +69,19 @@ export function commandOf(io: ActIo, rt: Runtime, log: string[]): ExecCtx['cmd']
   }
 }
 
-// eventArgv: `callum-flow-event <state>` with the fields as its flags.
-export function eventArgv(state: string, f: EventFields): string[] {
-  const argv = ['callum-flow-event', state]
-  if (f.issue !== undefined && f.issue !== null) argv.push('--issue', String(f.issue))
-  if (f.run !== undefined && f.run !== null) argv.push('--run', f.run)
-  if (f.branch !== undefined && f.branch !== null) argv.push('--branch', f.branch)
-  if (f.pr !== undefined && f.pr !== null) argv.push('--pr', String(f.pr))
-  if (f.head !== undefined && f.head !== null) argv.push('--head', f.head)
-  if (f.note !== undefined && f.note !== null) argv.push('--note', f.note)
-  return argv
+// eventArgv: `callum-flow-event --type <type> --data <json> --issue N`.
+export function eventArgv(type: string, data: Record<string, unknown>, at: { issue: number }): string[] {
+  return ['callum-flow-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(at.issue)]
 }
 
 // eventOf: ExecCtx.event. callum-flow-event exits non-zero only on a usage error (2); the error
 // carries the exit as `exitCode`, which the executors read to never retry it.
 export function eventOf(cmd: ExecCtx['cmd']): ExecCtx['event'] {
-  return async (state, fields) => {
-    const r = await cmd(eventArgv(state, fields), { timeoutMs: EVENT_TIMEOUT_MS })
+  return async (type, data, at) => {
+    const r = await cmd(eventArgv(type, data, at), { timeoutMs: EVENT_TIMEOUT_MS })
     if (r.exitCode === 0) return
     const why = r.stderr.trim().split('\n').pop() ?? ''
-    throw Object.assign(new Error(`callum-flow-event ${state}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
+    throw Object.assign(new Error(`callum-flow-event ${type}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
   }
 }
 
@@ -141,6 +135,8 @@ export type ActEnv = {
   killed: () => Promise<boolean>
   // what went wrong outside any one action (a loop event not logged), for the decision log
   problems: string[]
+  // where a command of an OFF_PASS kind (act-off.ts) ends; absent, it runs inline in the action
+  offPass?: OffPass
 }
 
 export function ctxOf(env: ActEnv, state: State, entry: LedgerEntry): ExecCtx {
@@ -158,11 +154,18 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
   const cmd = commandOf(env.io, env.rt, env.commands)
   const logged = (env.live.logged ??= new Map())
   for (const entry of entries) {
-    const argv = loopEvent(entry)
+    let argv = loopEvent(entry)
     if (argv === null) continue
     const said = JSON.stringify(argv)
     if (logged.get(entry.key) === said) continue
     logged.set(entry.key, said)
+    // an agent step's end carries its transcript's token totals, read once: only here, where the
+    // end is new (#657); no reading, no problem, where the runtime knows no config dir
+    if (entry.kind === 'agent-step' && entry.status !== 'running' && entry.agentId !== undefined && env.rt.configDir !== undefined && env.rt.sessionCwd !== undefined) {
+      const read = await readStepTokens(env.io, cmd, { configDir: env.rt.configDir, sessionCwd: env.rt.sessionCwd, session: entry.session ?? '', agentId: entry.agentId })
+      if (read.problem !== null) env.problems.push(clip(`loop event ${entry.key}: ${read.problem}`))
+      argv = loopEvent(entry, read.fields) ?? argv
+    }
     try {
       const r = await cmd(argv, { timeoutMs: EVENT_TIMEOUT_MS })
       if (r.exitCode !== 0) env.problems.push(clip(`loop event ${entry.key}: exit ${r.exitCode}`))
@@ -179,14 +182,13 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
 
 // One action's result, for the decision log (v2 SPEC 13.12); at: when it started, for the trace (#552),
 // absent for an action held before it started.
-export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms }
+// off: the action's command runs off the pass (act-off.ts); ms is then its launch time.
+export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms; off?: true }
 
 export type ActReport = {
   outcomes: ActOutcome[]
   // an executor met a GitHub rate limit: register sets the backoff (v2 SPEC 13.10 item 2)
   rateLimited: boolean
-  // the title the title action set, when it did
-  title: string | null
   // the kill switch stopped the pass between actions: register shows the loop off at once
   killed: boolean
 }
@@ -195,7 +197,7 @@ export type ActReport = {
 // The kill switch is asked before each action but the title (bookkeeping only): an action
 // already running finishes, and once the switch is seen every action left is skipped (#557).
 export async function runActions(env: ActEnv, state: State, actions: readonly Action[]): Promise<ActReport> {
-  const report: ActReport = { outcomes: [], rateLimited: false, title: null, killed: false }
+  const report: ActReport = { outcomes: [], rateLimited: false, killed: false }
   for (const action of actions) {
     if (!report.killed && action.kind !== 'title' && (await env.killed())) report.killed = true
     if (report.killed) {
@@ -213,7 +215,6 @@ export async function runActions(env: ActEnv, state: State, actions: readonly Ac
     const out = await actOne(env, state, action)
     report.outcomes.push(out.outcome)
     if (out.exec.status === 'failed' && out.exec.rateLimited === true) report.rateLimited = true
-    if (action.kind === 'title' && out.exec.status === 'done') report.title = action.text
   }
   return report
 }
@@ -226,7 +227,7 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
   const t0 = await env.io.now()
   const done = async (exec: Exec) => {
     const ms = (await env.io.now()) - t0
-    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary), at: t0 } }
+    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary), at: t0, ...(action.kind === 'title' && exec.status === 'running' ? { off: true as const } : {}) } }
   }
   if (action.kind === 'title') return done(await dispatch(ctxOf(env, state, start([], action, t0).entry), action))
 
@@ -249,6 +250,15 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
     env.live.ledger = finish(env.live.ledger, action.key, held, await env.io.now(), opts)
     return done(held)
   }
+  if (env.offPass !== undefined && isOffPass(action.kind)) {
+    // the command runs on, untraced, after the pass: its completion lands in the hook queue
+    const off = env.offPass
+    const ctx = ctxOf({ ...env, io: off.io, commands: [] }, state, s.entry)
+    await launchOff(off, () => env.io.now(), () => dispatch(ctx, action), { key: action.key, kind: action.kind, started: s.entry, ...opts })
+    const exec: Exec = { status: 'running', summary: 'running off the pass' }
+    const done = await env.io.now()
+    return { exec, outcome: { key: action.key, kind: action.kind, status: 'running', ms: done - t0, summary: exec.summary, at: t0, off: true } }
+  }
   const exec = await dispatch(ctxOf(env, state, s.entry), action)
   await record(env, action.key, s.entry, exec, opts)
   return done(exec)
@@ -266,8 +276,8 @@ async function record(
   opts: { config: Runtime['config']; prev: LedgerEntry | null },
 ): Promise<void> {
   const now = await env.io.now()
-  const current = env.live.ledger.find(e => e.key === key)
-  if (current === undefined || current.startedAt !== started.startedAt || current.attempts !== started.attempts) return
+  const current = sameAttempt(env.live.ledger, started)
+  if (current === undefined) return
   if (exec.status === 'running' && current.status !== 'running') return
   const moved = transition(env.live, l => finish(l, key, exec, now, opts))
   await env.save()
@@ -305,29 +315,6 @@ export function passErrorTell(since: Ms, passes: number, error: string): Action 
     fields: { passes: String(passes) },
     context: [`last error: ${error.replace(/\s+/g, ' ').slice(0, 300)}`],
   }
-}
-
-// --- rate-cap holds (v2 SPEC 13.11.4, D-24) ---------------------------------------------------------------
-
-// capKey: a rate cap plan tripped (a bucket, or '<kind>:<issue>') as its hourly loop event's key.
-export function capKey(capped: string, now: Ms): string {
-  return `cap:${capped}:${Math.floor(now / HOUR)}`
-}
-
-// capEventArgv: a rate-cap hold has no ledger entry of its own, so its `loop` event is built
-// here: one per capped bucket or kind and issue per hour, status held.
-export function capEventArgv(capped: string, now: Ms): string[] {
-  const [kind = capped, issue] = capped.split(':')
-  const argv = ['callum-flow-event', 'loop']
-  if (issue !== undefined && /^\d+$/.test(issue)) argv.push('--issue', issue)
-  argv.push('--note', `kind=${kind} key=${capKey(capped, now)} status=held`)
-  return argv
-}
-
-// breakerEventArgv: the ping-storm breaker opened (v2 SPEC 13.2, 13.11.4, D-39): its `loop` event, beside
-// its one tell.
-export function breakerEventArgv(b: BreakerNotice): string[] {
-  return ['callum-flow-event', 'loop', '--note', `kind=breaker key=breaker:pings:${b.since} status=open passes=${b.passes} until=${b.until}`]
 }
 
 // --- what a reload and the agent list prove (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4) --------------------------------
@@ -456,6 +443,11 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
+  // an off-pass command that outlived its bound is timed out; its completion, if it ever comes, is dropped
+  for (const u of offPassExpired(env.live.ledger, now)) {
+    env.problems.push(`${u.key}: ${u.summary}`)
+    moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
+  }
   // a recorded answer ends its step when read (v2 SPEC 10.8)
   for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e), undefined, between.gateHeld)) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {

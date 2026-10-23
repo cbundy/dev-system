@@ -37,6 +37,7 @@ BASH=$(command -v bash)
 ln -s "$ROOT/images/base/agentsview.sh" "$share/agentsview.sh"
 ln -s "$ROOT/images/base/workspace.sh" "$share/workspace.sh"
 ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
+ln -s "$ROOT/images/base/mem-pressure.sh" "$share/mem-pressure.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
@@ -93,7 +94,7 @@ case "$1" in
     echo x >> "$d/dver-local-calls"
     [ ! -e "$d/dver-local-sleep" ] || sleep 60
     [ ! -e "$d/dver-snapshot-fail" ] || exit 2
-    printf '%s\n' '{"device":"dev-box","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
+    printf '%s\n' '{"device":"'"$(cat "$d/dver-device" 2>/dev/null || echo dev-box)"'","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
     ;;
   --json)
     echo started >> "$d/dver-json-calls"
@@ -122,7 +123,7 @@ hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
     NM_PUSH_STATE_DIR="$tmpdir/nm" DEV_REPO_URL=https://github.com/Acme/Widgets.git \
-    HEARTBEAT_EVENT_LOCK="$tmpdir/ev.lock" HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
+    HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
     AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets" \
     HEARTBEAT_FACTORY_EVENT_LOCK="$tmpdir/fev.lock"
   unset FACTORY_DB_WRITER_URL
@@ -186,9 +187,9 @@ has_arg 1 repo=acme/desk-repo || fail "with no DEV_REPO_URL the repo comes from 
 
 # --- critical_failures --------------------------------------------------------
 cf() { sed -n 's/^critical_failures=//p' "$fakebin/psql-args-$1"; }
-[ "$(cf 1)" = '["events_push_not_running","nm_push_not_running","agentsview_push_not_running"]' ] || fail "free locks must be reported: $(cf 1)"
+[ "$(cf 1)" = '["nm_push_not_running","agentsview_push_not_running"]' ] || fail "free locks must be reported (the old event-push-loop is no longer one): $(cf 1)"
 reset
-for l in ev nm av; do
+for l in nm av; do
   : > "$tmpdir/$l.lock"
   flock -n "$tmpdir/$l.lock" sleep 20 &
 done
@@ -202,6 +203,12 @@ once > /dev/null 2>&1 || fail "beat without a snapshot"
 [ "$(cf 1)" = '["versions_snapshot_missing"]' ] || fail "a missing snapshot must be reported: $(cf 1)"
 has_arg 1 device=dev-box || fail "device falls back to DEV_MACHINE_NAME"
 rm -f "$fakebin/dver-snapshot-fail"
+# a snapshot naming another device cannot rename the row: DEV_MACHINE_NAME wins (#1051)
+reset
+echo box > "$fakebin/dver-device"
+once > /dev/null 2>&1 || fail "beat with a snapshot naming another device"
+has_arg 1 device=dev-box || fail "DEV_MACHINE_NAME must name the device, not the snapshot's: $(grep '^device=' "$fakebin/psql-args-1")"
+rm -f "$fakebin/dver-device"
 
 # --- the latest cache: background, never waited for ---------------------------
 reset
@@ -589,6 +596,57 @@ reset
 stats_once > /dev/null 2>&1 || fail "garbage stat files"
 [ -z "$(sarg 1 mem_used_bytes)" ] && [ -z "$(sarg 1 cpu_pct)" ] || fail "garbage must be NULL"
 
+# memory pressure (cbundy/dev-system#1124): memory.events and memory.pressure, the rate against $hbdir/dev-heartbeat.mem
+fake_mem() { # MAX OOM_KILL SOME FULL
+  printf 'low 0\nhigh 0\nmax %s\noom 0\noom_kill %s\n' "$1" "$2" > "$cg/memory.events"
+  printf 'some avg10=%s avg60=0.10 avg300=0.00 total=12345\nfull avg10=%s avg60=0.05 avg300=0.00 total=678\n' "$3" "$4" > "$cg/memory.pressure"
+}
+mem_keys='mem_max_events mem_max_rate_per_min mem_oom_kills mem_psi_some_avg10 mem_psi_full_avg10'
+reset
+rm -f "$hbdir/dev-heartbeat.mem"
+fake_cg 200000 100000 5000000 123456 1000000
+fake_mem 10 2 2.50 1.25
+stats_once > /dev/null 2>&1 || fail "memory pressure beat 1"
+[ "$(sarg 1 mem_max_events)" = 10 ] && [ "$(sarg 1 mem_oom_kills)" = 2 ] || fail "memory.events: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 mem_psi_some_avg10)" = 2.50 ] && [ "$(sarg 1 mem_psi_full_avg10)" = 1.25 ] || fail "memory.pressure: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ -z "$(sarg 1 mem_max_rate_per_min)" ] || fail "the rate must be empty on the first beat"
+[ "$(cut -d' ' -f1 "$hbdir/dev-heartbeat.mem")" = 10 ] || fail "the max reading is saved: $(cat "$hbdir/dev-heartbeat.mem")"
+# the next beat, one minute later by the state file: 30 more max events is 30 a minute (a little less as the real gap is longer)
+printf '%s %s\n' 10 $(($(now_us) - 60000000)) > "$hbdir/dev-heartbeat.mem"
+fake_mem 40 2 2.50 1.25
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "memory pressure beat 2"
+[ "$(sarg 1 mem_max_events)" = 40 ] || fail "second beat max events"
+rate=$(sarg 1 mem_max_rate_per_min)
+case "$rate" in [0-9]*.[0-9][0-9]) ;; *) fail "rate must be a 2 decimal number, got '$rate'" ;; esac
+jq -ne --argjson r "$rate" '$r > 0 and $r <= 30' > /dev/null || fail "rate should be at most 30 a minute and above 0, got $rate"
+# a counter that went down has no rate
+printf '%s %s\n' 100 $(($(now_us) - 60000000)) > "$hbdir/dev-heartbeat.mem"
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "memory pressure reset beat"
+[ -z "$(sarg 1 mem_max_rate_per_min)" ] && [ "$(sarg 1 mem_max_events)" = 40 ] || fail "a counter reset has no rate"
+# the files gone: all five empty and the beat still succeeds
+reset
+fake_cg 200000 100000 5000000 123456 1000000
+rm -f "$hbdir/dev-heartbeat.mem"
+stats_once > /dev/null 2>&1 || fail "beat without memory.events"
+for k in $mem_keys; do
+  grep -qx -- "$k=" "$fakebin/stats-args-1" || fail "$k must be sent empty with no source file: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+done
+[ ! -e "$hbdir/dev-heartbeat.mem" ] || fail "no memory.events: no state file"
+# garbage is no number either
+printf 'max lots\noom_kill x\n' > "$cg/memory.events"
+printf 'some avg10=x\n' > "$cg/memory.pressure"
+reset
+stats_once > /dev/null 2>&1 || fail "garbage memory files"
+for k in $mem_keys; do
+  grep -qx -- "$k=" "$fakebin/stats-args-1" || fail "garbage $k must be empty"
+done
+for k in $mem_keys; do
+  grep -qF -- ":'$k'" "$fakebin/stats-sql-1" || fail "the stats SQL lacks $k"
+done
+rm -f "$hbdir/dev-heartbeat.mem"
+
 # no stats on the stopped beat, and the stopped beat does not touch the stats columns
 reset
 fake_cg 200000 100000 5000000 123456 1000000
@@ -619,6 +677,8 @@ stats_once > /dev/null 2>&1 || rc=$?
 reset
 stats_once > /dev/null 2>&1
 for w in cpu_pct cpu_limit_cores cpu_quota_set mem_used_bytes mem_limit_bytes claude_interactive claude_headless claude_procs "'procs'" stats_at \
+  mem_max_events mem_max_rate_per_min mem_oom_kills mem_psi_some_avg10 mem_psi_full_avg10 \
+  "('mem_max_events', 'bigint')" "ALTER TABLE factory.worker_samples ADD COLUMN IF NOT EXISTS" \
   'CREATE TABLE IF NOT EXISTS factory.worker_samples' 'PRIMARY KEY (device, sampled_at)' 'SECURITY DEFINER SET search_path = factory, pg_temp' \
   'CREATE TRIGGER worker_samples_prune AFTER INSERT ON factory.worker_samples'; do
   grep -qF -- "$w" "$fakebin/psql-sql-1" || fail "the DDL lacks: $w"

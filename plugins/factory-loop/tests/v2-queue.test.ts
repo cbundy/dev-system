@@ -20,7 +20,7 @@ import { planV2 } from '../hooks/v2/plan'
 import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
 import { RERUN_ATTEMPTS, RERUN_REFUSED } from '../hooks/v2/rules-review'
 import { jobIdOf } from '../hooks/v2/refused'
-import { checksOf, headsOf, jobsOf, notStartedOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
+import { PR_READ_CONCURRENCY, checksOf, headsOf, jobsOf, notStartedOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
@@ -286,6 +286,24 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     expect(transitionOf(plan(withLedger(merged, [lost])), 11)).toMatchObject({ row: 'T13', next: { why: 'merged' } })
   })
 
+  test('a merge expired off the pass (timed-out) may have merged: a PR reading merged at its head is the queue\'s ok, not a hand merge; an open PR is unknown and no merge starts again', () => {
+    const r = rec(18)
+    const expired = { ...tried(r, 'merge'), status: 'timed-out' as const, outcome: undefined }
+    const merged = plan(withLedger(world([r], [view(r, { state: 'merged', mergedHead: HEAD })]), [expired]))
+    expect(transitionOf(merged, 18)).toMatchObject({ row: 'T13', event: 'ok', next: { why: 'merged' } })
+    const open = plan(withLedger(world([r]), [expired]))
+    expect(queueActions(open)).toEqual([])
+    expect(transitionOf(open, 18)).toMatchObject({ row: 'U2', event: 'unknown' })
+  })
+
+  test('a lost merge (a reload while it ran off the pass) is never started again; an open PR is unknown', () => {
+    const r = rec(19)
+    const lost = { ...tried(r, 'merge'), status: 'lost' as const, outcome: undefined }
+    const open = plan(withLedger(world([r]), [lost]))
+    expect(queueActions(open)).toEqual([])
+    expect(transitionOf(open, 19)).toMatchObject({ row: 'U2', event: 'unknown' })
+  })
+
   test('the guard\'s FAIL classes, one outcome each: policy parks with its lines, patch goes back to review, conflict to a fixer, read is unknown', () => {
     const r = rec(12)
     const run = (cls: GuardClass, lines: string[]) => transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', refusal(lines, cls))])), 12)
@@ -297,7 +315,7 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     expect(run('conflict', ['GUARD mergeable FAIL conflicts with main class=conflict'])).toMatchObject({
       row: 'T9',
       via: 'fix:conflict',
-      next: { state: 'fixing', fixes: 1, notes: [expect.stringContaining('merge origin/main into issue-12')] },
+      next: { state: 'fixing', fixes: 0, conflicts: 1, notes: [expect.stringContaining('merge origin/main into issue-12')] },
     })
     // a guard that could not read fails its try (act-queue.ts): no answer about the PR, so unknown
     const unread = { status: 'failed' as const, failClass: 'read' as const, lines: ['GUARD author FAIL cannot verify the author of PR #612 (reader exit 1) class=read'] }
@@ -392,8 +410,14 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const dirty = plan(world([r], [view(r, { mergeable: 'dirty' })]))
     expect(queueActions(dirty)).toEqual([])
     expect(transitionOf(dirty, 20)).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing' } })
-    // at the fix cap, the conflict parks with the question
-    expect(transitionOf(plan(world([{ ...r, fixes: 3 }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({ row: 'T10', next: { state: 'parked', resumeTo: 'fixing' } })
+    // at the fix cap, a conflict still gets a fixer (other merges caused it: plant-console fix-cap:conflict parks, 2026-10-18)
+    expect(transitionOf(plan(world([{ ...r, fixes: CFG.reviewFixCap }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1 } })
+    // at the conflict cap, the conflict parks with its own question
+    expect(transitionOf(plan(world([{ ...r, conflicts: CFG.conflictFixCap }], [view(r, { mergeable: 'dirty' })])), 20)).toMatchObject({
+      row: 'T10',
+      via: 'fix-cap:conflict',
+      next: { state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('conflicts and red CI after other merges') },
+    })
   })
 
   test('a failed check gets one re-run per round, by its run; failed again after it, the head goes to a fixer with the check\'s name and link (ci-red); no hold for a red main', () => {
@@ -411,6 +435,9 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const again = { ...red, completedAt: NOW - MIN }
     const t = transitionOf(plan(withLedger(world([r], [view(r, { checks: [again] })]), [rerun])), 21)
     expect(t).toMatchObject({ row: 'T9', via: 'fix:ci', next: { state: 'fixing', notes: [`check ci failed after its one re-run (run 9001): ${red.link}`] } })
+    // red CI after the re-run is base-caused in the merge queue: at the fix cap it still gets a fixer, charged to conflicts
+    const atCap = { ...r, fixes: CFG.reviewFixCap }
+    expect(transitionOf(plan(withLedger(world([atCap], [view(r, { checks: [again] })]), [rerun])), 21)).toMatchObject({ row: 'T9', via: 'fix:ci', next: { state: 'fixing', fixes: CFG.reviewFixCap, conflicts: 1 } })
     // a check with no run to re-run counts at once; a cancelled one is re-run too
     expect(transitionOf(plan(world([r], [view(r, { checks: [{ ...red, runId: null, link: null }] })])), 21)).toMatchObject({ row: 'T9', via: 'fix:ci' })
     expect(of(plan(world([r], [view(r, { checks: [{ ...red, bucket: 'cancel' }] })])), 21).map(a => a.kind)).toContain('ci-rerun')
@@ -547,18 +574,18 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     expect(queueActions(p)).toEqual([])
   })
 
-  test('the head\'s step starts only once its entry actions are done: its transition event, its label and its merge_ready event', () => {
+  test('the head\'s step starts only once its entry actions are done: its transition event and its label', () => {
     const r = rec(25)
     const t = entry(transitionKey(r), 'transition', { issue: 25, outcome: { kind: 'transition', row: 'T8', event: 'ok', cause: null, from: 'reviewing', to: 'merge-queue', step: 'review', stored: true, via: 'approve' } })
     const first = plan(withLedger(world([r]), [t]))
     expect(queueActions(first)).toEqual([])
-    expect(of(first, 25).map(a => (a.kind === 'event' ? `event ${a.event.state}` : a.kind))).toEqual(['event transition', 'label', 'event merge_ready'])
+    expect(of(first, 25).map(a => (a.kind === 'event' ? `event ${a.event.state}` : a.kind))).toEqual(['event transition', 'label'])
     expect(said(first, 25)).toContain('its transition event of seq 5 is not logged yet')
     const logged = entry(`${transitionKey(r).slice(0, -2)}/event/transition`, 'event', { issue: 25 })
     const second = plan(withLedger(world([r]), [t, logged]))
     expect(queueActions(second)).toEqual([])
     expect(said(second, 25)).toContain('its entry actions run first')
-    const rest = ['label', 'event/merge_ready'].map(a => entry(`${transitionKey(r).slice(0, -2)}/${a}`, a === 'label' ? 'label' : 'event', { issue: 25 }))
+    const rest = [entry(`${transitionKey(r).slice(0, -2)}/label`, 'label', { issue: 25 })]
     expect(queueActions(plan(withLedger(world([r]), [t, logged, ...rest])))).toEqual([expect.objectContaining({ kind: 'queue-merge' })])
   })
 })
@@ -1049,6 +1076,110 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(r.heads).toEqual({ [sha('1')]: { pr: 670, at: NOW }, [sha('2')]: { pr: 671, at: NOW }, [sha('3')]: { pr: 674, at: NOW } })
     const one = sourceCtx(records, prReply(heads), { prBudget: 1 })
     expect((await readPrs(one.ctx)).read.prs.map(v => v.pr)).toEqual([671])
+  })
+
+  describe('concurrent reads', () => {
+    const several = (n: number) => Array.from({ length: n }, (_, i) => rec(80 + i, { state: 'reviewing', step: 'review', seqAt: NOW - (60 - i) * MIN }))
+    const flush = () => new Promise<void>(r => setTimeout(r, 0))
+    // held: each callum-flow-issue-read reply waits on its own deferred, in the order the reads started
+    function held(records: IssueRecord[], over: Partial<SourceCtx> = {}) {
+      const base = sourceCtx(records, prReply({}), over)
+      const waiting = new Map<number, () => void>()
+      const started: number[] = []
+      let flying = 0
+      let peak = 0
+      const inner = base.ctx.run
+      const ctx: SourceCtx = {
+        ...base.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] !== 'callum-flow-issue-read') return inner(argv, init, ms)
+          const pr = Number(argv[3])
+          started.push(pr)
+          flying++
+          peak = Math.max(peak, flying)
+          await new Promise<void>(release => waiting.set(pr, release))
+          flying--
+          return inner(argv, init, ms)
+        },
+      }
+      return { ctx, waiting, started, peak: () => peak }
+    }
+
+    test('a second read starts before the first ends, never more than PR_READ_CONCURRENCY are in flight, and they start in 2.4\'s order', async () => {
+      expect(PR_READ_CONCURRENCY).toBe(4)
+      const h = held(several(6), { prBudget: 6 })
+      const done = readPrs(h.ctx)
+      await flush()
+      expect(h.started).toEqual([680, 681, 682, 683])
+      // release the first: the next record starts at once
+      h.waiting.get(680)?.()
+      await flush()
+      expect(h.started).toEqual([680, 681, 682, 683, 684])
+      for (const n of [681, 682, 683, 684]) h.waiting.get(n)?.()
+      await flush()
+      h.waiting.get(685)?.()
+      const r = await done
+      expect(h.peak()).toBe(4)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 681, 682, 683, 684, 685])
+      expect(r.source).toEqual({ ok: true, at: NOW })
+    })
+
+    test('replies resolved in reverse order still give prs and unread in 2.4\'s order, and the same as one at a time', async () => {
+      const records = several(4)
+      const reply = prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '682' ? { exitCode: 1, stderr: 'boom' } : undefined))
+      const inner = sourceCtx(records, reply, { prBudget: 4 })
+      const waiting = new Map<number, () => void>()
+      const racing: SourceCtx = {
+        ...inner.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] === 'callum-flow-issue-read') await new Promise<void>(release => waiting.set(Number(argv[3]), release))
+          return inner.ctx.run(argv, init, ms)
+        },
+      }
+      const done = readPrs(racing)
+      await flush()
+      for (const n of [683, 682, 681, 680]) {
+        waiting.get(n)?.()
+        await flush()
+      }
+      const out = await done
+      const serial = await readPrs(sourceCtx(records, reply, { prBudget: 4 }).ctx)
+      expect(out.read.prs.map(v => v.pr)).toEqual([680, 681, 683])
+      expect(out.read.unread?.map(u => u.pr)).toEqual([682])
+      expect(out.read).toEqual(serial.read)
+      expect(out.heads).toEqual(serial.heads)
+    })
+
+    test('a rate limit met after the first record starts nothing new, lets the reads in flight finish, and sets cut', async () => {
+      let limited = false
+      const h = held(several(6), { prBudget: 6, limited: () => limited })
+      const done = readPrs(h.ctx)
+      await flush()
+      expect(h.started).toHaveLength(4)
+      limited = true
+      for (const n of h.started) h.waiting.get(n)?.()
+      const r = await done
+      expect(h.started).toHaveLength(4)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 681, 682, 683])
+      expect(r.read.cut).toBe('a GitHub rate limit met this pass ended the PR reads')
+      expect(r.source.ok).toBe(false)
+    })
+
+    test('one record whose run throws is the only one unread; readPrs never rejects', async () => {
+      const records = several(3)
+      const base = sourceCtx(records, prReply({}), { prBudget: 3 })
+      const ctx: SourceCtx = {
+        ...base.ctx,
+        run: async (argv, init, ms) => {
+          if (argv[0] === 'callum-flow-issue-read' && argv[3] === '681') throw new Error('spawn failed')
+          return base.ctx.run(argv, init, ms)
+        },
+      }
+      const r = await readPrs(ctx)
+      expect(r.read.prs.map(v => v.pr)).toEqual([680, 682])
+      expect(r.read.unread?.map(u => u.pr)).toEqual([681])
+      expect(r.read.unread?.[0]?.why).toContain('spawn failed')
+    })
   })
 
   test('a head\'s patch id is computed once, and again when the head moved; one that does not compute leaves that PR alone unread, with why, and the source read', async () => {

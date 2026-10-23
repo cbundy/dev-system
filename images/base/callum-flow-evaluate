@@ -9,7 +9,12 @@
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
 //          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
 //          [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
-//          [--source old|new|shadow] [--new-events <file>]
+//          [--source old|new|shadow] [--new-events <file>] [--regime <value>]
+//
+// --regime (factory_loop_v2|testbed|manual|unknown) keeps only the events of that regime (a null
+// regime counts as unknown) and the turns attributed to it through their session; without it the
+// report carries throughput.by_regime and spend.by_regime. A regime is never guessed from a device
+// or workspace name.
 //
 // --source picks the event store (cbundy/dev-system#899; docs/factory-events/replay.md, "Source switch"),
 // else CALLUM_FLOW_EVALUATE_SOURCE, else new (the default; old is the way back). old reads the old log (--events, or the default
@@ -76,9 +81,10 @@ const STAGE_STATES = ['ready', 'claimed', 'delegated', 'merge_ready', 'merged'];
 const ISSUE_BRANCH_RE = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/;
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
+const REGIMES = ['factory_loop_v2', 'testbed', 'manual', 'unknown'];
 const TOP_KEYS = [
   'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
-  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'spend', 'waste',
+  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'size', 'overlap', 'spend', 'waste',
   'pipeline', 'sources',
 ];
 // A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
@@ -96,6 +102,10 @@ class UsageError extends Error {}
 class InputError extends Error {}
 
 const na = (reason) => ({ 'n/a': reason });
+// merges, prs, gaps, size and overlap read the new events' pr, by, recovered, files, file_lines, additions
+// and deletions fields (docs/metrics.md, 9c).
+const MERGE_SECTIONS = ['merges', 'prs', 'gaps', 'size', 'overlap'];
+const MERGE_OLD_NA = "needs the new events' pr, by and recovered fields";
 
 // ---------------------------------------------------------------- arguments
 
@@ -117,10 +127,14 @@ function parseArgs(argv) {
     else if (a === '--nm-export') o.nmExport = need(i++, a);
     else if (a === '--ready-times') o.readyTimes = need(i++, a);
     else if (a === '--new-events') o.newEvents = need(i++, a);
+    else if (a === '--regime') o.regime = need(i++, a);
     else if (a === '-h' || a === '--help') o.help = true;
     else throw new UsageError(`unknown option '${a}'`);
   }
   if (o.help) return o;
+  if (o.regime !== undefined && !REGIMES.includes(o.regime)) {
+    throw new UsageError(`--regime must be one of ${REGIMES.join(', ')}`);
+  }
   if (!o.repo || !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new UsageError('--repo <owner/name> is required');
   if (!o.since) throw new UsageError('--since <ISO> is required');
   if (!['json', 'markdown'].includes(o.format)) throw new UsageError("--format must be json or markdown");
@@ -135,7 +149,7 @@ function parseArgs(argv) {
 
 const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
   '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>] ' +
-  '[--source old|new|shadow] [--new-events <file>]';
+  '[--source old|new|shadow] [--new-events <file>] [--regime <value>]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -153,6 +167,12 @@ function median(xs) {
   const s = [...xs].sort((a, b) => a - b);
   const m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+// nearest rank (docs/metrics.md): the smallest value with at least 90% of the values at or below it
+function p90(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.ceil(0.9 * s.length) - 1];
 }
 const pct = (num, den) => (den ? Math.round((1000 * num) / den) / 10 : null);
 
@@ -751,6 +771,7 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
   }
   const v2 = computeV2Metrics(evs, win, merged.map((m) => ({ issue: m.issue, t: Date.parse(m.merged_at) })));
+  Object.assign(v2, computeMergeMetrics(evs, win));
   return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, ...v2, mergedAt };
 }
 
@@ -889,6 +910,22 @@ function computeV2Metrics(evs, win, merged) {
     const p = (/^\s*([A-Z]+)\s*:/.exec(e.note || '') || [])[1];
     if (p === 'CORRECT' || p === 'WRONG') calls.push({ e, kind: 'fix', outcome: p === 'CORRECT' ? 'fixed' : 'declined' });
   }
+  // a judge task (a loop_entry of kind task): one call per key, timed by its first row, its outcome
+  // the wake and the status of the key's latest row (by time, then the device's sequence number)
+  const taskRows = new Map();
+  evs.forEach((e, i) => {
+    if (e.state !== 'loop') return;
+    const f = t(e);
+    if (f.kind !== 'task' || !f.key) return;
+    if (!taskRows.has(f.key)) taskRows.set(f.key, []);
+    taskRows.get(f.key).push({ e, f, i });
+  });
+  const bySeq = (a, b) => a.e.t - b.e.t || (a.e.device_seq ?? 0) - (b.e.device_seq ?? 0) || a.i - b.i;
+  for (const rows of taskRows.values()) {
+    rows.sort(bySeq);
+    const last = rows[rows.length - 1].f;
+    calls.push({ e: rows[0].e, kind: 'task', outcome: `${last.wake || 'none'}:${last.status || 'none'}` });
+  }
   const persons = interventions.filter((x) => x.f.who === 'person');
   const overridden = (c) => persons.some((x) => x.issue === c.e.issue && issueOf(x) !== null && x.t > c.e.t && x.t <= c.e.t + OVERRIDE_MS);
   const callsWin = calls.filter((c) => inWin(c.e.t, win));
@@ -993,6 +1030,247 @@ function computeV2Metrics(evs, win, merged) {
   return { interventions: interventionsOut, judgement_calls, claim_completion, rounds };
 }
 
+// The merges, pull requests and merge gaps of docs/metrics.md 9c, from the new events' `pr`, `by` and
+// `recovered` fields: the same definitions as the saved queries there. A merge is one per (issue, pr)
+// across three signals: a `merged` event, a transition to closed `why=merged-by-hand` and a person
+// intervention `hand-merge`; a signal with no pr takes that of the issue's latest event naming one at
+// or before it.
+const PR_TYPES = new Set(['transition', 'reviewed', 'intervention', 'merged']);
+const HEAD_MOVE_CAUSES = new Set(['queue:patch', 'push']);
+const GAPS_SHOWN = 10;
+const HOTTEST_SHOWN = 10;
+// The one code-file rule of docs/metrics.md 9c: a path matching it is not a code file (a document, a
+// changelog or version file, a release note, a package manifest or lockfile). Only syntax that JS
+// RegExp and PostgreSQL `~` read alike; every 9c size query embeds this same literal.
+const NON_CODE_RE = /(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)/;
+const isCode = (p) => !NON_CODE_RE.test(p);
+
+function computeMergeMetrics(evs, win) {
+  const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
+  const key = (e, f) => {
+    if (e.state === 'transition') return f.life && f.seq !== undefined ? `t|${e.issue}|${f.life}|${f.seq}` : null;
+    if (e.state === 'reviewed') return `r|${e.issue}|${f.round}|${f.patch}`;
+    if (e.state === 'intervention') return f.fact ? `i|${e.issue}|${f.who}|${f.cause}|${f.fact}` : e.event_id || null;
+    return null;
+  };
+  const named = once(
+    evs.filter((e) => PR_TYPES.has(e.state) && issueOf(e) !== null).map((e) => ({ ...e, f: noteTokens(e.note), pr: e.pr === undefined ? null : e.pr })),
+    (e) => key(e, e.f),
+  );
+  const claimed = new Map();
+  for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !claimed.has(e.issue)) claimed.set(e.issue, e.t);
+  const prOf = (s) => {
+    if (s.pr !== null) return s.pr;
+    let best = null;
+    for (const e of named) {
+      if (e.issue !== s.issue || e.pr === null || e.t > s.t) continue;
+      if (best === null || e.t > best.t || (e.t === best.t && e.pr > best.pr)) best = e;
+    }
+    return best ? best.pr : null;
+  };
+  const signals = [];
+  for (const e of named) {
+    if (e.state === 'merged') signals.push({ ...e, hand: e.f.by === 'hand', merged: true });
+    else if (e.state === 'transition' && e.f.to === 'closed' && e.f.why === 'merged-by-hand') signals.push({ ...e, hand: true, merged: false });
+    else if (e.state === 'intervention' && e.f.who === 'person' && e.f.cause === 'hand-merge') signals.push({ ...e, hand: true, merged: false });
+  }
+  const groups = new Map();
+  for (const s of signals) {
+    const pr = prOf(s);
+    const k = `${s.issue}|${pr}`;
+    const g = groups.get(k) || { issue: s.issue, pr, t: s.t, hand: false, recovered: null, size: null };
+    g.t = Math.min(g.t, s.t);
+    // the merge's size: that of its earliest merged event with files (a tie by the files' text)
+    if (s.merged && Array.isArray(s.files)) {
+      const fk = JSON.stringify(s.files);
+      if (g.size === null || s.t < g.size.t || (s.t === g.size.t && fk < g.size.key)) {
+        g.size = { t: s.t, key: fk, files: s.files, file_lines: Array.isArray(s.file_lines) ? s.file_lines : null, additions: s.additions ?? null, deletions: s.deletions ?? null };
+      }
+    }
+    g.hand = g.hand || s.hand;
+    if (s.merged && s.f.recovered !== undefined && s.f.recovered !== null) g.recovered = g.recovered === true || s.f.recovered === 'true';
+    groups.set(k, g);
+  }
+  const prCmp = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
+  const mine = [...groups.values()].filter((g) => inWin(g.t, win)).sort((a, b) => a.t - b.t || a.issue - b.issue || prCmp(a.pr, b.pr));
+  const sizes = computeSizeOverlap([...groups.values()], mine, claimed);
+  if (!mine.length) return { merges: na('0 merges in the window'), prs: na('0 merges in the window'), gaps: na('fewer than 2 merges in the window'), ...sizes };
+  const byOf = (g) => (g.hand ? 'hand' : 'factory');
+  const triState = (v) => (v === null ? 2 : v ? 1 : 0);
+
+  const counts = new Map();
+  const days = new Map();
+  const bump = (m, k, row) => {
+    const r = m.get(k) || { ...row, merges: 0 };
+    r.merges++;
+    m.set(k, r);
+  };
+  for (const g of mine) {
+    bump(counts, `${byOf(g)}|${g.recovered}`, { by: byOf(g), recovered: g.recovered });
+    bump(days, `${day(g.t)}|${byOf(g)}|${g.recovered}`, { day: day(g.t), by: byOf(g), recovered: g.recovered });
+  }
+  const order = (a, b) => cmpStr(a.day || '', b.day || '') || cmpStr(a.by, b.by) || triState(a.recovered) - triState(b.recovered);
+  const merges = {
+    total: mine.length,
+    by: [...counts.values()].sort(order).map((r) => ({ by: r.by, recovered: r.recovered, count: r.merges })),
+    per_day: [...days.values()].sort(order).map((r) => ({ day: r.day, by: r.by, recovered: r.recovered, merges: r.merges })),
+    issues: mine.map((g) => ({ issue: g.issue, pr: g.pr, merged_at: iso(g.t), by: byOf(g), recovered: g.recovered })),
+    per_day_by_kind: perDayByKind(evs, mine, claimed, byOf, win),
+  };
+
+  const rows = mine.map((g) => {
+    const seen = named.filter((e) => e.issue === g.issue && e.t <= g.t && (e.state === 'transition' || e.state === 'reviewed') && g.pr !== null && e.pr === g.pr);
+    const from = Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+    const span = named.filter((e) => e.issue === g.issue && e.t >= from && e.t <= g.t);
+    const prs = new Set(span.filter((e) => e.pr !== null).map((e) => e.pr)).size;
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      pr_open_to_merge_seconds: seen.length ? secs(g.t - Math.min(...seen.map((e) => e.t))) : null,
+      prs,
+      supersedes: Math.max(prs - 1, 0),
+      head_moves: span.filter((e) => e.state === 'intervention' && HEAD_MOVE_CAUSES.has(e.f.cause)).length,
+    };
+  });
+  const prs = {
+    merges: rows.length,
+    pr_open_to_merge_seconds: statsOf(rows.map((r) => r.pr_open_to_merge_seconds).filter((x) => x !== null)),
+    prs: statsOf(rows.map((r) => r.prs)),
+    supersedes: statsOf(rows.map((r) => r.supersedes)),
+    head_moves: statsOf(rows.map((r) => r.head_moves)),
+    issues: rows,
+  };
+
+  if (mine.length < 2) return { merges, prs, gaps: na('fewer than 2 merges in the window'), ...sizes };
+  // state intervals of each issue from its transitions: [seq_at, the next one's); the last has no end
+  const states = new Map();
+  for (const e of named.filter((x) => x.state === 'transition').sort((a, b) => a.t - b.t || Number(a.f.seq) - Number(b.f.seq) || cmpStr(a.f.life || '', b.f.life || ''))) {
+    if (!states.has(e.issue)) states.set(e.issue, []);
+    states.get(e.issue).push({ from: e.t, to: Infinity, state: e.f.to, question: e.f.question === 'yes' });
+  }
+  for (const list of states.values()) list.forEach((s, i) => { if (i + 1 < list.length) s.to = list[i + 1].from; });
+  const pairs = mine.slice(1).map((next, i) => ({ before: mine[i], after: next }));
+  pairs.sort((a, b) => (b.after.t - b.before.t) - (a.after.t - a.before.t) || a.before.t - b.before.t);
+  const gaps = {
+    merges: mine.length,
+    gaps: pairs.slice(0, GAPS_SHOWN).map(({ before, after }) => {
+      const inFlight = [];
+      for (const [issue, list] of [...states].sort((a, b) => a[0] - b[0])) {
+        const held = new Map();
+        let asked = false;
+        for (const s of list) {
+          if (s.state === 'closed' || !(s.from < after.t && s.to > before.t)) continue;
+          held.set(s.state, (held.get(s.state) || 0) + Math.min(s.to, after.t) - Math.max(s.from, before.t));
+          if (s.state === 'parked' && s.question) asked = true;
+        }
+        if (!held.size) continue;
+        const [state] = [...held].sort((a, b) => b[1] - a[1] || cmpStr(a[0], b[0]))[0];
+        inFlight.push({ issue, state, parked_with_question: asked });
+      }
+      return {
+        from: iso(before.t), to: iso(after.t), gap_seconds: secs(after.t - before.t),
+        before: { issue: before.issue, pr: before.pr }, after: { issue: after.issue, pr: after.pr }, in_flight: inFlight,
+      };
+    }),
+  };
+  return { merges, prs, gaps, ...sizes };
+}
+
+// All merges to main per day and kind (docs/metrics.md 9c): `unlinked` is a merged event with no issue
+// (one per pr, a retried event counted once) or a merge whose issue has no claimed event at or before
+// it; `hand` any other hand merge; `factory` the rest. Summed over kind, the merges with an issue are
+// those of `per_day`.
+function perDayByKind(evs, mine, claimed, byOf, win) {
+  const rows = new Map();
+  const bump = (d, kind) => {
+    const k = `${d}|${kind}`;
+    const r = rows.get(k) || { day: d, kind, merges: 0 };
+    r.merges++;
+    rows.set(k, r);
+  };
+  for (const g of mine) bump(day(g.t), claimed.has(g.issue) && claimed.get(g.issue) <= g.t ? byOf(g) : 'unlinked');
+  const loose = new Map();
+  for (const e of evs) {
+    if (e.state !== 'merged' || (e.issue !== null && e.issue !== undefined)) continue;
+    const k = e.pr !== null && e.pr !== undefined ? `pr|${e.pr}` : `ev|${e.event_id || loose.size}`;
+    loose.set(k, Math.min(loose.has(k) ? loose.get(k) : Infinity, e.t));
+  }
+  for (const t of loose.values()) if (inWin(t, win)) bump(day(t), 'unlinked');
+  return [...rows.values()].sort((a, b) => cmpStr(a.day, b.day) || cmpStr(a.kind, b.kind));
+}
+
+// The size and overlap of the merges in the window (docs/metrics.md 9c): from each merge's earliest
+// merged event with files. all: every merge of the input (a window of another issue's merge may lie
+// outside the report's); mine: those in the window; claimed: the first claim of each issue.
+function computeSizeOverlap(all, mine, claimed) {
+  const noFiles = "no merge in the window has files (recorded from #752's release on)";
+  const codeOf = (g) => g.size.files.filter(isCode);
+  const rows = mine.map((g) => {
+    const z = g.size;
+    if (z === null) return { issue: g.issue, pr: g.pr, files: null, lines: null, code_files: null, code_lines: null };
+    const lines = z.file_lines === null ? null
+      : z.file_lines.filter((x) => x && isCode(x.path)).reduce((a, x) => a + x.additions + x.deletions, 0);
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      files: z.files.length,
+      lines: z.additions !== null && z.deletions !== null ? z.additions + z.deletions : null,
+      code_files: codeOf(g).length,
+      code_lines: lines,
+    };
+  });
+  const known = rows.filter((r) => r.files !== null);
+  if (!known.length) {
+    return { size: na(mine.length ? noFiles : '0 merges in the window'), overlap: na(mine.length ? noFiles : '0 merges in the window') };
+  }
+  const stats = (k) => {
+    const xs = known.map((r) => r[k]).filter((x) => x !== null);
+    return { median: median(xs), p90: p90(xs) };
+  };
+  const withLines = known.filter((r) => r.code_lines !== null).length;
+  const size = {
+    merges: mine.length,
+    known: known.length,
+    code_lines_known: withLines,
+    files: stats('files'),
+    lines: stats('lines'),
+    code_files: stats('code_files'),
+    code_lines: withLines ? stats('code_lines') : na('no known merge has file_lines'),
+    issues: rows,
+  };
+
+  const from = (g) => Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+  const meets = (a, b) => (from(a) < b.t && from(b) < a.t) || (from(a) === a.t && from(b) === b.t && a.t === b.t);
+  const others = all.filter((g) => g.size !== null);
+  const per = [];
+  const hot = new Map();
+  for (const g of mine.filter((m) => m.size !== null)) {
+    const mineCode = new Set(codeOf(g));
+    const hit = new Set();
+    for (const o of others) {
+      if (o.issue === g.issue || !meets(g, o)) continue;
+      const shared = codeOf(o).filter((f) => mineCode.has(f));
+      if (!shared.length) continue;
+      hit.add(o.issue);
+      for (const f of shared) {
+        if (!hot.has(f)) hot.set(f, new Set());
+        hot.get(f).add(g.issue);
+      }
+    }
+    per.push({ issue: g.issue, pr: g.pr, overlapping: hit.size > 0, overlaps: [...hit].sort((a, b) => a - b) });
+  }
+  const overlapping = per.filter((r) => r.overlapping).length;
+  const overlap = {
+    merges: per.length,
+    overlapping,
+    share: Math.round((1000 * overlapping) / per.length) / 1000,
+    issues: per,
+    hottest_files: [...hot].map(([path, set]) => ({ path, issues: set.size }))
+      .sort((a, b) => b.issues - a.issues || cmpStr(a.path, b.path)).slice(0, HOTTEST_SHOWN),
+  };
+  return { size, overlap };
+}
+
 // ---------------------------------------------------------------- waste
 
 function isStale(w, seenDone, mergedAt) {
@@ -1071,7 +1349,11 @@ function computeWaste(sessions, mergedAt) {
 
 // ---------------------------------------------------------------- spend
 
-function computeSpend(fileTurns, invocations) {
+const turnRegime = (t) => t.regime || 'unknown';
+
+// computeSpend(fileTurns, invocations, regime): with a regime, only the turns attributed to it count, and the
+// pipeline invocations (no session, so unknown) only when the regime is unknown.
+function computeSpend(fileTurns, invocations, regime = null) {
   const rows = new Map();
   const add = (role, model, turns, u) => {
     const k = `${role}\u0000${model}`;
@@ -1083,14 +1365,72 @@ function computeSpend(fileTurns, invocations) {
     r.cache_creation += u.cache_creation;
     rows.set(k, r);
   };
-  for (const f of fileTurns) for (const t of f.turns) add(f.role, t.model || 'unknown', 1, t.usage);
-  for (const i of invocations || []) {
+  for (const f of fileTurns) {
+    for (const t of f.turns) if (regime === null || turnRegime(t) === regime) add(f.role, t.model || 'unknown', 1, t.usage);
+  }
+  for (const i of regime === null || regime === 'unknown' ? invocations || [] : []) {
     add(`pipeline:${i.step_name}`, i.model || 'unknown', i.model_roundtrips || 0, {
       input: i.input_tokens || 0, output: i.output_tokens || 0,
       cache_read: i.cache_read_tokens || 0, cache_creation: i.cache_creation_tokens || 0,
     });
   }
   return [...rows.values()].sort((a, b) => cmpStr(a.role, b.role) || cmpStr(a.model, b.model));
+}
+
+// spend.by_regime: the spend rows of each regime, sorted by regime; for a role and model they add up to spend.rows.
+function computeSpendByRegime(fileTurns, invocations, regimes) {
+  return regimes.map((regime) => ({ regime, rows: computeSpend(fileTurns, invocations, regime) }));
+}
+
+// Sets `regime` on every turn: the regime of the latest regime-carrying event of the turn's session at or
+// before the turn (the first such event's regime for an earlier turn), else unknown. A sub-agent's transcript
+// carries its parent's session. Only the events' own regime is read, never a device or workspace name.
+function attributeTurns(parsed, repoEvents) {
+  const bySession = new Map();
+  repoEvents.forEach((e, i) => {
+    if (typeof e.session_id !== 'string' || !e.session_id || typeof e.regime !== 'string' || !e.regime) return;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) return;
+    if (!bySession.has(e.session_id)) bySession.set(e.session_id, []);
+    bySession.get(e.session_id).push({ t, i, regime: e.regime });
+  });
+  for (const list of bySession.values()) list.sort((a, b) => a.t - b.t || a.i - b.i);
+  for (const f of parsed) {
+    const list = bySession.get(f.session);
+    for (const turn of f.turns) {
+      if (!list) { turn.regime = 'unknown'; continue; }
+      const at = Date.parse(turn.ts);
+      let r = list[0].regime;
+      for (const x of list) { if (x.t <= at) r = x.regime; else break; }
+      turn.regime = r;
+    }
+  }
+}
+
+// throughput.by_regime: per regime the merged issues (the throughput derivation), the distinct issues closed
+// and the claims in the window, from that regime's events.
+// The regimes the spend breakdown lists: those of the window's events and turns, plus unknown when a pipeline
+// invocation has to land somewhere.
+function spendRegimes(parsed, repoEvents, win, invocations) {
+  const set = new Set([
+    ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+    ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+  ]);
+  if ((invocations || []).length) set.add('unknown');
+  return [...set].sort(cmpStr);
+}
+
+function throughputByRegime(repoEvents, win, regimes, ctx) {
+  return regimes.map((regime) => {
+    const evs = repoEvents.filter((e) => (e.regime || 'unknown') === regime);
+    const inW = evs.filter((e) => inWin(Date.parse(e.ts), win));
+    return {
+      regime,
+      merged_issues: computeEventMetrics(evs, win, ctx).throughput.merged_issues,
+      closed_issues: new Set(inW.filter((e) => e.state === 'closed' && e.issue !== null && e.issue !== undefined).map((e) => e.issue)).size,
+      claims: inW.filter((e) => e.state === 'claimed').length,
+    };
+  });
 }
 
 // Sub-agents whose transcript model differs from the model the Agent call requested.
@@ -1432,6 +1772,7 @@ function evaluate(opts, env = process.env) {
   });
   if (useNew) {
     sources.push({ kind: 'source', path: 'new', found: true, rows: null, note: 'computed from the new events (docs/metrics.md, Reading the new events)' });
+    for (const sk of ev.skipped || []) sources.push({ kind: 'new-events-skipped', path: `${sk.type} v${sk.type_version}`, found: false, rows: sk.count });
     for (const [k, why] of Object.entries(newMod.NA_METRICS)) sources.push({ kind: 'new-events-n/a', path: k, found: false, rows: null, 'n/a': why });
     for (const [k, why] of Object.entries(newMod.NOTES)) sources.push({ kind: 'new-events-note', path: k, found: true, rows: null, note: why });
   }
@@ -1459,7 +1800,9 @@ function evaluate(opts, env = process.env) {
   sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
 
   const haveTr = tr.foundDirs.length > 0;
-  const repoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  const allRepoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  attributeTurns(parsed, allRepoEvents); // from every event of the session, before the regime filter
+  const repoEvents = opts.regime === undefined ? allRepoEvents : allRepoEvents.filter((e) => (e.regime || 'unknown') === opts.regime);
   const links = nm.reason ? null : linkRuns(nm.runs, repoEvents);
   const pl = computePipeline(nm, win, links ? links.linked : new Set());
   let rt = { times: null };
@@ -1475,7 +1818,15 @@ function evaluate(opts, env = process.env) {
   const leaseMinutes = Number(env.CALLUM_FLOW_LEASE_MINUTES) > 0 ? Number(env.CALLUM_FLOW_LEASE_MINUTES) : 120;
   const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
     { readyTimes: rt.times, leaseMinutes, runLinks: links ? links.byIssue : null });
+  if (em && opts.regime === undefined) {
+    const regimes = [...new Set([
+      ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+      ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+    ])].sort(cmpStr);
+    em.throughput.by_regime = throughputByRegime(repoEvents, win, regimes, { readyTimes: rt.times, leaseMinutes, runLinks: null });
+  }
   if (em && useNew) for (const [k, why] of Object.entries(newMod.NA_METRICS)) em[k] = na(why);
+  if (em && !useNew) for (const k of MERGE_SECTIONS) em[k] = na(MERGE_OLD_NA);
 
   const mains = parsed.filter((f) => f.kind === 'main');
   const subs = parsed.filter((f) => f.kind === 'sub');
@@ -1483,6 +1834,7 @@ function evaluate(opts, env = process.env) {
     window: {
       since: iso(win.since),
       until: iso(win.until),
+      regime: opts.regime === undefined ? 'all' : opts.regime,
       sessions: mains.filter((f) => f.inWindow).length,
       sub_agents: subs.filter((f) => f.inWindow).length,
       pipeline_runs: nm.reason ? 'n/a' : pl.pipeline.runs,
@@ -1504,8 +1856,14 @@ function evaluate(opts, env = process.env) {
     judgement_calls: em ? em.judgement_calls : evNa,
     claim_completion: em ? em.claim_completion : evNa,
     rounds: em ? em.rounds : evNa,
+    merges: em ? em.merges : evNa,
+    prs: em ? em.prs : evNa,
+    gaps: em ? em.gaps : evNa,
+    size: em ? em.size : evNa,
+    overlap: em ? em.overlap : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
-      rows: computeSpend(parsed, pl.invocations),
+      rows: computeSpend(parsed, pl.invocations, opts.regime === undefined ? null : opts.regime),
+      ...(opts.regime === undefined ? { by_regime: computeSpendByRegime(parsed, pl.invocations, spendRegimes(parsed, repoEvents, win, pl.invocations)) } : {}),
       sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
     },
     waste: haveTr ? computeWaste(mains, em ? em.mergedAt : null) : na('no transcripts'),
@@ -1560,7 +1918,8 @@ function toMarkdown(r) {
   sec('throughput', guard(r.throughput, (t) =>
     kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
     table(['issue', 'merged_at', 'ready_source', 'run_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
-      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
+      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total])) +
+    (t.by_regime ? '\nBy regime:\n\n' + table(['regime', 'merged_issues', 'closed_issues', 'claims'], t.by_regime.map((x) => [x.regime, x.merged_issues, x.closed_issues, x.claims])) : '')));
   sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
   sec('review', guard(r.review, (v) =>
     kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
@@ -1613,12 +1972,41 @@ function toMarkdown(r) {
     }) + '\n' +
     table(['merged issue', 'review_rounds', 'fix_rounds', 'in_flight_seconds', 'parked_seconds'],
       x.issues.map((i) => [i.issue, i.review_rounds, i.fix_rounds, i.in_flight_seconds, i.parked_seconds]))));
+  sec('merges', guard(r.merges, (m) =>
+    kv({ merges: m.total }) + '\n' +
+    table(['by', 'recovered', 'merges'], m.by.map((x) => [x.by, x.recovered, x.count])) + '\n' +
+    table(['day', 'by', 'recovered', 'merges'], m.per_day.map((d) => [d.day, d.by, d.recovered, d.merges])) + '\n' +
+    table(['issue', 'pr', 'merged_at', 'by', 'recovered'], m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered])) + '\n' +
+    'By kind (unlinked: no issue, or no claim at or before the merge):\n\n' + table(['day', 'kind', 'merges'], m.per_day_by_kind.map((d) => [d.day, d.kind, d.merges]))));
+  sec('prs', guard(r.prs, (p) =>
+    kv({
+      merges: p.merges, 'pr_open_to_merge_seconds.median': p.pr_open_to_merge_seconds.median, 'pr_open_to_merge_seconds.max': p.pr_open_to_merge_seconds.max,
+      'prs.median': p.prs.median, 'prs.max': p.prs.max, 'supersedes.median': p.supersedes.median, 'supersedes.max': p.supersedes.max,
+      'head_moves.median': p.head_moves.median, 'head_moves.max': p.head_moves.max,
+    }) + '\n' +
+    table(['issue', 'pr', 'pr_open_to_merge_seconds', 'prs', 'supersedes', 'head_moves'],
+      p.issues.map((i) => [i.issue, i.pr, i.pr_open_to_merge_seconds, i.prs, i.supersedes, i.head_moves]))));
+  sec('gaps', guard(r.gaps, (g) =>
+    kv({ merges: g.merges, gaps_shown: g.gaps.length }) + '\n' +
+    table(['from', 'to', 'gap_seconds', 'after merge of', 'before merge of', 'in flight (issue:state, ? = parked with a question)'],
+      g.gaps.map((x) => [x.from, x.to, x.gap_seconds, `#${x.before.issue}`, `#${x.after.issue}`,
+        x.in_flight.map((i) => `#${i.issue}:${i.state}${i.parked_with_question ? '?' : ''}`).join(' ') || 'none']))));
+  sec('size', guard(r.size, (z) =>
+    kv({ merges: z.merges, known: z.known, code_lines_known: z.code_lines_known }) + '\n' +
+    table(['metric', 'median', 'p90'], ['files', 'lines', 'code_files', 'code_lines'].map((k) => (z[k]['n/a'] ? [k, 'n/a', z[k]['n/a']] : [k, z[k].median, z[k].p90]))) + '\n' +
+    table(['issue', 'pr', 'files', 'lines', 'code_files', 'code_lines'], z.issues.map((i) => [i.issue, i.pr, i.files, i.lines, i.code_files, i.code_lines]))));
+  sec('overlap', guard(r.overlap, (o) =>
+    kv({ merges: o.merges, overlapping: o.overlapping, share: o.share }) + '\n' +
+    table(['issue', 'pr', 'overlapping', 'overlaps'], o.issues.map((i) => [i.issue, i.pr, i.overlapping, i.overlaps.map((x) => `#${x}`).join(' ') || 'none'])) + '\n' +
+    'Hottest files:\n\n' + table(['path', 'issues'], o.hottest_files.map((f) => [f.path, f.issues]))));
   sec('spend', guard(r.spend, (s) =>
     table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
     (s.sub_agent_model_mismatches['n/a'] ? naLine(s.sub_agent_model_mismatches)
       : 'Sub-agents on a model other than requested:\n\n' + table(['session', 'role', 'requested', 'actual'],
-        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')])))));
+        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')]))) +
+    (s.by_regime || []).map((g) => `\nSpend for regime ${g.regime}:\n\n` + table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
+      g.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation]))).join('')));
   sec('waste', guard(r.waste, (w) =>
     table(['wake kind', 'count'], WAKE_KINDS.map((k) => [k, w.wakes[k]])) + '\n' +
     table(['category', 'count', 'tokens'], [
@@ -1695,8 +2083,8 @@ async function main(argv, env = process.env) {
 }
 
 module.exports = {
-  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend,
-  modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
+  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend, computeSpendByRegime, attributeTurns,
+  modelMismatches, evaluate, toMarkdown, MERGE_SECTIONS, NON_CODE_RE, computeMergeMetrics, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
 };
 
 if (require.main === module) {

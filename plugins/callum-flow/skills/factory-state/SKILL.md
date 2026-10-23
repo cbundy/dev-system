@@ -9,7 +9,7 @@ description: >-
   "what is in flight?", "what is stuck?" or "what needs attention?". For
   historical numbers use query-factory-data, for a windowed report use
   evaluate-sessions.
-version: 0.71.0
+version: 0.88.0
 ---
 
 # Factory state: what is going on right now
@@ -41,6 +41,8 @@ the issue number in parentheses, and say who has to act on it, especially when i
 2. Issues in `parked`, then `ready to merge` (`waiting` is the loop's own hold on wait conditions and needs no action unless it is old), because a person or the orchestrator can act on them.
 3. `flags` on any issue (label or claim disagreeing with GitHub, GitHub state unreadable): these
    are disagreements between sources, not facts about the work.
+
+Per repo, say what its `queue` shows: the top of the claim queue, how old the snapshot is and the blocked reasons. An old snapshot or `n/a` means the loop's queue view is unknown, not empty.
 
 Then one short line per repo on **coverage**, because a gap must never read as idle:
 

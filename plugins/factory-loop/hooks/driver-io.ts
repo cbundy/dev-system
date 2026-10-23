@@ -10,6 +10,7 @@ import { loopBaseOf, loopDirOf } from './contract.mjs'
 import type { FileIo } from './control'
 import type { ActIo } from './exec'
 import type { Io, Runtime } from './observe'
+import { spendKey, tallyStep } from './spend'
 import { actLockPath, parseLease } from './rails'
 import type { LockIo } from './rails'
 import { lockTimed } from './trace'
@@ -21,6 +22,7 @@ import { v2IoOf } from './v2/store'
 import type { V2StoreIo } from './v2/store'
 import type { V2Io } from './v2/types'
 import { processIdOf, withSlotLine } from './v2/workspace'
+import { newTitleFlight } from './title-flight'
 import { within } from './within'
 import { DEFAULT_TOOLS_DIR, RENAME_TIMEOUT_MS, S, SPAWN_TIMEOUT_MS, STOP_TIMEOUT_MS, SUBMIT_GRACE_MS, live, liveV2, ping, settingsCache } from './driver-state'
 import type { AgentRow, Options } from './driver-state'
@@ -45,7 +47,7 @@ export async function configDir($: EngineInterface) {
 // runtime: the settings one pass runs with (v2 SPEC 13.4.1): plugin options, then the workspace
 // file ${CLAUDE_CONFIG_DIR}/factory-loop/config.json, then the repo's .claude/factory-loop.json.
 // env is every command's base environment: the repo, the configured labels (callum-flow-claim
-// and callum-flow-sweep read them), binDir ahead of PATH when the workspace file names one (a
+// and callum-flow-sweep read them), the regime and the loop's session id (callum-flow-event stamps them on every event), binDir ahead of PATH when the workspace file names one (a
 // testbed runs the branch's own CLIs), and the event sink when the mode is not act.
 export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const dir = await configDir($)
@@ -72,13 +74,20 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
+  const session = await $.session.id()
+  // API-key mode (the Coder template sets these in the container, claude_login=api-key)
+  const apiKey = (await $.env.get('DEV_CLAUDE_AUTH')) === 'api-key'
+    ? { budgetUsd: (await $.env.get('DEV_CLAUDE_BUDGET_USD')) || '', resetDay: (await $.env.get('DEV_CLAUDE_BUDGET_RESET_DAY')) || '' }
+    : undefined
   const env: Record<string, string> = {
     CALLUM_FLOW_REPO: repo,
+    FACTORY_REGIME: config.regime,
     CALLUM_FLOW_READY_LABEL: config.readyLabel,
     CALLUM_FLOW_IN_DEV_LABEL: config.inDevLabel,
   }
   const binDir = str(file.binDir)
   if (binDir !== '') env.PATH = `${binDir}:${(await $.env.get('PATH')) || '/usr/local/bin:/usr/bin:/bin'}`
+  if (session !== '') env.CLAUDE_SESSION_ID = session
   if (sink !== null) env.CALLUM_EVENTS_DIR = sink
   return {
     mode,
@@ -88,13 +97,16 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : DEFAULT_POOL_SIZE,
     cwd: checkout,
     loopDir,
-    workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },
+    configDir: dir,
+    sessionCwd: S.cwd,
+    workspace: { session, process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
+    ...(apiKey === undefined ? {} : { apiKey }),
     ...(await gateLimits(argv => $.process.run(argv, { timeoutMs: 15_000 }), loaded.config)),
     configProblems: loaded.problems,
     repoSettings: loaded.raw,
@@ -148,6 +160,7 @@ export function io($: EngineInterface, agents: AgentRow[]): Io {
     run: (argv, init) => $.process.run(argv, init),
     readFile: path => text($, path),
     sessionLimits: async () => (await $.session.usage()).rateLimits,
+    sessionCost: async () => (await $.session.usage()).cost?.usd ?? null,
     agents: async () => agents,
   }
 }
@@ -186,9 +199,19 @@ export function actIo($: EngineInterface): ActIo {
       if (early !== null) throw new Error(`the prompt was ${early}`)
     },
     rename: async title => {
-      await within($, RENAME_TIMEOUT_MS, $.command.run({ command: 'rename', args: title }), 'rename')
+      flightOf($).want(title)
     },
     usage: async () => {
+      // API-key mode: the tally and the cost now, in memory (spend.ts); no tally or no cost: the read fails
+      // and plan's tier stands
+      const rt = S.lastRt
+      if (rt?.apiKey !== undefined) {
+        const cost = (await $.session.usage()).cost?.usd
+        const tally = await $.store.get(spendKey(rt.repo))
+        if (cost === undefined || tally === undefined || tally === null) throw new Error('no spend reading')
+        const step = tallyStep(tally, { costUsd: cost, process: rt.workspace?.process ?? '', session: rt.workspace?.session ?? '' }, await $.clock.now(), rt.apiKey)
+        return { fiveHour: null, sevenDay: null, usage: step.usage }
+      }
       const limits = (await $.session.usage()).rateLimits
       const pct = (kind: string) => limits.find(l => l.kind === kind)?.percentUsed ?? null
       return { fiveHour: pct('five_hour'), sevenDay: pct('seven_day') }
@@ -242,11 +265,39 @@ export function offTitle(rt: Runtime): string {
   return `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`
 }
 
-export async function setTitle($: EngineInterface, title: string) { // every rename, the driver's own included, starts the throttle window
-  if (title === S.lastTitle) return
-  await $.command.run({ command: 'rename', args: title })
-  S.lastTitle = title
-  S.lastTitleAt = await $.clock.now()
+// setTitle: wants the title and returns at once; the rename runs off the pass (title-flight.ts).
+export function setTitle($: EngineInterface, title: string) {
+  flightOf($).want(title)
+}
+
+// flightOf: the one title flight of this engine. A rename that succeeds starts the throttle window
+// (v2 SPEC 13.9.1); its time and status, and its error when it failed, go to the next trace record.
+function flightOf($: EngineInterface): TitleFlight {
+  // the engine of the latest call renames; the flight itself outlives the engine handed to a call
+  S.renamer = async title => {
+    await within($, RENAME_TIMEOUT_MS, $.command.run({ command: 'rename', args: title }), 'rename')
+  }
+  S.clockNow = () => $.clock.now()
+  if (S.titleFlight === null) {
+    S.titleFlight = newTitleFlight({
+      rename: title => S.renamer?.(title) ?? Promise.resolve(),
+      now: () => S.clockNow?.() ?? Promise.resolve(0),
+      title: () => S.lastTitle,
+      settled: done => {
+        if (done.ok) [S.lastTitle, S.lastTitleAt] = [done.title, done.endedAt]
+        S.offFinished.push({
+          cmd: 'title',
+          key: 'title',
+          ms: Math.round(done.ms * 10) / 10,
+          exit: done.ok ? 0 : -1,
+          endedAt: new Date(done.endedAt).toISOString(),
+          ...(done.error === undefined ? {} : { error: done.error.slice(0, 200) }),
+        })
+        S.offFinished.splice(0, S.offFinished.length - 100)
+      },
+    })
+  }
+  return S.titleFlight
 }
 
 // wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (v2 SPEC 13.8.1).

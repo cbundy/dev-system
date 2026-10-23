@@ -9,9 +9,13 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { loopEventArgs } from '../hooks/derive'
+import { loopNote } from '../hooks/derive'
 import { pruneArgvs } from '../hooks/exec'
+import { CLI_TIMEOUT_MS } from '../hooks/act-cli'
+import { OFF_PASS_MARGIN_MS } from '../hooks/act-off'
 import type { LedgerEntry } from '../hooks/types'
+import { recordsKey, recordsToStore } from '../hooks/v2/observe'
+import { madeRecord } from '../hooks/v2/table'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { handshakePath } from '../hooks/v2/workspace'
 import { STEP_AGENT } from '../hooks/v2/types'
@@ -94,6 +98,8 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0) · observe'])
     expect(h.passes()).toHaveLength(1)
     expect(h.last()).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
+    // the cap the pass held to, with the container's memory (the host's 64 GiB) and the estimate behind the ceiling
+    expect(h.last().cap).toEqual({ effective: 3, configured: 3, ceiling: 20, memoryBytes: 64 * 1024 ** 3, estimateBytes: 3072 * 1024 ** 2, estimateSource: 'default' })
     // parked #45 holds a live claim of this device with no record: the ghost is planned for release (R1), and not run
     expect(h.last().actions).toEqual([expect.objectContaining({ kind: 'label', rule: 'R1', issue: 45 })])
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
@@ -148,6 +154,37 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     const before = h.seen.filter(s => s.argv.includes('--list')).length
     await clock.advance(60_000)
     expect(h.seen.filter(s => s.argv.includes('--list')).length).toBe(before)
+  })
+
+  test('every command carries the regime and the loop session id, in observe and in act (v2 SPEC 13.4.1)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const own = h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state')
+    expect(own.length).toBeGreaterThan(0)
+    expect(own.every(s => s.env.FACTORY_REGIME === 'factory_loop_v2' && s.env.CLAUDE_SESSION_ID === SESSION && s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
+  })
+
+  test('the regime setting reaches the commands; an act pass keeps it without the sink', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470] })
+    const h = host(on, { config: { ...ACT, regime: 'testbed' }, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const cmds = h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s))
+    expect(cmds.length).toBeGreaterThan(0)
+    expect(cmds.every(s => s.env.FACTORY_REGIME === 'testbed' && s.env.CLAUDE_SESSION_ID === SESSION && s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
+  })
+
+  test('a session with no id puts no CLAUDE_SESSION_ID in the environment', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work' }, session: '' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const cmds = h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s))
+    expect(cmds.length).toBeGreaterThan(0)
+    expect(cmds.every(s => s.env.FACTORY_REGIME === 'factory_loop_v2' && !('CLAUDE_SESSION_ID' in s.env))).toBe(true)
   })
 
   test('a tracker named in only has its timeline read, then its sub-issues (D-35)', ENGINE_TEST, async ($, on) => {
@@ -319,9 +356,10 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(line.rails).toBeUndefined()
     expect(line.outcomes).toEqual([
       { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
-      { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
+      // the sweep runs off the pass (act-off.ts): the pass line says it is running, its completion lands after
+      { key: 'sweep:0', status: 'running', ms: 0, summary: 'running off the pass' },
     ])
-    expect(line.commands).toContain('callum-flow-claim 470')
+    expect(line.commands).toContain('env CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} callum-flow-claim 470')
     expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adopt', branch: 'issue-470' } })
     expect(JSON.parse(h.files.get(LOCK) ?? '{}')).toMatchObject({ session: SESSION, expiresAt: NOW + 5_000 + 15 * MIN })
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
@@ -343,7 +381,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       reason: `old watcher: orchestrator-watch.sh holds ${WATCH_LOCK} (pid 4242)`,
       tell: 'TELL old-watcher id=w',
     },
-    { name: "another orchestrator's heartbeat", beats: `device,age_s\n${OTHER},30\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
+    { name: "another orchestrator's heartbeat", beats: `device,age_s,coder_workspace\n${OTHER},30,\n`, reason: 'heartbeat: another orchestrator on this repo is up', tell: 'TELL heartbeat-other id=w' },
     {
       name: 'a failed startup migrate',
       files: { '/tmp/dev-factory-db-migrate.json': JSON.stringify({ outcome: 'failed', at: new Date(NOW - 60_000).toISOString(), to_version: 12, error: 'connecting as x_migrator failed' }) },
@@ -370,7 +408,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       expect((line.rails as string[]).join(' | ')).toContain(r.reason)
       // it planned the claim and ran nothing but reads, their events to the sink
       expect((line.actions as { key: string }[]).map(a => a.key)).toContain(CLAIM_KEY)
-      expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim' || s.argv[0] === 'callum-flow-sweep')).toBe(false)
+      expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
       expect(h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state').every(s => s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
       expect(h.titles.at(-1)).toContain('· observe')
       // a session a rail refuses never takes the act lock
@@ -385,7 +423,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
 
   test('a heartbeat notice keeps its key in the ledger and is logged as a loop event', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -393,9 +431,22 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     // the spell is remembered beside the ledger, so a reload does not tell it again
     expect(h.store.get(`rails:${REPO}`)).toEqual({ heartbeat: { since: NOW + 5_000, device: OTHER }, watcher: null })
     expect(h.last().told).toEqual([`tell:heartbeat-other:${NOW + 5_000}`])
-    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=tell'))).toHaveLength(1)
+    expect(h.native('loop_entry').filter(e => e.data.kind === 'tell')).toHaveLength(1)
     expect(h.prompts[0]).toStartWith(`TELL heartbeat-other id=w`)
     expect(h.prompts[0]).toContain(`device=${OTHER}`)
+  })
+
+  test('a beat from this loop\'s own Coder workspace under another device name does not hold act mode, and is logged as railTwins', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470], beats: 'device,age_s,coder_workspace\nbox,12,ws-a\n' })
+    const h = host(on, { config: ACT, run, env: { DEV_CODER_WORKSPACE: 'ws-a' } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const line = h.last()
+    expect(line).toMatchObject({ mode: 'act', executed: true, railTwins: [{ device: 'box', age_s: 12 }] })
+    expect(line.rails).toBeUndefined()
+    await clock.advance(60_000)
+    expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toEqual([])
   })
 
   test('the kill switch stops act mode within a pass: nothing read, nothing run', ENGINE_TEST, async ($, on) => {
@@ -422,7 +473,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv[0] === 'callum-flow-claim') h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+        if (argv.includes('callum-flow-claim')) h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
         return undefined
       },
     })
@@ -459,9 +510,9 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.entry('design:470:1')).toMatchObject({ status: 'running', agentId: 'agent-alive' })
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
     // the lost agent's loop event; command entries log their own events, never a loop event
-    const loops = h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith('kind='))
-    expect(loops.some(n => n.startsWith('kind=agent-step key=fixer:gate:R:review:h status=lost'))).toBe(true)
-    expect(loops.some(n => n.includes('key=heartbeat:0'))).toBe(false)
+    const loops = h.native('loop_entry').map(e => e.data)
+    expect(loops.some(d => d.kind === 'agent-step' && d.key === 'fixer:gate:R:review:h' && d.status === 'lost')).toBe(true)
+    expect(loops.some(d => d.key === 'heartbeat:0')).toBe(false)
   })
 
   test('the restart for an update ran: the update is done and the drain ends (rule H4)', ENGINE_TEST, async ($, on) => {
@@ -495,7 +546,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ updateDue: { at: 777 } })
     expect(h.last()).toMatchObject({ executed: false })
     expect((h.last().rails as string[]).join(' ')).toContain('restart: dev-restart-self asked for a new workspace')
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
   })
 
@@ -521,17 +572,17 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
     expect(h.titles.at(-1)).toContain('winding down')
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.status.json`) ?? '{}')).toMatchObject({ cap_ms: 10 * MIN, running: { steps: [] } })
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
     // the stop script removed the request: still nothing starts, and no status file is written for it
     h.files.delete(`${LOOP_DIR}/wind-down.request`)
     h.files.delete(`${LOOP_DIR}/wind-down.status.json`)
     await clock.advance(60_000)
     expect(h.files.has(`${LOOP_DIR}/wind-down.status.json`)).toBe(false)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     // the restart never came: past the cap and the margin the loop plans normally again
     await clock.advance(16 * MIN)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
     expect(h.events().filter(e => e.some(n => n.includes('wind-down-stale'))).length).toBeGreaterThan(0)
   })
 
@@ -548,7 +599,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
 
   test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (v2 SPEC 13.10 item 2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
     const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -597,19 +648,18 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.last().starved).toBeUndefined()
   })
 
-  test('a rate-cap hold is one loop event per cap per hour (v2 SPEC 13.11.4, D-24)', ENGINE_TEST, async ($, on) => {
+  test('a rate-cap hold writes no loop event and still holds the action, once an hour in the pass line (v2 SPEC 13.11.4)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470] })
     const claims = Array.from({ length: 30 }, (_, i) => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN }))
     const h = host(on, { config: ACT, run, store: ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }), ...claims]) })
     await $.session.start(START)
     await clock.advance(6_000)
-    const held = `kind=start key=cap:start:${Math.floor((NOW + 5_000) / 3_600_000)} status=held`
     expect(h.last().capped).toEqual(['start'])
-    expect(h.events().filter(e => e.at(-1) === held)).toEqual([['callum-flow-event', 'loop', '--note', held]])
     await clock.advance(60_000)
     expect(h.last().capped).toEqual(['start'])
-    expect(h.events().filter(e => e.at(-1) === held)).toHaveLength(1)
+    expect(h.events().filter(e => e.some(w => w.includes('cap:') || w === 'loop'))).toEqual([])
+    expect(h.native('loop_entry').some(e => String(e.data.key).startsWith('cap:'))).toBe(false)
   })
 
   test('three passes in a row that throw tell the owner once, and the title shows error (v2 SPEC 13.10 item 9)', ENGINE_TEST, async ($, on) => {
@@ -630,6 +680,24 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.titles.at(-1)).toBe(`${good} · error`)
     await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).toBe(good)
+  })
+
+  test('a rename that hangs holds no pass: the pass ends, the title stays, and the next record lists the timed-out rename (title flight)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: { ...ACT, trace: true }, run, rename: () => new Promise<void>(() => undefined) })
+    await $.session.start(START)
+    // the first pass finishes at 5 s, though its rename never answers: its record is written
+    await clock.advance(6_000)
+    expect(h.titles).toHaveLength(1)
+    const first = h.traces()[0] as { actions: { kind: string; status: string; off?: boolean }[] }
+    expect(first.actions.find(a => a.kind === 'title')).toMatchObject({ status: 'running', off: true })
+    // past the 10 s bound the rename times out; the row lands in a later record, with its error
+    await clock.advance(60_000)
+    const rows = (h.traces() as { offPass: { cmd: string; exit: number; error?: string }[] }[]).flatMap(r => r.offPass.filter(o => o.cmd === 'title'))
+    expect(rows.length).toBeGreaterThanOrEqual(1)
+    expect(rows[0]).toMatchObject({ cmd: 'title', exit: -1 })
+    expect(rows[0]?.error).toContain('rename')
   })
 
   test('passes that fail now and then never rename more than once per titleEveryMs (O1)', ENGINE_TEST, async ($, on) => {
@@ -672,7 +740,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       const { run } = factory({
         queue: [470],
         run: argv => {
-          if (argv[0] === 'callum-flow-claim' && h !== undefined) {
+          if (argv.includes('callum-flow-claim') && h !== undefined) {
             h.files.set(LOCK, otherLease(expiresAt))
             atLoss = JSON.stringify(h.store.get(ledgerKey))
           }
@@ -741,7 +809,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     // the queue is read again two minutes after its last read
     await clock.advance(3 * MIN)
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.last().skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
@@ -760,7 +828,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ executed: true })
     expect(h.entry(key)).toMatchObject({ status: 'running', agentId: 'agent-1' })
-    expect(h.events().some(e => (e.at(-1) ?? '').includes('status=lost'))).toBe(false)
+    expect(h.native('loop_entry').some(e => e.data.status === 'lost')).toBe(false)
     expect(h.spawns).toEqual([])
   })
 
@@ -775,7 +843,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     expect(line).toMatchObject({ mode: 'act', executed: false })
     expect(line.rails as string[]).toContain('ledger: not loaded, so nothing is acted on this pass')
     expect((line.problems as string[]).join(' ')).toContain('ledger: the store could not be read')
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim' || s.argv[0] === 'callum-flow-sweep')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
     expect(h.spawns).toEqual([])
     expect(h.store.has(ledgerKey)).toBe(false)
   })
@@ -792,14 +860,14 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
     ])
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv.includes('callum-flow-claim'))).toBe(false)
     expect((line.problems as string[]).join(' ')).toContain('ledger: not saved, so nothing starts until a save succeeds')
     expect((line.problems as string[]).join(' ')).toContain(`store: ${ledgerKey} could not be written`)
     expect(h.titles.at(-1)).toEndWith(' · error')
     // the store takes it again: the loop acts, and the title clears
     h.failSet = () => false
     await clock.advance(60_000)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
     // the error title started the throttle window: the plan title returns once titleEveryMs has passed
     await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).not.toContain('error')
@@ -813,7 +881,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       queue: [470],
       run: argv => {
         if (argv[0] === 'callum-flow-sweep') seen.sweep = h?.entry('sweep:0')?.status
-        if (argv[0] === 'callum-flow-claim') seen.claim = h?.entry(CLAIM_KEY)?.status
+        if (argv.includes('callum-flow-claim')) seen.claim = h?.entry(CLAIM_KEY)?.status
         return undefined
       },
     })
@@ -829,13 +897,13 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
     // the claim is still running 14 minutes on: the lease runs well past now
     await clock.advance(14 * MIN)
-    expect(h.commands().filter(s => s.argv[0] === 'callum-flow-claim')).toHaveLength(1)
+    expect(h.commands().filter(s => s.argv.includes('callum-flow-claim'))).toHaveLength(1)
     expect(JSON.parse(h.files.get(LOCK) ?? '{}').expiresAt).toBeGreaterThan(clock.now() + 10 * MIN)
     release()
     await clock.settle()
@@ -848,7 +916,7 @@ describe('act mode: a lease taken over during a long step', () => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1031,7 +1099,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
   // run 2 (#536): a wake's turn starts inside its submit, as the engine starts it, and its one
   // start was logged twice, by turn.start and by the executor's finish
   const loopStatuses = (h: Host, kind: string) =>
-    h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith(`kind=${kind} `)).map(n => /status=(\S+)/.exec(n)?.[1])
+    h.native('loop_entry').filter(e => e.data.kind === kind).map(e => e.data.status)
 
   test('each ledger transition logs one loop event: a task whose turns start inside their submits, its reminder included', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -1057,7 +1125,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
 
   test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     let turns = 0
     const h = host(on, { config: ACT, run, submit: text => void $.turn.start({ text, turnId: `turn-${++turns}` }) })
     await $.session.start(START)
@@ -1098,7 +1166,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     const first = /id=(\S+)/.exec(h.prompts[0] ?? '')?.[1] ?? ''
     expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: first, decision: 'done' })).toMatchObject({ result: expect.stringContaining('Recorded') })
     // another orchestrator comes up: its notice is the next wake
-    f.w.beats = `device,age_s\n${OTHER},30\n`
+    f.w.beats = `device,age_s,coder_workspace\n${OTHER},30,\n`
     await clock.advance(60_000)
     const second = /id=(\S+)/.exec(h.prompts.find(p => p.startsWith('TELL heartbeat-other')) ?? '')?.[1] ?? ''
     expect(second).not.toBe('')
@@ -1107,7 +1175,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
 
   test("a rail's notice whose spell ended before a wake let it out is never sent (v2 SPEC 13.11.2)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const f = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const f = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
@@ -1150,7 +1218,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     f.w.queue = [470]
     await clock.advance(3 * MIN)
     expect(h.files.has(`${CFG_DIR}/factory-loop/cbundy__other/act.lock`)).toBe(true)
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     const lines = (h.files.get(`${CFG_DIR}/factory-loop/cbundy__other/decisions-${iso(NOW).slice(0, 10)}.jsonl`) ?? '').split('\n').filter(l => l !== '')
     expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
@@ -1178,14 +1246,14 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
   const heldQueue = (on: Parameters<typeof host>[0]) => {
     const first = 'task:redrive:issue-470-x:abc'
     const second = 'judge:sequence:512:abc1234'
-    const held = `kind=task key=${first} status=done`
+    const held = (argv: string[]) => argv[2] === 'loop_entry' && argv[4]?.includes(`"key":"${first}"`) === true && argv[4].includes('"status":"done"')
     let release: () => void = () => undefined
     const holding = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && (argv.at(-1) ?? '').startsWith(held) ? holding : undefined) })
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && held(argv) ? holding : undefined) })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(first, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
-      entry(second, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 9 * MIN, endedAt: null, wakeId: 'w2', session: SESSION }),
+      entry(second, 'task', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 9 * MIN, endedAt: null, wakeId: 'w2', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run, store })
     return { h, first, second, release: () => release() }
@@ -1209,14 +1277,14 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
     // the second wake's answer is in the store at once; its loop event and the op's line wait their turn
     expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(false)
+    expect(h.native('loop_entry').some(e => e.data.key === second && e.data.status === 'done')).toBe(false)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
 
     release()
     await turn
     await clock.settle()
     expect(h.entry(second)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${second} status=done`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.key === second && e.data.status === 'done')).toBe(true)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
   })
 
@@ -1257,7 +1325,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     // the other device's parked run is not this loop's to drive; the claim is this device's own
     expect((line.actions as { key: string }[]).map(a => a.key)).toEqual([CLAIM_KEY, 'sweep:0'])
     expect(h.spawns).toEqual([])
-    expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
+    expect(h.commands().find(s => s.argv.includes('callum-flow-claim'))?.argv).toEqual(['env', 'CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]}', 'callum-flow-claim', '470'])
   })
 
   test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (v2 SPEC 13.8.2, 13.10 item 8)', ENGINE_TEST, async ($, on) => {
@@ -1276,14 +1344,14 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.entry(judge)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=done`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'judge')).toBe(false)
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(1)
   })
 
   test('a ledger rebuilt from the event log after a lost store is the one the loop keeps and acts on (v2 SPEC 13.7.5)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const told = entry('tell:stalled:i470/claim/old:1', 'tell', { wake: 'stalled', class: 'owner', rule: 'S1', issue: 470, status: 'done', startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
-    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
+    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopNote(e)}",loop,${DEVICE}`
     const events = [NO_EVENTS.trim(), row(told)].join('\n') + '\n'
     const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
@@ -1300,7 +1368,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     // run 1 left a judge open; run 2 starts with the store cleared
     const judge = 'judge:sequence:512:abc1234'
     const open = entry(judge, 'judge', { wake: 'sequence', class: 'drive', rule: 'M5', issue: 470, pr: 512, status: 'running', startedAt: NOW - 13 * MIN, endedAt: null })
-    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
+    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopNote(e)}",loop,${DEVICE}`
     const events = [NO_EVENTS.trim(), row(open)].join('\n') + '\n'
     const { run } = factory({ run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
     const h = host(on, { config: ACT, run })
@@ -1309,7 +1377,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'events' })
     // nobody can answer it: lost with its attempt given back, so its rule decides again
     expect(h.entry(judge)).toMatchObject({ status: 'lost', attempts: 0, summary: 'lost: it was open before this load' })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=lost`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'judge')).toBe(false)
     expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
@@ -1322,7 +1390,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ tier: 'stop-all' })
     expect(h.last().skipped).toContainEqual(expect.objectContaining({ issue: 470, why: expect.stringContaining('tier stop-all') }))
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.entry(CLAIM_KEY)).toBeUndefined()
   })
 
@@ -1364,7 +1432,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.settle()
     // lost with its attempt given back, and its end logged, since its start was
     expect(h.entry(wake)).toMatchObject({ status: 'lost', attempts: 0, summary: 'submit dropped: the queue was cleared' })
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=tell key=${wake} status=lost`))).toBe(true)
+    expect(h.native('loop_entry').some(e => e.data.kind === 'tell' && e.data.key === wake && e.data.status === 'lost')).toBe(true)
     await clock.advance(60_000)
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(2)
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
@@ -1374,7 +1442,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     const clock = mock.clock(on, { now: NOW })
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
-    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    const { run } = factory({ beats: `device,age_s,coder_workspace\n${OTHER},30,\n` })
     const h = host(on, { config: ACT, run, submit: () => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : undefined) })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1519,11 +1587,15 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect(h.store.get(`settings-ops:${REPO}`)).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', by: 'person' })])
     await clock.advance(61_000)
     const logged = settingsEvents().map(s => JSON.parse(s.argv[s.argv.indexOf('--data') + 1] ?? '{}') as Record<string, unknown>)
-    expect(logged).toEqual([expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' })])
+    // the cap in force follows the setting (the container's memory ceiling is far above it), and that is its own change
+    expect(logged).toEqual([
+      expect.objectContaining({ key: 'maxInFlightIssues', new_value: 7, layer: 'workspace', who: 'person' }),
+      expect.objectContaining({ key: 'derived.effectiveCap', old_value: 3, new_value: 7 }),
+    ])
     expect((h.store.get(`settings:${REPO}`) as { settings: Record<string, unknown> }).settings.maxInFlightIssues).toBe(7)
     // the pass after it has no change to log, and the op older than the snapshot is dropped
     await clock.advance(61_000)
-    expect(settingsEvents()).toHaveLength(1)
+    expect(settingsEvents()).toHaveLength(2)
     expect(h.store.get(`settings-ops:${REPO}`)).toEqual([])
   })
 
@@ -1565,7 +1637,9 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     expect(h.prompts.filter(p => p.startsWith('TELL breaker id=w'))).toHaveLength(1)
     expect(h.prompts.find(p => p.startsWith('TELL breaker'))).toContain('kind=ping')
     expect(h.lines().some(l => l.breaker !== undefined)).toBe(true)
-    expect(h.events().some(e => (e.at(-1) ?? '').startsWith('kind=breaker key=breaker:pings:'))).toBe(true)
+    // the breaker is no longer logged as an event of its own: only its tell's loop_entry
+    expect(h.native('loop_entry').some(e => e.data.kind === 'breaker')).toBe(false)
+    expect(h.events().some(e => e[1] === 'loop')).toBe(false)
     // pings are ignored now: an op changes control.json, and no pass follows until the timer's next
     // tick (every 60 s from the session's start), which runs exactly one
     const before = h.passes().length
@@ -1626,9 +1700,132 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
   })
 })
 
+describe('commands that run off the pass (act-off.ts, v2 SPEC 13.2, 13.7.5)', () => {
+  // a sweep held until the test releases it; every sweep command seen is counted
+  function slowSweep(over: { exitCode?: number; stderr?: string } = {}) {
+    let release: () => void = () => undefined
+    const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: over.exitCode ?? 0, stderr: over.stderr ?? '' })))
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-sweep' ? gate : undefined) })
+    return { run, release: () => release() }
+  }
+  const sweeps = (h: Host) => h.commands().filter(s => s.argv[0] === 'callum-flow-sweep').length
+
+  test('a sweep that takes 40 s never holds a pass: the line is written with its entry running, and the completion lands between passes, logged and pinging a pass', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const first = h.passes()[0] as Record<string, unknown>
+    expect((first.outcomes as { key: string; status: string; ms: number }[]).find(o => o.key === 'sweep:0')).toMatchObject({ status: 'running', ms: 0 })
+    expect(first.ms as number).toBeLessThan(1_000)
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'running', attempts: 1 })
+    // a second pass while it runs plans no second sweep
+    await clock.advance(30_000)
+    await clock.advance(30_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(sweeps(h)).toBe(1)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    const passes = h.passes().length
+    s.release()
+    await clock.settle()
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'done', summary: 'swept', attempts: 1 })
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', kind: 'sweep', status: 'done', summary: 'swept' } })
+    // the completion pinged a pass
+    await clock.advance(6_000)
+    expect(h.passes().length).toBeGreaterThan(passes)
+  })
+
+  // a heartbeat held until the test releases it, over a record the store holds (so it runs
+  // `callum-flow-claim --heartbeat`); every such command seen is counted
+  function slowBeat() {
+    let release: () => void = () => undefined
+    const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: 0, stderr: '' })))
+    const { run } = factory({ run: argv => (argv.includes('--heartbeat') ? gate : undefined) })
+    return { run, release: () => release() }
+  }
+  const beats = (h: Host) => h.commands().filter(s => s.argv.includes('--heartbeat')).length
+
+  test('a heartbeat that takes 14 s never holds a pass: the line is written with its entry running, no second heartbeat or sweep is planned meanwhile, and the completion lands after', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const b = slowBeat()
+    const record = { ...madeRecord({ issue: 140, life: 'l', branch: 'issue-140', pr: null, others: [] }, NOW - 30 * MIN), state: 'parked' as const, step: null, question: 'q' }
+    const h = host(on, { config: ACT, run: b.run, store: { [recordsKey(REPO)]: recordsToStore([record], NOW) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const first = h.passes()[0] as Record<string, unknown>
+    expect((first.outcomes as { key: string; status: string; ms: number }[]).find(o => o.key.startsWith('heartbeat:'))).toMatchObject({ status: 'running', ms: 0 })
+    expect(first.ms as number).toBeLessThan(1_000)
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'running', attempts: 1 })
+    expect(beats(h)).toBe(1)
+    const sweepsBefore = sweeps(h)
+    // a second pass while it runs plans no new heartbeat and no new sweep
+    await clock.advance(8_000)
+    await clock.advance(8_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(beats(h)).toBe(1)
+    expect(sweeps(h)).toBe(sweepsBefore)
+    expect(h.entry('heartbeat:0')?.status).toBe('running')
+    b.release()
+    await clock.settle()
+    expect(h.entry('heartbeat:0')).toMatchObject({ status: 'done', summary: 'leases renewed: #140', attempts: 1 })
+    expect(h.lines().find(l => l.offPass !== undefined && (l.offPass as { kind: string }).kind === 'heartbeat')).toMatchObject({ offPass: { key: 'heartbeat:0', kind: 'heartbeat', status: 'done' } })
+  })
+
+  test('a sweep that never ends is marked timed-out on the first pass after its bound; a completion after that changes nothing', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(CLI_TIMEOUT_MS.sweep + OFF_PASS_MARGIN_MS - 10_000)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    await clock.advance(2 * 60_000)
+    const timed = h.ledger().find(e => e.key === 'sweep:0')
+    expect(timed).toMatchObject({ status: 'timed-out', summary: 'timed out: no completion within 360 s' })
+    const attempt = timed?.startedAt
+    expect(h.passes().some(l => ((l.problems ?? []) as string[]).some(p => p.includes('sweep:0: timed out')))).toBe(true)
+    s.release()
+    await clock.settle()
+    // the late exit 0 finds the attempt ended: dropped, said in the decision log
+    const now = h.entry('sweep:0')
+    expect(now?.status === 'done' && now.startedAt === attempt).toBe(false)
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', dropped: true } })
+  })
+
+  test('a completion after the act lock went to another session changes nothing in memory and writes nothing', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep()
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    const stored = JSON.stringify(h.store.get(`ledger:${REPO}`))
+    h.files.set(LOCK, JSON.stringify({ session: 'session-other', renewedAt: NOW + 6_000, expiresAt: NOW + 10 * MIN }))
+    s.release()
+    await clock.settle()
+    expect(JSON.stringify(h.store.get(`ledger:${REPO}`))).toBe(stored)
+    expect(h.entry('sweep:0')?.status).toBe('running')
+    expect(h.lines().find(l => l.offPass !== undefined)).toMatchObject({ offPass: { key: 'sweep:0', status: 'done', dropped: true } })
+  })
+
+  test('a rate-limited sweep sets the GitHub backoff on the next pass, as an inline action does', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const s = slowSweep({ exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' })
+    const h = host(on, { config: ACT, run: s.run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(`backoff:${REPO}`)).toBeUndefined()
+    s.release()
+    await clock.settle()
+    expect(h.entry('sweep:0')).toMatchObject({ status: 'failed' })
+    await clock.advance(6_000)
+    expect(h.store.get(`backoff:${REPO}`)).toBeGreaterThan(NOW + 6_000)
+  })
+})
+
 describe('the pass summary event (#680)', () => {
-  const passesEvents = (h: Host) => h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes '))
-  const field = (argv: string[], name: string) => (argv.at(-1) ?? '').split(' ').find(t => t.startsWith(`${name}=`))?.slice(name.length + 1)
+  const passesEvents = (h: Host) => h.native('loop_passes')
 
   test('act mode sends one per minute, its count the decision log lines whose time falls in the minute', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -1639,23 +1836,21 @@ describe('the pass summary event (#680)', () => {
     const events = passesEvents(h)
     // the minutes that ended: the first at NOW + 1 min, none from the one still open
     expect(events).toHaveLength(5)
-    expect(events[0]).toEqual(['callum-flow-event', 'loop', '--note', expect.stringContaining('kind=passes key=passes:')])
+    expect(h.events().filter(e => e[2] === 'loop_passes')[0]?.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
     const lines = h.passes()
     expect(lines.length).toBeGreaterThan(10)
     events.forEach((e, i) => {
       const from = NOW + i * 60_000
-      expect(field(e, 'key')).toBe(`passes:${from}`)
-      expect(field(e, 'status')).toBe('done')
-      expect(field(e, 'from')).toBe(iso(from))
-      expect(field(e, 'to')).toBe(iso(from + 60_000))
+      expect(e.data.from_at).toBe(iso(from))
+      expect(e.data.to_at).toBe(iso(from + 60_000))
       const inMinute = lines.filter(l => Date.parse(String(l.at)) >= from && Date.parse(String(l.at)) < from + 60_000)
-      expect(Number(field(e, 'passes'))).toBe(inMinute.length)
-      expect(field(e, 'mode')).toBe('act')
-      expect(field(e, 'planner')).toBe('v2')
-      expect(field(e, 'pass_every_ms')).toBe('20000')
+      expect(e.data.passes).toBe(inMinute.length)
+      expect(e.data.mode).toBe('act')
+      expect(e.data.planner).toBe('v2')
+      expect(e.data.pass_every_ms).toBe(20000)
     })
     // no per-pass event: only the minutes' summaries
-    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes'))).toHaveLength(5)
+    expect(h.events().filter(e => e.includes('loop_passes'))).toHaveLength(5)
   })
 
   test('a minute in which a pass hangs sends passes=0', ENGINE_TEST, async ($, on) => {
@@ -1672,16 +1867,17 @@ describe('the pass summary event (#680)', () => {
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(10_000)
-    expect(h.passes()).toHaveLength(1)
+    // the first pass, and the one its sweep's completion pings (act-off.ts)
+    expect(h.passes()).toHaveLength(2)
     hang = true
     await clock.advance(4 * 60_000)
-    const counts = passesEvents(h).map(e => field(e, 'passes'))
+    const counts = passesEvents(h).map(e => e.data.passes)
     expect(counts.length).toBeGreaterThanOrEqual(3)
-    expect(counts[0]).toBe('1')
-    expect(counts.slice(2)).toContain('0')
-    const empty = passesEvents(h).find(e => field(e, 'passes') === '0')
-    expect(field(empty ?? [], 'mean_ms')).toBe('none')
-    expect(field(empty ?? [], 'acting_mean_ms')).toBe('none')
+    expect(counts[0]).toBe(2)
+    expect(counts.slice(2)).toContain(0)
+    const empty = passesEvents(h).find(e => e.data.passes === 0)
+    expect(empty?.data.mean_ms).toBeNull()
+    expect(empty?.data.acting_mean_ms).toBeNull()
     release()
   })
 
@@ -1711,5 +1907,60 @@ describe('the pass summary event (#680)', () => {
     h.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
     await clock.advance(3 * 60_000)
     expect(passesEvents(h)).toHaveLength(before)
+  })
+})
+
+// --- API-key mode (hooks/spend.ts; v2 SPEC 13.5.2 G3, 13.13) ----------------------------------------
+
+describe('API-key mode: the spend tally', () => {
+  const KEY = `spend:${REPO}`
+  const API = { DEV_CLAUDE_AUTH: 'api-key', DEV_CLAUDE_BUDGET_USD: '100', DEV_CLAUDE_BUDGET_RESET_DAY: '1' }
+  const tally = { v: 1, periodStart: Date.parse('2026-10-01T00:00:00Z'), spentUsd: 30, counter: { process: 'other', session: 'other', lastUsd: 5 }, at: NOW - MIN }
+
+  test('an acting pass stores the tally, counted from the cost it read; no usage-check.sh runs', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT }, env: API, run: factory({ queue: [470] }).run })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(KEY)).toMatchObject({ v: 1, spentUsd: 12, counter: { session: SESSION, lastUsd: 12 } })
+    expect(h.commands().some(s => s.argv[0] === `${TOOLS}/usage-check.sh`)).toBe(false)
+    // the cost grows: the tally grows by the difference
+    h.cost = 15
+    await clock.advance(2 * MIN)
+    expect((h.store.get(KEY) as { spentUsd: number }).spentUsd).toBe(15)
+  })
+
+  test('an observe pass reads the tally and never writes it; its event goes to the sink', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, env: API, store: { [KEY]: tally } })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(KEY)).toEqual(tally)
+    expect(h.last()).toMatchObject({ mode: 'observe', tier: 'normal' })
+    const event = h.commands().find(s => s.argv[0] === 'callum-flow-event' && s.argv[2] === 'usage')
+    expect(event?.env.CALLUM_EVENTS_DIR).toBe(SINK)
+    expect(JSON.parse(event?.argv[6] ?? '{}')).toMatchObject({ source: 'spend', spend_usd: 42, budget_usd: 100 })
+  })
+
+  test('no cost.usd stops new work: tier stop-new, and the store is left alone', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { ...ACT }, env: API, run: factory({ queue: [470] }).run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last()).toMatchObject({ tier: 'stop-new' })
+    expect(h.store.has(KEY)).toBe(false)
+  })
+
+  test('without DEV_CLAUDE_AUTH the pass is a subscription pass: usage-check.sh runs, nothing is stored', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const base = factory({ queue: [470] }).run
+    const h = host(on, { config: { ...ACT }, run: (argv, seen) => (argv[0] === `${TOOLS}/usage-check.sh` ? { stdout: USAGE } : base(argv, seen)) })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.commands().some(s => s.argv[0] === `${TOOLS}/usage-check.sh`)).toBe(true)
+    expect(h.store.has(KEY)).toBe(false)
   })
 })

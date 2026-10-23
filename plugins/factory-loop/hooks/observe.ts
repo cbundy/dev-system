@@ -12,20 +12,22 @@ import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
 import { readIssues } from './observe-github'
+import { readQueue } from './observe-queue'
 import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
   parseCheckout,
   parseCsv,
+  derivedSkipError,
   parseFactoryState,
   parsePool,
-  parseQueue,
-  parseQueueOnce,
   parseSubIssues,
   parseUsage,
 } from './parse'
 import type { Factory } from './parse'
+import { spendEventData, tallyStep, unavailableSpend } from './spend'
+import type { ApiKeySettings, Tally } from './spend'
 import { LIVE, listedLive } from './foundation'
 import { TRACKER_DEPTH, buildState } from './state'
 import type { GithubIssue } from './state'
@@ -53,6 +55,10 @@ export type Runtime = {
   poolSize: number
   cwd: string
   loopDir: string
+  // where the step agents' transcripts are (v2/step-tokens.ts): the config dir and the cwd of this session, whose
+  // munged name is the project folder; absent in a test's Runtime: no token reading
+  configDir?: string
+  sessionCwd?: string
   // this session and process, as v2's workspace rail checks the companion's handshake (v2 SPEC 10.9)
   workspace?: { session: string; process?: string }
   // the observe-mode event sink (v2 SPEC 13.11.1), null when acting; env carries it
@@ -66,10 +72,15 @@ export type Runtime = {
   // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
   pluginRoot: string
   config: Config
+  // API-key mode (DEV_CLAUDE_AUTH=api-key): the budget settings from the environment, unparsed (spend.ts);
+  // absent: subscription mode, and in a test's Runtime
+  apiKey?: ApiKeySettings
   // the container's CPU count (read once per process) and the stop gates the companion may run at once,
   // resolved from config.gateConcurrency; absent in a test's Runtime: no limit
   cpus?: number
   gateConcurrency?: number
+  // the container's memory in bytes, read once per process (config.ts gateLimits); null: not readable, so no memory ceiling; absent in a test's Runtime
+  memoryBytes?: number | null
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
   // what the repo-local settings file says, no defaults (settings.ts repoLoaded); null: not read
@@ -101,6 +112,8 @@ export type Cache = {
   // trackers' direct open sub-issues, from their timelines (D-35)
   timelines: Map<number, Timed<number[]>>
   usage?: Timed<Usage>
+  // API-key mode: when the last usage event was written (a reload starts it over)
+  usageEvent?: Ms
   milestone?: Timed<Milestone | null>
   release?: Timed<ReleaseInfo>
   // when the oldest closed issue of the milestone closed (observe-milestone.ts)
@@ -126,6 +139,7 @@ function resetFor(cache: Cache, repo: string) {
   if (cache.repo === repo) return
   delete cache.queue
   delete cache.usage
+  delete cache.usageEvent
   delete cache.milestone
   delete cache.release
   delete cache.closed
@@ -153,6 +167,8 @@ export type Observation = {
   rateLimited: boolean
   // the PR heads v2 has seen (v2 SPEC 2.4), for act mode to keep; null when v2 read nothing
   v2Heads: Record<string, HeadSeen> | null
+  // API-key mode: the tally after this pass's reading, for an acting pass to store; null: leave it
+  spend: Tally | null
 }
 
 // Io: the engine calls observe needs, built by register.ts (the only module that holds $).
@@ -161,6 +177,8 @@ export type Io = {
   run: (argv: string[], init: { cwd: string; env: Record<string, string>; stdin?: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   readFile: (path: string) => Promise<string | null>
   sessionLimits: () => Promise<{ kind: string; percentUsed: number; resetsAt?: string }[]>
+  // the process-wide cost in dollars (session usage cost.usd); null: none; absent in a test's Io
+  sessionCost?: () => Promise<number | null>
   agents: () => Promise<{ id: string; type: string; status: State['agents'][number]['status'] }[]>
 }
 
@@ -175,6 +193,7 @@ export async function observe(
   lastTitle: string | null, lastTitleAt: number | null,
   stored?: Stored,
   v2Stored?: V2Stored,
+  spendStored?: unknown,
 ): Promise<Observation> {
   resetFor(cache, rt.repo)
   const now = await io.now()
@@ -202,8 +221,10 @@ export async function observe(
   try {
     const r = await run(['callum-flow-factory-state', '--repo', rt.repo, '--format', 'json', '--github', 'off'], undefined, 90_000)
     const parsed = r.exitCode === 0 ? parseFactoryState(r.stdout, rt.repo) : null
-    if (parsed !== null) cache.factory = { at: now, value: parsed }
-    mark('factory', parsed !== null, cache.factory?.at ?? null, parsed === null ? fail(r) : undefined)
+    // a derivation that left out events the loop reads is blind (G2), and never cached
+    const behind = parsed === null ? null : derivedSkipError(parsed.skipped)
+    if (parsed !== null && behind === null) cache.factory = { at: now, value: parsed }
+    mark('factory', parsed !== null && behind === null, cache.factory?.at ?? null, parsed === null ? fail(r) : (behind ?? undefined))
   } catch (err) {
     mark('factory', false, cache.factory?.at ?? null, String(err))
   }
@@ -267,21 +288,14 @@ export async function observe(
     mark('queue', false, cache.queue?.at ?? null, waiting)
   } else if (readDue(cache.queue?.at, now, cfg.queueEveryMs, lastLabelWrite())) {
     try {
-      if (stored !== undefined) {
-        const known = stored.queueKnown !== null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
-        const r = await run([tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known])
-        const line = r.exitCode === 0 ? parseQueueOnce(r.stdout) : null
-        if (line !== null) {
-          cache.queue = { at: now, value: line.now }
-          queueKnown = line.now
-        }
-        mark('queue', line !== null, cache.queue?.at ?? null, line === null ? fail(r) : undefined)
-      } else {
-        const r = await run(['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel])
-        const queue = r.exitCode === 0 ? parseQueue(r.stdout) : null
-        if (queue !== null) cache.queue = { at: now, value: queue }
-        mark('queue', queue !== null, cache.queue?.at ?? null, queue === null ? fail(r) : undefined)
-      }
+      const once = stored !== undefined
+      const known = stored?.queueKnown != null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
+      const argv = once
+        ? [tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known]
+        : ['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel]
+      const q = await readQueue({ argv, once, cache, now, readyLabel: cfg.readyLabel, run: a => run(a), fail })
+      queueKnown = q.known
+      mark('queue', q.source.ok, q.source.at, q.source.error)
     } catch (err) {
       mark('queue', false, cache.queue?.at ?? null, String(err))
     }
@@ -376,18 +390,40 @@ export async function observe(
     mark('github', githubOk, now, !githubOk && limited ? 'GitHub rate limit' : undefined)
   }
 
-  // usage: usage-check.sh every usageEveryMs, and the session's own figures every pass
-  if (cache.usage === undefined || now - cache.usage.at >= cfg.usageEveryMs) {
-    try {
-      const r = await run([tool('usage-check.sh')], undefined, 30_000)
-      cache.usage = { at: now, value: parseUsage(r.stdout.trim()) }
-    } catch {
-      // unavailable: plan fails open as the skill says
+  // usage: usage-check.sh every usageEveryMs, and the session's own figures every pass. In API-key mode
+  // neither: the session's cost goes into the stored tally every pass (spend.ts) and the reading is spend.
+  let spend: Tally | null = null
+  let usage: Usage | null
+  if (rt.apiKey !== undefined) {
+    const apiKey = rt.apiKey
+    const cost = await (io.sessionCost?.() ?? Promise.resolve(null)).catch(() => null)
+    const step = tallyStep(spendStored, { costUsd: cost, process: rt.workspace?.process ?? '', session: rt.workspace?.session ?? '' }, now, apiKey)
+    spend = step.tally
+    // a cost that cannot be read keeps the last real reading until it is older than usageStaleMs
+    if (step.usage.reason !== 'spend:no-session-cost' || cache.usage?.value.spend == null) cache.usage = { at: now, value: step.usage }
+    const stale = now - cache.usage.at >= cfg.usageStaleMs
+    usage = stale ? unavailableSpend('spend:stale') : cache.usage.value
+    if (cache.usageEvent === undefined || now - cache.usageEvent >= cfg.usageEveryMs) {
+      cache.usageEvent = now
+      try {
+        await run(['callum-flow-event', '--type', 'usage', '--actor', 'watcher', '--data', JSON.stringify(spendEventData(usage))], undefined, 30_000)
+      } catch {
+        // best effort, as usage-check.sh's own event write
+      }
     }
+  } else {
+    if (cache.usage === undefined || now - cache.usage.at >= cfg.usageEveryMs) {
+      try {
+        const r = await run([tool('usage-check.sh')], undefined, 30_000)
+        cache.usage = { at: now, value: parseUsage(r.stdout.trim()) }
+      } catch {
+        // unavailable: plan fails open as the skill says
+      }
+    }
+    // a reading older than usageStaleMs counts as unavailable (v2 SPEC 13.3.1)
+    const reading = cache.usage !== undefined && now - cache.usage.at < cfg.usageStaleMs ? cache.usage.value : null
+    usage = withSession(reading, await io.sessionLimits())
   }
-  // a reading older than usageStaleMs counts as unavailable (v2 SPEC 13.3.1)
-  const reading = cache.usage !== undefined && now - cache.usage.at < cfg.usageStaleMs ? cache.usage.value : null
-  const usage = withSession(reading, await io.sessionLimits())
   mark('usage', usage !== null && !usage.unavailable, cache.usage?.at ?? null)
 
   // pool: the shadow cannot see the shadowed device's pool, so it is assumed from its load
@@ -461,7 +497,7 @@ export async function observe(
     checkout,
   })
   const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), tags: repoTags(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, factsShadow: cache.factsShadow, backoff: backoffUntil !== null, limited: () => limited, starvedSince: stored?.starvedSince ?? null })
-  return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
+  return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads, spend }
 }
 
 // withSession: the higher of usage-check.sh's reading and the session's own, per window.

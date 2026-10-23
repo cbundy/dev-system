@@ -12,6 +12,7 @@ import {
   LIVE,
   STEP_BREAKER,
   admit,
+  blindPass,
   gate,
   isoOf,
   issueFromBranch,
@@ -71,6 +72,45 @@ describe('the usage tier (G3)', () => {
     expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toEqual({ tier: 'normal', overridden: true })
     expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW - MIN }, NOW).tier).toBe('stop-new')
     expect(tierOf(u, CFG, { untilPct: 91, expiresAt: NOW + MIN }, NOW).tier).toBe('stop-new')
+  })
+
+  describe('API-key mode: spend against the budget', () => {
+    const spend = (usd: number, resetsAt = NOW + 86_400_000): Usage => ({ ...reading(null, null), auth: 'api-key', spend: { usd, budgetUsd: 100, resetsAt } })
+    const gone = (reason: string): Usage => ({ ...reading(null, null, true), auth: 'api-key', spend: null, reason })
+
+    test('the spend percent runs through the same thresholds, at, below and above', () => {
+      // 84.1 rounds up to 85, 89.1 to 90, 94.1 to 95
+      const tiers = [84, 84.1, 85, 89, 89.1, 90, 94, 94.1, 100, 250].map(usd => tierOf(spend(usd), CFG, null, NOW).tier)
+      expect(tiers).toEqual(['normal', 'slow', 'slow', 'slow', 'stop-new', 'stop-new', 'stop-new', 'stop-all', 'stop-all', 'stop-all'])
+    })
+
+    test('a spend whose period has ended counts as 0 until the next read', () => {
+      expect(tierOf(spend(99, NOW - 1), CFG, null, NOW).tier).toBe('normal')
+      expect(tierOf(spend(99, NOW), CFG, null, NOW).tier).toBe('normal')
+    })
+
+    test('an override lifts slow, stop-new and stop-all below its untilPct, not at or above it', () => {
+      const until = (untilPct: number) => ({ untilPct, expiresAt: NOW + MIN })
+      for (const usd of [86, 91, 97]) {
+        expect(tierOf(spend(usd), CFG, until(98), NOW)).toEqual({ tier: 'normal', overridden: true })
+        expect(tierOf(spend(usd), CFG, until(usd), NOW).overridden).toBe(false)
+      }
+      expect(tierOf(spend(97), CFG, until(97), NOW).tier).toBe('stop-all')
+      expect(tierOf(spend(97), CFG, { untilPct: 100, expiresAt: NOW - 1 }, NOW).tier).toBe('stop-all')
+    })
+
+    test('a missing reading is stop-new, never normal, and no override lifts it', () => {
+      for (const reason of ['spend:no-budget', 'spend:bad-reset-day', 'spend:no-session-cost', 'spend:bad-tally', 'spend:stale']) {
+        expect(tierOf(gone(reason), CFG, null, NOW)).toEqual({ tier: 'stop-new', overridden: false })
+        expect(tierOf(gone(reason), CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toEqual({ tier: 'stop-new', overridden: false })
+      }
+      // spend null without the unavailable flag is missing too
+      expect(tierOf({ ...spend(1), spend: null }, CFG, null, NOW).tier).toBe('stop-new')
+    })
+
+    test('window readings in API-key mode are ignored', () => {
+      expect(tierOf({ ...spend(10), fiveHour: 99, sevenDay: 99 }, CFG, null, NOW).tier).toBe('normal')
+    })
   })
 })
 
@@ -223,6 +263,29 @@ describe('the title frame', () => {
 
   test('a blind pass has no counts: blind takes their place', () => {
     expect(titleOf({ ...frame, counts: null, observe: true, blind: true, owner: 1 })).toBe('🔄 dev-system · observe · blind · owner 1')
+  })
+})
+
+describe('G2: the blind pass and its notice', () => {
+  const blindState = (error: string | null) => {
+    const base = state()
+    return { ...base, sources: { ...base.sources, factory: error === null ? { ok: false, at: NOW - 20 * MIN } : { ok: false, at: NOW - 20 * MIN, error } } }
+  }
+  const tellOf = (ctx: PlanCtx) => ctx.out.find(a => a.kind === 'tell' && a.wake === 'blind')
+
+  test('tell(blind) carries the source error cut to 300 characters and counts as an owner item', () => {
+    const ctx = ctxOf(blindState(`unknown factory event: queue_snapshot v1 ${'x'.repeat(400)}`), CFG, V2_OWNER_TELLS)
+    blindPass(ctx)
+    const fields = (tellOf(ctx) as Extract<Action, { kind: 'tell' }>).fields
+    expect(fields.error).toHaveLength(300)
+    expect(fields.error?.startsWith('unknown factory event: queue_snapshot v1')).toBe(true)
+    expect(ctx.owner.size).toBe(1)
+  })
+
+  test('with no error the field is absent', () => {
+    const ctx = ctxOf(blindState(null), CFG, V2_OWNER_TELLS)
+    blindPass(ctx)
+    expect((tellOf(ctx) as Extract<Action, { kind: 'tell' }>).fields).toEqual({ since: String(NOW - 20 * MIN) })
   })
 })
 
@@ -392,5 +455,18 @@ describe('v2 actions in the foundation\'s filters', () => {
     expect(want(ctx, free)).toBe('exhausted')
     expect(ctx.exhausted).toEqual(['slot/l1/free'])
     expect(ctx.skipped).toEqual([{ rule: 'W2', issue: 1, why: 'exhausted: slot/l1/free' }])
+  })
+
+  test('a cadenced key stays exhausted while its retry runs, and not after it is done', () => {
+    const sweep: Action = { kind: 'sweep', key: 'sweep:7', class: 'free', rule: 'H2', reason: 'x', issue: null }
+    const exhaustedWith = (over: Partial<LedgerEntry>) => {
+      const ctx = ctxOf(withLedger(state(), [entry('sweep:7', 'sweep', { endedAt: NOW - HOUR, ...over })]))
+      want(ctx, sweep)
+      return ctx.exhausted
+    }
+    expect(exhaustedWith({ status: 'failed', attempts: 3 })).toEqual(['sweep:7'])
+    expect(exhaustedWith({ status: 'running', attempts: 4, endedAt: null })).toEqual(['sweep:7'])
+    expect(exhaustedWith({ status: 'running', attempts: 3, endedAt: null })).toEqual([])
+    expect(exhaustedWith({ status: 'done', attempts: 4 })).toEqual([])
   })
 })
