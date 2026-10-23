@@ -30,6 +30,7 @@ import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
 import { FACTORY_LABELS, SLOT_STATES, V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2Ctx, V2Io, V2State } from '../hooks/v2/types'
+import { applyOp, parseOp } from '../hooks/control'
 import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, config, control, entry, issue, running, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -832,6 +833,25 @@ describe('the steps', () => {
     const r2 = plan(held)
     expect(of(r2, 91)).toEqual([])
     expect(said(r2, 91)).toEqual(['owner: no new work (agent-step)'])
+  })
+
+  test('S2: a note op replaces the owner\'s earlier note of its scope in the step\'s notes, and note off leaves none (R4-O2, R5-O3)', () => {
+    const r = rec(73, { state: 'designing', step: 'design', notes: [] })
+    const apply = (c: ReturnType<typeof control>, text: string, at: number) => {
+      const parsed = parseOp(text)
+      if (!parsed.ok) throw new Error(parsed.error)
+      return applyOp(c, parsed.op, at).control
+    }
+    const spawnNotes = (c: ReturnType<typeof control>) => {
+      const prepared = withLedger(world([r], { control: c }), [done(prepareKey(r, 1), 'slot', { issue: 73, maxAttempts: 1 })])
+      return (of(plan(prepared), 73).find(a => a.kind === 'agent-step') as Extract<Action, { kind: 'agent-step' }> | undefined)?.notes
+    }
+    let c = apply(control(), 'note 73 always ask for changes', NOW - 3 * MIN)
+    expect(spawnNotes(c)).toEqual(['owner: always ask for changes'])
+    c = apply(c, 'note 73 review normally', NOW - 2 * MIN)
+    expect(spawnNotes(c)).toEqual(['owner: review normally'])
+    c = apply(c, 'note 73 off', NOW - MIN)
+    expect(spawnNotes(c)).toEqual([])
   })
 
   test('a running step past its timeout is unknown (timeout) and its transition re-checks the entry as running; within its timeout it runs on', () => {

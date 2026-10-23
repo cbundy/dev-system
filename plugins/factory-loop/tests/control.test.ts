@@ -358,6 +358,9 @@ describe('applyOp', () => {
     expect(again.control.notes).toContainEqual({ issue: 6, text: 'other', at: NOW + 2 })
     expect(again.text).toBe('Note for #5 replaced: its next agent prompts carry the new one.')
 
+    const added = applyOp(BUSY, op('note be brief'), NOW)
+    expect(added.text).toBe('Note added for every issue: the next agent prompts carry it.')
+
     const fleet = applyOp(again.control, op('note be brief'), NOW + 4)
     expect(fleet.control.notes.filter(n => n.issue === null)).toEqual([{ issue: null, text: 'be brief', at: NOW + 4 }])
     expect(fleet.control.notes.filter(n => n.issue !== null)).toHaveLength(2)
@@ -375,7 +378,9 @@ describe('applyOp', () => {
     const noFleet = applyOp(cleared.control, op('note off'), NOW + 7)
     expect(noFleet.changed).toBe(true)
     expect(noFleet.control.notes).toEqual([{ issue: 6, text: 'other', at: NOW + 2 }])
-    expect(applyOp(noFleet.control, op('note off'), NOW + 8).changed).toBe(false)
+    const noneFleet = applyOp(noFleet.control, op('note off'), NOW + 8)
+    expect(noneFleet.changed).toBe(false)
+    expect(noneFleet.text).toBe('No note for every issue.')
   })
 
   test('mode changes no control: the effect is the mode to write', () => {
