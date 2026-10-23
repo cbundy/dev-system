@@ -55,7 +55,10 @@ breaking change to an existing contract.
 How each layer reaches consumers after the tag exists:
 
 - **Plugin**: follow the [consumer update flow](docs/architecture.md#how-a-change-reaches-a-consumer-repo)
-  to advance the marketplace pin and migrate the installation.
+  to advance the marketplace pin and migrate the installation. Loop workspaces on the
+  `orchestrator-loop` template need one more step: the foreman session runs
+  `coder/push.sh orchestrator-loop`, because the template pins `default_plugins` to the release it
+  was pushed at and `default_plugin_refs_win` makes that ref win over the repo's pin.
 - **npm/CLI layer**: consumers depend on `github:cbundy/dev-system#semver:0.x` -
   npm resolves that range against the git tags, so `npm update @callum/dev-system`
   pulls the new tag, then `npx callum-dev update` merges template changes into the

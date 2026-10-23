@@ -24,6 +24,9 @@ When a person runs this skill with no step given, pick the step yourself in step
   outside foreman session moves the loops onto a new release.
 - Report back in one line per step (notes, bump PR, merge, CI on main, Release, image publish,
   milestone) and finish with the version, the image version when it changed, and the release URL.
+  The report ends with one line for the foreman: when the release changes anything under `plugins/`
+  since the previous tag (`git diff --name-only <prev>..origin/main -- plugins/`), exactly
+  `push coder/push.sh orchestrator-loop to move the loops onto plugin vX.Y.Z`; otherwise `no Coder template push needed`.
   If a step fails, stop there and report which step and why; do not retry by force-pushing,
   re-tagging or skipping a check.
 
@@ -81,7 +84,9 @@ the user, not how.
 Upgrade section lists only the layers that changed:
 - Plugin: run `npx callum-dev update`, commit the `.claude/settings.json` it produces, then
   restart the container or run `dev-init --plugins`. A plain `/plugin marketplace update`
-  does not advance the pinned ref.
+  does not advance the pinned ref. A loop workspace on the `orchestrator-loop` template picks up
+  the plugin only after that template is pushed at the release (`coder/push.sh orchestrator-loop`),
+  because the template's plugin ref beats the repo's `.claude/settings.json` pin.
 - CLI and templates: `npm update @callum/dev-system && npx callum-dev update`.
 - Base image (only if the release bumps `images/base/VERSION`): rebuild or re-pull the dev container.
 
@@ -114,6 +119,9 @@ fix the notes until the validator passes and the preview reads well. Do not wait
 5. Report (to the judge that started you, or to the owner when a person ran this skill): the
    version and image level with the reasons in one line each, the tag, the release URL
    (`gh release view vX.Y.Z --json url`), and the result of each workflow run, including the dev image run.
+   Close the report with one line for the foreman, decided by
+   `git diff --name-only <prev>..origin/main -- plugins/`: when it lists anything, exactly
+   `push coder/push.sh orchestrator-loop to move the loops onto plugin vX.Y.Z`; when it is empty, `no Coder template push needed`.
 
 Waiting on a check or a run: the whole fleet (every loop and session) shares one GitHub rate limit,
 and the image publish alone takes about 15 minutes. Always wait with a slow interval:
