@@ -21,7 +21,7 @@ import { configHelpText } from './config-help'
 import { CONFIG_VERBS, HELP_TOPICS, HELP_USAGE, OPS, USAGE, helpText, hintText } from './control-help'
 import type { HelpTopic, OpName } from './control-help'
 import type { Control, Mode, Ms } from './types'
-import { applyDrop, applyUnpark, onlyParked, parseUnpark, stopNow } from './v2/ops'
+import { applyDrop, applyUnpark, onlyParked, parseUnpark, quoteNote, stopNow } from './v2/ops'
 import type { Unpark } from './v2/ops'
 
 const MIN = 60_000
@@ -94,7 +94,7 @@ function allUsage(): string {
 // its keywords ignore case, numbers take an optional leading #, and a list may use commas. An
 // empty op is `status`. Anything malformed is an error naming the op and its usage, so a bad
 // op never makes a partial change. `resume` takes issue numbers and an optional note in double
-// quotes.
+// quotes, where `\"` is a `"` and `\\` a `\`. A note's text is kept as typed (only its ends are trimmed).
 export function parseOp(text: string): Parsed {
   const words = text.trim().split(/\s+/).filter(w => w !== '')
   // the model may pass the command as typed
@@ -102,6 +102,7 @@ export function parseOp(text: string): Parsed {
   const head = (words[0] ?? 'status').toLowerCase()
   const args = words.slice(1)
   const rest = args.join(' ')
+  const raw = (/^(?:\/factory\s+)?\S+\s*([\s\S]*)$/i.exec(text.trim())?.[1] ?? '')
   const word = args.length === 1 ? args[0]?.toLowerCase() : undefined
   if (head === 'help' || head === '--help' || head === '-h') {
     if (args.length === 0) return { ok: true, op: { op: 'help' } }
@@ -169,7 +170,7 @@ export function parseOp(text: string): Parsed {
       return { ok: true, op: { op: 'update', reason: rest } }
     case 'note': {
       const issue = issueOf(args[0])
-      const note = (issue === null ? args : args.slice(1)).join(' ')
+      const note = (issue === null ? raw : raw.replace(/^\S+\s*/, '')).trim()
       if (note === '') return bad(name, 'needs the text')
       if (note === 'off') return { ok: true, op: { op: 'note', issue, text: null } }
       if (note.length > NOTE_MAX) return bad(name, `the text is at most ${NOTE_MAX} characters`)
@@ -224,7 +225,7 @@ export function formatOp(op: Op): string {
     case 'mode':
       return `mode ${op.mode}`
     case 'unpark':
-      return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${op.note}"`}`
+      return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${quoteNote(op.note)}"`}`
   }
 }
 

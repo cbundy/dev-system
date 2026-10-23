@@ -16,15 +16,21 @@ export type Unpark = { op: 'unpark'; issues: number[]; note: string | null }
 export type V2Applied = { patch: Partial<Control>; text: string }
 
 // parseUnpark: `resume <N...> ["note"]` after the op name: one or more issue numbers, then the note,
-// if any, in double quotes; why not, when it does not read.
+// if any, in double quotes; why not, when it does not read. The note reads `\"` as `"` and `\\` as `\`
+// (one left-to-right pass); any other backslash stays as typed.
 export function parseUnpark(rest: string, issueOf: (word: string) => number | null, noteMax: number): Unpark | string {
   const m = /^([^"]*?)\s*(?:"(.*)")?\s*$/s.exec(rest)
   const items = (m?.[1] ?? '').split(/[\s,]+/).filter(w => w !== '')
   const issues = items.map(issueOf)
   if (m === null || items.length === 0 || issues.some(n => n === null)) return 'takes issue numbers and an optional note in double quotes'
-  const note = (m[2] ?? '').trim()
+  const note = (m[2] ?? '').replace(/\\(["\\])/g, '$1').trim()
   if (note.length > noteMax) return `the note is at most ${noteMax} characters`
   return { op: 'unpark', issues: [...new Set(issues as number[])], note: note === '' ? null : note }
+}
+
+// quoteNote: a resume note as parseUnpark reads it back, with `\` and `"` escaped.
+export function quoteNote(note: string): string {
+  return note.replace(/[\\"]/g, c => `\\${c}`)
 }
 
 // onlyParked: the resume narrowed to the issues parked now (parked: as the last pass's records say;

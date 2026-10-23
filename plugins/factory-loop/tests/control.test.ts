@@ -113,7 +113,11 @@ describe('parseOp', () => {
     expect(op('update off')).toEqual({ op: 'update', reason: null })
     expect(op('update   base image  1.4.0')).toEqual({ op: 'update', reason: 'base image 1.4.0' })
     expect(op('note keep briefs short')).toEqual({ op: 'note', issue: null, text: 'keep briefs short' })
-    expect(op('note #5 use the  existing parser')).toEqual({ op: 'note', issue: 5, text: 'use the existing parser' })
+    expect(op('note #5 use the  existing parser')).toEqual({ op: 'note', issue: 5, text: 'use the  existing parser' })
+    expect(op('note 5 a  b\nc')).toEqual({ op: 'note', issue: 5, text: 'a  b\nc' })
+    expect(op('note keep  it')).toEqual({ op: 'note', issue: null, text: 'keep  it' })
+    expect(op('/factory note 5  x ')).toEqual({ op: 'note', issue: 5, text: 'x' })
+    expect(op('note 5 \n\t a \t b \n')).toEqual({ op: 'note', issue: 5, text: 'a \t b' })
     expect(op('note 5 use it')).toEqual({ op: 'note', issue: 5, text: 'use it' })
     expect(op('note 5 off')).toEqual({ op: 'note', issue: 5, text: null })
     expect(op('note #5 off')).toEqual({ op: 'note', issue: 5, text: null })
@@ -502,6 +506,12 @@ describe('the files', () => {
     expect(JSON.parse(fresh.map.get(CONTROL_FILE) ?? '')).toEqual({ ...EMPTY_CONTROL, only: [522] })
   })
 
+  test('a note keeps its text as typed, line break included, in the written control.json', async () => {
+    const { io, map } = files()
+    expect((await runOp(io, PATHS, 'note 5 a b\nc', NOW)).ok).toBe(true)
+    expect(JSON.parse(map.get(CONTROL_FILE) ?? '').notes[0].text).toBe('a b\nc')
+  })
+
   test('an op that changes nothing, a bad op, or status writes nothing and does not ping', async () => {
     const { io, writes } = files({ [CONTROL_FILE]: JSON.stringify({ paused: [12] }) })
     expect(await runOp(io, PATHS, 'pause 12', NOW)).toMatchObject({ ok: true, ping: false, logged: null, text: '#12 is already paused.' })
@@ -642,8 +652,14 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
       expect({ bad, parsed: parseOp(bad) }).toEqual({ bad, parsed: { ok: false, error: usage } })
     }
     expect(parseOp(`resume 60 "${'x'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
+    expect(op('resume 60 "say \\"hi\\" and a \\\\ path"')).toEqual({ op: 'unpark', issues: [60], note: 'say "hi" and a \\ path' })
+    expect(op('resume 60 "a \\\\"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\' })
+    expect(op('resume 60 "a \\n b"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\n b' })
+    expect(op(`resume 60 "${'\\"'.repeat(2000)}"`)).toEqual({ op: 'unpark', issues: [60], note: '"'.repeat(2000) })
+    expect(parseOp(`resume 60 "${'\\"'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
+    expect(op('resume 60 "a\nb"')).toEqual({ op: 'unpark', issues: [60], note: 'a b' })
     // canonical text parses back
-    for (const text of ['resume 60', 'resume 60 61 "a note"']) expect(op(formatOp(op(text)))).toEqual(op(text))
+    for (const text of ['resume 60', 'resume 60 61 "a note"', 'resume 60 "say \\"hi\\" \\\\ x"', 'note 5 a  b\nc', 'note "quoted" \\ text']) expect(op(formatOp(op(text)))).toEqual(op(text))
   })
 
   test('a v2 resume appends issue:<N> with its note for each issue, every time; the note is read back from control.json', async () => {
