@@ -48,7 +48,7 @@ export async function configDir($: EngineInterface) {
 // file ${CLAUDE_CONFIG_DIR}/factory-loop/config.json, then the repo's .claude/factory-loop.json.
 // env is every command's base environment: the repo, the configured labels (callum-flow-claim
 // and callum-flow-sweep read them), the regime and the loop's session id (callum-flow-event stamps them on every event), binDir ahead of PATH when the workspace file names one (a
-// testbed runs the branch's own CLIs), and the event sink when the mode is not act.
+// testbed runs the branch's own CLIs), CALLUM_FLOW_LINKAGE_BIN=<toolsDir>/check-pr-linkage.sh when the workspace file names a toolsDir (the merge guard's link check then runs the checkout's script), and the event sink when the mode is not act.
 export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const dir = await configDir($)
   const base = loopBaseOf(dir)
@@ -87,6 +87,8 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
   }
   const binDir = str(file.binDir)
   if (binDir !== '') env.PATH = `${binDir}:${(await $.env.get('PATH')) || '/usr/local/bin:/usr/bin:/bin'}`
+  const toolsDir = str(file.toolsDir)
+  if (toolsDir !== '') env.CALLUM_FLOW_LINKAGE_BIN = `${toolsDir.replace(/(.)\/$/, '$1')}/check-pr-linkage.sh`
   if (session !== '') env.CLAUDE_SESSION_ID = session
   if (sink !== null) env.CALLUM_EVENTS_DIR = sink
   return {
@@ -102,7 +104,7 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     workspace: { session, process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,
-    toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,
+    toolsDir: toolsDir || DEFAULT_TOOLS_DIR,
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,

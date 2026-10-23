@@ -2671,7 +2671,9 @@ unlabelled or never read) is accepted at once (D-76).
   is `answerTools`, the switch `answerChannel` replaced, named as replaced and not read. It is
   plain JSON, easy to read and set from a shell, which an observe run uses (DECISIONS D-33). A testbed
   points `toolsDir` at a checkout's `features/src/callum-tools` and `binDir` at its
-  `images/base` (DECISIONS D-42).
+  `images/base` (DECISIONS D-42). A `toolsDir` also sets `CALLUM_FLOW_LINKAGE_BIN` to
+  `<toolsDir>/check-pr-linkage.sh` for every command, so the merge guard's link check runs the
+  checkout's script; without `toolsDir` the variable is left unset.
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 13.4.2.
   The plugin ships no repo-specific values (CLAUDE.md: shared plugins stay generic). An unknown
   key or a bad value is left out and named in the decision log (`config`).
