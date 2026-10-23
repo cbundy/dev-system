@@ -1,0 +1,103 @@
+# Daily canary: do the mods still validate and pass on the newest Claude Code release?
+# CI is pinned (.github/claude-code-version) so a new release cannot turn every pull request
+# red; this workflow tests the newest one instead and raises one bug issue per version that
+# breaks. Not a required check, never edits the pin and opens no PR (dev-system#1227).
+name: Claude Code canary
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Compare the newest release with the pin
+        id: cc
+        run: |
+          newest=$(npm view @anthropic-ai/claude-code version | tr -d '[:space:]')
+          pin=$(tr -d '[:space:]' < .github/claude-code-version)
+          for v in "$newest" "$pin"; do
+            if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Expected a Claude Code version X.Y.Z (got '$v')."
+              exit 1
+            fi
+          done
+          echo "newest=$newest" >> "$GITHUB_OUTPUT"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          if [ "$newest" = "$pin" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::skipped: newest $newest equals pin $pin"
+            echo "Claude Code canary: skipped (same version) - skipped: newest $newest equals pin $pin" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install the newest Claude Code
+        if: steps.cc.outputs.skip != 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${{ steps.cc.outputs.newest }}" && claude --version
+
+      # The mod ids come from the runner itself (scripts/test.sh), so its discovery rule is not copied.
+      - name: Test the mods
+        id: mods
+        if: steps.cc.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          TEST_REQUIRE_CLAUDE: "1"
+          TEST_REQUIRE_POSTGRES: "1"
+          FACTORY_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: |
+          set -o pipefail
+          mods=$(npm test -- --list | grep '^plugins/')
+          test -n "$mods"
+          status=0
+          for mod in $mods; do
+            npm test -- "$mod" 2>&1 | tee -a "$RUNNER_TEMP/canary-output.txt" || status=1
+          done
+          exit "$status"
+
+      - name: Report
+        if: steps.cc.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEWEST: ${{ steps.cc.outputs.newest }}
+          PIN: ${{ steps.cc.outputs.pin }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MODS_OUTCOME: ${{ steps.mods.outcome }}
+        run: |
+          if [ "$MODS_OUTCOME" = "success" ]; then
+            echo "Claude Code canary: passed - newest $NEWEST, pin $PIN" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::warning::The mods fail on Claude Code $NEWEST: $RUN_URL"
+          touch "$RUNNER_TEMP/canary-output.txt"
+          result=$(sh scripts/claude-code-canary-issue.sh "$NEWEST" "$PIN" "$RUN_URL" "$RUNNER_TEMP/canary-output.txt")
+          echo "$result"
+          echo "Claude Code canary: failed - $result - newest $NEWEST, pin $PIN" >> "$GITHUB_STEP_SUMMARY"

@@ -87,4 +87,4 @@ it too. (`/plugin` does not work inside the desktop app.)
 reloads it as files change. `npm test` validates it and runs `plugins/factory-hud/tests/*.test.ts` through
 `claude plugin validate` and `claude plugin test` when `claude` is on PATH. Without it,
 the other suites still run and the summary notes that mods were skipped. CI installs
-the Claude Code version pinned in `.github/claude-code-version` and sets `TEST_REQUIRE_CLAUDE=1`, so a missing `claude` fails the gate.
+the Claude Code version pinned in `.github/claude-code-version` and sets `TEST_REQUIRE_CLAUDE=1`, so a missing `claude` fails the gate; a daily canary tests the newest Claude Code.
