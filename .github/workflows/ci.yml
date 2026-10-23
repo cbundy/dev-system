@@ -21,7 +21,8 @@ name: CI
 #   scripts, node --check, the generated-skill drift check against docs/, and
 #   terraform fmt -check, init and validate on coder/dev-system.
 #   LINT_REQUIRE_TERRAFORM=1 makes a missing terraform fail instead of skipping.
-# - `test`: `npm test`: runs the callum-dev bin end-to-end (init, update
+# - `test`: `npm test` (mods on the Claude Code version pinned in
+#   .github/claude-code-version): runs the callum-dev bin end-to-end (init, update
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
 #   (dev-system#52), the callum-tools script tests and every mod's validation
@@ -42,11 +43,6 @@ permissions:
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# The Claude Code release the mod tests run on. Pinned so a new CLI release cannot turn every pull
-# request red; bumping it is this one line, in its own PR, after `npm test` passes on the new release.
-env:
-  CLAUDE_CODE_VERSION: "2.1.308"
 
 jobs:
   lint:
@@ -126,11 +122,23 @@ jobs:
           node-version: "24"
 
       # Claude Code validates and tests the mods (plugins/*/ with a hooks module); it
-      # needs no login for that. The release is CLAUDE_CODE_VERSION above, so a new CLI
-      # release changes nothing here until the pin moves. TEST_REQUIRE_CLAUDE=1 makes a
-      # missing claude fail instead of skipping.
+      # needs no login for that. The release is pinned on purpose, in
+      # .github/claude-code-version, so a new CLI release cannot turn every pull request
+      # red. Bump it by hand in that file, in its own PR, after `npm test` passes on the new
+      # release; the daily canary (dev-system#1227) is what tests the newest release.
+      # TEST_REQUIRE_CLAUDE=1 makes a missing claude fail instead of skipping.
+      - name: Read the pinned Claude Code version
+        id: cc
+        run: |
+          version=$(tr -d '[:space:]' < .github/claude-code-version)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::.github/claude-code-version must hold X.Y.Z (got '$version')."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Install Claude Code
-        run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" && claude --version
+        run: npm install -g "@anthropic-ai/claude-code@${{ steps.cc.outputs.version }}" && claude --version
 
       - name: Test
         env:
