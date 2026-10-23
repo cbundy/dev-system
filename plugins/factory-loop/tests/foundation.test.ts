@@ -197,24 +197,19 @@ describe('O3: the hourly release review (releaseDue, shared with v2)', () => {
     const open = state({ milestone: { open: 2, closed: 0, openIssues: [], expected: null }, release: { tag: 'v1.0.0', oldest: null } })
     expect(releaseDue(open, CFG)).toBeNull()
     expect(releaseDue(open, CFG, [])).toBeNull()
-    expect(releaseDue(open, CFG, [7, 9])).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}:w7.9`, fields: { waiting: [7, 9] } })
+    expect(releaseDue(open, CFG, [7, 9])).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}`, fields: { waiting: [7, 9] } })
+    expect(Object.keys(releaseDue(open, CFG, [7, 9]) ?? {})).toEqual(['key', 'fields'])
     const plain = releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG)
     expect(Object.keys(plain?.fields ?? {})).not.toContain('waiting')
     expect(Object.keys(releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG, [3])?.fields ?? {})).toEqual(['closed', 'expected', 'tag', 'oldest', 'cadence', 'waiting'])
-    // a review this hour that did not see #7 makes one more due, naming it
-    const again = releaseDue({ ...open, ledger: [...open.ledger, done(`task:release:v1.0.0:${RHOUR}`, NOW)] }, CFG, [7])
-    expect(again).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}:w7`, fresh: [7], fields: { waiting: [7] } })
-    expect(releaseDue(open, CFG, [7])?.fresh).toEqual([])
+    // any release task this hour, ended or running, with any set: nothing more
     const withLedger = (...keys: string[]) => ({ ...open, ledger: [...open.ledger, ...keys.map(k => done(k, NOW))] })
-    // the same set, a shrunk set, or a running review of this hour: nothing more
-    expect(releaseDue(withLedger(`task:release:v1.0.0:${RHOUR}:w7`), CFG, [7])).toBeNull()
-    expect(releaseDue(withLedger(`task:release:v1.0.0:${RHOUR}:w7.9`), CFG, [7])).toBeNull()
-    const running = { ...done(`task:release:v1.0.0:${RHOUR}:w7`, NOW), status: 'running' as const }
-    expect(releaseDue({ ...open, ledger: [...open.ledger, running] }, CFG, [7])).toBeNull()
-    // a grown set: one more, naming the new issue
-    expect(releaseDue(withLedger(`task:release:v1.0.0:${RHOUR}:w7`), CFG, [7, 9])).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}:w7.9`, fresh: [9] })
-    // the hour turning over: a plain review again, nothing fresh
-    expect(releaseDue({ ...withLedger(`task:release:v1.0.0:${RHOUR}:w7`), now: NOW + 60 * MIN }, CFG, [7])).toMatchObject({ key: 'task:release:v1.0.0:2026-10-13T04:w7', fresh: [] })
+    expect(releaseDue(withLedger(`task:release:v1.0.0:${RHOUR}`), CFG, [7])).toBeNull()
+    expect(releaseDue(withLedger(`task:release:v1.0.0:${RHOUR}`), CFG, [7, 9])).toBeNull()
+    const running = { ...done(`task:release:v1.0.0:${RHOUR}`, NOW), status: 'running' as const }
+    expect(releaseDue({ ...open, ledger: [...open.ledger, running] }, CFG, [7, 9])).toBeNull()
+    // the hour turning over: the next hour's plain key
+    expect(releaseDue({ ...withLedger(`task:release:v1.0.0:${RHOUR}`), now: NOW + 60 * MIN }, CFG, [7, 9])).toMatchObject({ key: 'task:release:v1.0.0:2026-10-13T04', fields: { waiting: [7, 9] } })
     expect(releaseDue({ ...open, milestone: null }, CFG, [7])).toBeNull()
     expect(releaseDue({ ...open, sources: { ...open.sources, milestone: { ok: false, at: NOW } } }, CFG, [7])).toBeNull()
   })

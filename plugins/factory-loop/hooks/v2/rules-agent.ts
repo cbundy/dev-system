@@ -226,10 +226,14 @@ export function stepEvent(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, step: Step
 // --- the generic agent step (S2, S5) ---------------------------------------------------------------------
 
 // notesFor: what the step's agent is told: the record's notes for this seq, then the owner's notes
-// for the issue (or every issue) made in this life (`/factory note`).
+// for the issue (or every issue) made in this life (`/factory note`): at most one per scope, the newest
+// (an older control.json may hold several notes for one scope).
 export function notesFor(ctx: V2Ctx, r: IssueRecord): string[] {
   const lifeStart = lifeAt(r.life) ?? 0
-  const owner = ctx.state.control.notes.filter(n => (n.issue === null || n.issue === r.issue) && n.at >= lifeStart).map(n => `owner: ${n.text}`)
+  const mine = ctx.state.control.notes.filter(n => (n.issue === null || n.issue === r.issue) && n.at >= lifeStart)
+  const newest = (issue: number | null) => mine.filter(n => n.issue === issue).reduce<(typeof mine)[number] | null>((a, n) => (a === null || n.at >= a.at ? n : a), null)
+  const keepers = [newest(null), newest(r.issue)].filter(n => n !== null)
+  const owner = mine.filter(n => keepers.includes(n)).map(n => `owner: ${n.text}`)
   return [...r.notes, ...owner]
 }
 

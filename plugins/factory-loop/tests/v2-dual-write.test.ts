@@ -92,12 +92,13 @@ describe('seenIn', () => {
       line(),
       line({ device: OTHER }),
       line({ repo: 'o/other' }),
+      line({ issue: 8, repo: REPO.toUpperCase() }),
       line({ type: 'claimed', data: {} }),
       '{not json',
       line({}, { seq: 'x' }),
       '',
     ].join('\n')
-    expect([...seenIn(text, DEVICE, REPO)]).toEqual([`7:${LIFE}:3`])
+    expect([...seenIn(text, DEVICE, REPO)]).toEqual([`7:${LIFE}:3`, `8:${LIFE}:3`])
   })
 })
 

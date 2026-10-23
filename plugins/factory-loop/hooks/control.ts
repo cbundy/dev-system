@@ -51,7 +51,8 @@ export type Op =
   | { op: 'override'; until: { pct: number; hours: number } | null }
   // null: `update off`
   | { op: 'update'; reason: string | null }
-  | { op: 'note'; issue: number | null; text: string }
+  // null: `note [N] off`
+  | { op: 'note'; issue: number | null; text: string | null }
   | { op: 'mode'; mode: Mode }
   // resume (v2/ops.ts)
   | Unpark
@@ -160,6 +161,7 @@ export function parseOp(text: string): Parsed {
       const issue = issueOf(args[0])
       const note = (issue === null ? args : args.slice(1)).join(' ')
       if (note === '') return bad(name, 'needs the text')
+      if (note === 'off') return { ok: true, op: { op: 'note', issue, text: null } }
       if (note.length > NOTE_MAX) return bad(name, `the text is at most ${NOTE_MAX} characters`)
       return { ok: true, op: { op: 'note', issue, text: note } }
     }
@@ -208,7 +210,7 @@ export function formatOp(op: Op): string {
     case 'update':
       return op.reason === null ? 'update off' : `update ${op.reason}`
     case 'note':
-      return `note ${op.issue === null ? '' : `${op.issue} `}${op.text}`
+      return `note ${op.issue === null ? '' : `${op.issue} `}${op.text === null ? 'off' : op.text}`
     case 'mode':
       return `mode ${op.mode}`
     case 'unpark':
@@ -320,11 +322,20 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       const v2 = applyDrop(control, op.issue, now)
       return set(v2.patch, v2.text)
     }
-    case 'note':
-      return set(
-        { notes: [...control.notes, { issue: op.issue, text: op.text, at: now }] },
-        op.issue === null ? 'Note added for every issue: the next agent prompts carry it.' : `Note added for #${op.issue}: its next agent prompts carry it.`,
-      )
+    case 'note': {
+      const scope = op.issue === null ? 'every issue' : `#${op.issue}`
+      const same = control.notes.filter(n => n.issue === op.issue)
+      const others = control.notes.filter(n => n.issue !== op.issue)
+      if (op.text === null) {
+        if (same.length === 0) return keep(op.issue === null ? 'No note for every issue.' : `No note for #${op.issue}.`)
+        return set({ notes: others }, `Notes for ${scope} cleared: ${op.issue === null ? 'the' : 'its'} next agent prompts carry none.`)
+      }
+      const text =
+        same.length > 0
+          ? `Note for ${scope} replaced: ${op.issue === null ? 'the' : 'its'} next agent prompts carry the new one.`
+          : op.issue === null ? 'Note added for every issue: the next agent prompts carry it.' : `Note added for #${op.issue}: its next agent prompts carry it.`
+      return set({ notes: [...others, { issue: op.issue, text: op.text, at: now }] }, text)
+    }
     case 'mode':
       return keep(`Mode ${op.mode} set in the workspace config file; it applies from the next pass.`, { mode: op.mode })
     case 'stop-now': return keep('Stop-now is written by runOp.')
@@ -528,7 +539,7 @@ export const CONTROL_TOOL: ToolSpec = {
     '(run past the usage tiers up to pct for hours); resume <N...> ["note"] (release what waits on you: ' +
     'unpark issues, the note going to their next step); ' +
     "retry <N> (clear N's exhausted actions); update [<reason>]|off (wind down, up to windDownMinutes, then restart this workspace for an " +
-    'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
+    'update); drop <N> (abandon N); note [<N>] <text>|off (an instruction the next agent prompts carry; a newer note replaces the older one, off clears it); ' +
     "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
     'trace file, for troubleshooting); stop-now (during a wind-down, stop at once without waiting for what runs, only when the owner asks).',
   inputSchema: {

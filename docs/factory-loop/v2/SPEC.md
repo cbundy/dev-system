@@ -2348,10 +2348,10 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   (14.1).
 - **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
-  clock hour, whatever its key, except that one more is due in the hour when an issue starts waiting that none of the hour's review keys carries; also while a record waits on a `tag-contains` condition, even with open items or none closed, a readable milestone source still required), keyed `task:release:<tag>:<YYYY-MM-DDTHH>`, plus `:w<N>.<N>` (the waiting issues, ascending) when some wait, with the last release
+  clock hour, whatever its key, and none while a release task runs (an earlier hour's included; the skip `release review running: <key> started at <ISO>`, plus `; waiting #N, #M` when records wait); a wait that arrives while it runs joins it, and one that arrives after the hour's review gets the next hour's; also while a record waits on a `tag-contains` condition, even with open items or none closed, a readable milestone source still required), keyed `task:release:<tag>:<YYYY-MM-DDTHH>`, whatever the waiting set is, with the last release
   tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
   `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form), and `waiting` (the issues of the records that wait on a release tag, comma-joined; omitted when none); a release wait is the judge's to answer, never the owner's; the judge
-  decides whether to cut the release now or `hold` until the next hour, or until an issue the review has not seen starts waiting (the action's reason is then `task release: #N started waiting`), and cuts the release with its standing
+  decides whether to cut the release now or `hold` until the next hour (the action's reason is `task release: #N, #M waiting` when waiting issues make it due, else `task release`), and cuts the release with its standing
   authority (PR #634, `27a13ce`). After a `done` answer (the judge started a release) the loop sends no release review until a newer tag is seen (the tag view's newest tag, else the release read's) or `releaseInProgress` has passed since the task ended; an entry tagged `unknown` ends only by the window, `none` once any tag is known. The suppression records one skip per held pass (rule O3, `release in progress: <key> answered done at <ISO>, tag <tag>; until a newer tag or <ISO>`). A `hold`, `failed` or timed-out task starts none. The key's and field's `tag` is the newest known tag, and `oldest` is omitted when that tag differs from the release read's. "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues.
 - **The release log** has two producers, both opt-in with the Next milestone (a repo without one logs
@@ -2771,7 +2771,7 @@ type Control = {
   updateDue: { reason: string; at: Ms } | null   // an update is due (rule R2): set by `/factory update`
   resumed: { subject: string; at: Ms; note?: string }[]  // parked issues the owner resumed: 'issue:<N>', with the note for the next step
   dropped: { issue: number; at: Ms }[]     // issues the owner dropped: their current life is closed (4.1)
-  notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents
+  notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents, at most one per scope
 }
 ```
 
@@ -2781,7 +2781,7 @@ sets them with the `mcp__factory-loop__control` tool (`{ "op": "<op>" }`) when t
 in chat, and the owner can type `/factory <op>` from any client (named so to stay clear of Claude
 Code's built-in `/loop`): `status`, `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`,
 `priority <N...>|off`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct> <hours>|off`,
-`resume <N...> ["note"]`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`,
+`resume <N...> ["note"]`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>|off`,
 `mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`, `stamp <N>`, `stop-now`. Each change
 pings the loop and gets its own decision-log line (`control`). Appendix E gives what v2 makes of `resume`, `drop`,
 `note`, `retry` and `stop-now`.
@@ -3880,7 +3880,7 @@ Twenty-six rules, by id.
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
-| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour (or, with waiting issues, one that saw them all), and no `done`-answered release is in progress (`releaseInProgressMs`, skip `release in progress: ...`); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>` (plus `:w<N>.<N>` when issues wait), fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
+| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour and none running (skip `release review running: ...`), and no `done`-answered release is in progress (`releaseInProgressMs`, skip `release in progress: ...`); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
 | O4 | release logged | the milestone exists and the newest known tag has no done `released:<repo>:<tag>` entry | a free `released` action (`callum-flow-released`), source `loop` or `workflow` (11); held in a GitHub backoff |
 | O5 | milestone state | the milestone exists and its reading differs from the last logged (the newest done `milestone-state/` entry's fingerprint) | a free `event` of `milestone_state`, key `milestone-state/<fingerprint>/<last>` (11) |
 | M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
@@ -3992,7 +3992,7 @@ The first entries are the owner's own decisions; they are settled.
 - **Hourly review (#761):** the wake was keyed by the milestone's counts and ran once per key, so a
   later milestone reaching a used count never woke the judge, and a `hold` was final. It is now
   keyed by the last release tag and the UTC hour, at most one release task starts per hour, so a
-  `hold` is asked again the next hour (or at once when a new issue starts waiting) while unreleased merged work remains. The loop reads the tag
+  `hold` is asked again the next hour while unreleased merged work remains. The loop reads the tag
   and the oldest merge since it (`gh`, on the milestone cadence, only while the milestone qualifies).
 
 ### `fixCap` 3 and `maxTriages` 2 per life (owner)
@@ -4576,7 +4576,7 @@ Notices (TELL kinds), owner items first:
 |---|---|
 | `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
 | `drop <N>` | E1, for the current life only (4.1) |
-| `note [N] <text>` | a note for the issue's next step (or every issue's) |
+| `note [N] <text>\|off` | a note for the issue's next step (or every issue's), replacing its earlier note; `off` clears it |
 | `stamp <N>` | the intake reader's dry run on issue N (13.4.3): the reply at once, the notice when the reader ends. The reader answers `{"area": <one of intakeAreas>, "needs_owner": <bool>, "reason": <one line, 1 to 200 characters, required when needs_owner is true>, "touches": [<at most 20 distinct top-level names>]}`; `checkIntake` drops a bad field and names it (`ok`, `dropped` or `failed`). View-only: it logs no intervention, writes nothing to GitHub, the events, `stamps:<repo>` or the ledger |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
