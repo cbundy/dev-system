@@ -1,7 +1,7 @@
 {
   "name": "factory-loop-workspace",
   "displayName": "Factory loop workspace",
-  "version": "0.91.0",
+  "version": "0.92.0",
   "description": "The factory loop's companion: starts each agent the loop runs in its worktree slot, confines its writes and pushes, gives its shell commands a 10-minute timeout, and holds a builder's or fixer's finish while the repo's gate commands fail. It acts only on agents the factory loop (v2) starts in a slot; enable it beside factory-loop.",
   "author": {
     "name": "Callum Bundy"
