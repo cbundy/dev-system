@@ -212,9 +212,12 @@ describe('parse', () => {
   test('the main checkout: its branch or a detached head, its commit, changed tracked paths, the default branch (#544)', () => {
     const oid = '# branch.oid 5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff'
     const clean = `${oid}\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n`
-    expect(parseCheckout('origin/main\n', clean)).toEqual({ branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [] })
+    expect(parseCheckout('origin/main\n', clean)).toEqual({ branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [], upstream: 'origin/main', ahead: 0, behind: 0 })
     // the testbed's adjudicator left it detached on another issue's branch
     expect(parseCheckout('origin/main\n', `${oid}\n# branch.head (detached)\n`)).toMatchObject({ branch: null, defaultBranch: 'main' })
+    expect(parseCheckout('origin/main', `${oid}\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -1\n`)).toMatchObject({ upstream: 'origin/main', ahead: 2, behind: 1 })
+    expect(parseCheckout('origin/main', `${oid}\n# branch.head side\n`)).toMatchObject({ upstream: null, ahead: null, behind: null })
+    expect(parseCheckout('origin/main', `${oid}\n# branch.head (detached)\n`)).toMatchObject({ upstream: null, ahead: null, behind: null })
     // modified, renamed (path, then its old name after a tab) and unmerged entries; untracked are allowed
     const changed = [
       `${oid}`,
@@ -1094,7 +1097,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       issues: {},
       files: {},
       originHead: { stdout: 'origin/main\n' },
-      status: { stdout: `# branch.oid ${SHA(1)}\n# branch.head main\n` },
+      status: { stdout: `# branch.oid ${SHA(1)}\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n` },
       pool: { stdout: '[]' },
       slots: {},
       ...over,
@@ -1603,7 +1606,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const first = await h.pass(runtime(), stored())
     expect(h.commands()).toContain('git symbolic-ref --quiet --short refs/remotes/origin/HEAD')
     expect(h.commands()).toContain('git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no')
-    expect(first.state.checkout).toEqual({ branch: 'main', head: SHA(1), defaultBranch: 'main', dirty: [] })
+    expect(first.state.checkout).toEqual({ branch: 'main', head: SHA(1), defaultBranch: 'main', dirty: [], upstream: 'origin/main', ahead: 0, behind: 0 })
 
     // an agent checks out another issue's branch: the next pass sees it
     h.world.status = { stdout: `# branch.oid ${SHA(4)}\n# branch.head (detached)\n` }

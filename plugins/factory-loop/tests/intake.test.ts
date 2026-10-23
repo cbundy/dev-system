@@ -375,7 +375,7 @@ function fake(over: { read?: { exitCode: number; stdout: string; stderr: string 
 
 async function stamp(f: ReturnType<typeof fake>, issue = 12) {
   S.stamping.clear()
-  S.checkout = { branch: 'main', head: null, defaultBranch: 'main', dirty: [] }
+  S.checkout = { branch: 'main', head: null, defaultBranch: 'main', dirty: [], upstream: 'origin/main', ahead: 0, behind: 0 }
   S.stampJob = (rt, run) => void stampJob(f.$, rt, run)
   const reply = startStamp(f.rt, issue, NOW)
   // the job runs on its own; let its awaits finish

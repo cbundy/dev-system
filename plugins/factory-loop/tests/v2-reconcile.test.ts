@@ -622,7 +622,7 @@ describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
   })
 
   test('a moved HEAD tells; nothing new, no base, a failed read or changes cleaned away do not', () => {
-    const moved = dirty([], { head: '9e01b77aa45eef8d6c31556c1b5ac3d5dd34f3ff' })
+    const moved = dirty([], { head: '9e01b77aa45eef8d6c31556c1b5ac3d5dd34f3ff', ahead: 1 })
     const told = tells(planV2(world({ base: base(CLEAN), checkout: moved }), CFG))
     expect(told).toHaveLength(1)
     expect(told[0]?.fields.moved).toBe('yes')
@@ -703,6 +703,43 @@ describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
     const p = passes([{ checkout: now }, { checkout: now, ledger: [toldAt(NOW)] }, { checkout: more }, { checkout: dirty([]) }, { checkout: now }])
     expect(p.admitted.map(a => a.map(x => x.key))).toEqual([[key], [], [tripwireKey(more)], [], []])
     expect(p.tells[2]?.[0]?.context).toEqual(['changed:', '- README.md'])
+  })
+
+  const B = '9e01b77aa45eef8d6c31556c1b5ac3d5dd34f3ff'
+  const skips = (result: PlanResult) => result.skipped.filter(s => s.why.startsWith('checkout:'))
+
+  test('a clean fast-forward along origin is not told, the base moves, and later changes are told once', () => {
+    for (const behind of [0, 2]) {
+      const ff = dirty([], { head: B, ahead: 0, behind })
+      const p = passes([{ checkout: ff }, { checkout: dirty(['new.ts'], { head: B, behind }) }, { checkout: dirty([], { head: 'c0ffee77aa45eef8d6c31556c1b5ac3d5dd34f3f', ahead: 1 }) }])
+      expect(p.tells[0]).toEqual([])
+      expect(p.tells[1]).toHaveLength(1)
+      expect(p.tells[1]?.[0]).toMatchObject({ fields: { moved: 'no', paths: '1' } })
+      expect(p.tells[2]).toHaveLength(1)
+      expect(p.tells[2]?.[0]).toMatchObject({ fields: { moved: 'yes' } })
+      expect(checkoutBaseOf(base(CLEAN), ff, [], NOW)).toMatchObject({ checkout: ff, settled: { from: CLEAN.head, to: B, behind } })
+    }
+  })
+
+  test('a HEAD move that is not along origin still tells', () => {
+    const cases: Partial<CheckoutRead>[] = [{ ahead: 1 }, { branch: 'issue-1', upstream: 'origin/issue-1' }, { branch: null, upstream: null, ahead: null, behind: null }, { upstream: null, ahead: null, behind: null }, { ahead: null }, { upstream: 'origin/other' }]
+    for (const over of cases) {
+      const told = tells(planV2(world({ base: base(CLEAN), checkout: dirty([], { head: B, ...over }) }), CFG))
+      expect(told).toHaveLength(1)
+      expect(told[0]?.fields.moved).toBe('yes')
+    }
+    const withPath = tells(planV2(world({ base: base(CLEAN), checkout: dirty(['a.ts'], { head: B }) }), CFG))
+    expect(withPath[0]?.context).toEqual(['changed:', '- a.ts'])
+  })
+
+  test('the settled skip line shows on the pass the base moves, and not on the next', () => {
+    const ff = dirty([], { head: B, behind: 3 })
+    const settled = checkoutBaseOf(base(CLEAN), ff, [], NOW)
+    const first = planV2(world({ base: settled, checkout: ff }), CFG)
+    expect(skips(first).map(s => s.why)).toEqual(['checkout: HEAD 5251b75 -> 9e01b77 is on origin/main (0 ahead, 3 behind); not told'])
+    const next = checkoutBaseOf(settled, ff, [], NOW + MIN)
+    expect(next?.settled).toBeUndefined()
+    expect(skips(planV2(world({ base: next, checkout: ff }), CFG))).toEqual([])
   })
 
   test('checkoutBaseOf: a failed or missing read keeps the base; the first read is a clean checkout at its HEAD unless told', () => {

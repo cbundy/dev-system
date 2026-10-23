@@ -117,8 +117,11 @@ export type RunView = {
 // The main checkout, where every agent the loop starts begins and its own commands run (#544):
 // the branch checked out (null when HEAD is detached), its commit, origin's default branch and
 // the tracked paths with changes (untracked files are not the checkout moving). A read that
-// failed is { error }.
-export type Checkout = { branch: string | null; head: string | null; defaultBranch: string; dirty: string[] } | { error: string }
+// failed is { error }. It also carries the branch's upstream (`origin/main`) and its ahead and behind
+// counts against it (null when git prints none: no upstream, a detached HEAD).
+export type Checkout =
+  | { branch: string | null; head: string | null; defaultBranch: string; dirty: string[]; upstream: string | null; ahead: number | null; behind: number | null }
+  | { error: string }
 
 // A treehouse pool slot (#563): the branch checked out (null when detached), and the lease's
 // id, start and branch: the branch it has checked out, else the newest issue branch its HEAD
