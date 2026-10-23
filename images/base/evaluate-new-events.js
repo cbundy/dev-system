@@ -24,8 +24,9 @@ const NA_METRICS = {
   waiting: "needs the v1-only run_started and parked events: the new log has neither, so ready-to-merge time cannot be split into pipeline-bound and dispatcher-bound",
   adjudicator_agreement: "pairs verdicts by the v1 run_id, which no new event carries",
 };
-// The sections that read the new events' pr, by and recovered fields; n/a under --source old.
-const MERGE_SECTIONS = ["merges", "prs", "gaps"];
+// The sections that read the new events' pr, by, recovered, files, file_lines, additions and deletions
+// fields; n/a under --source old.
+const MERGE_SECTIONS = ["merges", "prs", "gaps", "size", "overlap"];
 const NOTES = {
   first_pass: "the v1-only failed event does not exist in the new log: setbacks count fix_requested (a transition to fixing) only",
 };
@@ -76,8 +77,14 @@ function mapEvent(raw) {
       const prefix = get("outcome") === "fixed" ? "CORRECT" : get("outcome") === "declined" ? "WRONG" : null;
       return prefix ? [rec("verdict", `${prefix}: ${get("finding") || "-"}`)] : [];
     }
-    case "merged":
-      return [rec("merged", tokens({ by: get("by"), recovered: get("recovered") }))];
+    case "merged": {
+      // the size fields are record fields, not note tokens: a list is no token. Null unless of the right type.
+      const files = Array.isArray(d.files) && d.files.every((f) => typeof f === "string" && f !== "") ? d.files : null;
+      const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+      const lineEntry = (x) => x && typeof x === "object" && typeof x.path === "string" && x.path !== "" && count(x.additions) !== null && count(x.deletions) !== null;
+      const file_lines = Array.isArray(d.file_lines) ? d.file_lines.filter(lineEntry).map((x) => ({ path: x.path, additions: x.additions, deletions: x.deletions })) : null;
+      return [{ ...rec("merged", tokens({ by: get("by"), recovered: get("recovered") })), files, file_lines, additions: count(d.additions), deletions: count(d.deletions) }];
+    }
     case "claim_renewed":
       return [rec("renewed", null)];
     case "requeued":

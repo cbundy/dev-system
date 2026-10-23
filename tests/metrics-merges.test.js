@@ -31,8 +31,8 @@ const REPO = "acme/widgets";
 const SINCE = "2026-10-16T00:00:00Z";
 const UNTIL = "2026-10-16T12:00:00Z";
 
-function seed(db) {
-  const lines = fs.readFileSync(FIXTURE, "utf8").split("\n").filter((l) => l !== "");
+function seed(db, fixture = FIXTURE) {
+  const lines = fs.readFileSync(fixture, "utf8").split("\n").filter((l) => l !== "");
   lines.forEach((l, i) => {
     const e = JSON.parse(l);
     db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
@@ -61,7 +61,7 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.ok(seed(db) > 60);
   const ev = evaluate();
   const q = blocks("## 9c. Merges, pull requests and gaps");
-  assert.equal(q.length, 8, "the five merge queries, the two run-only ones (unrecorded merges, missing size) and merges per day by regime");
+  assert.equal(q.length, 12, "the five merge queries, the two run-only ones (unrecorded merges, missing size), merges per day by regime, and issue size, overlap, hottest files and merges by kind");
 
   // merges per day: the same counts by merged_by and recovered
   const days = rows(db, q[0]);
@@ -135,4 +135,97 @@ test("the 9c comparison bites: a merge changed in the store only is reported", o
     SELECT envelope, gen_random_uuid(), ts, type, type_version, repo, device, actor, issue, 9999, jsonb_set(data, '{fact}', '"i30/l30/other"')
     FROM factory.event_store WHERE type = 'intervention' AND data->>'cause' = 'queue:patch' AND issue = 30 LIMIT 1`, "writer");
   assert.deepEqual(rows(db, q[3]).map((r) => r.head_moves), [2, 2, 0, 0, 0]);
+});
+
+// ---- issue size, overlap, hottest files and merges by kind (#1219): the fixture's story is in tests/evaluate.test.js
+const SIZE_FIXTURE = path.join(__dirname, "fixtures", "evaluate", "v2", "size-overlap-events.jsonl");
+const SIZE_SINCE = "2026-10-20T00:00:00Z";
+const SIZE_UNTIL = "2026-10-21T00:00:00Z";
+const { NON_CODE_RE } = require(path.join(ROOT, "images", "base", "callum-flow-evaluate"));
+const sizeRows = (db, sql) => {
+  const text = sql.replaceAll(":'repo'", `'${REPO}'`).replaceAll(":'since'", `'${SIZE_SINCE}'`).trim().replace(/;$/, "");
+  return JSON.parse(db.query(`SELECT coalesce(json_agg(q), '[]'::json) FROM (${text}) q`, "reader"));
+};
+const sizeEvaluate = () => {
+  const r = spawnSync("node", [path.join(ROOT, "images", "base", "callum-flow-evaluate"), "--repo", REPO, "--since", SIZE_SINCE, "--until", SIZE_UNTIL,
+    "--source", "new", "--new-events", SIZE_FIXTURE], { encoding: "utf8", env: { ...process.env, NO_MISTAKES_HOME: path.join(ROOT, "no-such-dir") } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+
+test("section 9c's size, overlap, hottest files and merges-by-kind blocks give the rows behind callum-flow-evaluate's numbers", opts, (t) => {
+  const db = createDb(t);
+  seed(db, SIZE_FIXTURE);
+  const ev = sizeEvaluate();
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+
+  const size = sizeRows(db, q[8]);
+  assert.deepEqual(size.map((r) => [r.issue, r.pr, r.files, r.lines, r.code_files, r.code_lines]),
+    ev.size.issues.map((i) => [i.issue, i.pr, i.files, i.lines, i.code_files, i.code_lines]));
+  assert.deepEqual(size.find((r) => r.issue === 101), { repo: REPO, issue: 101, pr: 201, at: "2026-10-20T04:00:00+00:00", files: 4, lines: 192, code_files: 2, code_lines: 37 });
+  assert.deepEqual(size.find((r) => r.issue === 104).files, null, "a merge without files is unknown");
+  assert.equal(size.find((r) => r.issue === 105).code_lines, null, "no file_lines");
+  assert.equal(size.length, 8, "Z, merged before since, is left out");
+
+  const overlap = sizeRows(db, q[9]);
+  assert.deepEqual(overlap.map((r) => [r.issue, r.pr, r.overlaps]), ev.overlap.issues.map((i) => [i.issue, i.pr, i.overlaps]));
+  assert.deepEqual(overlap.filter((r) => r.overlapping).map((r) => [r.issue, r.overlaps]), [[106, [107]], [101, [102]], [102, [101]]]);
+
+  const hot = sizeRows(db, q[10]);
+  assert.deepEqual(hot, ev.overlap.hottest_files);
+  assert.deepEqual(hot, [{ path: "src/shared.js", issues: 2 }, { path: "lib/old.js", issues: 1 }]);
+
+  const kinds = sizeRows(db, q[11]);
+  assert.deepEqual(kinds.map((r) => [r.day, r.kind, r.merges]), ev.merges.per_day_by_kind.map((r) => [r.day, r.kind, r.merges]));
+  const days = sizeRows(db, q[0]);
+  assert.equal(days.reduce((a, r) => a + r.merges, 0), kinds.filter((r) => r.kind !== "unlinked").reduce((a, r) => a + r.merges, 0) + 1,
+    "summed over kind, the merges with an issue are #0's (G was never claimed, so it moves to unlinked)");
+});
+
+test("the size blocks bite: moving a claim, or a changed file, changes the rows", opts, (t) => {
+  const db = createDb(t);
+  seed(db, SIZE_FIXTURE);
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  // A and B stop overlapping when B's claim moves after A's merge
+  db.query("UPDATE factory.event_store SET ts = '2026-10-20T04:30:00Z' WHERE type = 'claimed' AND issue = 102", "owner");
+  assert.deepEqual(sizeRows(db, q[9]).filter((r) => r.overlapping).map((r) => r.issue), [106]);
+  // G becomes linked once claimed
+  db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+    VALUES (1, gen_random_uuid(), '2026-10-20T08:30:00Z', 'claimed', 1, '${REPO}', 'L', 'agent', 108, 9999, '{"lease_minutes":120}'::jsonb)`, "writer");
+  assert.deepEqual(sizeRows(db, q[11]).map((r) => [r.kind, r.merges]), [["factory", 7], ["hand", 1], ["unlinked", 2]]);
+  // a code file turned into a document drops out of the counts
+  db.query("UPDATE factory.event_store SET data = replace(data::text, 'src/g.js', 'src/g.md')::jsonb WHERE type = 'merged' AND issue = 108", "owner");
+  assert.equal(sizeRows(db, q[8]).find((r) => r.issue === 108).code_files, 0);
+});
+
+// The one code-file rule: held once in callum-flow-evaluate, written once in the doc, embedded in each new block.
+const RULE_PATHS = {
+  "docs/x.md": false, README: true, CHANGELOG: false, "CHANGELOG.txt": false, "a/CHANGELOG.md": false, "a/VERSION": false, VERSION: false,
+  "release-notes/v1.md": false, "x/release-notes/v1.txt": false, "sub/package.json": false, "package-lock.json": false, "yarn.lock": false,
+  "pnpm-lock.yaml": false, "Cargo.toml": false, "go.sum": false, Gemfile: false, "Gemfile.lock": false, "poetry.lock": false,
+  "requirements.txt": false, "requirements-dev.txt": false, "composer.lock": false,
+  "src/app.js": true, "src/VERSIONS.js": true, "src/CHANGELOGS.js": true, "my-package.json": true, "src/release-notes.js": true,
+  "src/package.json.ts": true, "requirements.py": true, "Cargo.toml.rs": true, "docs/x.md.js": true, "lib/go.mod.js": true,
+};
+
+test("the code-file rule is one expression in evaluate, the doc and every new 9c block, and JS and PostgreSQL agree on it", opts, (t) => {
+  const literal = NON_CODE_RE.source;
+  const rule = doc.slice(doc.indexOf("**What is a code file**"), doc.indexOf("**Issue size**"));
+  assert.equal([...rule.matchAll(/```text\n(.*)\n```/g)].map((m) => m[1]).join("|"), literal, "the doc's expression is evaluate's");
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  const sql = [8, 9, 10];
+  for (const i of sql) {
+    const found = [...q[i].matchAll(/!~ '([^']*)'/g)].map((m) => m[1]);
+    assert.ok(found.length >= 1, `block #${i} uses the rule`);
+    for (const f of found) assert.equal(f, literal, `block #${i} embeds the same literal`);
+  }
+  assert.ok(!q[11].includes("!~"), "the kind block does not use it");
+  const db = createDb(t);
+  const paths = Object.keys(RULE_PATHS);
+  const out = JSON.parse(db.query(`SELECT json_agg(json_build_object('p', p, 'non', p ~ '${literal}')) FROM unnest(ARRAY[${paths.map((p) => `'${p}'`).join(",")}]) p`, "reader"));
+  for (const { p, non } of out) {
+    assert.equal(non, !RULE_PATHS[p], `PostgreSQL: ${p}`);
+    assert.equal(NON_CODE_RE.test(p), !RULE_PATHS[p], `JS: ${p}`);
+  }
+  assert.equal(out.length, paths.length);
 });

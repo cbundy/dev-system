@@ -921,9 +921,9 @@ function writeLife(dir) {
 
 const NO_NM = () => path.join(tmp, "no-nm");
 const sectionsFrom = (r) => {
-  // the sources block names the input; the two n/a metrics have no new value; merges, prs and gaps read
+  // the sources block names the input; the two n/a metrics have no new value; merges, prs, gaps, size and overlap read
   // the new events' pr, by and recovered, so they are n/a under old; scope.events says which file
-  const { sources, waiting, adjudicator_agreement, merges, prs, gaps, window, ...rest } = r;
+  const { sources, waiting, adjudicator_agreement, merges, prs, gaps, size, overlap, window, ...rest } = r;
   const { events, ...scope } = window.scope;
   return { ...rest, window: { ...window, scope } };
 };
@@ -1047,25 +1047,25 @@ test("v2 judgement calls count a judge task once per key: wake and latest status
 test("merges, prs and gaps read n/a with a reason: no events, one merge, no merge in the window, and under --source old", () => {
   const env = { NO_MISTAKES_HOME: NO_NM() };
   const absent = json([...NEW_WINDOW, "--source", "new", "--new-events", path.join(tmp, "absent.jsonl")], env);
-  for (const k of ["merges", "prs", "gaps"]) assert.match(absent[k]["n/a"], /file not found/, k);
+  for (const k of mod.MERGE_SECTIONS) assert.match(absent[k]["n/a"], /file not found/, k);
   const empty = json(["--repo", "acme/widgets", "--since", "2026-10-17T00:00:00Z", "--until", "2026-10-17T12:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
-  for (const k of ["merges", "prs"]) assert.equal(empty[k]["n/a"], "0 merges in the window", k);
+  for (const k of ["merges", "prs", "size", "overlap"]) assert.equal(empty[k]["n/a"], "0 merges in the window", k);
   assert.match(empty.gaps["n/a"], /fewer than 2 merges/);
   const one = json(["--repo", "acme/widgets", "--since", "2026-10-16T00:00:00Z", "--until", "2026-10-16T02:00:00Z", ...MERGE_ARGS.slice(NEW_WINDOW.length)], env);
   assert.equal(one.merges.total, 1);
   assert.equal(one.prs.issues.length, 1);
   assert.match(one.gaps["n/a"], /fewer than 2 merges/);
   const old = json(V2_WINDOW);
-  for (const k of ["merges", "prs", "gaps"]) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
+  for (const k of mod.MERGE_SECTIONS) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
   const md = run([...MERGE_ARGS, "--format", "markdown"], env).out;
   assert.match(md, /\| 31 \| 92 \| 1200 \| 2 \| 1 \| 2 \|/);
   assert.match(md, /\| 2026-10-16T04:59:00.000Z \| 2026-10-16T08:00:00.000Z \| 10860 \| #32 \| #34 \| #34:building #36:building\? #37:building #38:building \|/);
   assert.match(md, /## gaps/);
 });
 
-test("normalize leaves out merges, prs and gaps, so a shadow run records no difference for them", () => {
+test("normalize leaves out the merge sections, so a shadow run records no difference for them", () => {
   const { normalize } = require("../images/base/evaluate-new-events.js");
-  const out = normalize({ window: {}, merges: { total: 1 }, prs: { merges: 1 }, gaps: { merges: 2 }, rounds: { merged_issues: 0 } });
+  const out = normalize({ window: {}, merges: { total: 1 }, prs: { merges: 1 }, gaps: { merges: 2 }, size: { merges: 1 }, overlap: { merges: 1 }, rounds: { merged_issues: 0 } });
   assert.deepEqual(Object.keys(out).sort(), ["rounds", "window"]);
 });
 
@@ -1338,4 +1338,109 @@ test("regime: pipeline rows count only for unknown; normalize drops both by_regi
   const { normalize } = require("../images/base/evaluate-new-events.js");
   const out = normalize({ throughput: { merged_issues: 1, by_regime: [] }, spend: { rows: [], by_regime: [] } });
   assert.deepEqual(out, { throughput: { merged_issues: 1 }, spend: { rows: [] } });
+});
+
+// ---- issue size, overlap and merges by kind (#1219, docs/metrics.md 9c): tests/fixtures/evaluate/v2/size-overlap-events.jsonl.
+// The story, all on 2026-10-20 (acme/widgets): 101 (A) and 102 (B) have windows that overlap and share
+// src/shared.js and docs/guide.md; A also changes package-lock.json. 103 (C) is later and touches shared.js too.
+// 106 (D) shares shared.js with A but its window only ends where A's begins; it overlaps 107 (Z, merged the
+// day before, so outside the window) on lib/old.js. 104 (E) has no files, 105 (F) no file_lines, 108 (G) was never
+// claimed, 109 (H) is a hand merge whose window meets C's without a shared file. Two merged events name no issue
+// (the sweep's, one logged twice).
+const SIZE_FIXTURE = path.join(FIX, "v2", "size-overlap-events.jsonl");
+const SIZE_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-20T00:00:00Z", "--until", "2026-10-21T00:00:00Z", "--source", "new"];
+const sizeRun = (file, extra = []) => json([...SIZE_WINDOW, "--new-events", file, ...extra], { NO_MISTAKES_HOME: NO_NM() });
+const rewrite = (name, f) => {
+  const file = path.join(tmp, name);
+  fs.writeFileSync(file, fs.readFileSync(SIZE_FIXTURE, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.stringify(f(JSON.parse(l)))).join("\n") + "\n");
+  return file;
+};
+
+test("size: counts, medians and p90 over the merges with files; the lockfile and documents are left out of the code lines", () => {
+  const { size } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual([size.merges, size.known, size.code_lines_known], [8, 7, 6], "E has no files, F no file_lines");
+  assert.deepEqual(size.files, { median: 2, p90: 4 });
+  assert.deepEqual(size.lines, { median: 10, p90: 192 });
+  assert.deepEqual(size.code_files, { median: 2, p90: 3 });
+  assert.deepEqual(size.code_lines, { median: 16, p90: 37 });
+  const a = size.issues.find((i) => i.issue === 101);
+  assert.deepEqual(a, { issue: 101, pr: 201, files: 4, lines: 192, code_files: 2, code_lines: 37 }, "package-lock.json (150 lines) and guide.md are not code");
+  assert.deepEqual(size.issues.find((i) => i.issue === 104), { issue: 104, pr: 204, files: null, lines: null, code_files: null, code_lines: null });
+  assert.deepEqual(size.issues.find((i) => i.issue === 105), { issue: 105, pr: 205, files: 2, lines: 10, code_files: 1, code_lines: null });
+});
+
+test("overlap: windows that meet and share a code file; the hottest files hold code only", () => {
+  const { overlap } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual([overlap.merges, overlap.overlapping, overlap.share], [7, 3, 0.429]);
+  const flags = Object.fromEntries(overlap.issues.map((i) => [i.issue, i.overlaps]));
+  assert.deepEqual(flags, { 101: [102], 102: [101], 103: [], 105: [], 106: [107], 108: [], 109: [] },
+    "A and B; D with Z (merged before the window); not D with A (windows only touch), nor C with H (no shared file)");
+  assert.deepEqual(overlap.issues.filter((i) => i.overlapping).map((i) => i.issue), [106, 101, 102]);
+  assert.deepEqual(overlap.hottest_files, [{ path: "src/shared.js", issues: 2 }, { path: "lib/old.js", issues: 1 }], "docs/guide.md is shared but not code");
+});
+
+test("merges.per_day_by_kind counts unlinked merges, a retried one once; per_day is unchanged", () => {
+  const { merges } = sizeRun(SIZE_FIXTURE);
+  assert.deepEqual(merges.per_day_by_kind, [
+    { day: "2026-10-20", kind: "factory", merges: 6 },
+    { day: "2026-10-20", kind: "hand", merges: 1 },
+    { day: "2026-10-20", kind: "unlinked", merges: 3 },
+  ], "G was never claimed; the sweep's two prs, 300 logged twice");
+  assert.deepEqual(merges.per_day, [{ day: "2026-10-20", by: "factory", recovered: false, merges: 7 }, { day: "2026-10-20", by: "hand", recovered: false, merges: 1 }]);
+  assert.equal(merges.total, 8);
+});
+
+test("size, overlap and the kind table render as markdown", () => {
+  const md = run([...SIZE_WINDOW, "--new-events", SIZE_FIXTURE, "--format", "markdown"], { NO_MISTAKES_HOME: NO_NM() }).out;
+  const headings = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(headings.slice(headings.indexOf("gaps"), headings.indexOf("gaps") + 3), ["gaps", "size", "overlap"]);
+  assert.match(md, /\| code_lines \| 16 \| 37 \|/);
+  assert.match(md, /\| 101 \| 201 \| 4 \| 192 \| 2 \| 37 \|/);
+  assert.match(md, /\| 106 \| 206 \| true \| #107 \|/);
+  assert.match(md, /\| src\/shared\.js \| 2 \|/);
+  assert.match(md, /\| 2026-10-20 \| unlinked \| 3 \|/);
+});
+
+test("size and overlap: no files anywhere reads n/a with a reason; no file_lines reads n/a for the code-only line stats only", () => {
+  const bare = sizeRun(rewrite("no-files.jsonl", (e) => {
+    if (e.type === "merged") for (const k of ["files", "file_lines", "additions", "deletions"]) delete e.data[k];
+    return e;
+  }));
+  for (const k of ["size", "overlap"]) assert.equal(bare[k]["n/a"], "no merge in the window has files (recorded from #752's release on)", k);
+  assert.equal(bare.merges.total, 8, "the other sections are unaffected");
+  const noLines = sizeRun(rewrite("no-file-lines.jsonl", (e) => {
+    if (e.type === "merged" && e.data.file_lines) e.data.file_lines = null;
+    return e;
+  }));
+  assert.equal(noLines.size.code_lines["n/a"], "no known merge has file_lines");
+  assert.equal(noLines.size.code_lines_known, 0);
+  assert.deepEqual(noLines.size.files, { median: 2, p90: 4 }, "every other stat is still reported");
+  assert.equal(noLines.size.issues.find((i) => i.issue === 101).code_files, 2);
+  assert.equal(noLines.overlap.overlapping, 3);
+  const md = run([...SIZE_WINDOW, "--new-events", path.join(tmp, "no-file-lines.jsonl"), "--format", "markdown"], { NO_MISTAKES_HOME: NO_NM() }).out;
+  assert.match(md, /\| code_lines \| n\/a \| no known merge has file_lines \|/);
+});
+
+test("a merged event's size fields are record fields, null when absent or of the wrong type, and other states do not get them", () => {
+  const { mapEvent } = require("../images/base/evaluate-new-events.js");
+  const merged = (data) => mapEvent({ type: "merged", ts: "2026-10-20T01:00:00Z", issue: 1, repo: "acme/widgets", data: { pr: 1, by: "factory", recovered: false, ...data } })[0];
+  const full = merged({ files: ["a.js"], file_lines: [{ path: "a.js", additions: 1, deletions: 2 }, { path: "bad", additions: "x", deletions: 0 }], additions: 1, deletions: 2 });
+  assert.deepEqual([full.files, full.file_lines, full.additions, full.deletions], [["a.js"], [{ path: "a.js", additions: 1, deletions: 2 }], 1, 2], "an entry with bad counts is left out");
+  assert.doesNotMatch(full.note, /files|additions/, "not note tokens");
+  const wrong = merged({ files: "a.js", file_lines: { a: 1 }, additions: "3", deletions: -1 });
+  assert.deepEqual([wrong.files, wrong.file_lines, wrong.additions, wrong.deletions], [null, null, null, null]);
+  const bare = merged({});
+  assert.deepEqual([bare.files, bare.file_lines, bare.additions, bare.deletions], [null, null, null, null]);
+  const other = mapEvent({ type: "claimed", ts: "2026-10-20T01:00:00Z", issue: 1, repo: "acme/widgets", data: { files: ["a.js"] } })[0];
+  assert.ok(!("files" in other) && !("additions" in other));
+});
+
+test("the two MERGE_SECTIONS lists are equal and TOP_KEYS places size and overlap after gaps", () => {
+  assert.deepEqual(require("../images/base/evaluate-new-events.js").MERGE_SECTIONS, mod.MERGE_SECTIONS);
+  assert.deepEqual(mod.TOP_KEYS.slice(mod.TOP_KEYS.indexOf("merges"), mod.TOP_KEYS.indexOf("merges") + 5), ["merges", "prs", "gaps", "size", "overlap"]);
+});
+
+test("size and overlap read n/a under --source old, with the merge sections' reason", () => {
+  const old = json(V2_WINDOW);
+  for (const k of ["size", "overlap"]) assert.equal(old[k]["n/a"], "needs the new events' pr, by and recovered fields", k);
 });

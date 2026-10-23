@@ -116,6 +116,7 @@ const RUN_ONLY = [
   "9c. Merges, pull requests and gaps #0", "9c. Merges, pull requests and gaps #1", "9c. Merges, pull requests and gaps #2",
   "9c. Merges, pull requests and gaps #3", "9c. Merges, pull requests and gaps #4",
   "9c. Merges, pull requests and gaps #5", "9c. Merges, pull requests and gaps #6",
+  "9c. Merges, pull requests and gaps #8", "9c. Merges, pull requests and gaps #9", "9c. Merges, pull requests and gaps #10", "9c. Merges, pull requests and gaps #11",
   "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4",

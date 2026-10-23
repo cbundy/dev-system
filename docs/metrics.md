@@ -2048,7 +2048,9 @@ retried event once by its type's key (a `transition` by `(issue, life, seq)`, a 
 `-v repo=... -v since=...` (merges at or after `since`; `callum-flow-evaluate` also takes the
 window's end). Each repeats the same first CTEs (`ev`, `sig`, `mg`), so it runs on its own. They
 need `recovered` as a column: migration 0021 lifts it. `callum-flow-evaluate` reports the same
-numbers as its `merges`, `prs` and `gaps` sections, from the new events only.
+numbers as its `merges` (with `per_day_by_kind`), `prs`, `gaps`, `size` and `overlap` sections, from the
+new events only. The size and overlap blocks (#8 to #11) read the `merged` event's `files`, `file_lines`,
+`additions` and `deletions` (migration 0028).
 
 **A merge** is one per `(repo, issue, pr)`, told by three signals: a `merged` event; a `transition`
 to `closed` with `why = 'merged-by-hand'` (timed by `seq_at`); and a person `intervention` with
@@ -2483,6 +2485,355 @@ WHERE at >= :'since'::timestamptz
 GROUP BY repo, day, regime, merged_by, recovered
 ORDER BY repo, day, regime, merged_by, recovered;
 ```
+
+**What is a code file** (used by the size, overlap and hottest-files blocks below, and by
+`callum-flow-evaluate`'s `NON_CODE_RE`, which these blocks repeat literally): a path is not a code file when
+it ends in `.md`; its base name is `CHANGELOG` (with or without an extension) or `VERSION`; it is under a
+`release-notes/` directory; or its base name is one of `package.json`, `package-lock.json`,
+`npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.toml`, `Cargo.lock`, `go.mod`, `go.sum`,
+`Gemfile`, `Gemfile.lock`, `poetry.lock`, `pyproject.toml`, `requirements*.txt`, `composer.json` or
+`composer.lock`. As one expression, which JS `RegExp` and PostgreSQL `~` read alike:
+
+```text
+(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)
+```
+
+**Issue size** (#8; cbundy/dev-system#1219): one row per merge in the window, from the merge's earliest
+`merged` event whose `files` is not null. `files` is the number of changed paths and `lines` is
+`additions + deletions`; `code_files` and `code_lines` count only the code files, `code_lines` summing the
+`file_lines` entries of those paths. Every count is null when no such event exists (the merge's size is
+unknown, left out of the stats), and `code_lines` is null when that event has no `file_lines`. Medians and
+90th percentiles (nearest rank) are taken in code.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), sized AS (
+  SELECT repo, issue, pr, at, sz -> 'files' AS files,
+         CASE WHEN jsonb_typeof(sz -> 'file_lines') = 'array' THEN sz -> 'file_lines' END AS file_lines,
+         (sz ->> 'additions')::int AS additions, (sz ->> 'deletions')::int AS deletions
+  FROM mg
+  WHERE at >= :'since'::timestamptz
+)
+SELECT repo, issue, pr, at,
+       jsonb_array_length(files) AS files,
+       additions + deletions AS lines,
+       CASE WHEN files IS NOT NULL THEN
+         (SELECT count(*) FROM jsonb_array_elements_text(files) f(path) WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)')
+       END AS code_files,
+       CASE WHEN file_lines IS NOT NULL THEN
+         (SELECT coalesce(sum((l ->> 'additions')::int + (l ->> 'deletions')::int), 0)
+          FROM jsonb_array_elements(file_lines) l WHERE (l ->> 'path') !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)')
+       END AS code_lines
+FROM sized
+ORDER BY at, issue, pr;
+```
+
+**Overlap** (#9): per merge in the window with known files, whether it overlapped another issue's merge.
+A merge's window runs from its issue's first `claimed` event (at any time, not bounded by `since`) to the
+merge, and is the merge instant when the issue has no claim. `overlapping` is true when a merge of a
+different issue, with known files (at any time), has a window that meets this one
+(`a.from < b.at AND b.from < a.at`, or both are the same instant) and shares at least one code file with
+it; `overlaps` names those issues. Only merged work is covered: in-flight work that has not merged has no
+known files.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), w AS (
+  -- each merge with known files and its window: from the issue's first claim (the merge itself with none)
+  SELECT m.repo, m.issue, m.pr, m.at, least(coalesce(c.at, m.at), m.at) AS from_at, m.sz -> 'files' AS files
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.sz IS NOT NULL
+), hit AS (
+  -- a code file that a merge shares with a merge of another issue whose window meets its own
+  SELECT a.issue, a.pr, a.at, b.issue AS other_issue, f.path
+  FROM w a
+  JOIN w b ON b.issue <> a.issue
+   AND ((a.from_at < b.at AND b.from_at < a.at) OR (a.from_at = a.at AND b.from_at = b.at AND a.at = b.at))
+  CROSS JOIN LATERAL jsonb_array_elements_text(a.files) f(path)
+  WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(b.files) bf(path) WHERE bf.path = f.path)
+)
+SELECT w.repo, w.issue, w.pr, w.at,
+       EXISTS (SELECT 1 FROM hit h WHERE h.issue = w.issue AND h.pr IS NOT DISTINCT FROM w.pr) AS overlapping,
+       coalesce((SELECT array_agg(DISTINCT h.other_issue ORDER BY h.other_issue) FROM hit h
+                 WHERE h.issue = w.issue AND h.pr IS NOT DISTINCT FROM w.pr), '{}') AS overlaps
+FROM w
+WHERE w.at >= :'since'::timestamptz
+ORDER BY w.at, w.issue, w.pr;
+```
+
+**Hottest files** (#10): the code files behind #9, the 10 with the most issues. A file's count is the
+number of distinct issues merged in the window that touch it and have an overlapping merge of another
+issue that also touches it. Ranked by count descending, ties by path.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered, files, file_lines, additions, deletions
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN jsonb_typeof(e.files) = 'array' THEN e.files END AS files,
+           CASE WHEN jsonb_typeof(e.file_lines) = 'array' THEN e.file_lines END AS file_lines,
+           e.additions, e.deletions,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered,
+         files, file_lines, additions, deletions
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean, NULL::jsonb, NULL::jsonb, NULL::int, NULL::int
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered,
+         -- the size: that of the merge's earliest merged event with files
+         (array_agg(jsonb_build_object('files', files, 'file_lines', file_lines, 'additions', additions, 'deletions', deletions)
+                    ORDER BY at, files::text) FILTER (WHERE is_merged AND files IS NOT NULL))[1] AS sz
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered, s.files, s.file_lines, s.additions, s.deletions,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), w AS (
+  -- each merge with known files and its window: from the issue's first claim (the merge itself with none)
+  SELECT m.repo, m.issue, m.pr, m.at, least(coalesce(c.at, m.at), m.at) AS from_at, m.sz -> 'files' AS files
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.sz IS NOT NULL
+), hit AS (
+  -- a code file that a merge shares with a merge of another issue whose window meets its own
+  SELECT a.issue, a.pr, a.at, b.issue AS other_issue, f.path
+  FROM w a
+  JOIN w b ON b.issue <> a.issue
+   AND ((a.from_at < b.at AND b.from_at < a.at) OR (a.from_at = a.at AND b.from_at = b.at AND a.at = b.at))
+  CROSS JOIN LATERAL jsonb_array_elements_text(a.files) f(path)
+  WHERE f.path !~ '(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(b.files) bf(path) WHERE bf.path = f.path)
+)
+SELECT path, count(DISTINCT issue) AS issues
+FROM hit
+WHERE at >= :'since'::timestamptz
+GROUP BY path
+ORDER BY issues DESC, path COLLATE "C"
+LIMIT 10;
+```
+
+**All merges to main by kind** (#11): per repo, day and `kind`. `unlinked` is a `merged` event with no
+issue (one per `pr`, a retried event counted once) or a merge above whose issue has no `claimed` event at
+or before the merge; `hand` is any other merge that is `hand`; `factory` is the rest. Summed over `kind`,
+the merges with an issue are #0's per day.
+
+```sql
+WITH ev AS (
+  -- the events that name a pull request, a retried one counted once by its type's key
+  SELECT repo, issue, type, pr, at, who, cause, to_state, why, question, life, seq, merged_by, recovered
+  FROM (
+    SELECT e.repo, e.issue, e.type, e.pr, e.who, e.cause, e.to_state, e.why, e.question, e.life, e.seq,
+           e.by AS merged_by, e.recovered,
+           CASE WHEN e.type = 'transition' THEN coalesce(e.seq_at, e.ts) ELSE e.ts END AS at,
+           row_number() OVER (
+             PARTITION BY e.repo, e.issue, e.type,
+               CASE e.type
+                 WHEN 'transition' THEN coalesce(e.life || '/' || e.seq::text, e.event_id::text)
+                 WHEN 'reviewed' THEN coalesce(e.round::text, '') || '/' || coalesce(e.patch, '')
+                 WHEN 'intervention' THEN coalesce(e.who, '') || '/' || coalesce(e.cause, '') || '/' || coalesce(e.fact, e.event_id::text)
+                 ELSE e.event_id::text
+               END
+             ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.repo = :'repo' AND e.issue IS NOT NULL
+      AND e.type IN ('transition', 'reviewed', 'intervention', 'merged')
+  ) x
+  WHERE n = 1
+), sig AS (
+  -- the three signals of a merge
+  SELECT repo, issue, pr, at, coalesce(merged_by = 'hand', false) AS hand, true AS is_merged, recovered
+  FROM ev WHERE type = 'merged'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'transition' AND to_state = 'closed' AND why = 'merged-by-hand'
+  UNION ALL
+  SELECT repo, issue, pr, at, true, false, NULL::boolean
+  FROM ev WHERE type = 'intervention' AND who = 'person' AND cause = 'hand-merge'
+), mg AS (
+  -- one merge per (repo, issue, pr); a signal with no pr takes the issue's latest pr at or before it
+  SELECT repo, issue, pr, min(at) AS at,
+         CASE WHEN bool_or(hand) THEN 'hand' ELSE 'factory' END AS merged_by,
+         bool_or(recovered) FILTER (WHERE is_merged) AS recovered
+  FROM (
+    SELECT s.repo, s.issue, s.at, s.hand, s.is_merged, s.recovered,
+           coalesce(s.pr, (SELECT p.pr FROM ev p
+                           WHERE p.repo = s.repo AND p.issue = s.issue AND p.pr IS NOT NULL AND p.at <= s.at
+                           ORDER BY p.at DESC, p.pr DESC LIMIT 1)) AS pr
+    FROM sig s
+  ) r
+  GROUP BY repo, issue, pr
+), cl AS (
+  -- the first claim of each issue, at any time
+  SELECT issue, min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'claimed' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY issue
+), un AS (
+  -- merges to main that name no issue: one per pr (a retried event counted once), at its earliest event
+  SELECT min(ts) AS at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NULL AND repo = :'repo'
+  GROUP BY coalesce(pr::text, event_id::text)
+)
+SELECT repo, day, kind, count(*) AS merges
+FROM (
+  SELECT m.repo, (m.at AT TIME ZONE 'UTC')::date AS day,
+         CASE WHEN c.at IS NULL OR c.at > m.at THEN 'unlinked'
+              WHEN m.merged_by = 'hand' THEN 'hand'
+              ELSE 'factory' END AS kind
+  FROM mg m LEFT JOIN cl c ON c.issue = m.issue
+  WHERE m.at >= :'since'::timestamptz
+  UNION ALL
+  SELECT :'repo', (at AT TIME ZONE 'UTC')::date, 'unlinked'
+  FROM un
+  WHERE at >= :'since'::timestamptz
+) k
+GROUP BY repo, day, kind
+ORDER BY repo, day, kind;
+```
+
+`callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
+claimed before `since` read unlinked and shorten its overlap window; the saved queries above look at all
+time.
 
 ## 10. Releases
 
@@ -3101,7 +3452,18 @@ export is passed (see the skill).
   superseded and its head moves (`queue:patch` and `push` interventions), with the median and max
   computed in code; and the 10 longest gaps between consecutive in-window merges, each with the
   issues in flight. They read `n/a` with a reason for no events, for 0 merges (`gaps`: fewer than 2)
-  and under `--source old`.
+  and under `--source old`. `merges` also lists `per_day_by_kind` (day, `kind`, merges): `unlinked`
+  (a `merged` event with no issue, or a merge whose issue has no `claimed` event at or before it),
+  `hand` or `factory`; its other fields are unchanged.
+- `size` and `overlap` are section 9c's issue size, overlap and hottest-files numbers over the same
+  merges, from the `merged` event's `files`, `file_lines`, `additions` and `deletions`, with the one code-file
+  rule `NON_CODE_RE`. `size`: `merges`, `known` (those with `files`), `code_lines_known`, the median and
+  p90 (nearest rank) of `files`, `lines`, `code_files` and `code_lines`, and per merge its counts. `overlap`:
+  the merges with known files, how many `overlapping` and their `share`, per merge the issues it
+  overlaps, and the `hottest_files` (10 shown). A merge without `files` is unknown and left out; both
+  read `n/a` when no merge has `files`, and the code-only line stats read `n/a` when none has
+  `file_lines`. Evaluate reads `claimed` from its input, so a fleet export cut at `since` can make an
+  issue claimed before `since` read unlinked and shorten its overlap window.
 - `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store
   ([source switch](factory-events/replay.md#source-switch)). `old` is the behaviour above. `new` reads the
   new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<name>.jsonl`, or with
@@ -3165,7 +3527,7 @@ Metrics that need a v1-only state read `n/a`, never 0, and `sources` names each 
 (`sources` says so). The per-issue lead-time stages `design`, `implementation`, `pipeline` and
 `waiting_for_merge` can differ by seconds from `old`, which times `delegated` and `merge_ready` by the
 line's write time; the shadow comparison leaves them out, with the `sources` block, the two `n/a` metrics and the
-`merges`, `prs` and `gaps` sections (they read `n/a` under `--source old`: "needs the new events' pr, by and recovered fields").
+`merges`, `prs`, `gaps`, `size` and `overlap` sections (they read `n/a` under `--source old`: "needs the new events' pr, by and recovered fields").
 A view export carries `reviewed.patch` and `test_weakened.restored` from migration 0006, and `merged.recovered`
 from migration 0021. The fleet export is
 `dev-query --factory -At -c "SELECT row_to_json(e) FROM factory.event_log e WHERE repo = :'repo' AND ts >= :'since'" -v repo=<owner/name> -v since=<ISO>`.
