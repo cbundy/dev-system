@@ -20,6 +20,7 @@ import {
   parseCheckout,
   parseCsv,
   derivedSkipError,
+  factoryStateError,
   parseFactoryState,
   parsePool,
   parseSubIssues,
@@ -224,7 +225,7 @@ export async function observe(
     // a derivation that left out events the loop reads is blind (G2), and never cached
     const behind = parsed === null ? null : derivedSkipError(parsed.skipped)
     if (parsed !== null && behind === null) cache.factory = { at: now, value: parsed }
-    mark('factory', parsed !== null && behind === null, cache.factory?.at ?? null, parsed === null ? fail(r) : (behind ?? undefined))
+    mark('factory', parsed !== null && behind === null, cache.factory?.at ?? null, parsed === null ? (r.exitCode === 0 ? factoryStateError(r.stdout, rt.repo) : fail(r)) : (behind ?? undefined))
   } catch (err) {
     mark('factory', false, cache.factory?.at ?? null, String(err))
   }
