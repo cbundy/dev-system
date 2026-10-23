@@ -4574,9 +4574,9 @@ Notices (TELL kinds), owner items first:
 
 | Op | Meaning |
 |---|---|
-| `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
+| `resume <N...> ["note"]` | unpark (P1); in the note `\"` is a `"` and `\\` a `\`. On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
 | `drop <N>` | E1, for the current life only (4.1) |
-| `note [N] <text>\|off` | a note for the issue's next step (or every issue's), replacing its earlier note; `off` clears it |
+| `note [N] <text>\|off` | a note for the issue's next step (or every issue's), its text kept as typed (inner spaces and line breaks too, only the ends trimmed), replacing its earlier note; `off` clears it |
 | `stamp <N>` | the intake reader's dry run on issue N (13.4.3): the reply at once, the notice when the reader ends. The reader answers `{"area": <one of intakeAreas>, "needs_owner": <bool>, "reason": <one line, 1 to 200 characters, required when needs_owner is true>, "touches": [<at most 20 distinct top-level names>]}`; `checkIntake` drops a bad field and names it (`ok`, `dropped` or `failed`). View-only: it logs no intervention, writes nothing to GitHub, the events, `stamps:<repo>` or the ledger |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
