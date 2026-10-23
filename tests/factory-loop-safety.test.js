@@ -303,7 +303,10 @@ test("the answer script's only writes are its own temp file and the rename over 
   // it runs no command, bar one: a design wait's read-only `gh` lookups (hooks/v2/wait-check.mjs, #980),
   // by execFile with an argv and no shell
   assert.doesNotMatch(src, /\bspawn\w*\(|\bexec(Sync)?\(|\bexecFileSync\(|\bfork\(|shell:/);
-  assert.deepEqual([...src.matchAll(/\bexecFile\(([^,]*),/g)].map((m) => m[1]), ["'gh'"]);
+  // (the one runner takes its command from readOnGitHub's calls below: gh, or callum-flow-issue-read)
+  assert.deepEqual([...src.matchAll(/\bexecFile\(([^,]*),/g)].map((m) => m[1]), ["command"]);
+  assert.ok(src.includes("async function readOnGitHub(mods, self, file, command = 'gh', env = {})"));
+  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')(?:, ('[^']+'))?/g)].map((m) => [m[1], m[2] ?? "'gh'"]), [["'wait-check.mjs'", "'gh'"], ["'done-check.mjs'", "'gh'"], ["'rollout-check.mjs'", "'callum-flow-issue-read'"]]);
   // the modules it loads: node's own, and the contract and the wait check beside the hooks
   const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]).sort();
   assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'", "'node:child_process'", "'node:url'"].sort());
@@ -311,7 +314,6 @@ test("the answer script's only writes are its own temp file and the rename over 
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
   // the one loader of the read-only checks takes its file from the two calls below: a wait's and a done close's
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)"));
-  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')\)/g)].map((m) => m[1]), ["'wait-check.mjs'", "'done-check.mjs'"]);
 });
 
 // The act step holds GitHub writes for the rest of a pass that met a rate limit (v2 SPEC 13.10 item 2): the

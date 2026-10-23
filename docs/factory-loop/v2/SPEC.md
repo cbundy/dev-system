@@ -1636,6 +1636,14 @@ The designer is a reader: it writes nothing to GitHub.
   404 or 422, "release not found", an unresolvable PR) is refused like any problem, one per
   condition; an indeterminate read (no `gh`, network, rate limit, auth, timeout) records the wait and
   names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
+- **A brief's Rollout** (`kind: "brief"`, #987). When the Rollout (`rolloutOf`) is `merge`,
+  `bin/factory-answer` reads the job's issue before it records
+  (`hooks/v2/rollout-check.mjs`; `callum-flow-issue-read --json <N>` with `CALLUM_FLOW_REPO` set to the job's
+  repo, limited to 15 s). A body with a `## Run it` heading (the test of `callum-flow-rollout`) refuses the
+  answer with that tool's reason, `brief says merge but issue #<N> has a '## Run it' heading`, and the
+  remedy: answer `run-it` when the Run it stands, or ask the owner to rename the stale heading. An
+  indeterminate read records the brief and names the unchecked Rollout on stderr. The PR-open check
+  (`callum-flow-rollout` in `act-pr.ts`) stays as the backstop.
 - **A done close** (`kind: "done"`, the designer's choice when the issue's work is already merged on
   the default branch). `evidence` is `{ pr, commit, runIt }`, at least one of `pr` and `commit` (a
   whole number of at least 1; 7 to 40 hex digits, stored lower-case); `runIt`, when given, is a
