@@ -74,7 +74,7 @@ the model was involved.
   with a reason. Decide whether to release now, by
   "Release decisions" below. To release, start the release agent and answer
   `done` (reason: the version and why now); to wait, answer `hold` with the reason, which the loop
-  only logs (the next hour's review asks again, and so does one within the hour when a new issue starts waiting). A `done` answer (the release started) quiets the review: the loop sends no release review until a newer tag is seen or `releaseInProgress` (2h) has passed since the answer. A review that comes after the window means the release did not land: check `git tag -l` before starting another. You do not do the release steps yourself. Once the release agent reports the release
+  only logs (the next hour's review asks again; a wait that arrives while you run joins this review). A `done` answer (the release started) quiets the review: the loop sends no release review until a newer tag is seen or `releaseInProgress` (2h) has passed since the answer. A review that comes after the window means the release did not land: check `git tag -l` before starting another. You do not do the release steps yourself. Once the release agent reports the release
   out, do the Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps,
   recording the result on the issue and closing it.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
