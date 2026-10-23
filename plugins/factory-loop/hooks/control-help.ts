@@ -94,6 +94,7 @@ export function helpText(): string {
     'Ops:',
     ...rows.map(([usage, meaning]) => `  ${usage.padEnd(width)}${meaning}`),
     '',
+    'In a resume note, type " as \\" and \\ as \\\\. A note op keeps its text as typed.',
     'N is an issue number, with or without #; a list takes spaces or commas. In chat, the model sets',
     'the same ops through mcp__factory-loop__control with { "op": "<op>" }.',
   ].join('\n')
