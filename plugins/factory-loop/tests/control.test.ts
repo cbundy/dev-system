@@ -112,6 +112,9 @@ describe('parseOp', () => {
     expect(op('note keep briefs short')).toEqual({ op: 'note', issue: null, text: 'keep briefs short' })
     expect(op('note #5 use the  existing parser')).toEqual({ op: 'note', issue: 5, text: 'use the existing parser' })
     expect(op('note 5 use it')).toEqual({ op: 'note', issue: 5, text: 'use it' })
+    expect(op('note 5 off')).toEqual({ op: 'note', issue: 5, text: null })
+    expect(op('note #5 off')).toEqual({ op: 'note', issue: 5, text: null })
+    expect(op('note off')).toEqual({ op: 'note', issue: null, text: null })
     for (const mode of ['off', 'observe', 'act'] as const) expect(op(`mode ${mode}`)).toEqual({ op: 'mode', mode })
     expect(op('mode ACT')).toEqual({ op: 'mode', mode: 'act' })
   })
@@ -230,7 +233,7 @@ describe('parseOp', () => {
     const texts = [
       'status', 'pause #12', 'unpause 12', 'skip 3', 'noskip 3', 'priority 4,2', 'priority off', 'only 522', 'only off',
       'serial on', 'new off', 'override 95% 2h', 'override off', 'resume 60', 'resume 60 61 "a note"',
-      'retry 5', 'update', 'update off', 'update base image', 'drop 9', 'note 5 keep it small', 'note be brief', 'mode act',
+      'retry 5', 'update', 'update off', 'update base image', 'drop 9', 'note 5 keep it small', 'note be brief', 'note 5 off', 'note off', 'mode act',
     ]
     for (const text of texts) expect(op(formatOp(op(text)))).toEqual(op(text))
     expect(formatOp(op('override 95% 2h'))).toBe('override 95 2')
@@ -339,13 +342,40 @@ describe('applyOp', () => {
     expect(applyOp(BUSY, op('update off'), NOW)).toMatchObject({ changed: false, text: 'No update is due.' })
   })
 
-  test('note appends { issue, text, at } for one issue or all', () => {
+  test('a note replaces the earlier notes of its scope and leaves the other scopes; off clears the scope', () => {
     const one = applyOp(BUSY, op('note 5 keep the change small'), NOW)
     expect(one.control.notes).toEqual([{ issue: 5, text: 'keep the change small', at: NOW }])
     expect(one.text).toBe('Note added for #5: its next agent prompts carry it.')
+
     const all = applyOp(one.control, op('note no new dependencies'), NOW + 1)
     expect(all.control.notes).toEqual([...one.control.notes, { issue: null, text: 'no new dependencies', at: NOW + 1 }])
-    expect(all.text).toBe('Note added for every issue: the next agent prompts carry it.')
+    const other = applyOp(all.control, op('note 6 other'), NOW + 2).control
+
+    const again = applyOp(other, op('note 5 review normally'), NOW + 3)
+    expect(again.control.notes.filter(n => n.issue === 5)).toEqual([{ issue: 5, text: 'review normally', at: NOW + 3 }])
+    expect(again.control.notes).toHaveLength(3)
+    expect(again.control.notes).toContainEqual({ issue: null, text: 'no new dependencies', at: NOW + 1 })
+    expect(again.control.notes).toContainEqual({ issue: 6, text: 'other', at: NOW + 2 })
+    expect(again.text).toBe('Note for #5 replaced: its next agent prompts carry the new one.')
+
+    const fleet = applyOp(again.control, op('note be brief'), NOW + 4)
+    expect(fleet.control.notes.filter(n => n.issue === null)).toEqual([{ issue: null, text: 'be brief', at: NOW + 4 }])
+    expect(fleet.control.notes.filter(n => n.issue !== null)).toHaveLength(2)
+    expect(fleet.text).toBe('Note for every issue replaced: the next agent prompts carry the new one.')
+
+    const cleared = applyOp(fleet.control, op('note 5 off'), NOW + 5)
+    expect(cleared.changed).toBe(true)
+    expect(cleared.control.notes.some(n => n.issue === 5)).toBe(false)
+    expect(cleared.control.notes).toHaveLength(2)
+    expect(cleared.text).toBe('Notes for #5 cleared: its next agent prompts carry none.')
+
+    const none = applyOp(cleared.control, op('note 5 off'), NOW + 6)
+    expect(none.changed).toBe(false)
+    expect(none.text).toBe('No note for #5.')
+    const noFleet = applyOp(cleared.control, op('note off'), NOW + 7)
+    expect(noFleet.changed).toBe(true)
+    expect(noFleet.control.notes).toEqual([{ issue: 6, text: 'other', at: NOW + 2 }])
+    expect(applyOp(noFleet.control, op('note off'), NOW + 8).changed).toBe(false)
   })
 
   test('mode changes no control: the effect is the mode to write', () => {
