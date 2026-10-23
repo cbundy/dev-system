@@ -17,7 +17,8 @@
 // 3. Only this device's claims: another device's claims and labels are never looked at
 //    (totality/T-02).
 // 4. The main-checkout tripwire (10.7): a change to the main checkout since the checkout the
-//    tripwire last settled on (new tracked changes, or a moved HEAD) tells the owner once, with the
+//    tripwire last settled on (new tracked changes, or a moved HEAD that is not a fast-forward along
+//    origin's default branch: on it, upstream origin/<default>, 0 ahead) tells the owner once, with the
 //    paths and the steps that ran in that window. It is level-triggered: the change stays pending,
 //    and its tell planned on every pass R1 runs, until the tell is done (checkoutBaseOf), so a pass
 //    that drops it (one wake at a time, a rate cap, a store-blind pass) loses nothing. No step's
@@ -268,17 +269,24 @@ export type CheckoutRead = Exclude<Checkout, { error: string }>
 
 // The checkout the tripwire last settled on (V2State.checkoutBase): the newest read with no change
 // pending against the one before, or whose change the owner has been told of; at: when it was read.
-export type CheckoutBase = { checkout: CheckoutRead; at: Ms }
+// settled: set only on the pass the base moved past a HEAD move that did not count (onOrigin).
+export type CheckoutBase = { checkout: CheckoutRead; at: Ms; settled?: { from: string | null; to: string | null; behind: number } }
 
 // A change to the main checkout between two reads: where HEAD is now, whether it moved (or changed
 // branch), and the tracked paths changed now that were not before.
 export type CheckoutChange = { head: string | null; branch: string | null; moved: { from: string | null; to: string | null } | null; paths: string[] }
 
+// onOrigin: the read is on origin's history: the default branch, tracking origin/<default>, 0 commits
+// ahead (behind is allowed: another worktree's fetch can move origin/main after the pull).
+function onOrigin(read: CheckoutRead): boolean {
+  return read.branch === read.defaultBranch && read.upstream === `origin/${read.defaultBranch}` && read.ahead === 0
+}
+
 // checkoutChange: the change from one read to another; null when there is none, or when either
 // read is missing or failed.
 export function checkoutChange(before: Checkout | null, now: Checkout | null): CheckoutChange | null {
   if (before === null || now === null || 'error' in before || 'error' in now) return null
-  const moved = before.head !== now.head || before.branch !== now.branch
+  const moved = (before.head !== now.head || before.branch !== now.branch) && !onOrigin(now)
   const paths = now.dirty.filter(p => !before.dirty.includes(p)).sort()
   if (!moved && paths.length === 0) return null
   return { head: now.head, branch: now.branch, moved: moved ? { from: before.head, to: now.head } : null, paths }
@@ -305,8 +313,11 @@ export function checkoutBaseOf(base: CheckoutBase | null, now: Checkout | null, 
   const told = ledger.some(e => e.key === tripwireKey(now) && e.status === 'done')
   if (told) return { checkout: now, at }
   if (base === null) return { checkout: { ...now, dirty: [] }, at }
-  if (checkoutChange(base.checkout, now) === null) return { checkout: now, at }
-  return base
+  if (checkoutChange(base.checkout, now) === null) {
+    const hopped = base.checkout.head !== now.head || base.checkout.branch !== now.branch
+    return hopped ? { checkout: now, at, settled: { from: base.checkout.head, to: now.head, behind: now.behind ?? 0 } } : { checkout: now, at }
+  }
+  return base.settled === undefined ? base : { checkout: base.checkout, at: base.at }
 }
 
 // tripwire: tell(checkout) for a change against the base until it is told, with its paths and the
@@ -316,6 +327,10 @@ function tripwire(ctx: V2Ctx): void {
   const now = ctx.state.checkout
   const base = ctx.v2.checkoutBase
   if (base === null || now === null || 'error' in now) return
+  if (base.settled !== undefined) {
+    const { from, to, behind } = base.settled
+    skip(ctx, 'R1', null, `checkout: HEAD ${short(from ?? 'none')} -> ${short(to ?? 'none')} is on origin/${now.defaultBranch} (0 ahead, ${behind} behind); not told`)
+  }
   const change = checkoutChange(base.checkout, now)
   const key = tripwireKey(now)
   if (change === null || ctx.byKey.get(key)?.status === 'done') return

@@ -30,7 +30,7 @@ export const OTHER = 'coder-plant-console-orchestrator'
 export const PLUGIN_ROOT = '/plugins/factory-loop'
 
 // the main checkout on its default branch with nothing changed: where agents may start (#544)
-export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [] }
+export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [], upstream: 'origin/main', ahead: 0, behind: 0 }
 
 const SOURCES: SourceName[] = ['factory', 'facts', 'runs', 'queue', 'github', 'usage', 'pool', 'milestone']
 

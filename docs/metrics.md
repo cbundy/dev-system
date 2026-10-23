@@ -2009,6 +2009,21 @@ GROUP BY s.repo, s.key, s.started_at, s.resumed_at, s.reason
 ORDER BY s.started_at DESC;
 ```
 
+### Main-checkout tripwire notices
+
+(#829) How often the loop told the owner that the main checkout
+changed (a commit ahead of origin, a branch switch, a detached HEAD or new tracked changes; a plain
+fast-forward to origin is not told). A return of false notices, for example after each hourly
+upgrade, shows here.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, count(*) AS notices
+FROM factory.event_log
+WHERE type = 'intervention' AND cause = 'tripwire'
+GROUP BY repo, week
+ORDER BY repo, week DESC;
+```
+
 ## 9b. Permission prompts
 
 Reads the `prompt_denied` and `prompt_waiting` events (`prompt_denied.v1.json`, `prompt_waiting.v1.json`):

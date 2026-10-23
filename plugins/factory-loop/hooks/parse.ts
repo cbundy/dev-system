@@ -381,22 +381,33 @@ function changedPath(line: string): string | null | undefined {
 // parseCheckout: origin's default branch, from `git symbolic-ref --short refs/remotes/origin/HEAD`
 // (`origin/main`), and the checkout's branch, commit and changed tracked paths, from `git status
 // --porcelain=v2 --branch --untracked-files=no` (`# branch.head (detached)` when detached, then
-// one line per changed path; untracked files are allowed); null when either does not read.
+// one line per changed path; untracked files are allowed), and the upstream (`# branch.upstream`) and
+// ahead and behind counts (`# branch.ab +A -B`), null when absent; null when either does not read.
 export function parseCheckout(originHead: string, status: string): Checkout | null {
   const defaultBranch = originHead.trim().match(/^origin\/(\S+)$/)?.[1]
   if (defaultBranch === undefined) return null
   let branch: string | null | undefined
   let head: string | null = null
+  let upstream: string | null = null
+  let ahead: number | null = null
+  let behind: number | null = null
   const dirty: string[] = []
   for (const line of status.split('\n')) {
     const header = line.match(/^# branch\.(oid|head) (.+)$/)
     if (header?.[1] === 'head') branch = header[2] === '(detached)' ? null : (header[2] ?? null)
     else if (header?.[1] === 'oid') head = header[2] === '(initial)' ? null : (header[2] ?? null)
+    const up = line.match(/^# branch\.upstream (\S+)$/)
+    if (up !== null) upstream = up[1] ?? null
+    const ab = line.match(/^# branch\.ab \+(\d+) -(\d+)$/)
+    if (ab !== null) {
+      ahead = Number(ab[1])
+      behind = Number(ab[2])
+    }
     const path = changedPath(line)
     if (path === undefined) return null
     if (path !== null) dirty.push(path)
   }
-  return branch === undefined ? null : { branch, head, defaultBranch, dirty }
+  return branch === undefined ? null : { branch, head, defaultBranch, dirty, upstream, ahead, behind }
 }
 
 // --- callum-flow-milestone show next -----------------------------------------------------------
