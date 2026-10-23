@@ -60,6 +60,13 @@ merged pull request. The Claude app is there for when you want to talk to it.
 
 ## How it works
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/pipeline-dark.svg">
+    <img alt="The line: an issue moves from queued through design, build, review and the merge queue to merged; review sends changes to fix and back, and a stuck issue is parked with a question for you, then requeued when you answer" src="docs/images/pipeline-light.svg" width="744">
+  </picture>
+</p>
+
 - **Agents do the craft.** Designer, builder, reviewer and fixer each work in their own git
   worktree, and can't finish until the repo's lint and tests pass.
 - **Surprises dealt with quickly.** A retry, then a triage agent with a fixed menu, then a
