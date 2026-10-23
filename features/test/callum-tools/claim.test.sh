@@ -44,6 +44,8 @@ OWNER='{"login":"cbundy","id":13131067}'
 author_of() { if [ -f "$d/$1-$2" ]; then cat "$d/$1-$2"; else echo "$OWNER"; fi; }
 case "$1 $2" in
   'repo view')
+    # as real gh: repo view takes the repo as an argument and has no --repo/-R flag
+    case " $* " in *' --repo '*|*' -R '*) echo 'unknown flag: --repo' >&2; exit 1 ;; esac
     case "$*" in *defaultBranchRef*) echo main ;; *) echo o/r ;; esac ;;
   'pr list')
     # the merged PRs of the default branch (rule 7): pr-list.json, [] by default; the args are recorded
