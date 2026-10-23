@@ -1688,19 +1688,6 @@ GROUP BY s.repo, s.issue, s.merged_at
 ORDER BY s.merged_at DESC;
 ```
 
-**Main-checkout tripwire notices** (#829): how often the loop told the owner that the main checkout
-changed (a commit ahead of origin, a branch switch, a detached HEAD or new tracked changes; a plain
-fast-forward to origin is not told). A return of false notices, for example after each hourly
-upgrade, shows here.
-
-```sql
-SELECT repo, date_trunc('week', ts)::date AS week, count(*) AS notices
-FROM factory.event_log
-WHERE type = 'intervention' AND cause = 'tripwire'
-GROUP BY repo, week
-ORDER BY repo, week DESC;
-```
-
 **Judgement calls** (#632 metric 2): the decisions a model made, by kind and outcome: each review
 (`reviewed`, by `verdict`; one per `(issue, round, patch)`), each triage call (an `intervention` with
 cause `triage`, by the choice the next triage row of the loop's table applied: `X1` retry, `X2` fix,
@@ -2020,6 +2007,21 @@ LEFT JOIN factory.event_log i
  AND i.ts >= s.started_at - interval '10 minutes' AND (s.resumed_at IS NULL OR i.ts <= s.resumed_at)
 GROUP BY s.repo, s.key, s.started_at, s.resumed_at, s.reason
 ORDER BY s.started_at DESC;
+```
+
+### Main-checkout tripwire notices
+
+(#829) How often the loop told the owner that the main checkout
+changed (a commit ahead of origin, a branch switch, a detached HEAD or new tracked changes; a plain
+fast-forward to origin is not told). A return of false notices, for example after each hourly
+upgrade, shows here.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, count(*) AS notices
+FROM factory.event_log
+WHERE type = 'intervention' AND cause = 'tripwire'
+GROUP BY repo, week
+ORDER BY repo, week DESC;
 ```
 
 ## 9b. Permission prompts
