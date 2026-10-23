@@ -2194,7 +2194,7 @@ both URLs (see [`dev-doctor`](#dev-doctor)).
 | Role | Login | Grants |
 |---|---|---|
 | `NAME_owner` | no | owns the database, the `factory` schema and every object the migrations create; only the bootstrap uses it, through `SET ROLE` |
-| `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
+| `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` and `public_repos` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
 | `NAME_reader` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT` on every table and view |
 | `NAME_migrator` | yes | `CONNECT` and membership of `NAME_owner` with `SET` but not `INHERIT`; no grant on any factory object. Only `--migrate` uses it |
 | `NAME_panel` | yes | `CONNECT`, `USAGE` on `factory_public` and `SELECT` on its five views (`event_store`, `event_log`, `workers`, `workers_status`, `worker_samples`), which show only the repos in `factory.public_repos`; nothing on `factory` or `public`; read-only, 5 s statements, 10 sessions. A migration that adds a column to one of those five also adds it to the matching `factory_public` view. Written by `--panel-dir`; see [The panel role](../../docs/factory-db.md#the-panel-role) |
@@ -2209,13 +2209,13 @@ settings are put back. `--panel-dir DIR` writes `factory-db-panel-url` (always `
 `--public-repo add|remove OWNER/NAME` edits the panel's allowlist.
 
 **Passwords and files.** A login role gets a new password in a run when its `FACTORY_DB_WRITER_PASSWORD`,
-`FACTORY_DB_READER_PASSWORD` or `FACTORY_DB_MIGRATOR_PASSWORD` is set (the explicit value wins), or when its
-directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator) and the
+`FACTORY_DB_READER_PASSWORD`, `FACTORY_DB_MIGRATOR_PASSWORD` or `FACTORY_DB_PANEL_PASSWORD` is set (the explicit value wins), or when its
+directory was given (`--secrets-dir` for the writer and reader, `--migrator-dir` for the migrator, `--panel-dir` for the panel) and the
 role was created in this run, its URL file is missing there, or the admin is a superuser and the role has no
 password. A generated password is 32 random bytes from `/dev/urandom` in hex. Passwords reach psql only
 through psql variables, and without a directory none is generated. For each role whose password changed and
 whose directory was given, the command writes `factory-db-writer-url` / `factory-db-reader-url` /
-`factory-db-migrator-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
+`factory-db-migrator-url` / `factory-db-panel-url` atomically, mode 0600, owned by `FACTORY_DB_SECRET_OWNER` (default `1000:1000`),
 with the admin URL's host, port and ssl settings. It checks before connecting that it can write there (run
 it with `docker run --user root --entrypoint factory-db-bootstrap` to give files to another UID), touches no
 other file, and a run that changes nothing rewrites nothing. The summary line lists the roles created, the
