@@ -1348,10 +1348,10 @@ ORDER BY seq_at DESC;
 Group by `foreign` and `ended_via` for how waits end (`foreign` is true when a condition names another repo, so waits on another repo's release or issue compare with those on the loop's own), and count the rows with a null `ended_at` older than a day for
 waits that look stuck.
 
-How often a release wait triggers a review within the hour (the O3 key carries the waiting set the review saw, the reason names the new issues):
+How often, and for how long, a running release review held O3, and which waits joined it instead of starting a new task:
 
 ```sh
-jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.rule == "O3" and (.reason | test("started waiting"))) | {at: $d.at, key, reason}] | .[] | "\(.at) \(.key) \(.reason)"' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -rs '[.[] | . as $d | ($d.skipped // [])[] | select(.rule == "O3" and (.why | startswith("release review running"))) | {at: $d.at, why}] | .[] | "\(.at) \(.why)"' /persist/claude/factory-loop/*/decisions-*.jsonl
 ```
 
 How often, and for how long, a started release quiets the review (first and last pass held, passes held, the entry):
