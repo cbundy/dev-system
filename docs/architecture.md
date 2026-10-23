@@ -59,9 +59,11 @@ scripts/test-reporter.js          node:test reporter: failing test, file:line an
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 scripts/release-bump.js           sets the release version everywhere and refreshes the stamp
 scripts/release-notes.js          validates release-notes/vX.Y.Z.md and builds the release body
+scripts/claude-code-canary-issue.sh  raises one bug issue per Claude Code version the canary fails on
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
-                                  publish-dev-image.yml, publish-features.yml, test-features.yml
+                                  publish-dev-image.yml, publish-features.yml, test-features.yml,
+                                  claude-code-canary.yml (daily; not a required check)
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs
 ```
@@ -75,7 +77,8 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 forms a shell job, and each mod's validation and tests form a job. See
 [mod testing](../plugins/factory-hud/README.md#develop-it) for Claude Code requirements.
 CI's Claude Code release is pinned in `.github/claude-code-version`; how to bump it is in the comment
-above the install step in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+above the install step in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). A daily canary
+(`claude-code-canary.yml`) tests the newest release and raises a bug when the mods fail on it.
 `scripts/test-pool.sh` runs these jobs through `scripts/test-job.sh` with at most
 `TEST_JOBS` active jobs. For example, `TEST_JOBS=2 npm test` limits the pool to two;
 this does not limit Node's internal test concurrency. The default is the container-aware

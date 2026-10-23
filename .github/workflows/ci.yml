@@ -125,7 +125,7 @@ jobs:
       # needs no login for that. The release is pinned on purpose, in
       # .github/claude-code-version, so a new CLI release cannot turn every pull request
       # red. Bump it by hand in that file, in its own PR, after `npm test` passes on the new
-      # release; the daily canary (dev-system#1227) is what tests the newest release.
+      # release; the daily canary (claude-code-canary.yml, dev-system#1227) is what tests the newest release.
       # TEST_REQUIRE_CLAUDE=1 makes a missing claude fail instead of skipping.
       - name: Read the pinned Claude Code version
         id: cc
