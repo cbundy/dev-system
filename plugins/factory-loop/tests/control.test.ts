@@ -7,11 +7,14 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { PassSummary } from '../types'
 import type { ConfigView } from '../hooks/config-view'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
+import { configHelpText } from '../hooks/config-help'
 import { effectText } from '../hooks/config-keys'
 import { sourceOf } from '../hooks/config-view'
 import {
+  CONFIG_VERBS,
   CONTROL_TOOL,
   FACTORY_COMMAND,
+  HELP_TOPICS,
   MEANING,
   OPS,
   USAGE,
@@ -190,9 +193,44 @@ describe('parseOp', () => {
     expect(rows).toHaveLength(OPS.length + 1)
     for (const name of OPS) expect(rows.some(r => r.startsWith(`  ${USAGE[name]} `) && r.endsWith(MEANING[name]))).toBe(true)
     // every meaning starts in the same column
-    const meanings = [...OPS.map(name => MEANING[name]), 'this list']
+    const helpRow = rows[rows.length - 1] as string
+    expect(helpRow.startsWith('  help [config] ')).toBe(true)
+    expect(helpRow).toContain('help config lists every setting')
+    for (const topic of HELP_TOPICS) expect(helpRow).toContain(topic)
+    const meanings = [...OPS.map(name => MEANING[name]), helpRow.slice(helpRow.indexOf('this list'))]
     expect(new Set(rows.map((r, i) => r.indexOf(meanings[i] ?? ''))).size).toBe(1)
     expect(helpText()).not.toContain('\u2014')
+  })
+
+  test('USAGE and MEANING hold exactly the ops; the help, the tool and the config usage name what parseOp takes', () => {
+    expect(Object.keys(USAGE).sort()).toEqual([...OPS].sort())
+    expect(Object.keys(MEANING).sort()).toEqual([...OPS].sort())
+    for (const name of OPS) {
+      expect(helpText()).toContain(USAGE[name])
+      expect(CONTROL_TOOL.description).toContain(USAGE[name])
+    }
+    for (const verb of CONFIG_VERBS) expect(USAGE.config).toContain(verb)
+    expect(CONTROL_TOOL.description).toContain('help [config]')
+    expect(CONTROL_TOOL.description).not.toContain('\u2014')
+  })
+
+  test('help config parses, round-trips and answers the settings list, writing and logging nothing, for the owner and an agent', async () => {
+    expect(parseOp('help config')).toEqual({ ok: true, op: { op: 'help', topic: 'config' } })
+    expect(parseOp('/factory HELP Config')).toEqual({ ok: true, op: { op: 'help', topic: 'config' } })
+    expect(parseOp('--help config')).toEqual(parseOp('help config'))
+    expect(formatOp({ op: 'help', topic: 'config' })).toBe('help config')
+    expect(formatOp({ op: 'help' })).toBe('help')
+    for (const input of ['help foo', 'help config now', 'help set', '-h x y']) {
+      expect(parseOp(input)).toEqual({ ok: false, error: 'Usage: help [config]' })
+    }
+    const { io, writes } = files({})
+    for (const from of [{}, { agentId: 'a1' }]) {
+      expect(await runOp(io, PATHS, 'help config', NOW, from)).toEqual({
+        ok: true, text: configHelpText(), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null,
+      })
+    }
+    expect(await runOp(io, PATHS, 'help foo', NOW)).toMatchObject({ ok: false })
+    expect(writes).toEqual([])
   })
 
   test('an unknown op lists the ops; help lists them too', () => {
@@ -555,7 +593,7 @@ describe('the command and the tool', () => {
 
   test('the specs: /factory runs at once, and the tool lists every op', () => {
     expect(FACTORY_COMMAND).toMatchObject({ name: 'factory', argumentHint: hintText(), immediate: true })
-    expect(FACTORY_COMMAND.description.endsWith('see /factory help')).toBe(true)
+    expect(FACTORY_COMMAND.description.endsWith('see /factory help, and /factory help config for every setting')).toBe(true)
     expect(CONTROL_TOOL.name).toBe('control')
     expect(CONTROL_TOOL.inputSchema).toEqual({
       type: 'object',

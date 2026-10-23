@@ -448,7 +448,7 @@ describe('person interventions', () => {
     // a landed `config set|unset` is the settings file changed through the loop
     const cfg = opInterventions({ text: 'config set maxInFlightIssues 3', name: 'config', issues: [], at: NOW, by: 'person' })
     expect(cfg.map(e => [e.who, e.cause, e.issue, e.reason])).toEqual([['person', 'config-file', null, 'config set maxInFlightIssues 3']])
-    for (const name of ['status', 'help']) expect(opInterventions({ text: name, name, issues: [], at: NOW, by: 'person' })).toEqual([])
+    for (const [text, name] of [['status', 'status'], ['help', 'help'], ['help config', 'help']]) expect(opInterventions({ text, name, issues: [], at: NOW, by: 'person' })).toEqual([])
     // two ops a millisecond apart are two facts
     expect(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW + 1, by: 'person' })[0]?.fact).not.toBe(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW, by: 'person' })[0]?.fact)
   })

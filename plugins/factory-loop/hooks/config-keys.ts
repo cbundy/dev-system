@@ -103,7 +103,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
 // the pool size runtime() uses when the workspace file sets none
 export const DEFAULT_POOL_SIZE = 16
 
-const OWN_OP: Record<string, string> = {
+export const OWN_OP: Record<string, string> = {
   mode: 'mode off|observe|act',
   trace: 'trace on|off',
 }
