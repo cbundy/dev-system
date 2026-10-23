@@ -101,6 +101,10 @@ guard parse it to decide whether the PR closes the issue. Pick it:
   `run-it`), or it is research or a proposal, or its own Done-when needs a person (then
   `keep-open`). The epic's Run it lives on the child that runs it.
 
+`bin/factory-answer` refuses a `merge` brief while the issue body still has a `## Run it` heading.
+When that heading is stale (its Run it moved elsewhere), ask the owner with a question to rename or
+remove it instead of answering `merge`; you never edit the issue.
+
 `## Observability` makes every new decision measurable without the owner asking for it. A
 decision is any point where an agent or a rule chooses: claim or skip, split, park, retry, wait,
 release or hold, merge or send back. For each one the change adds:
