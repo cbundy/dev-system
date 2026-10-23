@@ -29,7 +29,7 @@ const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes",
 const NUMERICS = new Set(["spend_usd", "budget_usd"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off", "needs_owner"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at", "taken_at"]);
-const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options", "candidates", "rest", "owner_priority", "owner_only", "touches", "dropped", "labels_set", "labels_kept", "file_lines"]);
+const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options", "candidates", "rest", "owner_priority", "owner_only", "touches", "dropped", "labels_set", "labels_kept", "file_lines", "issues", "issues_closed", "headlines"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -112,6 +112,20 @@ test("merged: file_lines lifts as a jsonb array of per-file counts, and reads NU
   }
   assert.equal(db.query("SELECT coalesce(file_lines::text, 'null') FROM factory.event_log WHERE device_seq = 1", "reader"), "null");
   assert.equal(db.query("SELECT jsonb_typeof(file_lines) || ' ' || jsonb_array_length(file_lines) || ' ' || (file_lines -> 0 ->> 'path') || ' ' || (file_lines -> 1 ->> 'deletions') FROM factory.event_log WHERE device_seq = 2", "reader"), "array 2 a.js 2");
+});
+
+test("released: issues, issues_closed and headlines lift as jsonb arrays, and read NULL on every other type", opts, (t) => {
+  const db = createDb(t);
+  const [full] = load("released.v1.json").examples;
+  const merged = { pr: 1, branch: "b", head: "f94eb46", by: "factory", recovered: false };
+  const rows = [["released", full], ["merged", merged]];
+  rows.forEach(([type, data], i) => {
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), now(), '${type}', 1, 'o/r', 'd', 'a', 7, ${i + 1}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  });
+  assert.equal(db.query("SELECT jsonb_typeof(issues) || ' ' || jsonb_array_length(issues) || ' ' || jsonb_typeof(issues_closed) || ' ' || jsonb_array_length(issues_closed) || ' ' || jsonb_typeof(headlines) || ' ' || (headlines ->> 0) FROM factory.event_log WHERE type = 'released'", "reader"),
+    `array ${full.issues.length} array ${full.issues_closed.length} array ${full.headlines[0]}`);
+  assert.equal(db.query("SELECT issues IS NULL AND issues_closed IS NULL AND headlines IS NULL FROM factory.event_log WHERE type = 'merged'", "reader"), "t");
 });
 
 test("usage: the spend columns are null for an old reading and the given values for a spend reading", opts, (t) => {
@@ -214,6 +228,5 @@ test("regime: rows from before the migration read NULL, and a new row's regime r
   insert(after, ", regime", ", 'testbed'");
   assert.equal(db.query(`SELECT regime FROM factory.event_log WHERE event_id = '${after}'`, "reader"), "testbed");
   const cols = db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log' ORDER BY ordinal_position").split("\n");
-  assert.equal(cols[cols.length - 2], "regime", "OR REPLACE appends: regime keeps its place, and 0028's file_lines follows it");
-  assert.equal(cols[cols.length - 1], "file_lines");
+  assert.deepEqual(cols.slice(-5), ["regime", "file_lines", "issues", "issues_closed", "headlines"], "OR REPLACE appends: regime keeps its place, 0028's file_lines and 0029's release columns follow it");
 });

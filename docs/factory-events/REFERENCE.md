@@ -168,9 +168,12 @@ Example:
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `green` | boolean | `main_state` | true when the newest completed run of every workflow concluded success, skipped or neutral. |
 | `head` | string | `finding_handled`, `gate_run`, `intervention`, `main_state`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `headlines` | array of string | `released` | The release notes' headlines, one per entry. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
 | `input_tokens` | integer | `intake_stamp`, `loop_entry` | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
+| `issues` | array of integer | `released` | Every issue those pull requests link, closing or not. |
+| `issues_closed` | array of integer | `released` | The issues those pull requests close. |
 | `key` | string | `loop_entry`, `settings_changed` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
 | `kind` | enum | `loop_entry` | agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step. |
 | `labels` | array of string | `claimed`, `ready` | The issue's label names in GitHub's order, as the producer read them: on ready, the labels of the queue listing; on claimed, the labels after the claim (the ready label the claim removed is left out). Null when they were not read. |
@@ -1125,9 +1128,9 @@ A release tag was cut: the tag, the tag before it, the commit it points at, the 
 | `commit` | string | required | no | pattern `^[0-9a-f]{7,40}$` | yes | The sha the tag points at. |
 | `released_at` | string | required | no | format date-time |  | The tag commit's time, copied as given. |
 | `prs` | array of integer | required | no |  | yes | The pull requests the release carried. |
-| `issues` | array of integer | required | no |  |  | Every issue those pull requests link, closing or not. |
-| `issues_closed` | array of integer | required | no |  |  | The issues those pull requests close. |
-| `headlines` | array of string | required | no | items: maxLength 200 |  | The release notes' headlines, one per entry. |
+| `issues` | array of integer | required | no |  | yes | Every issue those pull requests link, closing or not. |
+| `issues_closed` | array of integer | required | no |  | yes | The issues those pull requests close. |
+| `headlines` | array of string | required | no | items: maxLength 200 | yes | The release notes' headlines, one per entry. |
 | `source` | enum | required | no | one of "loop", "workflow", "manual" |  | Who cut the release: the loop, the release workflow, or a person by hand. |
 
 Example:

@@ -13,9 +13,9 @@
     "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$", "description": "The sha the tag points at.", "x-column": true },
     "released_at": { "type": "string", "format": "date-time", "description": "The tag commit's time, copied as given." },
     "prs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The pull requests the release carried.", "x-column": true },
-    "issues": { "type": "array", "items": { "type": "integer" }, "description": "Every issue those pull requests link, closing or not." },
-    "issues_closed": { "type": "array", "items": { "type": "integer" }, "description": "The issues those pull requests close." },
-    "headlines": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "description": "The release notes' headlines, one per entry." },
+    "issues": { "type": "array", "items": { "type": "integer" }, "description": "Every issue those pull requests link, closing or not.", "x-column": true },
+    "issues_closed": { "type": "array", "items": { "type": "integer" }, "description": "The issues those pull requests close.", "x-column": true },
+    "headlines": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "description": "The release notes' headlines, one per entry.", "x-column": true },
     "source": { "enum": ["loop", "workflow", "manual"], "description": "Who cut the release: the loop, the release workflow, or a person by hand." }
   },
   "examples": [
