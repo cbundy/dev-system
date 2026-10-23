@@ -84,7 +84,7 @@ const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done
 const REGIMES = ['factory_loop_v2', 'testbed', 'manual', 'unknown'];
 const TOP_KEYS = [
   'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
-  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'spend', 'waste',
+  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'size', 'overlap', 'spend', 'waste',
   'pipeline', 'sources',
 ];
 // A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
@@ -102,8 +102,9 @@ class UsageError extends Error {}
 class InputError extends Error {}
 
 const na = (reason) => ({ 'n/a': reason });
-// merges, prs and gaps read the new events' pr, by and recovered fields (docs/metrics.md, 9c).
-const MERGE_SECTIONS = ['merges', 'prs', 'gaps'];
+// merges, prs, gaps, size and overlap read the new events' pr, by, recovered, files, file_lines, additions
+// and deletions fields (docs/metrics.md, 9c).
+const MERGE_SECTIONS = ['merges', 'prs', 'gaps', 'size', 'overlap'];
 const MERGE_OLD_NA = "needs the new events' pr, by and recovered fields";
 
 // ---------------------------------------------------------------- arguments
@@ -166,6 +167,12 @@ function median(xs) {
   const s = [...xs].sort((a, b) => a - b);
   const m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+// nearest rank (docs/metrics.md): the smallest value with at least 90% of the values at or below it
+function p90(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.ceil(0.9 * s.length) - 1];
 }
 const pct = (num, den) => (den ? Math.round((1000 * num) / den) / 10 : null);
 
@@ -1031,6 +1038,12 @@ function computeV2Metrics(evs, win, merged) {
 const PR_TYPES = new Set(['transition', 'reviewed', 'intervention', 'merged']);
 const HEAD_MOVE_CAUSES = new Set(['queue:patch', 'push']);
 const GAPS_SHOWN = 10;
+const HOTTEST_SHOWN = 10;
+// The one code-file rule of docs/metrics.md 9c: a path matching it is not a code file (a document, a
+// changelog or version file, a release note, a package manifest or lockfile). Only syntax that JS
+// RegExp and PostgreSQL `~` read alike; every 9c size query embeds this same literal.
+const NON_CODE_RE = /(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)/;
+const isCode = (p) => !NON_CODE_RE.test(p);
 
 function computeMergeMetrics(evs, win) {
   const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
@@ -1065,15 +1078,23 @@ function computeMergeMetrics(evs, win) {
   for (const s of signals) {
     const pr = prOf(s);
     const k = `${s.issue}|${pr}`;
-    const g = groups.get(k) || { issue: s.issue, pr, t: s.t, hand: false, recovered: null };
+    const g = groups.get(k) || { issue: s.issue, pr, t: s.t, hand: false, recovered: null, size: null };
     g.t = Math.min(g.t, s.t);
+    // the merge's size: that of its earliest merged event with files (a tie by the files' text)
+    if (s.merged && Array.isArray(s.files)) {
+      const fk = JSON.stringify(s.files);
+      if (g.size === null || s.t < g.size.t || (s.t === g.size.t && fk < g.size.key)) {
+        g.size = { t: s.t, key: fk, files: s.files, file_lines: Array.isArray(s.file_lines) ? s.file_lines : null, additions: s.additions ?? null, deletions: s.deletions ?? null };
+      }
+    }
     g.hand = g.hand || s.hand;
     if (s.merged && s.f.recovered !== undefined && s.f.recovered !== null) g.recovered = g.recovered === true || s.f.recovered === 'true';
     groups.set(k, g);
   }
   const prCmp = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
   const mine = [...groups.values()].filter((g) => inWin(g.t, win)).sort((a, b) => a.t - b.t || a.issue - b.issue || prCmp(a.pr, b.pr));
-  if (!mine.length) return { merges: na('0 merges in the window'), prs: na('0 merges in the window'), gaps: na('fewer than 2 merges in the window') };
+  const sizes = computeSizeOverlap([...groups.values()], mine, claimed);
+  if (!mine.length) return { merges: na('0 merges in the window'), prs: na('0 merges in the window'), gaps: na('fewer than 2 merges in the window'), ...sizes };
   const byOf = (g) => (g.hand ? 'hand' : 'factory');
   const triState = (v) => (v === null ? 2 : v ? 1 : 0);
 
@@ -1094,6 +1115,7 @@ function computeMergeMetrics(evs, win) {
     by: [...counts.values()].sort(order).map((r) => ({ by: r.by, recovered: r.recovered, count: r.merges })),
     per_day: [...days.values()].sort(order).map((r) => ({ day: r.day, by: r.by, recovered: r.recovered, merges: r.merges })),
     issues: mine.map((g) => ({ issue: g.issue, pr: g.pr, merged_at: iso(g.t), by: byOf(g), recovered: g.recovered })),
+    per_day_by_kind: perDayByKind(evs, mine, claimed, byOf, win),
   };
 
   const rows = mine.map((g) => {
@@ -1119,7 +1141,7 @@ function computeMergeMetrics(evs, win) {
     issues: rows,
   };
 
-  if (mine.length < 2) return { merges, prs, gaps: na('fewer than 2 merges in the window') };
+  if (mine.length < 2) return { merges, prs, gaps: na('fewer than 2 merges in the window'), ...sizes };
   // state intervals of each issue from its transitions: [seq_at, the next one's); the last has no end
   const states = new Map();
   for (const e of named.filter((x) => x.state === 'transition').sort((a, b) => a.t - b.t || Number(a.f.seq) - Number(b.f.seq) || cmpStr(a.f.life || '', b.f.life || ''))) {
@@ -1151,7 +1173,102 @@ function computeMergeMetrics(evs, win) {
       };
     }),
   };
-  return { merges, prs, gaps };
+  return { merges, prs, gaps, ...sizes };
+}
+
+// All merges to main per day and kind (docs/metrics.md 9c): `unlinked` is a merged event with no issue
+// (one per pr, a retried event counted once) or a merge whose issue has no claimed event at or before
+// it; `hand` any other hand merge; `factory` the rest. Summed over kind, the merges with an issue are
+// those of `per_day`.
+function perDayByKind(evs, mine, claimed, byOf, win) {
+  const rows = new Map();
+  const bump = (d, kind) => {
+    const k = `${d}|${kind}`;
+    const r = rows.get(k) || { day: d, kind, merges: 0 };
+    r.merges++;
+    rows.set(k, r);
+  };
+  for (const g of mine) bump(day(g.t), claimed.has(g.issue) && claimed.get(g.issue) <= g.t ? byOf(g) : 'unlinked');
+  const loose = new Map();
+  for (const e of evs) {
+    if (e.state !== 'merged' || (e.issue !== null && e.issue !== undefined)) continue;
+    const k = e.pr !== null && e.pr !== undefined ? `pr|${e.pr}` : `ev|${e.event_id || loose.size}`;
+    loose.set(k, Math.min(loose.has(k) ? loose.get(k) : Infinity, e.t));
+  }
+  for (const t of loose.values()) if (inWin(t, win)) bump(day(t), 'unlinked');
+  return [...rows.values()].sort((a, b) => cmpStr(a.day, b.day) || cmpStr(a.kind, b.kind));
+}
+
+// The size and overlap of the merges in the window (docs/metrics.md 9c): from each merge's earliest
+// merged event with files. all: every merge of the input (a window of another issue's merge may lie
+// outside the report's); mine: those in the window; claimed: the first claim of each issue.
+function computeSizeOverlap(all, mine, claimed) {
+  const noFiles = "no merge in the window has files (recorded from #752's release on)";
+  const codeOf = (g) => g.size.files.filter(isCode);
+  const rows = mine.map((g) => {
+    const z = g.size;
+    if (z === null) return { issue: g.issue, pr: g.pr, files: null, lines: null, code_files: null, code_lines: null };
+    const lines = z.file_lines === null ? null
+      : z.file_lines.filter((x) => x && isCode(x.path)).reduce((a, x) => a + x.additions + x.deletions, 0);
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      files: z.files.length,
+      lines: z.additions !== null && z.deletions !== null ? z.additions + z.deletions : null,
+      code_files: codeOf(g).length,
+      code_lines: lines,
+    };
+  });
+  const known = rows.filter((r) => r.files !== null);
+  if (!known.length) {
+    return { size: na(mine.length ? noFiles : '0 merges in the window'), overlap: na(mine.length ? noFiles : '0 merges in the window') };
+  }
+  const stats = (k) => {
+    const xs = known.map((r) => r[k]).filter((x) => x !== null);
+    return { median: median(xs), p90: p90(xs) };
+  };
+  const withLines = known.filter((r) => r.code_lines !== null).length;
+  const size = {
+    merges: mine.length,
+    known: known.length,
+    code_lines_known: withLines,
+    files: stats('files'),
+    lines: stats('lines'),
+    code_files: stats('code_files'),
+    code_lines: withLines ? stats('code_lines') : na('no known merge has file_lines'),
+    issues: rows,
+  };
+
+  const from = (g) => Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+  const meets = (a, b) => (from(a) < b.t && from(b) < a.t) || (from(a) === a.t && from(b) === b.t && a.t === b.t);
+  const others = all.filter((g) => g.size !== null);
+  const per = [];
+  const hot = new Map();
+  for (const g of mine.filter((m) => m.size !== null)) {
+    const mineCode = new Set(codeOf(g));
+    const hit = new Set();
+    for (const o of others) {
+      if (o.issue === g.issue || !meets(g, o)) continue;
+      const shared = codeOf(o).filter((f) => mineCode.has(f));
+      if (!shared.length) continue;
+      hit.add(o.issue);
+      for (const f of shared) {
+        if (!hot.has(f)) hot.set(f, new Set());
+        hot.get(f).add(g.issue);
+      }
+    }
+    per.push({ issue: g.issue, pr: g.pr, overlapping: hit.size > 0, overlaps: [...hit].sort((a, b) => a - b) });
+  }
+  const overlapping = per.filter((r) => r.overlapping).length;
+  const overlap = {
+    merges: per.length,
+    overlapping,
+    share: Math.round((1000 * overlapping) / per.length) / 1000,
+    issues: per,
+    hottest_files: [...hot].map(([path, set]) => ({ path, issues: set.size }))
+      .sort((a, b) => b.issues - a.issues || cmpStr(a.path, b.path)).slice(0, HOTTEST_SHOWN),
+  };
+  return { size, overlap };
 }
 
 // ---------------------------------------------------------------- waste
@@ -1742,6 +1859,8 @@ function evaluate(opts, env = process.env) {
     merges: em ? em.merges : evNa,
     prs: em ? em.prs : evNa,
     gaps: em ? em.gaps : evNa,
+    size: em ? em.size : evNa,
+    overlap: em ? em.overlap : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
       rows: computeSpend(parsed, pl.invocations, opts.regime === undefined ? null : opts.regime),
       ...(opts.regime === undefined ? { by_regime: computeSpendByRegime(parsed, pl.invocations, spendRegimes(parsed, repoEvents, win, pl.invocations)) } : {}),
@@ -1857,7 +1976,8 @@ function toMarkdown(r) {
     kv({ merges: m.total }) + '\n' +
     table(['by', 'recovered', 'merges'], m.by.map((x) => [x.by, x.recovered, x.count])) + '\n' +
     table(['day', 'by', 'recovered', 'merges'], m.per_day.map((d) => [d.day, d.by, d.recovered, d.merges])) + '\n' +
-    table(['issue', 'pr', 'merged_at', 'by', 'recovered'], m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered]))));
+    table(['issue', 'pr', 'merged_at', 'by', 'recovered'], m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered])) + '\n' +
+    'By kind (unlinked: no issue, or no claim at or before the merge):\n\n' + table(['day', 'kind', 'merges'], m.per_day_by_kind.map((d) => [d.day, d.kind, d.merges]))));
   sec('prs', guard(r.prs, (p) =>
     kv({
       merges: p.merges, 'pr_open_to_merge_seconds.median': p.pr_open_to_merge_seconds.median, 'pr_open_to_merge_seconds.max': p.pr_open_to_merge_seconds.max,
@@ -1871,6 +1991,14 @@ function toMarkdown(r) {
     table(['from', 'to', 'gap_seconds', 'after merge of', 'before merge of', 'in flight (issue:state, ? = parked with a question)'],
       g.gaps.map((x) => [x.from, x.to, x.gap_seconds, `#${x.before.issue}`, `#${x.after.issue}`,
         x.in_flight.map((i) => `#${i.issue}:${i.state}${i.parked_with_question ? '?' : ''}`).join(' ') || 'none']))));
+  sec('size', guard(r.size, (z) =>
+    kv({ merges: z.merges, known: z.known, code_lines_known: z.code_lines_known }) + '\n' +
+    table(['metric', 'median', 'p90'], ['files', 'lines', 'code_files', 'code_lines'].map((k) => (z[k]['n/a'] ? [k, 'n/a', z[k]['n/a']] : [k, z[k].median, z[k].p90]))) + '\n' +
+    table(['issue', 'pr', 'files', 'lines', 'code_files', 'code_lines'], z.issues.map((i) => [i.issue, i.pr, i.files, i.lines, i.code_files, i.code_lines]))));
+  sec('overlap', guard(r.overlap, (o) =>
+    kv({ merges: o.merges, overlapping: o.overlapping, share: o.share }) + '\n' +
+    table(['issue', 'pr', 'overlapping', 'overlaps'], o.issues.map((i) => [i.issue, i.pr, i.overlapping, i.overlaps.map((x) => `#${x}`).join(' ') || 'none'])) + '\n' +
+    'Hottest files:\n\n' + table(['path', 'issues'], o.hottest_files.map((f) => [f.path, f.issues]))));
   sec('spend', guard(r.spend, (s) =>
     table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
@@ -1956,7 +2084,7 @@ async function main(argv, env = process.env) {
 
 module.exports = {
   TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend, computeSpendByRegime, attributeTurns,
-  modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
+  modelMismatches, evaluate, toMarkdown, MERGE_SECTIONS, NON_CODE_RE, computeMergeMetrics, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
 };
 
 if (require.main === module) {
