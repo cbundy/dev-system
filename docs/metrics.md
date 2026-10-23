@@ -2890,11 +2890,16 @@ attached to its GitHub Release), and rule
 O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
 11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
 
-Releases per week and the pull requests each carried:
+Releases per week and the pull requests each carried. A `released` row also has the view columns
+`issues`, `issues_closed` and `headlines` (jsonb arrays, migration 0029); the query counts them and
+shows the first headline:
 
 ```sql
 SELECT date_trunc('week', ts)::date AS week, repo, tag, previous_tag,
-  jsonb_array_length(prs) AS pr_count, prs
+  jsonb_array_length(prs) AS pr_count, prs,
+  jsonb_array_length(issues) AS issue_count,
+  jsonb_array_length(issues_closed) AS issues_closed_count,
+  headlines ->> 0 AS first_headline
 FROM factory.event_log
 WHERE type = 'released'
 ORDER BY week DESC, ts DESC;

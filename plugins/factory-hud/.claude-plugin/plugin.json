@@ -1,7 +1,7 @@
 {
   "name": "factory-hud",
   "displayName": "Factory HUD",
-  "version": "0.89.0",
+  "version": "0.90.0",
   "description": "A status entry with the time, context fill, plan usage, the agent factory's counts and the tool versions, drawn on every surface a session shows on (terminal, desktop, mobile through Remote Control), plus toasts when context or usage runs high. Display only: nothing reaches the conversation.",
   "author": {
     "name": "Callum Bundy"

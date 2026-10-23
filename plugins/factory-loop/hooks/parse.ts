@@ -62,6 +62,27 @@ export function derivedSkipError(skipped: SkippedEvent[]): string | null {
   return `the image's readers are older than this loop: skipped derived events ${d.map(s => `${s.type} v${s.version} x${s.count}`).join(', ')}`
 }
 
+// sameRepo: two owner/name strings are the same repo whatever their casing (GitHub names are case-insensitive,
+// and callum-flow-factory-state lower-cases the repos it reports).
+export function sameRepo(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+// factoryStateError: why a report from a tool that exited 0 cannot be used for the repo (rule G2's blind tell,
+// at most 300 characters).
+export function factoryStateError(json: string, repo: string): string {
+  let doc: { at?: unknown; repos?: unknown }
+  try {
+    doc = JSON.parse(json)
+  } catch {
+    return 'factory-state report is not JSON'
+  }
+  if (doc === null || typeof doc !== 'object') return 'factory-state report is not JSON'
+  if (isoMs(doc.at) === null) return 'factory-state report has no valid at'
+  const repos = Array.isArray(doc.repos) ? doc.repos.flatMap((r: { repo?: unknown }) => (typeof r?.repo === 'string' ? [r.repo] : [])) : []
+  return `factory-state report has no entry for ${repo} (repos: ${repos.length === 0 ? 'none' : repos.join(', ')})`.slice(0, 300)
+}
+
 // parseFactoryState: the repo's live and recently ended issues, or null when the document is
 // not a factory-state report for that repo.
 export function parseFactoryState(json: string, repo: string): Factory | null {
@@ -72,7 +93,7 @@ export function parseFactoryState(json: string, repo: string): Factory | null {
     return null
   }
   const at = isoMs(doc.at)
-  const entry = Array.isArray(doc.repos) ? doc.repos.find(r => r.repo === repo) : undefined
+  const entry = Array.isArray(doc.repos) ? doc.repos.find(r => typeof r?.repo === 'string' && sameRepo(r.repo, repo)) : undefined
   if (at === null || entry === undefined) return null
   const issues: FactoryIssue[] = []
   const take = (list: unknown[] | undefined, ended: boolean) => {
@@ -190,7 +211,7 @@ function factsOf(issue: unknown, repo?: string): IssueFacts | null {
   const closed = (blockedBy ?? []).flatMap(b => (b?.state === 'closed' && typeof b.closed_at === 'string' ? [isoMs(b.closed_at)] : []))
   const closedAts = closed.filter((t): t is number => typeof t === 'number')
   const par = i.parent !== null && typeof i.parent === 'object' ? (i.parent as Node & { sub_issues?: unknown }) : null
-  const here = repo !== undefined && par !== null && par.repo === repo
+  const here = repo !== undefined && par !== null && typeof par.repo === 'string' && sameRepo(par.repo, repo)
   const sibs = here ? nodesOf(par.sub_issues) : null
   return {
     open: i.state === 'open',
@@ -199,10 +220,10 @@ function factsOf(issue: unknown, repo?: string): IssueFacts | null {
     blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
     subIssues: typeof subs?.total === 'number' ? subs.total : null,
     title: typeof i.title === 'string' ? i.title : '',
-    blockingList: blocking === null ? null : blocking.filter(n => n.state === 'open' && n.repo === repo).map(n => n.number),
+    blockingList: blocking === null ? null : blocking.filter(n => n.state === 'open' && repo !== undefined && sameRepo(n.repo, repo)).map(n => n.number),
     blockersClosedAt: closedAts.length > 0 ? Math.max(...closedAts) : null,
     parent: here ? par.number : null,
-    siblings: sibs === null ? null : sibs.filter(n => n.repo === repo && n.number !== i.number).map(n => ({ number: n.number, open: n.state === 'open' })),
+    siblings: sibs === null ? null : sibs.filter(n => repo !== undefined && sameRepo(n.repo, repo) && n.number !== i.number).map(n => ({ number: n.number, open: n.state === 'open' })),
     ...(typeof i.body_sha === 'string' && /^[0-9a-f]{16}$/.test(i.body_sha) ? { bodyVersion: i.body_sha } : {}),
   }
 }
@@ -275,7 +296,7 @@ export function parseSubIssues(json: string, repo: string): number[] | null {
       const sub = e.sub_issue
       if (typeof sub?.number !== 'number') continue
       const where = sub.repository?.full_name
-      if (typeof where === 'string' && where.toLowerCase() !== repo.toLowerCase()) continue
+      if (typeof where === 'string' && !sameRepo(where, repo)) continue
       if (e.event === 'sub_issue_added') subs.set(sub.number, sub.state === 'open')
       else if (e.event === 'sub_issue_removed') subs.delete(sub.number)
     }

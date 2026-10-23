@@ -17,10 +17,11 @@ import { clock, configText } from './config-view'
 import type { ConfigView } from './config-view'
 import { readControl, writeControl, writeKey, writeSetting } from './control-files'
 import type { FileIo, LoadedControl } from './control-files'
-import { OPS, USAGE, helpText, hintText } from './control-help'
-import type { OpName } from './control-help'
+import { configHelpText } from './config-help'
+import { CONFIG_VERBS, HELP_TOPICS, HELP_USAGE, OPS, USAGE, helpText, hintText } from './control-help'
+import type { HelpTopic, OpName } from './control-help'
 import type { Control, Mode, Ms } from './types'
-import { applyDrop, applyUnpark, onlyParked, parseUnpark, stopNow } from './v2/ops'
+import { applyDrop, applyUnpark, onlyParked, parseUnpark, quoteNote, stopNow } from './v2/ops'
 import type { Unpark } from './v2/ops'
 
 const MIN = 60_000
@@ -34,8 +35,8 @@ const NOTE_MAX = 2000
 
 export { configFilePath, controlPath, controlText, loadControl, readControl, withMode, withSetting, writeControl, writeKey, writeSetting } from './control-files'
 export type { FileIo, LoadedControl, SettingKey } from './control-files'
-export { HINT_OPS, MEANING, OPS, USAGE, helpText, hintText } from './control-help'
-export type { OpName } from './control-help'
+export { CONFIG_VERBS, HELP_TOPICS, HELP_USAGE, HINT_OPS, MEANING, OPS, USAGE, helpText, hintText } from './control-help'
+export type { HelpTopic, OpName } from './control-help'
 
 // One op, parsed. An empty priority or only list clears it.
 export type Op =
@@ -43,7 +44,8 @@ export type Op =
   // no change: the read-only view; a change sets a key in the workspace config file, or removes it
   // (no value). The key is as typed (`passEvery`, `stateTimeout.design`)
   | { op: 'config'; change?: { key: string; value?: unknown } }
-  | { op: 'help' }
+  // help config: the list of every setting; no topic: the op table
+  | { op: 'help'; topic?: HelpTopic }
   | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop' | 'stamp'; issue: number }
   | { op: 'priority' | 'only'; issues: number[] }
   | { op: 'serial' | 'new' | 'trace'; on: boolean }
@@ -80,6 +82,10 @@ function bad(name: OpName, why?: string): Parsed {
   return { ok: false, error: `${why === undefined ? '' : `${name}: ${why}. `}Usage: ${USAGE[name]}` }
 }
 
+function helpOf(op: { topic?: HelpTopic }): string {
+  return op.topic === 'config' ? configHelpText() : helpText()
+}
+
 function allUsage(): string {
   return OPS.map(name => USAGE[name]).join(', ')
 }
@@ -88,7 +94,7 @@ function allUsage(): string {
 // its keywords ignore case, numbers take an optional leading #, and a list may use commas. An
 // empty op is `status`. Anything malformed is an error naming the op and its usage, so a bad
 // op never makes a partial change. `resume` takes issue numbers and an optional note in double
-// quotes.
+// quotes, where `\"` is a `"` and `\\` a `\`. A note's text is kept as typed (only its ends are trimmed).
 export function parseOp(text: string): Parsed {
   const words = text.trim().split(/\s+/).filter(w => w !== '')
   // the model may pass the command as typed
@@ -96,8 +102,13 @@ export function parseOp(text: string): Parsed {
   const head = (words[0] ?? 'status').toLowerCase()
   const args = words.slice(1)
   const rest = args.join(' ')
+  const raw = (/^(?:\/factory\s+)?\S+\s*([\s\S]*)$/i.exec(text.trim())?.[1] ?? '')
   const word = args.length === 1 ? args[0]?.toLowerCase() : undefined
-  if (head === 'help' || head === '--help' || head === '-h') return { ok: true, op: { op: 'help' } }
+  if (head === 'help' || head === '--help' || head === '-h') {
+    if (args.length === 0) return { ok: true, op: { op: 'help' } }
+    const topic = HELP_TOPICS.find(t => t === word)
+    return topic === undefined ? { ok: false, error: `Usage: ${HELP_USAGE}` } : { ok: true, op: { op: 'help', topic } }
+  }
   if (!(OPS as readonly string[]).includes(head)) {
     return { ok: false, error: `Unknown op "${(words[0] ?? '').slice(0, 40)}". Ops: ${allUsage()}. /factory help explains each.` }
   }
@@ -111,8 +122,8 @@ export function parseOp(text: string): Parsed {
       if (args.length === 0) return { ok: true, op: { op: 'config' } }
       const verb = args[0]?.toLowerCase()
       const key = args[1]
-      if (verb === 'unset' && key !== undefined && args.length === 2) return { ok: true, op: { op: 'config', change: { key } } }
-      if (verb === 'set' && key !== undefined && args.length > 2) return { ok: true, op: { op: 'config', change: { key, value: valueOfText(args.slice(2).join(' ')) } } }
+      if (verb === CONFIG_VERBS[1] && key !== undefined && args.length === 2) return { ok: true, op: { op: 'config', change: { key } } }
+      if (verb === CONFIG_VERBS[0] && key !== undefined && args.length > 2) return { ok: true, op: { op: 'config', change: { key, value: valueOfText(args.slice(2).join(' ')) } } }
       return bad(name)
     }
     case 'pause':
@@ -159,7 +170,7 @@ export function parseOp(text: string): Parsed {
       return { ok: true, op: { op: 'update', reason: rest } }
     case 'note': {
       const issue = issueOf(args[0])
-      const note = (issue === null ? args : args.slice(1)).join(' ')
+      const note = (issue === null ? raw : raw.replace(/^\S+\s*/, '')).trim()
       if (note === '') return bad(name, 'needs the text')
       if (note === 'off') return { ok: true, op: { op: 'note', issue, text: null } }
       if (note.length > NOTE_MAX) return bad(name, `the text is at most ${NOTE_MAX} characters`)
@@ -189,7 +200,7 @@ export function formatOp(op: Op): string {
       if (op.change === undefined) return 'config'
       return 'value' in op.change ? `config set ${op.change.key} ${JSON.stringify(op.change.value)}` : `config unset ${op.change.key}`
     case 'help':
-      return 'help'
+      return op.topic === undefined ? 'help' : `help ${op.topic}`
     case 'pause':
     case 'unpause':
     case 'skip':
@@ -214,7 +225,7 @@ export function formatOp(op: Op): string {
     case 'mode':
       return `mode ${op.mode}`
     case 'unpark':
-      return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${op.note}"`}`
+      return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${quoteNote(op.note)}"`}`
   }
 }
 
@@ -256,7 +267,7 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
     case 'config':
       return op.change === undefined ? keep(configText(view, control, now)) : applyChange(control, op.change, view)
     case 'help':
-      return keep(helpText())
+      return keep(helpOf(op))
     case 'pause':
       return control.paused.includes(op.issue)
         ? keep(`#${op.issue} is already paused.`)
@@ -445,7 +456,7 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   const parsed = parseOp(input)
   if (!parsed.ok) return refused(parsed.error)
   // help reads and writes nothing, and an agent may ask for it as it may for the status
-  if (parsed.op.op === 'help') return { ok: true, text: helpText(), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null }
+  if (parsed.op.op === 'help') return { ok: true, text: helpOf(parsed.op), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null }
   let op = parsed.op
   let aside = ''
   if (op.op === 'unpark') {
@@ -519,7 +530,7 @@ export async function controlTool(io: FileIo, paths: ControlPaths, input: unknow
 export const FACTORY_COMMAND: CommandSpec = {
   name: 'factory',
   description:
-    'Factory loop owner controls: pause, prioritise, retry or drop issues, set the mode; see /factory help',
+    'Factory loop owner controls: pause, prioritise, retry or drop issues, set the mode; see /factory help, and /factory help config for every setting',
   argumentHint: hintText(),
   immediate: true,
 }
@@ -532,7 +543,7 @@ export const CONTROL_TOOL: ToolSpec = {
   description:
     "Set the factory loop's owner directives (control.json) when the owner asks, as `/factory <op>` does; " +
     'one op per call, answered in one line, and a malformed op changes nothing. Ops: ' +
-    'status (what the loop is doing); stamp <N> (dry-run the intake reader on one issue; writes nothing); config [set <key> <value>|unset <key>] (no argument: the settings it runs with, each with its source; config set <key> <value> saves one setting in the workspace config file and config unset <key> removes it, checked as the loader reads it, only when the owner asks); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
+    'status (what the loop is doing); help [config] (the op list, or every setting with its default); stamp <N> (dry-run the intake reader on one issue; writes nothing); config [set <key> <value>|unset <key>] (no argument: the settings it runs with, each with its source; config set <key> <value> saves one setting in the workspace config file and config unset <key> removes it, checked as the loader reads it, only when the owner asks); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +

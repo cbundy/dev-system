@@ -7,11 +7,14 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { PassSummary } from '../types'
 import type { ConfigView } from '../hooks/config-view'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
+import { configHelpText } from '../hooks/config-help'
 import { effectText } from '../hooks/config-keys'
 import { sourceOf } from '../hooks/config-view'
 import {
+  CONFIG_VERBS,
   CONTROL_TOOL,
   FACTORY_COMMAND,
+  HELP_TOPICS,
   MEANING,
   OPS,
   USAGE,
@@ -110,7 +113,11 @@ describe('parseOp', () => {
     expect(op('update off')).toEqual({ op: 'update', reason: null })
     expect(op('update   base image  1.4.0')).toEqual({ op: 'update', reason: 'base image 1.4.0' })
     expect(op('note keep briefs short')).toEqual({ op: 'note', issue: null, text: 'keep briefs short' })
-    expect(op('note #5 use the  existing parser')).toEqual({ op: 'note', issue: 5, text: 'use the existing parser' })
+    expect(op('note #5 use the  existing parser')).toEqual({ op: 'note', issue: 5, text: 'use the  existing parser' })
+    expect(op('note 5 a  b\nc')).toEqual({ op: 'note', issue: 5, text: 'a  b\nc' })
+    expect(op('note keep  it')).toEqual({ op: 'note', issue: null, text: 'keep  it' })
+    expect(op('/factory note 5  x ')).toEqual({ op: 'note', issue: 5, text: 'x' })
+    expect(op('note 5 \n\t a \t b \n')).toEqual({ op: 'note', issue: 5, text: 'a \t b' })
     expect(op('note 5 use it')).toEqual({ op: 'note', issue: 5, text: 'use it' })
     expect(op('note 5 off')).toEqual({ op: 'note', issue: 5, text: null })
     expect(op('note #5 off')).toEqual({ op: 'note', issue: 5, text: null })
@@ -186,9 +193,44 @@ describe('parseOp', () => {
     expect(rows).toHaveLength(OPS.length + 1)
     for (const name of OPS) expect(rows.some(r => r.startsWith(`  ${USAGE[name]} `) && r.endsWith(MEANING[name]))).toBe(true)
     // every meaning starts in the same column
-    const meanings = [...OPS.map(name => MEANING[name]), 'this list']
+    const helpRow = rows[rows.length - 1] as string
+    expect(helpRow.startsWith('  help [config] ')).toBe(true)
+    expect(helpRow).toContain('help config lists every setting')
+    for (const topic of HELP_TOPICS) expect(helpRow).toContain(topic)
+    const meanings = [...OPS.map(name => MEANING[name]), helpRow.slice(helpRow.indexOf('this list'))]
     expect(new Set(rows.map((r, i) => r.indexOf(meanings[i] ?? ''))).size).toBe(1)
     expect(helpText()).not.toContain('\u2014')
+  })
+
+  test('USAGE and MEANING hold exactly the ops; the help, the tool and the config usage name what parseOp takes', () => {
+    expect(Object.keys(USAGE).sort()).toEqual([...OPS].sort())
+    expect(Object.keys(MEANING).sort()).toEqual([...OPS].sort())
+    for (const name of OPS) {
+      expect(helpText()).toContain(USAGE[name])
+      expect(CONTROL_TOOL.description).toContain(USAGE[name])
+    }
+    for (const verb of CONFIG_VERBS) expect(USAGE.config).toContain(verb)
+    expect(CONTROL_TOOL.description).toContain('help [config]')
+    expect(CONTROL_TOOL.description).not.toContain('\u2014')
+  })
+
+  test('help config parses, round-trips and answers the settings list, writing and logging nothing, for the owner and an agent', async () => {
+    expect(parseOp('help config')).toEqual({ ok: true, op: { op: 'help', topic: 'config' } })
+    expect(parseOp('/factory HELP Config')).toEqual({ ok: true, op: { op: 'help', topic: 'config' } })
+    expect(parseOp('--help config')).toEqual(parseOp('help config'))
+    expect(formatOp({ op: 'help', topic: 'config' })).toBe('help config')
+    expect(formatOp({ op: 'help' })).toBe('help')
+    for (const input of ['help foo', 'help config now', 'help set', '-h x y']) {
+      expect(parseOp(input)).toEqual({ ok: false, error: 'Usage: help [config]' })
+    }
+    const { io, writes } = files({})
+    for (const from of [{}, { agentId: 'a1' }]) {
+      expect(await runOp(io, PATHS, 'help config', NOW, from)).toEqual({
+        ok: true, text: configHelpText(), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null,
+      })
+    }
+    expect(await runOp(io, PATHS, 'help foo', NOW)).toMatchObject({ ok: false })
+    expect(writes).toEqual([])
   })
 
   test('an unknown op lists the ops; help lists them too', () => {
@@ -464,6 +506,12 @@ describe('the files', () => {
     expect(JSON.parse(fresh.map.get(CONTROL_FILE) ?? '')).toEqual({ ...EMPTY_CONTROL, only: [522] })
   })
 
+  test('a note keeps its text as typed, line break included, in the written control.json', async () => {
+    const { io, map } = files()
+    expect((await runOp(io, PATHS, 'note 5 a b\nc', NOW)).ok).toBe(true)
+    expect(JSON.parse(map.get(CONTROL_FILE) ?? '').notes[0].text).toBe('a b\nc')
+  })
+
   test('an op that changes nothing, a bad op, or status writes nothing and does not ping', async () => {
     const { io, writes } = files({ [CONTROL_FILE]: JSON.stringify({ paused: [12] }) })
     expect(await runOp(io, PATHS, 'pause 12', NOW)).toMatchObject({ ok: true, ping: false, logged: null, text: '#12 is already paused.' })
@@ -545,7 +593,7 @@ describe('the command and the tool', () => {
 
   test('the specs: /factory runs at once, and the tool lists every op', () => {
     expect(FACTORY_COMMAND).toMatchObject({ name: 'factory', argumentHint: hintText(), immediate: true })
-    expect(FACTORY_COMMAND.description.endsWith('see /factory help')).toBe(true)
+    expect(FACTORY_COMMAND.description.endsWith('see /factory help, and /factory help config for every setting')).toBe(true)
     expect(CONTROL_TOOL.name).toBe('control')
     expect(CONTROL_TOOL.inputSchema).toEqual({
       type: 'object',
@@ -604,8 +652,14 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
       expect({ bad, parsed: parseOp(bad) }).toEqual({ bad, parsed: { ok: false, error: usage } })
     }
     expect(parseOp(`resume 60 "${'x'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
+    expect(op('resume 60 "say \\"hi\\" and a \\\\ path"')).toEqual({ op: 'unpark', issues: [60], note: 'say "hi" and a \\ path' })
+    expect(op('resume 60 "a \\\\"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\' })
+    expect(op('resume 60 "a \\n b"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\n b' })
+    expect(op(`resume 60 "${'\\"'.repeat(2000)}"`)).toEqual({ op: 'unpark', issues: [60], note: '"'.repeat(2000) })
+    expect(parseOp(`resume 60 "${'\\"'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
+    expect(op('resume 60 "a\nb"')).toEqual({ op: 'unpark', issues: [60], note: 'a b' })
     // canonical text parses back
-    for (const text of ['resume 60', 'resume 60 61 "a note"']) expect(op(formatOp(op(text)))).toEqual(op(text))
+    for (const text of ['resume 60', 'resume 60 61 "a note"', 'resume 60 "say \\"hi\\" \\\\ x"', 'note 5 a  b\nc', 'note "quoted" \\ text']) expect(op(formatOp(op(text)))).toEqual(op(text))
   })
 
   test('a v2 resume appends issue:<N> with its note for each issue, every time; the note is read back from control.json', async () => {

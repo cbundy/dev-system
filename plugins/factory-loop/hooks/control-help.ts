@@ -8,6 +8,13 @@ export const OPS = [
 ] as const
 export type OpName = (typeof OPS)[number]
 
+// The words `config` takes first, and the topics `help` takes: parseOp reads these same lists, so
+// the usage and the help row name what it accepts.
+export const CONFIG_VERBS = ['set', 'unset'] as const
+export const HELP_TOPICS = ['config'] as const
+export type HelpTopic = (typeof HELP_TOPICS)[number]
+export const HELP_USAGE = `help [${HELP_TOPICS.join('|')}]`
+
 // Each op's form, for the usage errors and the tool's description (v2 SPEC 13.4.3). `priority off`
 // and `override off` are the only way to lift those two, as `only off` and `update off` are.
 export const USAGE: Record<OpName, string> = {
@@ -84,7 +91,7 @@ export const MEANING: Record<OpName, string> = {
 // helpText: `/factory help`, in the shape of a command's --help, built from the same table the
 // parser checks, so the two cannot drift.
 export function helpText(): string {
-  const rows: [string, string][] = [...OPS.map(name => [USAGE[name], MEANING[name]] as [string, string]), ['help', 'this list']]
+  const rows: [string, string][] = [...OPS.map(name => [USAGE[name], MEANING[name]] as [string, string]), [HELP_USAGE, 'this list; help config lists every setting config set accepts, with its default']]
   const width = Math.max(...rows.map(([usage]) => usage.length)) + 2
   return [
     'Usage: /factory <op> [arguments]',
@@ -94,6 +101,7 @@ export function helpText(): string {
     'Ops:',
     ...rows.map(([usage, meaning]) => `  ${usage.padEnd(width)}${meaning}`),
     '',
+    'In a resume note, type " as \\" and \\ as \\\\. A note op keeps its text as typed.',
     'N is an issue number, with or without #; a list takes spaces or commas. In chat, the model sets',
     'the same ops through mcp__factory-loop__control with { "op": "<op>" }.',
   ].join('\n')
