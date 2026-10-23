@@ -150,6 +150,8 @@ const cleanEnv = (extra) => {
   const env = { ...process.env };
   for (const k of ["AGENTSVIEW_PG_URL", "FACTORY_DB_WRITER_URL", "FACTORY_DB_READER_URL", "FACTORY_DB_MIGRATOR_URL", "CALLUM_FLOW_FACTORY_STATE_SOURCE"]) delete env[k];
   for (const k of ["DEV_SECRETS_DIR", "DEV_WORKSPACE_SECRETS_DIR", "DEV_MIGRATOR_SECRETS_DIR"]) env[k] = path.join(NO_SECRETS, k);
+  // no release collection from GitHub: a real release would be one more row than the events written
+  env.DEV_FACTORY_RELEASE_COLLECT_INTERVAL = "0";
   return { ...env, ...extra };
 };
 

@@ -4,7 +4,7 @@
 // (heartbeat, sweep, tell, restart, the release task) keep v1's keys. A life is the claim's time
 // in base-36 seconds (3.3): unique per life, and no counter that pruning could reset. Hashes
 // (a patch id, a head, main's head) appear as their first seven characters. Pure.
-import type { Ms } from '../types'
+import type { LedgerEntry, Ms } from '../types'
 import type { AgentStep, RecordRef } from './types'
 
 // lifeOf: the life a claim made at this time names, base-36 seconds.
@@ -183,6 +183,27 @@ export function keyParts(key: string): { issue: number; life: string; seq: numbe
   const m = /^i([1-9]\d*)\/l([0-9a-z]+)(?:\/s(\d+))?(?:\/(.*))?$/.exec(key)
   if (m === null || m[1] === undefined || m[2] === undefined) return null
   return { issue: Number(m[1]), life: m[2], seq: m[3] === undefined ? null : Number(m[3]), rest: m[4] ?? '' }
+}
+
+// stoppedBy: the stop-agent ledger entry that names this agent step, or null: the loop stopped it.
+// A stop names its target only through its key (a stop-agent entry keeps no agentId or entry), in
+// three shapes:
+// - a v2 entry or review stop (rules-entry.ts stopKey), within the entry's life, ending in
+//   /stop/<the entry key's rest within the life>;
+// - an R1 release stop (release.ts RELEASE_OPS.stop, reconcileKey), ending in /stop/<agentId>
+//   (matched by the literal suffix: release.ts imports this file's family, so no import here);
+// - the A1 stop (ledger.ts), stop:<agentId>.
+export function stoppedBy(ledger: readonly LedgerEntry[], entry: Pick<LedgerEntry, 'key' | 'agentId'>): LedgerEntry | null {
+  const parts = keyParts(entry.key)
+  const life = parts === null ? null : lifeKey({ issue: parts.issue, life: parts.life })
+  const own = life === null ? null : `/stop/${entry.key.slice(life.length + 1)}`
+  const agent = entry.agentId === undefined || entry.agentId === '' ? null : entry.agentId
+  for (const s of ledger) {
+    if (s.kind !== 'stop-agent') continue
+    if (own !== null && life !== null && s.key.startsWith(`${life}/`) && s.key.endsWith(own)) return s
+    if (agent !== null && (s.key.endsWith(`/stop/${agent}`) || s.key === `stop:${agent}`)) return s
+  }
+  return null
 }
 
 // hiddenKey: the marker a comment carries, by which a retry finds it, and by which the unpark

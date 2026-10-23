@@ -546,14 +546,15 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 | queued | `lease` | the workspace `slot` op `lease` (10.1) | - | a lease with the record's holder exists | - | - (a lease is an effect: it retries, then holds the record as `stalled`, 4.5) |
 | designing | `design` | the designer agent in the slot, then the loop posts the brief or creates the children (8.7) | reader | a brief, posted | a question; a wait on conditions (`wait`); or a split, its children created | the generic agent unknown (below) |
 | building | `build` | the builder agent in the slot | writer | a valid answer, and origin's branch, read directly, has commits beyond the base at or past the answered head | the answer says it cannot (with a reason); or origin's branch has no commit beyond the base (`no-commit`) | the generic agent unknown, or the direct read of origin failed |
-| reviewing | `review` | `pr` ensure (8.1), then the reviewer agent and CI on the head (8.3, 8.5) | reader | the reviewer approved the head's patch in this round, every check on the head passed or was skipped, and the PR does not conflict | the reviewer asked for changes; a check failed after its one re-run; the PR conflicts (`dirty`), which ends the step at once | the reviewer's generic agent unknown; a GitHub wait past its bound (4.4) |
+| reviewing | `review` | `pr` ensure (8.1), then the reviewer agent and CI on the head (8.3, 8.5) | reader | the reviewer approved the head's patch in this round, every check on the head passed or was skipped, and the PR does not conflict | the reviewer asked for changes; a check failed after its one re-run; the PR conflicts (`dirty`), which ends the step once this seq's running reviewer of the head's patch has ended (at once when none runs) | the reviewer's generic agent unknown; a GitHub wait past its bound (4.4) |
 | fixing | `fix` | the fixer agent in the slot | writer | a new head on origin's branch, read directly | every finding declined with reasons, and no new head (`declined`); or nothing pushed and a finding fixed outside the branch, such as on the PR description or evidence (`unchanged`) | the generic agent unknown, or the direct read of origin failed |
 | merge-queue, the head | `queue` | Q1 and Q2 (9) | - | the PR merged at a head that a `queue-merge` entry of this life names | `conflict`, `ci-red` (a failed check after its one re-run), `patch` (the head's patch is not `approvedPatch`), `policy` (9.3) | a Q1 or Q2 CLI failure; a guard FAIL of class `read`; a refusal GitHub gives no reason for; a GitHub wait past its bound |
 | a step state | `triage` | the triage agent (5.2) | reader | a valid answer: its choice is the `triage` event | - | the generic agent unknown |
 | merge-queue, not the head; parked; waiting; closed | none | - | - | - | - | - |
 
 - **The generic agent unknown.** No valid answer after one repair message; the turn ended in
-  error, aborted or refused; the agent failed or was lost; the step's timeout (4.4).
+  error, aborted or refused; the agent failed or was lost; the step's timeout (4.4). An agent the loop
+  itself stopped (a stop-agent names it) that gave no answer is `stopped`, not `agent-dead`.
 - Readers may not write inside the repository. Writers may write only inside their slot and push
   only the record's branch (10.4).
 - When the usage pre-check skips a spawn, the step has not started and no attempt counts
@@ -795,7 +796,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
 4. After a triage `retry`, the step gets exactly one more attempt (X1 sets attempt 2), so its next
    unknown goes to step 3.
 
-- **What is unknown.** No answer; the timeout of a running step; a dead or lost agent; a turn that
+- **What is unknown.** No answer; the timeout of a running step; a dead or lost agent (`stopped` when the loop stopped it); a turn that
   ended in error, aborted or refused; an API error, a 429 included; an answer that fails its
   contract after its repair message; a CLI result outside the step's known outcomes; a GitHub
   wait past its bound (4.4).
@@ -1195,7 +1196,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | Cause | When | Issue |
 |---|---|---|
 | `triage` | every triage call (T6) | the issue |
-| `unknown:<why>` | every step that ended unknown and is not a free re-run. `why` is `timeout`, `agent-dead` (the agent failed, was lost or crashed, or its turn ended in error, aborted or refused), `bad-answer` (no valid answer after the repair message), `api` (an API error other than a rate limit: a 5xx, overloaded), `rate-limited` (a 429 or the usage window; a free re-run, cause `usage`, so it is logged as `unknown:rate-limited` only once its attempt's free re-run is spent), `spawn` (the companion refused the spawn), `cli` (a CLI result outside the step's known outcomes, a failed origin read, a failed prepare, a guard FAIL of class `read`) or `github-wait` (a wait past its bound) | the issue |
+| `unknown:<why>` | every step that ended unknown and is not a free re-run. `why` is `timeout`, `agent-dead` (a death the loop did not cause: the agent failed, was lost or crashed, or its turn, with no stop of the loop's, ended in error, aborted or refused), `stopped` (the loop stopped the agent and it gave no answer; no free re-run by itself), `bad-answer` (no valid answer after the repair message), `api` (an API error other than a rate limit: a 5xx, overloaded), `rate-limited` (a 429 or the usage window; a free re-run, cause `usage`, so it is logged as `unknown:rate-limited` only once its attempt's free re-run is spent), `spawn` (the companion refused the spawn), `cli` (a CLI result outside the step's known outcomes, a failed origin read, a failed prepare, a guard FAIL of class `read`) or `github-wait` (a wait past its bound) | the issue |
 | `free:<cause>` | every free re-run (the free re-run): `load` (after a restart), `usage` (a usage-limit kill), `slot` (a lost slot) or `breaker` | the issue |
 | `park` | every entry to parked: a question to the owner | the issue |
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
@@ -1470,7 +1471,11 @@ is a new `Reviewer` implementation and a setting, nothing more.
   old re-run.
 - **A conflict.** GitHub does not run `pull_request` workflows for a PR with a merge conflict, and
   `ci.yml` triggers on `pull_request` and on pushes to main (`.github/workflows/ci.yml`). So a
-  `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.
+  `dirty` PR is `not-ok(conflict)` and goes to a fixer. It does not wait out `ciStartMs`, and no
+  re-run is planned for it. While this seq's reviewer of the head's patch still runs, the step waits
+  for it (on the reviewer's clock) so one fixer gets the merge and the findings; the fixer's notes
+  carry the merge lead, then the findings when the review asked for changes. With no such reviewer
+  it ends at once.
   The GitHub rule is from GitHub's documentation.
 - **Waits** are bounded by `ciStartMs` and `ciRunMs` (4.4).
 

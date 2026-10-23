@@ -720,6 +720,28 @@ WHERE type = 'transition'
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
+While a conflicting PR's reviewer of the head's patch still runs, the review step waits for it, so one
+fixer gets the merge and the findings (v2 SPEC 8.5). This counts per repo and week the review-stage
+conflict rounds (T9, via `fix:conflict`, from reviewing) and how many carry a finished review: a
+`reviewed` row of the same issue, the transition's own `round` (a merge-queue `patch` return, T14, raises it with no T9) and life (a `reviewed` row has no life, so it must be no older than the life's first row), with verdict `approve` or `changes`, at or before the
+transition's `seq_at`.
+
+```sql
+-- conflict rounds with a finished review
+SELECT t.repo, date_trunc('week', t.seq_at) AS week,
+       count(*) AS conflict_rounds,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM factory.event_log r
+         WHERE r.repo = t.repo AND r.issue = t.issue AND r.type = 'reviewed'
+           AND r.round = t.round
+           AND r.ts >= (SELECT min(p.ts) FROM factory.event_log p
+                        WHERE p.repo = t.repo AND p.issue = t.issue AND p.life = t.life)
+           AND r.verdict IN ('approve', 'changes') AND r.ts <= t.seq_at)) AS with_finished_review
+FROM factory.event_log t
+WHERE t.type = 'transition' AND t.table_row = 'T9' AND t.via = 'fix:conflict' AND t.from_state = 'reviewing'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ### Split children parked on their open decision
 
 A split's not-ready child is claimed at once and parked on its decision (row S7, via `split-decision`).
@@ -1931,6 +1953,22 @@ Only non-derived skips keep the loop working and raise the owner item `reader-be
 jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | startswith("tell:reader-behind:")))
   | {day: ($d.at | tostring | .[0:10]), types: .fields.types, count: .fields.count}]
   | unique_by(.types) | .[] | "\(.day) \(.types) (\(.count))"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
+### Loop-stopped agent unknowns
+
+An agent step whose agent the loop itself stopped, and that gave no answer, ends `unknown:stopped`
+(v2 SPEC 7.2); `unknown:agent-dead` is a death the loop did not cause. This counts both per repo and
+week, to show how many agent unknowns were the loop's own stops.
+
+```sql
+-- loop-stopped versus agent-dead unknowns, per repo and week
+SELECT repo, date_trunc('week', ts) AS week,
+       count(*) FILTER (WHERE cause = 'unknown:stopped')    AS stopped,
+       count(*) FILTER (WHERE cause = 'unknown:agent-dead') AS agent_dead
+FROM factory.event_log
+WHERE type = 'intervention' AND cause IN ('unknown:stopped', 'unknown:agent-dead')
+GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 
 ### Actions refusal spells

@@ -309,7 +309,7 @@ describe('unknown:<why> is the transition\'s own via', () => {
     ctxOf({ ledger: [t(2, { row: 'T1', event: 'ok', from: 'queued', to: from }, 50), ...more, t(3, { row: 'U2', event, from, to: from, ...(why === null ? {} : { via: `unknown:${why}` }) }, 30)] })
 
   test('every why, as the transition\'s via code recorded it (table.ts viaOf); a timeout says so itself', () => {
-    for (const why of ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait'] as UnknownWhy[]) {
+    for (const why of ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait', 'stopped'] as UnknownWhy[]) {
       expect(interventionsOf(unknownAt('building', why)).map(p => p.event.cause)).toEqual([`unknown:${why}`])
     }
     expect(interventionsOf(unknownAt('fixing', null, 'timeout')).map(p => p.event.cause)).toEqual(['unknown:timeout'])

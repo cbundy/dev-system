@@ -493,17 +493,49 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect([...notes, question].join('\n')).not.toMatch(/\bevery\b/)
   })
 
-  test('a conflict ends the step at once, even while the reviewer runs: T9 for the conflict, with the merge to make', () => {
-    const r = rec(623)
+  test('a conflict holds for this seq\'s running reviewer of the head\'s patch, so one fixer gets both; it plans no re-run meanwhile', () => {
+    const r = rec(623, { seqAt: NOW - 40 * MIN, since: NOW - 40 * MIN })
     const runningReview = { ...reviewed(r, {}), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN }
-    const p = plan(withLedger(world([r], [view(623, { mergeable: 'dirty' })]), [ensured(r), prepared(r), runningReview]))
-    const t = transitionOf(p, 623)
-    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', pr: PR } })
-    expect(t?.next.notes[0]).toContain('merge origin/main into issue-623')
-    // with no reviewer yet, none starts beside the transition, and no re-run either
-    const fresh = plan(withLedger(world([r], [view(623, { mergeable: 'dirty', checks: [check('test', 'fail')] })]), [ensured(r), prepared(r)]))
-    expect(transitionOf(fresh, 623)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
-    expect(of(fresh, 623).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    const dirty = (extra: Partial<PrView> = {}) => world([r], [view(623, { mergeable: 'dirty', checks: [check('test', 'fail')], ...extra })])
+    const p = plan(withLedger(dirty(), [ensured(r), prepared(r), runningReview]))
+    expect(transitionOf(p, 623)).toBeUndefined()
+    expect(said(p, 623)).toEqual([`review: PR #${PR} conflicts; waits for the reviewer of patch ${short(PATCH)} so one fixer gets both`])
+    expect(of(p, 623).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    // its clock is the reviewer's
+    const late = plan(withLedger(dirty(), [ensured(r), prepared(r), { ...runningReview, startedAt: NOW - 31 * MIN }]))
+    expect(transitionOf(late, 623)).toMatchObject({ row: 'U2', via: 'unknown:timeout' })
+  })
+
+  test('the reviewer ends: T9 for the conflict whatever it said; changes add its findings to the merge lead, the reviewed event and comment come first', () => {
+    const r = rec(624)
+    const s = (e: LedgerEntry) => withLedger(world([r], [view(624, { mergeable: 'dirty' })]), [ensured(r), prepared(r), e])
+    const changes = s(changed(r))
+    const first = plan(changes)
+    expect(transitionOf(first, 624)).toBeUndefined()
+    expect(of(first, 624).map(a => a.kind).sort()).toEqual(['comment', 'event'])
+    const t = transitionOf(plan(settled(changes, first)), 624)
+    expect(t).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing', conflicts: 1, pr: PR } })
+    expect(t?.next.notes[0]).toContain('merge origin/main into issue-624')
+    expect(t?.next.notes.join('\n')).toContain('a moved HEAD is accepted')
+    const ok = s(approved(r))
+    const t2 = transitionOf(plan(settled(ok, plan(ok))), 624)
+    expect(t2).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+    expect(t2?.next.notes.join('\n')).toContain('merge origin/main into issue-624')
+    expect(t2?.next.notes.join('\n')).not.toContain('a moved HEAD')
+    const unk = s(reviewed(r, { event: 'unknown', why: 'agent-dead' }))
+    expect(transitionOf(plan(settled(unk, plan(unk))), 624)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+  })
+
+  test('a conflict with no reviewer, or none of this seq for the head\'s patch, ends the step at once with nothing started', () => {
+    const r = rec(625)
+    const run = (over: Partial<LedgerEntry>, k = 1, patch = PATCH) => ({ ...reviewed(r, {}, {}, k, patch), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN, ...over })
+    const stopKey = `${entryKey(r, 'stop')}/review/${short(PATCH)}/r1/a1`
+    const cases: LedgerEntry[][] = [[], [run({}, 1, PATCH2)], [run({}), done(stopKey, 'stop-agent', { issue: 625 })], [run({ startedAt: r.seqAt - 1 })]]
+    for (const extra of cases) {
+      const p = plan(withLedger(world([r], [view(625, { mergeable: 'dirty', checks: [check('test', 'fail')] })]), [ensured(r), prepared(r), ...extra]))
+      expect(transitionOf(p, 625)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+      expect(of(p, 625).filter(a => a.kind === 'agent-step' || a.kind === 'slot' || a.kind === 'ci-rerun')).toEqual([])
+    }
   })
 
   test('a conflict at the review fix cap still goes to fixing: it has its own cap, so fixes stays and conflicts counts it', () => {

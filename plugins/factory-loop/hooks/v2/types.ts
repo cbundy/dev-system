@@ -163,8 +163,10 @@ export const OUTSIDE_CAUSES = ['load', 'usage', 'breaker', 'slot'] as const
 export type OutsideCause = (typeof OUTSIDE_CAUSES)[number]
 
 // Why a step ended unknown (7.2, intervention `unknown:<why>`). rate-limited is an API rate limit
-// (a 429, or the usage window); api is any other API error (a 5xx, overloaded).
-export const UNKNOWN_WHYS = ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait'] as const
+// (a 429, or the usage window); api is any other API error (a 5xx, overloaded); stopped is a step
+// whose agent the loop itself stopped (a stop-agent names it) and that gave no answer: no free
+// re-run by itself, and not a death (agent-dead).
+export const UNKNOWN_WHYS = ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait', 'stopped'] as const
 export type UnknownWhy = (typeof UNKNOWN_WHYS)[number]
 
 // The outside cause an unknown's why is by itself (5.1): a rate limit is `usage`, a free re-run

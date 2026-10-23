@@ -100,7 +100,7 @@ const blocks = sqlBlocks(markdown);
 
 // Blocks that are compared against a frozen old query (SPECS below) and blocks that are only run.
 const RUN_ONLY = [
-  "Factory metrics #0", "Fix rounds with no new head #0", "Fix rounds caused by other merges #0",
+  "Factory metrics #0", "Fix rounds with no new head #0", "Fix rounds caused by other merges #0", "Fix rounds caused by other merges #1",
   "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2", "2b. Gate waits #3",
   "6b. Reader shadow compares #0",
   "7a. How waits end #0", "7b. Done closes #0",
@@ -110,7 +110,7 @@ const RUN_ONLY = [
   "Heartbeat twins of the loop's own workspace #0",
   "8b. Designer model comparison #0",
   "9. Interventions, judgement calls and claim completion #5",
-  "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7",
+  "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7", "Loop-stopped agent unknowns #0",
   "9b. Permission prompts #0",
   "4. Merges per device #1", "9c. Merges, pull requests and gaps #7",
   "9c. Merges, pull requests and gaps #0", "9c. Merges, pull requests and gaps #1", "9c. Merges, pull requests and gaps #2",

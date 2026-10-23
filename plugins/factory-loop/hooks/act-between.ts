@@ -52,7 +52,7 @@ export async function agentAnswered(
   between.repairing.delete(id)
   try {
     // a v2 agent step's answer is read by steps.ts, and is never interim (v2 SPEC 10.8)
-    const step = await stepAnswered(ctxOf(env, state, entry), entry, answer, undefined, between.gateHeld)
+    const step = await stepAnswered(ctxOf(env, state, entry), entry, answer, undefined, between.gateHeld, env.live.ledger)
     // a gated writer's turn ended before its stop gate line: the entry runs on until a pass finds it
     if (step.held === true) return { result: 'held', key: entry.key }
     let exec = step.exec
