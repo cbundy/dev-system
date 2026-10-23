@@ -89,7 +89,7 @@ merged pull request. The Claude app is there for when you want to talk to it.
 | `resume <N>` | Release a hold on an issue or a run |
 | `retry <N>` | Let an issue's exhausted actions run again |
 | `drop <N>` | Abandon an issue and stop its agents |
-| `note [<N>] <text>` | An instruction the next agent prompts carry |
+| `note [<N>] <text>\|off` | An instruction the next agent prompts carry; a newer note replaces the older one, off clears it |
 | `mode off\|observe\|act` | Switch the loop off, to watching only, or to acting |
 | `trace on\|off` | Detailed per-pass timing records |
 
