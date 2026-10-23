@@ -91,6 +91,20 @@ echo "unexpected: $*" >&2
 exit 1
 `;
 
+// A stub `callum-flow-issue-read` beside it: the issue's body is STUB_BODY (default: no Run it heading),
+// STUB_READ=fail exits 1 and STUB_READ=junk prints no JSON; each call's argv and CALLUM_FLOW_REPO go to
+// STUB_READ_LOG. With --comments it also serves STUB_BRIEF as a design brief comment (the parity test).
+const READ_STUB = `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.appendFileSync(process.env.STUB_READ_LOG, process.argv.slice(2).join(" ") + " repo=" + process.env.CALLUM_FLOW_REPO + "\\n");
+if (process.env.STUB_READ === "fail") { console.error("callum-flow-issue-read: cannot read"); process.exit(1); }
+if (process.env.STUB_READ === "junk") { console.log("not json"); process.exit(0); }
+const out = { issue: { body: process.env.STUB_BODY ?? "Do the thing.\\n" } };
+if (process.argv.includes("--comments")) out.comments = process.env.STUB_BRIEF ? [{ body: process.env.STUB_BRIEF }] : [];
+console.log(JSON.stringify(out));
+`;
+let readLog;
+
 before(async () => {
   contract = await import(pathToFileURL(path.join(PLUGIN, "hooks", "contract.mjs")).href);
   table = await import(pathToFileURL(path.join(PLUGIN, "tests", "answer-cases.mjs")).href);
@@ -100,7 +114,9 @@ before(async () => {
   stubDir = path.join(scratch, "stub-bin");
   fs.mkdirSync(stubDir);
   fs.writeFileSync(path.join(stubDir, "gh"), GH_STUB, { mode: 0o755 });
+  fs.writeFileSync(path.join(stubDir, "callum-flow-issue-read"), READ_STUB, { mode: 0o755 });
   ghLog = path.join(scratch, "gh.log");
+  readLog = path.join(scratch, "read.log");
   answers = path.join(cfg, "factory-loop", REPO_DIR, "answers");
   fs.mkdirSync(answers, { recursive: true });
 });
@@ -126,7 +142,7 @@ function run(args, { input, env = {}, cwd = os.tmpdir(), bin = SCRIPT } = {}) {
     cwd,
     input: input ?? "",
     encoding: "utf8",
-    env: { PATH: `${stubDir}:${process.env.PATH}`, STUB_LOG: ghLog, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg, ...env },
+    env: { PATH: `${stubDir}:${process.env.PATH}`, STUB_LOG: ghLog, STUB_READ_LOG: readLog, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg, ...env },
     timeout: 30_000,
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
@@ -404,6 +420,7 @@ const waitOf = (...conditions) => ({ kind: "wait", conditions, reason: "Needs th
 const TAG = { kind: "tag-contains", sha: "bd2fee14" };
 const ISSUE = { kind: "issue-closed", issue: 57 };
 const PR = { kind: "pr-merged", pr: 812 };
+const readCalls = () => (fs.existsSync(readLog) ? fs.readFileSync(readLog, "utf8").split("\n").filter(Boolean) : []);
 const ghCalls = () => (fs.existsSync(ghLog) ? fs.readFileSync(ghLog, "utf8").split("\n").filter(Boolean) : []);
 
 // answerWait: the wait answered with the stub set by env; the result, the answer file and gh's calls.
@@ -514,12 +531,15 @@ test("with no gh on PATH the wait is recorded with the unchecked line", () => {
 });
 
 test("a brief, a question, a split and any other contract make no gh call", () => {
+  fs.rmSync(readLog, { force: true });
   const brief = "## Design brief (designer, 2026-01-01)\n\n## Rollout\n\nmerge\n\n## Observability\n\nnone - no new decision\n\n## Compatibility\n\nnone - no schema, event or reader change\n";
   for (const answer of [{ kind: "brief", brief }, { kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }]) {
     const r = answerWait(answer);
     assert.deepEqual(r.calls, [], JSON.stringify(answer));
     if (answer.kind === "brief") assert.equal(r.code, 0, "the brief fixture stays a valid brief");
   }
+  // a merge brief makes exactly one issue read, and nothing else does
+  assert.deepEqual(readCalls(), ["--json 837 repo=cbundy/dev-system"]);
   fs.rmSync(ghLog, { force: true });
   const g = issue(gate());
   assert.equal(run(["--to", g.file], { input: JSON.stringify(VALID) }).code, 0);
@@ -631,4 +651,113 @@ test("wait-check maps a finished gh read to yes, no or unknown", async () => {
     throw new Error("spawn gh ENOENT");
   });
   assert.deepEqual(out, { problems: [], unchecked: ["conditions[0] (spawn gh ENOENT)"] });
+});
+
+// A design brief's Rollout is read against the issue's body before it is written (hooks/v2/rollout-check.mjs, #987).
+const briefOf = (rollout) => `## Design brief (designer, 2026-10-23)\n\n## Rollout\n\n${rollout}\n\n## Observability\n\nnone - no new decision\n\n## Compatibility\n\nnone - no schema, event or reader change\n`;
+const STALE_BODY = "Build it.\n\n## Run it\nmoved to #832\n";
+const ROLLOUT_JOB = { ...WAIT_JOB, issue: 467 };
+function answerBrief(rollout, env = {}) {
+  fs.rmSync(readLog, { force: true });
+  const { file } = issue(ROLLOUT_JOB);
+  const r = run(["--to", file], { input: JSON.stringify({ kind: "brief", brief: briefOf(rollout) }), env });
+  return { ...r, file, reads: readCalls() };
+}
+
+test("a merge brief over a stale Run it heading is refused with callum-flow-rollout's reason; nothing is written (#467)", () => {
+  const r = answerBrief("merge - the Run it moved to #832", { STUB_BODY: STALE_BODY });
+  assert.equal(r.code, 1, r.out);
+  const problems = problemsOf(r.err);
+  assert.equal(problems.length, 1);
+  assert.ok(problems[0].startsWith("brief says merge but issue #467 has a '## Run it' heading"), problems[0]);
+  assert.match(problems[0], /answer run-it .*ask the owner|question asking the owner to rename or remove it/);
+  assert.equal(fs.existsSync(r.file), false);
+  assert.deepEqual(r.reads, ["--json 467 repo=cbundy/dev-system"]);
+});
+
+test("run-it and keep-open briefs, and a merge over a body with no Run it heading, are recorded", () => {
+  for (const [rollout, STUB_BODY] of [
+    ["run-it - the Run it stands", STALE_BODY],
+    ["keep-open - research only", STALE_BODY],
+    ["merge - plain", "Do it.\n"],
+    ["merge - plain", "Do it.\n\n```\n## Run it\n```\n"],
+    ["merge - plain", "Do it, then run it after release.\n"],
+  ]) {
+    const r = answerBrief(rollout, { STUB_BODY });
+    assert.equal(r.code, 0, `${rollout}: ${r.err}`);
+    assert.equal(r.err, "");
+    assert.equal(fs.existsSync(r.file), true);
+    assert.equal(r.reads.length, rollout.startsWith("merge") ? 1 : 0, rollout);
+  }
+});
+
+test("an issue read that decides nothing records the merge brief and names the unchecked Rollout", () => {
+  for (const STUB_READ of ["fail", "junk"]) {
+    const r = answerBrief("merge - plain", { STUB_BODY: STALE_BODY, STUB_READ });
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.err, /^factory-answer: recorded without checking the Rollout against issue #467: /);
+    assert.equal(fs.existsSync(r.file), true);
+  }
+  const bare = path.join(scratch, "node-only");
+  fs.mkdirSync(bare, { recursive: true });
+  const node = path.join(bare, "node");
+  if (!fs.existsSync(node)) fs.symlinkSync(process.execPath, node);
+  const { file } = issue(ROLLOUT_JOB);
+  const r = spawnSync(SCRIPT, ["--to", file], {
+    input: JSON.stringify({ kind: "brief", brief: briefOf("merge - plain") }),
+    encoding: "utf8",
+    env: { PATH: bare, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
+    timeout: 30_000,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /recorded without checking the Rollout against issue #467: callum-flow-issue-read is not installed/);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test("question, wait, done and split answers, and a gate job make no issue read", () => {
+  for (const answer of [{ kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }, waitOf(ISSUE), doneOf(DONE_PR)]) {
+    fs.rmSync(readLog, { force: true });
+    answerWait(answer, { STUB_PR: "merged" });
+    assert.deepEqual(readCalls(), [], JSON.stringify(answer));
+  }
+  fs.rmSync(readLog, { force: true });
+  const g = issue(gate());
+  assert.equal(run(["--to", g.file], { input: JSON.stringify(VALID) }).code, 0);
+  assert.deepEqual(readCalls(), []);
+});
+
+test("hasRunItHeading and callum-flow-rollout agree on the same bodies", async () => {
+  const { hasRunItHeading, conflictReason } = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "rollout-check.mjs")).href);
+  const bodies = [
+    STALE_BODY,
+    "Do it.\n",
+    "Do it.\n\n```\n## Run it\n```\n",
+    "Do it.\n\n~~~\n## Run it\n~~~\n\nafter",
+    "Do it, then run it after release.\n",
+    "# run IT\nx\n",
+    "###### Run it  \nx\n",
+    "####### Run it\nx\n",
+    "## Run it now\nx\n",
+    "  ## Run it\nx\n",
+    "## Run it\n",
+  ];
+  const rollout = path.join(__dirname, "..", "images", "base", "callum-flow-rollout");
+  for (const body of bodies) {
+    const r = spawnSync(rollout, ["5"], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "callum-flow-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: body, STUB_BRIEF: briefOf("merge - plain") },
+      timeout: 30_000,
+    });
+    const conflict = hasRunItHeading(body);
+    assert.equal(r.status, conflict ? 1 : 0, `${JSON.stringify(body)}: ${r.stdout}${r.stderr}`);
+    if (conflict) assert.equal(r.stdout.trim(), `ROLLOUT conflict ${conflictReason(5)}`, JSON.stringify(body));
+    else assert.doesNotMatch(r.stdout, /conflict/);
+  }
+});
+
+test("rollout-check's declaration file names exactly the module's exports", async () => {
+  const mod = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "rollout-check.mjs")).href);
+  const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", "rollout-check.d.mts"), "utf8");
+  const declared = [...dts.matchAll(/^export (?:const|function) (\w+)/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(declared, Object.keys(mod).sort());
 });

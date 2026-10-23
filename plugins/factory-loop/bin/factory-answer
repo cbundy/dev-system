@@ -36,6 +36,10 @@
 // the answer and names the unchecked conditions on stderr. The loop's own re-check stays shape-only.
 // A design-v2 done answer's evidence is read the same way (hooks/v2/done-check.mjs): the PR must be
 // merged and the commit on the default branch; the loop checks it again against origin.
+// A design-v2 brief whose Rollout is merge is read against the issue (hooks/v2/rollout-check.mjs, #987),
+// through callum-flow-issue-read: an issue body with a `## Run it` heading refuses it, with the reason
+// callum-flow-rollout gives; a read that decides nothing records it and says so on stderr. The PR-open
+// check (callum-flow-rollout) stays the backstop.
 'use strict'
 
 const NAME = 'factory-answer'
@@ -185,28 +189,30 @@ async function writeAtomically(mods, dir, name, body) {
   }
 }
 
-// ghRunner: runs `gh <argv>` without a shell, each call limited to the read timeout; a finished
-// call (any exit code) gives its result, a call that could not run or timed out rejects.
-function ghRunner(execFile, timeout) {
+// commandRunner: runs `<command> <argv>` without a shell, each call limited to the read timeout and
+// given `env` over the script's own; a finished call (any exit code) gives its result, a call that
+// could not run or timed out rejects.
+function commandRunner(execFile, command, timeout, env) {
   return argv =>
     new Promise((resolve, reject) => {
-      execFile('gh', argv, { timeout, encoding: 'utf8', maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+      execFile(command, argv, { timeout, encoding: 'utf8', maxBuffer: 1 << 20, env: { ...process.env, ...env } }, (err, stdout, stderr) => {
         if (err === null) resolve({ code: 0, stdout, stderr })
         else if (typeof err.code === 'number' && !err.killed) resolve({ code: err.code, stdout, stderr })
-        else reject(new Error(err.killed ? `gh timed out after ${timeout / 1000} s` : err.code === 'ENOENT' ? 'gh is not installed' : err.message))
+        else reject(new Error(err.killed ? `${command} timed out after ${timeout / 1000} s` : err.code === 'ENOENT' ? `${command} is not installed` : err.message))
       })
     })
 }
 
-// readOnGitHub: a hooks/v2 check module (wait-check.mjs, done-check.mjs) loaded beside the contract,
-// with the runner that runs its `gh` reads (execFile with an argv, no shell, each read limited).
-async function readOnGitHub(mods, self, file) {
+// readOnGitHub: a hooks/v2 check module (wait-check.mjs, done-check.mjs, rollout-check.mjs) loaded
+// beside the contract, with the runner that runs its reads: `gh`, or the named command with `env`
+// (execFile with an argv, no shell, each read limited).
+async function readOnGitHub(mods, self, file, command = 'gh', env = {}) {
   const { path } = mods
   const [cp, url] = await Promise.all([import('node:child_process'), import('node:url')])
   const check = await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)
   const override = Number(process.env.FACTORY_ANSWER_GH_TIMEOUT_MS)
   const timeout = Number.isInteger(override) && override > 0 ? override : check.READ_TIMEOUT_MS
-  return { check, runner: ghRunner(cp.execFile, timeout) }
+  return { check, runner: commandRunner(cp.execFile, command, timeout, env) }
 }
 
 // checkWaitOnGitHub: a wait's conditions read on GitHub (hooks/v2/wait-check.mjs, #980). A definite
@@ -226,6 +232,16 @@ async function checkDoneOnGitHub(mods, self, repo, evidence) {
   const { problems, unchecked } = await check.checkDone(evidence, repo, runner)
   if (problems.length > 0) throw new Refused(problems)
   if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking on GitHub: ${unchecked.join('; ')}. The loop checks the evidence again itself.\n`)
+}
+
+// checkRolloutOnIssue: a merge brief's Rollout read against the issue's body (hooks/v2/rollout-check.mjs,
+// #987). A Run it heading refuses; a read that decided nothing is named on stderr and the brief is
+// still recorded, since the PR-open check (callum-flow-rollout) runs again.
+async function checkRolloutOnIssue(mods, self, repo, issue, brief) {
+  const { check, runner } = await readOnGitHub(mods, self, 'rollout-check.mjs', 'callum-flow-issue-read', { CALLUM_FLOW_REPO: repo })
+  const { problems, unchecked } = await check.checkRollout(brief, issue, runner)
+  if (problems.length > 0) throw new Refused(problems)
+  if (unchecked.length > 0) process.stderr.write(`${NAME}: recorded without checking the Rollout against issue #${issue}: ${unchecked.join('; ')}. The PR-open check runs callum-flow-rollout again.\n`)
 }
 
 async function main(argv) {
@@ -252,6 +268,7 @@ async function main(argv) {
   if (!body.ok) throw new Refused(body.problems)
   if (place.job.contract === 'design-v2' && input.kind === 'wait') await checkWaitOnGitHub(mods, self, place.job.repo, input.conditions)
   if (place.job.contract === 'design-v2' && input.kind === 'done') await checkDoneOnGitHub(mods, self, place.job.repo, { pr: input.evidence.pr ?? null, commit: typeof input.evidence.commit === 'string' ? input.evidence.commit.trim().toLowerCase() : null })
+  if (place.job.contract === 'design-v2' && input.kind === 'brief') await checkRolloutOnIssue(mods, self, place.job.repo, place.job.issue, input.brief)
   await writeAtomically(mods, place.dir, place.name, body.outcome)
   process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${contract.answerSummary(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
   return 0
