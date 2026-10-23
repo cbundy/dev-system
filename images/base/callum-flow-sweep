@@ -298,7 +298,7 @@ log_unrecorded_merges() {
   fi
   cat "$tmp/rec.central" "$tmp/rec.local" > "$tmp/rec"
 
-  _base=$("$GH" repo view --repo "$repo" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null) || _base=
+  _base=$("$GH" repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null) || _base=
   if [ -z "$_base" ]; then
     err "cannot read the default branch of $repo - unrecorded merges to main not checked"
     rc=1
