@@ -468,6 +468,12 @@ describe('the files', () => {
     expect(JSON.parse(fresh.map.get(CONTROL_FILE) ?? '')).toEqual({ ...EMPTY_CONTROL, only: [522] })
   })
 
+  test('a note keeps its text as typed, line break included, in the written control.json', async () => {
+    const { io, map } = files()
+    expect((await runOp(io, PATHS, 'note 5 a b\nc', NOW)).ok).toBe(true)
+    expect(JSON.parse(map.get(CONTROL_FILE) ?? '').notes[0].text).toBe('a b\nc')
+  })
+
   test('an op that changes nothing, a bad op, or status writes nothing and does not ping', async () => {
     const { io, writes } = files({ [CONTROL_FILE]: JSON.stringify({ paused: [12] }) })
     expect(await runOp(io, PATHS, 'pause 12', NOW)).toMatchObject({ ok: true, ping: false, logged: null, text: '#12 is already paused.' })
@@ -612,7 +618,8 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
     expect(op('resume 60 "a \\\\"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\' })
     expect(op('resume 60 "a \\n b"')).toEqual({ op: 'unpark', issues: [60], note: 'a \\n b' })
     expect(op(`resume 60 "${'\\"'.repeat(2000)}"`)).toEqual({ op: 'unpark', issues: [60], note: '"'.repeat(2000) })
-    expect(parseOp(`resume 60 "${'\\"'.repeat(2001)}"`).ok).toBe(false)
+    expect(parseOp(`resume 60 "${'\\"'.repeat(2001)}"`)).toEqual({ ok: false, error: 'resume: the note is at most 2000 characters. Usage: resume <N...> ["note"]' })
+    expect(op('resume 60 "a\nb"')).toEqual({ op: 'unpark', issues: [60], note: 'a b' })
     // canonical text parses back
     for (const text of ['resume 60', 'resume 60 61 "a note"', 'resume 60 "say \\"hi\\" \\\\ x"', 'note 5 a  b\nc', 'note "quoted" \\ text']) expect(op(formatOp(op(text)))).toEqual(op(text))
   })
