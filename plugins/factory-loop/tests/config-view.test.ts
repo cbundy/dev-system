@@ -240,7 +240,7 @@ describe('configText', () => {
     const def = configText(view({}), control(), NOW)
     expect(line(def, 'releaseBranchPrefix')).toContain('none')
     expect(line(def, 'releaseBranchPrefix')).toEndWith(' default')
-    expect(line(def, 'releaseHold')).toContain('10m')
+    expect(line(def, 'releaseHold')).toContain('45m')
     expect(line(def, 'releaseHold')).toEndWith(' default')
     const set = configText(view({ releaseBranchPrefix: 'chore/release-', releaseHold: '0' }, { releaseHold: 0 }), control(), NOW)
     expect(line(set, 'releaseBranchPrefix')).toContain('chore/release-')

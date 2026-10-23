@@ -16,8 +16,8 @@
 //   untrusted author, a wait on GitHub past its bound; otherwise Q1, a CI re-run, the body written again after a linkage FAIL,
 //   the PR reopened after a hand close the record handled, or Q2. A PR that did not read is a wait
 //   on GitHub, bounded like any other (4.4); only a GitHub rate limit holds it with no clock.
-// - Release hold (9.1): while a release bump PR is open within `releaseHold` of its creation
-//   (rules-release-hold.ts), the head plans no Q2 and its step is `held`, with no clock. Every record
+// - Release hold (9.1): while a release bump PR's head is inside its window, at most `releaseHold` from
+//   the head's anchor and with no failed check (rules-release-hold.ts), the head plans no Q2 and its step is `held`, with no clock. Every record
 //   stays in the queue at its place, and Q1, CI re-runs and fixers go on, so the head is ready the
 //   moment the hold ends.
 // - Every action of the head is wanted through the foundation, so one that failed is tried again

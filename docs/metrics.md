@@ -1893,13 +1893,15 @@ ORDER BY h.held_at DESC;
 ```
 
 **Release holds** (the merge queue's hold for a release's bump PR, v2 SPEC 9.1): the loop logs one
-`hold:release` loop intervention when a hold starts, fact `hold/release/pr<p>/start`, and one end,
-fact `hold/release/pr<p>/end`, with cause `hold:release-merged`, `hold:release-closed` or
-`hold:release-timeout`. Each device logs its own, so an event is counted once per fact. The detail
+`hold:release` loop intervention when a hold window starts, fact `hold/release/pr<p>/h<head12>/start`
+(one window per head of the bump PR; the older form has no `h<head12>`), and one end, fact
+`hold/release/pr<p>/h<head12>/end`, with cause `hold:release-merged`, `hold:release-closed`,
+`hold:release-pushed` (a push started a new window), `hold:release-failed` (a check failed or was
+cancelled) or `hold:release-timeout` (the window ran out; the owner item `release-hold` goes out too). Each device logs its own, so an event is counted once per fact. The detail
 names the queue heads whose merge the hold deferred. A hold with no end yet has a null `held_s`.
 
 ```sql
--- per hold: when the bump PR's hold started, how it ended and how long it lasted
+-- per window: when the bump PR's hold started, how it ended and how long it lasted
 WITH ev AS (
   SELECT repo, pr, fact, cause, min(ts) AS ts
   FROM factory.event_log
@@ -1918,7 +1920,7 @@ ORDER BY s.ts DESC;
 ```
 
 ```sql
--- per week: how many release holds ended, and the share that ran out their window (is 10 minutes enough)
+-- per week: how many release holds ended, and the share that ran out their window (is 45 minutes enough); pushed, failed and timeout ends are counted in their own columns
 WITH ends AS (
   SELECT repo, fact, cause, min(ts) AS ts
   FROM factory.event_log
@@ -1928,6 +1930,8 @@ WITH ends AS (
 )
 SELECT date_trunc('week', ts)::date AS week,
   count(*) AS holds,
+  count(*) FILTER (WHERE cause = 'hold:release-pushed') AS pushed,
+  count(*) FILTER (WHERE cause = 'hold:release-failed') AS failed,
   count(*) FILTER (WHERE cause = 'hold:release-timeout') AS timeouts,
   round(100.0 * count(*) FILTER (WHERE cause = 'hold:release-timeout') / count(*), 1) AS timeout_pct
 FROM ends

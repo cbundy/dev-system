@@ -81,7 +81,7 @@ the model was involved.
   still needs asking) becomes an owner item, a comment on the issue and one `[ACTION]` line to the
   owner, and the task goes on. Answer `failed` (reason) when the release cannot be cut. A merge
   waits for a release only briefly: the loop holds its own merges while the release's bump PR is
-  open, for at most `releaseHold` (10 minutes) from its creation, when the repo sets
+  open and its checks run, for at most `releaseHold` (45 minutes) from each push, when the repo sets
   `releaseBranchPrefix`. You hold nothing yourself.
 
 ### Release decisions
@@ -215,6 +215,10 @@ Owner items (the title counts them until resolved):
   the cause from `error`. One containing `unknown factory event` or `skipped` means the workspace
   image is older than the loop: the owner rebuilds or updates the image, and the loop does not
   recover by itself. Any other error: the owner checks the database; the loop recovers by itself.
+- `release-hold` (pr, branch, head, minutes, checks): the release bump PR's CI has run past the hold
+  (`releaseHold`) without failing, so the queue merges again and the bump PR may fall behind main. Lead
+  with `[ACTION]`: name the PR and head, and say the owner or judge checks why its checks have not
+  finished or the PR has not merged.
 - `reader-behind` (types, count): the workspace image cannot read events of those types (`type vN`,
   comma-joined), so it is older than the loop; the loop keeps working. Owner updates the image. A
   release that adds a reader of those types to the derivation turns this into `blind`.

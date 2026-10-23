@@ -21,6 +21,7 @@ import type { WorkspaceRead } from './workspace'
 import type { StampOwned, StampTries, Stamps } from './stamps'
 import type { QueueView } from './queue-view'
 import type { MainReading } from './types-facts'
+import type { ReleasePrsRead } from './release-hold-types'
 
 export { LOOP_CAUSES, PERSON_CAUSES } from './types-facts'
 export type { InterventionWho, MainDeployment, MainReading, MainRun, MainWorkflow } from './types-facts'
@@ -430,7 +431,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 
 // The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2); blind, the foundation's own, is one of them under v2. The foundation's others (runaway, heartbeat-other, old-watcher, schema-behind, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused', 'blind', 'reader-behind'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused', 'blind', 'reader-behind', 'release-hold'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale', 'done', 'flake-bug', 'actions-resumed', 'capacity'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -456,13 +457,6 @@ export type WaitRead = { at: Ms; held: boolean; tag?: string }
 
 // A condition the loop cannot read, since when: its read failed, or (tag-contains) its repo has no release tag.
 export type WaitUnread = { since: Ms; why: 'read-failed' | 'no-release' }
-
-// An open release bump PR (sources-release.ts): its branch and GitHub's creation time, which the
-// merge queue's hold window runs from (9.1).
-export type ReleasePr = { pr: number; branch: string; createdAt: Ms }
-// What the merge queue's release hold reads: the open bump PRs, and how the ones that left the list
-// ended (merged or closed), until their end is logged.
-export type ReleasePrsRead = { prs: ReleasePr[]; left: Record<number, 'merged' | 'closed'> }
 
 // A trusted comment on an issue (callum-flow-issue-read --comments), for a resume's note (11).
 export type IssueComment = { body: string; at: Ms; url: string | null }
