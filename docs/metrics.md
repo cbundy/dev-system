@@ -1408,8 +1408,8 @@ jq -rs '[.[] | (.outcomes // [])[] | select(.key | test("/upstream$")) | "\(.key
 How long the upstream waits last: the 7a query above, filtered to waits that name the upstream repo (the
 transition note's `wait` is `issue:cbundy/dev-system#<n>`):
 
-```sql
--- add to the final SELECT of 7a
+```text
+-- add to the final WHERE of 7a
 AND EXISTS (SELECT 1 FROM jsonb_array_elements(data -> 'wait') w WHERE w ->> 'repo' = 'cbundy/dev-system')
 ```
 
