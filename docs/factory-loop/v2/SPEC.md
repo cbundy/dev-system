@@ -2689,7 +2689,7 @@ unlabelled or never read) is accepted at once (D-76).
   `images/base` (DECISIONS D-42). A `toolsDir` also sets `CALLUM_FLOW_LINKAGE_BIN` to
   `<toolsDir>/check-pr-linkage.sh` for every command, so the merge guard's link check runs the
   checkout's script; without `toolsDir` the variable is left unset.
-- **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 13.4.2.
+- **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in appendix A.
   The plugin ships no repo-specific values (CLAUDE.md: shared plugins stay generic). An unknown
   key or a bad value is left out and named in the decision log (`config`).
 - **Control state** in `<loop dir>/control.json` (13.4.3): owner directives that change at runtime.
@@ -2701,40 +2701,9 @@ session; `callum-flow-event` stamps both on every event), and, when the pass doe
 
 #### 13.4.2 Settings and defaults
 
-| Key | Default | Meaning |
-|---|---|---|
-| `readyLabel`, `inDevLabel` | `ready`, `in development` | the queue and claim labels (I-03). Labels are lower case for now, and every label comparison ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
-| `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
-| `skipLabels` | `[]` | labels that keep an issue out of rule `S1` (I-92) |
-| `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
-| `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
-| `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (13.11.2) |
-| `trace` | `false` | trace mode (13.12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
-| `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (13.12.1) |
-| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
-| `passEveryMs` | `60s` | the timer |
-| `minimumReleaseCadenceMs` | `6h` | the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake carries it as `cadence` |
-| `titleEveryMs` | `5m` | the session title is renamed at most this often (13.9.1) |
-| `reportEveryMs` | `10m` | the factory report is built at most this often; delivery comes in a later child of #684 |
-| `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
-| `usageStaleMs` | `15m` | an older reading counts as unavailable |
-| `heartbeatEveryMs`, `sweepEveryMs` | `20m`, `30m` | rules `H1`, `H2`; `heartbeatEveryMs` is also how long a claim that is done but not yet shown by the factory state counts as started (#538) |
-| `checkoutEveryMs` | `5m` | how often the main-checkout tripwire reads the checkout (10.7) |
-| `slowGapMs` | `10m` | Slow: the least time between two claims |
-| `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | 3 | a cap on this device's live issues (K, further bounded by the memory ceiling below; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
-| `slotMemoryMiB` | `auto` | the memory one slot is assumed to use, `auto` or a whole number of at least 1 (`next-pass`). `auto` is the p90 (nearest rank) of `memPeakBytes - memStartBytes` over the companion's gate lines of the window that carry both, each run once per (issue, life, seq, startedAt), once at least 3 such runs exist; with fewer it is 3072 MiB (the agent session plus one full stop gate; the plant-console figure of 12.9 GB held 3 at a time without an OOM kill). A set number wins. Shown beside the estimate's source: `setting`, `measured` or `default` |
-| `memoryReserveMiB` | 2048 | the container's memory kept free of slots, a whole number of at least 0 (`next-pass`) |
-| `worktreeReserve` | 2 | free slots kept for the steps of issues already in flight |
-| `reviewFixCap` | 3 | review fix rounds per issue (`fixCap`, 8.6; I-48) |
-| `conflictFixCap` | 5 | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
-| `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
-| `starvedNoticeAfterMs` | `60m` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
-| `maxAttempts` | claim 3, stop-agent 1, restart-self 1, task and tell 1 (one reminder inside the attempt); heartbeat and sweep 3 each; any other kind 3; v2's step kinds carry their own (appendix A) | then the owner hears of it (`tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47), and the owner item (`tell:stalled:<key>`) stays while a retry runs, until a run ends `done` |
-| `retryBackoffMs` | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
-| `wakeTimeoutMs` | task `6h`, tell `30m` | 13.8 |
-| `queueScore` | priorityLabel 30, bug 25, unblocksDirect 10, unblocksTransitive 5, unblocksCap 40, closesEpic 20, nearlyClosesEpic 10, epicStarted 10, waitingPerHour 2, waitingCap 20, failedLife 10, failedLivesCap 30, areaFactory 20, needsOwner 40, overlap 15 | the weights of the claim score (S1, `hooks/v2/score.ts`): whole numbers of at least 0, penalties as positive magnitudes; set one with `/factory config set queueScore.<name> N`; applied `next-pass`. `unblocks` is `min(unblocksCap, unblocksDirect x direct + unblocksTransitive x transitive)`, where transitive walks `state.blockGraph`; `waiting` is `min(waitingCap, floor(waitingPerHour x hours claimable))`; `failed-lives` is `-min(failedLivesCap, failedLife x earlier lives not ended merged)`; the three intake weights score only while `intakeStamp` is `on` and the issue has a stamp (`stamps:<repo>`): `area-factory` is `+areaFactory` for the label `area:factory` (stacks on `bug`), `needs-owner` is `-needsOwner` for the label `needs-decision`, and `overlap` is `-overlap`, once, when the stamp's `touches` (cut to their first segment) meet the `paths` of any other live record |
-| `rateCaps` | starts 30, spawns 120, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (13.11.4) |
+Every key, with its default and meaning, is a row of the table in appendix A; `/factory help config` prints the same
+list (13.4.3). What stays here is the memory ceiling the settings `maxInFlightIssues`, `slotMemoryMiB` and
+`memoryReserveMiB` feed.
 
 The memory ceiling (`hooks/v2/capacity.ts`). The loop reads the container's memory once per process
 beside the CPU count: the cgroup's `memory.max` in bytes, or `/proc/meminfo` `MemTotal` when that is
@@ -2814,7 +2783,10 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
   `stamps:<repo>`, the score and the ledger as they were, and logs one local decision-log line (`stamp`, `outcome`, `model`, `seconds`).
   The real run, which writes, is rule I1's (13.4.4); the dry run keeps writing nothing.
 - An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
-  answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
+  answer and changes nothing; `help config` lists every setting `config set` accepts, each with its default and a one-line meaning
+  (`hooks/config-help.ts`: `mode`, `trace`, the plugin and runtime keys, retired keys and the first-loop keys are left out of the list,
+  the last on one closing line), also a normal answer that writes and logs nothing; any other word after `help` is refused with
+  `Usage: help [config]`; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` takes issue numbers and an
   optional note in double quotes (at most 2 000 characters).
 - Limits, refused rather than cut: an override's percentage above 0 and at most 100 and its
@@ -4425,54 +4397,99 @@ own test.
 
 ## Appendix A. Settings
 
-The loop's own keys, in the repo-local file or the workspace file (which wins). Durations take `60s`, `5m`,
-`2h` as the foundation's do (13.4.2).
+Every key the loader accepts, one row each: the foundation's (13.4.2) and the loop's own, in the repo-local file or the workspace file
+(which wins). Durations take `60s`, `5m`, `2h` under the key without `Ms` (the "written" spelling) or a number of
+milliseconds under either spelling. The Default column is what `/factory help config` prints (`hooks/config-help.ts`,
+`defaultText`): a duration in its short form, `none` for null, a list as JSON, a map as `name value, ...`;
+`tests/factory-loop-settings-docs.test.js` holds it to the loader. `/factory config set` refuses `mode` and `trace` (they
+have ops of their own) and `shadowDevice` (a plugin option), and `help config` leaves them and the first-loop keys out.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `mode` | `observe` | `off`, `observe` or `act` (13.4.1): what the loop does. A plugin option; the workspace file's `mode`, which `/factory mode` writes, wins |
+| `shadowDevice` | `none` | a plugin option (13.4.1), observe mode only: plan as this device, the live orchestrator's, so an observe run can be compared with it; `none` plans as this one; ignored in act mode |
+| `readyLabel` | `ready` | the queue and claim label (I-03). Labels are lower case for now, and every label comparison ignores case (owner, 2026-10-13) |
 | `priorityLabel` | `priority` | 3.3: the label of the `priority-label` score factor (S1 orders by score after the owner's `only`/`priority` list), ignoring case; order only, never a filter |
-| `stateTimeoutMs` | design 45m, build 90m, review 30m, fix 60m, triage 15m, queued 6h, queueWait 2h, parked 24h, waiting 24h | 4.4 |
-| `ciStartMs` | `10m` | 4.4 |
-| `ciRunMs` | `30m` | 4.4 |
-| `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
+| `inDevLabel` | `in development` | the claim label (I-03); ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
+| `skipLabels` | `[]` | labels that keep an issue out of rule `S1` (I-92) |
+| `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
+| `usageSlowPct` | `85` | the Slow tier (I-12 to I-16), in percent |
+| `usageStopNewPct` | `90` | the stop-new tier (I-12 to I-16), in percent |
+| `usageStopAllPct` | `95` | the stop-all tier (I-12 to I-16), in percent |
+| `passEveryMs` (written `passEvery`) | `1m` | the timer |
+| `titleEveryMs` (written `titleEvery`) | `5m` | the session title is renamed at most this often (13.9.1) |
+| `reportEveryMs` (written `reportEvery`) | `10m` | the factory report is built at most this often; delivery comes in a later child of #684 |
+| `queueEveryMs` (written `queueEvery`) | `2m` | observe cadence: the queue |
+| `githubEveryMs` (written `githubEvery`) | `5m` | observe cadence: GitHub |
+| `usageEveryMs` (written `usageEvery`) | `5m` | observe cadence: usage |
+| `milestoneEveryMs` (written `milestoneEvery`) | `10m` | observe cadence: milestones |
+| `usageStaleMs` (written `usageStale`) | `15m` | an older reading counts as unavailable |
+| `heartbeatEveryMs` (written `heartbeatEvery`) | `20m` | rule `H1`'s cadence; also how long a claim that is done but not yet shown by the factory state counts as started (#538) |
+| `sweepEveryMs` (written `sweepEvery`) | `30m` | rule `H2`'s cadence |
+| `checkoutEveryMs` (written `checkoutEvery`) | `5m` | how often the main-checkout tripwire reads the checkout (10.7) |
+| `slowGapMs` (written `slowGap`) | `10m` | Slow: the least time between two claims |
+| `maxStartsPerPass` | `4` | claims per pass in Normal |
+| `maxInFlightIssues` | `3` | a cap on this device's live issues (K, further bounded by the memory ceiling in 13.4.2; owner, 2026-10-13, lowered from 10 after the testbed run; default 3 as built). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `worktreeReserve` | `2` | free slots kept for the steps of issues already in flight |
+| `reviewFixCap` | `3` | review fix rounds per issue (`fixCap`, 8.6; I-48) |
+| `conflictFixCap` | `5` | fix rounds per life for conflicts and red CI in the merge queue, apart from `reviewFixCap` (8.6; applied `next-pass`) |
+| `guardRecheckMs` | `3m` | first loop only: accepted in a settings file, no effect |
+| `guardTtlMs` | `5m` | first loop only: accepted in a settings file, no effect |
+| `respondSettleMs` | `15m` | first loop only: accepted in a settings file, no effect |
+| `updateBehindRetryMs` | `5m` | first loop only: accepted in a settings file, no effect |
+| `updateBehindRetries` | `3` | first loop only: accepted in a settings file, no effect |
+| `ciStallRecheckMs` | `15m` | first loop only: accepted in a settings file, no effect |
+| `blindNoticeAfterMs` (written `blindNoticeAfter`) | `15m` | blind this long tells the owner |
+| `starvedNoticeAfterMs` (written `starvedNoticeAfter`) | `1h` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
+| `agentTimeoutMs` | `designer 1h, implementer 2h, adjudicator 30m, fixer 2h` | first loop only: accepted in a settings file, no effect |
+| `wakeTimeoutMs` (written `wakeTimeout`) | `judge 30m, task 6h, tell 30m` | per wake kind (13.8); a wake already running keeps the timeout it took |
+| `maxAttempts` | `claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, heartbeat 3, sweep 3, restart-self 1, stop-agent 1, judge 1, task 1, tell 1, agent-step 1, ci-rerun 3, queue-update 1, queue-merge 1` | per action kind or agent type, then the owner hears of it (`tell(task-timeout)` for a task); any other kind is 3, and v2's step kinds carry their own (appendix B). A task and a tell are asked once, with one reminder inside the attempt. Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47), and the owner item (`tell:stalled:<key>`) stays while a retry runs, until a run ends `done` |
+| `retryBackoffMs` (written `retryBackoff`) | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
+| `rateCaps` | `start 30, spawn 120, wake 20, perIssueKind 6` | runaway protection (13.11.4): starts, spawns and wakes per rolling hour, and `perIssueKind` actions of one kind on one issue; no global cap on merges (DECISIONS D-24) |
+| `queueScore` | `priorityLabel 30, bug 25, unblocksDirect 10, unblocksTransitive 5, unblocksCap 40, closesEpic 20, nearlyClosesEpic 10, epicStarted 10, waitingPerHour 2, waitingCap 20, failedLife 10, failedLivesCap 30, areaFactory 20, needsOwner 40, overlap 15` | the weights of the claim score (S1, `hooks/v2/score.ts`): whole numbers of at least 0, penalties as positive magnitudes; set one with `/factory config set queueScore.<name> N`; applied `next-pass`. `unblocks` is `min(unblocksCap, unblocksDirect x direct + unblocksTransitive x transitive)`, where transitive walks `state.blockGraph`; `waiting` is `min(waitingCap, floor(waitingPerHour x hours claimable))`; `failed-lives` is `-min(failedLivesCap, failedLife x earlier lives not ended merged)`; the three intake weights score only while `intakeStamp` is `on` and the issue has a stamp (`stamps:<repo>`): `area-factory` is `+areaFactory` for the label `area:factory` (stacks on `bug`), `needs-owner` is `-needsOwner` for the label `needs-decision`, and `overlap` is `-overlap`, once, when the stamp's `touches` (cut to their first segment) meet the `paths` of any other live record |
+| `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (13.11.2) |
+| `trace` | `false` | trace mode (13.12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on|off` writes, overrides it |
+| `traceMaxBytes` | `104857600` | the trace files' total size (100 MiB): the oldest go first, and today's is cut short rather than pass it (13.12.1) |
+| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
+| `eventsSource` | `new` | `old`, `new` or `shadow` (3.3): where the facts and the ledger rebuild read the factory events; `new` since #978, and `/factory config set eventsSource old` is the way back, taken on the next pass |
+| `stateTimeoutMs` (written `stateTimeout`) | `design 45m, build 90m, review 30m, fix 1h, triage 15m, queued 6h, queueWait 2h, parked 24h, waiting 24h` | 4.4: per state, a map of durations |
+| `ciStartMs` (written `ciStart`) | `10m` | 4.4 |
+| `ciRunMs` (written `ciRun`) | `30m` | 4.4 |
+| `prEveryMs` (written `prEvery`) | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
 | `mainEveryMs` (written `mainEvery`) | `5m` | 2.4: how often the default branch's state is read (act mode), any positive duration |
-| `maxTriages` | 2 | 5.1 |
-| `windDownMinutes` | 10 | 10.11: the minutes a requested wind-down may take, a whole number of at least 0; 0 turns wind-down off (a request is ignored). Read every pass from both settings files; `/factory config` shows it as `windDown`, with its source |
-| `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
-| `releaseBranchPrefix` | `null` | 9.1: the head-branch prefix of a release's bump PR (like `chore/release-`), a non-empty string; null turns the release hold off. Read every pass from both settings files; `/factory config` shows it with its source |
+| `maxTriages` | `2` | 5.1 |
+| `windDownMinutes` | `10` | 10.11: the minutes a requested wind-down may take, a whole number of at least 0; 0 turns wind-down off (a request is ignored). Read every pass from both settings files; `/factory config` shows it as `windDown`, with its source |
+| `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake names it as `cadence` |
+| `releaseBranchPrefix` | `none` | 9.1: the head-branch prefix of a release's bump PR (like `chore/release-`), a non-empty string; `none` (null) turns the release hold off. Read every pass from both settings files; `/factory config` shows it with its source |
 | `releaseHoldMs` (written `releaseHold`) | `45m` | 9.1: the longest the merge queue holds per head of a bump PR, counted from the head's anchor; 0 turns the hold off. Read every pass from both settings files; `/factory config` shows it as `releaseHold` (`off` at 0) |
 | `releaseInProgressMs` (written `releaseInProgress`) | `2h` | 11, O3: after a release task answered `done`, no release review is planned until a newer tag is seen or this long has passed since it ended; 0 turns it off. Read every pass; `/factory config` shows it as `releaseInProgress` (`off` at 0) |
-| `flakeWindowDays` | 7 | 8.5: the days back a test's flakes count toward a flake bug, a whole number of at least 1 |
-| `flakeBugMin` | 2 | 8.5: the flakes of one test in the window that file a flake bug, a whole number of at least 1 |
-| `flakeBugReadyCap` | 2 | 8.5: a new flake bug is readied only while fewer open flake bugs than this are `ready` or in flight, a whole number of at least 0 |
-| `flakeEpic` | `null` | 8.5: the issue a flake bug is linked under as a sub-issue; null links none. dev-system's `.claude/factory-loop.json` sets 864 |
-| `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
+| `flakeWindowDays` | `7` | 8.5: the days back a test's flakes count toward a flake bug, a whole number of at least 1 |
+| `flakeBugMin` | `2` | 8.5: the flakes of one test in the window that file a flake bug, a whole number of at least 1 |
+| `flakeBugReadyCap` | `2` | 8.5: a new flake bug is readied only while fewer open flake bugs than this are `ready` or in flight, a whole number of at least 0 |
+| `flakeEpic` | `none` | 8.5: the issue a flake bug is linked under as a sub-issue; `none` (null) links none. dev-system's `.claude/factory-loop.json` sets 864 |
+| `maxLives` | `3` | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `regime` | `factory_loop_v2` | `factory_loop_v2` or `testbed` (anything else, `manual` included, is refused and read as `factory_loop_v2`): the `regime` every event the loop's commands write carries, passed as `FACTORY_REGIME` (13.4.1); applied `next-pass` |
 | `intakeStamp` | `off` | `off` or `on` (anything else is refused): the intake stamp's factors score (3.5) and the `paths` source reads (2.4); off changes nothing of the claim order and runs no reader (13.4.4: on, rule I1 also stamps each ready issue once per body version and sets `area:*` and `needs-decision` with the owner's precedence), and `/factory stamp <N>` (13.4.3) still dry-runs the reader |
 | `intakeModel` | `haiku` | the intake agent's model; when larger than `triageModel` (haiku < sonnet < opus < fable) it is named in the config problems and `triageModel` is used |
-| `intakeAreas` | `["factory", "product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
+| `intakeAreas` | `["factory","product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
 | `reviewer` | `adjudicator` | 8.2 |
 | `reviewerModel` | `opus` | 8.3 |
-| `gateCommands` | `[]` | 10.6 |
-| `gateTimeoutMs` | `10m` in all | 10.6 |
-| `gateConcurrency` | `auto` (`max(1, floor(cpus / 8))`) | 10.6 |
-| `gateWaitTimeoutMs` | `30m` in all | 10.6 |
-| `slotMemoryMiB`, `memoryReserveMiB` | `auto`, 2048 | 13.4.2 |
-
-The foundation's settings (13.4) also apply: `maxInFlightIssues` (K; default 3), `worktreeReserve`,
-`poolSize`, `reviewFixCap` (`fixCap`), `retryBackoffMs` and `maxAttempts` (for effects),
-`rateCaps`, the usage thresholds, the read cadences, `heartbeatEveryMs`, `sweepEveryMs`,
-`checkoutEveryMs`, `slowGapMs`, `maxStartsPerPass`, `answerChannel` (`script`), `trace`,
-`traceMaxBytes`.
+| `gateCommands` | `[]` | 10.6: the stop gate's commands; a repo sets its own |
+| `gateTimeoutMs` (written `gateTimeout`) | `10m` | 10.6: in all |
+| `gateConcurrency` | `auto` | 10.6: `auto` is `max(1, floor(cpus / 8))`, or a whole number |
+| `gateWaitTimeoutMs` (written `gateWaitTimeout`) | `30m` | 10.6: in all |
+| `slotMemoryMiB` | `auto` | the memory one slot is assumed to use, `auto` or a whole number of at least 1 (`next-pass`). `auto` is the p90 (nearest rank) of `memPeakBytes - memStartBytes` over the companion's gate lines of the window that carry both, each run once per (issue, life, seq, startedAt), once at least 3 such runs exist; with fewer it is 3072 MiB (the agent session plus one full stop gate; the plant-console figure of 12.9 GB held 3 at a time without an OOM kill). A set number wins. Shown beside the estimate's source: `setting`, `measured` or `default` |
+| `memoryReserveMiB` | `2048` | the container's memory kept free of slots, a whole number of at least 0 (`next-pass`) |
+| `poolSize` | `16` | the treehouse pool of the main checkout (13.4.1); the workspace file only, a whole number of at least 1 |
 
 Retired keys: `planner` and `shadow` chose between the first loop and this one (2.3). A settings
 file that still sets either one, to any value, loads; the key is ignored and `problems` reports it
 as retired (`/factory config` shows it).
 
-Keys only the first loop read: `guardRecheckMs`, `guardTtlMs`, `respondSettleMs`,
-`updateBehindRetryMs`, `updateBehindRetries`, `ciStallRecheckMs` and `agentTimeoutMs`. The loop
-still accepts them in a settings file, and they have no effect.
+Keys only the first loop read (`guardRecheckMs`, `guardTtlMs`, `respondSettleMs`, `updateBehindRetryMs`,
+`updateBehindRetries`, `ciStallRecheckMs` and `agentTimeoutMs`) are rows above: the loop still accepts them in a
+settings file, and they have no effect. `/factory help config` lists them on one line, not as settings.
 
 ## Appendix B. Action kinds
 
@@ -4580,7 +4597,7 @@ Notices (TELL kinds), owner items first:
 | `stamp <N>` | the intake reader's dry run on issue N (13.4.3): the reply at once, the notice when the reader ends. The reader answers `{"area": <one of intakeAreas>, "needs_owner": <bool>, "reason": <one line, 1 to 200 characters, required when needs_owner is true>, "touches": [<at most 20 distinct top-level names>]}`; `checkIntake` drops a bad field and names it (`ok`, `dropped` or `failed`). View-only: it logs no intervention, writes nothing to GitHub, the events, `stamps:<repo>` or the ledger |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
-| `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `config`, `help` | as the foundation (13.4.3) |
+| `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `config`, `help [config]` | as the foundation (13.4.3) |
 
 Every op but `status`, `stamp` and `help` is logged as a person intervention (7.2). Rescues the loop cannot
 see are recorded by hand with `callum-flow-event intervention` (7.2); there is no `/factory touch`

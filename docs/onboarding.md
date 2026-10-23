@@ -415,17 +415,18 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 
 | Setting | Default | What it means |
 |---|---|---|
-| `gateCommands` | none | The stop gate's commands, run in order in the agent's worktree (lint, then test). Empty means no gate. |
-| `gateTimeoutMs` | 10 minutes | The budget for all of the gate commands together, in milliseconds (or `gateTimeout` as a duration, like `"15m"`). A gate that runs out is recorded as unknown, never as a pass, and CI decides. |
-| `maxInFlightIssues` | 3 | How many issues the loop works on at once. Parked and waiting issues do not count. The loop also holds fewer when the container's memory cannot hold that many (see `slotMemoryMiB`). |
+| `gateCommands` | `[]` | The stop gate's commands, run in order in the agent's worktree (lint, then test). Empty means no gate. |
+| `gateTimeoutMs` | `10m` | The budget for all of the gate commands together, in milliseconds (or `gateTimeout` as a duration, like `"15m"`). A gate that runs out is recorded as unknown, never as a pass, and CI decides. |
+| `maxInFlightIssues` | `3` | How many issues the loop works on at once. Parked and waiting issues do not count. The loop also holds fewer when the container's memory cannot hold that many (see `slotMemoryMiB`). |
 | `slotMemoryMiB` | `auto` | The memory one issue's slot is assumed to use, in MiB. `auto` measures it from the stop gates' memory and uses 3072 until three runs are measured. The container's memory less `memoryReserveMiB`, over this, is the most issues held at once. |
-| `memoryReserveMiB` | 2048 | The container's memory kept free of slots, in MiB. |
+| `memoryReserveMiB` | `2048` | The container's memory kept free of slots, in MiB. |
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
-| `minimumReleaseCadence` | `"6h"` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
-| `releaseBranchPrefix` | none | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
-| `releaseHold` | `"45m"` | The longest the queue holds per push of the bump PR while its checks are pending or green, counted from the head's start (commit or first check); a push restarts it and a failed check ends it; `0` turns the hold off. |
+| `minimumReleaseCadence` | `6h` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
+| `releaseBranchPrefix` | `none` | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
+| `releaseHold` | `45m` | The longest the queue holds per push of the bump PR while its checks are pending or green, counted from the head's start (commit or first check); a push restarts it and a failed check ends it; `0` turns the hold off. |
 
-The rest are in [the v2 SPEC, appendix A](factory-loop/v2/SPEC.md#appendix-a-settings). The
+`/factory help config` lists every setting with its default and a one-line meaning, and
+[the v2 SPEC, appendix A](factory-loop/v2/SPEC.md#appendix-a-settings) has the full table. The
 workspace file, `${CLAUDE_CONFIG_DIR}/factory-loop/config.json` (`/persist/claude/factory-loop/config.json`
 in a Coder workspace), can set any key and wins over the repo's file. `/factory config` shows
 every setting the loop runs with and where each came from.
@@ -511,7 +512,7 @@ and does nothing. In the loop's session:
 | `drop <N>` | abandon N for this life; its agents stop and its claim is released |
 | `mode off\|observe\|act` | stop, watch only, or work |
 
-`/factory help` lists every op, and [the v2 SPEC, appendix E](factory-loop/v2/SPEC.md#appendix-e-owner-ops)
+`/factory help` lists every op, `/factory help config` every setting, and [the v2 SPEC, appendix E](factory-loop/v2/SPEC.md#appendix-e-owner-ops)
 says what each does. To stop the loop within a minute whatever its mode, create the `OFF` file
 in the workspace: `touch /persist/claude/factory-loop/OFF`, and delete it to start again.
 
