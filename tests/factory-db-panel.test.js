@@ -276,7 +276,7 @@ test("the bootstrap takes an allowlist change, refuses a bad name before it conn
   assert.equal(db.query("SELECT string_agg(repo, ',') FROM factory.public_repos"), "c/d");
   assert.match(bootOk(db, ["--public-repo", "remove", "c/d", "--public-repo", "add", "c/d"]), /public repos: -c\/d, \+c\/d\)/);
   // Refused before any connection: the admin URL points nowhere.
-  const nowhere = { ...own, FACTORY_DB_ADMIN_URL: "postgresql://nobody@127.0.0.1:1/none" };
+  const nowhere = { FACTORY_DB_ADMIN_URL: "postgresql://nobody@127.0.0.1:1/none" };
   for (const bad of [["add", "nope"], ["add", "a/b/c"], ["remove", "a b/c"], ["drop", "a/b"]]) {
     const r = boot(db, ["--public-repo", ...bad], nowhere);
     assert.notEqual(r.status, 0, bad.join(" "));
