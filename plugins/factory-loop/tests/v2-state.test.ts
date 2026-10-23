@@ -30,6 +30,7 @@ import { renderQuestion } from '../hooks/v2/question.mjs'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
 import { FACTORY_LABELS, SLOT_STATES, V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2Ctx, V2Io, V2State } from '../hooks/v2/types'
+import { applyOp, parseOp } from '../hooks/control'
 import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, config, control, entry, issue, running, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -816,7 +817,7 @@ describe('the steps', () => {
 
   test('S2: the slot prepared for the attempt, then the step\'s agent spawned in it with the record\'s notes and the owner\'s; a step that admission holds has no clock', () => {
     const r = rec(91, { state: 'designing', step: 'design', notes: ['use the v2 API'] })
-    const s = world([r], { control: control({ notes: [{ issue: 91, text: 'keep it small', at: NOW - 10 * MIN }, { issue: 92, text: 'not this one', at: NOW - 10 * MIN }] }) })
+    const s = world([r], { control: control({ notes: [{ issue: 91, text: 'keep it small', at: NOW - 10 * MIN }, { issue: 92, text: 'not this one', at: NOW - 10 * MIN }, { issue: 91, text: 'older', at: NOW - 20 * MIN }, { issue: null, text: 'fleet old', at: NOW - 30 * MIN }, { issue: null, text: 'fleet', at: NOW - 5 * MIN }] }) })
     const prep = of(plan(s), 91)
     expect(prep).toEqual([expect.objectContaining({ kind: 'slot', op: 'prepare', key: prepareKey(r, 1), path: '/slots/91', lease: 'L91', branch: 'issue-91', maxAttempts: 1 })])
     expect((prep[0] as Extract<Action, { kind: 'slot' }>).marker).toMatchObject({ v: 1, issue: 91, life: LIFE, seq: 3, step: 'design', role: 'reader', branch: 'issue-91', pr: null })
@@ -826,12 +827,31 @@ describe('the steps', () => {
     expect(prepPr?.marker).toMatchObject({ issue: 93, pr: 612 })
     const prepared = withLedger(s, [done(prepareKey(r, 1), 'slot', { issue: 91, maxAttempts: 1 })])
     const spawn = of(plan(prepared), 91)
-    expect(spawn).toEqual([expect.objectContaining({ kind: 'agent-step', key: stepKey(r, 'design', 1), class: 'develop', rule: 'S2', step: 'design', slot: '/slots/91', notes: ['use the v2 API', 'owner: keep it small'] })])
+    expect(spawn).toEqual([expect.objectContaining({ kind: 'agent-step', key: stepKey(r, 'design', 1), class: 'develop', rule: 'S2', step: 'design', slot: '/slots/91', notes: ['use the v2 API', 'owner: keep it small', 'owner: fleet'] })])
     // no new work: held, its skip line names the filter, and with no running entry it never times out
     const held = { ...prepared, control: control({ noNewWork: true }), now: NOW + 5 * HOUR }
     const r2 = plan(held)
     expect(of(r2, 91)).toEqual([])
     expect(said(r2, 91)).toEqual(['owner: no new work (agent-step)'])
+  })
+
+  test('S2: a note op replaces the owner\'s earlier note of its scope in the step\'s notes, and note off leaves none (R4-O2, R5-O3)', () => {
+    const r = rec(73, { state: 'designing', step: 'design', notes: [] })
+    const apply = (c: ReturnType<typeof control>, text: string, at: number) => {
+      const parsed = parseOp(text)
+      if (!parsed.ok) throw new Error(parsed.error)
+      return applyOp(c, parsed.op, at).control
+    }
+    const spawnNotes = (c: ReturnType<typeof control>) => {
+      const prepared = withLedger(world([r], { control: c }), [done(prepareKey(r, 1), 'slot', { issue: 73, maxAttempts: 1 })])
+      return (of(plan(prepared), 73).find(a => a.kind === 'agent-step') as Extract<Action, { kind: 'agent-step' }> | undefined)?.notes
+    }
+    let c = apply(control(), 'note 73 always ask for changes', NOW - 3 * MIN)
+    expect(spawnNotes(c)).toEqual(['owner: always ask for changes'])
+    c = apply(c, 'note 73 review normally', NOW - 2 * MIN)
+    expect(spawnNotes(c)).toEqual(['owner: review normally'])
+    c = apply(c, 'note 73 off', NOW - MIN)
+    expect(spawnNotes(c)).toEqual([])
   })
 
   test('a running step past its timeout is unknown (timeout) and its transition re-checks the entry as running; within its timeout it runs on', () => {

@@ -282,7 +282,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
   (D-38).
 - `drop <N>`: close the issue's current claim and stop its agents; the issue stays open, and
   re-adding `ready` brings it back.
-- `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.
+- `note [<N>] <text>|off`: an owner instruction the next agent prompts carry, for N or for all; a newer note replaces the older one, off clears it.
 - `update [<reason>]` / `update off`: wind down (up to windDownMinutes), then restart this workspace
   for an update (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.

@@ -2771,7 +2771,7 @@ type Control = {
   updateDue: { reason: string; at: Ms } | null   // an update is due (rule R2): set by `/factory update`
   resumed: { subject: string; at: Ms; note?: string }[]  // parked issues the owner resumed: 'issue:<N>', with the note for the next step
   dropped: { issue: number; at: Ms }[]     // issues the owner dropped: their current life is closed (4.1)
-  notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents
+  notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents, at most one per scope
 }
 ```
 
@@ -2781,7 +2781,7 @@ sets them with the `mcp__factory-loop__control` tool (`{ "op": "<op>" }`) when t
 in chat, and the owner can type `/factory <op>` from any client (named so to stay clear of Claude
 Code's built-in `/loop`): `status`, `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`,
 `priority <N...>|off`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct> <hours>|off`,
-`resume <N...> ["note"]`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`,
+`resume <N...> ["note"]`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>|off`,
 `mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`, `stamp <N>`, `stop-now`. Each change
 pings the loop and gets its own decision-log line (`control`). Appendix E gives what v2 makes of `resume`, `drop`,
 `note`, `retry` and `stop-now`.
@@ -4576,7 +4576,7 @@ Notices (TELL kinds), owner items first:
 |---|---|
 | `resume <N...> ["note"]` | unpark (P1). On an issue that is not parked it changes nothing and answers "not parked; use `/factory note N`" |
 | `drop <N>` | E1, for the current life only (4.1) |
-| `note [N] <text>` | a note for the issue's next step (or every issue's) |
+| `note [N] <text>\|off` | a note for the issue's next step (or every issue's), replacing its earlier note; `off` clears it |
 | `stamp <N>` | the intake reader's dry run on issue N (13.4.3): the reply at once, the notice when the reader ends. The reader answers `{"area": <one of intakeAreas>, "needs_owner": <bool>, "reason": <one line, 1 to 200 characters, required when needs_owner is true>, "touches": [<at most 20 distinct top-level names>]}`; `checkIntake` drops a bad field and names it (`ok`, `dropped` or `failed`). View-only: it logs no intervention, writes nothing to GitHub, the events, `stamps:<repo>` or the ledger |
 | `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |

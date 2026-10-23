@@ -526,7 +526,7 @@ and does nothing. In the loop's session:
 | `priority <N...>` / `only <N...>` | claim these first / claim only these (`off` clears either) |
 | `skip <N>` / `pause <N>` | never claim N / take no action on N (`noskip`, `unpause` undo them) |
 | `new off` | claim and start nothing new; work in flight goes on (`new on` undoes it) |
-| `note [<N>] <text>` | an instruction for N's next agent, or for every issue's |
+| `note [<N>] <text>\|off` | an instruction for N's next agent, or for every issue's; a newer note replaces the older one, off clears it |
 | `resume <N> ["<note>"]` | unpark N |
 | `drop <N>` | abandon N for this life; its agents stop and its claim is released |
 | `mode off\|observe\|act` | stop, watch only, or work |
