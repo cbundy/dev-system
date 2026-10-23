@@ -243,13 +243,14 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     const outcome = (decision: string) => ({ kind: 'wake' as const, decision, reason: null, instructions: null, bump: null, bumpReason: null, fields: {} })
     const started = (key: string, decision: string | null, status: 'done' | 'failed' = 'done') =>
       entry(key, 'task', { class: 'drive', wake: 'release', status, startedAt: NOW - 30 * MIN, endedAt: NOW + MIN, ...(decision === null ? {} : { outcome: outcome(decision) }) })
+    // the done release started in the previous hour (02:30), so the pass's own hour has no task and its key is free
     const base = state({ milestone: { open: 2, closed: 5, openIssues: [], expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } })
-    const at = (over: Partial<State>, ids: number[], tag: string | null = 'v1.0.0', key = 'task:release:v1.0.0:2026-10-13T03', decision: string | null = 'done', status: 'done' | 'failed' = 'done'): State =>
+    const at = (over: Partial<State>, ids: number[], tag: string | null = 'v1.0.0', key = 'task:release:v1.0.0:2026-10-13T02', decision: string | null = 'done', status: 'done' | 'failed' = 'done'): State =>
       ({ ...base, ...over, ledger: [...base.ledger, started(key, decision, status)], v2: { ...emptyV2State(NOW), tag, records: ids.map(waitingOn) } })
     const plan = (s: State) => planV2(s, cfg)
     const tasks = (s: State) => plan(s).actions.filter(x => x.kind === 'task')
     const why = (s: State) => plan(s).skipped.filter(k => k.rule === 'O3').map(k => k.why)
-    const line = `release in progress: task:release:v1.0.0:2026-10-13T03 answered done at ${new Date(NOW + MIN).toISOString()}, tag v1.0.0; until a newer tag or ${new Date(NOW + MIN + WIN).toISOString()}`
+    const line = `release in progress: task:release:v1.0.0:2026-10-13T02 answered done at ${new Date(NOW + MIN).toISOString()}, tag v1.0.0; until a newer tag or ${new Date(NOW + MIN + WIN).toISOString()}`
     // the incident: issues start waiting one by one, then the hour turns over: no task, one skip each pass
     for (const [ids, now] of [[[7], NOW + 2 * MIN], [[7, 9], NOW + 3 * MIN], [[7, 9, 11], NOW + 4 * MIN], [[7, 9, 11], NOW + 60 * MIN]] as const) {
       const s = at({ now }, [...ids])
@@ -269,13 +270,13 @@ describe('planPass: the planner is v2 (v2 SPEC 2.3)', () => {
     expect(tasks({ ...at({ now: NOW + 2 * MIN }, [7]) }).length).toBe(0)
     expect(planV2(at({ now: NOW + 2 * MIN }, [7]), { ...cfg, releaseInProgressMs: 0 }).actions.filter(x => x.kind === 'task')).toHaveLength(1)
     // hold, failed and an entry with no wake outcome never suppress
-    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T03', 'hold'))).toHaveLength(1)
-    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T03', 'done', 'failed'))).toHaveLength(1)
-    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T03', null))).toHaveLength(1)
+    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T02', 'hold'))).toHaveLength(1)
+    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T02', 'done', 'failed'))).toHaveLength(1)
+    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.0.0', 'task:release:v1.0.0:2026-10-13T02', null))).toHaveLength(1)
     // an unknown tag ends only by the window; none ends once a tag is read
-    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.1.0', 'task:release:unknown:2026-10-13T03'))).toEqual([])
-    expect(tasks(at({ now: NOW + 2 * MIN, release: { tag: null, oldest: null } }, [7], null, 'task:release:none:2026-10-13T03'))).toEqual([])
-    expect(tasks(at({ now: NOW + 2 * MIN, release: { tag: null, oldest: null } }, [7], 'v0.1.0', 'task:release:none:2026-10-13T03'))).toHaveLength(1)
+    expect(tasks(at({ now: NOW + 2 * MIN }, [7], 'v1.1.0', 'task:release:unknown:2026-10-13T02'))).toEqual([])
+    expect(tasks(at({ now: NOW + 2 * MIN, release: { tag: null, oldest: null } }, [7], null, 'task:release:none:2026-10-13T02'))).toEqual([])
+    expect(tasks(at({ now: NOW + 2 * MIN, release: { tag: null, oldest: null } }, [7], 'v0.1.0', 'task:release:none:2026-10-13T02'))).toHaveLength(1)
   })
 
   test('O3 (v2): a wait that arrives while the hour\'s review runs joins it: one task, a skip naming the waits; a review running across the hour holds the next', () => {
