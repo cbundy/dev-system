@@ -318,7 +318,7 @@ export type Config = {
   passEveryMs: Ms
   // the repo expects a release at least this often; the release wake names it (#772)
   minimumReleaseCadenceMs: Ms
-  // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the window from the PR's opening (0: no hold)
+  // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the cap per head of the bump PR, from the head's anchor (0: no hold)
   releaseBranchPrefix: string | null
   releaseHoldMs: Ms
   // after a release task answered `done` (the judge started a release), no release review is planned until a newer tag is seen or this long has passed since it ended (0: no suppression)

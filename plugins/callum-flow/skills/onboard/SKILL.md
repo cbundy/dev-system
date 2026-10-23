@@ -443,7 +443,7 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
 | `minimumReleaseCadence` | `"6h"` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
 | `releaseBranchPrefix` | none | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
-| `releaseHold` | `"10m"` | The longest the queue holds for a bump PR, counted from the PR's opening; `0` turns the hold off. |
+| `releaseHold` | `"45m"` | The longest the queue holds per push of the bump PR while its checks are pending or green, counted from the head's start (commit or first check); a push restarts it and a failed check ends it; `0` turns the hold off. |
 
 The rest are in [the v2 SPEC, appendix A](https://github.com/cbundy/dev-system/blob/main/docs/factory-loop/v2/SPEC.md#appendix-a-settings). The
 workspace file, `${CLAUDE_CONFIG_DIR}/factory-loop/config.json` (`/persist/claude/factory-loop/config.json`
