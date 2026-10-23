@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Tests for factory-db-bootstrap's fourth role, its URL files and --migrate
+# Tests for factory-db-bootstrap's panel and migrator roles, its URL files and --migrate
 # (cbundy/dev-system#884) against a real PostgreSQL: the private cluster or the CI service
 # that scripts/test.sh sets up (scripts/test-pg.sh). The private cluster trusts every
 # connection, so a password is proven only on CI's server; here a URL proves its user, host
@@ -81,7 +81,7 @@ md="$tmpdir/migrator"
 mkdir "$sd"   # the migrator directory is created by the run
 boot --db "$db" --secrets-dir "$sd" --migrator-dir "$md" || fail "first run failed: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "expected one summary line: $(cat "$tmpdir/out")"
-grep -qF "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; created: ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; new passwords: ${db}_writer, ${db}_reader, ${db}_migrator; wrote: $sd/factory-db-writer-url, $sd/factory-db-reader-url, $md/factory-db-migrator-url), schema version $EXPECTED" "$tmpdir/out" \
+grep -qF "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator, ${db}_panel; created: ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator, ${db}_panel; new passwords: ${db}_writer, ${db}_reader, ${db}_migrator; wrote: $sd/factory-db-writer-url, $sd/factory-db-reader-url, $md/factory-db-migrator-url; public repos: none), schema version $EXPECTED" "$tmpdir/out" \
   || fail "unexpected summary: $(cat "$tmpdir/out")"
 for r in writer reader migrator; do
   [ "$(q postgres "SELECT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname = '${db}_$r'")" = t ] \
@@ -117,7 +117,7 @@ done
 before=$(for f in "$sd"/* "$md"/*; do st "$f"; done)
 sleep 1
 boot --db "$db" --secrets-dir "$sd" --migrator-dir "$md" || fail "second run failed: $(cat "$tmpdir/out")"
-grep -qF "created: none; new passwords: none; wrote: none), schema version $EXPECTED" "$tmpdir/out" || fail "second run: $(cat "$tmpdir/out")"
+grep -qF "created: none; new passwords: none; wrote: none; public repos: none), schema version $EXPECTED" "$tmpdir/out" || fail "second run: $(cat "$tmpdir/out")"
 [ "$before" = "$(for f in "$sd"/* "$md"/*; do st "$f"; done)" ] || fail "the second run rewrote a file"
 
 # --- a missing file rotates only that role --------------------------------------------------
@@ -127,7 +127,7 @@ oldr=$(cat "$sd/factory-db-reader-url")
 rm "$sd/factory-db-reader-url"
 sleep 1
 boot --db "$db" --secrets-dir "$sd" --migrator-dir "$md" || fail "rotation run failed: $(cat "$tmpdir/out")"
-grep -qF "created: none; new passwords: ${db}_reader; wrote: $sd/factory-db-reader-url)" "$tmpdir/out" || fail "rotation: $(cat "$tmpdir/out")"
+grep -qF "created: none; new passwords: ${db}_reader; wrote: $sd/factory-db-reader-url; public repos: none)" "$tmpdir/out" || fail "rotation: $(cat "$tmpdir/out")"
 [ "$wbefore" = "$(st "$sd/factory-db-writer-url")" ] || fail "the writer file was rewritten"
 [ "$mbefore" = "$(st "$md/factory-db-migrator-url")" ] || fail "the migrator file was rewritten"
 [ "$(cat "$sd/factory-db-reader-url")" != "$oldr" ] || fail "the reader URL did not change"
@@ -136,16 +136,16 @@ grep -qF "created: none; new passwords: ${db}_reader; wrote: $sd/factory-db-read
 oldw=$(cat "$sd/factory-db-writer-url")
 q postgres "ALTER ROLE \"${db}_writer\" PASSWORD NULL" > /dev/null
 boot --db "$db" --secrets-dir "$sd" --migrator-dir "$md" || fail "no-password run failed: $(cat "$tmpdir/out")"
-grep -qF "new passwords: ${db}_writer; wrote: $sd/factory-db-writer-url)" "$tmpdir/out" || fail "no-password: $(cat "$tmpdir/out")"
+grep -qF "new passwords: ${db}_writer; wrote: $sd/factory-db-writer-url; public repos: none)" "$tmpdir/out" || fail "no-password: $(cat "$tmpdir/out")"
 [ "$(cat "$sd/factory-db-writer-url")" != "$oldw" ] || fail "the writer URL did not change"
 # Without a directory nothing is generated or written.
 boot --db "$db" || fail "run without directories failed: $(cat "$tmpdir/out")"
-grep -qF "created: none; new passwords: none; wrote: none)" "$tmpdir/out" || fail "no directories: $(cat "$tmpdir/out")"
+grep -qF "created: none; new passwords: none; wrote: none; public repos: none)" "$tmpdir/out" || fail "no directories: $(cat "$tmpdir/out")"
 
 # --- an explicit password wins, and is encoded ---------------------------------------------
 EPW='p@ss:w/rd%?#&x'
 FACTORY_DB_WRITER_PASSWORD=$EPW boot --db "$db" --secrets-dir "$sd" --migrator-dir "$md" || fail "explicit run failed: $(cat "$tmpdir/out")"
-grep -qF "new passwords: ${db}_writer; wrote: $sd/factory-db-writer-url)" "$tmpdir/out" || fail "explicit: $(cat "$tmpdir/out")"
+grep -qF "new passwords: ${db}_writer; wrote: $sd/factory-db-writer-url; public repos: none)" "$tmpdir/out" || fail "explicit: $(cat "$tmpdir/out")"
 grep -qF -- "$EPW" "$tmpdir/out" && fail "the explicit password reached the output"
 grep -qF 'p%40ss%3Aw%2Frd%25%3F%23%26x' "$sd/factory-db-writer-url" || fail "the explicit password is not percent-encoded in the file"
 [ "$(who "$sd/factory-db-writer-url")" = "${db}_writer|$db" ] || fail "the explicit-password URL does not connect"
@@ -244,7 +244,7 @@ mkdir "$asd" "$amd"
 printf 'dummy-migrator\n' > "$amd/factory-db-migrator-url"
 printf 'dummy-writer\n' > "$asd/factory-db-writer-url"
 boot --db "$adb" --secrets-dir "$asd" --migrator-dir "$amd" || fail "adoption run failed: $(cat "$tmpdir/out")"
-grep -qF "created: ${adb}_reader; new passwords: ${adb}_reader; wrote: $asd/factory-db-reader-url)" "$tmpdir/out" || fail "adoption summary: $(cat "$tmpdir/out")"
+grep -qF "created: ${adb}_reader, ${adb}_panel; new passwords: ${adb}_reader; wrote: $asd/factory-db-reader-url; public repos: none)" "$tmpdir/out" || fail "adoption summary: $(cat "$tmpdir/out")"
 [ "$(q postgres "SELECT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname IN ('${adb}_migrator') ")" = t ] || fail "the adopted migrator's attributes are not corrected"
 [ "$(q postgres "SELECT NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname = '${adb}_writer'")" = t ] || fail "the adopted writer's attributes are not corrected"
 [ "$(q postgres "SELECT string_agg(pg_get_userbyid(roleid) || ':' || admin_option || ':' || set_option || ':' || inherit_option, ',') FROM pg_auth_members WHERE pg_get_userbyid(member) = '${adb}_migrator'")" = "${adb}_owner:false:true:false" ] \
@@ -255,7 +255,7 @@ grep -qF "created: ${adb}_reader; new passwords: ${adb}_reader; wrote: $asd/fact
 [ "$(cat "$asd/factory-db-writer-url")" = dummy-writer ] || fail "the writer file was rewritten"
 # A re-run on correct roles issues no ALTER: it succeeds even for a non-superuser's rules, and changes nothing.
 boot --db "$adb" --secrets-dir "$asd" --migrator-dir "$amd" || fail "adoption re-run failed: $(cat "$tmpdir/out")"
-grep -qF "created: none; new passwords: none; wrote: none)" "$tmpdir/out" || fail "adoption re-run: $(cat "$tmpdir/out")"
+grep -qF "created: none; new passwords: none; wrote: none; public repos: none)" "$tmpdir/out" || fail "adoption re-run: $(cat "$tmpdir/out")"
 
 # --- --migrate ---------------------------------------------------------------------------------
 old_migs="$tmpdir/old-migs"
@@ -337,14 +337,14 @@ wait "$p2" || fail "concurrent --migrate 2 failed: $(cat "$tmpdir/c2")"
 froms=$(cat "$tmpdir/c1" "$tmpdir/c2" | sed 's/.*from schema version //' | sort | tr '\n' ' ')
 [ "$froms" = "$(printf '%s\n%s\n' "1 to $EXPECTED" "$EXPECTED to $EXPECTED" | sort | tr '\n' ' ')" ] || fail "unexpected from/to pair: '$froms'"
 
-# --- the helpers know the fourth role -------------------------------------------------------
+# --- the helpers know the panel and migrator roles -------------------------------------------------------
 tdb=$(factory_test_db_new) || fail "factory_test_db_new failed"
 names="$names $tdb"
 factory_test_db_drop "$tdb"
 [ "$(q postgres "SELECT count(*) FROM pg_roles WHERE rolname LIKE '${tdb}\\_%'")" = 0 ] || fail "factory_test_db_drop left a role"
 
 # --help describes the new surface.
-for word in --secrets-dir --migrator-dir --migrate --migrator-url-file FACTORY_DB_MIGRATOR_PASSWORD FACTORY_DB_SECRET_OWNER "password rule" NAME_migrator; do
+for word in --secrets-dir --migrator-dir --migrate --migrator-url-file --panel-dir --public-repo FACTORY_DB_PANEL_PASSWORD NAME_panel FACTORY_DB_MIGRATOR_PASSWORD FACTORY_DB_SECRET_OWNER "password rule" NAME_migrator; do
   bash "$BOOTSTRAP" --help | grep -q -- "$word" || fail "--help does not mention $word"
 done
 echo "factory-db-bootstrap-secrets tests passed"

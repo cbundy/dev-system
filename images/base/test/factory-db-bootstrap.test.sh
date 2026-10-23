@@ -127,7 +127,7 @@ db=$new_db
 [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname = '$db'")" = 0 ] || fail "$db exists before the run"
 boot --db "$db" || fail "first run failed: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "expected one summary line, got: $(cat "$tmpdir/out")"
-grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; created: ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator; new passwords: none; wrote: none), schema version $EXPECTED\$" "$tmpdir/out" \
+grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator, ${db}_panel; created: ${db}_owner, ${db}_writer, ${db}_reader, ${db}_migrator, ${db}_panel; new passwords: none; wrote: none; public repos: none), schema version $EXPECTED\$" "$tmpdir/out" \
   || fail "unexpected summary: $(cat "$tmpdir/out")"
 [ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$db'")" = "${db}_owner" ] \
   || fail "the database is not owned by ${db}_owner"
@@ -178,7 +178,7 @@ cmp -s "$tmpdir/psnap1" "$tmpdir/psnap2" || fail "run 2 changed the taken-over d
 db=$main_db
 
 # --- the schemas ------------------------------------------------------------------
-[ "$(q "$db" "SELECT string_agg(nspname, ',' ORDER BY nspname) FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'")" = "factory,public" ] \
+[ "$(q "$db" "SELECT string_agg(nspname, ',' ORDER BY nspname) FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'")" = "factory,factory_public,public" ] \
   || fail "unexpected schemas (nomistakes must not exist)"
 [ "$(q "$db" "SELECT count(*) FROM pg_class WHERE relnamespace = 'factory'::regnamespace AND relname IN ('events')")" = 0 ] \
   || fail "factory.events exists"
