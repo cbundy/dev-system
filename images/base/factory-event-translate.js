@@ -164,6 +164,7 @@ const SPECS = {
     recommended: opt(nul(KEY)),
     recommendation: opt(nul(MAXS(200))),
     conflicts: opt(nul(I(0))),
+    env_blocked: opt(nul(MAXS(1000))),
     wait: opt(nul(WAIT)),
     why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", "done")),
     notes: L(S),
@@ -171,7 +172,7 @@ const SPECS = {
     lives: I(1),
   },
   reviewed: { branch: NE, pr: I(1), head: HEX, verdict: E("approve", "changes", "unknown"), round: I(1), patch: NE, errors: I(0), warnings: I(0), infos: I(0), reviewer: NE, answer_path: NE },
-  finding_handled: { branch: NE, pr: nul(I(1)), head: nul(HEX), finding: NE, outcome: E("fixed", "declined"), detail: S },
+  finding_handled: { branch: NE, pr: nul(I(1)), head: nul(HEX), finding: NE, outcome: E("fixed", "declined"), detail: S, blocker: opt(nul(E("environment"))) },
   intervention: { who: E("person", "loop", "judge"), cause: RX(/^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$/), life: nul(RX(/^[0-9a-z]+$/)), fact: nul(S), pr: nul(I(1)), detail: S, flaky: nul(B), failed_tests: nul(L(S)), failed_jobs: nul(L(S)), head: nul(HEX) },
   implementer_routed: { model: NE, reason: E("label", "default", "hash", "fallback"), bucket: nul(I(0)), opus_pct: I(0) },
   test_weakened: { branch: NE, pr: I(1), head: HEX, commit: HEX, restored: B, kinds: L1(S), files: L1(S) },
@@ -526,10 +527,10 @@ function merged(line) {
   return { pr: colInt(line, "pr"), branch: colStr(line, "branch"), head: colStr(line, "head"), by, recovered };
 }
 
-const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "conflicts", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
+const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "conflicts", "envBlocked", "via", "brief", "question", "notes", "wait", "decision", "context", "options", "recommended", "recommendation"];
 
 function transition(line) {
-  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "conflicts", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
+  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => !["lives", "conflicts", "envBlocked", "wait", "decision", "context", "options", "recommended", "recommendation"].includes(k)) });
   const lives = t.has("lives") ? tInt(t, "lives") : 1;
   const wait = tWait(t);
   const options = tOptions(t);
@@ -564,6 +565,7 @@ function transition(line) {
   };
   if (wait !== undefined) ev.wait = wait;
   if (t.has("conflicts")) ev.conflicts = tInt(t, "conflicts");
+  if (t.has("envBlocked")) ev.env_blocked = tStr(t, "envBlocked");
   const parts = { decision: tStr(t, "decision"), context: tStr(t, "context"), options, recommended, recommendation: tStr(t, "recommendation") };
   for (const [k, v] of Object.entries(parts)) if (v !== undefined) ev[k] = v;
   return ev;

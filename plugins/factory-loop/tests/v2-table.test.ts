@@ -49,7 +49,7 @@ function records(): IssueRecord[] {
                   for (const head of [null, HEAD]) {
                     const resumeTo: IssueState | null = state === 'queued' ? (pr === null ? null : 'reviewing') : state === 'parked' ? 'building' : state === 'waiting' ? 'designing' : null
                     const wait = state === 'waiting' ? [{ kind: 'issue-closed' as const, issue: 57 }, { kind: 'pr-merged' as const, pr: 812 }] : null
-                    out.push({ ...base, state, step, attempt, cut, triages, fixes, conflicts, pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null, wait })
+                    out.push({ ...base, state, step, attempt, cut, triages, fixes, conflicts, envBlocked: head === null ? null : 'r1-1: no browser', pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null, wait })
                   }
                 }
               }
@@ -87,6 +87,13 @@ function eventsOf(kind: EventKind): TableEvent[] {
 }
 
 const ALL_EVENTS: TableEvent[] = EVENT_KINDS.flatMap(eventsOf)
+
+// The fix rounds' results with an environment-blocked finding (T19, T20 beside T11, T12, T17): a
+// guard input only a fixing record reads, so only fixing records meet them.
+const BLOCKED_EVENTS: TableEvent[] = [
+  { kind: 'ok', data: { head: HEAD, blocked: ['r1-1: no browser'] } },
+  ...['declined', 'unchanged'].map((reason): TableEvent => ({ kind: 'not-ok', reason, data: { text: 'a reason', blocked: ['r1-1: no browser'] } })),
+]
 
 // The sweeps over every record and event take a few seconds alone, and more while other suites
 // share the machine (npm test runs them side by side): room past the default 5 s. They assert once
@@ -129,7 +136,7 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
     designing: { ok: ['T2'], notOk: ['T3', 'T4', 'T16', 'T18'] },
     building: { ok: ['T5'], notOk: ['T6', 'T7'] },
     reviewing: { ok: ['T8'], notOk: ['T9', 'T10'] },
-    fixing: { ok: ['T11'], notOk: ['T12', 'T17'] },
+    fixing: { ok: ['T11', 'T19'], notOk: ['T12', 'T17', 'T20'] },
     'merge-queue': { ok: ['T13'], notOk: ['T9', 'T10', 'T14', 'T15'] },
   }
   const cell = own[state] ?? { ok: [], notOk: [] }
@@ -145,15 +152,15 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
 }
 
 describe('the table (v2 SPEC 4.3, 4.6)', () => {
-  test('38 rows, the spec\'s, held as data; S0 and S7 make a record and rowFor never returns them', SWEEP, () => {
-    expect(ROW_IDS).toEqual(['S0', 'S7', 'T1', 'T2', 'T3', 'T4', 'T16', 'T18', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T17', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
-    expect(ROW_IDS).toHaveLength(38)
+  test('40 rows, the spec\'s, held as data; S0 and S7 make a record and rowFor never returns them', SWEEP, () => {
+    expect(ROW_IDS).toEqual(['S0', 'S7', 'T1', 'T2', 'T3', 'T4', 'T16', 'T18', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T17', 'T19', 'T20', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
+    expect(ROW_IDS).toHaveLength(40)
     // the event schema's table_row pattern (docs/factory-events/schemas/transition.v1.json)
     for (const id of ROW_IDS) expect({ id, ok: /^([A-Z][0-9]+|recovered)$/.test(id) }).toEqual({ id, ok: true })
     // E7 has one row for each event kind: every event has a row with no meaning in every state
     expect(TABLE.filter(r => r.id === 'E7').map(r => r.on).sort()).toEqual([...EVENT_KINDS].sort())
     const made = madeRecord({ issue: 7, life: 'ss1x2k', branch: 'issue-7', pr: null, others: [] }, NOW)
-    expect(made).toMatchObject({ state: 'queued', step: 'lease', seq: 1, seqAt: NOW, since: NOW, resumeTo: null, attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 0 })
+    expect(made).toMatchObject({ state: 'queued', step: 'lease', seq: 1, seqAt: NOW, since: NOW, resumeTo: null, attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, envBlocked: null, round: 0 })
     expect(madeRecord({ issue: 7, life: 'ss1x2k', branch: 'feat/issue-7-x', pr: 621, others: [619] }, NOW)).toMatchObject({ resumeTo: 'reviewing', pr: 621, branch: 'feat/issue-7-x', notes: [expect.stringContaining('#619')] })
     // S7: a split child's claim carrying a park makes the parked record, resumeTo designing (8.7)
     const parked = madeRecord({ issue: 8, life: 'ss1x2k', branch: 'issue-8', pr: null, others: [], park: { question: 'Which API?', parent: 7 } }, NOW)
@@ -171,7 +178,7 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     let combos = 0
     const bad: string[] = []
     for (const r of records()) {
-      for (const e of ALL_EVENTS) {
+      for (const e of r.state === 'fixing' ? [...ALL_EVENTS, ...BLOCKED_EVENTS] : ALL_EVENTS) {
         // rowFor throws when two rows match: the guards are exclusive
         const row = rowFor(r, e, CFG)
         combos += 1
@@ -313,7 +320,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     for (const r of parked) {
       const closed = { ...r, pr: 512, prClosedAt: '2026-10-15T10:00:00Z' }
       const n = next(closed, { kind: 'unpark', reason: 'label', data: { note: 'go on', closedAt: '2026-10-15T10:00:00Z' } })
-      expect(n).toMatchObject({ state: 'queued', resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, cut: false, notes: ['go on'], prClosedAt: '2026-10-15T10:00:00Z', question: null })
+      expect(n).toMatchObject({ state: 'queued', resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, envBlocked: null, cut: false, notes: ['go on'], prClosedAt: '2026-10-15T10:00:00Z', question: null })
       // the PR's close is already handled: pr-closed is an edge on its closedAt, never present again
       expect(((n as IssueRecord).prClosedAt ?? '') >= '2026-10-15T10:00:00Z').toBe(true)
     }
@@ -505,6 +512,46 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     }
     expect(next(r, { kind: 'not-ok', reason: 'ci-red', data: { text: 'test failed' } })).toMatchObject({ state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('fix cap') })
     expect(next(r, { kind: 'not-ok', reason: 'changes' })).toMatchObject({ state: 'parked', question: expect.stringContaining('fix cap') })
+  })
+
+  test('an environment blocker (T19, T20): the second fix round in a row with one parks at once, quoting both rounds; a round without one resets it', SWEEP, () => {
+    const fixing: IssueRecord = { ...base, state: 'fixing', step: 'fix', pr: 512, head: HEAD, fixes: 1, round: 1 }
+    const blocked = ['r1-1: no browser to capture the UI']
+    const declined = (b: string[]): TableEvent => ({ kind: 'not-ok', reason: 'declined', data: { notes: ['the fixer declined r1-1 (environment blocker): no browser'], blocked: b } })
+    const unchanged = (b: string[]): TableEvent => ({ kind: 'not-ok', reason: 'unchanged', data: { notes: ['x'], blocked: b } })
+    const pushed = (b: string[]): TableEvent => ({ kind: 'ok', data: { head: HEAD, blocked: b } })
+    // a first blocker only records its reasons, on every result
+    for (const e of [declined(blocked), unchanged(blocked), pushed(blocked)]) {
+      expect(next(fixing, e)).toMatchObject({ state: 'reviewing', envBlocked: 'r1-1: no browser to capture the UI' })
+    }
+    expect(next(fixing, declined(blocked))).toMatchObject({ notes: ['the fixer declined r1-1 (environment blocker): no browser'] })
+    // a round without one sets null; no `blocked` at all is a round without one
+    const held = { ...fixing, envBlocked: 'r1-1: earlier reason' }
+    for (const e of [declined([]), unchanged([]), pushed([]), { kind: 'ok' as const, data: { head: HEAD } }]) expect(next(held, e)).toMatchObject({ state: 'reviewing', envBlocked: null })
+    // a second one parks: T20 on not-ok, T19 on ok, both resuming reviewing, the question for the owner
+    for (const [e, row] of [[declined(blocked), 'T20'], [unchanged(blocked), 'T20'], [pushed(blocked), 'T19']] as const) {
+      expect(rowFor(held, e, CFG).id).toBe(row)
+      const parked = next(held, e) as IssueRecord
+      expect(parked).toMatchObject({ state: 'parked', resumeTo: 'reviewing', fixes: 1, round: 1, question: expect.stringMatching(/^\[ACTION\]/) })
+      expect(parked.question).toContain('r1-1: earlier reason')
+      expect(parked.question).toContain('r1-1: no browser to capture the UI')
+      expect(parked.question).toContain('uiCapture')
+      expect(viaOf(rowFor(held, e, CFG), e)).toBe('env-blocked')
+    }
+    expect((next(held, pushed(blocked)) as IssueRecord).head).toBe(HEAD)
+    // blocker, clean round, blocker never parks
+    let r = next(fixing, declined(blocked)) as IssueRecord
+    r = { ...r, state: 'fixing', step: 'fix' }
+    r = next(r, pushed([])) as IssueRecord
+    expect(r).toMatchObject({ state: 'reviewing', envBlocked: null })
+    expect(next({ ...r, state: 'fixing', step: 'fix' }, declined(blocked))).toMatchObject({ state: 'reviewing', envBlocked: expect.any(String) })
+    // a stored reason stays one clipped line
+    const long = [`r1-1: ${'x'.repeat(3000)}`]
+    expect(((next(fixing, declined(long)) as IssueRecord).envBlocked ?? '').length).toBeLessThanOrEqual(1000)
+    expect(((next(held, declined(long)) as IssueRecord).question ?? '').length).toBeLessThanOrEqual(2000)
+    // an owner resume starts it at null, and so does a new record
+    const parked = { ...held, state: 'parked' as const, step: null, question: 'q', resumeTo: 'reviewing' as const }
+    expect(next(parked, { kind: 'unpark', reason: 'label', data: { note: 'go' } })).toMatchObject({ state: 'queued', envBlocked: null })
   })
 
   test('the conflict cap: a conflict, or red CI in the merge queue, charges conflicts and not fixes, so it still gets a fixer at the fix cap; at the conflict cap it parks with its own question', SWEEP, () => {

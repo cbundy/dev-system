@@ -161,6 +161,7 @@ function transitionNote(e: TransitionEvent): string {
     `approvedPatch=${str(r.approvedPatch)}`,
     `prClosedAt=${str(r.prClosedAt)}`,
     `lives=${r.lives}`,
+    `envBlocked=${str(r.envBlocked)}`,
     `wait=${waitToken(r.wait)}`,
     `via=${str(e.via)}`,
     `brief=${str(r.brief)}`,
@@ -265,6 +266,8 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   const [seqAt, since, attempt, triages, fixes, round] = ints
   // a note from before the field carries no count: it read as none
   const conflicts = t.get('conflicts') === undefined ? 0 : unnum(t.get('conflicts'))
+  // a note from before the field carries none: it read as null
+  const envBlocked = t.get('envBlocked') === undefined ? null : unstr(t.get('envBlocked'))
   const cut = t.get('cut')
   const rowId = unstr(t.get('row'))
   const via = unstr(t.get('via'))
@@ -285,6 +288,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   if (typeof rowId !== 'string' || via === undefined || brief === undefined || question === undefined) return null
   if (approvedPatch === undefined || prClosedAt === undefined || notes === undefined) return null
   if (typeof conflicts !== 'number' || !Number.isInteger(conflicts) || conflicts < 0) return null
+  if (envBlocked === undefined) return null
   if (typeof lives !== 'number' || !Number.isInteger(lives) || lives < 1) return null
   if (wait === undefined || parts === undefined) return null
   const record: IssueRecord = {
@@ -306,6 +310,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     triages: triages as number,
     fixes: fixes as number,
     conflicts,
+    envBlocked,
     round: round as number,
     question,
     parts,

@@ -782,9 +782,17 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
   })
 
   test('dispositions read either shape a fixer may give, and skip what is neither', () => {
-    expect(dispositionsOf({ findings: [{ id: 'r1-1', disposition: 'fixed', reason: 'x' }, { id: 'r1-2', disposition: 'maybe' }, { reason: 'no id' }] })).toEqual([{ id: 'r1-1', fixed: true, reason: 'x' }])
+    expect(dispositionsOf({ findings: [{ id: 'r1-1', disposition: 'fixed', reason: 'x' }, { id: 'r1-2', disposition: 'maybe' }, { reason: 'no id' }] })).toEqual([{ id: 'r1-1', fixed: true, reason: 'x', blocker: null }])
     expect(dispositionsOf(null)).toEqual([])
-    expect(verdictEvent({ issue: 1, branch: 'issue-1', pr: null, head: null }, { id: 'r1-1', fixed: false, reason: '' }).note).toBe('WRONG: r1-1 declined')
+    expect(verdictEvent({ issue: 1, branch: 'issue-1', pr: null, head: null }, { id: 'r1-1', fixed: false, reason: '', blocker: null }).note).toBe('WRONG: r1-1 declined')
+    // an environment blocker rides on the declined finding's verdict; nothing else carries one
+    const blocked = { findings: [{ id: 'r1-1', disposition: 'declined', reason: 'no browser', blocker: 'environment' }, { id: 'r1-2', disposition: 'fixed', reason: 'x', blocker: 'environment' }, { id: 'r1-3', disposition: 'declined', reason: 'wrong', blocker: 'other' }] }
+    expect(dispositionsOf(blocked).map(d => d.blocker)).toEqual(['environment', null, null])
+    const at = { issue: 1, branch: 'issue-1', pr: null, head: null }
+    expect(verdictEvent(at, { id: 'r1-1', fixed: false, reason: 'no browser', blocker: 'environment' })).toMatchObject({ note: 'WRONG: r1-1 no browser', blocker: 'environment' })
+    expect(verdictEvent(at, { id: 'r1-3', fixed: false, reason: 'wrong', blocker: null })).not.toHaveProperty('blocker')
+    expect(eventArgv(verdictEvent(at, { id: 'r1-1', fixed: false, reason: 'no browser', blocker: 'environment' })).join(' ')).toContain('"blocker":"environment"')
+    expect(eventArgv(verdictEvent(at, { id: 'r1-3', fixed: false, reason: 'wrong', blocker: null })).join(' ')).not.toContain('blocker')
   })
 })
 
