@@ -9,7 +9,6 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   ALLOWED,
   GITHUB_V2,
-  LIVE,
   STEP_BREAKER,
   admit,
   blindPass,
@@ -119,10 +118,6 @@ describe('the shared helpers', () => {
     expect(issueFromBranch('feat/issue-506-implementer-route-v2')).toBe(506)
     expect(issueFromBranch('issue-448-dev-statusline')).toBe(448)
     expect(issueFromBranch('chore/release-1.0')).toBeNull()
-  })
-
-  test('the live stages are the ones before a merge or a close', () => {
-    expect(LIVE).toEqual(['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge'])
   })
 
   test('an agent whose turn ended (completed, or idle between turns) is not at work; a failed or killed one is not live either', () => {

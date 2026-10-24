@@ -2,8 +2,8 @@
 name: factory-state
 description: >-
   Say what the agent factory is doing right now: which issues are queued,
-  being designed, being implemented, in the pipeline, parked, waiting, ready to merge or
-  merged, which are stuck and why, which repos have only partial data, and how
+  being designed, building, reviewing, fixing, in the merge queue, parked, waiting or
+  closed, which are stuck and why, which repos have only partial data, and how
   that agrees with GitHub. Runs the read-only `callum-flow-factory-state` tool
   and adds a short narrative. Use for "what is the factory doing right now?",
   "what is in flight?", "what is stuck?" or "what needs attention?". For
@@ -15,8 +15,9 @@ version: 0.93.0
 # Factory state: what is going on right now
 
 One deterministic answer to "what is the factory doing right now?". The tool does all the
-work; this skill runs it and tells the reader what to look at first. The definitions (stages,
-source precedence, stuck rules, coverage classes) are in
+work; this skill runs it and tells the reader what to look at first. The definitions (the states
+queued, designing, building, reviewing, fixing, merge-queue, parked, waiting and closed, source
+precedence, stuck rules) are in
 https://github.com/cbundy/dev-system/blob/main/docs/factory-state.md
 
 ## Run
@@ -26,8 +27,8 @@ callum-flow-factory-state --format json
 ```
 
 Add `--repo <owner/name>` (repeatable) to narrow it, `--at <ISO time>` to look at a past moment
-(pipeline facts are then marked approximate, and GitHub facts are still read now), and
-`--rule S1=<minutes>` to try another stuck threshold. `--source old|new|shadow` picks the event store; the default `new` reads the new store; `--source old` switches back (`shadow` is opt-in and records how the stores differ). Exit 2 is a bad argument. Exit 1 means the
+(GitHub facts are still read now), and
+`--rule <state>=<minutes>` to try another stuck threshold for a state (the old S1 to S4 still work as aliases for designing, building, parked and merge-queue). Exit 2 is a bad argument. Exit 1 means the
 fleet database cannot be read: say so and stop, never guess a state. This skill only reads. It
 never queries tables itself, never edits labels, issues or runs, and never "fixes" a stuck item.
 
@@ -36,25 +37,17 @@ never queries tables itself, never edits labels, issues or runs, and never "fixe
 Lead with what needs attention, in this order, then stop. Name each item by what it does, with
 the issue number in parentheses, and say who has to act on it, especially when it is the owner:
 
-1. `stuck` items, each with its rule and the minutes in stage. Name the rule's meaning, for
-   example S3 means a pipeline run has waited on an agent or the owner too long.
-2. Issues in `parked`, then `ready to merge` (`waiting` is the loop's own hold on wait conditions and needs no action unless it is old), because a person or the orchestrator can act on them.
+1. `stuck` items, each with its rule (a state, such as `parked`) and the minutes in state. Name the rule's meaning, for
+   example `parked` means a run has waited on an agent or the owner too long.
+2. Issues in `parked`, then `merge-queue` (`waiting` is the loop's own hold on wait conditions and needs no action unless it is old), because a person or the orchestrator can act on them.
 3. `flags` on any issue (label or claim disagreeing with GitHub, GitHub state unreadable): these
    are disagreements between sources, not facts about the work.
 
 Per repo, say what its `queue` shows: the top of the claim queue, how old the snapshot is and the blocked reasons. An old snapshot or `n/a` means the loop's queue view is unknown, not empty.
 
-Then one short line per repo on **coverage**, because a gap must never read as idle:
+Then say whether a repo has little data: the report's per-repo `coverage` notes (no events in the
+database, GitHub not read) mean a gap, never idle.
 
-- `pipeline only`: the repo has runs but no factory events, so claims, delegation and queue state
-  are unknown.
-- `events only`: no mirrored runs, so pipeline stages are only what agents logged.
-- `none`: nothing in the database for the repo.
-- For `workers` reading `n/a`, say liveness is unknown and include the reported reason. See the
-  [reader's liveness contract](https://github.com/cbundy/dev-system/blob/main/docs/factory-state.md#holder-and-lease); do not infer
-  workers are healthy. Rule S6 is then not evaluated.
-- `approximate` pipeline facts mean the question was asked about a past time.
-
-Report numbers exactly as the tool prints them. Do not add stages, thresholds or causes the output
+Report numbers exactly as the tool prints them. Do not add states, thresholds or causes the output
 does not contain. If the question is about latency, throughput or cost over time, hand off to
 `query-factory-data` or `evaluate-sessions`.

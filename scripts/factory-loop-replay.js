@@ -223,6 +223,7 @@ async function main() {
   const { emptyV2State } = await import(path.join(HOOKS, "v2", "observe.ts"));
   const parse = await import(path.join(HOOKS, "parse.ts"));
   const derive = await import(path.join(HOOKS, "derive.ts"));
+  const { BUSY_STATES: busyStates } = await import(path.join(HOOKS, "factory-state-map.ts"));
   const { buildState } = await import(path.join(HOOKS, "state.ts"));
   const { EMPTY_CONTROL, loadConfig } = await import(path.join(HOOKS, "config.ts"));
   // the settings the planner runs with, its own defaults included (K is 3)
@@ -272,13 +273,13 @@ async function main() {
     if (factory === null) throw new Error(`factory-state at ${iso(t)} did not parse`);
     const upTo = events.filter((e) => e.ts <= t);
     const facts = derive.factsOf(upTo);
-    const candidates = factory.issues.filter((i) => !i.ended && (i.stage === "queued" || i.holder === a.device)).map((i) => i.number);
+    const candidates = factory.issues.filter((i) => !i.ended && (i.state === "queued" || i.holder === a.device)).map((i) => i.number);
     const github = new Map(candidates.map((n) => [n, githubAt(n, t)]));
     const queue = candidates.filter((n) => {
       const g = github.get(n);
       return g.facts !== null && g.facts.open && g.facts.labels.includes(config.readyLabel);
     });
-    const held = factory.issues.filter((i) => !i.ended && i.holder === a.device && ["implementing", "in pipeline", "parked", "ready to merge"].includes(i.stage)).length;
+    const held = factory.issues.filter((i) => !i.ended && i.holder === a.device && busyStates.includes(i.state)).length;
     const u = [...usage].reverse().find((r) => r.ts <= t);
     const ok = { ok: true, at: t };
     const state = buildState({

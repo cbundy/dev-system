@@ -10,7 +10,9 @@ import type { ActOutcome } from './act'
 import type { ActIo, RunResult } from './exec'
 import type { Io } from './observe'
 import type { ObserveSplit } from './observe-clock'
-import type { ActionKind, LedgerEntry, LedgerStatus, Ms, PlanResult, Skip, SourceName, Stage, State } from './types'
+import { LIVE_STATES } from './factory-state-map'
+import type { ActionKind, LedgerEntry, LedgerStatus, Ms, PlanResult, Skip, SourceName, State } from './types'
+import type { IssueState } from './v2/types'
 
 // A pass's phases in the order they run, each ending where the next begins: setup (the settings,
 // the kill switch, the agent list), rails (act mode's checks and the act lock), observe, plan, act
@@ -46,7 +48,6 @@ export type Tracer = {
 const CMD_MAX = 160
 const ERROR_MAX = 200
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
-const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 const encoder = new TextEncoder()
 
 // to a tenth of a millisecond: plan takes a few
@@ -293,7 +294,7 @@ export function wakeRows(
 }
 
 // What one issue waits on (null: the whole pass, a source down), since when, and for how long.
-export type WaitRow = { issue: number | null; stage: Stage | null; rule: string | null; on: string; since: string | null; forMs: Ms | null }
+export type WaitRow = { issue: number | null; state: IssueState | null; rule: string | null; on: string; since: string | null; forMs: Ms | null }
 
 const waitKey = (s: Skip) => `${s.issue}:${s.rule}`
 
@@ -308,26 +309,26 @@ export function waitSince(prev: ReadonlyMap<string, Ms>, skipped: readonly Skip[
 
 // waitingRows: each skip plan gave (the rule's reason, with how long it has been given), each
 // running ledger entry an issue waits for, and each live issue of this device that nothing acts
-// on and nothing names, waiting in its stage.
+// on and nothing names, waiting in its state.
 export function waitingRows(state: State, result: PlanResult, ledger: readonly LedgerEntry[], since: ReadonlyMap<string, Ms>): WaitRow[] {
-  const stageOf = (n: number | null) => (n === null ? null : (state.issues.find(i => i.number === n)?.stage ?? null))
+  const stateOf = (n: number | null) => (n === null ? null : (state.issues.find(i => i.number === n)?.state ?? null))
   const rows: WaitRow[] = []
   const seen = new Set<string>()
   for (const s of result.skipped) {
     if (seen.has(waitKey(s))) continue
     seen.add(waitKey(s))
     const at = since.get(waitKey(s)) ?? state.now
-    rows.push({ issue: s.issue, stage: stageOf(s.issue), rule: s.rule, on: s.why, since: iso(at), forMs: state.now - at })
+    rows.push({ issue: s.issue, state: stateOf(s.issue), rule: s.rule, on: s.why, since: iso(at), forMs: state.now - at })
   }
   for (const e of ledger) {
     if (e.status !== 'running' || e.issue === null) continue
-    rows.push({ issue: e.issue, stage: stageOf(e.issue), rule: e.rule, on: `${e.key} running`, since: iso(e.startedAt), forMs: state.now - e.startedAt })
+    rows.push({ issue: e.issue, state: stateOf(e.issue), rule: e.rule, on: `${e.key} running`, since: iso(e.startedAt), forMs: state.now - e.startedAt })
   }
   for (const i of state.issues) {
-    if (i.stage === null || !LIVE.includes(i.stage) || i.holder !== state.device) continue
+    if (i.state === null || !LIVE_STATES.includes(i.state) || i.holder !== state.device) continue
     if (rows.some(r => r.issue === i.number) || result.actions.some(a => a.issue === i.number)) continue
-    const at = i.stageSince
-    rows.push({ issue: i.number, stage: i.stage, rule: null, on: 'no rule acts on it', since: at === null ? null : iso(at), forMs: at === null ? null : state.now - at })
+    const at = i.stateSince
+    rows.push({ issue: i.number, state: i.state, rule: null, on: 'no rule acts on it', since: at === null ? null : iso(at), forMs: at === null ? null : state.now - at })
   }
   return rows.sort((a, b) => (a.issue ?? 0) - (b.issue ?? 0))
 }

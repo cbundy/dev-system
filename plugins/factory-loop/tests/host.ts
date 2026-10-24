@@ -389,9 +389,34 @@ export async function agentDone(
   if (a !== undefined) a.status = 'completed'
 }
 
+// The v2 state of each stage word the tool still reports (a stage the row names that is not one has none).
+const STATE_OF_STAGE: Record<string, string> = {
+  queued: 'queued',
+  designing: 'designing',
+  implementing: 'building',
+  'in pipeline': 'reviewing',
+  parked: 'parked',
+  waiting: 'waiting',
+  'ready to merge': 'merge-queue',
+  merged: 'closed',
+  'closed without merge': 'closed',
+}
+
+// The shape of a report's rows (the shape switch): `new` is what the tool reports now, each row with
+// its v2 `state`, `state_since` and (closed) `why` beside the `stage` kept for older plugins; `old`
+// is an image older than the tool switch, which has the stage and entered_at only. A row that
+// names a `state` of its own keeps it.
+export type ReportShape = 'new' | 'old'
+export const REPORT_SHAPES: readonly ReportShape[] = ['new', 'old']
+
+export function rowOf(row: Record<string, unknown>, shape: ReportShape): Record<string, unknown> {
+  if (shape === 'old' || row.state !== undefined || typeof row.stage !== 'string' || STATE_OF_STAGE[row.stage] === undefined) return row
+  return { ...row, state: STATE_OF_STAGE[row.stage], state_since: row.entered_at ?? null, why: row.stage === 'merged' ? 'merged' : null }
+}
+
 // The factory-state report for one repo (callum-flow-factory-state --format json).
-export function factoryDoc(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], at = NOW): string {
-  return JSON.stringify({ at: iso(at), repos: [{ repo: REPO, issues, recent }] })
+export function factoryDoc(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], at = NOW, shape: ReportShape = 'new'): string {
+  return JSON.stringify({ at: iso(at), repos: [{ repo: REPO, issues: issues.map(r => rowOf(r, shape)), recent: recent.map(r => rowOf(r, shape)) }] })
 }
 
 // The heartbeat guard's query (rails.ts HEARTBEAT_SQL) reads no other orchestrator.

@@ -154,7 +154,7 @@ export function runsFromEvents(factory: Factory, facts: Facts): RunView[] {
     const last = events[events.length - 1]
     const lastPark = [...events].reverse().find(e => e.state === 'parked')
     // a run newer than the mirror's has no mirror stage yet: the watcher's events decide
-    const stageOf = run === issue.run ? issue : { ...issue, stage: 'in pipeline' as const }
+    const stageOf = run === issue.run ? issue : { ...issue, state: 'reviewing' as const }
     const state = runState(stageOf, last, lastPark, facts.answered.get(run) ?? 0)
     if (state === null) continue
     runs.push({
@@ -166,7 +166,7 @@ export function runsFromEvents(factory: Factory, facts: Facts): RunView[] {
       step: null,
       detail: state === 'ci-stalled' || state === 'head-mismatch' ? (last?.note ?? null) : null,
       pr: issue.pr,
-      since: (state === 'parked' ? lastPark?.ts : undefined) ?? last?.ts ?? issue.stageSince,
+      since: (state === 'parked' ? lastPark?.ts : undefined) ?? last?.ts ?? issue.stateSince,
       reviewFixRounds: facts.reviewFixes.get(run) ?? 0,
       verdicts: facts.verdicts.get(run) ?? [],
       superseded: facts.superseded.has(run),
@@ -181,10 +181,11 @@ function runState(
   lastPark: FactoryEvent | undefined,
   answeredAt: number,
 ): RunState | null {
-  switch (issue.stage) {
+  switch (issue.state) {
     case 'parked':
       return 'parked'
-    case 'in pipeline': {
+    case 'reviewing':
+    case 'fixing': {
       const refined = last === undefined ? undefined : RUN_STATE[last.state]
       // a refinement counts only while it is newer than the run's last park
       if (refined !== undefined && (lastPark === undefined || last!.ts > lastPark.ts)) return refined
@@ -193,10 +194,10 @@ function runState(
       if (lastPark !== undefined && last === lastPark && answeredAt < lastPark.ts) return 'parked'
       return 'running'
     }
-    case 'ready to merge':
+    case 'merge-queue':
       // a completed run with an open PR: a green run left unmerged is the loop's to merge
       return 'merge-ready'
-    case 'implementing':
+    case 'building':
       if (last?.state !== 'failed') return null
       return last.note === 'cancelled' ? 'cancelled' : 'failed'
     default:

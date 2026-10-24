@@ -28,7 +28,7 @@
 //   and logs its own (releaseIntervention).
 //
 // Pure: the bin tool imports it as well as the planner.
-import type { Action, LedgerEntry, Stage } from '../types'
+import type { Action, LedgerEntry } from '../types'
 import { RELEASE_OUTCOMES } from './events'
 import type { InterventionEvent, ReleaseEvent } from './events'
 import { reconcileKey } from './keys'
@@ -37,10 +37,8 @@ import { FACTORY_LABEL_PREFIX, REJECTED_LABEL } from './types'
 // The text fields' bounds: an intervention's reason is one line of at most 200 characters (7.2).
 const REASON_MAX = 200
 
-// The factory-state stages of a live claim, what shows as active (6.1): its holder works the
-// issue. queued is a claim that ended (ready, reclaimed) or lapsed; merged and closed without merge
-// are final.
-export const LIVE_STAGES: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
+// The live claim's states are LIVE_STATES (../factory-state-map.ts, 6.1): its holder works the issue.
+// queued is a claim that ended (ready, reclaimed) or lapsed; closed is final.
 
 // How a release ends (6.4): back in the queue, out of the factory, or rejected at the last life
 // (the list lives in events.ts, the seam that writes and reads them).
@@ -55,9 +53,9 @@ export type ReleaseInput = {
   // the released life's number since the issue's count last started (lives.ts); null for the
   // migration, which counts no v1 lives
   lives: number | null
-  // the factory-state stage it shows as active in
+  // the v2 state the factory shows it as active in (the event's `stage` field holds it)
   stage: string
-  // what was checked, for the event's reason: `no live step in <stage>: <checked>`
+  // what was checked, for the event's reason: `no live step in <state>: <checked>`
   checked: string
   branch: string | null
   pr: number | null
@@ -107,8 +105,8 @@ export function releaseState(outcome: ReleaseOutcome): ReleaseEvent['state'] {
 }
 
 // releaseReason: the release's free-text field (6.4).
-export function releaseReason(stage: string, checked: string): string {
-  return `no live step in ${stage}: ${oneLine(checked)}`
+export function releaseReason(state: string, checked: string): string {
+  return `no live step in ${state}: ${oneLine(checked)}`
 }
 
 // releaseLabels: of an issue's labels, the ones the migration removes, as the issue spells them:

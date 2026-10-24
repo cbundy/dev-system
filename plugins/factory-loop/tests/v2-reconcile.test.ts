@@ -12,7 +12,8 @@
 // No test here asserts an exact key: keys come from the key codec.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import type { Action, AgentView, Checkout, IssueView, LedgerEntry, PlanResult, Stage, State } from '../hooks/types'
+import type { Action, AgentView, Checkout, IssueView, LedgerEntry, PlanResult, State } from '../hooks/types'
+import { LIVE_STATES } from '../hooks/factory-state-map'
 import { claimKey, interventionKey, lifeAt, lifeOf } from '../hooks/v2/keys'
 import { knownLives, livesBefore } from '../hooks/v2/lives'
 import { emptyV2State } from '../hooks/v2/observe'
@@ -20,7 +21,6 @@ import { planV2 } from '../hooks/v2/plan'
 import { checkoutBaseOf, checkoutChange, claimOf, ghostsOf, tripwireKey } from '../hooks/v2/reconcile'
 import type { CheckoutBase, CheckoutRead } from '../hooks/v2/reconcile'
 import {
-  LIVE_STAGES,
   RELEASE_OPS,
   RELEASE_OUTCOMES,
   isReleaseEntry,
@@ -38,14 +38,14 @@ import {
 import type { ReleaseOutcome } from '../hooks/v2/release'
 import { GITHUB_V2, newCtx, tierOf } from '../hooks/foundation'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
-import type { IssueRecord, Lease, V2Ctx, V2State } from '../hooks/v2/types'
+import type { IssueRecord, IssueState, Lease, V2Ctx, V2State } from '../hooks/v2/types'
 import { CLEAN, DEVICE, MIN, NOW, OTHER, config, entry, issue, state } from './fixtures'
-import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
-import type { Seen } from './host'
+import { NO_EVENTS, QUIET_BEATS, REPO, REPORT_SHAPES, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
+import type { ReportShape, Seen } from './host'
 
 const HOUR = 60 * MIN
 const CFG = config()
-const STAGES: readonly (Stage | null)[] = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'ready to merge', 'merged', 'closed without merge', null]
+const STATES: readonly (IssueState | null)[] = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'parked', 'waiting', 'merge-queue', 'closed', null]
 
 function record(over: Partial<IssueRecord> = {}): IssueRecord {
   return {
@@ -82,7 +82,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
 
 // held: an issue this device holds in a live stage, as the factory source shows it, not labelled ready
 function held(n: number, over: Partial<IssueView> = {}): IssueView {
-  return issue(n, { stage: 'designing', stageSince: NOW - 3 * HOUR, holder: DEVICE, labels: ['enhancement'], ...over })
+  return issue(n, { state: 'designing', stateSince: NOW - 3 * HOUR, holder: DEVICE, labels: ['enhancement'], ...over })
 }
 
 // lease: a loop slot leased for the issue's life (10.1)
@@ -134,7 +134,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   test('its agents stopped and its labels set first (ready back on, the factory labels off); its event last, once they have ended and W2 has freed its slot; then nothing more', () => {
     const agent = entry('i470/l0/s3/build/a1', 'agent-step', { issue: 470, status: 'running', agentId: 'agent-7', endedAt: null })
     let s = world({
-      issues: [held(470, { stage: 'implementing', pr: 621 })],
+      issues: [held(470, { state: 'building', pr: 621 })],
       ledger: [agent],
       leases: [lease(470, 'tbq3k0')],
       agents: [{ id: 'agent-7', type: 'factory-loop:builder', status: 'running' }],
@@ -159,7 +159,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     expect(r1(third)[0]).toMatchObject({
       kind: 'event',
       issue: 470,
-      event: { state: 'reclaimed', issue: 470, pr: 621, stage: 'implementing', reason: 'reconcile', outcome: 'requeue', lives: 1 },
+      event: { state: 'reclaimed', issue: 470, pr: 621, stage: 'building', reason: 'reconcile', outcome: 'requeue', lives: 1 },
     })
 
     // a done release begins nothing again, though the factory still shows the claim (property 17):
@@ -254,7 +254,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   })
 
   test('a later claim of the same issue is a release of its own: its keys never reuse an earlier one\'s', () => {
-    const s = world({ issues: [held(476, { stageSince: NOW - 3 * HOUR })] })
+    const s = world({ issues: [held(476, { stateSince: NOW - 3 * HOUR })] })
     const first = r1(planV2(s, CFG))
     const event = releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), outcome: 'requeue', lives: 1, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')
     let released = ran(ran(s, first), [event])
@@ -266,7 +266,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     // claimed again an hour ago, its record lost with the store: its claim entry, rebuilt from its
     // `claimed` event, dates a ghost of its own, released again under keys of its own
     const claim = entry('claim:476:derived:2', 'claim', { issue: 476, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'claim', result: 'claimed' } })
-    const again = { ...released, issues: [held(476, { stageSince: NOW - HOUR })], ledger: [...released.ledger, claim] }
+    const again = { ...released, issues: [held(476, { stateSince: NOW - HOUR })], ledger: [...released.ledger, claim] }
     const second = r1(planV2(again, CFG))
     expect(second.map(a => a.kind)).toEqual(['label'])
     expect(second.map(a => a.key).some(k => first.some(a => a.key === k))).toBe(false)
@@ -274,8 +274,8 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
 
   test('the claim\'s own entry dates the release, whatever stage the factory shows', () => {
     const claim = entry('claim:477:derived:1', 'claim', { issue: 477, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'claim', result: 'claimed' } })
-    for (const stageSince of [NOW - 3 * HOUR, NOW - 10 * MIN, null]) {
-      const s = world({ issues: [held(477, { stageSince })], ledger: [claim] })
+    for (const stateSince of [NOW - 3 * HOUR, NOW - 10 * MIN, null]) {
+      const s = world({ issues: [held(477, { stateSince })], ledger: [claim] })
       const [g] = ghostsOf(ctxOf(s))
       expect(g?.claim).toBe(lifeOf(NOW - HOUR))
       expect(r1(planV2(s, CFG)).map(a => a.key)).toEqual([releaseKey(477, lifeOf(NOW - HOUR), 'requeue')])
@@ -283,12 +283,12 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   })
 
   test('a release once begun keeps its keys when the stage the factory shows moves (a run\'s stage); a done one is never begun again', () => {
-    let s = world({ issues: [held(479, { stage: 'in pipeline', stageSince: NOW - 3 * HOUR })] })
+    let s = world({ issues: [held(479, { state: 'reviewing', stateSince: NOW - 3 * HOUR })] })
     const [label] = r1(planV2(s, CFG))
     if (label === undefined) throw new Error('expected a label')
     s = ran(s, [label])
     // the run moved on: the factory shows a later stage time, and the release goes on under its own claim
-    const moved = (st: State, since: number): State => ({ ...st, issues: [held(479, { stage: 'ready to merge', stageSince: since })] })
+    const moved = (st: State, since: number): State => ({ ...st, issues: [held(479, { state: 'merge-queue', stateSince: since })] })
     const [g] = ghostsOf(ctxOf(moved(s, NOW - 20 * MIN)))
     expect(g?.claim).toBe(releaseClaimOf(479, label.key))
     const events = r1(planV2(moved(s, NOW - 20 * MIN), CFG))
@@ -309,7 +309,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   })
 
   test('a done release leaves the issue to S1: with the factory still showing it live, S1\'s claim starts the new life', () => {
-    let s = world({ issues: [held(486, { labels: ['ready'], stage: 'in pipeline', stageSince: NOW - 2 * HOUR })] })
+    let s = world({ issues: [held(486, { labels: ['ready'], state: 'reviewing', stateSince: NOW - 2 * HOUR })] })
     s = ran(s, r1(planV2(s, CFG)))
     s = ran(s, r1(planV2(s, CFG)))
     expect(s.ledger.some(e => isReleaseEntry(e) && e.status === 'done')).toBe(true)
@@ -337,7 +337,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     const first = record({ issue: 487, life: lifeOf(NOW - 30 * HOUR), state: 'closed', step: null, why: 'dropped', notes: ['triage: needs a decision'], since: NOW - 29 * HOUR, lives: 1 })
     const second = entry(releaseKey(487, lifeOf(NOW - 20 * HOUR), 'requeue'), 'label', { issue: 487, rule: 'R1', startedAt: NOW - 19 * HOUR, endedAt: NOW - 19 * HOUR })
     const claim = entry('claim:487:derived:3', 'claim', { issue: 487, startedAt: NOW - 3 * HOUR, endedAt: NOW - 3 * HOUR, outcome: { kind: 'claim', result: 'claimed' } })
-    let s = world({ issues: [held(487, { stage: 'implementing', pr: 701 })], records: [first], ledger: [second, claim] })
+    let s = world({ issues: [held(487, { state: 'building', pr: 701 })], records: [first], ledger: [second, claim] })
     const plans = r1(planV2(s, CFG))
     const life = lifeOf(NOW - 3 * HOUR)
     expect(plans.map(a => [a.kind, a.kind === 'label' ? a.op : a.kind === 'tell' ? a.wake : null])).toEqual([
@@ -352,7 +352,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     expect(body).toMatch(/its 3rd life ended without a merge, so it is labelled `factory:rejected`/)
     expect(body).toMatch(/^- life 1, claimed .* UTC: dropped: triage: needs a decision$/m)
     expect(body).toMatch(/^- life 2, claimed .* UTC: released: a live claim with no record, put back in the queue$/m)
-    expect(body).toMatch(/^- life 3, claimed .* UTC: released: a live claim of this device in implementing with no record$/m)
+    expect(body).toMatch(/^- life 3, claimed .* UTC: released: a live claim of this device in building with no record$/m)
     expect(body).toMatch(/remove `factory:rejected` and add `ready` to #487/)
     expect(tell).toMatchObject({ kind: 'tell', wake: 'rejected', class: 'owner', issue: 487, fields: { issue: '487', lives: '3', max: '3' } })
     expect(planV2(s, CFG).owner).toBeGreaterThanOrEqual(1)
@@ -367,11 +367,11 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     const cfg = (maxLives: number) => config({ maxLives })
     const fresh = world({ issues: [held(488)] })
     expect(r1(planV2(fresh, cfg(1))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['reject', 'comment', 'tell'])
-    expect(r1(planV2(world({ issues: [held(487, { stage: 'implementing' })], records: [first], ledger: [second, claim] }), cfg(4))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['requeue'])
+    expect(r1(planV2(world({ issues: [held(487, { state: 'building' })], records: [first], ledger: [second, claim] }), cfg(4))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['requeue'])
   })
 
   test('a ghost with no claim time is named, not released', () => {
-    const s = world({ issues: [held(478, { stageSince: null })] })
+    const s = world({ issues: [held(478, { stateSince: null })] })
     const result = planV2(s, CFG)
     expect(r1(result)).toEqual([])
     expect(r1Skips(result, 478)).toEqual([expect.stringMatching(/no claim time is known/)])
@@ -381,13 +381,13 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
 describe('R1 names nothing but a ghost (property 17)', () => {
   const cases: [string, World][] = [
     ['a record that is not closed', { issues: [held(480)], records: [record({ issue: 480, state: 'parked', step: null })] }],
-    ['a closed record at least as new as the factory\'s view (its closing events have not reached it)', { issues: [held(480, { stageSince: NOW - HOUR })], records: [record({ issue: 480, state: 'closed', step: null, why: 'dropped', since: NOW - 30 * MIN })] }],
+    ['a closed record at least as new as the factory\'s view (its closing events have not reached it)', { issues: [held(480, { stateSince: NOW - HOUR })], records: [record({ issue: 480, state: 'closed', step: null, why: 'dropped', since: NOW - 30 * MIN })] }],
     ['a running claim', { issues: [held(480)], ledger: [entry(claimKey(480, 'tbq3k0'), 'claim', { issue: 480, status: 'running', endedAt: null })] }],
     ['a done v2 claim whose record S0 has still to make', { issues: [held(480)], ledger: [entry(claimKey(480, 'tbq3k0'), 'claim', { issue: 480, outcome: { kind: 'claim', result: 'claimed' } })] }],
     ['another device\'s claim', { issues: [held(480, { holder: OTHER })] }],
     ['no holder', { issues: [held(480, { holder: null })] }],
-    ['a claim that ended or lapsed (queued)', { issues: [held(480, { stage: 'queued' })] }],
-    ['a final stage', { issues: [held(480, { stage: 'merged' }), held(481, { stage: 'closed without merge' })] }],
+    ['a claim that ended or lapsed (queued)', { issues: [held(480, { state: 'queued' })] }],
+    ['a final stage', { issues: [held(480, { state: 'closed', merged: true }), held(481, { state: 'closed' })] }],
     ['an issue closed on GitHub (the sweep logs it)', { issues: [held(480, { open: false })] }],
   ]
   for (const [name, w] of cases) {
@@ -399,7 +399,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
   }
 
   test('but: a closed record older than the claim the factory shows; a claim another device lost', () => {
-    const older = world({ issues: [held(482, { stageSince: NOW - HOUR })], records: [record({ issue: 482, state: 'closed', step: null, why: 'dropped', since: NOW - 3 * HOUR })] })
+    const older = world({ issues: [held(482, { stateSince: NOW - HOUR })], records: [record({ issue: 482, state: 'closed', step: null, why: 'dropped', since: NOW - 3 * HOUR })] })
     expect(r1(planV2(older, CFG)).map(a => a.issue)).toEqual([482])
     const lost = world({ issues: [held(483)], ledger: [entry(claimKey(483, 'tbq3k0'), 'claim', { issue: 483, outcome: { kind: 'claim', result: 'lost' } })] })
     expect(r1(planV2(lost, CFG)).map(a => a.issue)).toEqual([483])
@@ -410,10 +410,10 @@ describe('R1 names nothing but a ghost (property 17)', () => {
   // a ghost by the spec's words (6.2), restated for the property
   function ghost(s: State, n: number): boolean {
     const i = s.issues.find(x => x.number === n)
-    if (i === undefined || i.holder !== DEVICE || i.stage === null || !LIVE_STAGES.includes(i.stage) || i.open === false) return false
+    if (i === undefined || i.holder !== DEVICE || i.state === null || !LIVE_STATES.includes(i.state) || i.open === false) return false
     const records = (s.v2?.records ?? []).filter(r => r.issue === n)
     if (records.some(r => r.state !== 'closed')) return false
-    if (records.length > 0 && (i.stageSince === null || records.some(r => r.since >= (i.stageSince ?? 0)))) return false
+    if (records.length > 0 && (i.stateSince === null || records.some(r => r.since >= (i.stateSince ?? 0)))) return false
     const lives = records.map(r => claimKey(n, r.life))
     return !s.ledger.some(
       e => e.kind === 'claim' && e.issue === n && (e.status === 'running' || (e.status === 'done' && e.key.startsWith(claimKey(n, '')) && !(e.outcome?.kind === 'claim' && e.outcome.result === 'lost') && !lives.includes(e.key))),
@@ -449,8 +449,8 @@ describe('R1 names nothing but a ghost (property 17)', () => {
       issues.push(
         issue(n, {
           holder: pick(r, [DEVICE, DEVICE, OTHER, null]),
-          stage: pick(r, STAGES),
-          stageSince: since,
+          state: pick(r, STATES),
+          stateSince: since,
           open: pick(r, [true, true, false, null]),
           labels: pick(r, [null, ['bug'], ['ready'], ['Ready', 'bug']]),
           pr: pick(r, [null, 600 + n]),
@@ -495,7 +495,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
     const seen = { ghosts: 0, requeue: 0, leave: 0, reject: 0, kept: 0 }
     for (let seed = 1; seed <= 300; seed++) {
       let s = generated(seed)
-      seen.kept += s.issues.filter(i => i.holder === DEVICE && i.stage !== null && LIVE_STAGES.includes(i.stage) && !ghost(s, i.number)).length
+      seen.kept += s.issues.filter(i => i.holder === DEVICE && i.state !== null && LIVE_STATES.includes(i.state) && !ghost(s, i.number)).length
       const ghosts = new Set(s.issues.filter(i => ghost(s, i.number)).map(i => i.number))
       // each ghost's outcome, fixed when its release begins
       const outcomes = new Map([...ghosts].map(n => [n, outcome(s, n)]))
@@ -559,7 +559,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
         s = withLeases(ran(s, all), [])
         s = { ...s, v2: { ...(s.v2 ?? emptyV2State(NOW)), sources: { ...(s.v2 ?? emptyV2State(NOW)).sources, leases: { ok: true, at: NOW } } } }
         // the factory keeps showing a released claim live, and a run's stage moves its time
-        s = { ...s, issues: s.issues.map(i => (released.has(i.number) && i.stageSince !== null ? { ...i, stageSince: NOW - (5 - pass) * MIN } : i)) }
+        s = { ...s, issues: s.issues.map(i => (released.has(i.number) && i.stateSince !== null ? { ...i, stateSince: NOW - (5 - pass) * MIN } : i)) }
       }
       // a release done on the last pass logs its intervention on the next; every done release has
       // exactly one
@@ -582,7 +582,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
       for (const n of ghosts) {
         const read = s.issues.find(x => x.number === n)?.open === true || outcomes.get(n) !== 'requeue'
         const dated =
-          s.issues.find(x => x.number === n)?.stageSince !== null ||
+          s.issues.find(x => x.number === n)?.stateSince !== null ||
           s.ledger.some(e => e.kind === 'claim' && e.issue === n && e.status === 'done' && !(e.outcome?.kind === 'claim' && e.outcome.result === 'lost'))
         if (read && dated && !released.has(n)) throw new Error(`seed ${seed}: ghost #${n} was never released`)
       }
@@ -862,7 +862,7 @@ describe('lives (v2 SPEC 3.2, 6.4)', () => {
     const life = lifeOf(NOW - MIN)
     const done = entry(claimKey(492, life), 'claim', { issue: 492, startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'claim', result: 'claimed' } })
     const s0 = (records: IssueRecord[], ledger: LedgerEntry[]) =>
-      planV2(world({ issues: [issue(492, { holder: DEVICE, stage: 'designing', stageSince: NOW - MIN })], records, ledger: [...ledger, done] }), CFG).actions.find(a => a.kind === 'transition' && a.issue === 492)
+      planV2(world({ issues: [issue(492, { holder: DEVICE, state: 'designing', stateSince: NOW - MIN })], records, ledger: [...ledger, done] }), CFG).actions.find(a => a.kind === 'transition' && a.issue === 492)
     const earlier = record({ issue: 492, life: at(10), state: 'closed', step: null, why: 'dropped', since: NOW - 9 * HOUR, lives: 1 })
     expect(s0([earlier], [])).toMatchObject({ next: { lives: 2 }, via: 'claim' })
     expect(s0([], [])).toMatchObject({ next: { lives: 1 }, via: 'claim' })
@@ -895,13 +895,13 @@ describe('lives (v2 SPEC 3.2, 6.4)', () => {
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
 
-function driverWorld(ghostIssue: number) {
+function driverWorld(ghostIssue: number, shape: ReportShape = 'new') {
   const issueJson = { issue: { number: ghostIssue, title: 'x', state: 'open', labels: [{ name: 'bug' }, { name: 'In development' }], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
   return (argv: string[], s: Seen) => {
     const [cmd, ...args] = argv
     switch (cmd) {
       case 'callum-flow-factory-state':
-        return { stdout: factoryDoc([{ issue: ghostIssue, stage: 'implementing', entered_at: iso(NOW - 3 * HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]) }
+        return { stdout: factoryDoc([{ issue: ghostIssue, stage: 'implementing', entered_at: iso(NOW - 3 * HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }], [], NOW, shape) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
       case `${TOOLS}/queue-watch.sh`:
@@ -918,25 +918,27 @@ function driverWorld(ghostIssue: number) {
   }
 }
 
-describe('R1 in the driver', () => {
-  test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: driverWorld(470) })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    // a second pass, once the issue's labels have been read
-    await clock.advance(61_000)
-    const line = h.last()
-    expect(line).toMatchObject({ mode: 'observe', executed: false })
-    const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
-    expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
-    expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in implementing for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
-    const ran = h.commands().map(c => c.argv.join(' '))
-    expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
-    expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])
-    expect(h.store.get(`ledger:${REPO}`)).toBeUndefined()
+for (const shape of REPORT_SHAPES) {
+  describe(`R1 in the driver, on a ${shape} report`, () => {
+    test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: driverWorld(470, shape) })
+      await $.session.start(START)
+      await clock.advance(6_000)
+      // a second pass, once the issue's labels have been read
+      await clock.advance(61_000)
+      const line = h.last()
+      expect(line).toMatchObject({ mode: 'observe', executed: false })
+      const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
+      expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
+      expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in building for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
+      const ran = h.commands().map(c => c.argv.join(' '))
+      expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
+      expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])
+      expect(h.store.get(`ledger:${REPO}`)).toBeUndefined()
+    })
   })
-})
+}
 
 // ctxOf: the context R1 works in for a state, for the pure helpers' own tests.
 function ctxOf(s: State): V2Ctx {

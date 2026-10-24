@@ -29,14 +29,15 @@
 // state.now.
 import { gate, listedLive, skip, wake, want } from '../foundation'
 import type { Gate } from '../foundation'
-import type { Action, Checkout, IssueView, LedgerEntry, Ms, Stage } from '../types'
+import type { Action, Checkout, IssueView, LedgerEntry, Ms } from '../types'
+import { LIVE_STATES } from '../factory-state-map'
 import { claimKey, lifeAt, lifeOf, short } from './keys'
 import { claimedAt, livesBefore } from './lives'
 import type { Lives } from './lives'
-import { LIVE_STAGES, RELEASE_OPS, releaseClaimOf, releaseEffects, releaseEventAction, releaseKey, releaseOutcomeOf } from './release'
+import { RELEASE_OPS, releaseClaimOf, releaseEffects, releaseEventAction, releaseKey, releaseOutcomeOf } from './release'
 import type { ReleaseAgent, ReleaseOutcome } from './release'
 import { REJECTED_LABEL } from './types'
-import type { IssueRecord, Lease, V2Ctx } from './types'
+import type { IssueRecord, IssueState, Lease, V2Ctx } from './types'
 
 const MIN = 60_000
 
@@ -51,8 +52,8 @@ export type Ghost = {
   issue: number
   // the claim the release ends, as its keys carry it (claimOf); null when no time is known
   claim: string | null
-  stage: Stage
-  // when the factory shows it entered its stage
+  state: IssueState
+  // when the factory shows it entered its state
   since: Ms | null
   // open on GitHub; null when not read (a closed one is never a ghost: the sweep ends its claim)
   open: boolean | null
@@ -77,7 +78,7 @@ export function reconcile(ctx: V2Ctx): void {
 
 // ghostsOf: this device's live claims with no record, no claim in flight and no done release, by
 // issue number. S1 leaves these to R1, whose release ends their claim before any new one. A claim
-// whose release is done is not one: the factory may still show it live (a no-mistakes run's stage
+// whose release is done is not one: the factory may still show it live (a no-mistakes run's state
 // outlives the release until the factory tools end it, 6.4), and S1 may claim it again, whose
 // claim starts the new life.
 export function ghostsOf(ctx: V2Ctx): Ghost[] {
@@ -93,8 +94,8 @@ export function ghostsOf(ctx: V2Ctx): Ghost[] {
     out.push({
       issue: issue.number,
       claim,
-      stage: issue.stage as Stage,
-      since: issue.stageSince,
+      state: issue.state as IssueState,
+      since: issue.stateSince,
       open: issue.open,
       dropped: claimAt !== null && state.control.dropped.some(d => d.issue === issue.number && d.at >= claimAt),
       lives: claim === null ? { count: 0, ended: [], afterReject: false } : livesBefore(ctx.v2.records, state.ledger, issue.number, claim),
@@ -109,7 +110,7 @@ export function ghostsOf(ctx: V2Ctx): Ghost[] {
 // liveClaim: the factory shows the issue live with this device as the holder, and it is not
 // known closed on GitHub (a closed issue's claim is ended by the sweep's `closed`, H2).
 function liveClaim(issue: IssueView, device: string): boolean {
-  return issue.holder === device && issue.stage !== null && LIVE_STAGES.includes(issue.stage) && issue.open !== false
+  return issue.holder === device && issue.state !== null && LIVE_STATES.includes(issue.state) && issue.open !== false
 }
 
 // heldByRecord: a record holds the issue's claim: one that is not closed (rule 1), or a closed one
@@ -120,7 +121,7 @@ function heldByRecord(records: readonly IssueRecord[], issue: IssueView): boolea
   const mine = records.filter(r => r.issue === issue.number)
   if (mine.some(r => r.state !== 'closed')) return true
   if (mine.length === 0) return false
-  return issue.stageSince === null || mine.some(r => r.since >= (issue.stageSince ?? 0))
+  return issue.stateSince === null || mine.some(r => r.since >= (issue.stateSince ?? 0))
 }
 
 // claimInFlight: a claim of the issue runs, or a v2 claim is done and its record is still to be
@@ -142,7 +143,7 @@ function claimInFlight(ctx: V2Ctx, n: number): boolean {
 //   the ledger was rebuilt), a claim that was not lost;
 // - else the claim the newest release begun for the issue is keyed by, so a release once begun
 //   keeps its keys;
-// - else, to begin one, when the factory shows it entered its stage. A run's stage moves that
+// - else, to begin one, when the factory shows it entered its state. A run's state moves that
 //   time, which is why it never dates a release already begun.
 // null when none is known.
 export function claimOf(ledger: readonly LedgerEntry[], issue: IssueView): string | null {
@@ -159,7 +160,7 @@ export function claimOf(ledger: readonly LedgerEntry[], issue: IssueView): strin
   }
   if (at !== null) return lifeOf(at)
   if (begun !== null) return begun.claim
-  return issue.stageSince === null ? null : lifeOf(issue.stageSince)
+  return issue.stateSince === null ? null : lifeOf(issue.stateSince)
 }
 
 // agentsOn: the loop's agents still at work on the issue: an entry of it that runs, or whose agent
@@ -198,14 +199,14 @@ const WAIT: Readonly<Record<string, string>> = {
 function release(ctx: V2Ctx, g: Ghost): void {
   const age = g.since === null ? '' : ` for ${Math.max(0, Math.round((ctx.state.now - g.since) / MIN))} min`
   if (g.claim === null) {
-    skip(ctx, 'R1', g.issue, `ghost #${g.issue} in ${g.stage}: no claim time is known, so it is not released`)
+    skip(ctx, 'R1', g.issue, `ghost #${g.issue} in ${g.state}: no claim time is known, so it is not released`)
     return
   }
   const claim = g.claim
-  const why = `ghost #${g.issue}: a live claim of this device in ${g.stage}${age} with no record`
+  const why = `ghost #${g.issue}: a live claim of this device in ${g.state}${age} with no record`
   const outcome = outcomeOf(ctx, g, claim)
   const lives = g.lives.count + 1
-  const ended = [...g.lives.ended, `life ${lives}, claimed ${claimedAt(claim)}: released: a live claim of this device in ${g.stage} with no record`]
+  const ended = [...g.lives.ended, `life ${lives}, claimed ${claimedAt(claim)}: released: a live claim of this device in ${g.state} with no record`]
   const max = ctx.config.maxLives
   const waits: string[] = []
   // with no outcome yet, the stops still go: they are the same for every outcome
@@ -243,7 +244,7 @@ function release(ctx: V2Ctx, g: Ghost): void {
     return
   }
   const checked = `this device's live claim has no record and no claim in flight${g.agents.length > 0 ? `; ${g.agents.length} agent(s) stopped` : ''}`
-  const event = releaseEventAction({ issue: g.issue, claim, outcome: outcome ?? 'leave', lives, stage: g.stage, checked, branch: null, pr: g.pr }, why)
+  const event = releaseEventAction({ issue: g.issue, claim, outcome: outcome ?? 'leave', lives, stage: g.state, checked, branch: null, pr: g.pr }, why)
   if (effect(ctx, event) === 'exhausted') stalled(ctx, g.issue, event)
 }
 

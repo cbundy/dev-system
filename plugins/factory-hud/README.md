@@ -9,9 +9,9 @@ A Claude Code mod that keeps a one-line readout on screen:
 - the time (in the workspace's `TZ`), the context window fill, and the plan's 5-hour and
   7-day usage when Claude Code supplies those figures;
 - for an orchestrator, the factory's counts for the session's repo, by
-  [`callum-flow-factory-state`](../../docs/factory-state.md) stage: `live` is every active
-  stage, `design` designing, `dev` implementing, `pipe` in pipeline plus parked, `merge` ready
-  to merge. Refreshed every minute; counts at least five minutes old show their age;
+  [`callum-flow-factory-state`](../../docs/factory-state.md) state: `live` is every active
+  state (designing, building, reviewing, fixing, parked, merge-queue), `design` designing,
+  `dev` building, `pipe` reviewing, fixing plus parked, `merge` merge-queue, `queued` queued. Refreshed every minute; counts at least five minutes old show their age;
 - the versions of Claude Code, callum-flow, the base image and no-mistakes.
 
 On usage measurements, it shows a toast once per conversation for each threshold: context

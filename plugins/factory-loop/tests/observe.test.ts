@@ -38,7 +38,8 @@ import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
 import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, eventRow, eventsCsv, review, run, state, wakeAnswer } from './fixtures'
-import { issuesRead } from './host'
+import { REPORT_SHAPES, issuesRead, rowOf } from './host'
+import type { ReportShape } from './host'
 
 const REPO = 'cbundy/dev-system'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -59,7 +60,17 @@ const pl = (s: RunState, branch: string, run: string, over: Partial<PipelineRun>
 function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], extra: Record<string, unknown> = {}) {
   return JSON.stringify({ at: iso(NOW), at_source: '--at', ...extra, repos: [{ repo: REPO, issues, recent }] })
 }
-const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) => ({
+// The shape the rows of a report take (host.ts rowOf): the tool's now, or an older image's.
+let shape: ReportShape = 'new'
+const inShape = (s: ReportShape, run: () => void) => () => {
+  shape = s
+  try {
+    run()
+  } finally {
+    shape = 'new'
+  }
+}
+const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) => rowOf({
   issue: n,
   stage,
   detail: null,
@@ -73,7 +84,7 @@ const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) =
   github: null,
   flags: [],
   ...over,
-})
+}, shape)
 
 function ev(over: Partial<FactoryEvent>): FactoryEvent {
   return { ts: NOW - 10 * MIN, state: 'parked', issue: 45, run: 'R45', branch: 'feat/issue-45-x', pr: null, head: 'h1', note: null, actor: 'watcher', device: DEVICE, ...over }
@@ -90,10 +101,10 @@ describe('parse', () => {
     )
     const f = parseFactoryState(json, REPO)
     expect(f?.at).toBe(NOW)
-    expect(f?.issues.map(i => [i.number, i.stage, i.ended, i.stuck])).toEqual([
-      [45, 'parked', false, 'S3'],
-      [114, 'queued', false, null],
-      [271, 'merged', true, null],
+    expect(f?.issues.map(i => [i.number, i.state, i.merged, i.ended, i.stuck])).toEqual([
+      [45, 'parked', false, false, 'S3'],
+      [114, 'queued', false, false, null],
+      [271, 'closed', true, true, null],
     ])
     expect(f?.issues[1]?.github).toEqual({ open: true, labels: ['enhancement', 'ready'] })
     // a claim the tool shows lapsed carries its lease end (v2's H1 reads it); any other detail none
@@ -104,6 +115,32 @@ describe('parse', () => {
     ])
     expect(parseFactoryState(json, 'other/repo')).toBeNull()
     expect(parseFactoryState('not json', REPO)).toBeNull()
+  })
+
+  test('factory-state: a new report and the same one with only the old stage words give the same states, merged flags and since times', () => {
+    // what the tool adds beyond the stage words, by issue: a lapsed claim keeps the state it had and shows
+    // the stage queued; a closed row has its why; GitHub closed #13 before the view saw it (it keeps its live state)
+    const extra: Record<number, Record<string, unknown>> = {
+      8: { state: 'designing', detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` },
+      11: { why: 'dropped' },
+      12: { why: 'merged-by-hand' },
+      13: { state: 'building' },
+    }
+    const read = (s: ReportShape) => {
+      shape = s
+      try {
+        const rows = (list: [number, string][]) => list.map(([n, stage]) => ({ ...fsIssue(n, stage), ...(s === 'new' ? extra[n] : {}), ...(s === 'old' && n === 8 ? { detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` } : {}) }))
+        const live = rows([[1, 'designing'], [2, 'implementing'], [3, 'in pipeline'], [4, 'ready to merge'], [5, 'parked'], [6, 'waiting'], [7, 'queued'], [8, 'queued']])
+        const recent = rows([[10, 'merged'], [11, 'closed without merge'], [12, 'merged'], [13, 'closed without merge']])
+        return parseFactoryState(factoryJson(live, recent), REPO)!.issues.map(i => [i.number, i.state, i.merged, i.stateSince, i.ended])
+      } finally {
+        shape = 'new'
+      }
+    }
+    const now = read('new')
+    expect(Object.fromEntries(now.map(r => [r[0], r[1]]))).toEqual({ 1: 'designing', 2: 'building', 3: 'reviewing', 4: 'merge-queue', 5: 'parked', 6: 'waiting', 7: 'queued', 8: 'queued', 10: 'closed', 11: 'closed', 12: 'closed', 13: 'closed' })
+    expect(now.filter(r => r[2]).map(r => r[0])).toEqual([10, 12])
+    expect(read('old')).toEqual(now)
   })
 
   test('factory-state: the repo matches case-insensitively, both ways (the tool lower-cases it)', () => {
@@ -667,7 +704,7 @@ describe('derive', () => {
     expect([...facts.superseded]).toEqual(['R44'])
   })
 
-  test('runs: the mirror decides parked or running; the watcher refines the rest', () => {
+  for (const s of REPORT_SHAPES) test(`runs: the mirror decides parked or running; the watcher refines the rest (${s} report)`, inShape(s, () => {
     const facts = factsOf([
       ev({ state: 'parked', ts: NOW - 30 * MIN }),
       ev({ state: 'merge_ready', ts: NOW - 20 * MIN, head: 'h2' }),
@@ -693,15 +730,15 @@ describe('derive', () => {
       [47, 'cancelled', 'h1'],
       [48, 'merge-ready', 'h1'],
     ])
-  })
+  }))
 
-  test('a park the mirror shows as running is still waiting until the log shows it answered', () => {
+  for (const s of REPORT_SHAPES) test(`a park the mirror shows as running is still waiting until the log shows it answered (${s} report)`, inShape(s, () => {
     const park = ev({ state: 'parked', ts: NOW - 6 * MIN })
     const factory = parseFactoryState(factoryJson([fsIssue(45, 'in pipeline', { run: 'R45' })]), REPO)!
     expect(runsFromEvents(factory, factsOf([park]))[0]?.state).toBe('parked')
     const answered = [park, ev({ state: 'verdict', note: 'NIT: x', actor: 'agent', ts: NOW - 5 * MIN })]
     expect(runsFromEvents(factory, factsOf(answered))[0]?.state).toBe('running')
-  })
+  }))
 
   test('a run the watcher saw that the mirror has not synced yet is the current run', () => {
     const facts = factsOf([

@@ -3,7 +3,7 @@
 // are its. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
-import type { AgentStep, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, IssueState, Model, ParkParts, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 import type { CapInfo } from './v2/capacity'
 import type { QueueView } from './v2/queue-view'
 import type { QueueScoreWeights, ScoreResult } from './v2/score'
@@ -14,17 +14,6 @@ export type Tier = 'normal' | 'slow' | 'stop-new' | 'stop-all'
 
 // Each action has one class; the tier decides which classes may run (v2 SPEC 13.5.2).
 export type ActionClass = 'free' | 'owner' | 'drive' | 'develop' | 'start'
-
-export type Stage =
-  | 'queued'
-  | 'designing'
-  | 'implementing'
-  | 'in pipeline'
-  | 'parked'
-  | 'waiting'
-  | 'ready to merge'
-  | 'merged'
-  | 'closed without merge'
 
 export type SourceName = 'factory' | 'facts' | 'runs' | 'queue' | 'github' | 'usage' | 'pool' | 'milestone'
 
@@ -50,8 +39,10 @@ export type Brief = { url: string; at: Ms }
 
 export type IssueView = {
   number: number
-  stage: Stage | null
-  stageSince: Ms | null
+  state: IssueState | null
+  // a closed issue that was merged (factory-state-map.ts); false for any other
+  merged: boolean
+  stateSince: Ms | null
   holder: string | null
   run: string | null
   pr: number | null

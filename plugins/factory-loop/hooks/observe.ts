@@ -29,7 +29,8 @@ import {
 import type { Factory } from './parse'
 import { spendEventData, tallyStep, unavailableSpend } from './spend'
 import type { ApiKeySettings, Tally } from './spend'
-import { LIVE, listedLive } from './foundation'
+import { listedLive } from './foundation'
+import { BUSY_STATES, LIVE_STATES } from './factory-state-map'
 import { TRACKER_DEPTH, buildState } from './state'
 import type { GithubIssue } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, ReleaseInfo, Source, SourceName, State, Usage } from './types'
@@ -345,7 +346,7 @@ export async function observe(
     const working = ledger
       .filter(e => e.status === 'running' || (e.agentId !== undefined && listedLive(agents, e.agentId)))
       .flatMap(e => (e.issue === null ? [] : [e.issue]))
-    const live = (factory?.issues ?? []).filter(i => !i.ended && LIVE.includes(i.stage)).map(i => i.number)
+    const live = (factory?.issues ?? []).filter(i => !i.ended && LIVE_STATES.includes(i.state)).map(i => i.number)
     const runIts = ledger
       .filter(e => e.key.startsWith('task:run-it:') && !(e.status === 'done' && e.outcome?.kind === 'wake' && e.outcome.decision === 'done'))
       .flatMap(e => (e.issue === null ? [] : [e.issue]))
@@ -365,7 +366,7 @@ export async function observe(
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
-    const designing = new Set(mine.filter(i => i.stage === 'designing').map(i => i.number))
+    const designing = new Set(mine.filter(i => i.state === 'designing').map(i => i.number))
     let githubOk = await readIssues(run, due, { repo: rt.repo, cache: cache.github, now, designing, limited: () => limited })
     // tracker timelines, in the reads left this pass, walked again so a tracker read just now counts
     const timelinesDue = walkTrackers()
@@ -431,7 +432,7 @@ export async function observe(
   let pool: Pool | null = null
   let poolJson: string | null = null
   if (rt.runSource === 'events') {
-    const busy = mine.filter(i => ['implementing', 'in pipeline', 'parked', 'ready to merge'].includes(i.stage)).length
+    const busy = mine.filter(i => BUSY_STATES.includes(i.state)).length
     pool = { free: Math.max(0, rt.poolSize - busy), total: rt.poolSize, slots: [] }
     mark('pool', true, now)
   } else {

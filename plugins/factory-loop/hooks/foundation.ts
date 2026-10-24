@@ -8,7 +8,7 @@
 // (v2 SPEC 5.3), which holds every start, develop and drive action for 30 minutes.
 //
 // Pure: no clock (state.now), no I/O, and nothing imported but types and v2's vocabulary.
-import type { Action, ActionClass, ActionKind, AgentStatus, AgentType, AgentView, Config, LedgerEntry, Ms, Skip, Stage, State, Tier, Usage } from './types'
+import type { Action, ActionClass, ActionKind, AgentStatus, AgentType, AgentView, Config, LedgerEntry, Ms, Skip, State, Tier, Usage } from './types'
 import { AGENT_STEPS } from './v2/types'
 
 const MIN = 60_000
@@ -421,8 +421,6 @@ export function titleOf(f: TitleFrame): string {
 
 // --- shared helpers: the usage tier, the live stages, the agent list, the release review ----------
 
-// the live stages; observe reads the GitHub state of every issue in one (#556)
-export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
 // tierOf: the usage tier (rule G3, v2 SPEC 13.5.2). The higher of the two windows decides; a missing
 // reading is Normal (stop-new in API-key mode) (the skill fails open); an owner override keeps Normal below its pct.

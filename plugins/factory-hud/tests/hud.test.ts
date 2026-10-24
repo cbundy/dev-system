@@ -45,6 +45,31 @@ describe('format', () => {
     expect(counts('{}', 1)).toBeUndefined()
   })
 
+  test('counts the v2 states of a new report as the old stage words counted, and a lapsed claim as queued', () => {
+    const rows = [
+      { state: 'designing', stage: 'designing' },
+      { state: 'designing', stage: 'designing' },
+      { state: 'building', stage: 'implementing' },
+      { state: 'reviewing', stage: 'in pipeline' },
+      { state: 'fixing', stage: 'in pipeline' },
+      { state: 'parked', stage: 'parked' },
+      { state: 'merge-queue', stage: 'ready to merge' },
+      { state: 'waiting', stage: 'waiting' },
+      { state: 'queued', stage: 'queued' },
+      { state: 'queued', stage: 'queued' },
+    ]
+    const json = (issues: unknown[]) => JSON.stringify({ repos: [{ issues }] })
+    expect(counts(json(rows), 1)).toEqual({ live: 7, design: 2, dev: 1, pipe: 3, merge: 1, queued: 2, at: 1 })
+    // the same report from an image with only the stage words: reviewing and fixing were both in pipeline
+    expect(counts(json(rows.map(({ stage }) => ({ stage }))), 1)).toEqual({ live: 7, design: 2, dev: 1, pipe: 3, merge: 1, queued: 2, at: 1 })
+    // a claim whose lease lapsed keeps its state and shows the stage queued: it counts as queued, not live
+    const lapsed = { state: 'designing', stage: 'queued', detail: 'claim lapsed at 2026-10-11T10:00:00.000Z' }
+    expect(counts(json([lapsed, { state: 'building', stage: 'implementing' }]), 1)).toEqual({ live: 1, design: 0, dev: 1, pipe: 0, merge: 0, queued: 1, at: 1 })
+    expect(counts(json([{ stage: 'queued', detail: 'claim lapsed at 2026-10-11T10:00:00.000Z' }]), 1)?.queued).toBe(1)
+    // an ended row is never live
+    expect(counts(json([{ state: 'building', stage: 'closed without merge', ended: true }]), 1)?.live).toBe(0)
+  })
+
   test('reads the repo from https and ssh remotes', () => {
     expect(repoSlug('https://github.com/cbundy/dev-system.git\n')).toBe('cbundy/dev-system')
     expect(repoSlug('git@github.com:cbundy/dev-system')).toBe('cbundy/dev-system')
