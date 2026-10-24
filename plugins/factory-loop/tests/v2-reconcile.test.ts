@@ -40,8 +40,8 @@ import { GITHUB_V2, newCtx, tierOf } from '../hooks/foundation'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, IssueState, Lease, V2Ctx, V2State } from '../hooks/v2/types'
 import { CLEAN, DEVICE, MIN, NOW, OTHER, config, entry, issue, state } from './fixtures'
-import { NO_EVENTS, QUIET_BEATS, REPO, REPORT_SHAPES, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
-import type { ReportShape, Seen } from './host'
+import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso, ENGINE_TEST } from './host'
+import type { Seen } from './host'
 
 const HOUR = 60 * MIN
 const CFG = config()
@@ -895,13 +895,13 @@ describe('lives (v2 SPEC 3.2, 6.4)', () => {
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
 
-function driverWorld(ghostIssue: number, shape: ReportShape = 'new') {
+function driverWorld(ghostIssue: number) {
   const issueJson = { issue: { number: ghostIssue, title: 'x', state: 'open', labels: [{ name: 'bug' }, { name: 'In development' }], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
   return (argv: string[], s: Seen) => {
     const [cmd, ...args] = argv
     switch (cmd) {
       case 'callum-flow-factory-state':
-        return { stdout: factoryDoc([{ issue: ghostIssue, stage: 'implementing', entered_at: iso(NOW - 3 * HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }], [], NOW, shape) }
+        return { stdout: factoryDoc([{ issue: ghostIssue, state: 'building', state_since: iso(NOW - 3 * HOUR), holder: DEVICE, pr: null, stuck: null, github: null }], [], NOW) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
       case `${TOOLS}/queue-watch.sh`:
@@ -918,27 +918,25 @@ function driverWorld(ghostIssue: number, shape: ReportShape = 'new') {
   }
 }
 
-for (const shape of REPORT_SHAPES) {
-  describe(`R1 in the driver, on a ${shape} report`, () => {
-    test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
-      const clock = mock.clock(on, { now: NOW })
-      const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: driverWorld(470, shape) })
-      await $.session.start(START)
-      await clock.advance(6_000)
-      // a second pass, once the issue's labels have been read
-      await clock.advance(61_000)
-      const line = h.last()
-      expect(line).toMatchObject({ mode: 'observe', executed: false })
-      const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
-      expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
-      expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in building for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
-      const ran = h.commands().map(c => c.argv.join(' '))
-      expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
-      expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])
-      expect(h.store.get(`ledger:${REPO}`)).toBeUndefined()
-    })
+describe('R1 in the driver', () => {
+  test('observe mode with planner v2: the release of a ghost is planned and logged, and nothing of it runs', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: driverWorld(470) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // a second pass, once the issue's labels have been read
+    await clock.advance(61_000)
+    const line = h.last()
+    expect(line).toMatchObject({ mode: 'observe', executed: false })
+    const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
+    expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
+    expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in building for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
+    const ran = h.commands().map(c => c.argv.join(' '))
+    expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
+    expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])
+    expect(h.store.get(`ledger:${REPO}`)).toBeUndefined()
   })
-}
+})
 
 // ctxOf: the context R1 works in for a state, for the pure helpers' own tests.
 function ctxOf(s: State): V2Ctx {

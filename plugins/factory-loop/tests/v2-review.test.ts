@@ -1119,7 +1119,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       const line = argv.join(' ')
       switch (argv[0]) {
         case 'callum-flow-factory-state':
-          return { stdout: factoryDoc([{ issue: n, stage: 'reviewing', entered_at: iso(NOW - MIN), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]) }
+          return { stdout: factoryDoc([{ issue: n, state: 'reviewing', state_since: iso(NOW - MIN), holder: DEVICE, pr: null, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
         case `${TOOLS}/queue-watch.sh`:
@@ -1196,7 +1196,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       const line = argv.join(' ')
       switch (argv[0]) {
         case 'callum-flow-factory-state':
-          return { stdout: factoryDoc(recs.map(r => ({ issue: r.issue, stage: 'reviewing', entered_at: iso(NOW - MIN), holder: DEVICE, run: null, pr: r.pr, stuck: null, github: null }))) }
+          return { stdout: factoryDoc(recs.map(r => ({ issue: r.issue, state: 'reviewing', state_since: iso(NOW - MIN), holder: DEVICE, pr: r.pr, stuck: null, github: null }))) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
         case `${TOOLS}/queue-watch.sh`:
@@ -1265,7 +1265,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       const line = argv.join(' ')
       switch (argv[0]) {
         case 'callum-flow-factory-state':
-          return { stdout: factoryDoc([{ issue: n, stage: 'reviewing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
+          return { stdout: factoryDoc([{ issue: n, state: 'reviewing', state_since: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
         case `${TOOLS}/queue-watch.sh`:

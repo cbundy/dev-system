@@ -205,8 +205,8 @@ SQL
     const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
     if (r.repos.length !== 1 || r.repos[0].repo !== "acme/widgets" || r.at_source !== "--at") process.exit(1);
     const by = Object.fromEntries(r.repos[0].issues.concat(r.repos[0].recent).map((i) => [i.issue, i]));
-    const want = { 42: ["closed", "merged"], 51: ["building", "implementing"], 52: ["parked", "parked"], 53: ["designing", "designing"] };
-    for (const [n, [state, stage]] of Object.entries(want)) if (!by[n] || by[n].state !== state || by[n].stage !== stage) process.exit(1);
+    const want = { 42: ["closed", "merged"], 51: ["building", null], 52: ["parked", null], 53: ["designing", null] };
+    for (const [n, [state, why]] of Object.entries(want)) if (!by[n] || by[n].state !== state || (why !== null && by[n].why !== why) || "stage" in by[n]) process.exit(1);
     if (!r.repos[0].recent.some((i) => i.issue === 42) || by[52].question !== "Which schema?" || by[51].holder !== "nm-metrics") process.exit(1);'
 }
 check "callum-flow-factory-state reads factory.issue_state_at through dev-query --factory and places the issues" factory_state_query

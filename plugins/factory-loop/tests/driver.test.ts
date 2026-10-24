@@ -49,7 +49,7 @@ const WATCH_LOCK = '/tmp/orchestrator-watch-cbundy_dev-system.lock'
 // --- observe mode (the shadow's shape: runSource events, another device's work) ------------------
 
 const FACTORY = factoryDoc([
-  { issue: 45, stage: 'parked', entered_at: iso(NOW - 600_000), holder: DEVICE, run: 'R45', pr: 545, stuck: null, github: null },
+  { issue: 45, state: 'parked', state_since: iso(NOW - 600_000), holder: DEVICE, pr: 545, stuck: null, github: null },
 ])
 const EVENTS = [
   'ts,state,issue,run_id,branch,pr,head,note,actor,device',
@@ -296,7 +296,7 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
 
 // --- act mode ---------------------------------------------------------------------------------------
 
-type Issue = { stage: string; since: number; run?: string | null; pr?: number | null }
+type Issue = { state: string; since: number; pr?: number | null }
 
 // factory: a small world of canned CLIs: issue 470 in the queue or at a stage, the rest quiet.
 type Answer = { exitCode?: number; stdout?: string; stderr?: string }
@@ -309,7 +309,7 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
     switch (cmd) {
       case 'callum-flow-factory-state': {
         const i = w.issue
-        const row = i === null ? null : { issue: 470, stage: i.stage, entered_at: iso(i.since), holder: DEVICE, run: i.run ?? null, pr: i.pr ?? null, stuck: null, github: null }
+        const row = i === null ? null : { issue: 470, state: i.state, state_since: iso(i.since), holder: DEVICE, pr: i.pr ?? null, stuck: null, github: null }
         return { stdout: factoryDoc(row === null ? [] : [row]) }
       }
       case 'dev-query':
@@ -784,7 +784,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
   test("an agent's answer while another session holds the lock is left to that session: no load, no event, no write", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
-    const { run } = factory({ issue: { stage: 'designing', since } })
+    const { run } = factory({ issue: { state: 'designing', since } })
     const store = ledgerOf([
       entry(`design:470:${since}`, 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
@@ -828,7 +828,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
     const key = `design:470:${since}`
-    const { run } = factory({ issue: { stage: 'designing', since } })
+    const { run } = factory({ issue: { state: 'designing', since } })
     const store = ledgerOf([
       entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
       entry(key, 'agent-step', { step: 'design', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
@@ -1317,7 +1317,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
       queue: [470],
       run: argv => {
         if (argv[0] === 'callum-flow-factory-state') {
-          return { stdout: factoryDoc([{ issue: 471, stage: 'parked', entered_at: iso(NOW - 10 * MIN), holder: OTHER, run: '01K7S1AAAAAAAAAAAAAAAAAAAA', pr: 571, stuck: null, github: null }]) }
+          return { stdout: factoryDoc([{ issue: 471, state: 'parked', state_since: iso(NOW - 10 * MIN), holder: OTHER, pr: 571, stuck: null, github: null }]) }
         }
         if (argv[0] === `${TOOLS}/pipeline-watch.sh`) return { stdout: `parked issue-471-other 01K7S1AAAAAAAAAAAAAAAAAAAA step=review pr=571 head=${head}\n` }
         // a live issue is read whoever holds it (#556): it is still open

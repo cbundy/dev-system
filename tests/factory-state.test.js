@@ -152,51 +152,75 @@ test("every fixture's report equals its reviewed expected JSON, and each issue e
   }
 });
 
-test("every issue has what factory-loop's parse.ts and factory-reconcile read", opts, async (t) => {
-  const { stateOfRow, STAGE_STATE } = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "factory-state-map.ts"));
-  const stages = Object.keys(STAGE_STATE);
-  assert.ok(stages.length >= 9, "factory-state-map.ts STAGE_STATE");
+test("every issue has what factory-loop's parse.ts and factory-reconcile read, and none of the old stage fields", opts, async (t) => {
+  const { stateOfRow } = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "factory-state-map.ts"));
   for (const n of names) {
     const db = newDb(t);
     const { report } = runFixture(db, n);
     for (const repo of report.repos) {
       for (const i of repo.issues.concat(repo.recent)) {
         const at = `${n} #${i.issue}`;
-        assert.ok(stages.includes(i.stage), `${at}: stage ${i.stage}`);
+        for (const gone of ["stage", "entered_at", "run", "v2", "minutes_in_stage"]) assert.ok(!(gone in i), `${at}: no ${gone}`);
+        assert.ok("minutes_in_state" in i, `${at}: minutes_in_state`);
         assert.ok(stateOfRow({ ...i, ended: repo.recent.includes(i) }), `${at}: factory-loop reads a state`);
-        if (i.entered_at !== null) assert.equal(new Date(i.entered_at).toISOString(), i.entered_at, at);
         assert.ok(i.stuck === null || typeof i.stuck.rule === "string", at);
-        assert.equal(i.run, null, at);
-        assert.equal(i.v2 === null, i.life === null, `${at}: v2 is null exactly when there is no deciding transition`);
       }
     }
+    for (const s of report.stuck) assert.ok(!("stage" in s), `${n}: no stage in a stuck entry`);
     for (const s of report.skipped_events) assert.deepEqual(Object.keys(s).sort(), ["count", "derived", "type", "type_version"]);
   }
 });
 
-test("lapsed claim: a claim-only designing issue shows as queued with the lapse text and no v2 record", opts, (t) => {
+test("issues sort by the state order, then the issue number", opts, (t) => {
+  for (const n of ["v2", "v2-waiting", "lapsed-claim"]) {
+    const db = newDb(t);
+    const { report } = runFixture(db, n);
+    for (const repo of report.repos) {
+      const shown = (i, ended) => (ended ? "closed" : i.life === null && i.state === "designing" && i.lease && i.lease.lapsed ? "queued" : i.state);
+      for (const [list, ended] of [[repo.issues, false], [repo.recent, true]]) {
+        const keys = list.map((i) => [mod.STATE_ORDER.indexOf(shown(i, ended)), i.issue]);
+        assert.ok(keys.every((k) => k[0] >= 0), `${n}: every row has a known state`);
+        assert.deepEqual(keys, [...keys].sort((x, y) => x[0] - y[0] || x[1] - y[1]), `${n} ${repo.repo}`);
+      }
+    }
+  }
+});
+
+test("no stage translation is left in the tool or its readers", () => {
+  const files = ["plugins/factory-loop/hooks/factory-state-map.ts", "plugins/factory-loop/hooks/parse.ts", "plugins/factory-hud/hooks/format.ts",
+    "plugins/factory-loop/bin/factory-reconcile", "images/base/callum-flow-factory-state"];
+  for (const rel of files) {
+    const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+    for (const gone of ["STAGE_STATE", "entered_at", "'in pipeline'", "i.v2", "?? i.v2", "ACTIVE_STAGES", "V2_STAGE", "minutes_in_stage"]) assert.ok(!src.includes(gone), `${rel}: ${gone}`);
+  }
+});
+
+test("lapsed claim: a claim-only designing issue shows as queued in the text, with the lapse text and no life", opts, (t) => {
   const db = newDb(t);
   const { report } = runFixture(db, "lapsed-claim");
+  const text = cli(db, ["--at", input("lapsed-claim").at, "--github", "off"]);
+  assert.equal(text.status, 0, text.stderr);
   const lapsed = all(report).filter((i) => i.life === null && i.state === "designing" && i.lease && i.lease.lapsed);
   assert.ok(lapsed.length >= 2);
   for (const i of lapsed) {
-    assert.equal(i.stage, "queued");
+    assert.equal(i.state, "designing", "the JSON state stays the view's");
     assert.match(i.detail, /^claim lapsed at \S+/);
     assert.equal(i.detail, `claim lapsed at ${i.lease.until}`);
-    assert.equal(i.v2, null, "factory-reconcile's orphanOf only sees an issue with no v2 record");
+    assert.equal(i.life, null, "factory-reconcile's orphanOf only sees an issue with no life");
+    assert.match(text.stdout, new RegExp(`#${i.issue} +queued +`));
   }
   const live = all(report).find((i) => i.life === null && i.state === "designing" && i.lease && !i.lease.lapsed);
   assert.ok(live, "a claim inside its lease stays designing");
-  assert.equal(live.stage, "designing");
+  assert.match(text.stdout, new RegExp(`#${live.issue} +designing +`));
   assert.match(live.detail, /^v2 designing/);
 });
 
-test("closed with why done, merged-by-hand or merged reads as merged, and another why as closed without merge", opts, (t) => {
+test("closed with why done, merged-by-hand or merged is closed, with its why kept", opts, (t) => {
   const db = newDb(t);
   const close = (n, why) => [claim(n, `${D}09:00:00.000Z`), tr(n, `${D}09:30:00.000Z`, 3, "building", "closed", { why })];
   load(db, [...close(1, "done"), ...close(2, "merged-by-hand"), ...close(3, "merged"), ...close(4, "dropped"), ...close(5, null)]);
   const r = json(cli(db, AT));
-  assert.deepEqual([1, 2, 3, 4, 5].map((n) => issue(r, n).stage), ["merged", "merged", "merged", "closed without merge", "closed without merge"]);
+  assert.deepEqual([1, 2, 3, 4, 5].map((n) => [issue(r, n).state, issue(r, n).why]), [["closed", "done"], ["closed", "merged-by-hand"], ["closed", "merged"], ["closed", "dropped"], ["closed", null]]);
   assert.equal(issue(r, 4).detail, "v2 closed (dropped)");
   assert.equal(issue(r, 5).detail, "v2 closed (no why)");
   assert.equal(r.repos[0].issues.length, 0);
@@ -209,10 +233,10 @@ test("--at: the report before and after a transition shows the state of then", o
   const at = (iso) => json(cli(db, ["--at", iso, "--github", "off", "--format", "json"]));
   const before = at(`${D}10:30:00Z`);
   assert.equal(issue(before, 7).state, "designing");
-  assert.equal(issue(before, 7).minutes_in_stage, 30);
+  assert.equal(issue(before, 7).minutes_in_state, 30);
   assert.equal(before.at_source, "--at");
   const after = at(`${D}11:30:00Z`);
-  assert.deepEqual([issue(after, 7).state, issue(after, 7).stage, issue(after, 7).minutes_in_stage], ["building", "implementing", 30]);
+  assert.deepEqual([issue(after, 7).state, issue(after, 7).minutes_in_state], ["building", 30]);
   assert.deepEqual(at(`${D}08:00:00Z`).repos, [], "before any event nothing is placed");
 });
 
@@ -250,12 +274,12 @@ const stuckEvents = [
   claim(6, `${D}11:50:00.000Z`), tr(6, `${D}11:50:00.000Z`, 1, "building", "parked", { question: "Which one?" }), // parked 10: fine
 ];
 
-test("stuck without --rule is the view's flag; the top-level list names state, stage, rule and minutes", opts, (t) => {
+test("stuck without --rule is the view's flag; the top-level list names state, rule and minutes", opts, (t) => {
   const db = newDb(t);
   load(db, stuckEvents);
   const r = json(cli(db, AT));
-  assert.deepEqual(r.stuck.map((s) => [s.issue, s.state, s.stage, s.rule, s.minutes_in_state]), [
-    [1, "designing", "designing", "designing", 359], [3, "building", "implementing", "building", 90], [5, "merge-queue", "ready to merge", "merge-queue", 60],
+  assert.deepEqual(r.stuck.map((s) => [s.issue, s.state, s.rule, s.minutes_in_state]), [
+    [1, "designing", "designing", 359], [3, "building", "building", 90], [5, "merge-queue", "merge-queue", 60],
   ]);
   assert.deepEqual(issue(r, 3).stuck, { rule: "building", minutes: 60 });
   assert.equal(issue(r, 2).stuck, null);
@@ -389,16 +413,21 @@ test("github: closure beats events, labels and claim holders are cross-checked, 
   const db = newDb(t);
   const { report } = runFixture(db, "github");
   const st = (n) => issue(report, n);
-  assert.equal(st(80).stage, "closed without merge");
+  assert.equal(st(80).state, "designing", "GitHub's closure leaves the view's state");
   assert.equal(st(80).source, "github");
+  assert.equal(st(80).stuck, null);
+  const text = cli(db, ["--at", input("github").at, "--github", "on"], {}, "github");
+  assert.equal(text.status, 0, text.stderr);
+  for (const n of [80, 83]) assert.match(text.stdout, new RegExp(`#${n} +closed +`));
   assert.match(st(80).detail, /^closed on GitHub \(completed\)/);
   assert.match(st(82).flags.join(), /queued, but the issue has no 'ready' label/);
   assert.deepEqual(st(84).flags, [], "a claim needs no label (v2 SPEC 3.6)");
   assert.match(st(81).flags.join(), /dev-b/);
   assert.match(st(86).flags.join(), /could not be read/);
-  assert.deepEqual([90, 91].map((n) => [st(n).stage, st(n).source]), [["queued", "github"], ["implementing", "github"]]);
+  assert.deepEqual([90, 91].map((n) => [st(n).state, st(n).source]), [["queued", "github"], ["building", "github"]]);
   assert.equal(st(92), undefined, "an unrelated open issue is not in the factory");
-  assert.equal(st(83).stage, "merged");
+  assert.equal(st(83).state, "closed");
+  assert.equal(st(83).why, "merged");
   assert.equal(st(83).source, "event");
 });
 
@@ -493,12 +522,14 @@ test("CLI: output is byte-identical twice, and without --at the database clock i
   assert.ok(!Number.isNaN(Date.parse(now.at)));
 });
 
-test("CLI: text output lists stage, holder and PR", opts, (t) => {
+test("CLI: text output lists state, holder and PR", opts, (t) => {
   const db = newDb(t);
   load(db, input("v2").events);
   const r = cli(db, ["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /#102 +in pipeline +20m +dev-a +#202 /);
+  assert.match(r.stdout, /#102 +reviewing +20m +dev-a +#202 /);
+  assert.match(r.stdout.split("\n").find((l) => l.startsWith("issue ")), /^issue +state +in state +holder +pr +stuck +source +detail$/);
+  for (const gone of ["implementing", "in pipeline", "ready to merge", "closed without merge"]) assert.ok(!r.stdout.includes(gone), gone);
   assert.match(r.stdout, /Recently ended \(24h\)/);
 });
 
@@ -549,9 +580,10 @@ test("the historical-number and windowed-report skills route 'right now' to fact
   }
 });
 
-test("docs/factory-state.md is written around the view: sections, stages, states, one worked example per fixture", () => {
+test("docs/factory-state.md is written around the view: sections, states, one worked example per fixture", () => {
   const doc = fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8");
-  for (const st of mod.STAGES) assert.ok(doc.includes(`\`${st}\``), `stage ${st}`);
+  for (const st of mod.STATE_ORDER) assert.ok(doc.includes(`\`${st}\``), `state ${st}`);
+  for (const gone of ["entered_at", "minutes_in_stage", "| Stage |"]) assert.ok(!doc.includes(gone), `no ${gone}`);
   for (const st of ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"]) assert.ok(doc.includes(`\`${st}\``), `state ${st}`);
   for (const h of ["Usage", "States", "Lives", "Holder and lease", "`--at`", "Stuck rules", "Output", "Queue", "GitHub flags", "Skipped events", "Worked examples", "The issue_state view"]) {
     assert.ok(new RegExp(`^#{2,3} ${h.replace(/[`]/g, "\\`")}$`, "m").test(doc), `heading ${h}`);

@@ -19,7 +19,6 @@
       "repo": "acme/widgets",
       "issue": 50,
       "state": "parked",
-      "stage": "parked",
       "rule": "parked",
       "minutes_in_state": 170
     }
@@ -58,12 +57,9 @@
             "until": "2026-10-10T18:40:00.000Z",
             "lapsed": false
           },
-          "stage": "parked",
           "detail": "v2 parked, attempt 1",
-          "entered_at": "2026-10-10T09:10:00.000Z",
-          "minutes_in_stage": 170,
+          "minutes_in_state": 170,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": {
             "rule": "parked",
@@ -71,15 +67,7 @@
           },
           "source": "event",
           "github": null,
-          "flags": [],
-          "v2": {
-            "state": "parked",
-            "step": null,
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 2,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 51,
@@ -94,25 +82,14 @@
             "until": "2026-10-10T20:20:00.000Z",
             "lapsed": false
           },
-          "stage": "parked",
           "detail": "v2 parked, attempt 1",
-          "entered_at": "2026-10-10T11:40:00.000Z",
-          "minutes_in_stage": 20,
+          "minutes_in_state": 20,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
           "github": null,
-          "flags": [],
-          "v2": {
-            "state": "parked",
-            "step": null,
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 2,
-            "why": null
-          }
+          "flags": []
         }
       ],
       "recent": [],

@@ -8,16 +8,16 @@ const FACTORY = JSON.stringify({
     {
       repo: 'cbundy/dev-system',
       issues: [
-        { stage: 'queued' },
-        { stage: 'queued' },
-        { stage: 'designing' },
-        { stage: 'designing' },
-        { stage: 'implementing' },
-        { stage: 'in pipeline' },
-        { stage: 'parked' },
-        { stage: 'ready to merge' },
-        { stage: 'merged' },
-        { stage: 'closed without merge' },
+        { state: 'queued' },
+        { state: 'queued' },
+        { state: 'designing' },
+        { state: 'designing' },
+        { state: 'building' },
+        { state: 'reviewing' },
+        { state: 'parked' },
+        { state: 'merge-queue' },
+        { state: 'closed' },
+        { state: 'closed', ended: true },
       ],
     },
   ],
@@ -45,29 +45,29 @@ describe('format', () => {
     expect(counts('{}', 1)).toBeUndefined()
   })
 
-  test('counts the v2 states of a new report as the old stage words counted, and a lapsed claim as queued', () => {
+  test('counts the states of a report, a lapsed claim as queued, and nothing for a row with no valid state', () => {
     const rows = [
-      { state: 'designing', stage: 'designing' },
-      { state: 'designing', stage: 'designing' },
-      { state: 'building', stage: 'implementing' },
-      { state: 'reviewing', stage: 'in pipeline' },
-      { state: 'fixing', stage: 'in pipeline' },
-      { state: 'parked', stage: 'parked' },
-      { state: 'merge-queue', stage: 'ready to merge' },
-      { state: 'waiting', stage: 'waiting' },
-      { state: 'queued', stage: 'queued' },
-      { state: 'queued', stage: 'queued' },
+      { state: 'designing' },
+      { state: 'designing' },
+      { state: 'building' },
+      { state: 'reviewing' },
+      { state: 'fixing' },
+      { state: 'parked' },
+      { state: 'merge-queue' },
+      { state: 'waiting' },
+      { state: 'queued' },
+      { state: 'queued' },
     ]
     const json = (issues: unknown[]) => JSON.stringify({ repos: [{ issues }] })
     expect(counts(json(rows), 1)).toEqual({ live: 7, design: 2, dev: 1, pipe: 3, merge: 1, queued: 2, at: 1 })
-    // the same report from an image with only the stage words: reviewing and fixing were both in pipeline
-    expect(counts(json(rows.map(({ stage }) => ({ stage }))), 1)).toEqual({ live: 7, design: 2, dev: 1, pipe: 3, merge: 1, queued: 2, at: 1 })
-    // a claim whose lease lapsed keeps its state and shows the stage queued: it counts as queued, not live
-    const lapsed = { state: 'designing', stage: 'queued', detail: 'claim lapsed at 2026-10-11T10:00:00.000Z' }
-    expect(counts(json([lapsed, { state: 'building', stage: 'implementing' }]), 1)).toEqual({ live: 1, design: 0, dev: 1, pipe: 0, merge: 0, queued: 1, at: 1 })
-    expect(counts(json([{ stage: 'queued', detail: 'claim lapsed at 2026-10-11T10:00:00.000Z' }]), 1)?.queued).toBe(1)
+    // a row with only an old stage word, or an unknown state, counts nowhere
+    expect(counts(json(rows.map(({ state }) => ({ stage: state === 'building' ? 'implementing' : state }))), 1)).toEqual({ live: 0, design: 0, dev: 0, pipe: 0, merge: 0, queued: 0, at: 1 })
+    expect(counts(json([{ state: 'mystery' }, {}]), 1)).toEqual({ live: 0, design: 0, dev: 0, pipe: 0, merge: 0, queued: 0, at: 1 })
+    // a claim whose lease lapsed keeps its state: it counts as queued, not live
+    const lapsed = { state: 'designing', detail: 'claim lapsed at 2026-10-11T10:00:00.000Z' }
+    expect(counts(json([lapsed, { state: 'building' }]), 1)).toEqual({ live: 1, design: 0, dev: 1, pipe: 0, merge: 0, queued: 1, at: 1 })
     // an ended row is never live
-    expect(counts(json([{ state: 'building', stage: 'closed without merge', ended: true }]), 1)?.live).toBe(0)
+    expect(counts(json([{ state: 'building', ended: true }]), 1)?.live).toBe(0)
   })
 
   test('reads the repo from https and ssh remotes', () => {

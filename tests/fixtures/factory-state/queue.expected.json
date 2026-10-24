@@ -49,18 +49,14 @@
             "until": "2026-10-10T13:30:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T11:30:00.000Z",
-          "minutes_in_stage": 30,
+          "minutes_in_state": 30,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
           "github": null,
-          "flags": [],
-          "v2": null
+          "flags": []
         }
       ],
       "recent": [],
@@ -100,18 +96,14 @@
             "until": "2026-10-10T13:30:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T11:30:00.000Z",
-          "minutes_in_stage": 30,
+          "minutes_in_state": 30,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
           "github": null,
-          "flags": [],
-          "v2": null
+          "flags": []
         }
       ],
       "recent": [],

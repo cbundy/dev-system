@@ -33,22 +33,17 @@ const path = require('node:path');
 const DEV_QUERY = process.env.CALLUM_FLOW_DEV_QUERY_BIN || 'dev-query';
 const ISSUE_READ = process.env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read';
 
-// Stage order is the sort order of the output.
-const STAGES = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge', 'merged', 'closed without merge'];
+// State order is the sort order of the output (shownState; closed rows sort last).
+const STATE_ORDER = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'parked', 'waiting', 'merge-queue', 'closed'];
 const FINAL_RECENT_MS = 24 * 3600 * 1000;
 const LABEL_QUEUED = 'ready';
 // The factory loop v2's states (v2 SPEC 3.1; waiting is the loop's hold on wait conditions), each
-// with the stage it shows as; closed shows as merged or closed without merge, by why. Its labels
-// are `factory:<state>` (v2 SPEC 3.4), closed has none.
-const V2_STAGE = {
-  queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
-  'merge-queue': 'ready to merge', parked: 'parked', waiting: 'waiting',
-};
-const V2_MERGED = new Set(['merged', 'merged-by-hand', 'done']);
+// Its labels are `factory:<state>` (v2 SPEC 3.4), closed has none.
+const LABEL_STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting'];
 const FACTORY_LABEL = 'factory:';
 // an issue the loop rejected at its last life (v2 SPEC 6.4): out of the factory, so not a state
 const LABEL_REJECTED = 'factory:rejected';
-const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']);
+const ACTIVE_STATES = new Set(['designing', 'building', 'reviewing', 'fixing', 'parked', 'waiting', 'merge-queue']);
 // The old stuck rules S1 to S4 under their state names; no other old rule has a state.
 const RULE_ALIAS = { S1: 'designing', S2: 'building', S3: 'parked', S4: 'merge-queue' };
 // The event types factory.issue_state_at reads (migration 0033's VALUES list; a test keeps the two
@@ -173,8 +168,8 @@ function parseArgs(argv, env = process.env) {
       const m = /^([A-Za-z0-9-]+)=(\d{1,7})$/.exec(v);
       if (!m || Number(m[2]) < 1) throw new UsageError(`--rule must be <state>=<minutes> with minutes of at least 1, got '${v}'`);
       const state = RULE_ALIAS[m[1]] || m[1];
-      if (!Object.prototype.hasOwnProperty.call(V2_STAGE, state)) {
-        throw new UsageError(`--rule names no state: '${m[1]}' (states: ${Object.keys(V2_STAGE).join(', ')}; aliases ${Object.keys(RULE_ALIAS).join(', ')})`);
+      if (!LABEL_STATES.includes(state)) {
+        throw new UsageError(`--rule names no state: '${m[1]}' (states: ${LABEL_STATES.join(', ')}; aliases ${Object.keys(RULE_ALIAS).join(', ')})`);
       }
       o.rules[state] = Number(m[2]);
     } else if (a === '--github') {
@@ -207,10 +202,13 @@ const last = (xs) => (xs.length ? xs[xs.length - 1] : null);
 
 // ---------------------------------------------------------------- the issues
 
-// The stage a view state shows as. A closed issue is merged or closed without merge by its why.
-function stageOf(state, why) {
-  if (state === 'closed') return V2_MERGED.has(why) ? 'merged' : 'closed without merge';
-  return V2_STAGE[state];
+// The state a row shows as: closed once it ended (the view ended it, or GitHub closed it); queued
+// for a claim with no transition yet (life null) whose lease lapsed, since the loop re-claims it;
+// else the view's state.
+function shownState(d) {
+  if (d.ended) return 'closed';
+  if (d.life === null && d.state === 'designing' && d.lease && d.lease.lapsed) return 'queued';
+  return d.state;
 }
 
 // One row of factory.issue_state_at as the report's issue (docs/factory-state.md, "Output"). The
@@ -218,7 +216,6 @@ function stageOf(state, why) {
 function issueOf(row, at, overrides) {
   const state = row.state;
   const since = ms(row.state_since);
-  const stage = stageOf(state, row.why);
   const hasLife = row.life !== null && row.life !== undefined;
   const o = {
     issue: row.issue, state, step: row.step || null, attempt: row.attempt === undefined ? null : row.attempt, life: hasLife ? row.life : null,
@@ -228,11 +225,9 @@ function issueOf(row, at, overrides) {
   let detail = state === 'closed'
     ? `v2 closed (${row.why || 'no why'})`
     : `v2 ${state}${row.step ? `, step ${row.step}` : ''}${row.attempt ? `, attempt ${row.attempt}` : ''}`;
-  let shown = stage;
   // A claim with no transition yet is a `designing` state; once its lease lapsed the issue is queued
   // again (the loop re-claims it), so it shows as queued, with the lapse as the detail.
   if (!hasLife && state === 'designing' && row.lease_lapsed) {
-    shown = 'queued';
     detail = `claim lapsed at ${iso(ms(row.lease_until))}`;
   }
   let threshold = row.stuck_minutes === undefined ? null : row.stuck_minutes;
@@ -243,18 +238,14 @@ function issueOf(row, at, overrides) {
   }
   return {
     ...o,
-    stage: shown,
     detail,
-    entered_at: o.state_since,
-    minutes_in_stage: minutesBetween(since, at),
+    minutes_in_state: minutesBetween(since, at),
     holder: row.holder || null,
-    run: null,
     pr: row.pr === undefined ? null : row.pr,
     stuck: stuck ? { rule: state, minutes: threshold } : null,
     source: 'event',
     github: null,
     flags: [],
-    v2: hasLife ? { state, step: row.step || null, attempt: o.attempt, life: row.life, seq: row.seq === undefined ? null : row.seq, why: o.why } : null,
     ended: Boolean(row.ended),
   };
 }
@@ -263,14 +254,14 @@ function issueOf(row, at, overrides) {
 // label of its state (none once closed, but `factory:rejected`, which marks an issue out of the
 // factory, not a state); any other issue is checked for `ready` only, when queued.
 function expectedLabelProblem(d, labels) {
-  if (d.v2) {
-    const want = d.v2.state === 'closed' ? null : `${FACTORY_LABEL}${d.v2.state}`;
-    if (want && !labels.includes(want)) return `v2 ${d.v2.state}, but the issue lacks '${want}'`;
+  if (d.life !== null) {
+    const want = d.state === 'closed' ? null : `${FACTORY_LABEL}${d.state}`;
+    if (want && !labels.includes(want)) return `v2 ${d.state}, but the issue lacks '${want}'`;
     const other = labels.filter((l) => l.startsWith(FACTORY_LABEL) && l !== want && !(want === null && l === LABEL_REJECTED));
-    if (other.length) return `v2 ${d.v2.state}, but the issue carries ${other.map((l) => `'${l}'`).join(', ')}`;
+    if (other.length) return `v2 ${d.state}, but the issue carries ${other.map((l) => `'${l}'`).join(', ')}`;
     return null;
   }
-  if (d.stage === 'queued' && !labels.includes(LABEL_QUEUED)) return `queued, but the issue has no '${LABEL_QUEUED}' label`;
+  if (shownState(d) === 'queued' && !labels.includes(LABEL_QUEUED)) return `queued, but the issue has no '${LABEL_QUEUED}' label`;
   return null;
 }
 
@@ -278,7 +269,7 @@ function expectedLabelProblem(d, labels) {
 // labelStage: the state an open issue's labels say, for one the database has never seen: a
 // `factory:*` label's state (`factory:rejected` names none), else `ready` is queued.
 function labelState(labels) {
-  const f = labels.find((l) => l.startsWith(FACTORY_LABEL) && V2_STAGE[l.slice(FACTORY_LABEL.length)]);
+  const f = labels.find((l) => l.startsWith(FACTORY_LABEL) && LABEL_STATES.includes(l.slice(FACTORY_LABEL.length)));
   if (f) return f.slice(FACTORY_LABEL.length);
   return labels.includes(LABEL_QUEUED) ? 'queued' : null;
 }
@@ -338,10 +329,9 @@ function deriveState(input) {
         d.github = { state: st, labels: labels === null ? null : [...labels].sort(), claim: gh.claims[d.issue] || null };
         const closedAt = st === 'closed' && gh.states[d.issue].closed_at ? ms(gh.states[d.issue].closed_at) : null;
         if (st === 'closed' && !d.ended && (closedAt === null || closedAt <= at)) {
-          d.stage = d.stage === 'merged' ? 'merged' : 'closed without merge';
           d.detail = `closed on GitHub${gh.states[d.issue].reason ? ` (${gh.states[d.issue].reason})` : ''}`;
-          d.entered_at = iso(closedAt !== null ? closedAt : at);
-          d.minutes_in_stage = minutesBetween(closedAt !== null ? closedAt : at, at);
+          d.closed_ms = closedAt !== null ? closedAt : at;
+          d.minutes_in_state = minutesBetween(d.closed_ms, at);
           d.ended = true;
           d.source = 'github';
           d.stuck = null;
@@ -353,19 +343,18 @@ function deriveState(input) {
           if (p) d.flags.push(`label: ${p}`);
         }
         // the owner's hold on a merge: a PR waiting on a person is not stuck (PR labels are not visible here)
-        if (d.github.state === 'open' && d.github.labels && d.stage === 'ready to merge' && d.github.labels.some((l) => l.toLowerCase() === "don't-merge")) {
+        if (d.github.state === 'open' && d.github.labels && d.state === 'merge-queue' && d.github.labels.some((l) => l.toLowerCase() === "don't-merge")) {
           d.flags.push("held: don't-merge (waits on the owner)");
           d.stuck = null;
         }
         if (d.github.state === 'unknown') d.flags.push('github: state could not be read');
-        if (d.github.claim && d.holder && d.github.claim.device !== d.holder && ACTIVE_STAGES.has(d.stage)) {
+        if (d.github.claim && d.holder && d.github.claim.device !== d.holder && ACTIVE_STATES.has(shownState(d))) {
           d.flags.push(`claim: GitHub comment says ${d.github.claim.device}, events say ${d.holder}`);
         }
       }
       placed.add(d.issue);
       if (d.ended) {
-        const entered = ms(d.entered_at);
-        if (d.source === 'github' ? at - entered <= FINAL_RECENT_MS && entered <= at : true) recent.push(d);
+        if (d.source === 'github' ? at - d.closed_ms <= FINAL_RECENT_MS && d.closed_ms <= at : true) recent.push(d);
       } else live.push(d);
     }
 
@@ -378,14 +367,14 @@ function deriveState(input) {
         if (!state) continue;
         live.push({
           issue: n, state, step: null, attempt: null, life: null, why: null, state_since: null, question: null, lease: null,
-          stage: V2_STAGE[state], detail: 'GitHub label only, no events', entered_at: null, minutes_in_stage: null,
-          holder: gh.claims[n] ? gh.claims[n].device : null, run: null, pr: null, stuck: null, source: 'github',
-          github: { state: 'open', labels: [...labels].sort(), claim: gh.claims[n] || null }, flags: [], v2: null, ended: false,
+          detail: 'GitHub label only, no events', minutes_in_state: null,
+          holder: gh.claims[n] ? gh.claims[n].device : null, pr: null, stuck: null, source: 'github',
+          github: { state: 'open', labels: [...labels].sort(), claim: gh.claims[n] || null }, flags: [], ended: false,
         });
       }
     }
 
-    const order = (a, b) => STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage) || a.issue - b.issue;
+    const order = (a, b) => STATE_ORDER.indexOf(shownState(a)) - STATE_ORDER.indexOf(shownState(b)) || a.issue - b.issue;
     live.sort(order);
     recent.sort(order);
 
@@ -401,10 +390,13 @@ function deriveState(input) {
     for (const d of live) bySource[d.source]++;
 
     for (const d of live) {
-      if (d.stuck) stuckAll.push({ repo, issue: d.issue, state: d.state, stage: d.stage, rule: d.stuck.rule, minutes_in_state: d.minutes_in_stage });
+      if (d.stuck) stuckAll.push({ repo, issue: d.issue, state: d.state, rule: d.stuck.rule, minutes_in_state: d.minutes_in_state });
     }
 
-    const out = ({ ended, ...d }) => d;
+    const out = (d) => {
+      const { ended, closed_ms: closedMs, ...rest } = d;
+      return rest;
+    };
     repos.push({
       repo,
       coverage: { events: total, last_event_at: lastEvent, devices, live_issue_sources: bySource, notes },
@@ -550,7 +542,7 @@ function loadGithub(report) {
         if (one.ok && one.data.issue) {
           g.states[d.issue] = { state: one.data.issue.state, labels: labelNames(one.data.issue), reason: one.data.issue.state_reason || null, closed_at: one.data.issue.closed_at || null };
         } else g.states[d.issue] = { state: 'unknown' };
-      } else if (ACTIVE_STAGES.has(d.stage)) {
+      } else if (ACTIVE_STATES.has(shownState(d))) {
         const one = readIssue(r.repo, [String(d.issue), '--comments']);
         if (one.ok) {
           const c = parseClaim(one.data.comments);
@@ -600,7 +592,7 @@ function renderText(r) {
   }
   out.push('');
   out.push('Stuck');
-  out.push(r.stuck.length ? table(['repo', 'issue', 'state', 'stage', 'rule', 'in state', 'limit'], r.stuck.map((s) => [s.repo, `#${s.issue}`, s.state, s.stage, s.rule, dur(s.minutes_in_state), `${r.rules[s.rule]}m`])) : 'none');
+  out.push(r.stuck.length ? table(['repo', 'issue', 'state', 'rule', 'in state', 'limit'], r.stuck.map((s) => [s.repo, `#${s.issue}`, s.state, s.rule, dur(s.minutes_in_state), `${r.rules[s.rule]}m`])) : 'none');
   for (const repo of r.repos) {
     out.push('');
     out.push(`== ${repo.repo}`);
@@ -610,16 +602,16 @@ function renderText(r) {
     out.push(`live issues by source: event ${c.live_issue_sources.event}, github ${c.live_issue_sources.github}`);
     for (const n of c.notes) out.push(`note: ${n}`);
     out.push(...queueLines(repo.queue));
-    const row = (i) => [`#${i.issue}`, i.stage, dur(i.minutes_in_stage), i.holder, i.pr ? `#${i.pr}` : null,
+    const row = (i, ended) => [`#${i.issue}`, shownState({ ...i, ended }), dur(i.minutes_in_state), i.holder, i.pr ? `#${i.pr}` : null,
       i.stuck ? `STUCK ${i.stuck.rule}` : null, i.source, [i.detail, ...i.flags].filter(Boolean).join('; ')];
-    const head = ['issue', 'stage', 'in stage', 'holder', 'pr', 'stuck', 'source', 'detail'];
+    const head = ['issue', 'state', 'in state', 'holder', 'pr', 'stuck', 'source', 'detail'];
     out.push('');
     out.push('Live issues');
-    out.push(repo.issues.length ? table(head, repo.issues.map(row)) : 'none');
+    out.push(repo.issues.length ? table(head, repo.issues.map((i) => row(i, false))) : 'none');
     if (repo.recent.length) {
       out.push('');
       out.push('Recently ended (24h)');
-      out.push(table(head, repo.recent.map(row)));
+      out.push(table(head, repo.recent.map((i) => row(i, true))));
     }
   }
   return `${out.join('\n')}\n`;
@@ -660,5 +652,5 @@ if (require.main === module) {
 
 module.exports = {
   deriveState, parseArgs, renderText, SQL_META, SQL_STATE, SQL_RULES, SQL_COUNTS, SQL_SKIPPED, SQL_QUEUE, SQL_QUEUE_META,
-  STAGES, VIEW_TYPES, RULE_ALIAS,
+  STATE_ORDER, VIEW_TYPES, RULE_ALIAS,
 };
