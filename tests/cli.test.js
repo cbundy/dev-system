@@ -526,6 +526,7 @@ test("update with unchanged templates is a no-op; check reports drift via the st
   assert.equal(noop.status, 0, noop.stderr);
   assert.match(noop.stdout, /Already in sync/);
 
+  setLoop(repo, { uiCapture: "none" });
   assert.equal(run(repo, "check").status, 0);
 
   const stampFile = path.join(repo, ".callum-dev.json");
@@ -538,6 +539,116 @@ test("update with unchanged templates is a no-op; check reports drift via the st
   const update = run(repo, "update");
   assert.equal(update.status, 0, update.stderr);
   assert.equal(run(repo, "check").status, 0);
+});
+
+function setLoop(repo, extra) {
+  const f = path.join(repo, ".claude", "factory-loop.json");
+  fs.writeFileSync(f, JSON.stringify({ ...JSON.parse(fs.readFileSync(f, "utf-8")), ...extra }));
+}
+
+const OFF_RE = /UI evidence check skipped: \.callum-dev[/\\]evidence-off/;
+
+test("check: unset uiCapture with the placeholder CLAUDE.md fails, naming the fixes", (t) => {
+  const repo = initRepo(t);
+  const r = run(repo, "check");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /uiCapture/);
+  assert.match(r.stderr, /"none"/);
+  assert.match(r.stderr, /evidence-off/);
+});
+
+test("check: unset uiCapture passes when CLAUDE.md says n/a - no UI", (t) => {
+  const repo = initRepo(t);
+  const f = path.join(repo, "CLAUDE.md");
+  fs.writeFileSync(
+    f,
+    read(repo, "CLAUDE.md").replace(
+      /e2e visual verification tooling \([^)]*\)/,
+      "e2e visual verification tooling (N/A - No UI)",
+    ),
+  );
+  const r = run(repo, "check");
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("check: uiCapture none passes and is named", (t) => {
+  const repo = initRepo(t);
+  setLoop(repo, { uiCapture: "none" });
+  const r = run(repo, "check");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /UI capture: none/);
+});
+
+test("check: an npm run capture command needs its package.json script", (t) => {
+  const repo = initRepo(t);
+  setLoop(repo, { uiCapture: "npm run e2e:capture --" });
+  const missing = run(repo, "check");
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /e2e:capture/);
+  fs.writeFileSync(
+    path.join(repo, "package.json"),
+    JSON.stringify({ scripts: { "e2e:capture": "true" } }),
+  );
+  const ok = run(repo, "check");
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /UI capture: npm run e2e:capture --/);
+});
+
+test("check: a non-npm capture command passes", (t) => {
+  const repo = initRepo(t);
+  setLoop(repo, { uiCapture: "bun run shots" });
+  const r = run(repo, "check");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /UI capture: bun run shots/);
+});
+
+test("check: a non-string uiCapture fails", (t) => {
+  const repo = initRepo(t);
+  setLoop(repo, { uiCapture: 42 });
+  const r = run(repo, "check");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /non-empty string/);
+});
+
+test("check: invalid factory-loop.json fails", (t) => {
+  const repo = initRepo(t);
+  fs.writeFileSync(path.join(repo, ".claude", "factory-loop.json"), "{ nope");
+  const r = run(repo, "check");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /not valid JSON/);
+});
+
+test("check: no factory-loop.json skips the capture check", (t) => {
+  const repo = initRepo(t);
+  fs.rmSync(path.join(repo, ".claude", "factory-loop.json"));
+  const r = run(repo, "check");
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /UI capture/);
+});
+
+test("check: the evidence-off marker skips the capture check and survives update", (t) => {
+  const repo = initRepo(t);
+  fs.writeFileSync(path.join(repo, ".callum-dev", "evidence-off"), "no UI here\n");
+  const r = run(repo, "check");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, OFF_RE);
+  assert.equal(run(repo, "update").status, 0);
+  assert.ok(fs.existsSync(path.join(repo, ".callum-dev", "evidence-off")));
+});
+
+test("check: template drift fails before the capture check", (t) => {
+  const repo = initRepo(t);
+  const stamp = JSON.parse(read(repo, ".callum-dev.json"));
+  fs.writeFileSync(path.join(repo, ".callum-dev.json"), JSON.stringify({ ...stamp, version: "0.0.1" }));
+  const r = run(repo, "check");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Template drift/);
+  assert.doesNotMatch(r.stderr, /uiCapture/);
+});
+
+test("check: dev-system itself stays clean", () => {
+  const r = run(path.join(__dirname, ".."), "check");
+  assert.equal(r.status, 0, r.stderr);
 });
 
 // devcontainer.json is JSONC; every comment in the templates is a whole line.
