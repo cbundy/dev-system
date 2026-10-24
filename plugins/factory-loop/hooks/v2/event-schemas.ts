@@ -148,6 +148,7 @@ export const SCHEMAS: Record<string, Shape> = {
   "finding_handled.v1": {
     "additionalProperties": false, "required": ["branch","detail","finding","head","outcome","pr"], "type": "object", "x-issue": "required",
     "properties": {
+      "blocker": {"enum":["environment",null]},
       "branch": {"minLength":1,"type":"string"},
       "detail": {"type":"string"},
       "finding": {"minLength":1,"type":"string"},
@@ -482,6 +483,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "context": {"maxLength":800,"type":["null","string"]},
       "cut": {"type":"boolean"},
       "decision": {"maxLength":2000,"type":["null","string"]},
+      "env_blocked": {"maxLength":1000,"type":["null","string"]},
       "fixes": {"minimum":0,"type":"integer"},
       "from_state": {"enum":["building","closed","designing","fixing","merge-queue","parked","queued","reviewing","waiting",null]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},

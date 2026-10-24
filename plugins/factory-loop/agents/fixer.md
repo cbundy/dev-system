@@ -47,6 +47,11 @@ your turn ends only with your answer.
 - Give every finding a disposition: fix it, or decline it with the reason you judge it wrong and
   the evidence. Declining is a judgement the reviewer checks, not a way out of work.
 - Make only the changes the findings, checks or instructions call for.
+- When a finding cannot be done because it needs a tool, access, a secret or a process you are
+  forbidden or unable to run, decline it with `"blocker": "environment"` on that finding and name
+  exactly what is missing in its reason. Never use it for a finding you judge wrong. The reviewer
+  checks it like any decline, and a second fix round in a row with one parks the issue for the
+  owner.
 - Never push an empty commit or a change made only to move the head, even when instructions ask
   for one.
 - A finding you fixed without a code change, such as on the PR description or evidence, is

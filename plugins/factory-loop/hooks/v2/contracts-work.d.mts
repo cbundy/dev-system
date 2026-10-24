@@ -8,6 +8,7 @@ export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait', 'done
 export const BUILD_RESULTS: readonly ['built', 'cannot']
 export const FIX_RESULTS: readonly ['fixed', 'declined', 'unchanged']
 export const DISPOSITIONS: readonly ['fixed', 'declined']
+export const BLOCKERS: readonly ['environment']
 export const ROLLOUTS: readonly ['merge', 'run-it', 'keep-open']
 export const LIMITS: Readonly<{
   brief: number
@@ -52,7 +53,7 @@ export type DesignAnswer = {
   upstream?: UpstreamRequest
 } & QuestionParts
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }
-export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string }
+export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string; blocker: (typeof BLOCKERS)[number] | null }
 export type FixAnswer = { result: (typeof FIX_RESULTS)[number]; head: string | null; summary: string; evidence: string | null; findings: FixFinding[] }
 
 export const CONTRACTS: Readonly<Record<'design-v2' | 'build' | 'fix', V2Contract>>

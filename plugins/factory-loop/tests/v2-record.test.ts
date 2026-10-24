@@ -169,6 +169,15 @@ describe('the rebuild from the new store (recordsFromNewRows, source new)', () =
     expect(recordsFromNewRows([{ ...row, data: JSON.stringify({ ...data, conflicts: null }) }])).toEqual([{ ...D, conflicts: 0 }])
   })
 
+  test('a payload without env_blocked reads null; one with it keeps the reasons', () => {
+    const D = record(10, { seq: 2, state: 'fixing', step: 'fix', pr: 12, envBlocked: 'r1-1: no browser' })
+    const row = transitionRow(D, NOW - DAY)
+    expect((JSON.parse(row.data) as Record<string, unknown>).env_blocked).toBe('r1-1: no browser')
+    expect(recordsFromNewRows([row])).toEqual([D])
+    const { env_blocked: _e, ...without } = JSON.parse(row.data) as Record<string, unknown>
+    expect(recordsFromNewRows([{ ...row, data: JSON.stringify(without) }])).toEqual([{ ...D, envBlocked: null }])
+  })
+
   test('the newest life, then the highest seq wins; a record closed past the keep time goes', () => {
     const older = { ...A, seq: 2 }
     const newerLife = record(7, { life: lifeOf(NOW - DAY), seq: 1 })
