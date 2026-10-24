@@ -57,19 +57,43 @@ Use exactly this shape:
 ```
 ## Design brief (designer, <YYYY-MM-DD>)
 
-Exploration: <what was read and checked, or "none needed" for a trivial change>
+<one or two plain lines: what the change does, how risky it is, anything the owner must know>
+
+<details><summary>Exploration</summary>
+
+<what was read and checked, or "none needed" for a trivial change>
+
+</details>
 
 ## Acceptance criteria
+<one or two plain lines: what the change must achieve>
+
+<details><summary>Details</summary>
+
 - requirement, stated so it can be checked
 
+</details>
+
 ## Files to touch
+<one or two plain lines: which areas change>
+
+<details><summary>Details</summary>
+
 - path:line - what changes
+
+</details>
 
 ## Risk
 low | medium | high - one line why
 
 ## Test plan
+<one or two plain lines: how the change is proven>
+
+<details><summary>Details</summary>
+
 - what proves each criterion, including the regression test for a bug
+
+</details>
 
 ## Observability
 - each decision the change adds - where it is recorded - the question it answers; or "none - no new decision"
@@ -86,6 +110,16 @@ merge | run-it | keep-open - one reason
 ## Open decisions
 - options for the owner, never decided by you, or "none"
 ```
+
+The brief is read by the owner on GitHub, so it has two layers. The summary lines (under the
+title and under Acceptance criteria, Files to touch and Test plan) are plain prose for a
+non-engineer: no file paths, no line numbers, no code beyond a command name. Everything else goes
+in the collapsed `<details>` block under them: nothing is dropped, the collapsed layer holds all
+that the brief held before, as detailed as ever. Put a blank line after every `</summary>` and
+before every `</details>`, or GitHub shows the markdown inside as plain text. Every `##` heading
+sits outside any `<details>`. `## Risk`, `## Observability`, `## Compatibility`, `## Sequencing`
+and `## Rollout` stay one visible line each, never in a `<details>`. `## Open decisions` is never
+collapsed: an open decision is written visibly.
 
 `## Risk` is a single value from `low`, `medium`, `high`, followed by a dash and one reason;
 later tooling parses it.
@@ -148,7 +182,9 @@ When the design needs a decision only the owner can make (a product choice, acce
 repo setting), answer with the question instead of a brief. `question` is the one decision, in a
 single short sentence. When the choice is between a few ways forward, add them as `options`
 (2 to 6, each `{"key": "A", "title": "<one line>", "detail": "<optional, short>"}`, keys A to F),
-a `context` of a few sentences when the owner needs it, and a `recommendation`
+a `context` when the owner needs it (its first paragraph is one or two plain lines: what the
+problem is and why it needs the owner, no file paths, migration numbers or code; after a blank
+line, the technical evidence, which the loop collapses in a Details block), and a `recommendation`
 (`{"key": "B", "reason": "<one line>"}`) when you have one. Do not put the options or the context
 into `question`: the loop renders them as a template with a checkbox for each option, which the
 owner ticks. Leave them out when the question has no fixed options. The rendered text, with all of
@@ -238,7 +274,7 @@ unless the child has its own `## Run it`, is research or a proposal, or needs a 
 blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
 and whether it is ready. A child is not ready only when it carries an open owner
 decision, and then it has a `decision` in the shape of a question answer: `question` (the decision
-as one sentence) and, optionally, `context`, `options` (2 to 6 of `key` A to F, `title`, `detail`)
+as one sentence) and, optionally, `context` (plain lines first, then after a blank line the technical detail, which the loop collapses), `options` (2 to 6 of `key` A to F, `title`, `detail`)
 and `recommendation` (`key`, `reason`); the rendered text is at most 2000 characters. A ready child
 takes no `decision`. The loop makes each child an issue under this one, links its `blocked_by`, labels the
 ready ones `ready` once every link exists, claims each not-ready one at once and parks it on its

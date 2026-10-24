@@ -4,6 +4,8 @@
 // the contracts of the designer's question and the triage's park; renderQuestion turns the parts
 // into the one canonical markdown text the record stores as its `question`. The park comment
 // (park-text.ts) wraps that text in its template and tickedOptions reads the owner's tick back.
+// A context is a summary paragraph, then (after a blank line) technical detail that the render
+// collapses in a Details block; the question, options, recommendation stay visible.
 // With no optional field the rendered text is the decision alone, so an old answer and a machine
 // written park reason are unchanged.
 //
@@ -93,12 +95,26 @@ export function checkQuestionParts(o, decision, problems) {
   return { context, options, recommendation }
 }
 
+// contextParts: the context as the owner sees it. Its first paragraph (up to the first blank line)
+// is the visible summary; any later paragraphs are the technical evidence, collapsed in a Details
+// block (GitHub needs the blank lines after </summary> and before </details> to render markdown
+// inside it). A one-paragraph context is the text as is.
+function contextParts(context) {
+  const t = context.trim()
+  const m = /\r?\n[ \t]*\r?\n/.exec(t)
+  if (m === null) return [t]
+  const rest = t.slice(m.index + m[0].length).trim()
+  const head = t.slice(0, m.index).trim()
+  if (rest === '') return [head]
+  return [head, `<details><summary>Details</summary>\n\n${rest}\n\n</details>`]
+}
+
 // renderQuestion: the canonical markdown of a question: the decision sentence, then the sections
 // that are given, in order: Context, Options (one checkbox line each, its detail indented below,
 // then the note on how a tick is read) and Recommendation. With no optional part: the decision.
 export function renderQuestion(q) {
   const out = [String(q.question).trim()]
-  if (q.context) out.push('#### Context', q.context.trim())
+  if (q.context) out.push('#### Context', ...contextParts(q.context))
   if (q.options && q.options.length > 0) {
     const lines = []
     for (const o of q.options) {
