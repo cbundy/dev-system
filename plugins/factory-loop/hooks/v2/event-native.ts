@@ -209,6 +209,9 @@ function mergedData(e: ReusedEvent): Record<string, unknown> {
     file_lines: size?.fileLines ?? null,
     additions: size?.additions ?? null,
     deletions: size?.deletions ?? null,
+    merged_at: e.pr === null ? null : (e.mergedAt ?? null),
+    // the loop's ready/claimed events already carry the title
+    title: null,
   }
 }
 

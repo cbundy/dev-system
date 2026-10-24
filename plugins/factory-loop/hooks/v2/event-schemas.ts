@@ -308,8 +308,10 @@ export const SCHEMAS: Record<string, Shape> = {
       "file_lines": {"items":{"additionalProperties":false,"properties":{"additions":{"minimum":0,"type":"integer"},"deletions":{"minimum":0,"type":"integer"},"path":{"minLength":1,"type":"string"}},"required":["additions","deletions","path"],"type":"object"},"type":["array","null"]},
       "files": {"items":{"minLength":1,"type":"string"},"type":["array","null"]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},
+      "merged_at": {"format":"date-time","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
       "recovered": {"type":"boolean"},
+      "title": {"maxLength":256,"type":["null","string"]},
     },
   },
   "milestone_state.v1": {

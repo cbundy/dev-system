@@ -2877,6 +2877,22 @@ GROUP BY repo, day, kind
 ORDER BY repo, day, kind;
 ```
 
+**How late the sweep recorded recovered merges** (#12, run only; cbundy/dev-system#1263): per repo and week,
+the delay between GitHub's merge time (`merged_at`) and the sweep writing the `merged` event (`ts`), for the
+merges the sweep recovered that carry `merged_at`. A reader that places a merge by time uses
+`coalesce(merged_at, ts)`, since `ts` of a recovered merge is the time of the sweep, not of the merge.
+Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, count(DISTINCT pr) AS merges,
+       min(ts - merged_at) AS min_delay, avg(ts - merged_at) AS avg_delay, max(ts - merged_at) AS max_delay
+FROM factory.event_log
+WHERE type = 'merged' AND actor = 'sweep' AND merged_at IS NOT NULL
+  AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week
+ORDER BY week DESC;
+```
+
 `callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
 claimed before `since` read unlinked and shorten its overlap window; the saved queries above look at all
 time.

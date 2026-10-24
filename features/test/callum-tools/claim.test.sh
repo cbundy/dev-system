@@ -90,9 +90,11 @@ case "$1 $2" in
         n=${2##*/}
         jq -n --argjson n "$n" --argjson u "$(author_of pr-author "$n")" --arg r "$(cat "$d/head-ref-$n")" \
           --arg s "$(cat "$d/head-sha-$n" 2>/dev/null || true)" \
-          '{number: $n, title: "t", body: "b", user: $u, head: {ref: $r, sha: (if $s == "" then null else $s end)}}' ;;
+          --arg t "$(cat "$d/pr-title-$n" 2>/dev/null || echo t)" --arg m "$(cat "$d/pr-merged-at-$n" 2>/dev/null || true)" \
+          '{number: $n, title: $t, body: "b", user: $u, merged_at: (if $m == "" then null else $m end), head: {ref: $r, sha: (if $s == "" then null else $s end)}}' ;;
       */issues/[0-9]*)
         n=${2##*/}
+        [ ! -f "$d/issue-read-fails-$n" ] || exit 1
         jq --argjson n "$n" --argjson u "$(author_of author "$n")" --arg t "$(cat "$d/title-$n" 2>/dev/null || echo t)" --arg p "$(cat "$d/parent-url-$n" 2>/dev/null || true)" \
           '{number: $n, title: $t, body: "b", user: $u, state: (.state | ascii_downcase), state_reason: (.state_reason // null), labels: .labels, parent_issue_url: (if $p == "" then null else $p end)}' "$d/issue-$n.json" ;;
     esac ;;
@@ -1377,10 +1379,12 @@ issue 7 OPEN
 seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+echo 'Facts of seven' > "$d/title-7"
+echo 2026-10-08T09:30:00Z > "$d/pr-merged-at-55"
 echo '{"files":[{"path":"a.js","additions":8,"deletions":1},{"path":"","additions":1,"deletions":1},{"path":"b/c.sh","additions":4,"deletions":2},{"path":"e.md","additions":-1,"deletions":0}],"additions":12,"deletions":3}' > "$d/pr-view-55.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep merged with a size"
-events | tail -n 1 | jq -e '.type == "merged" and .issue == 7 and .data.files == ["a.js", "b/c.sh", "e.md"] and .data.file_lines == [{path: "a.js", additions: 8, deletions: 1}, {path: "b/c.sh", additions: 4, deletions: 2}] and .data.additions == 12 and .data.deletions == 3 and .data.by == "factory" and .data.recovered == false' >/dev/null || fail "rule 4 size: $(events)"
+events | tail -n 1 | jq -e '.type == "merged" and .issue == 7 and .data.files == ["a.js", "b/c.sh", "e.md"] and .data.file_lines == [{path: "a.js", additions: 8, deletions: 1}, {path: "b/c.sh", additions: 4, deletions: 2}] and .data.additions == 12 and .data.deletions == 3 and .data.by == "factory" and .data.recovered == false and .data.merged_at == "2026-10-08T09:30:00Z" and .data.title == "Facts of seven"' >/dev/null || fail "rule 4 size: $(events)"
 grep -qx 'pr view 55 --repo o/r --json files,additions,deletions' "$d/pr-view-args" || fail "rule 4 size read: $(cat "$d/pr-view-args")"
 
 # --- sweep rule 7: unrecorded merges to main ---------------------------------------------------
@@ -1408,7 +1412,7 @@ sweep7
 expect_rc 0 "rule 7 unlinked"
 no_calls "rule 7 unlinked"
 [ "$(merged_rows | wc -l)" = 1 ] || fail "rule 7 unlinked: one event: $(events)"
-merged_rows | jq -e --arg h "$H1" '.actor == "sweep" and (.issue == null) and .data == {pr: 60, branch: "main-fix", head: $h, by: "hand", recovered: true, files: ["x.js", "y.sh", "z.md"], file_lines: [{path: "x.js", additions: 4, deletions: 1}, {path: "y.sh", additions: 1, deletions: 0}], additions: 5, deletions: 1}' > /dev/null || fail "rule 7 unlinked: event: $(events)"
+merged_rows | jq -e --arg h "$H1" '.actor == "sweep" and (.issue == null) and .data == {pr: 60, branch: "main-fix", head: $h, by: "hand", recovered: true, files: ["x.js", "y.sh", "z.md"], file_lines: [{path: "x.js", additions: 4, deletions: 1}, {path: "y.sh", additions: 1, deletions: 0}], additions: 5, deletions: 1, merged_at: "2026-10-07T10:00:00Z", title: "t"}' > /dev/null || fail "rule 7 unlinked: event: $(events)"
 grep -q -- '--base main' "$d/pr-list-args" && grep -q -- 'merged:>=2026-10-01' "$d/pr-list-args" && grep -q -- '--limit 200' "$d/pr-list-args" || fail "rule 7 list args: $(cat "$d/pr-list-args")"
 grep -q 'repo=o/r' "$d/dq-calls-merged" || fail "rule 7 central read: $(cat "$d/dq-calls-merged")"
 # a second run writes nothing
@@ -1432,11 +1436,39 @@ pv 61 9 7
 jq '.closingIssuesReferences += [{number: 2, repository: {name: "other", owner: {login: "o"}}}]' "$d/pr-view-61.json" > "$d/t" && mv "$d/t" "$d/pr-view-61.json"
 pv 62 9
 echo '{"login":"mallory","id":1}' > "$d/pr-author-62"
+echo "Title of seven" > "$d/title-7"
+echo "Title of nine" > "$d/title-9"
 sweep7
 expect_rc 0 "rule 7 closing"
 merged_rows | jq -e 'select(.data.pr == 61) | .issue == 7 and .data.by == "hand" and .data.recovered == true' > /dev/null || fail "rule 7 trusted closing: $(events)"
 merged_rows | jq -e 'select(.data.pr == 62) | .issue == null and .actor == "sweep"' > /dev/null || fail "rule 7 untrusted: $(events)"
+# the title: the closing issue's (#7, the lowest) for 61; none for the untrusted 62, which still carries merged_at
+merged_rows | jq -e 'select(.data.pr == 61) | .data.title == "Title of seven" and .data.merged_at == "2026-10-07T10:00:00Z"' > /dev/null || fail "rule 7 issue title: $(events)"
+merged_rows | jq -e 'select(.data.pr == 62) | .data.title == null and .data.merged_at == "2026-10-07T11:00:00Z"' > /dev/null || fail "rule 7 untrusted title: $(events)"
 # the lifecycle of #7 is untouched by an untrusted PR, and the trusted one releases #7 as any merged does
+# the title falls back to the PR's when the issue read fails, is clipped to 256 characters, and a failing issue read never skips the merge
+reset
+pl 71 feat/issue-7-x "$H1" 2026-10-07T10:00:00Z
+pv 71 7
+echo "Title of seven" > "$d/title-7"
+echo "The pull request title" > "$d/pr-title-71"
+touch "$d/issue-read-fails-7"
+sweep7
+expect_rc 0 "rule 7 failing issue read"
+merged_rows | jq -e '.issue == 7 and .data.title == "The pull request title"' > /dev/null || fail "rule 7 issue read failing: $(events)"
+reset
+pl 72 main-fix "$H1" 2026-10-07T10:00:00Z
+pv 72
+printf '%0300d' 0 | tr 0 x > "$d/pr-title-72"
+sweep7
+merged_rows | jq -e '(.data.title | length) == 256' > /dev/null || fail "rule 7 long title: $(events)"
+# the regression: merged_at is GitHub's time, not the sweep's (now is 2026-10-08T12:00:00Z)
+reset
+pl 61 main-fix "$H1" 2026-10-02T09:00:00Z
+pv 61
+sweep7
+merged_rows | jq -e '.data.merged_at == "2026-10-02T09:00:00Z" and .ts != .data.merged_at' > /dev/null || fail "rule 7 merged_at is the PR's: $(events)"
+
 # a PR that already has a merged event in this device's log (a different head, or none) is not logged
 for hd in "$H3" null; do
   reset

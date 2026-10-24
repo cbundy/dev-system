@@ -39,8 +39,8 @@
 #      `cross-referenced` timeline event) whose head branch is this issue's
 #      (`issue-<N>`, or `issue-<N>-...`, after any `<prefix>/`; matching is by
 #      branch name, so release or other PRs that merely mention the issue do
-#      not count): log a `merged` event (pr, head when known, by factory; actor
-#      sweep) and leave it alone. This runs before the lease check, so a claim
+#      not count): log a `merged` event (pr, head when known, by factory, merged_at from the PR, title from the
+#      issue; actor sweep) and leave it alone. This runs before the lease check, so a claim
 #      kept live by renewals still ends; whoever holds the claim. Afterwards the
 #      issue reads as released, so a second run writes nothing.
 #   5. Open, newest claim comment live (server updated_at + the comment's own
@@ -55,7 +55,8 @@
 #      to be pushed) that no `merged` event of the repo names by `pr` - whatever its head, device, actor or
 #      issue; read from factory.event_log through dev-query --factory plus this device's new log - gets a
 #      `merged` event (actor sweep, by hand, recovered true; pr, branch, head from GitHub, and the PR's files,
-#      additions and deletions). Its issue is the lowest-numbered closing issue of this repo when the PR's
+#      additions and deletions, `merged_at` from GitHub's mergedAt, and `title`: the closing issue's, else the PR's,
+#      else null, clipped to 256). Its issue is the lowest-numbered closing issue of this repo when the PR's
 #      author is trusted (callum-flow-issue-read --json --pr exits 0), otherwise none: an untrusted PR body
 #      never steers an issue's lifecycle (see Trust). Without the central store (dev-query absent, not
 #      configured or failing) nothing can prove that another device did not record the merge, so the rule
@@ -218,6 +219,7 @@ for n in $cands; do
   merged=0
   failed=0
   mhead=
+  mat=
   for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
       .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
       | .source.issue.number'); do
@@ -234,6 +236,7 @@ for n in $cands; do
       merged=$pr
       mhead=$(printf '%s' "$pj" | jq -r '.pr.head.sha // empty')
       printf '%s\n' "$mhead" | grep -Eq '^[0-9a-f]{7,40}$' || mhead=
+      mat=$(printf '%s' "$pj" | jq -r '.pr.merged_at | strings' 2>/dev/null) || mat=
       break
     fi
   done
@@ -243,8 +246,10 @@ for n in $cands; do
   fi
   if [ "$merged" != 0 ]; then
     msize=$(pr_size_or_null "$merged")
-    "$EVENT" --type merged --issue "$n" --actor sweep --data "$(jq -nc --argjson pr "$merged" --arg h "$mhead" --argjson s "$msize" \
-      '{pr: $pr, branch: null, head: (if $h == "" then null else $h end), by: "factory", recovered: false} + $s')" >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
+    mtitle=$(printf '%s' "$view" | jq -r '.title | strings' 2>/dev/null) || mtitle=
+    "$EVENT" --type merged --issue "$n" --actor sweep --data "$(jq -nc --argjson pr "$merged" --arg h "$mhead" --arg at "$mat" --arg t "$mtitle" --argjson s "$msize" \
+      '{pr: $pr, branch: null, head: (if $h == "" then null else $h end), by: "factory", recovered: false,
+        merged_at: (if $at == "" then null else $at end), title: (if $t == "" then null else $t[0:256] end)} + $s')" >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
     continue
   fi
 
@@ -326,18 +331,26 @@ log_unrecorded_merges() {
     fi
     # an untrusted PR body never steers an issue's lifecycle: its merge is logged with no issue
     _crc=0
-    "$READ" --json --pr "$_num" >/dev/null 2>&1 </dev/null || _crc=$?
+    _prj=$("$READ" --json --pr "$_num" 2>/dev/null </dev/null) || _crc=$?
     _issue=
+    _title=
     case "$_crc" in
       0) _issue=$(printf '%s' "$_pv" | jq -r --arg repo "$repo" '
-           [.closingIssuesReferences[]? | select(((.repository.owner.login // "") + "/" + (.repository.name // "") | ascii_downcase) == ($repo | ascii_downcase)) | .number | numbers] | min // empty' 2>/dev/null) || _issue= ;;
+           [.closingIssuesReferences[]? | select(((.repository.owner.login // "") + "/" + (.repository.name // "") | ascii_downcase) == ($repo | ascii_downcase)) | .number | numbers] | min // empty' 2>/dev/null) || _issue=
+         # the title: the closing issue's when it reads, else the pull request's (a trusted author only)
+         if [ -n "$_issue" ]; then
+           _title=$("$READ" --json "$_issue" 2>/dev/null </dev/null | jq -r '.issue.title | strings' 2>/dev/null) || _title=
+         fi
+         [ -n "$_title" ] || _title=$(printf '%s' "$_prj" | jq -r '.pr.title | strings' 2>/dev/null) || _title= ;;
       3) ;;
       *)
         err "cannot read PR #$_num - left for a later run"
         echo 1 > "$tmp/unrecorded.rc"
         continue ;;
     esac
-    _data=$(printf '%s' "$_row" | jq -c --argjson s "$_sz" '{pr: .number, branch: (.headRefName // null), head: (.headRefOid // null), by: "hand", recovered: true} + $s')
+    _data=$(printf '%s' "$_row" | jq -c --argjson s "$_sz" --arg t "$_title" \
+      '{pr: .number, branch: (.headRefName // null), head: (.headRefOid // null), by: "hand", recovered: true,
+        merged_at: (.mergedAt | strings), title: (if $t == "" then null else $t[0:256] end)} + $s')
     if [ -n "$_issue" ]; then
       "$EVENT" --type merged --issue "$_issue" --actor sweep --data "$_data" >/dev/null 2>&1 || err "warning: could not log the merged event for PR #$_num"
     else

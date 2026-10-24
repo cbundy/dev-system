@@ -123,7 +123,7 @@ RURL=$(url_for "$db" "${db}_reader" "$RPW")
 (umask 077 && printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url" \
   && printf '%s\n' "$RURL" > "$DEV_SECRETS_DIR/factory-db-reader-url")
 EXPECTED=$(factory_db_expected_version)
-[ "$EXPECTED" = 30 ] || fail "expected version should be 30 for the shipped migrations, got $EXPECTED"
+[ "$EXPECTED" = 31 ] || fail "expected version should be 31 for the shipped migrations, got $EXPECTED"
 for role in writer reader; do
   check $role
   expect 0 "OK" "database $db" "${db}_$role" "schema version $EXPECTED"
