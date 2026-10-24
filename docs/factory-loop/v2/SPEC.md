@@ -4513,7 +4513,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | `intakeAreas` | `["factory","product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
 | `reviewer` | `adjudicator` | 8.2 |
 | `reviewerModel` | `opus` | 8.3 |
-| `uiCapture` | unset (`null`) | 8.3: the repo's UI capture command (a non-empty string; the builder and fixer run it first) or the literal `none` (no capture tooling: a missing capture is at most a warning and builders capture nothing); anything else is refused; applied `next-pass` |
+| `uiCapture` | `none` | 8.3: unset (`null`, shown as `none`) leaves a missing capture an error; otherwise the repo's UI capture command (a non-empty string; the builder and fixer run it first) or the literal `none` (no capture tooling: a missing capture is at most a warning and builders capture nothing); anything else is refused; applied `next-pass` |
 | `gateCommands` | `[]` | 10.6: the stop gate's commands; a repo sets its own |
 | `gateTimeoutMs` (written `gateTimeout`) | `10m` | 10.6: in all |
 | `gateConcurrency` | `auto` | 10.6: `auto` is `max(1, floor(cpus / 8))`, or a whole number |
