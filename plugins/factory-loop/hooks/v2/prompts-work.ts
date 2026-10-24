@@ -244,6 +244,7 @@ export function designPrompt(i: DesignInput): string {
     `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
     `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
     'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open and a `## Compatibility` section.',
+    testPlanRule(i),
     '',
     ...answerBlock(
       i.place,
@@ -280,6 +281,15 @@ function evidenceRule(i: WorkInput): string {
   if (i.uiCapture === 'none') return `${lead} This repo has turned UI capture off (it has no capture tooling): capture nothing and try no other route. Say in the evidence that UI capture is off for the repo, and describe the visible change in words.`
   const first = i.uiCapture === null ? `A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool.` : `The repo's capture command comes first, since it is expected to upload through the tool: \`${neutral(i.uiCapture)}\`.`
   return `${lead} An image there needs a URL. ${first} Otherwise upload each capture with \`callum-flow-evidence-upload pr-${i.issue}/<slug> <file>...\` and put each printed URL in the evidence as ![description](<url>). When the tool is not on PATH or exits 78 (no evidence storage for the repo), fall back to a capture committed on the branch, linked by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true. On exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the evidence which route you used and why. Commit an image only when it is a durable reference image the repo keeps.`
+}
+
+// testPlanRule: the designer's Test plan only asks for steps a loop agent can carry out, and names the
+// repo's capture for a visible change as its uiCapture setting says (8.7).
+function testPlanRule(i: WorkInput): string {
+  const lead = `The Test plan asks a loop agent only for steps its command rule allows: never a dev server, a watcher or a browser session by hand, and never a manual e2e run ("run the dev server and click through").`
+  if (i.uiCapture === 'none') return `${lead} This repo has turned UI capture off: for a visible change the plan names no capture and says so, and describes what to check in words or in tests instead.`
+  if (i.uiCapture === null) return `${lead} For a visible change, the plan names the capture command the repo's CLAUDE.md documents and the scenario to capture; when it documents none, the plan names no capture and says so, and describes what to check in words or in tests instead.`
+  return `${lead} For a visible change, the plan names the repo's capture command \`${neutral(i.uiCapture)}\` and the scenario to capture.`
 }
 
 // --- the builder (4.2, 8.1) ------------------------------------------------------------------------------------

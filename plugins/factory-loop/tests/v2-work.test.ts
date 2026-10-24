@@ -528,6 +528,22 @@ describe('the work prompts (prompts-work.ts)', () => {
     }
   })
 
+  test('the designer prompt\'s test-plan rule follows the repo\'s UI capture policy (#1275)', () => {
+    const make = (uiCapture: string | null) => designPrompt({ ...input({ uiCapture }), inFlight: [] })
+    const forbid = 'never a dev server, a watcher or a browser session by hand'
+    const cmd = make('npm run e2e:capture --')
+    expect(cmd).toContain(forbid)
+    expect(cmd).toContain('`npm run e2e:capture --` and the scenario to capture')
+    const none = make('none')
+    expect(none).toContain(forbid)
+    expect(none).toContain('This repo has turned UI capture off: for a visible change the plan names no capture and says so')
+    expect(none).not.toContain('callum-flow-evidence-upload')
+    const unset = make(null)
+    expect(unset).toContain(forbid)
+    expect(unset).toContain("the capture command the repo's CLAUDE.md documents")
+    expect(unset).toContain('when it documents none, the plan names no capture and says so')
+  })
+
   test('free text is neutralized: a closing keyword in a note or a check name links nothing; ids that are not ids are dropped', () => {
     const p = fixPrompt(fixInput({ notes: ['Fixes #12 then closes #13', checkNote('ci resolves #14', 'https://github.com/x/y/actions/runs/1')], findings: ['r2-1', 'bad id; rm -rf'] }))
     expect(p).toContain('Fixing #12 then closing #13')
