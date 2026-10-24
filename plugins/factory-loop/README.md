@@ -26,9 +26,9 @@ through its executor, starts its agents (its own, `agents/`), and wakes the mode
 | Observe adapters | `hooks/observe.ts` | done; running as a shadow in `spike-reconcile-mod` |
 | The pass driver: the store, the scheduler, the decision log, the hooks | `hooks/register.ts` | done |
 | The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
-| Executors: commands, the rollout read, v2's effects and agent steps, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/v2/act-*.ts`, `hooks/v2/steps*.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done |
+| Executors: commands, the rollout read, v2's effects and agent steps, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/v2/act-*.ts`, `hooks/v2/steps*.ts`, `hooks/prompts.ts` | done |
 | Wakes and the answer tool | `hooks/wake.ts` | done |
-| The agents' answer tool definitions and the loop's agent definitions | `hooks/agent-tools.ts`, `agents/` | done; unused by the loop, which answers by script |
+| The loop's agent definitions | `agents/` | done |
 | The answer script and the contract it shares with the loop (a temporary workaround, D-74) | `bin/factory-answer`, `hooks/contract.mjs` | done; not yet run by real agents |
 | Safety rails | `hooks/rails.ts` | done |
 | `/factory` and the control tool | `hooks/control.ts` | done |

@@ -180,8 +180,8 @@ function tree(dir) {
   return out.sort();
 }
 
-const VALID = { findings: [{ id: "review-1", verdict: "WRONG", reason: "the timeout is handled in parse.ts" }], action: { type: "approve" } };
-const gate = () => table.JOBS.gate;
+const VALID = { verdict: "approve", findings: [{ id: "r2-1", severity: "warning", file: "hooks/x.ts", line: 4, text: "a nit worth a look" }], summary: "the change does what the brief asks", bump: "patch" };
+const reviewJob = () => table.JOBS.review;
 
 test("the contract's declaration file names exactly the module's exports", () => {
   const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "contract.d.mts"), "utf8");
@@ -209,16 +209,16 @@ test("every case of the shared table: the script records exactly the answers the
 });
 
 test("the answer as one argument or on standard input, from any directory and through a link to the script", () => {
-  const a = issue(gate());
+  const a = issue(reviewJob());
   const arg = run(["--to", a.file, JSON.stringify(VALID)], { cwd: "/" });
   assert.equal(arg.code, 0, arg.err);
-  assert.equal(arg.out, "factory-answer: recorded your verdict answer (action approve, 1 finding). End your turn now: the factory loop reads it when your turn ends.\n");
-  const b = issue(gate());
+  assert.equal(arg.out, "factory-answer: recorded your review answer (approve, 1 finding (0 errors)). End your turn now: the factory loop reads it when your turn ends.\n");
+  const b = issue(reviewJob());
   const piped = run([`--to=${b.file}`], { input: `${JSON.stringify(VALID, null, 2)}\n`, cwd: scratch });
   assert.equal(piped.code, 0, piped.err);
   // a heredoc's answer may hold any quote: the shell passes it as it stands
-  const c = issue(gate());
-  const quoted = { ...VALID, action: { type: "approve", reason: `it's "handled" in parse.ts` } };
+  const c = issue(reviewJob());
+  const quoted = { ...VALID, summary: `it's "handled" in parse.ts` };
   const linked = path.join(scratch, "bin-link");
   fs.symlinkSync(SCRIPT, linked);
   const viaLink = run(["--to", c.file], { input: JSON.stringify(quoted), bin: linked });
@@ -227,7 +227,7 @@ test("the answer as one argument or on standard input, from any directory and th
 });
 
 test("usage errors exit 2 and print the usage; --help exits 0", () => {
-  const { file } = issue(gate());
+  const { file } = issue(reviewJob());
   for (const [args, why] of [
     [[], "--to <answer file> is required"],
     [["--to"], "--to needs the answer file"],
@@ -248,7 +248,7 @@ test("usage errors exit 2 and print the usage; --help exits 0", () => {
 });
 
 test("an answer that is not JSON is refused with exit 1, and nothing is written", () => {
-  const { file } = issue(gate());
+  const { file } = issue(reviewJob());
   const r = run(["--to", file, "{findings: []"]);
   assert.equal(r.code, 1);
   assert.equal(problemsOf(r.err).length, 1);
@@ -258,13 +258,13 @@ test("an answer that is not JSON is refused with exit 1, and nothing is written"
 });
 
 test("the write is atomic: a new file renamed over the old one, never written in place, and no temp file left", () => {
-  const { file } = issue(gate());
+  const { file } = issue(reviewJob());
   assert.equal(run(["--to", file, JSON.stringify(VALID)]).code, 0);
   const first = fs.readFileSync(file, "utf8");
   // a second link to the first answer: a write in place would change it too, a rename does not
   const kept = path.join(scratch, "first-answer");
   fs.linkSync(file, kept);
-  const corrected = { ...VALID, action: { type: "approve", reason: "a false positive" } };
+  const corrected = { ...VALID, summary: "a false positive" };
   assert.equal(run(["--to", file, JSON.stringify(corrected)]).code, 0);
   assert.equal(fs.readFileSync(kept, "utf8"), first);
   assert.notEqual(fs.statSync(kept).ino, fs.statSync(file).ino);
@@ -276,20 +276,20 @@ test("the write is atomic: a new file renamed over the old one, never written in
 });
 
 test("it writes the one file it is given and nothing else", () => {
-  const { file, jobPath } = issue(gate());
+  const { file, jobPath } = issue(reviewJob());
   const before = tree(scratch);
   assert.equal(run(["--to", file, JSON.stringify(VALID)]).code, 0);
   assert.deepEqual(tree(scratch), [...before, file].sort());
-  assert.equal(fs.readFileSync(jobPath, "utf8"), contract.jobText(gate()));
+  assert.equal(fs.readFileSync(jobPath, "utf8"), contract.jobText(reviewJob()));
 });
 
 test("any other path is refused with exit 1 before anything is written: not absolute, not plain, not an answer file, outside the loop's answers, through a link, or with no job file", () => {
-  const { file, jobPath } = issue(gate());
+  const { file, jobPath } = issue(reviewJob());
   const name = path.basename(file);
   // another tree of the same shape, outside this config's factory-loop directory
   const foreign = path.join(scratch, "elsewhere", "factory-loop", REPO_DIR, "answers");
   fs.mkdirSync(foreign, { recursive: true });
-  const foreignJob = issue(gate(), foreign);
+  const foreignJob = issue(reviewJob(), foreign);
   // a loop dir whose answers directory is a link to the foreign one
   const linkedLoop = path.join(cfg, "factory-loop", "o__linked");
   fs.mkdirSync(linkedLoop);
@@ -299,15 +299,15 @@ test("any other path is refused with exit 1 before anything is written: not abso
   // a target that is a link to a file outside, and one that is a directory
   const victim = path.join(scratch, "victim.txt");
   fs.writeFileSync(victim, "keep me");
-  const linkTarget = issue(gate());
+  const linkTarget = issue(reviewJob());
   fs.symlinkSync(victim, linkTarget.file);
-  const dirTarget = issue(gate());
+  const dirTarget = issue(reviewJob());
   fs.mkdirSync(dirTarget.file);
   // a job file that is not the loop's
-  const badJob = issue(gate());
+  const badJob = issue(reviewJob());
   fs.writeFileSync(badJob.jobPath, '{"v": 1, "contract": "anything"}');
   // a job for another repo, in this repo's answers directory (contract.mjs loopDirOf)
-  const otherRepo = issue({ ...gate(), repo: "other/repo" });
+  const otherRepo = issue({ ...reviewJob(), repo: "other/repo" });
   const before = tree(scratch);
   const refusals = [
     [path.relative(os.tmpdir(), file), "is not an absolute path"],
@@ -342,10 +342,10 @@ test("without CLAUDE_CONFIG_DIR, the loop's answers are under ~/.claude, and onl
   const home = path.join(scratch, "home");
   const homeAnswers = path.join(home, ".claude", "factory-loop", REPO_DIR, "answers");
   fs.mkdirSync(homeAnswers, { recursive: true });
-  const { file } = issue(gate(), homeAnswers);
+  const { file } = issue(reviewJob(), homeAnswers);
   assert.equal(run(["--to", file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: "" } }).code, 0);
   // the config dir's own answers are not this home's
-  const other = issue(gate());
+  const other = issue(reviewJob());
   assert.equal(run(["--to", other.file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: "" } }).code, 1);
 });
 
@@ -356,7 +356,7 @@ test("the loop and the script share one folder layout: contract.mjs loopDirOf, a
   assert.equal(contract.loopDirOf(`${cfg}//`, "cbundy/dev-system"), loopDir);
   assert.equal(contract.loopBaseOf(`${cfg}/`), path.join(cfg, "factory-loop"));
   // a config dir given with a trailing / still finds the answers the loop issued
-  const { file } = issue(gate());
+  const { file } = issue(reviewJob());
   assert.equal(run(["--to", file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: `${cfg}/` } }).code, 0);
 });
 
@@ -554,7 +554,7 @@ test("a brief, a question, a split and any other contract make no gh call", () =
   // a merge brief makes exactly one issue read, and nothing else does
   assert.deepEqual(readCalls(), ["--json 837 repo=cbundy/dev-system"]);
   fs.rmSync(ghLog, { force: true });
-  const g = issue(gate());
+  const g = issue(reviewJob());
   assert.equal(run(["--to", g.file], { input: JSON.stringify(VALID) }).code, 0);
   // a wait the contract refuses is not read on GitHub either
   const bad = answerWait({ kind: "wait", conditions: [{ kind: "tag-contains", sha: "xyz" }], reason: "r", brief: null });
@@ -796,14 +796,14 @@ test("upstream-check's declaration file names exactly the module's exports", asy
   }
 });
 
-test("question, wait, done and split answers, and a gate job make no issue read", () => {
+test("question, wait, done and split answers, and a review job make no issue read", () => {
   for (const answer of [{ kind: "question", question: "Which one?", brief: null }, { kind: "split", brief: "x" }, waitOf(ISSUE), doneOf(DONE_PR)]) {
     fs.rmSync(readLog, { force: true });
     answerWait(answer, { STUB_PR: "merged" });
     assert.deepEqual(readCalls(), [], JSON.stringify(answer));
   }
   fs.rmSync(readLog, { force: true });
-  const g = issue(gate());
+  const g = issue(reviewJob());
   assert.equal(run(["--to", g.file], { input: JSON.stringify(VALID) }).code, 0);
   assert.deepEqual(readCalls(), []);
 });

@@ -50,11 +50,6 @@ export function neutralWhole(text: string): string {
 export const FOREGROUND_RULE =
   'Run any sub-agent you start in the foreground and wait for it there: your turn ends only with your final answer, given as asked below.'
 
-// Two incidents on 2026-10-14: an agent ran `claude remote-control --help`, which starts a session
-// and never exits, and others waited with `until ! pgrep -f <pattern>`, which matches its own shell.
-export const COMMAND_RULE =
-  'Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. The one exception is the detached no-mistakes pipeline run (`axi run` or `axi respond`) that the implement-issue skill launches. Wait on a PID you recorded or on the tool\'s own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.'
-
 // --- the answer script's paths ---------------------------------------------------------------------
 
 // An absolute path with nothing in it a shell or a closing keyword could use: no space, quote,

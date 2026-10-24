@@ -303,7 +303,7 @@ describe('starting an agent in its slot', () => {
 
   test('a spawn without the slot line is left alone', async ($, on) => {
     const w = world(on)
-    await $.agent.spawn(spawn({ subagentType: 'factory-loop:designer', description: 'v1 design', prompt: 'You are the designer.' }))
+    await $.agent.spawn(spawn({ subagentType: 'factory-loop:designer-v2', description: 'v1 design', prompt: 'You are the designer.' }))
     expect(w.spawned).toEqual([{ name: undefined, cwd: undefined, parentAgentId: undefined }])
   })
 

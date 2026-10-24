@@ -13,7 +13,7 @@ import { WIND_DOWN_WRITE_SCRIPT } from './v2/wind-down-files'
 export const SNAPSHOT_VERSION = 1
 
 // the agents whose `model:` line the snapshot reports, and the file each is read from
-export const AGENT_FILES = { designer: 'designer-v2', builder: 'builder', fixer: 'fixer', adjudicator: 'adjudicator' } as const
+export const AGENT_FILES = { designer: 'designer-v2', builder: 'builder', fixer: 'fixer' } as const
 export type AgentModels = Partial<Record<keyof typeof AGENT_FILES, string | null>>
 
 export type ShareEnv = { implementerOpusPct?: string | null; designSessionPct?: string | null }
@@ -114,7 +114,8 @@ export function snapshotOf(rt: Runtime & Partial<ViewInputs>, control: Control, 
         fixer: agentModels.fixer ?? null,
         triage: rt.config.triageModel ?? null,
         reviewer: rt.config.reviewerModel ?? null,
-        adjudicator: agentModels.adjudicator ?? null,
+        // no v2 agent has this model: the reviewer's model is `reviewer`
+        adjudicator: null,
       },
       experiment: { implementerOpusPct: shareOf(env.implementerOpusPct), designSessionPct: shareOf(env.designSessionPct) },
     },
