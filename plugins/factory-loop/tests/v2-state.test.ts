@@ -1627,13 +1627,13 @@ describe('the record\'s executors (act-state.ts)', () => {
   test('event: a merged event with a pr reads the PR size first and logs it; a failed read logs nulls and is no failure', async () => {
     const merged = { state: 'merged' as const, issue: 500, branch: 'issue-500', pr: 621, head: 'abc1234', note: 'merged by hand' }
     const action: Action = { kind: 'event', key: 'k', class: 'free', rule: 'S3', reason: 'x', issue: 500, event: merged }
-    const sizeArgv = ['gh', 'pr', 'view', '621', '--repo', REPO, '--json', 'files,additions,deletions']
+    const sizeArgv = ['gh', 'pr', 'view', '621', '--repo', REPO, '--json', 'files,additions,deletions,mergedAt']
     const dataOf = (argv: string[] | undefined) => JSON.parse(argv?.[argv.indexOf('--data') + 1] ?? 'null')
-    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: '', additions: 1, deletions: 0 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 }) } : {}))
+    const ok = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify({ files: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: '', additions: 1, deletions: 0 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3, mergedAt: '2026-10-22T21:22:01Z' }) } : {}))
     expect(await ok.run(action)).toMatchObject({ status: 'done', summary: 'logged merged' })
     expect(ok.argvs[0]).toEqual(sizeArgv)
-    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, size: { files: ['a.js', 'b/c.sh'], fileLines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 } }))
-    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], file_lines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 })
+    expect(ok.argvs[1]).toEqual(eventArgv({ ...merged, mergedAt: '2026-10-22T21:22:01Z', size: { files: ['a.js', 'b/c.sh'], fileLines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3 } }))
+    expect(dataOf(ok.argvs[1])).toMatchObject({ pr: 621, files: ['a.js', 'b/c.sh'], file_lines: [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }], additions: 12, deletions: 3, merged_at: '2026-10-22T21:22:01Z', title: null })
     // a read that fails (exit, throw, bad JSON, no counts) writes the three as null, and the summary says so
     const bad: [string, (argv: string[]) => { exitCode?: number; stdout?: string }][] = [
       ['exit', () => ({ exitCode: 1 })],
@@ -1647,7 +1647,7 @@ describe('the record\'s executors (act-state.ts)', () => {
       const w = actWorld([], argv => (argv[0] === 'gh' ? gh(argv) : {}))
       expect(await w.run(action), name).toMatchObject({ status: 'done', summary: expect.stringContaining('size of PR #621 was unread') })
       expect(w.argvs[1], name).toEqual(eventArgv(merged))
-      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
+      expect(dataOf(w.argvs[1]), name).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null, merged_at: null, title: null })
     }
     // no pr: no size read; another event: no extra command
     const nopr = actWorld([])

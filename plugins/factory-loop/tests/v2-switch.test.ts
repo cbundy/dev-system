@@ -119,6 +119,18 @@ describe('the settings (v2 SPEC appendix A)', () => {
     expect(bad.config).toMatchObject({ maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
+  test('uiCapture: unset is null, a command or none loads, anything else is one problem and the default; the workspace wins (#1270)', () => {
+    expect(loadConfig({})).toMatchObject({ problems: [], config: { uiCapture: null } })
+    expect(loadConfig({ uiCapture: 'npm run e2e:capture --' })).toMatchObject({ problems: [], config: { uiCapture: 'npm run e2e:capture --' } })
+    expect(loadConfig({ uiCapture: 'none' })).toMatchObject({ problems: [], config: { uiCapture: 'none' } })
+    expect(loadConfig({ uiCapture: 'none' }, { uiCapture: 'make shots' })).toMatchObject({ problems: [], config: { uiCapture: 'make shots' } })
+    for (const v of [5, '', '   ', ['x']]) {
+      const r = loadConfig({ uiCapture: v })
+      expect(r.problems).toEqual([`uiCapture: ${JSON.stringify(v)} is not a capture command or none`])
+      expect(r.config.uiCapture).toBeNull()
+    }
+  })
+
   test('minimumReleaseCadence: 6h by default, a duration or ms of at least 1h, the workspace wins, anything else is one problem (#772)', () => {
     expect(loadConfig({}).config.minimumReleaseCadenceMs).toBe(21_600_000)
     expect(loadConfig({ minimumReleaseCadence: '3h' }).config.minimumReleaseCadenceMs).toBe(10_800_000)

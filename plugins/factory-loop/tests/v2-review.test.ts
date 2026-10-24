@@ -714,6 +714,9 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'reviewed', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', '631'])
     expect(JSON.parse(argv[4] ?? '')).toEqual({ branch: 'issue-631', pr: PR, head: HEAD, verdict: 'changes', round: 1, patch: PATCH, errors: 1, warnings: 1, infos: 0, reviewer: 'adjudicator', answer_path: '/cfg/answers/a b.json' })
+    // the capture policy the review ran under is written only when the record carries it
+    expect(JSON.parse(eventArgv(reviewedEvent({ issue: 631, branch: 'issue-631', pr: PR, head: HEAD, round: 1, patch: PATCH, reviewer: 'adjudicator', answer: '/a' }, reviewData(r, 'changes', { uiCapture: 'none' })))[4] ?? '')).toMatchObject({ ui_capture: 'none' })
+    expect(JSON.parse(argv[4] ?? '')).not.toHaveProperty('ui_capture')
     // the old note, which the old source's readers still parse, reads back
     expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note: eventNote(e) })).toEqual(e)
     expect(e).toMatchObject({ verdict: 'changes', errors: 1, warnings: 1, infos: 0 })
@@ -841,7 +844,7 @@ describe('the reviewer interface and its contract (v2 SPEC 8.2)', () => {
 
   test('the registry: the interim reviewer is the adjudicator, spawning the review step\'s own agent on reviewerModel; read gives the result, or null', () => {
     expect(Object.keys(REVIEWERS)).toEqual(['adjudicator'])
-    const input: ReviewInput = { issue: 650, brief: BRIEF(650), pr: PR, base: 'main', head: HEAD, patch: PATCH, round: 2, prior: [], notes: [] }
+    const input: ReviewInput = { issue: 650, brief: BRIEF(650), pr: PR, base: 'main', head: HEAD, patch: PATCH, round: 2, prior: [], notes: [], uiCapture: null }
     const reviewer = reviewerOf('adjudicator', { model: 'opus' })
     expect(reviewer?.spawn(input)).toEqual({ agentType: STEP_AGENT.review, model: 'opus', prompt: 'adjudicator', input })
     expect(reviewerOf('no-mistakes', { model: 'opus' })).toBeNull()
@@ -865,6 +868,7 @@ describe('the reviewer\'s prompt (v2 SPEC 8.3)', () => {
     round: 2,
     prior: [{ round: 1, answerPath: `${LOOP_DIR}/answers/r1.answer.json`, fixerPath: `${LOOP_DIR}/answers/fix.answer.json` }],
     notes: ['r1-2 declined: Fixes #12 already, see the guard'],
+    uiCapture: null,
   }
   const place = { bin: `${PLUGIN_ROOT}/bin/factory-answer`, file: `${LOOP_DIR}/answers/review.answer.json` }
   const text = adjudicatorPrompt(input, { repo: REPO, branch: 'issue-660', slot: '/slots/660', scratch: `${LOOP_DIR}/scratch/660-x-s4`, place })
@@ -986,6 +990,26 @@ describe('the review step module (v2 SPEC 8.2, 8.3)', () => {
     expect(reviewResult(ctxOf(w.env, s, e), { ...rec2, data: { ...rec2.data, reviewer: 'gone' } }, {})).toMatchObject({ event: 'unknown', why: 'bad-answer' })
   })
 
+  test('the capture policy: the spawn data carries command, none or unset; the result and reviewDataOf keep it; a record with none gives none', async () => {
+    const kinds: [string | null, string][] = [['npm run e2e:capture --', 'command'], ['none', 'none'], [null, 'unset']]
+    for (const [setting, kind] of kinds) {
+      const w = actWorld(() => ({}), config({ mode: 'act', maxInFlightIssues: 3, uiCapture: setting }))
+      const a = action()
+      const e = { ...start([], a, NOW).entry, agentId: 'agent-r' }
+      await stepExecutor()(ctxOf(w.env, s, e), a)
+      const job = JSON.parse(w.files.get(stepAnswerPath(LOOP_DIR, a.key).replace(/\.answer\.json$/, '.job.json')) ?? '{}')
+      expect(job.data.uiCapture).toBe(kind)
+      const rec2 = { v: 2 as const, key: a.key, issue: 670, step: 'review' as const, life: LIFE, seq: 5, attempt: 1, branch: 'issue-670', slot: null, role: 'reader' as const, subagentType: STEP_AGENT.review, model: null, contract: 'review' as const, data: job.data, answerFile: '/a', prompt: '' }
+      const result = reviewResult(ctxOf(w.env, s, e), rec2, { verdict: 'approve', findings: [], summary: 'good', bump: 'patch' })
+      expect(reviewDataOf(result.data)?.uiCapture).toBe(kind)
+      expect(w.spawns[0]?.prompt).toContain(kind === 'none' ? 'at most a warning and never an error' : '4. a visible (UI) change has screenshot or video evidence in the PR body.')
+    }
+    const rec3 = { v: 2 as const, key: 'k', issue: 670, step: 'review' as const, life: LIFE, seq: 5, attempt: 1, branch: 'issue-670', slot: null, role: 'reader' as const, subagentType: STEP_AGENT.review, model: null, contract: 'review' as const, data: { round: 2, patch: PATCH, head: HEAD, pr: PR, reviewer: 'adjudicator' }, answerFile: '/a', prompt: '' }
+    const old = reviewResult(ctxOf(actWorld().env, s, { ...start([], action(), NOW).entry }), rec3, { verdict: 'approve', findings: [], summary: 'good', bump: 'patch' })
+    expect(reviewDataOf(old.data)).not.toHaveProperty('uiCapture')
+    expect(reviewDataOf({ ...(old.data as object), uiCapture: 'bogus' })).not.toHaveProperty('uiCapture')
+  })
+
   test('without what the plan had, the spawn refuses, never retried: no record, a key that is not a review\'s, no PR, a patch the key does not name, an unknown reviewer', async () => {
     const refusal = async (state: State, a = action(), cfg = CFG) => {
       const w = actWorld(() => ({}), cfg)
@@ -1005,7 +1029,7 @@ describe('the review step module (v2 SPEC 8.2, 8.3)', () => {
     const ctx = ctxOf(w.env, s, start([], action(), NOW).entry)
     expect(priorOf(ctx, r, 2)).toEqual([{ round: 1, answerPath: stepAnswerPath(LOOP_DIR, earlier.key), fixerPath: stepAnswerPath(LOOP_DIR, fix.key) }])
     expect(priorOf(ctx, r, 1)).toEqual([])
-    expect(reviewInput(ctx, action())).toEqual({ issue: 670, brief: BRIEF(670), pr: PR, base: 'main', head: HEAD, patch: PATCH, round: 2, prior: priorOf(ctx, r, 2), notes: ['owner: keep it small'] })
+    expect(reviewInput(ctx, action())).toEqual({ issue: 670, brief: BRIEF(670), pr: PR, base: 'main', head: HEAD, patch: PATCH, round: 2, prior: priorOf(ctx, r, 2), notes: ['owner: keep it small'], uiCapture: null })
   })
 })
 

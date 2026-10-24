@@ -440,6 +440,7 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 | `maxInFlightIssues` | `3` | How many issues the loop works on at once. Parked and waiting issues do not count. The loop also holds fewer when the container's memory cannot hold that many (see `slotMemoryMiB`). |
 | `slotMemoryMiB` | `auto` | The memory one issue's slot is assumed to use, in MiB. `auto` measures it from the stop gates' memory and uses 3072 until three runs are measured. The container's memory less `memoryReserveMiB`, over this, is the most issues held at once. |
 | `memoryReserveMiB` | `2048` | The container's memory kept free of slots, in MiB. |
+| `uiCapture` | `none` | Unset (shown as `none`) keeps a missing capture an error. Otherwise the repo's documented, self-stopping UI capture command (like `"npm run e2e:capture --"`), which builders and fixers run first for a visible change; or `"none"` when the repo has no capture tooling, so the reviewer treats a missing screenshot as a warning, not an error. Unset keeps a missing capture an error. |
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
 | `minimumReleaseCadence` | `6h` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
 | `releaseBranchPrefix` | `none` | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |

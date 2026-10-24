@@ -689,6 +689,21 @@ WHERE type = 'finding_handled'
 GROUP BY repo;
 ```
 
+### Reviews by UI capture policy
+
+Each `reviewed` event records the repo's `uiCapture` policy the review ran under in `ui_capture`
+(`command`, `none` for capture off, or `unset`; absent on a review recorded before the field
+existed); no `event_log` column lifts it, so the query reads `factory.event_store`. This counts reviews and verdicts per repo and policy over a window, one row per
+`(issue, round, patch)`.
+
+```sql
+SELECT repo, coalesce(data->>'ui_capture', 'absent') AS ui_capture, data->>'verdict' AS verdict,
+  count(DISTINCT (issue, data->>'round', data->>'patch')) AS reviews
+FROM factory.event_store
+WHERE type = 'reviewed' AND ts >= now() - interval '30 days'
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+```
+
 ### Fix rounds with no new head
 
 A fix round can end with no new head because a finding was fixed outside the branch (transition row
@@ -2875,6 +2890,22 @@ FROM (
 ) k
 GROUP BY repo, day, kind
 ORDER BY repo, day, kind;
+```
+
+**How late the sweep recorded recovered merges** (#12, run only; cbundy/dev-system#1263): per repo and week,
+the delay between GitHub's merge time (`merged_at`) and the sweep writing the `merged` event (`ts`), for the
+merges the sweep recovered that carry `merged_at`. A reader that places a merge by time uses
+`coalesce(merged_at, ts)`, since `ts` of a recovered merge is the time of the sweep, not of the merge.
+Takes `-v repo=... -v since=...`.
+
+```sql
+SELECT repo, date_trunc('week', ts)::date AS week, count(DISTINCT pr) AS merges,
+       min(ts - merged_at) AS min_delay, avg(ts - merged_at) AS avg_delay, max(ts - merged_at) AS max_delay
+FROM factory.event_log
+WHERE type = 'merged' AND actor = 'sweep' AND merged_at IS NOT NULL
+  AND repo = :'repo' AND ts >= :'since'::timestamptz
+GROUP BY repo, week
+ORDER BY week DESC;
 ```
 
 `callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue

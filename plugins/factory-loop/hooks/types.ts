@@ -411,6 +411,8 @@ export type Config = {
   // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
   reviewer: string
   reviewerModel: Model
+  // the repo's UI capture policy (#1270): null (unset) or a capture command keeps the reviewer holding a visible change without screenshot evidence as an error; the literal "none" says the repo has no capture tooling, so a missing capture is at most a warning
+  uiCapture: string | null
   // the stop gate's commands in the slot, joined with &&, and their one budget (v2 SPEC 10.6)
   gateCommands: string[]
   gateTimeoutMs: Ms

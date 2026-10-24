@@ -28,7 +28,7 @@ const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "con
 const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]);
 const NUMERICS = new Set(["spend_usd", "budget_usd"]);
 const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off", "needs_owner"]);
-const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at", "taken_at"]);
+const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at", "taken_at", "merged_at"]);
 const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options", "candidates", "rest", "owner_priority", "owner_only", "touches", "dropped", "labels_set", "labels_kept", "file_lines", "issues", "issues_closed", "headlines"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
@@ -112,6 +112,18 @@ test("merged: file_lines lifts as a jsonb array of per-file counts, and reads NU
   }
   assert.equal(db.query("SELECT coalesce(file_lines::text, 'null') FROM factory.event_log WHERE device_seq = 1", "reader"), "null");
   assert.equal(db.query("SELECT jsonb_typeof(file_lines) || ' ' || jsonb_array_length(file_lines) || ' ' || (file_lines -> 0 ->> 'path') || ' ' || (file_lines -> 1 ->> 'deletions') FROM factory.event_log WHERE device_seq = 2", "reader"), "array 2 a.js 2");
+});
+
+test("merged: merged_at lifts as a timestamptz, title stays the ready/claimed text column, and an older merged row reads NULL", opts, (t) => {
+  const db = createDb(t);
+  const base = { pr: 1, branch: "b", head: "f94eb46", by: "hand", recovered: true };
+  [base, { ...base, merged_at: "2026-10-22T21:22:01Z", title: "A merged title" }].forEach((data, i) => {
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), '2026-10-23T16:16:00Z', 'merged', 1, 'o/r', 'd', 'sweep', 7, ${i + 1}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  });
+  assert.equal(db.query("SELECT pg_typeof(merged_at)::text FROM factory.event_log LIMIT 1", "reader"), "timestamp with time zone");
+  assert.equal(db.query("SELECT merged_at IS NULL AND title IS NULL FROM factory.event_log WHERE device_seq = 1", "reader"), "t");
+  assert.equal(db.query("SELECT to_char(merged_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS') || ' ' || title || ' ' || (ts - merged_at) FROM factory.event_log WHERE device_seq = 2", "reader"), "2026-10-22T21:22:01 A merged title 18:53:59");
 });
 
 test("released: issues, issues_closed and headlines lift as jsonb arrays, and read NULL on every other type", opts, (t) => {
@@ -228,5 +240,5 @@ test("regime: rows from before the migration read NULL, and a new row's regime r
   insert(after, ", regime", ", 'testbed'");
   assert.equal(db.query(`SELECT regime FROM factory.event_log WHERE event_id = '${after}'`, "reader"), "testbed");
   const cols = db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log' ORDER BY ordinal_position").split("\n");
-  assert.deepEqual(cols.slice(-5), ["regime", "file_lines", "issues", "issues_closed", "headlines"], "OR REPLACE appends: regime keeps its place, 0028's file_lines and 0029's release columns follow it");
+  assert.deepEqual(cols.slice(-6), ["regime", "file_lines", "issues", "issues_closed", "headlines", "merged_at"], "OR REPLACE appends: regime keeps its place, 0028's file_lines, 0029's release columns and 0031's merged_at follow it");
 });

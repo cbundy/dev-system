@@ -50,7 +50,7 @@ Run only commands known to exit. Read source, docs and `--help` output only from
   reproduction under load and the stress run of consecutive passes are requirements like the
   acceptance criteria. Missing either, or a retry, skip or unexplained timeout raise, is an error
   finding.
-- A visible (UI) change needs screenshot or video evidence in the PR body.
+- A visible (UI) change needs screenshot or video evidence in the PR body. The prompt names the repo's capture policy: when it says the repo has turned UI capture off (`none`), a missing capture is at most a warning, never an error, and the PR's evidence should say capture is off.
 - Style, preference and anything outside the brief are at most warnings or infos: they never hold
   a merge.
 - The brief's `## Observability` section is a requirement like its acceptance criteria: a decision

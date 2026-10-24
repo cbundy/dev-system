@@ -119,6 +119,7 @@ function reviewedData(e: ReviewedEvent): Record<string, unknown> {
     infos: e.infos,
     reviewer: e.reviewer,
     answer_path: e.answer,
+    ...(e.uiCapture === undefined ? {} : { ui_capture: e.uiCapture }),
   }
 }
 
@@ -209,6 +210,9 @@ function mergedData(e: ReusedEvent): Record<string, unknown> {
     file_lines: size?.fileLines ?? null,
     additions: size?.additions ?? null,
     deletions: size?.deletions ?? null,
+    merged_at: e.pr === null ? null : (e.mergedAt ?? null),
+    // the loop's ready/claimed events already carry the title
+    title: null,
   }
 }
 

@@ -210,8 +210,9 @@ const event: Executor = async (ctx, action) => {
   if (e.state === 'merged' && e.pr !== null) {
     const sizeArgv = ARGV.prSizeArgv(ctx.rt.repo, e.pr)
     const read = await run(ctx, sizeArgv, GH_MS)
-    const size = read.ok && read.r.exitCode === 0 ? ARGV.prSizeOf(read.r.stdout) : null
-    e = { ...e, size }
+    const readOk = read.ok && read.r.exitCode === 0
+    const size = readOk ? ARGV.prSizeOf(read.r.stdout) : null
+    e = { ...e, size, mergedAt: readOk ? ARGV.prMergedAtOf(read.r.stdout) : null }
     if (size === null) unread = ` (the size of PR #${e.pr} was unread)`
   }
   const argv = eventArgv(e)

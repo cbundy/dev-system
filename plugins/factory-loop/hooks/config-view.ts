@@ -255,6 +255,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
       [
         ...render(row('reviewer', 'reviewer', c.reviewer)),
         ...render(row('reviewerModel', 'reviewerModel', c.reviewerModel)),
+        ...render(row('uiCapture', 'uiCapture', c.uiCapture ?? 'unset')),
         ...render(row('triageModel', 'triageModel', c.triageModel)),
         ...render(row('intakeModel', 'intakeModel', c.intakeModel)),
         ...render({ label: 'gateCommands', value: c.gateCommands.length === 0 ? 'none' : '', source: src('gateCommands') }),

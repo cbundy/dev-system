@@ -19,6 +19,8 @@ export type ReviewedEvent = {
   infos: number
   reviewer: string
   answer: string
+  // the UI capture policy the review ran under; absent for a review recorded before it existed
+  uiCapture?: 'command' | 'none' | 'unset'
 }
 
 export const INTERVENTION_WHO = ['person', 'loop', 'judge'] as const
@@ -80,6 +82,8 @@ export type ReusedEvent = {
   head: string | null
   note: string
   size?: PrSize | null
+  // when GitHub says the PR merged (merged.v1 merged_at), read with the size
+  mergedAt?: string | null
 }
 
 // One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by

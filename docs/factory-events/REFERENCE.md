@@ -189,6 +189,7 @@ Example:
 | `mem_limit_bytes` | integer | `gate_run` | The cgroup's memory.max when the gate ran, in bytes; left out when there is no limit or it was not read. |
 | `mem_peak_bytes` | integer | `gate_run` | The highest memory.current sampled (every 5 s, and at the end) while the gate ran, in bytes. Left out when not read. |
 | `mem_start_bytes` | integer | `gate_run` | The container's memory in use (cgroup memory.current) when the gate started to run, in bytes. Container-wide: at concurrency above 1 it includes other gates. Left out when not read. |
+| `merged_at` | string | `merged` | When GitHub says the pull request merged (its mergedAt, copied as given). null when unknown. |
 | `milestone_closed` | integer | `milestone_state` | Closed issues in the milestone. |
 | `milestone_open` | integer | `milestone_state` | Open issues in the milestone. |
 | `mode` | enum | `intake_stamp`, `loop_passes` | run: the stamp was applied. dry: a dry run. The loop writes only run; dry exists so the type can name a dry run. |
@@ -253,7 +254,7 @@ Example:
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
 | `taken_at` | string | `queue_snapshot` | When the pass that produced the view ended. |
-| `title` | string | `claimed`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
+| `title` | string | `claimed`, `merged`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
 | `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
@@ -846,7 +847,7 @@ Example:
 
 ## merged
 
-A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge that no event recorded: one on the issue's branch, or a merged pull request to the default branch that no merged event names by pr (logged as a hand merge, recovered, with the issue only when the pull request's author is trusted and it closes one). Ends the claim; the end point of lead time and throughput. Count one per pr and head.
+A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge that no event recorded: one on the issue's branch, or a merged pull request to the default branch that no merged event names by pr (logged as a hand merge, recovered, with the issue only when the pull request's author is trusted and it closes one). Ends the claim; the end point of lead time and throughput. Count one per pr and head. A reader places and ages a merge by coalesce(merged_at, ts), because ts is when the event was written, which for a recovered merge is later than the merge; merged.title is a fallback to the ready/claimed title.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -865,6 +866,8 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `file_lines` | array of object | optional | yes |  | yes | The pull request's per-file line counts ({path, additions, deletions}) from GitHub's pull request files at merge time, in the same order as files and up to the same cap. An entry whose counts are not non-negative integers is left out here but still counts in files. null when unknown. |
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
+| `merged_at` | string | optional | yes | format date-time | yes | When GitHub says the pull request merged (its mergedAt, copied as given). null when unknown. |
+| `title` | string | optional | yes | maxLength 256 | yes | The closed issue's title when the event has an issue and its author is trusted, otherwise the pull request's title when its author is trusted, clipped to 256 characters. null when neither was read. |
 
 Example:
 
@@ -1213,6 +1216,7 @@ One review of the issue's pull request finished. Written by the loop from the re
 | `warnings` | integer | required | no | minimum 0 |  | Findings of severity warning. |
 | `infos` | integer | required | no | minimum 0 |  | Findings of severity info. |
 | `reviewer` | string | required | no | minLength 1 |  | Which reviewer answered, for example adjudicator. |
+| `ui_capture` | string | optional | yes | one of "command", "none", "unset", null |  | The repo's UI capture policy the review ran under: command (a capture command is set), none (capture is off, so a missing capture is at most a warning) or unset. Optional: absent or null on a review recorded before the field existed. |
 | `answer_path` | string | required | no | minLength 1 | yes | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
 
 Example:
