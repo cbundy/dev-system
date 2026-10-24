@@ -37,6 +37,8 @@ export type ReviewInput = {
   round: number
   prior: PriorRound[]
   notes: string[]
+  // the repo's UI capture policy (config uiCapture): null when unset, a command, or the literal none
+  uiCapture: string | null
 }
 
 // What a reviewer starts: its agent type (the loop spawns the review step's own, types.ts
@@ -106,7 +108,16 @@ export function reviewerOf(id: string, opts: ReviewerOpts): Reviewer | null {
 
 // What the review step records as its result's data (steps-review.ts): the result, and what it
 // reviewed: the round, the patch and head, the PR, the reviewer's id and its answer file.
-export type ReviewData = ReviewResult & { round: number; patch: string; head: string; pr: number; reviewer: string; answer: string }
+export type ReviewData = ReviewResult & { round: number; patch: string; head: string; pr: number; reviewer: string; answer: string; uiCapture?: UiCaptureKind }
+
+// The capture policy a review ran under: a capture command, none (capture off), or unset.
+export const UI_CAPTURE_KINDS = ['command', 'none', 'unset'] as const
+export type UiCaptureKind = (typeof UI_CAPTURE_KINDS)[number]
+
+// uiCaptureKind: the policy kind of a uiCapture setting.
+export function uiCaptureKind(setting: string | null): UiCaptureKind {
+  return setting === null ? 'unset' : setting === 'none' ? 'none' : 'command'
+}
 
 // reviewDataOf: a result's data as ReviewData, or null when it is not one (an unknown, a step that
 // recorded none).
@@ -117,7 +128,8 @@ export function reviewDataOf(data: unknown): ReviewData | null {
   const int = (v: unknown) => typeof v === 'number' && Number.isInteger(v)
   const str = (v: unknown) => typeof v === 'string' && v !== ''
   if (result === null || !int(o.round) || !int(o.pr) || !str(o.patch) || !str(o.head) || !str(o.reviewer) || !str(o.answer)) return null
-  return { ...result, round: o.round as number, patch: o.patch as string, head: o.head as string, pr: o.pr as number, reviewer: o.reviewer as string, answer: o.answer as string }
+  const kind = (UI_CAPTURE_KINDS as readonly unknown[]).includes(o.uiCapture) ? { uiCapture: o.uiCapture as UiCaptureKind } : {}
+  return { ...result, round: o.round as number, patch: o.patch as string, head: o.head as string, pr: o.pr as number, reviewer: o.reviewer as string, answer: o.answer as string, ...kind }
 }
 
 // answerName: where a step key's answer file is, under the loop dir (steps.ts stepAnswerPath, named
@@ -238,6 +250,7 @@ export function reviewedEvent(at: ReviewedAt, d: ReviewData | null): ReviewedEve
     infos: count('info'),
     reviewer: at.reviewer,
     answer: at.answer,
+    ...(d?.uiCapture === undefined ? {} : { uiCapture: d.uiCapture }),
   }
 }
 

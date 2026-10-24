@@ -50,6 +50,8 @@ export type WorkInput = {
   // the gate commands the slot's step marker carries (rules-agent.ts markerOf), which the companion's
   // stop gate runs when a writer ends its turn (10.6); [] when the repo sets none
   gateCommands: string[]
+  // the repo's UI capture policy (config uiCapture): null when unset, a capture command, or the literal none
+  uiCapture: string | null
   // the step's scratch folder (keys.ts scratchOf): $TMPDIR in every Bash call of the agent
   scratch: string
   place: ScriptPlace
@@ -274,7 +276,10 @@ export function designPrompt(i: DesignInput): string {
 // evidenceRule: how a writer's evidence reaches the PR body the loop writes, where the reviewer
 // looks for it (8.1): the newest a build or a fix gives is the PR's, and an image needs a URL.
 function evidenceRule(i: WorkInput): string {
-  return `For a visible change, give the evidence a reviewer needs in your answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it whole. An image there needs a URL. A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool. Otherwise upload each capture with \`callum-flow-evidence-upload pr-${i.issue}/<slug> <file>...\` and put each printed URL in the evidence as ![description](<url>). When the tool is not on PATH or exits 78 (no evidence storage for the repo), fall back to a capture committed on the branch, linked by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true. On exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the evidence which route you used and why. Commit an image only when it is a durable reference image the repo keeps.`
+  const lead = `For a visible change, give the evidence a reviewer needs in your answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it whole.`
+  if (i.uiCapture === 'none') return `${lead} This repo has turned UI capture off (it has no capture tooling): capture nothing and try no other route. Say in the evidence that UI capture is off for the repo, and describe the visible change in words.`
+  const first = i.uiCapture === null ? `A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool.` : `The repo's capture command comes first, since it is expected to upload through the tool: \`${neutral(i.uiCapture)}\`.`
+  return `${lead} An image there needs a URL. ${first} Otherwise upload each capture with \`callum-flow-evidence-upload pr-${i.issue}/<slug> <file>...\` and put each printed URL in the evidence as ![description](<url>). When the tool is not on PATH or exits 78 (no evidence storage for the repo), fall back to a capture committed on the branch, linked by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true. On exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the evidence which route you used and why. Commit an image only when it is a durable reference image the repo keeps.`
 }
 
 // --- the builder (4.2, 8.1) ------------------------------------------------------------------------------------

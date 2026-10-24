@@ -1387,8 +1387,11 @@ output contract, so the reviewer is not an edit of it.
   - its own earlier rounds and the fixer's dispositions, so it does not repeat itself;
   - the owner's notes.
 - **It checks** that every acceptance criterion and owner requirement in the brief is met, nothing
-  unrelated was added, no test was weakened, and a visual change has UI evidence. It constructs a
-  failing case for any defect it reports.
+  unrelated was added, no test was weakened, and a visual change has UI evidence. The UI evidence
+  check follows the repo's `uiCapture` setting: unset or a capture command keeps a missing capture an
+  error, and `none` (the repo has turned capture off) makes it at most a warning. The prompt names the
+  policy, and the `reviewed` event records it as `ui_capture` (`command`, `none` or `unset`; absent for
+  a review recorded before the field). It constructs a failing case for any defect it reports.
 - **Answer.** It answers with the `review` contract (8.2) through the answer script.
 - **What the loop does with it.** It posts each result as one PR comment with a hidden key
   (`gh pr comment <p> --body-file -`): the verdict, the findings and the summary. It also logs one
@@ -4510,6 +4513,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | `intakeAreas` | `["factory","product"]` | distinct area names (`^[a-z][a-z0-9-]*$`) that hold `factory` and `product`; anything else is refused |
 | `reviewer` | `adjudicator` | 8.2 |
 | `reviewerModel` | `opus` | 8.3 |
+| `uiCapture` | unset (`null`) | 8.3: the repo's UI capture command (a non-empty string; the builder and fixer run it first) or the literal `none` (no capture tooling: a missing capture is at most a warning and builders capture nothing); anything else is refused; applied `next-pass` |
 | `gateCommands` | `[]` | 10.6: the stop gate's commands; a repo sets its own |
 | `gateTimeoutMs` (written `gateTimeout`) | `10m` | 10.6: in all |
 | `gateConcurrency` | `auto` | 10.6: `auto` is `max(1, floor(cpus / 8))`, or a whole number |

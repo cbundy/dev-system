@@ -423,6 +423,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "pr": {"minimum":1,"type":"integer"},
       "reviewer": {"minLength":1,"type":"string"},
       "round": {"minimum":1,"type":"integer"},
+      "ui_capture": {"enum":["command","none","unset",null],"type":["null","string"]},
       "verdict": {"enum":["approve","changes","unknown"]},
       "warnings": {"minimum":0,"type":"integer"},
     },

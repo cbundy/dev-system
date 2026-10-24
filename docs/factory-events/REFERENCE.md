@@ -1213,6 +1213,7 @@ One review of the issue's pull request finished. Written by the loop from the re
 | `warnings` | integer | required | no | minimum 0 |  | Findings of severity warning. |
 | `infos` | integer | required | no | minimum 0 |  | Findings of severity info. |
 | `reviewer` | string | required | no | minLength 1 |  | Which reviewer answered, for example adjudicator. |
+| `ui_capture` | string | optional | yes | one of "command", "none", "unset", null |  | The repo's UI capture policy the review ran under: command (a capture command is set), none (capture is off, so a missing capture is at most a warning) or unset. Optional: absent or null on a review recorded before the field existed. |
 | `answer_path` | string | required | no | minLength 1 | yes | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
 
 Example:

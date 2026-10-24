@@ -18,8 +18,8 @@ import type { ExecCtx } from '../exec'
 import type { LedgerEntry } from '../types'
 import { keyParts, scratchOf, short } from './keys'
 import { REVIEW_PROMPTS } from './prompts-review'
-import { reviewerOf } from './reviewer'
-import type { PriorRound, ReviewInput } from './reviewer'
+import { UI_CAPTURE_KINDS, reviewerOf, uiCaptureKind } from './reviewer'
+import type { PriorRound, ReviewInput, UiCaptureKind } from './reviewer'
 import { baseOf, lifePr } from './rules-review'
 import type { AgentStepAction, StepModule, StepRecord } from './steps'
 import { stepFiles } from './steps-triage'
@@ -93,6 +93,7 @@ export function reviewInput(ctx: ExecCtx, action: AgentStepAction): ReviewInput 
     round: key.round,
     prior: priorOf(ctx, r, key.round),
     notes: action.notes,
+    uiCapture: ctx.rt.config.uiCapture,
   }
 }
 
@@ -109,7 +110,7 @@ export function reviewResult(ctx: ExecCtx, rec: StepRecord, answer: unknown): St
   if (reviewer === null) return unknownResult('bad-answer', `no reviewer named ${id} reads this answer`)
   const result = reviewer.read(answer)
   if (result === null) return unknownResult('bad-answer', `the ${id} reviewer could not read the answer`)
-  const reviewed = { round: data.round, patch: data.patch, head: data.head, pr: data.pr, reviewer: id, answer: rec.answerFile }
+  const reviewed = { round: data.round, patch: data.patch, head: data.head, pr: data.pr, reviewer: id, answer: rec.answerFile, ...(UI_CAPTURE_KINDS.includes(data.uiCapture as UiCaptureKind) ? { uiCapture: data.uiCapture } : {}) }
   const summary = result.summary.replace(/\s+/g, ' ').trim()
   return {
     event: result.verdict === 'approve' ? 'ok' : 'not-ok',
@@ -136,7 +137,7 @@ const review: StepModule = {
     return {
       prompt: prompt(spec.input, { repo: ctx.rt.repo, branch: action.branch, slot: action.slot, scratch: scratchOf(ctx.rt.loopDir, action.issue, action.life, action.seq), place }),
       model: spec.model,
-      data: { round: input.round, patch: input.patch, head: input.head, pr: input.pr, reviewer: reviewer.id },
+      data: { round: input.round, patch: input.patch, head: input.head, pr: input.pr, reviewer: reviewer.id, uiCapture: uiCaptureKind(input.uiCapture) },
     }
   },
   result: async (ctx, rec, answer) => reviewResult(ctx, rec, answer),

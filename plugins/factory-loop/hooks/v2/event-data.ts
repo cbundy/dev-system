@@ -19,6 +19,8 @@ export type ReviewedEvent = {
   infos: number
   reviewer: string
   answer: string
+  // the UI capture policy the review ran under; absent for a review recorded before it existed
+  uiCapture?: 'command' | 'none' | 'unset'
 }
 
 export const INTERVENTION_WHO = ['person', 'loop', 'judge'] as const
