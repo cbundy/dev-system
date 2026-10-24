@@ -66,7 +66,7 @@ function sqlBlocks(md) {
 // Drops comments and string literals, so a word in either is never read as SQL.
 const strip = (sql) => sql.replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/'(?:[^']|'')*'/g, "''");
 
-const READABLE = new Set(["event_log", "workers_status", "worker_samples"]);
+const READABLE = new Set(["event_log", "workers_status", "worker_samples", "issue_state"]);
 const BANNED = [
   [/\bnomistakes\b/i, "reads the nomistakes mirror"],
   [/\bnote\b/i, "reads the old note column"],
@@ -123,6 +123,7 @@ const RUN_ONLY = [
   "Settings #0", "Settings #1",
   "Spend on an API key #0", "Spend on an API key #1", "Spend on an API key #2", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Tokens per merged issue #3", "Observe time per pass #0", "Pass time #0",
   "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Main-checkout tripwire notices #0",
+  "Stuck issues #0",
   "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",
   "Queue snapshots #0", "Queue snapshots #1", "Queue snapshots #2",
   "Intake stamp #0", "Intake stamp #1", "Intake stamp #2", "Intake stamp #3", "Intake stamp #4",
