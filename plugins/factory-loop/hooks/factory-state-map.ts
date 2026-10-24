@@ -10,6 +10,9 @@ const STATES: Readonly<Record<IssueState, true>> = { queued: true, designing: tr
 // The states of live work: a claim that holds, or waits on, the factory (queued and closed are not).
 export const LIVE_STATES: readonly IssueState[] = ['designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting']
 
+// The states that hold a pool slot: the shadow's pool size and the replay's both count these (designing and waiting hold none).
+export const BUSY_STATES: readonly IssueState[] = ['building', 'reviewing', 'fixing', 'parked', 'merge-queue']
+
 // The fallback for a row with no valid `state` (an image older than the tool switch): its old stage word.
 export const STAGE_STATE: Readonly<Record<string, IssueState>> = {
   queued: 'queued',

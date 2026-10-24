@@ -30,7 +30,7 @@ import type { Factory } from './parse'
 import { spendEventData, tallyStep, unavailableSpend } from './spend'
 import type { ApiKeySettings, Tally } from './spend'
 import { listedLive } from './foundation'
-import { LIVE_STATES } from './factory-state-map'
+import { BUSY_STATES, LIVE_STATES } from './factory-state-map'
 import { TRACKER_DEPTH, buildState } from './state'
 import type { GithubIssue } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, ReleaseInfo, Source, SourceName, State, Usage } from './types'
@@ -432,7 +432,7 @@ export async function observe(
   let pool: Pool | null = null
   let poolJson: string | null = null
   if (rt.runSource === 'events') {
-    const busy = mine.filter(i => ['building', 'reviewing', 'fixing', 'parked', 'merge-queue'].includes(i.state)).length
+    const busy = mine.filter(i => BUSY_STATES.includes(i.state)).length
     pool = { free: Math.max(0, rt.poolSize - busy), total: rt.poolSize, slots: [] }
     mark('pool', true, now)
   } else {

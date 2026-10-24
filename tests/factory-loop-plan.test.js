@@ -130,6 +130,11 @@ test("foundation.ts imports and runs under Node, for the replay harness", async 
   assert.equal(mod.LIVE, undefined, "the live set is factory-state-map.ts's LIVE_STATES");
   const map = await import(path.join(HOOKS, "factory-state-map.ts"));
   assert.ok(Array.isArray(map.LIVE_STATES));
+  assert.deepEqual([...map.BUSY_STATES], ["building", "reviewing", "fixing", "parked", "merge-queue"], "the pool's busy set");
+  for (const s of map.BUSY_STATES) assert.ok(map.LIVE_STATES.includes(s), s);
+  const read = (f) => fs.readFileSync(f, "utf8");
+  assert.match(read(path.join(HOOKS, "observe.ts")), /BUSY_STATES\.includes/, "observe sizes the pool from BUSY_STATES");
+  assert.match(read(path.join(__dirname, "..", "scripts", "factory-loop-replay.js")), /busyStates\.includes/, "the replay sizes the pool from BUSY_STATES");
 });
 
 test("the v2 planner imports hooks/v2/ and foundation.ts alone, and every module it reaches reads no clock and calls nothing outside itself", () => {
