@@ -25,7 +25,7 @@ import {
   parseTransition,
   tokensOf,
 } from '../hooks/v2/events'
-import { prSizeOf } from '../hooks/v2/argv'
+import { prMergedAtOf, prSizeOf } from '../hooks/v2/argv'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
 import type { PrSize } from '../hooks/v2/event-data'
 import { endedOf } from '../hooks/v2/lives'
@@ -494,17 +494,28 @@ describe('eventArgv: the native call of every event', () => {
 
   test('a merge: by the factory when the loop merged it, by hand otherwise; recovered when logged afterwards', () => {
     const merged = (note: string) => data(eventArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr: 9, head: 'abc1234', note }))
-    expect(merged('merged by the factory loop')).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'factory', recovered: true, files: null, file_lines: null, additions: null, deletions: null })
+    expect(merged('merged by the factory loop')).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'factory', recovered: true, files: null, file_lines: null, additions: null, deletions: null, merged_at: null, title: null })
     expect(merged('merged by hand')).toMatchObject({ by: 'hand', recovered: true })
     expect(merged('')).toMatchObject({ by: 'factory', recovered: false })
     // the size the executor read rides along; without one, a failed read or no pull request it is null
     const sized = (pr: number | null, size?: PrSize | null) => data(eventArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr, head: 'abc1234', note: 'merged by hand', ...(size === undefined ? {} : { size }) }))
     const fileLines = [{ path: 'a.js', additions: 8, deletions: 1 }, { path: 'b/c.sh', additions: 4, deletions: 2 }]
     const size = { files: ['a.js', 'b/c.sh'], fileLines, additions: 12, deletions: 3 }
-    expect(sized(9, size)).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'hand', recovered: true, files: ['a.js', 'b/c.sh'], file_lines: fileLines, additions: 12, deletions: 3 })
+    expect(sized(9, size)).toEqual({ pr: 9, branch: 'issue-5', head: 'abc1234', by: 'hand', recovered: true, files: ['a.js', 'b/c.sh'], file_lines: fileLines, additions: 12, deletions: 3, merged_at: null, title: null })
     expect(sized(9, null)).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
     expect(sized(9, { files: null, fileLines: null, additions: null, deletions: null })).toMatchObject({ files: null, file_lines: null, additions: null, deletions: null })
     expect(sized(null, size)).toMatchObject({ pr: null, files: null, file_lines: null, additions: null, deletions: null })
+    // merged_at is the time the executor read, as given; null when unread or with no pull request; title is always null
+    const at = (pr: number | null, mergedAt?: string | null) => data(eventArgv({ state: 'merged', issue: 5, branch: 'issue-5', pr, head: 'abc1234', note: 'merged by hand', ...(mergedAt === undefined ? {} : { mergedAt }) }))
+    expect(at(9, '2026-10-22T21:22:01Z')).toMatchObject({ merged_at: '2026-10-22T21:22:01Z', title: null })
+    expect(at(9, null)).toMatchObject({ merged_at: null, title: null })
+    expect(at(9)).toMatchObject({ merged_at: null, title: null })
+    expect(at(null, '2026-10-22T21:22:01Z')).toMatchObject({ merged_at: null, title: null })
+    expect(prMergedAtOf('{"mergedAt":"2026-10-22T21:22:01Z"}')).toBe('2026-10-22T21:22:01Z')
+    expect(prMergedAtOf('{"mergedAt":""}')).toBeNull()
+    expect(prMergedAtOf('{"mergedAt":5}')).toBeNull()
+    expect(prMergedAtOf('{}')).toBeNull()
+    expect(prMergedAtOf('not json')).toBeNull()
   })
 
   test('an abandoned: a drop, a split with its children, a triage drop, and a release by its outcome', () => {

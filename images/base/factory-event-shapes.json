@@ -1375,6 +1375,13 @@
             "string"
           ]
         },
+        "merged_at": {
+          "format": "date-time",
+          "type": [
+            "null",
+            "string"
+          ]
+        },
         "pr": {
           "minimum": 1,
           "type": [
@@ -1384,6 +1391,13 @@
         },
         "recovered": {
           "type": "boolean"
+        },
+        "title": {
+          "maxLength": 256,
+          "type": [
+            "null",
+            "string"
+          ]
         }
       },
       "required": [
