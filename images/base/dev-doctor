@@ -412,7 +412,9 @@ unset fdb_role fdb_rc fdb_out fdb_msg fdb_fix
 # Evidence storage (cbundy/dev-system#914): the workspace repo's container and SAS pair, checked
 # by callum-flow-evidence-upload --check in the checkout. Not configured is a WARN; a setup that
 # is wrong (an account SAS, a wrong scope, a missing file) is a FAIL with the tool's message.
-if command -v callum-flow-evidence-upload >/dev/null 2>&1 \
+if [ -f "$workspace/.callum-dev/evidence-off" ]; then
+  info "evidence collection is off for this repo (.callum-dev/evidence-off)"
+elif command -v callum-flow-evidence-upload >/dev/null 2>&1 \
   && git -C "$workspace" remote get-url origin >/dev/null 2>&1; then
   evs_rc=0
   evs_out=$(cd "$workspace" && callum-flow-evidence-upload --check 2>&1) || evs_rc=$?
@@ -424,6 +426,40 @@ if command -v callum-flow-evidence-upload >/dev/null 2>&1 \
     *) fail "evidence storage: $evs_msg" "see docs/evidence-storage.md" ;;
   esac
   unset evs_rc evs_out evs_msg
+  # UI capture policy (same rules and wording as `callum-dev check`): a repo that runs the
+  # factory loop and needs UI evidence sets uiCapture in .claude/factory-loop.json.
+  uic_file="$workspace/.claude/factory-loop.json"
+  if [ -f "$uic_file" ]; then
+    uic_claude=$(tr '\n' ' ' <"$workspace/CLAUDE.md" 2>/dev/null |
+      sed -n 's/.*e2e visual verification tooling (\([^)]*\)).*/\1/p' |
+      sed 's/^ *//; s/ *$//' | tr '[:upper:]' '[:lower:]')
+    if [ "$uic_claude" = "n/a - no ui" ]; then
+      info "UI capture: not required (CLAUDE.md says n/a - no UI)"
+    else
+      uic_fix="set \"uiCapture\" in .claude/factory-loop.json to the repo's capture command, or to \"none\" when the repo has no capture tooling; or, to turn evidence collection off completely, create .callum-dev/evidence-off"
+      if ! jq -e . "$uic_file" >/dev/null 2>&1; then
+        fail "UI capture: .claude/factory-loop.json is not valid JSON" "$uic_fix"
+      else
+        uic_type=$(jq -r '.uiCapture | type' "$uic_file")
+        uic_val=$(jq -r '.uiCapture | strings' "$uic_file")
+        uic_trim=$(printf '%s' "$uic_val" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        if [ "$uic_type" = "null" ]; then
+          fail "UI capture: \"uiCapture\" is not set in .claude/factory-loop.json" "$uic_fix"
+        elif [ "$uic_type" != "string" ] || [ -z "$uic_trim" ]; then
+          fail "UI capture: \"uiCapture\" in .claude/factory-loop.json is not a non-empty string" "$uic_fix"
+        else
+          uic_npm=$(printf '%s' "$uic_trim" | sed -n 's/^npm run \([^[:space:]]\{1,\}\).*/\1/p')
+          if [ -n "$uic_npm" ] &&
+            ! jq -e --arg n "$uic_npm" '.scripts[$n] | strings' "$workspace/package.json" >/dev/null 2>&1; then
+            fail "UI capture: \"uiCapture\" runs npm script \"$uic_npm\", which package.json does not define" "$uic_fix"
+          else
+            ok "UI capture: $uic_trim"
+          fi
+        fi
+      fi
+    fi
+  fi
+  unset uic_file uic_claude uic_fix uic_type uic_val uic_trim uic_npm
 else
   info "evidence storage: no workspace checkout with an origin remote, not checked"
 fi

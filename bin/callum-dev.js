@@ -8,7 +8,10 @@
 //           surfacing conflicts instead of overwriting repo-owned edits;
 //           `--devcontainer <kind>` also switches the devcontainer template
 //   check   fail when the applied template version lags the installed package
-//           (suitable as a CI drift gate)
+//           (suitable as a CI drift gate); then, for a repo that runs the factory loop
+//           and needs UI evidence, fail unless `uiCapture` in .claude/factory-loop.json
+//           names a capture command (or "none"). `.callum-dev/evidence-off` turns the
+//           evidence check off for the repo
 //
 // Dependency-free on purpose: this file runs via npx straight out of a git
 // install, so it can rely only on Node built-ins plus a git binary.
@@ -30,6 +33,9 @@ const TEMPLATE_ROOT =
 
 const STAMP_FILE = ".callum-dev.json";
 const BASELINE_DIR = path.join(".callum-dev", "baseline");
+// Committed, repo-owned marker (empty or a one-line reason): evidence collection is off.
+// `update` only removes baseline files, so it survives.
+const EVIDENCE_OFF_FILE = path.join(".callum-dev", "evidence-off");
 
 // How `update` treats each file (templates/README.md documents the split per file):
 //   merge         3-way merge; repo-owned edits survive, synced changes come forward
@@ -554,6 +560,64 @@ function check() {
     process.exit(1);
   }
   console.log(`Templates in sync at version ${PKG_VERSION}.`);
+  checkUiCapture();
+}
+
+// UI evidence counts as required unless CLAUDE.md's visual verification sentence says
+// `n/a - no UI`. A missing file, a missing sentence or the placeholder all count as required.
+function uiEvidenceRequired() {
+  let text;
+  try {
+    text = fs.readFileSync("CLAUDE.md", "utf-8");
+  } catch {
+    return true;
+  }
+  const m = /e2e visual verification tooling \(([^)]*)\)/.exec(text);
+  return !(m && m[1].trim().toLowerCase() === "n/a - no UI".toLowerCase());
+}
+
+function checkUiCapture() {
+  if (fs.existsSync(EVIDENCE_OFF_FILE)) {
+    console.log(
+      `UI evidence check skipped: ${EVIDENCE_OFF_FILE} (evidence collection is off for this repo).`,
+    );
+    return;
+  }
+  const loopFile = path.join(".claude", "factory-loop.json");
+  if (!fs.existsSync(loopFile)) return;
+  if (!uiEvidenceRequired()) {
+    console.log("UI capture: not required (CLAUDE.md says n/a - no UI).");
+    return;
+  }
+  const fix = `set "uiCapture" in ${loopFile} to the repo's capture command, or to "none" when the repo has no capture tooling; or, to turn evidence collection off completely, create ${EVIDENCE_OFF_FILE}.`;
+  const fail = (why) => {
+    console.error(`UI capture check failed: ${why} Fix: ${fix}`);
+    process.exit(1);
+  };
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(loopFile, "utf-8"));
+  } catch (err) {
+    return fail(`${loopFile} is not valid JSON (${err.message}).`);
+  }
+  const ui = config && typeof config === "object" ? config.uiCapture : undefined;
+  if (ui === undefined || ui === null) return fail(`"uiCapture" is not set in ${loopFile}.`);
+  if (typeof ui !== "string" || ui.trim() === "") {
+    return fail(`"uiCapture" in ${loopFile} is not a non-empty string.`);
+  }
+  const npm = /^npm run (\S+)/.exec(ui.trim());
+  if (npm) {
+    let scripts = {};
+    try {
+      scripts = JSON.parse(fs.readFileSync("package.json", "utf-8")).scripts || {};
+    } catch {
+      // a missing or unreadable package.json has no scripts
+    }
+    if (typeof scripts[npm[1]] !== "string") {
+      return fail(`"uiCapture" runs npm script "${npm[1]}", which package.json does not define.`);
+    }
+  }
+  console.log(`UI capture: ${ui.trim()}`);
 }
 
 function usage() {
@@ -568,7 +632,11 @@ Commands:
            git merge-file). Repo-owned edits survive; conflicts are left
            as markers and reported with a non-zero exit.
   check    Exit non-zero when the applied template version lags the
-           installed package (use in CI to catch drift).
+           installed package (use in CI to catch drift). For a repo with
+           .claude/factory-loop.json that needs UI evidence (CLAUDE.md does not
+           say "n/a - no UI"), it also fails when "uiCapture" there is not set to
+           a capture command or "none". Create .callum-dev/evidence-off to turn
+           the evidence check off for the repo.
 
 Options:
   --devcontainer <kind>  The devcontainer template (init: skips the prompt;

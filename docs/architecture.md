@@ -223,6 +223,7 @@ steps.
 | `treehouse.toml` | init only | Fully repo-owned |
 | `.claude/factory-loop.json` | init only | Fully repo-owned: `gateCommands`, the factory loop's stop gate (lint, then test) |
 | `.github/workflows/ci.yml` | init only | Fully repo-owned: the CI workflow, running the same lint and test commands |
+| `.callum-dev/evidence-off` | repo-owned, optional | Marker (empty or a one-line reason): turns the UI evidence checks of `callum-dev check` and `dev-doctor` off for the repo; `update` never removes it |
 | `.callum-dev.json` | rewritten | Stamp: applied template version, devcontainer kind |
 | `.callum-dev/baseline/` | rewritten | Pristine copy of each template: the base of the 3-way merge |
 | `package.json` devDependency | - | `@callum/dev-system` from `github:cbundy/dev-system#semver:0.x` |

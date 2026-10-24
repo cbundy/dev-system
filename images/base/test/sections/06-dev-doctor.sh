@@ -29,6 +29,25 @@ check "dev-doctor WARNs, naming docs/evidence-storage.md, when evidence storage 
   echo "$out" | grep -q "WARN evidence storage is not configured" &&
   echo "$out" | grep -q "fix: see docs/evidence-storage.md" &&
   ! echo "$out" | grep -q "FAIL evidence storage"' --entrypoint ""
+check "dev-doctor FAILs an unset uiCapture, naming uiCapture and the marker, and OKs none" in_image '
+  d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
+  mkdir -p "$d/.claude"; echo "{}" > "$d/.claude/factory-loop.json"
+  run_dd() { (cd "$d" && env -u ARTIFACT_SAS DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); }
+  out=$(run_dd); echo "$out"
+  echo "$out" | grep -q "FAIL UI capture: \"uiCapture\" is not set" &&
+  echo "$out" | grep -q "fix: set \"uiCapture\".*evidence-off" || exit 1
+  echo "{\"uiCapture\":\"none\"}" > "$d/.claude/factory-loop.json"
+  run_dd | grep -q "OK   UI capture: none"' --entrypoint ""
+check "dev-doctor prints one INFO line, and no evidence storage line, with the evidence-off marker" in_image '
+  d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
+  mkdir -p "$d/.claude" "$d/.callum-dev"; echo "{}" > "$d/.claude/factory-loop.json"; : > "$d/.callum-dev/evidence-off"
+  out=$(cd "$d" && env DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "INFO evidence collection is off for this repo (.callum-dev/evidence-off)" &&
+  ! echo "$out" | grep -q "evidence storage" && ! echo "$out" | grep -q "UI capture"' --entrypoint ""
+check "dev-doctor prints no UI capture line when the repo has no factory-loop.json" in_image '
+  d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
+  out=$(cd "$d" && env DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); echo "$out"
+  ! echo "$out" | grep -q "UI capture"' --entrypoint ""
 check "dev-doctor warns, without failing, for each /persist dir with no volume behind it" bash -c "
   vol=\$(docker volume create --label '$RUN_ID')
   out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
