@@ -131,6 +131,9 @@ export type IssueRecord = {
   // entries to fixing in this life for a round caused by other merges (a conflict, or red CI in
   // the merge queue), at most conflictFixCap
   conflicts: number
+  // fixing: the environment-blocker reasons of the previous fix round in this life (one clipped line,
+  // at most 1000 characters), null when that round had none; a second round with one parks (T19, T20)
+  envBlocked: string | null
   // entries to reviewing in this life
   round: number
   // parked: the question for the owner

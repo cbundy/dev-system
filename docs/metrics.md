@@ -689,6 +689,19 @@ WHERE type = 'finding_handled'
 GROUP BY repo;
 ```
 
+### Findings declined as environment blockers
+
+A fixer declines a finding it cannot do because it lacks a tool, access, a secret or a process with
+`blocker: "environment"`; its `finding_handled` event carries `blocker` (no `event_log` column lifts
+it, so the query reads `factory.event_store`). This counts them per repo and week.
+
+```sql
+SELECT repo, date_trunc('week', ts) AS week, count(*) AS env_blocked_findings
+FROM factory.event_store
+WHERE type = 'finding_handled' AND data->>'blocker' = 'environment'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
 ### Reviews by UI capture policy
 
 Each `reviewed` event records the repo's `uiCapture` policy the review ran under in `ui_capture`
@@ -713,6 +726,21 @@ T17, via `unchanged`). This counts them per repo and week.
 SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS unchanged_fixes
 FROM factory.event_log
 WHERE type = 'transition' AND table_row = 'T17'
+GROUP BY 1, 2 ORDER BY 2, 1;
+```
+
+### Parks on a repeated environment blocker
+
+A second fix round in a row with a finding the fixer declined as an environment blocker parks the
+issue at once (transition rows T19 on ok, T20 on not-ok, via `env-blocked`; the `question` holds both
+rounds' reasons, `env_blocked` the previous round's). This counts them per repo and week, with the
+fix rounds that life had used against the cap (`fixes`).
+
+```sql
+SELECT repo, date_trunc('week', seq_at) AS week, count(*) AS env_blocked_parks,
+  avg(fixes) AS avg_fix_rounds_used
+FROM factory.event_log
+WHERE type = 'transition' AND table_row IN ('T19', 'T20')
 GROUP BY 1, 2 ORDER BY 2, 1;
 ```
 

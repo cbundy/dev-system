@@ -97,6 +97,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     triages: g.int(3),
     fixes: g.int(4),
     conflicts: g.int(6),
+    envBlocked: maybe(g, text(g, free)),
     round: g.int(6),
     question: maybe(g, text(g, free)),
     parts: maybe(g, parts(g, free)),
@@ -184,6 +185,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
         triages: 0,
         fixes: 1,
         conflicts: 2,
+        envBlocked: null,
         round: 1,
         question: null,
         parts: null,
@@ -196,7 +198,7 @@ describe('the note format (v2 SPEC 7.1)', () => {
     }
     expect(eventNote(e)).toBe(
       'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 conflicts=2 round=1 why=none ' +
-        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
+        'approvedPatch=none prClosedAt=none lives=1 envBlocked=none wait=none via=ci-red brief=https://x/1#c question=none decision=none context=none options=none recommended=none recommendation=none notes=check%20ci,a%2Cb',
     )
   })
 })
@@ -226,6 +228,7 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
       triages: 0,
       fixes: 0,
       conflicts: 0,
+      envBlocked: null,
       round: 0,
       question: null,
       parts: null,
@@ -245,6 +248,16 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
     const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note: note.replace(' conflicts=3', '') }
     expect(parseTransition(row)?.record.conflicts).toBe(0)
     for (const bad of ['-1', '1.5', 'x', 'none']) expect(parseTransition({ ...row, note: `${row.note} conflicts=${bad}` })).toBeNull()
+  })
+
+  test('envBlocked=<reasons> follows conflicts=<n>; a note without the token reads null', () => {
+    const e = { ...waiting(null), record: { ...waiting(null).record, envBlocked: 'r1-1: no browser, a=b' } }
+    const note = eventNote(e)
+    expect(note).toContain(' lives=1 envBlocked=')
+    expect(roundTrip(e)).toEqual(e)
+    expect(roundTrip(waiting(null))).toEqual(waiting(null))
+    const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note: eventNote(waiting(null)).replace(' envBlocked=none', '') }
+    expect(parseTransition(row)?.record.envBlocked).toBeNull()
   })
 
   test('issue:<n>, pr:<n> and tag:<sha>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {

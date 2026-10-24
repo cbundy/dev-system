@@ -247,6 +247,7 @@ export function transitionRow(r: IssueRecord, ts: number, over: Record<string, s
     triages: r.triages,
     fixes: r.fixes,
     conflicts: r.conflicts,
+    env_blocked: r.envBlocked,
     round: r.round,
     question: r.question,
     // the parts of a structured park question; absent keys are read as null

@@ -13,7 +13,8 @@
     "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "The head after the fix step, when known.", "x-column": true },
     "finding": { "type": "string", "minLength": 1, "description": "The finding's id in the review, for example r1-2 (round 1, finding 2)." },
     "outcome": { "enum": ["fixed", "declined"], "description": "fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change.", "x-column": true },
-    "detail": { "type": "string", "description": "The fixer's one-line reason, for people; never parse it." }
+    "detail": { "type": "string", "description": "The fixer's one-line reason, for people; never parse it." },
+    "blocker": { "enum": ["environment", null], "description": "environment: the fixer declined the finding because it needs a tool, access, a secret or a process the agent is forbidden or unable to run; absent or null otherwise." }
   },
   "examples": [
     { "branch": "issue-92-tunnel-token", "pr": 143, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "finding": "r1-2", "outcome": "declined", "detail": "Info, not blocking: the secrets are hex, so quotes or backslashes cannot occur; no change made." }

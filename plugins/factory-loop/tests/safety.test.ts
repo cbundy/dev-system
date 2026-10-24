@@ -198,6 +198,7 @@ const RECORD: IssueRecord = {
   triages: 0,
   fixes: 0,
   conflicts: 0,
+  envBlocked: null,
   round: 0,
   question: null,
   parts: null,

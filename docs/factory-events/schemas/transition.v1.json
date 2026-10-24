@@ -72,6 +72,7 @@
     "notes": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 1000 }, "description": "Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them.", "x-column": true },
     "pr_closed_at": { "type": ["string", "null"], "format": "date-time", "description": "Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none." },
     "conflicts": { "type": ["integer", "null"], "minimum": 0, "description": "Loop state, for the record rebuild: the entries to fixing in this life caused by a conflict or red CI after other merges. Absent (or null) before the loop counted them; absent is read as 0." },
+    "env_blocked": { "type": ["string", "null"], "maxLength": 1000, "description": "Loop state, for the record rebuild: the environment-blocker reasons of the previous fix round in this life (one clipped line); null when that round had none. A second fix round with one parks the issue. Absent is read as null." },
     "lives": { "type": "integer", "minimum": 1, "description": "This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum.", "x-column": true }
   },
   "examples": [

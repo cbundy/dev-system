@@ -361,6 +361,9 @@ describe('the design-v2 contract (8.7)', () => {
   })
 })
 
+// the checked outcome gives every finding its blocker, null when the answer had none
+const unblocked = <F extends object>(findings: F[]) => findings.map(f => ({ blocker: null, ...f }))
+
 describe('the build and fix contracts (8.1, 9.7)', () => {
   test('built names its head, a one-line title, a summary and its evidence; cannot names only its reason', () => {
     const built = { result: 'built', head: SHA('A'), title: 'Add the thing', summary: 'It adds the thing.', evidence: 'npm test: 3 pass' }
@@ -376,7 +379,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 
   test('fix: each finding fixed or declined with a reason; a declined fix pushes nothing and declines all; the job names the findings each needing a disposition', () => {
     const fixed = { result: 'fixed', head: SHA('b'), summary: 'fixed the parser', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done' }, { id: 'r2-2', disposition: 'declined', reason: 'wrong' }] }
-    expect(check('fix', fixed, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...fixed, evidence: null } })
+    expect(check('fix', fixed, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...fixed, evidence: null, findings: unblocked(fixed.findings) } })
     expect(problems('fix', fixed, { findings: ['r2-1', 'r2-3'] })).toEqual(['finding r2-3 has no disposition: fix it, or decline it with a reason'])
     expect(problems('fix', { result: 'declined', summary: 's', findings: [] })).toEqual(['a declined fix names each finding it declines, with its reason'])
     expect(problems('fix', { result: 'declined', summary: 's', head: SHA('c'), findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'x' }] })).toEqual([
@@ -393,7 +396,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 
   test('fix: unchanged is nothing pushed with a finding fixed outside the branch', () => {
     const un = { result: 'unchanged', summary: 's', evidence: 'the PR text', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'edited the description' }, { id: 'r2-2', disposition: 'declined', reason: 'wrong' }] }
-    expect(check('fix', un, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...un, head: null } })
+    expect(check('fix', un, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...un, head: null, findings: unblocked(un.findings) } })
     expect(problems('fix', { ...un, head: SHA('c') })).toEqual(['head must be absent or null here'])
     expect(problems('fix', { ...un, findings: [] })).toEqual(['an unchanged fix names each finding, with its reason'])
     expect(problems('fix', { ...un, findings: [{ id: 'r2-1', disposition: 'declined', reason: 'x' }] })).toEqual(['findings: every finding is declined, so the result is declined'])
@@ -403,12 +406,29 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
     expect(problems('fix', un, { findings: ['r2-1', 'r2-3'] })).toEqual(['finding r2-3 has no disposition: fix it, or decline it with a reason'])
   })
 
+  test('fix: a declined finding may name an environment blocker, in a fixed, declined or unchanged answer; a fixed finding or another value is refused', () => {
+    const blocked = { id: 'r2-2', disposition: 'declined', reason: 'no browser to run the capture', blocker: 'environment' }
+    const fixed = { result: 'fixed', head: SHA('b'), summary: 's', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done' }, blocked] }
+    const declined = { result: 'declined', summary: 's', findings: [blocked] }
+    const un = { result: 'unchanged', summary: 's', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'edited the description' }, blocked] }
+    for (const answer of [fixed, declined, un]) {
+      const out = check('fix', answer)
+      expect(out.ok).toBe(true)
+      expect((out.outcome as { findings: { id: string; blocker: string | null }[] }).findings.map(f => [f.id, f.blocker])).toEqual(answer.findings.map(f => [f.id, f.id === 'r2-2' ? 'environment' : null]))
+    }
+    // null is the same as absent
+    expect(check('fix', { ...declined, findings: [{ ...blocked, blocker: null }] }).ok).toBe(true)
+    expect(problems('fix', { ...fixed, findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done', blocker: 'environment' }] })).toEqual(['findings[0].blocker is only for a declined finding, and r2-1 is fixed'])
+    expect(problems('fix', { ...declined, findings: [{ ...blocked, blocker: 'network' }] })).toEqual(['findings[0].blocker "network" is not "environment"'])
+    expect(problems('fix', { ...declined, findings: [{ ...blocked, blocker: true }] })).toHaveLength(1)
+  })
+
   test('fix: the answer may give the PR\'s evidence, as a build does, fixed or declined', () => {
     const shot = 'Screenshot: ![page](https://github.com/o/r/blob/abc1234/docs/shot.png?raw=true)'
     const fixed = { result: 'fixed', head: SHA('b'), summary: 'added the screenshot', evidence: shot, findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done' }] }
-    expect(check('fix', fixed)).toEqual({ ok: true, outcome: fixed })
+    expect(check('fix', fixed)).toEqual({ ok: true, outcome: { ...fixed, findings: unblocked(fixed.findings) } })
     const declined = { result: 'declined', summary: 's', evidence: shot, findings: [{ id: 'r2-1', disposition: 'declined', reason: 'it was there' }] }
-    expect(check('fix', declined)).toEqual({ ok: true, outcome: { ...declined, head: null } })
+    expect(check('fix', declined)).toEqual({ ok: true, outcome: { ...declined, head: null, findings: unblocked(declined.findings) } })
     expect(problems('fix', { ...fixed, evidence: 'e'.repeat(4001) })).toEqual(['evidence is 4001 characters; at most 4000'])
     expect(problems('fix', { ...fixed, evidence: 7 })).toEqual([expect.stringMatching(/^evidence /)])
   })
@@ -802,6 +822,24 @@ describe('the fix step (8.6, 9.7, 10.8)', () => {
     h.answer('fix', 'fix', declined)
     const exec = await h.early(e)
     expect(exec === null ? null : resultOf(exec)).toMatchObject({ event: 'not-ok', reason: 'declined', data: { notes: ['the fixer declined r2-1: the test covers it'] } })
+  })
+
+  test('an environment-blocked decline marks its note and gives `blocked` in the data; an unblocked one gives an empty list', async () => {
+    const blocked = { result: 'declined', summary: 'no browser', findings: [{ id: 'r2-1', disposition: 'declined', reason: 'no browser to run the capture', blocker: 'environment' }] }
+    const h = harness(r, origin('issue-310', SHA('a')), [prepared(SHA('a'))])
+    const { entry: e } = await h.spawn('fix')
+    h.answer('fix', 'fix', blocked)
+    const exec = await h.early(e)
+    expect(exec === null ? null : resultOf(exec)).toMatchObject({
+      event: 'not-ok',
+      reason: 'declined',
+      data: { notes: ['the fixer declined r2-1 (environment blocker): no browser to run the capture'], blocked: ['r2-1: no browser to run the capture'] },
+    })
+    const plain = harness(r, origin('issue-310', SHA('a')), [prepared(SHA('a'))])
+    const p = await plain.spawn('fix')
+    plain.answer('fix', 'fix', declined)
+    const early = await plain.early(p.entry)
+    expect(early === null ? null : resultOf(early)).toMatchObject({ data: { blocked: [] } })
   })
 
   test('a declined answer is never ok: origin moved, no prepared head, or a turn that ended in error, it is not-ok with its reasons', async () => {
