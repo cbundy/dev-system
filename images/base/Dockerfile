@@ -261,6 +261,7 @@ COPY --chmod=0755 \
   images/base/factory-db-migrate \
   images/base/systemctl \
   images/base/callum-flow-evidence-upload \
+  images/base/callum-flow-capture \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
 # The migrations factory-db-bootstrap applies (cbundy/dev-system#646); it finds them here.
