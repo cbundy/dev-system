@@ -1,6 +1,6 @@
-// The fixing-state rows of the transition table (SPEC 4.3): T11, T12 and T17, the fix rounds that
+// The fixing-state rows of the transition table (v2 SPEC 4.3): T11, T12 and T17, the fix rounds that
 // go back to reviewing, and T19 and T20, which park the issue at once when a second fix round in
-// a row is blocked by the environment (SPEC 8.6). Split from table.ts to keep it under the size
+// a row is blocked by the environment (v2 SPEC 8.6). Split from table.ts to keep it under the size
 // guard; table.ts spreads fixRows in place, giving the helpers the rows share with its other rows.
 //
 // Pure: the rows read only the record and the event.
