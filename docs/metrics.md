@@ -87,8 +87,9 @@ select plugin_version, count(*) from factory.event_log
 where type = 'merged' and base_image = '2.26.0' group by plugin_version;
 ```
 
-Subscribe to new events with `LISTEN factory_events`: each insert notifies a JSON payload with
-`event_id`, `device`, `repo`, `issue` and `type`.
+Subscribe to new events with `LISTEN factory_events`: each insert notifies `{"event_id": ...}` only, and a reader
+looks the row up in `factory.event_log` by `event_id`. `LISTEN factory_workers` gets an empty payload on each
+heartbeat: re-read `factory.workers_status`.
 
 ## Data coverage
 
