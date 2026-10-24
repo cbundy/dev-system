@@ -127,14 +127,16 @@ test("the observe half's pure modules and the config loader read no clock and ca
 test("foundation.ts imports and runs under Node, for the replay harness", async () => {
   const mod = await import(path.join(HOOKS, "foundation.ts"));
   for (const name of ["tierOf", "listedLive", "releaseDue", "turnEnded", "issueFromBranch"]) assert.equal(typeof mod[name], "function", name);
-  assert.ok(Array.isArray(mod.LIVE));
+  assert.equal(mod.LIVE, undefined, "the live set is factory-state-map.ts's LIVE_STATES");
+  const map = await import(path.join(HOOKS, "factory-state-map.ts"));
+  assert.ok(Array.isArray(map.LIVE_STATES));
 });
 
 test("the v2 planner imports hooks/v2/ and foundation.ts alone, and every module it reaches reads no clock and calls nothing outside itself", () => {
   const reached = closure("v2/plan.ts");
   assert.ok(reached.includes("foundation.ts") && reached.includes("v2/rules-state.ts") && reached.includes("v2/reconcile.ts"), reached.join(", "));
   for (const f of reached) {
-    const allowed = f.startsWith("v2/") || f === "foundation.ts";
+    const allowed = f.startsWith("v2/") || f === "foundation.ts" || f === "factory-state-map.ts";
     assert.ok(allowed, `v2/plan.ts reaches ${f}`);
     assert.ok(!f.endsWith(".mjs"), `v2/plan.ts reaches ${f}, an answer contract`);
     const src = code(f);

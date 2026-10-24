@@ -3,7 +3,9 @@
 // plugins/factory-hud/hooks/format.ts carries a small copy of the same rule (a separate mod with no
 // factory-loop import): change both together.
 import type { IssueState } from './v2/types'
-import { ISSUE_STATES } from './v2/types'
+
+// Every v2 state, as a record so the compiler keeps it complete (types only are imported here, so plain Node can load this).
+const STATES: Readonly<Record<IssueState, true>> = { queued: true, designing: true, building: true, reviewing: true, fixing: true, 'merge-queue': true, parked: true, waiting: true, closed: true }
 
 // The states of live work: a claim that holds, or waits on, the factory (queued and closed are not).
 export const LIVE_STATES: readonly IssueState[] = ['designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting']
@@ -32,7 +34,7 @@ export function stateOfRow(row: Record<string, unknown>): { state: IssueState; m
   let state: IssueState | null = null
   if (row.ended === true) state = 'closed'
   else if (typeof row.detail === 'string' && row.detail.startsWith('claim lapsed at')) state = 'queued'
-  else if (typeof row.state === 'string' && (ISSUE_STATES as readonly string[]).includes(row.state)) state = row.state as IssueState
+  else if (typeof row.state === 'string' && Object.hasOwn(STATES, row.state)) state = row.state as IssueState
   else if (stage !== null && Object.hasOwn(STAGE_STATE, stage)) state = STAGE_STATE[stage]
   if (state === null) return null
   const merged = state === 'closed' && (why !== null ? MERGED_WHYS.includes(why) : stage === 'merged')

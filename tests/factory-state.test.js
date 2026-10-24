@@ -152,10 +152,10 @@ test("every fixture's report equals its reviewed expected JSON, and each issue e
   }
 });
 
-test("every issue has what factory-loop's parse.ts and factory-reconcile read", opts, (t) => {
-  const parse = fs.readFileSync(path.join(ROOT, "plugins", "factory-loop", "hooks", "parse.ts"), "utf8");
-  const stages = [...(/STAGES[^=]*=\s*\[([^\]]*)\]/.exec(parse) || [, ""])[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map((m) => m[1] || m[2]);
-  assert.ok(stages.length >= 9, "parse.ts STAGES");
+test("every issue has what factory-loop's parse.ts and factory-reconcile read", opts, async (t) => {
+  const { stateOfRow, STAGE_STATE } = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "factory-state-map.ts"));
+  const stages = Object.keys(STAGE_STATE);
+  assert.ok(stages.length >= 9, "factory-state-map.ts STAGE_STATE");
   for (const n of names) {
     const db = newDb(t);
     const { report } = runFixture(db, n);
@@ -163,6 +163,7 @@ test("every issue has what factory-loop's parse.ts and factory-reconcile read", 
       for (const i of repo.issues.concat(repo.recent)) {
         const at = `${n} #${i.issue}`;
         assert.ok(stages.includes(i.stage), `${at}: stage ${i.stage}`);
+        assert.ok(stateOfRow({ ...i, ended: repo.recent.includes(i) }), `${at}: factory-loop reads a state`);
         if (i.entered_at !== null) assert.equal(new Date(i.entered_at).toISOString(), i.entered_at, at);
         assert.ok(i.stuck === null || typeof i.stuck.rule === "string", at);
         assert.equal(i.run, null, at);
