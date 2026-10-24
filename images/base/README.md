@@ -752,6 +752,10 @@ on every failure:
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
   `FAIL` with the tool's message when the setup breaks the per-repo boundary (account SAS, wrong scope,
   a missing file). One `INFO` line when there is no checkout with an origin remote;
+- UI capture, in the workspace checkout when it has `.claude/factory-loop.json` and CLAUDE.md does not say
+  `n/a - no UI`: `OK UI capture: ...` when `uiCapture` is a command (with its npm script defined) or `none`;
+  a `FAIL` with a `fix:` hint when it is unset or wrong. A `.callum-dev/evidence-off` file in the checkout
+  turns off both this line and the evidence storage line, leaving one `INFO` line. Same rules as `callum-dev check`;
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
   counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);
@@ -2091,8 +2095,9 @@ background at most every 15 minutes, never waited for), `repo`, `started_at` (th
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
 The nullable `config` column (jsonb) holds the settings snapshot of the factory loop (see [Settings snapshot](#settings-snapshot)); neither the UPSERT nor the stats UPDATE writes it. The guarded DDL adds it to an agentsview database that lacks it (migration 0015 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
-intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
-`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
+intervals); readers use the view and never their own rule. In the agentsview database, an `AFTER INSERT OR UPDATE` trigger from the guarded DDL runs
+`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`; in the factory database the
+payload is empty since migration 0032 (see [docs/factory-db.md](../../docs/factory-db.md)). The guarded DDL goes to the agentsview database
 only, with the first beat of the process and after a failed beat of that target; the writer role cannot run DDL, so
 the factory database gets the UPSERT alone. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
 (log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) when either URL is configured, and `dev-doctor` prints
@@ -2318,6 +2323,65 @@ callum-flow-evidence-upload --check                            # validate creden
 | 1 | refused credentials, or an upload that did not return HTTP 201 (the message names the file and status) |
 | 2 | bad usage, a bad `<dest>` (empty, leading `/`, a `..` segment, whitespace), or a missing or unreadable file; nothing is uploaded |
 | 78 | no credentials for the repo; fall back to a committed capture |
+
+## callum-flow-capture
+
+`callum-flow-capture` starts a UI app, takes a desktop and a narrow full-page screenshot (and optionally a
+short video) with headless Chromium through Playwright, stops the app, and uploads the captures through
+[`callum-flow-evidence-upload`](#callum-flow-evidence-upload). It is repo-agnostic: the repo says how to
+start its app. It starts what it needs and stops it before it exits, on every exit path (success, failure,
+SIGINT, SIGTERM): the app's whole process group gets SIGTERM, then SIGKILL after a short grace, and the
+browser is closed.
+
+```sh
+callum-flow-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out DIR] [--dest pr-<N>/<slug>] <scenario>
+```
+
+- **App.** `<cmd>` runs with `sh -c` in its own process group on a free port, exported as `PORT`; `{port}` in
+  `<cmd>` is replaced by it. The tool waits up to `--timeout` seconds (default 60) for
+  `http://127.0.0.1:<port><path>` (`--path`, default `/`) to answer HTTP.
+- **Captures.** `<scenario>` matches `[a-z0-9][a-z0-9-]*`. It writes `<scenario>-desktop.png` (1440x900) and
+  `<scenario>-narrow.png` (390x844), both full-page, and with `--video` also `<scenario>.webm`. A navigation
+  status of 400 or more or an uncaught page error fails the capture.
+- **Output.** To `--out`, default `${TMPDIR:-/tmp}/callum-flow-capture/<scenario>-<timestamp>`. With `--dest`,
+  the files are uploaded and one URL per file is printed on stdout; without it the local file paths are
+  printed and nothing is uploaded. When the upload exits 78 (no evidence storage) the tool exits 78, keeps the
+  files and names the folder on stderr, so the caller can commit a copy and use a commit-pinned blob URL.
+- **Playwright** is resolved from the current directory's `node_modules` (`playwright`, then
+  `playwright-core`), then from the global npm root. The base image installs no browser.
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | the upload failed (files kept; the folder is named on stderr) |
+| 2 | bad usage |
+| 3 | the app exited or did not answer within `--timeout` |
+| 4 | a page error, or a navigation status of 400 or more |
+| 69 | Playwright or its Chromium build is not installed: see below |
+| 78 | no evidence storage for the repo (files kept; commit a copy instead) |
+
+Consumer wiring, a `package.json` script that the agents run as `npm run e2e:capture -- <scenario>`
+(add `--path` per scenario):
+
+```json
+"e2e:capture": "callum-flow-capture --start 'npm run dev -- --port {port}' --dest pr-$PR"
+```
+
+### For a UI repo: the owner's action
+
+The base image ships the capture tool only, not a browser. A UI repo installs the browser in its own
+per-repo dev image (`.devcontainer/Dockerfile`, onboarding step 3e). Add a pinned Playwright (as a
+devDependency or global) and install Chromium at that same version as root, plus ffmpeg for `--video`:
+
+```dockerfile
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g playwright@<version> \
+ && npx playwright install --with-deps chromium \
+ && apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+```
+
+Without this the tool exits 69 with a one-line reason. A repo that opts out of UI evidence (the
+`uiCapture: "none"` setting) needs none of this.
 
 ## Central session history (agentsview)
 
