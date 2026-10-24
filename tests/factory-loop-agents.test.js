@@ -1,13 +1,9 @@
 "use strict";
 
-// Every agent the factory loop spawns must reach its answer tool (#548): an agent calls nothing its
-// definition's `tools:` list leaves out, and the callum-flow adjudicator and designer list theirs.
-// The loop spawns its own copies of those two (plugins/factory-loop/agents/), which must stay the
-// callum-flow definitions word for word but for `tools:` and the one sentence ADDED names, so the released orchestrator's agents
-// and the loop's never drift apart. The v2 rule layer's agents (docs/factory-loop/v2/SPEC.md 5.2,
-// 8.3, 8.7; v2/types.ts STEP_AGENT) are the loop's own definitions: each answers with the answer
-// script and carries v2's command rule. This reads the hooks and the definitions as text, since
-// plugin tests cannot read files.
+// The agents the factory loop spawns (docs/factory-loop/v2/SPEC.md 5.2, 8.3, 8.7; v2/types.ts
+// STEP_AGENT, and the intake reader) are the loop's own definitions in plugins/factory-loop/agents/:
+// each answers with the answer script and carries v2's command rule. This reads the hooks and the
+// definitions as text, since plugin tests cannot read files.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -24,24 +20,6 @@ function block(file, name) {
   return m[1];
 }
 
-// The v1 agent definitions still in the tree: agent -> `<plugin>:<name>`. The loop no longer spawns
-// them (v2 starts the STEP_AGENT types below), but the loop's two copies stay word for word the
-// callum-flow definitions until they go with the answer tools (agent-tools.ts).
-const SUBAGENT_OF = {
-  adjudicator: "factory-loop:adjudicator",
-  designer: "factory-loop:designer",
-  implementer: "callum-flow:implementer",
-  fixer: "callum-flow:fixer",
-};
-// TOOL_OF (agent-tools.ts): agent -> the answer tool's full name, through its constant
-const TOOLS = read(`${HOOKS}/agent-tools.ts`);
-const constant = (name) => {
-  const m = TOOLS.match(new RegExp(`export const ${name} = '([^']+)'`));
-  assert.ok(m, `agent-tools.ts: no ${name}`);
-  return m[1];
-};
-const TOOL_OF = Object.fromEntries([...block("agent-tools.ts", "TOOL_OF").matchAll(/(\w+):\s*(\w+)/g)].map((m) => [m[1], constant(m[2])]));
-
 // STEP_AGENT (v2/types.ts): a v2 step -> its loop-owned agent type (docs/factory-loop/v2/SPEC.md
 // 5.2, 8.3, 8.7). These are the loop's own definitions, never callum-flow copies.
 const STEP_AGENT = Object.fromEntries([...block("v2/types.ts", "STEP_AGENT").matchAll(/(\w+):\s*'([\w-]+:[\w-]+)'/g)].map((m) => [m[1], m[2]]));
@@ -51,7 +29,6 @@ const INTAKE_AGENT = (() => {
   assert.ok(m, "v2/intake.ts: no INTAKE_AGENT");
   return m[1];
 })();
-const V1_TYPES = Object.values(SUBAGENT_OF).filter((t) => t.startsWith("factory-loop:"));
 const V2_TYPES = Object.values(STEP_AGENT);
 const ownFiles = () => fs.readdirSync(path.join(ROOT, "plugins/factory-loop/agents")).filter((f) => f.endsWith(".md"));
 const typeOf = (file) => `factory-loop:${file.slice(0, -3)}`;
@@ -69,81 +46,24 @@ function toolsOf(text) {
   return line === undefined ? null : line.slice("tools:".length).split(",").map((t) => t.trim()).filter((t) => t !== "");
 }
 
-test("the four v1 agents are all there, and each one has its answer tool", () => {
-  assert.deepEqual(Object.keys(SUBAGENT_OF).sort(), ["adjudicator", "designer", "fixer", "implementer"]);
-  assert.deepEqual(Object.keys(TOOL_OF).sort(), Object.keys(SUBAGENT_OF).sort());
-});
-
-test("every v1 agent type reaches its answer tool, through ToolSearch, or lists no tools", () => {
-  for (const [agent, type] of Object.entries(SUBAGENT_OF)) {
-    const file = definition(type);
-    assert.ok(fs.existsSync(path.join(ROOT, file)), `${agent}: ${type} has no definition at ${file}`);
-    const tools = toolsOf(read(file));
-    if (tools === null) continue;
-    assert.ok(tools.includes(TOOL_OF[agent]), `${file}: tools must list ${TOOL_OF[agent]}`);
-    assert.ok(tools.includes("ToolSearch"), `${file}: tools must list ToolSearch, since the answer tools are deferred`);
-  }
-});
-
-// The one sentence a loop copy adds to its callum-flow definition (#561): the adjudicator is
-// otherwise held to a closed list of read-only commands, and its prompt asks it to record its
-// answer with the answer script. The designer's definition forbids nothing the script does.
-const ADDED = {
-  "adjudicator.md": "\nYou may also run the `factory-answer` command your prompt names, which only records your answer.",
-};
-
-test("every file in the loop's agents folder is a v1 copy the loop spawns or a v2 step's own definition, and the v1 copies are all there", () => {
-  for (const file of ownFiles()) assert.ok(V1_TYPES.includes(typeOf(file)) || V2_TYPES.includes(typeOf(file)) || typeOf(file) === INTAKE_AGENT, `plugins/factory-loop/agents/${file} is neither a v1 copy, a v2 step's agent nor the intake reader`);
-  assert.deepEqual(ownFiles().map(typeOf).filter((t) => V1_TYPES.includes(t)).sort(), [...V1_TYPES].sort());
-  // the triage agent is built (U2), the designer, builder and fixer (U5); the reviewer comes with U6
-  for (const file of ["triage.md", "designer-v2.md", "builder.md", "fixer.md"]) {
-    assert.ok(ownFiles().includes(file), `plugins/factory-loop/agents/${file} is missing`);
-  }
-});
-
-test("the loop's own v1 agents are the callum-flow definitions word for word but for their tools, which add only ToolSearch and the answer tool, and the one sentence that allows the answer script", () => {
-  const own = ownFiles().filter((f) => V1_TYPES.includes(typeOf(f)));
-  for (const file of own) {
-    const agent = file.slice(0, -3);
-    const loop = read(`plugins/factory-loop/agents/${file}`);
-    const released = read(`plugins/callum-flow/agents/${file}`);
-    const base = toolsOf(released);
-    assert.ok(base !== null, `callum-flow ${file} lists no tools: spawn it instead of a copy`);
-    assert.deepEqual(toolsOf(loop), [...base, "ToolSearch", TOOL_OF[agent]], `${file}: tools are callum-flow's plus ToolSearch and ${TOOL_OF[agent]}`);
-    const untooled = (text) => text.replace(/^tools:.*$/m, "tools:");
-    const added = ADDED[file];
-    let copy = loop;
-    if (added !== undefined) {
-      assert.equal(loop.split(added).length, 2, `plugins/factory-loop/agents/${file} must add, once, the sentence: ${added.trim()}`);
-      assert.ok(!released.includes(added), `plugins/callum-flow/agents/${file} already has the sentence the loop's copy adds`);
-      copy = loop.replace(added, "");
-    }
-    assert.equal(untooled(copy), untooled(released), `plugins/factory-loop/agents/${file} drifted from plugins/callum-flow/agents/${file}: copy it again and keep the tools line${added === undefined ? "" : " and the added sentence"}`);
-  }
-});
-
-// COMMAND_RULE (prompts.ts): the paragraph every role prompt carries, unescaped from its string literal
-const COMMAND_RULE = (() => {
-  const m = read(`${HOOKS}/prompts.ts`).match(/export const COMMAND_RULE =\s*'((?:[^'\\]|\\.)*)'/);
-  assert.ok(m, "prompts.ts: no COMMAND_RULE");
-  return m[1].replace(/\\(.)/g, "$1");
-})();
-
-// V2_COMMAND_RULE (v2/prompts-triage.ts): v1's rule without its no-mistakes exception, which every
-// v2 agent's prompt and definition carry (v2 SPEC 10.5)
+// V2_COMMAND_RULE (v2/prompts-triage.ts): the rule every agent's prompt and definition carries (v2 SPEC 10.5)
 const V2_COMMAND_RULE = (() => {
   const m = read(`${HOOKS}/v2/prompts-triage.ts`).match(/export const COMMAND_RULE =\s*'((?:[^'\\]|\\.)*)'/);
   assert.ok(m, "v2/prompts-triage.ts: no COMMAND_RULE");
   return m[1].replace(/\\(.)/g, "$1");
 })();
 
-test("every loop agent definition carries the command rule its prompts carry, word for word: v1's for the v1 copies, v2's for the v2 definitions", () => {
-  for (const file of ownFiles()) {
-    const v2 = V2_TYPES.includes(typeOf(file)) || typeOf(file) === INTAKE_AGENT;
-    const rule = v2 ? V2_COMMAND_RULE : COMMAND_RULE;
-    assert.ok(read(`plugins/factory-loop/agents/${file}`).includes(rule), `plugins/factory-loop/agents/${file} must carry ${v2 ? "v2/prompts-triage.ts" : "prompts.ts"} COMMAND_RULE word for word`);
+test("every file in the loop's agents folder is a STEP_AGENT or the INTAKE_AGENT, and the v2 definitions are all there", () => {
+  for (const file of ownFiles()) assert.ok(V2_TYPES.includes(typeOf(file)) || typeOf(file) === INTAKE_AGENT, `plugins/factory-loop/agents/${file} is neither a v2 step's agent nor the intake reader`);
+  // the triage agent is built (U2), the designer, builder and fixer (U5); the reviewer comes with U6
+  for (const file of ["triage.md", "designer-v2.md", "builder.md", "fixer.md"]) {
+    assert.ok(ownFiles().includes(file), `plugins/factory-loop/agents/${file} is missing`);
   }
-  assert.ok(!V2_COMMAND_RULE.includes("no-mistakes") && COMMAND_RULE.startsWith(V2_COMMAND_RULE.split(" Leave no ")[0]), "v2's rule is v1's without the no-mistakes exception");
+});
+
+test("every loop agent definition carries v2's COMMAND_RULE word for word, and the rule does not name no-mistakes", () => {
+  for (const file of ownFiles()) assert.ok(read(`plugins/factory-loop/agents/${file}`).includes(V2_COMMAND_RULE), `plugins/factory-loop/agents/${file} must carry v2/prompts-triage.ts COMMAND_RULE word for word`);
+  assert.ok(!V2_COMMAND_RULE.includes("no-mistakes"));
 });
 
 test("a v2 definition names itself, answers with the answer script through Bash (no answer tool), and names nothing of no-mistakes or implement-issue", () => {
@@ -176,16 +96,11 @@ test("no v2 prompt template names axi, no-mistakes or implement-issue", () => {
 
 test("the model is never offered the loop's own agent types, but while the loop's own repair message resumes one (#559)", () => {
   const register = read(`${HOOKS}/register.ts`);
-  // v2's (STEP_AGENT) and the intake reader (INTAKE_AGENT), hidden the same way in one loop
+  // v2's (STEP_AGENT) and the intake reader (INTAKE_AGENT), hidden in one loop
   assert.match(register, /for \(const agent of new Set\(\[\.\.\.Object\.values\(STEP_AGENT\), INTAKE_AGENT\]\)\) \{\n\s*on\('agent\.offer', \{ agent \}, \(\$, e, next\) => \(resuming\.has\(e\.agent\) \? next\(e\) : \{ isOffered: false \}\)\)/);
   assert.ok(V2_TYPES.includes("factory-loop:triage"));
-  for (const type of Object.values(SUBAGENT_OF).filter((t) => t.startsWith("factory-loop:"))) {
-    assert.match(
-      register,
-      new RegExp(`on\\('agent\\.offer', \\{ agent: '${type}' \\}, \\(\\$, e, next\\) => \\(resuming\\.has\\(e\\.agent\\) \\? next\\(e\\) : \\{ isOffered: false \\}\\)\\)`),
-      `register.ts: ${type} is not hidden from the model`,
-    );
-  }
+  // no v1 type is hidden any more: its definition is gone
+  assert.doesNotMatch(register, /factory-loop:(adjudicator|designer)'/);
 });
 
 test("the intake reader has the Read tool alone, no Bash or write tool, carries v2's command rule and treats the issue as data (issue #1151)", () => {
@@ -315,7 +230,7 @@ const templateOf = (file) => {
 };
 
 test("the three designer brief templates are a plain summary plus a collapsed Details block, and their readers' sections stay visible (#1269)", () => {
-  for (const file of ["plugins/factory-loop/agents/designer-v2.md", "plugins/callum-flow/agents/designer.md", "plugins/factory-loop/agents/designer.md"]) {
+  for (const file of ["plugins/factory-loop/agents/designer-v2.md", "plugins/callum-flow/agents/designer.md"]) {
     const t = templateOf(file);
     assert.deepEqual(briefShapeProblems(t, { exploration: file.endsWith("designer-v2.md") }), [], file);
   }

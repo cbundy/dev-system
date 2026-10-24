@@ -271,8 +271,15 @@ Never expose the server beyond the panel host.
 **What PostgreSQL cannot restrict.** The panel can `SET` its own user-level timeouts and
 `default_transaction_read_only` back, but it has nothing it could write to, so that gains it nothing. Catalog
 metadata stays readable by every role (`pg_class`, row-count statistics in `pg_stat_all_tables`, role and
-database names), and functions that `PUBLIC` may execute stay callable. Notification channels (`LISTEN`) are not
-covered here.
+database names), and functions that `PUBLIC` may execute stay callable.
+
+**Notification channels.** PostgreSQL has no privilege on `LISTEN` or `NOTIFY`, so the panel (like any connected
+role) can listen on `factory_events` and `factory_workers`. Since migration 0032 a `factory_events` payload is
+only `{"event_id" : "<uuid>"}` and a `factory_workers` payload is empty, so the panel learns the timing of inserts
+and heartbeats and opaque event ids, never a repo, issue, event type or device. The panel can also `NOTIFY` on any
+channel, so a listener must treat a payload as a hint and re-read the views (the panel reads `factory_public`,
+where the id of a non-allowlisted event returns no row). PostgreSQL folds identical notifications sent in one
+transaction into one, so several heartbeats in one transaction may wake a listener once.
 
 ## Schema compatibility
 

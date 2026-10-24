@@ -166,11 +166,11 @@ the foundation (section 13) and the glue:
   `driver-controls`, `driver-between`, `driver-pass-log`).
 - **Observe.** `observe.ts` with `observe-github.ts` and `observe-milestone.ts`, `derive.ts`,
   `parse.ts` and `state.ts`.
-- **Act.** `act.ts` (the dispatcher and `EXECUTORS`) with `act-cli.ts`, `act-merge.ts` and
-  `act-between.ts`, `exec.ts` and `agent-tools.ts`.
+- **Act.** `act.ts` (the dispatcher and `EXECUTORS`) with `act-cli.ts`, `act-merge.ts`,
+  `act-between.ts` and `exec.ts`.
 - **Control.** `control.ts` with `control-files.ts` and `control-help.ts`.
 - **Configuration.** `config.ts` with `config-keys.ts` and `config-view.ts`.
-- **Shared.** `foundation.ts`, `rails.ts`, `ledger.ts`, `wake.ts`, `prompts.ts`, `replies.ts`,
+- **Shared.** `foundation.ts`, `rails.ts`, `ledger.ts`, `wake.ts`, `prompts.ts`,
   `report.ts`, `trace.ts`, `within.ts`, `types.ts` and the answer contract (`contract.mjs`).
 
 `hooks/v2/` holds the loop itself, one module per area and kind:
@@ -1372,8 +1372,8 @@ type Finding = { id: string; severity: 'error' | 'warning' | 'info'; file: strin
 
 The existing merge adjudicator's judgement, given the brief and the whole diff, in a
 definition of its own: `agents/reviewer.md`, agent type `factory-loop:reviewer`. The
-adjudicator's definition (`agents/adjudicator.md`) is a no-mistakes gate adjudicator with another
-output contract, so the reviewer is not an edit of it.
+v1 adjudicator definition, a no-mistakes gate adjudicator with another output contract, was
+retired, and the reviewer was never an edit of it.
 
 - **Model** `reviewerModel` (default `opus`). It runs in the issue's slot as a reader, on
   the PR head.

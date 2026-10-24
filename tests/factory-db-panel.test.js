@@ -406,3 +406,52 @@ test("a CREATEDB CREATEROLE admin that is no superuser creates the panel and ski
   assert.match(settings(), /temp_file_limit=64MB/);
   assert.equal(psql(dbUrl, `SELECT count(*) FROM pg_class WHERE relname = 'public_repos'`), "1");
 });
+
+// The notifications the panel can LISTEN to name nothing (cbundy/dev-system#1265).
+test("LISTEN as the panel carries no repo, issue, type or device", opts, async (t) => {
+  const db = panelDb(t);
+  const p = spawn("psql", ["-X", "-q", "-At", db.panelUrl], { env: cleanEnv(), stdio: ["pipe", "pipe", "pipe"] });
+  let out = "";
+  let err = "";
+  const waiters = [];
+  p.stdout.on("data", (d) => {
+    out += d;
+    for (const w of waiters.splice(0)) w();
+  });
+  p.stderr.on("data", (d) => (err += d));
+  const closed = new Promise((resolve) => p.on("close", resolve));
+  const seen = (word) =>
+    new Promise((resolve) => {
+      const check = () => (out.includes(word) ? resolve() : waiters.push(check));
+      check();
+    });
+  try {
+    p.stdin.write("LISTEN factory_events; LISTEN factory_workers; SELECT 'ready';\n");
+    await seen("ready");
+    const id = crypto.randomUUID();
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, '${id}', now(), 'claimed', 1, 'other/secret-repo', 'secret-device', 'a', 4242, 1, '{}')`);
+    db.query(`INSERT INTO factory.workers (device, repo, interval_s, last_seen) VALUES ('secret-device', 'other/secret-repo', 60, now())`);
+    db.query(`UPDATE factory.workers SET last_seen = now() WHERE device = 'secret-device'`);
+    p.stdin.write("SELECT 'done';\n");
+    await seen("done");
+    p.stdin.end();
+    await closed;
+    assert.equal(err.trim(), "");
+    const notes = [...out.matchAll(/Asynchronous notification "([^"]+)"(?: with payload "(.*)")? received from/g)].map((m) => [m[1], m[2] ?? ""]); // psql omits the payload part when it is empty
+    const events = notes.filter(([c]) => c === "factory_events");
+    const workers = notes.filter(([c]) => c === "factory_workers");
+    for (const secret of ["other/secret-repo", "4242", "claimed", "secret-device"]) assert.ok(!out.includes(secret), `${secret} leaked: ${out}`);
+    assert.equal(events.length, 1);
+    assert.deepEqual(JSON.parse(events[0][1]), { event_id: id });
+    assert.deepEqual(workers, [["factory_workers", ""], ["factory_workers", ""]]);
+  } finally {
+    p.kill();
+  }
+});
+
+test("the panel can NOTIFY a channel, so a listener treats a payload as a hint", opts, (t) => {
+  const db = panelDb(t);
+  const r = db.as("NOTIFY factory_events, 'x'");
+  assert.equal(r.ok, true, r.err);
+});

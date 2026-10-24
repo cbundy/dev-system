@@ -752,6 +752,10 @@ on every failure:
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
   `FAIL` with the tool's message when the setup breaks the per-repo boundary (account SAS, wrong scope,
   a missing file). One `INFO` line when there is no checkout with an origin remote;
+- UI capture, in the workspace checkout when it has `.claude/factory-loop.json` and CLAUDE.md does not say
+  `n/a - no UI`: `OK UI capture: ...` when `uiCapture` is a command (with its npm script defined) or `none`;
+  a `FAIL` with a `fix:` hint when it is unset or wrong. A `.callum-dev/evidence-off` file in the checkout
+  turns off both this line and the evidence storage line, leaving one `INFO` line. Same rules as `callum-dev check`;
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
   counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);
@@ -2091,8 +2095,9 @@ background at most every 15 minutes, never waited for), `repo`, `started_at` (th
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
 The nullable `config` column (jsonb) holds the settings snapshot of the factory loop (see [Settings snapshot](#settings-snapshot)); neither the UPSERT nor the stats UPDATE writes it. The guarded DDL adds it to an agentsview database that lacks it (migration 0015 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
-intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
-`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
+intervals); readers use the view and never their own rule. In the agentsview database, an `AFTER INSERT OR UPDATE` trigger from the guarded DDL runs
+`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`; in the factory database the
+payload is empty since migration 0032 (see [docs/factory-db.md](../../docs/factory-db.md)). The guarded DDL goes to the agentsview database
 only, with the first beat of the process and after a failed beat of that target; the writer role cannot run DDL, so
 the factory database gets the UPSERT alone. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
 (log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) when either URL is configured, and `dev-doctor` prints
