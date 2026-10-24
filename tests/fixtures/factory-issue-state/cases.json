@@ -1,0 +1,1310 @@
+{
+ "at": "2026-10-20T12:00:00.000Z",
+ "repo": "Acme/Widgets",
+ "cases": [
+  {
+   "name": "building with a live lease",
+   "issue": 1,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T10:30:00.000Z",
+     {
+      "lease_minutes": 120,
+      "_device": "dev-a"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:31:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "queued",
+      "from_state": null,
+      "step": "lease",
+      "attempt": 1,
+      "branch": "issue-1-a"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:35:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-1-a"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:21:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-1-a",
+      "pr": 11,
+      "state_since": "2026-10-20T11:20:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "repo": "acme/widgets",
+    "state": "building",
+    "step": "build",
+    "attempt": 1,
+    "life": "t3xq00",
+    "seq": 2,
+    "state_since": "2026-10-20T11:20:00.000Z",
+    "branch": "issue-1-a",
+    "pr": 11,
+    "why": null,
+    "question": null,
+    "holder": "dev-a",
+    "claimed_at": "2026-10-20T10:30:00.000Z",
+    "lease_until": "2026-10-20T12:30:00.000Z",
+    "lease_lapsed": false,
+    "ended": false,
+    "stuck_minutes": 60,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a released ghost: requeued, ready, then a newer claimed",
+   "issue": 2,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T09:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T09:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-2",
+      "issue": 2
+     }
+    ],
+    [
+     "requeued",
+     "2026-10-20T10:00:00.000Z",
+     {}
+    ],
+    [
+     "ready",
+     "2026-10-20T10:10:00.000Z",
+     {}
+    ],
+    [
+     "claimed",
+     "2026-10-20T10:20:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "step": null,
+    "attempt": null,
+    "life": null,
+    "seq": null,
+    "state_since": "2026-10-20T10:20:00.000Z",
+    "holder": "dev-a",
+    "claimed_at": "2026-10-20T10:20:00.000Z",
+    "lease_until": "2026-10-20T12:20:00.000Z",
+    "lease_lapsed": false,
+    "ended": false,
+    "stuck_minutes": 240,
+    "stuck": false
+   }
+  },
+  {
+   "name": "released to the queue",
+   "issue": 3,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T09:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T09:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-3",
+      "issue": 3
+     }
+    ],
+    [
+     "requeued",
+     "2026-10-20T10:00:00.000Z",
+     {}
+    ],
+    [
+     "ready",
+     "2026-10-20T10:10:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "state": "queued",
+    "step": null,
+    "life": null,
+    "seq": null,
+    "state_since": "2026-10-20T10:10:00.000Z",
+    "holder": "dev-a",
+    "claimed_at": "2026-10-20T09:00:00.000Z",
+    "lease_until": "2026-10-20T11:00:00.000Z",
+    "lease_lapsed": true,
+    "ended": false,
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a claim-lost close from another device is ignored",
+   "issue": 4,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T10:00:00.000Z",
+     {
+      "lease_minutes": 120,
+      "_device": "dev-a"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:01:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "queued",
+      "from_state": null,
+      "step": "lease",
+      "attempt": 1,
+      "branch": "issue-4",
+      "issue": 4
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:05:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-4",
+      "issue": 4
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:00:00.000Z",
+     {
+      "_device": "dev-b",
+      "life": "t3xq01",
+      "seq": 0,
+      "to_state": "closed",
+      "from_state": "designing",
+      "why": "claim-lost",
+      "attempt": 1,
+      "branch": "issue-4"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "step": "design",
+    "life": "t3xq00",
+    "seq": 1,
+    "state_since": "2026-10-20T10:05:00.000Z",
+    "holder": "dev-a",
+    "lease_until": "2026-10-20T12:00:00.000Z",
+    "lease_lapsed": true,
+    "ended": false,
+    "stuck": false
+   }
+  },
+  {
+   "name": "transitions of an older life and of a life that is not base 36 never decide",
+   "issue": 5,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T09:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T09:01:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "queued",
+      "from_state": null,
+      "step": "lease",
+      "attempt": 1,
+      "branch": "issue-5",
+      "issue": 5
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:00:00.000Z",
+     {
+      "life": "t3xq01",
+      "seq": 0,
+      "to_state": "queued",
+      "from_state": null,
+      "step": "lease",
+      "attempt": 1,
+      "branch": "issue-5"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:05:00.000Z",
+     {
+      "life": "t3xq01",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-5"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 3,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-5",
+      "issue": 5
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:45:00.000Z",
+     {
+      "life": "T3-xq",
+      "seq": 9,
+      "to_state": "reviewing",
+      "from_state": "building",
+      "step": "review",
+      "attempt": 1,
+      "branch": "issue-5"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "step": "design",
+    "life": "t3xq01",
+    "seq": 1,
+    "state_since": "2026-10-20T10:05:00.000Z",
+    "ended": false,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a merged close within 24 hours",
+   "issue": 6,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T06:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T06:05:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "designing",
+      "from_state": null,
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-6",
+      "issue": 6
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T07:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "merge-queue",
+      "from_state": "reviewing",
+      "step": "queue",
+      "attempt": 1,
+      "branch": "issue-6",
+      "issue": 6,
+      "pr": 60
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T08:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "closed",
+      "from_state": "merge-queue",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-6",
+      "issue": 6,
+      "pr": 60,
+      "why": "merged"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "closed",
+    "step": null,
+    "life": "t3xq00",
+    "seq": 2,
+    "state_since": "2026-10-20T08:00:00.000Z",
+    "pr": 60,
+    "why": "merged",
+    "lease_until": "2026-10-20T08:00:00.000Z",
+    "lease_lapsed": true,
+    "ended": true,
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a dropped close within 24 hours",
+   "issue": 8,
+   "events": [
+    [
+     "transition",
+     "2026-10-19T12:01",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "closed",
+      "from_state": "designing",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-8",
+      "issue": 8,
+      "why": "dropped"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "closed",
+    "why": "dropped",
+    "ended": true,
+    "state_since": "2026-10-19T12:01:00.000Z",
+    "stuck": false
+   }
+  },
+  {
+   "name": "a dropped close past 24 hours",
+   "issue": 7,
+   "events": [
+    [
+     "transition",
+     "2026-10-19T11:59",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "closed",
+      "from_state": "designing",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-7",
+      "issue": 7,
+      "why": "dropped"
+     }
+    ]
+   ],
+   "expect": null
+  },
+  {
+   "name": "a close exactly 24 hours old",
+   "issue": 9,
+   "events": [
+    [
+     "transition",
+     "2026-10-19T12:00",
+     {
+      "life": "t3xq00",
+      "seq": 0,
+      "to_state": "closed",
+      "from_state": "designing",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-9",
+      "issue": 9,
+      "why": "dropped"
+     }
+    ]
+   ],
+   "expect": null
+  },
+  {
+   "name": "a merged event within 24 hours",
+   "issue": 10,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T06:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "merged",
+     "2026-10-20T10:00:00.000Z",
+     {
+      "pr": 50
+     }
+    ]
+   ],
+   "expect": {
+    "state": "closed",
+    "step": null,
+    "life": null,
+    "seq": null,
+    "state_since": "2026-10-20T10:00:00.000Z",
+    "pr": 50,
+    "why": "merged",
+    "ended": true,
+    "stuck": false,
+    "stuck_minutes": null
+   }
+  },
+  {
+   "name": "a merged event past 24 hours",
+   "issue": 11,
+   "events": [
+    [
+     "merged",
+     "2026-10-18T10:00:00.000Z",
+     {
+      "pr": 51
+     }
+    ]
+   ],
+   "expect": null
+  },
+  {
+   "name": "an abandoned event",
+   "issue": 12,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T08:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "abandoned",
+     "2026-10-20T09:00:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "state": "closed",
+    "why": null,
+    "state_since": "2026-10-20T09:00:00.000Z",
+    "ended": true,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a closed issue made ready again starts a new life",
+   "issue": 13,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T07:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T08:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "closed",
+      "from_state": "merge-queue",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-13",
+      "issue": 13,
+      "why": "merged"
+     }
+    ],
+    [
+     "ready",
+     "2026-10-20T09:00:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "state": "queued",
+    "life": null,
+    "state_since": "2026-10-20T09:00:00.000Z",
+    "why": null,
+    "ended": false,
+    "stuck": false
+   }
+  },
+  {
+   "name": "queued with no claim",
+   "issue": 14,
+   "events": [
+    [
+     "ready",
+     "2026-10-20T11:00:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "state": "queued",
+    "step": null,
+    "state_since": "2026-10-20T11:00:00.000Z",
+    "holder": null,
+    "claimed_at": null,
+    "lease_until": null,
+    "lease_lapsed": null,
+    "ended": false,
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "claimed with no transition, the default lease, past the designing rule",
+   "issue": 15,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T07:00:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "step": null,
+    "life": null,
+    "state_since": "2026-10-20T07:00:00.000Z",
+    "holder": "dev-a",
+    "lease_until": "2026-10-20T09:00:00.000Z",
+    "lease_lapsed": true,
+    "stuck_minutes": 240,
+    "stuck": true
+   }
+  },
+  {
+   "name": "a lease of 0 minutes reads as 120",
+   "issue": 16,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T11:00:00.000Z",
+     {
+      "lease_minutes": 0
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "lease_until": "2026-10-20T13:00:00.000Z",
+    "lease_lapsed": false,
+    "stuck": false
+   }
+  },
+  {
+   "name": "the newest renewal sets the lease",
+   "issue": 17,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T08:00:00.000Z",
+     {
+      "lease_minutes": 30
+     }
+    ],
+    [
+     "claim_renewed",
+     "2026-10-20T11:30:00.000Z",
+     {
+      "lease_minutes": 45
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "claimed_at": "2026-10-20T08:00:00.000Z",
+    "lease_until": "2026-10-20T12:15:00.000Z",
+    "lease_lapsed": false,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a lapsed lease with no release keeps the loop's state",
+   "issue": 18,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T08:00:00.000Z",
+     {
+      "lease_minutes": 60
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-18",
+      "issue": 18
+     }
+    ]
+   ],
+   "expect": {
+    "state": "building",
+    "step": "build",
+    "lease_until": "2026-10-20T09:00:00.000Z",
+    "lease_lapsed": true,
+    "ended": false,
+    "stuck_minutes": 60,
+    "stuck": true
+   }
+  },
+  {
+   "name": "rule trips: designing since 07:00",
+   "issue": 20,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T07:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-20",
+      "issue": 20,
+      "state_since": "2026-10-20T07:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "state_since": "2026-10-20T07:00:00.000Z",
+    "stuck_minutes": 240,
+    "stuck": true
+   }
+  },
+  {
+   "name": "rule holds: designing since 09:00",
+   "issue": 21,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T09:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-21",
+      "issue": 21,
+      "state_since": "2026-10-20T09:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "state_since": "2026-10-20T09:00:00.000Z",
+    "stuck_minutes": 240,
+    "stuck": false
+   }
+  },
+  {
+   "name": "rule trips: building since 10:50",
+   "issue": 22,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T10:50:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "building",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-22",
+      "issue": 22,
+      "state_since": "2026-10-20T10:50:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "building",
+    "state_since": "2026-10-20T10:50:00.000Z",
+    "stuck_minutes": 60,
+    "stuck": true
+   }
+  },
+  {
+   "name": "rule holds: building since 11:30",
+   "issue": 23,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "building",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-23",
+      "issue": 23,
+      "state_since": "2026-10-20T11:30:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "building",
+    "state_since": "2026-10-20T11:30:00.000Z",
+    "stuck_minutes": 60,
+    "stuck": false
+   }
+  },
+  {
+   "name": "rule trips: merge-queue since 11:00",
+   "issue": 26,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "merge-queue",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-26",
+      "issue": 26,
+      "state_since": "2026-10-20T11:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "merge-queue",
+    "state_since": "2026-10-20T11:00:00.000Z",
+    "stuck_minutes": 30,
+    "stuck": true
+   }
+  },
+  {
+   "name": "rule holds: merge-queue since 11:50",
+   "issue": 27,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:50:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "merge-queue",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-27",
+      "issue": 27,
+      "state_since": "2026-10-20T11:50:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "merge-queue",
+    "state_since": "2026-10-20T11:50:00.000Z",
+    "stuck_minutes": 30,
+    "stuck": false
+   }
+  },
+  {
+   "name": "no rule: queued since 01:00",
+   "issue": 28,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T01:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "queued",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-28",
+      "issue": 28,
+      "state_since": "2026-10-20T01:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "queued",
+    "state_since": "2026-10-20T01:00:00.000Z",
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "no rule: reviewing since 01:00",
+   "issue": 29,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T01:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "reviewing",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-29",
+      "issue": 29,
+      "state_since": "2026-10-20T01:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "reviewing",
+    "state_since": "2026-10-20T01:00:00.000Z",
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "no rule: fixing since 01:00",
+   "issue": 30,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T01:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "fixing",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-30",
+      "issue": 30,
+      "state_since": "2026-10-20T01:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "fixing",
+    "state_since": "2026-10-20T01:00:00.000Z",
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "no rule: waiting since 01:00",
+   "issue": 31,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T01:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "waiting",
+      "from_state": "queued",
+      "step": "x",
+      "attempt": 1,
+      "branch": "issue-31",
+      "issue": 31,
+      "state_since": "2026-10-20T01:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "waiting",
+    "state_since": "2026-10-20T01:00:00.000Z",
+    "stuck_minutes": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "parked with a structured question, past its rule",
+   "issue": 24,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:20:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 4,
+      "to_state": "parked",
+      "from_state": "building",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-24",
+      "issue": 24,
+      "state_since": "2026-10-20T11:20:00.000Z",
+      "question": "Which store?",
+      "decision": "Pick the store.",
+      "context": "They differ in rotation.",
+      "options": [
+       {
+        "key": "A",
+        "title": "Env",
+        "detail": null
+       },
+       {
+        "key": "B",
+        "title": "File",
+        "detail": "Rotated."
+       }
+      ],
+      "recommended": "B",
+      "recommendation": "No restart."
+     }
+    ]
+   ],
+   "expect": {
+    "state": "parked",
+    "state_since": "2026-10-20T11:20:00.000Z",
+    "question": "Which store?",
+    "decision": "Pick the store.",
+    "context": "They differ in rotation.",
+    "options": [
+     {
+      "key": "A",
+      "title": "Env",
+      "detail": null
+     },
+     {
+      "key": "B",
+      "title": "File",
+      "detail": "Rotated."
+     }
+    ],
+    "recommended": "B",
+    "recommendation": "No restart.",
+    "stuck_minutes": 30,
+    "stuck": true
+   }
+  },
+  {
+   "name": "parked with a question, inside its rule",
+   "issue": 25,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:45:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 4,
+      "to_state": "parked",
+      "from_state": "building",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-25",
+      "issue": 25,
+      "state_since": "2026-10-20T11:45:00.000Z",
+      "question": "Which store?"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "parked",
+    "question": "Which store?",
+    "decision": null,
+    "options": null,
+    "stuck_minutes": 30,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a building row never carries a question",
+   "issue": 19,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:45:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 4,
+      "to_state": "building",
+      "from_state": "parked",
+      "step": null,
+      "attempt": 1,
+      "branch": "issue-19",
+      "issue": 19,
+      "state_since": "2026-10-20T11:45:00.000Z",
+      "question": "stale"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "building",
+    "question": null,
+    "decision": null,
+    "stuck": false
+   }
+  },
+  {
+   "name": "a transition of a newer type version is left out",
+   "issue": 32,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T10:00:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-32",
+      "issue": 32
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:00:00.000Z",
+     {
+      "_v": 2,
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-32"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "designing",
+    "seq": 1,
+    "step": "design"
+   }
+  },
+  {
+   "name": "an issue with only a newer type version has no row",
+   "issue": 33,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:00:00.000Z",
+     {
+      "_v": 2,
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-33"
+     }
+    ]
+   ],
+   "expect": null
+  },
+  {
+   "name": "a transition logged again after a re-claim keeps its place",
+   "issue": 34,
+   "events": [
+    [
+     "claimed",
+     "2026-10-20T09:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T09:05:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 1,
+      "to_state": "designing",
+      "from_state": "queued",
+      "step": "design",
+      "attempt": 1,
+      "branch": "issue-34",
+      "issue": 34
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T09:10:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-34",
+      "issue": 34,
+      "pr": 34
+     }
+    ],
+    [
+     "claimed",
+     "2026-10-20T10:00:00.000Z",
+     {
+      "lease_minutes": 120
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T10:00:30.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 2,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-34",
+      "pr": 34,
+      "seq_at": "2026-10-20T09:10:00.000Z",
+      "state_since": "2026-10-20T09:10:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "building",
+    "seq": 2,
+    "state_since": "2026-10-20T09:10:00.000Z",
+    "claimed_at": "2026-10-20T10:00:00.000Z",
+    "lease_until": "2026-10-20T12:00:00.000Z",
+    "stuck": true
+   }
+  },
+  {
+   "name": "seq_at orders transitions, not the time they were logged",
+   "issue": 35,
+   "events": [
+    [
+     "transition",
+     "2026-10-20T11:11:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 4,
+      "to_state": "reviewing",
+      "from_state": "building",
+      "step": "review",
+      "attempt": 1,
+      "branch": "issue-35",
+      "seq_at": "2026-10-20T11:10:00.000Z",
+      "state_since": "2026-10-20T11:10:00.000Z"
+     }
+    ],
+    [
+     "transition",
+     "2026-10-20T11:30:00.000Z",
+     {
+      "life": "t3xq00",
+      "seq": 3,
+      "to_state": "building",
+      "from_state": "designing",
+      "step": "build",
+      "attempt": 1,
+      "branch": "issue-35",
+      "seq_at": "2026-10-20T11:00:00.000Z",
+      "state_since": "2026-10-20T11:00:00.000Z"
+     }
+    ]
+   ],
+   "expect": {
+    "state": "reviewing",
+    "seq": 4,
+    "state_since": "2026-10-20T11:10:00.000Z"
+   }
+  },
+  {
+   "name": "the repo reads lower case and the issue number is per repo",
+   "issue": 1,
+   "repo": "Other/Repo",
+   "events": [
+    [
+     "ready",
+     "2026-10-20T11:00:00.000Z",
+     {}
+    ]
+   ],
+   "expect": {
+    "repo": "other/repo",
+    "state": "queued"
+   }
+  }
+ ]
+}

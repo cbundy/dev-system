@@ -197,6 +197,10 @@ after.
 
 Then run `dev-doctor` and expect the factory database line OK for both roles.
 
+Migration 0033 adds `factory.issue_state`, `factory.issue_state_at(at)` and `factory.stuck_rules`: the
+factory loop v2's state of every issue. Its contract is in
+[factory-state.md](factory-state.md#the-issue_state-view).
+
 ### Automatic migrate at start-up
 
 `dev-init` runs `factory-db-migrate` after the repo sync and before the factory event push and the

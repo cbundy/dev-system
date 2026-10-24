@@ -103,6 +103,60 @@ lapse shows in the `lease` field, not as `queued`. The stuck rules apply as to a
 stage and never final; the named run is dropped when the issue's latest run is chosen, so its stale
 `running` row cannot set the stage.
 
+### The issue_state view
+
+`factory.issue_state` is the database's own reading of the factory loop v2's state (migration
+`0033_issue_state.sql`, cbundy/dev-system#1292). It is `factory.issue_state_at(now())`; the function
+`factory.issue_state_at(at timestamptz)` is the same read as of an instant. Both are plain SQL
+over `factory.event_log` (the function is `STABLE`, not `SECURITY DEFINER`), so the reader role
+selects from the view and runs the function, and the panel role reaches neither. It returns one row
+per (repo, issue) that is live at `at`, or whose life ended in the 24 hours before it. It reads only
+event types at the version it understands (all version 1 today): a row of a newer version is left
+out, not misread.
+
+| Column | Meaning |
+| --- | --- |
+| `repo`, `issue` | the repo (lower case) and the issue number |
+| `state` | a v2 state: `queued`, `designing`, `building`, `reviewing`, `fixing`, `merge-queue`, `parked`, `waiting` or `closed` |
+| `step`, `attempt`, `life`, `seq` | the deciding transition's record; null when no transition decides (a released issue) |
+| `state_since` | when the issue entered the state (the transition's `state_since`, else its time; the releasing event's time for a released issue; the end for a closed one) |
+| `branch`, `pr` | the life's branch and pull request |
+| `why` | closed rows only: the closing transition's `why`, or `merged` for a `merged` event |
+| `question`, `decision`, `context`, `options`, `recommended`, `recommendation` | parked rows only: the owner's question and its structured form |
+| `holder`, `claimed_at` | the device and the time of the newest `claimed` event |
+| `lease_until`, `lease_lapsed` | the newest `claimed` or `claim_renewed` plus its `lease_minutes` (120 when absent or not positive); whether that time has passed |
+| `ended` | the life ended (`merged`, `closed` or `abandoned` event, or a `closed` transition) with no new life since |
+| `stuck_minutes`, `stuck` | the state's rule below; whether `state_since` is older than it. `stuck` is false for an ended row and for a state with no rule |
+
+The life rules are those of [The factory loop v2](#the-factory-loop-v2), as the tool's `v2` field
+applies them:
+
+- The newest `transition` of the newest life decides. Lives order by their start time (the `life`
+  token decoded as base 36; a token that does not decode sorts lowest); within a life, by `seq_at`,
+  then `seq`. A `closed` transition with `why` `claim-lost` is another device's and is ignored.
+- A `requeued`, `ready` or `claimed` event newer than that transition releases the issue. It is
+  `queued` when the newest of those is a `ready` or `requeued` with no claim since, and `designing`
+  when it is a `claimed` with no transition yet (a life with a claim and no transition is
+  `designing` too).
+- `merged`, `closed` and `abandoned` events end the life, and so does a `closed` transition, until a
+  `ready`, `requeued` or `claimed` event follows (a new life).
+- A lapsed lease with no release keeps the loop's state: the loop claims the issue again.
+  Only `lease_lapsed` shows the lapse.
+
+`factory.stuck_rules (state, minutes)` holds the thresholds. It is a view over `VALUES`, so only the
+owner role can change it (a migration replaces it); a table would give the writer INSERT and UPDATE.
+The defaults keep today's effective thresholds for v2 issues:
+
+| State | Minutes |
+| --- | --- |
+| `designing` | 240 |
+| `building` | 60 |
+| `parked` | 30 |
+| `merge-queue` | 30 |
+| `queued`, `reviewing`, `fixing`, `waiting` | none (`NULL`) |
+
+The saved "Stuck issues" query is in [metrics.md](metrics.md#stuck-issues).
+
 ## Source precedence
 
 Highest first. A lower source never overrides a higher one.

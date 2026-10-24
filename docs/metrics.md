@@ -876,6 +876,21 @@ FROM factory.event_log
 GROUP BY device;
 ```
 
+### Stuck issues
+
+The issues that sit past their state's threshold now, read from `factory.issue_state`
+([factory-state.md](factory-state.md#the-issue_state-view)). The thresholds are the rows of
+`factory.stuck_rules`; `lease_lapsed` says the claim ran out without a release.
+
+```sql
+-- stuck issues, longest first
+SELECT repo, issue, state, step, attempt, holder, state_since, stuck_minutes,
+  round(extract(epoch FROM now() - state_since) / 60) AS minutes_in_state, lease_lapsed
+FROM factory.issue_state
+WHERE stuck
+ORDER BY state_since;
+```
+
 ### Claim order
 
 S1 names the order a claim came from in its reason: `ready and unblocked (order: owner only)` or
