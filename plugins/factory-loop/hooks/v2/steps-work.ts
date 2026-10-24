@@ -121,6 +121,7 @@ function workInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place:
     leftovers: leftoversOf(ctx.state.ledger, r)[0] ?? null,
     // the config the plan ran with, which the slot's marker copied (planPass: v2 plans with rt.config)
     gateCommands: [...ctx.rt.config.gateCommands],
+    uiCapture: ctx.rt.config.uiCapture,
     scratch: scratchOf(ctx.rt.loopDir, r.issue, r.life, action.seq),
     place,
   }

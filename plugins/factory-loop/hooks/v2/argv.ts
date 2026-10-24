@@ -266,7 +266,7 @@ export function queueMergeArgv(pr: number, patch: string, issue: number): string
 
 // A merged PR's size, for the recovered `merged` event (event-data.ts PrSize).
 export function prSizeArgv(repo: string, pr: number): string[] {
-  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'files,additions,deletions']
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'files,additions,deletions,mergedAt']
 }
 
 // prSizeOf: the size `prSizeArgv` read, or null when it does not parse or lacks the counts. The files
@@ -292,6 +292,17 @@ export function prSizeOf(stdout: string): PrSize | null {
     if (count(r.additions) && count(r.deletions)) fileLines.push({ path, additions: r.additions, deletions: r.deletions })
   }
   return { files, fileLines, additions: o.additions, deletions: o.deletions }
+}
+
+// prMergedAtOf: the `mergedAt` `prSizeArgv` read (a non-empty string as GitHub gave it), or null.
+export function prMergedAtOf(stdout: string): string | null {
+  try {
+    const v: unknown = JSON.parse(stdout)
+    const m = v !== null && typeof v === 'object' ? (v as Record<string, unknown>).mergedAt : null
+    return typeof m === 'string' && m !== '' ? m : null
+  } catch {
+    return null
+  }
 }
 
 // A head's patch id against the base (8.4).

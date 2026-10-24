@@ -105,6 +105,7 @@ export const SETTING_HELP: Record<string, string> = {
   intakeAreas: 'the area names a stamp may name; must hold factory and product',
   reviewer: 'the reviewer implementation',
   reviewerModel: 'the reviewer\'s model',
+  uiCapture: 'the repo\'s UI capture command, or none when it has no capture tooling (a missing capture is then only a warning)',
   gateCommands: 'the stop gate\'s commands, run in order in the worktree',
   gateTimeoutMs: 'the budget for all gate commands together',
   gateConcurrency: 'stop gates run at once: auto, or a whole number',

@@ -65,8 +65,8 @@ reset; m 7
 [ -z "$out" ] || fail "default base should not request manual closure: $out"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
 [ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "one merged event expected"
-jq -e --arg sha "$SHA" '.type == "merged" and .issue == 12 and .data == {pr: 7, branch: "feat/issue-12-x", head: $sha, by: "factory", recovered: false, files: ["a.js", "b/c.sh", "d.txt"], file_lines: [{path: "a.js", additions: 7, deletions: 1}, {path: "b/c.sh", additions: 3, deletions: 1}], additions: 10, deletions: 2}' "$nlog" > /dev/null || fail "event: $(cat "$nlog")"
-[ "$(cat "$st/size-calls")" = "pr view 7 --json files,additions,deletions" ] || fail "one size read expected: $(cat "$st/size-calls")"
+jq -e --arg sha "$SHA" '.type == "merged" and .issue == 12 and .data == {pr: 7, branch: "feat/issue-12-x", head: $sha, by: "factory", recovered: false, files: ["a.js", "b/c.sh", "d.txt"], file_lines: [{path: "a.js", additions: 7, deletions: 1}, {path: "b/c.sh", additions: 3, deletions: 1}], additions: 10, deletions: 2, merged_at: "2026-10-02T09:00:00Z", title: null}' "$nlog" > /dev/null || fail "event: $(cat "$nlog")"
+[ "$(cat "$st/size-calls")" = "pr view 7 --json files,additions,deletions,mergedAt" ] || fail "one size read expected: $(cat "$st/size-calls")"
 ! grep -q 'could not read the size' "$tmpdir/err" || fail "no size warning expected on success: $(cat "$tmpdir/err")"
 [ ! -e "$events/o__r.jsonl" ] || fail "the old log must stay empty: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
@@ -97,18 +97,21 @@ reset; touch "$st/merge-refuse"; m 7
 passed=$((passed + 1))
 
 # merge: a failing or unparseable size read warns, writes the three fields as null and still writes the event
-for bad in fails junk partial; do
+for bad in fails junk partial nosize; do
   reset
   case "$bad" in
     fails) touch "$st/size-fails" ;;
     junk) echo 'not json' > "$st/size" ;;
     partial) echo '{"files":[{"path":"a.js"}]}' > "$st/size" ;;
+    nosize) echo '{"mergedAt":"2026-10-02T09:00:00Z"}' > "$st/size" ;;
   esac
   m 7
   [ "$rc" = 0 ] || fail "size read $bad: exit $rc out=$out"
   grep -qx 'callum-flow-merge: warning: could not read the size of PR #7 - merged event written without it' "$tmpdir/err" || fail "size read $bad: no warning: $(cat "$tmpdir/err")"
   [ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "size read $bad: the event must still be written"
-  jq -e --arg sha "$SHA" '.type == "merged" and .data == {pr: 7, branch: "feat/issue-12-x", head: $sha, by: "factory", recovered: false, files: null, file_lines: null, additions: null, deletions: null}' "$nlog" > /dev/null || fail "size read $bad: event: $(cat "$nlog")"
+  # a bad size still gives merged_at when the read has one; a failed read or a missing mergedAt gives null
+  case "$bad" in nosize) want_at='"2026-10-02T09:00:00Z"' ;; *) want_at=null ;; esac
+  jq -e --arg sha "$SHA" --argjson at "$want_at" '.type == "merged" and .data == {pr: 7, branch: "feat/issue-12-x", head: $sha, by: "factory", recovered: false, files: null, file_lines: null, additions: null, deletions: null, merged_at: $at, title: null}' "$nlog" > /dev/null || fail "size read $bad: event: $(cat "$nlog")"
 done
 # the size is read after the merge only: a refused merge or a guard failure reads nothing
 reset; touch "$st/merge-refuse"; m 7

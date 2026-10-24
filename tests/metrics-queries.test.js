@@ -82,7 +82,7 @@ const BANNED = [
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
 // 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
 // The startup migrates and the release hold reasons read loop_entry fields (database, versions, outcome, decision_reason) from event_store: no event_log column lifts them.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Claim order #0", "Claim order #3", "Queue snapshots #2", "Intake stamp #4", "Spend on an API key #2"]);
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Claim order #0", "Claim order #3", "Queue snapshots #2", "Intake stamp #4", "Spend on an API key #2", "Reviews by UI capture policy #0"]);
 
 function problems(sql, id) {
   const text = strip(sql);
@@ -100,7 +100,7 @@ const blocks = sqlBlocks(markdown);
 
 // Blocks that are compared against a frozen old query (SPECS below) and blocks that are only run.
 const RUN_ONLY = [
-  "Factory metrics #0", "Fix rounds with no new head #0", "Fix rounds caused by other merges #0", "Fix rounds caused by other merges #1",
+  "Factory metrics #0", "Fix rounds with no new head #0", "Reviews by UI capture policy #0", "Fix rounds caused by other merges #0", "Fix rounds caused by other merges #1",
   "2b. Gate waits #0", "2b. Gate waits #1", "2b. Gate waits #2", "2b. Gate waits #3",
   "6b. Reader shadow compares #0",
   "7a. How waits end #0", "7b. Done closes #0",
@@ -116,7 +116,7 @@ const RUN_ONLY = [
   "9c. Merges, pull requests and gaps #0", "9c. Merges, pull requests and gaps #1", "9c. Merges, pull requests and gaps #2",
   "9c. Merges, pull requests and gaps #3", "9c. Merges, pull requests and gaps #4",
   "9c. Merges, pull requests and gaps #5", "9c. Merges, pull requests and gaps #6",
-  "9c. Merges, pull requests and gaps #8", "9c. Merges, pull requests and gaps #9", "9c. Merges, pull requests and gaps #10", "9c. Merges, pull requests and gaps #11",
+  "9c. Merges, pull requests and gaps #8", "9c. Merges, pull requests and gaps #9", "9c. Merges, pull requests and gaps #10", "9c. Merges, pull requests and gaps #11", "9c. Merges, pull requests and gaps #12",
   "10. Releases #0", "10. Releases #1", "10. Releases #2",
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4",

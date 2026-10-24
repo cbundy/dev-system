@@ -88,6 +88,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   intakeAreas: 'next-pass',
   reviewer: 'next-pass',
   reviewerModel: 'next-pass',
+  uiCapture: 'next-pass',
   gateCommands: 'next-pass',
   gateTimeoutMs: 'next-pass',
   gateConcurrency: 'next-pass',

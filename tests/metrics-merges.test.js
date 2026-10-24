@@ -61,7 +61,7 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.ok(seed(db) > 60);
   const ev = evaluate();
   const q = blocks("## 9c. Merges, pull requests and gaps");
-  assert.equal(q.length, 12, "the five merge queries, the two run-only ones (unrecorded merges, missing size), merges per day by regime, and issue size, overlap, hottest files and merges by kind");
+  assert.equal(q.length, 13, "the five merge queries, the two run-only ones (unrecorded merges, missing size), merges per day by regime, issue size, overlap, hottest files and merges by kind, and how late the sweep recorded merges");
 
   // merges per day: the same counts by merged_by and recovered
   const days = rows(db, q[0]);
@@ -196,6 +196,20 @@ test("the size blocks bite: moving a claim, or a changed file, changes the rows"
   // a code file turned into a document drops out of the counts
   db.query("UPDATE factory.event_store SET data = replace(data::text, 'src/g.js', 'src/g.md')::jsonb WHERE type = 'merged' AND issue = 108", "owner");
   assert.equal(sizeRows(db, q[8]).find((r) => r.issue === 108).code_files, 0);
+});
+
+test("section 9c's sweep-delay block gives ts - merged_at for a recovered merge that carries merged_at", opts, (t) => {
+  const db = createDb(t);
+  const ins = (id, actor, data, seq) => db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+    VALUES (1, '${id}', '2026-10-23T16:16:00Z', 'merged', 1, '${REPO}', 'L', '${actor}', NULL, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  const base = { branch: null, head: null, by: "hand", recovered: true };
+  ins("00000000-0000-4000-8000-0000000000a1", "sweep", { ...base, pr: 1230, merged_at: "2026-10-22T21:22:01Z" }, 1);
+  ins("00000000-0000-4000-8000-0000000000a2", "sweep", { ...base, pr: 1231, merged_at: null }, 2);
+  ins("00000000-0000-4000-8000-0000000000a3", "loop", { ...base, pr: 1232, merged_at: "2026-10-23T16:00:00Z" }, 3);
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  const r = rows(db, q[12]);
+  assert.equal(r.length, 1);
+  assert.deepEqual([r[0].repo, r[0].merges, r[0].min_delay, r[0].max_delay], [REPO, 1, "18:53:59", "18:53:59"], "only the sweep row that carries merged_at counts");
 });
 
 // The one code-file rule: held once in callum-flow-evaluate, written once in the doc, embedded in each new block.

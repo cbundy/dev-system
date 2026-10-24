@@ -144,6 +144,7 @@ export const DEFAULT_CONFIG: Config = {
   intakeAreas: ['factory', 'product'],
   reviewer: 'adjudicator',
   reviewerModel: 'opus',
+  uiCapture: null,
   // the plugin ships no repo's commands: a repo sets its own (dev-system: npm run lint, npm test)
   gateCommands: [],
   gateTimeoutMs: 10 * MIN,
@@ -397,6 +398,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'regime') {
         if (value === 'factory_loop_v2' || value === 'testbed') out[key] = value
         else bad(raw, value, 'factory_loop_v2 or testbed')
+      } else if (key === 'uiCapture') {
+        if (value === null) out[key] = null
+        else if (typeof value === 'string' && value.trim() !== '') out[key] = value.trim()
+        else bad(raw, value, 'a capture command or none')
       } else if (key === 'intakeStamp') {
         if (value === 'off' || value === 'on') out[key] = value
         else bad(raw, value, 'off or on')
