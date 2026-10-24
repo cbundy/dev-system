@@ -1,481 +1,546 @@
 {
  "at": "2026-10-10T12:00:00.000Z",
  "repos": [],
- "workers": {
-  "available": false,
-  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
- },
  "events": [
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "claimed",
    "issue": 100,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:01:00.000Z",
-   "state": "transition",
    "issue": 100,
-   "run_id": null,
-   "branch": "issue-100",
-   "pr": null,
-   "note": "row=S0 life=t3xq00 seq=0 from=none to=queued seqAt=1791630060000 since=1791630060000 resumeTo=none step=lease attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 0,
+    "from_state": null,
+    "to_state": "queued",
+    "seq_at": "2026-10-10T11:01:00.000Z",
+    "state_since": "2026-10-10T11:01:00.000Z",
+    "step": "lease",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-100"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:05:00.000Z",
-   "state": "transition",
    "issue": 100,
-   "run_id": null,
-   "branch": "issue-100",
-   "pr": null,
-   "note": "row=T1 life=t3xq00 seq=1 from=queued to=designing seqAt=1791630300000 since=1791630300000 resumeTo=none step=design attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 1,
+    "from_state": "queued",
+    "to_state": "designing",
+    "seq_at": "2026-10-10T11:05:00.000Z",
+    "state_since": "2026-10-10T11:05:00.000Z",
+    "step": "design",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-100"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:20:00.000Z",
-   "state": "transition",
    "issue": 100,
-   "run_id": null,
-   "branch": "issue-100",
-   "pr": null,
-   "note": "row=T2 life=t3xq00 seq=2 from=designing to=building seqAt=1791631200000 since=1791631200000 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T11:20:00.000Z",
-   "state": "delegated",
-   "issue": 100,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "brief https://x/100",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "building",
+    "seq_at": "2026-10-10T11:20:00.000Z",
+    "state_since": "2026-10-10T11:20:00.000Z",
+    "step": "build",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-100"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:50:00.000Z",
-   "state": "renewed",
    "issue": 100,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "claimed",
    "issue": 101,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
    "issue": 101,
-   "run_id": null,
-   "branch": "issue-101",
-   "pr": null,
-   "note": "row=T7 life=t3xq00 seq=4 from=building to=parked seqAt=1791630000000 since=1791630000000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 4,
+    "from_state": "building",
+    "to_state": "parked",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-101"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:30:00.000Z",
-   "state": "renewed",
    "issue": 101,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "claimed",
    "issue": 102,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:40:00.000Z",
-   "state": "transition",
    "issue": 102,
-   "run_id": null,
-   "branch": "issue-102",
-   "pr": 202,
-   "note": "row=T5 life=t3xq00 seq=3 from=building to=reviewing seqAt=1791632400000 since=1791632400000 resumeTo=none step=review attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 3,
+    "from_state": "building",
+    "to_state": "reviewing",
+    "seq_at": "2026-10-10T11:40:00.000Z",
+    "state_since": "2026-10-10T11:40:00.000Z",
+    "step": "review",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-102",
+    "pr": 202
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "claimed",
    "issue": 103,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:30:00.000Z",
-   "state": "transition",
    "issue": 103,
-   "run_id": null,
-   "branch": "issue-103",
-   "pr": 203,
-   "note": "row=T13 life=t3xq00 seq=6 from=merge-queue to=closed seqAt=1791631800000 since=1791631800000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=merged approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 6,
+    "from_state": "merge-queue",
+    "to_state": "closed",
+    "seq_at": "2026-10-10T11:30:00.000Z",
+    "state_since": "2026-10-10T11:30:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": "merged",
+    "question": null,
+    "branch": "issue-103",
+    "pr": 203
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "claimed",
    "issue": 104,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
    "issue": 104,
-   "run_id": null,
-   "branch": "issue-104",
-   "pr": null,
-   "note": "row=E1 life=t3xq00 seq=3 from=building to=closed seqAt=1791630000000 since=1791630000000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=dropped approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 3,
+    "from_state": "building",
+    "to_state": "closed",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": "dropped",
+    "question": null,
+    "branch": "issue-104"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "abandoned",
    "issue": 104,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "reason=dropped note=dropped",
-   "actor": "agent"
+   "type": "abandoned",
+   "data": {
+    "reason": "dropped"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T08:00:00.000Z",
-   "state": "claimed",
    "issue": 105,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T09:00:00.000Z",
-   "state": "transition",
    "issue": 105,
-   "run_id": null,
-   "branch": "issue-105",
-   "pr": null,
-   "note": "row=E1 life=t3xq00 seq=2 from=designing to=closed seqAt=1791622800000 since=1791622800000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=dropped approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "closed",
+    "seq_at": "2026-10-10T09:00:00.000Z",
+    "state_since": "2026-10-10T09:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": "dropped",
+    "question": null,
+    "branch": "issue-105"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T09:00:00.000Z",
-   "state": "abandoned",
    "issue": 105,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "reason=dropped note=dropped",
-   "actor": "agent"
+   "type": "abandoned",
+   "data": {
+    "reason": "dropped"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "ready",
    "issue": 105,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
+   "type": "ready",
+   "data": {}
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "claimed",
    "issue": 106,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-b",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "claimed",
    "issue": 106,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:05:00.000Z",
-   "state": "transition",
    "issue": 106,
-   "run_id": null,
-   "branch": "issue-106",
-   "pr": null,
-   "note": "row=E5 life=t3xq00 seq=2 from=designing to=closed seqAt=1791630300000 since=1791630300000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=claim-lost approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "closed",
+    "seq_at": "2026-10-10T11:05:00.000Z",
+    "state_since": "2026-10-10T11:05:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": "claim-lost",
+    "question": null,
+    "branch": "issue-106"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T08:00:00.000Z",
-   "state": "claimed",
    "issue": 107,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T08:01:00.000Z",
-   "state": "transition",
    "issue": 107,
-   "run_id": null,
-   "branch": "issue-107",
-   "pr": null,
-   "note": "row=S0 life=t3xq00 seq=0 from=none to=queued seqAt=1791619260000 since=1791619260000 resumeTo=none step=lease attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 0,
+    "from_state": null,
+    "to_state": "queued",
+    "seq_at": "2026-10-10T08:01:00.000Z",
+    "state_since": "2026-10-10T08:01:00.000Z",
+    "step": "lease",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-107"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T08:00:00.000Z",
-   "state": "claimed",
    "issue": 109,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:50:00.000Z",
-   "state": "transition",
    "issue": 109,
-   "run_id": null,
-   "branch": "issue-109",
-   "pr": null,
-   "note": "row=T1 life=t3xq00 seq=1 from=queued to=designing seqAt=1791633000000 since=1791633000000 resumeTo=none step=design attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=ok brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 1,
+    "from_state": "queued",
+    "to_state": "designing",
+    "seq_at": "2026-10-10T11:50:00.000Z",
+    "state_since": "2026-10-10T11:50:00.000Z",
+    "step": "design",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-109"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T09:00:00.000Z",
-   "state": "claimed",
    "issue": 111,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T09:01:00.000Z",
-   "state": "transition",
    "issue": 111,
-   "run_id": null,
-   "branch": "issue-111",
-   "pr": null,
-   "note": "row=S0 life=t3xq00 seq=0 from=none to=queued seqAt=1791630000000 since=1791630000000 resumeTo=none step=lease attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=S0 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 0,
+    "from_state": null,
+    "to_state": "queued",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": "lease",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-111"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "transition",
    "issue": 111,
-   "run_id": null,
-   "branch": "issue-111",
-   "pr": null,
-   "note": "row=T2 life=t3xq00 seq=2 from=designing to=building seqAt=1791630000000 since=1791630000000 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=T2 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq00",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "building",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": "build",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-111"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-c",
    "ts": "2026-10-10T11:30:00.000Z",
-   "state": "reclaimed",
    "issue": 111,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease expired",
-   "actor": "sweep"
+   "type": "requeued",
+   "data": {
+    "reason": "lease-expired"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T08:00:00.000Z",
-   "state": "claimed",
    "issue": 112,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T09:00:00.000Z",
-   "state": "transition",
    "issue": 112,
-   "run_id": null,
-   "branch": "issue-112",
-   "pr": null,
-   "note": "row=T1 life=t3xp00 seq=1 from=queued to=designing seqAt=1791630000000 since=1791630000000 resumeTo=none step=design attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=T1 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xp00",
+    "seq": 1,
+    "from_state": "queued",
+    "to_state": "designing",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": "design",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-112"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-b",
    "ts": "2026-10-10T10:00:00.000Z",
-   "state": "claimed",
    "issue": 112,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-b",
    "ts": "2026-10-10T10:01:00.000Z",
-   "state": "transition",
    "issue": 112,
-   "run_id": null,
-   "branch": "issue-112",
-   "pr": null,
-   "note": "row=S0 life=t3xq10 seq=0 from=none to=queued seqAt=1791630000000 since=1791630000000 resumeTo=none step=lease attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=S0 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq10",
+    "seq": 0,
+    "from_state": null,
+    "to_state": "queued",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": "lease",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-112"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-b",
    "ts": "2026-10-10T10:30:00.000Z",
-   "state": "transition",
    "issue": 112,
-   "run_id": null,
-   "branch": "issue-112",
-   "pr": null,
-   "note": "row=T2 life=t3xq10 seq=2 from=designing to=building seqAt=1791630000000 since=1791630000000 resumeTo=none step=build attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=T2 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xq10",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "building",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": "build",
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-112"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
    "issue": 112,
-   "run_id": null,
-   "branch": "issue-112",
-   "pr": null,
-   "note": "row=E5 life=t3xp00 seq=2 from=designing to=closed seqAt=1791630000000 since=1791630000000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=claim-lost approvedPatch=none prClosedAt=none via=E5 brief=none question=none notes=none",
-   "actor": "agent"
+   "type": "transition",
+   "data": {
+    "life": "t3xp00",
+    "seq": 2,
+    "from_state": "designing",
+    "to_state": "closed",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": "claim-lost",
+    "question": null,
+    "branch": "issue-112"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-b",
    "ts": "2026-10-10T11:30:00.000Z",
-   "state": "renewed",
    "issue": 112,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
-  }
- ],
- "runs": [
-  {
-   "id": "r100",
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "branch": "feat/issue-100-old",
-   "status": "running",
-   "pr_url": null,
-   "pr_state": null,
-   "issue": 100,
-   "awaiting_agent_since": null,
-   "created_at": "2026-10-10T09:00:00.000Z",
-   "updated_at": "2026-10-10T11:55:00.000Z"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   }
  ],
  "github": {

@@ -1,8 +1,9 @@
-// Tests for images/base/callum-flow-factory-state (cbundy/dev-system#345): the pure stage rules against
-// fixtures modelled on the real failure cases (tests/fixtures/factory-state/*.input.json, with the
-// reviewed output beside each as *.expected.json), the CLI against stub dev-query and
-// callum-flow-issue-read binaries, and the shipped skill, docs and allow list.
-// images/base/test/sections/09-agentsview.sh runs the same tool's SQL against a real PostgreSQL.
+// Tests for images/base/callum-flow-factory-state (cbundy/dev-system#345, #1293): the tool reads the
+// factory.issue_state_at view through `dev-query --factory`, so every test here runs it against a
+// throwaway PostgreSQL database (tests/lib/factory-db.js) loaded from event rows as the writer role.
+// tests/fixtures/factory-state/*.input.json are those rows (with the GitHub answers and the reviewed
+// output beside each as *.expected.json). The pure rendering, argument and docs checks need no
+// database. images/base/test/sections/09-agentsview.sh runs the tool in the image.
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -11,256 +12,33 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { before, test } = require("node:test");
+const { after, before, test } = require("node:test");
 
 const ROOT = path.join(__dirname, "..");
-const SCRIPT = path.join(ROOT, "images", "base", "callum-flow-factory-state");
+const BASE = path.join(ROOT, "images", "base");
+const SCRIPT = path.join(BASE, "callum-flow-factory-state");
 const FIX = path.join(__dirname, "fixtures", "factory-state");
+const MIGRATIONS = path.join(BASE, "factory-db", "migrations");
 const mod = require(SCRIPT);
-const { extractRunLink } = require("./metrics-blocks.js");
 const { available, createDb } = require("./lib/factory-db.js");
 
+const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 const names = fs.readdirSync(FIX).filter((f) => f.endsWith(".input.json")).map((f) => f.replace(".input.json", "")).sort();
 const input = (n) => JSON.parse(fs.readFileSync(path.join(FIX, `${n}.input.json`), "utf8"));
-const expected = (n) => JSON.parse(fs.readFileSync(path.join(FIX, `${n}.expected.json`), "utf8"));
-const derive = (i, over = {}) => mod.deriveState({
-  ...i, at: Date.parse(i.at), rules: { ...mod.DEFAULT_RULES, ...i.rules }, atSource: "--at", github: i.github || null, ...over,
-});
-const issue = (report, repo, n) => report.repos.find((r) => r.repo === repo).issues.concat(report.repos.find((r) => r.repo === repo).recent).find((i) => i.issue === n);
+const expectedFile = (n) => path.join(FIX, `${n}.expected.json`);
 const A = "acme/widgets";
-const OLD_QUEUE = { available: false, reason: "the old store has no queue snapshots" };
+const RPW = "reader-pw";
+const AT = ["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"];
 
-test("every fixture's output matches its reviewed expected JSON", () => {
-  assert.ok(names.length >= 10);
-  for (const n of names) assert.deepEqual(JSON.parse(JSON.stringify(derive(input(n)))), expected(n), n);
-});
-
-test("closed outside the factory: closed ends the issue whatever came before it", () => {
-  const r = derive(input("closed-outside"));
-  assert.deepEqual(r.repos[0].issues, [], "no live issue, although #10 still has a running run");
-  assert.deepEqual(r.repos[0].recent.map((i) => [i.issue, i.stage]), [[10, "closed without merge"], [11, "closed without merge"], [12, "closed without merge"], [14, "closed without merge"]]);
-  assert.match(issue(r, A, 14).detail, /abandoned/, "abandoned is not merged even though a run's PR merged");
-  assert.equal(issue(r, A, 13), undefined, "closed more than 24 h ago leaves the view");
-});
-
-test("missing run_started: the mirror run places the issue and follows the run row", () => {
-  const r = derive(input("missing-run-started"));
-  assert.deepEqual([20, 21, 22].map((n) => issue(r, A, n).stage), ["in pipeline", "ready to merge", "merged"]);
-  assert.equal(issue(r, A, 21).pr, 121);
-  assert.equal(issue(r, A, 20).source, "mirror");
-});
-
-test("replayed events: a failed after merged or closed neither reopens nor hints", () => {
-  const r = derive(input("replayed-events"));
-  assert.equal(issue(r, A, 30).stage, "merged");
-  assert.equal(issue(r, A, 31).stage, "closed without merge");
-  assert.equal(issue(r, A, 32).stage, "merged");
-  assert.equal(issue(r, A, 32).hint, null);
-  assert.deepEqual(r.repos[0].issues.map((i) => i.issue), [32], "merged stays visible until GitHub or the sweep closes it");
-});
-
-test("implementer_routed (#506) is a delegation decision: implementing, and a new life after abandoned", () => {
-  const e = (issue, ts, state, note = null) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note, actor: "agent" });
-  const r = derive({
-    at: "2026-10-10T12:00:00.000Z", repos: [], runs: [], workers: { available: false, reason: "test" },
-    events: [
-      e(90, "2026-10-10T11:00:00.000Z", "claimed", "lease: 120"),
-      e(90, "2026-10-10T11:10:00.000Z", "implementer_routed", "model=opus reason=hash bucket=12 pct=50"),
-      e(91, "2026-10-10T09:00:00.000Z", "claimed"),
-      e(91, "2026-10-10T09:30:00.000Z", "abandoned"),
-      e(91, "2026-10-10T11:00:00.000Z", "implementer_routed", "model=sonnet reason=hash bucket=70 pct=50"),
-    ],
-  });
-  assert.equal(issue(r, A, 90).stage, "implementing", "routed after a live claim");
-  assert.equal(issue(r, A, 91).stage, "implementing", "routed after abandoned starts a new life");
-});
-
-test("a merged event with no issue (the sweep's unrecorded main merge, cbundy/dev-system#752) changes no issue's stage and throws nothing", () => {
-  const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
-  const base = {
-    at: "2026-10-10T12:00:00.000Z", repos: [], runs: [], workers: { available: false, reason: "test" },
-    events: [e(95, "2026-10-10T11:00:00.000Z", "claimed", { note: "lease: 120" })],
-  };
-  const orphan = e(null, "2026-10-10T11:30:00.000Z", "merged", { actor: "sweep", pr: 77, head: "1".repeat(40) });
-  const without = derive(base);
-  const withOrphan = derive({ ...base, events: [...base.events, orphan] });
-  const issuesOf = (r) => r.repos.map((x) => ({ issues: x.issues, recent: x.recent }));
-  assert.deepEqual(issuesOf(withOrphan), issuesOf(without), "the null-issue merged row changes no issue");
-  assert.equal(issue(withOrphan, A, 95).stage, issue(without, A, 95).stage);
-  // alone, it places no issue
-  assert.deepEqual(derive({ ...base, events: [orphan] }).repos.flatMap((r) => r.issues.concat(r.recent)), []);
-});
-
-test("loop events (the factory loop's bookkeeping, D-09) never derive anything about an issue", () => {
-  const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
-  const loop = (issue, ts, note) => e(issue, ts, "loop", { run_id: "rL", pr: 900 + issue, note });
-  const run = (id, issue, status, ts) => ({ id, repo: A, device: "dev-a", branch: `feat/issue-${issue}-x`, status, pr_url: null, pr_state: null, issue, awaiting_agent_since: null, created_at: ts, updated_at: ts });
-  const r = derive({
-    at: "2026-10-10T12:00:00.000Z", repos: [], workers: { available: false, reason: "test" },
-    runs: [run("r97", 97, "failed", "2026-10-10T08:00:00.000Z")],
-    events: [
-      e(95, "2026-10-10T11:00:00.000Z", "claimed", { note: "lease: 120" }),
-      loop(95, "2026-10-10T11:30:00.000Z", "kind=spawn key=design:95:1 status=running"),
-      loop(96, "2026-10-10T11:00:00.000Z", "kind=judge key=judge:96 status=done"),
-      loop(97, "2026-10-10T11:00:00.000Z", "kind=tell key=tell:97 status=done"),
-      e(98, "2026-10-10T09:00:00.000Z", "claimed"),
-      e(98, "2026-10-10T10:00:00.000Z", "abandoned"),
-      loop(98, "2026-10-10T11:00:00.000Z", "kind=spawn key=fix:98 status=done"),
-    ],
-  });
-  const d95 = issue(r, A, 95);
-  assert.deepEqual([d95.stage, d95.entered_at, d95.run, d95.pr], ["designing", "2026-10-10T11:00:00.000Z", null, null], "a loop event sets no stage, run or PR");
-  assert.equal(issue(r, A, 96), undefined, "an issue with only loop events is not placed");
-  assert.equal(issue(r, A, 97), undefined, "a loop event does not bring a pipeline-only history into view");
-  assert.equal(issue(r, A, 98).stage, "closed without merge", "a loop event after abandoned is no new life");
-  assert.equal(r.repos[0].coverage.events, 7, "loop events still count as the factory at work");
-});
-
-test("superseded run: an abandon is final only until a new life starts; superseded is never a stage", () => {
-  const r = derive(input("superseded-run"));
-  const st = (n) => issue(r, A, n);
-  assert.equal(st(80).stage, "merged");
-  assert.equal(st(80).run, "r80b");
-  assert.equal(st(80).pr, 180);
-  assert.equal(st(81).stage, "closed without merge", "replays on the abandoned run do not reopen it");
-  assert.equal(st(82).stage, "queued");
-  assert.equal(st(83).stage, "closed without merge", "a run created before the abandon is not a new life");
-  assert.equal(st(84).stage, "in pipeline");
-  assert.equal(st(85).hint.startsWith("event-only: run_started"), true);
-  assert.equal(st(86).stage, "parked");
-  assert.equal(st(86).run, "r86b");
-  assert.equal(st(87).stage, "implementing", "a superseded run is excluded from latest-run selection");
-  for (const i of r.repos[0].issues.concat(r.repos[0].recent)) assert.doesNotMatch(`${i.stage} ${i.detail}`, /superseded(?! by)/);
-});
-
-test("pipeline only: a repo with runs and no events is labelled, and the running run is shown", () => {
-  const r = derive(input("pipeline-only"));
-  const repo = r.repos[0];
-  assert.equal(repo.coverage.class, "pipeline only");
-  assert.match(repo.coverage.notes[0], /not necessarily idle/);
-  assert.deepEqual(repo.issues.map((i) => [i.issue, i.stage]), [[5, "in pipeline"], [6, "parked"]]);
-  assert.deepEqual(repo.other_runs.map((o) => o.run), ["g4"]);
-});
-
-test("split parent and parked trip S1 and S3", () => {
-  assert.deepEqual(derive(input("split-parent")).stuck.map((s) => [s.issue, s.rule]), [[40, "S1"]]);
-  assert.deepEqual(derive(input("parked")).stuck.map((s) => [s.issue, s.rule]), [[50, "S3"]]);
-});
-
-test("S2, S4 and S5 trip, and --rule thresholds move them", () => {
-  const i = input("stuck-rules");
-  assert.deepEqual(derive(i).stuck.map((s) => [s.issue, s.rule]), [[70, "S2"], [71, "S4"], [72, "S5"], [73, "S2"]]);
-  const loose = derive(i, { rules: { ...mod.DEFAULT_RULES, S2: 500, S4: 500, S5: 500 } });
-  assert.deepEqual(loose.stuck, []);
-  assert.equal(loose.rules.S2, 500);
-});
-
-test("don't-merge: a ready-to-merge issue the owner holds shows the held flag and is not stuck (S4)", () => {
-  const gh = (labels) => ({ [A]: { ok: true, stripped: 0, open: { 71: { labels } }, states: {}, claims: {} } });
-  const base = input("stuck-rules");
-  const plain = derive(base, { github: gh(["factory:merge-queue"]) });
-  assert.ok(plain.stuck.some((s) => s.issue === 71 && s.rule === "S4"), "without the label #71 is stuck");
-  assert.deepEqual(issue(plain, A, 71).flags.filter((f) => f.startsWith("held")), []);
-  const held = derive(base, { github: gh(["factory:merge-queue", "Don't-Merge"]) });
-  assert.equal(issue(held, A, 71).stage, "ready to merge");
-  assert.ok(issue(held, A, 71).flags.includes("held: don't-merge (waits on the owner)"));
-  assert.equal(held.stuck.some((s) => s.issue === 71), false, "a held issue is not stuck");
-  assert.ok(held.stuck.some((s) => s.issue === 70), "other issues keep their rules");
-});
-
-test("point in time: before the run finished it is in pipeline and approximate", () => {
-  const early = derive(input("point-in-time-early"));
-  assert.equal(issue(early, A, 60).stage, "in pipeline");
-  assert.equal(issue(early, A, 60).approximate, true);
-  assert.ok(early.approximate);
-  const late = derive(input("point-in-time-late"));
-  assert.equal(issue(late, A, 60).stage, "ready to merge");
-  assert.equal(issue(late, A, 60).approximate, false);
-  assert.equal(late.approximate, null);
-});
-
-test("github: closure beats events, labels and claim holders are cross-checked, labelled issues unknown to the database appear", () => {
-  const r = derive(input("github"));
-  assert.equal(issue(r, A, 80).stage, "closed without merge");
-  assert.equal(issue(r, A, 80).source, "github");
-  assert.match(issue(r, A, 82).flags.join(), /queued, but the issue has no 'ready' label/);
-  assert.deepEqual(issue(r, A, 84).flags, [], "a claim needs no label (In development is gone, v2 SPEC 3.6)");
-  assert.match(issue(r, A, 81).flags.join(), /dev-b/);
-  assert.match(issue(r, A, 86).flags.join(), /could not be read/);
-  assert.deepEqual([90, 91].map((n) => issue(r, A, n).stage), ["queued", "implementing"]);
-  assert.equal(issue(r, A, 92), undefined, "an unrelated open issue is not in the factory");
-  assert.equal(issue(r, A, 83).stage, "merged", "merged but still open stays visible");
-});
-
-test("a requested repo with no data is listed as coverage none", () => {
-  const r = derive({ ...input("split-parent"), repos: ["empty/repo"] });
-  assert.equal(r.repos.find((x) => x.repo === "empty/repo").coverage.class, "none");
-});
-
-test("determinism: shuffled input rows give the identical report", () => {
-  for (const n of names) {
-    const i = input(n);
-    const shuffled = { ...i, events: [...i.events].reverse(), runs: [...i.runs].reverse() };
-    assert.equal(JSON.stringify(derive(shuffled)), JSON.stringify(derive(i)), n);
-  }
-});
-
-test("the SQL carries the canonical run_link CTE from docs/factory-state.md verbatim", () => {
-  const canonical = extractRunLink(fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8"));
-  assert.ok(mod.RUN_LINK.includes(canonical), "RUN_LINK differs from docs/factory-state.md");
-  assert.ok(mod.SQL_RUNS.includes(canonical));
-});
-
-test("every query is read-only SQL bounded by --at", () => {
-  for (const sql of [mod.SQL_EVENTS, mod.SQL_RUNS, mod.SQL_QUEUE]) {
-    assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
-    assert.match(sql, /<= :'at'::timestamptz/);
-  }
-});
-
-// ---------------------------------------------------------------- CLI against stubs
+// ---------------------------------------------------------------- harness
 
 let tmp;
-let devQuery;
 let issueRead;
+let devQuery;
 
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "factory-state-test-"));
-  devQuery = path.join(tmp, "dev-query");
-  // answers by the `-- fs:<name>` marker on the SQL's first line, from the fixture in FS_FIXTURE
-  fs.writeFileSync(devQuery, `#!/usr/bin/env node
-const fs = require("fs");
-const a = process.argv.slice(2);
-if (process.env.FS_FAIL) { console.error("psql: connection refused"); process.exit(Number(process.env.FS_FAIL)); }
-const sql = a[a.indexOf("-c") + 1];
-const vars = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === "-v" ? [x.split(/=(.*)/s).slice(0, 2)] : [])));
-fs.appendFileSync(process.env.FS_LOG, JSON.stringify({ marker: sql.split("\\n")[0], vars, factory: a.includes("--factory"), sql }) + "\\n");
-const fx = JSON.parse(fs.readFileSync(process.env.FS_FIXTURE, "utf8"));
-const m = sql.split("\\n")[0];
-if (m === "-- fs:meta") console.log(JSON.stringify({ now: "2026-10-10T12:00:00.000Z", events: true, runs: process.env.FS_NORUNS !== "1", workers: process.env.FS_WORKERS === "1" }));
-else if (m === "-- fs:events") console.log(JSON.stringify(fx.events));
-else if (m === "-- fs:event_log") {
-  if (process.env.FS_NEW_FAIL) { console.error("psql: no factory database"); process.exit(Number(process.env.FS_NEW_FAIL)); }
-  console.log(JSON.stringify(process.env.FS_EVENT_LOG ? JSON.parse(fs.readFileSync(process.env.FS_EVENT_LOG, "utf8")) : fx.event_log));
-}
-else if (m === "-- fs:queue_meta") console.log(JSON.stringify({ columns: process.env.FS_QUEUE_COLUMNS !== "0" }));
-else if (m === "-- fs:queue") {
-  if (process.env.FS_QUEUE_FAIL) { console.error("psql: queue exploded"); process.exit(Number(process.env.FS_QUEUE_FAIL)); }
-  // like the real SQL: the newest snapshot of each repo at or before :'at', only the repos asked for
-  const at = Date.parse(vars.at);
-  const want = vars.repos ? vars.repos.split(",") : null;
-  const best = new Map();
-  for (const q of fx.queue_rows || []) {
-    const k = q.repo.toLowerCase();
-    if (Date.parse(q.taken_at) > at || (want && !want.includes(k))) continue;
-    const c = best.get(k);
-    if (!c || (q.taken_at + q.ts) > (c.taken_at + c.ts)) best.set(k, q);
-  }
-  console.log(JSON.stringify([...best.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map((e) => e[1])));
-}
-else if (m === "-- fs:runs" && process.env.FS_NORUNS !== "1") console.log(JSON.stringify(fx.runs));
-else process.exit(9);
-`, { mode: 0o755 });
+  // the GitHub side: answers from the fixture named by FS_FIXTURE
   issueRead = path.join(tmp, "issue-read");
   fs.writeFileSync(issueRead, `#!/usr/bin/env node
 const fs = require("fs");
@@ -278,109 +56,475 @@ if (!s || s.state === "unknown") process.exit(3);
 const comments = gh.claims[n] ? [{ id: 1, body: "claimed-by: " + gh.claims[n].device + " at " + gh.claims[n].at + " lease: " + gh.claims[n].lease_minutes }] : [];
 console.log(JSON.stringify({ issue: { state: s.state, labels: lab(s.labels || []), state_reason: s.reason, closed_at: s.closed_at }, comments, stripped: 0 }));
 `, { mode: 0o755 });
+  // dev-query in front of the real one: logs every call, and can fail or hide a part of the database
+  devQuery = path.join(tmp, "dev-query");
+  fs.writeFileSync(devQuery, `#!/usr/bin/env node
+const fs = require("fs");
+const { spawnSync } = require("child_process");
+const a = process.argv.slice(2);
+const sql = a[a.indexOf("-c") + 1];
+const marker = sql.split("\\n")[0];
+fs.appendFileSync(process.env.FS_LOG, JSON.stringify({ marker, factory: a.includes("--factory"), sql }) + "\\n");
+if (process.env.FS_FAIL) { console.error("psql: connection refused"); process.exit(Number(process.env.FS_FAIL)); }
+if (marker === "-- fs:queue_meta" && process.env.FS_QUEUE_COLUMNS === "0") { console.log(JSON.stringify({ columns: false })); process.exit(0); }
+if (marker === "-- fs:queue" && process.env.FS_QUEUE_FAIL) { console.error("psql: queue exploded"); process.exit(Number(process.env.FS_QUEUE_FAIL)); }
+const r = spawnSync(process.env.REAL_DEV_QUERY, a, { stdio: "inherit" });
+process.exit(r.status === null ? 1 : r.status);
+`, { mode: 0o755 });
 });
 
-function cli(args, env = {}, fixture = "missing-run-started") {
+after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+const lit = (s) => `$q$${s}$q$`;
+
+// load(db, events): event rows { repo, device, ts, type, issue, data, version } into factory.event_store
+// as the writer role.
+function load(db, events) {
+  db.n = db.n || 0;
+  const rows = events.map((e) => {
+    db.n += 1;
+    return `(1, '${crypto.randomUUID()}', ${lit(e.ts)}, '${e.type}', ${e.version || 1}, ${lit(e.repo || A)}, ${lit(e.device || "dev-a")}, 'agent', ${e.issue === null || e.issue === undefined ? "NULL" : e.issue}, ${db.n}, ${lit(JSON.stringify(e.data || {}))}::jsonb)`;
+  });
+  if (rows.length) db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data) VALUES ${rows.join(",\n")}`, "writer");
+}
+
+// cli(db, args, env, fixture): the tool over the real dev-query as the database's reader role.
+function cli(db, args, env = {}, fixture = "github") {
   const log = path.join(tmp, "calls.log");
-  fs.rmSync(log, { force: true });
   fs.writeFileSync(log, "");
   const r = spawnSync(process.execPath, [SCRIPT, ...args], {
     encoding: "utf8",
     env: {
-      PATH: process.env.PATH, CALLUM_FLOW_DEV_QUERY_BIN: devQuery, CALLUM_FLOW_ISSUE_READ_BIN: issueRead,
-      CALLUM_FLOW_FACTORY_STATE_SOURCE: "old", CALLUM_EVENTS_DIR: path.join(tmp, "events"),
-      FS_FIXTURE: path.join(FIX, `${fixture}.input.json`), FS_LOG: log, ...env,
+      PATH: process.env.PATH, CALLUM_FLOW_DEV_QUERY_BIN: devQuery, REAL_DEV_QUERY: path.join(BASE, "dev-query"), DEV_SYSTEM_SHARE: BASE,
+      FACTORY_DB_READER_URL: db.readerUrl, CALLUM_FLOW_ISSUE_READ_BIN: issueRead, FS_FIXTURE: path.join(FIX, `${fixture}.input.json`), FS_LOG: log, ...env,
     },
   });
   return { ...r, calls: fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) };
 }
 
-test("CLI: json output equals the pure derivation, passes --at and --repo to the queries, and is byte-identical twice", () => {
-  const args = ["--at", "2026-10-10T12:00:00Z", "--repo", "Acme/Widgets", "--format", "json", "--github", "off"];
-  const a = cli(args);
-  const b = cli(args);
-  assert.equal(a.status, 0, a.stderr);
-  assert.equal(a.stdout, b.stdout);
-  const want = JSON.parse(JSON.stringify(derive({ ...input("missing-run-started"), repos: [A] }, { queue: OLD_QUEUE })));
-  want.skipped_events = [];
-  assert.deepEqual(JSON.parse(a.stdout), want);
-  assert.deepEqual(a.calls.filter((c) => c.marker !== "-- fs:meta").map((c) => c.vars), [
-    { at: "2026-10-10T12:00:00.000Z", repos: A }, { at: "2026-10-10T12:00:00.000Z", repos: A },
+const json = (r) => {
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+const newDb = (t) => createDb(t, { readerPassword: RPW });
+const all = (report, repo = A) => {
+  const r = report.repos.find((x) => x.repo === repo);
+  return r.issues.concat(r.recent);
+};
+const issue = (report, n, repo = A) => all(report, repo).find((i) => i.issue === n);
+
+// event builders for the inline cases
+const ev = (type, ts, n, data = {}, o = {}) => ({ type, ts, issue: n, data, ...o });
+const claim = (n, ts, lease = 120) => ev("claimed", ts, n, { lease_minutes: lease });
+const tr = (n, ts, seq, from, to, extra = {}) => ev("transition", ts, n, {
+  life: "t3xq00", seq, from_state: from, to_state: to, seq_at: ts, state_since: ts, step: null, attempt: 1, why: null, question: null, ...extra,
+});
+const D = "2026-10-10T";
+
+// ---------------------------------------------------------------- fixtures against the database
+
+function runFixture(db, n) {
+  const fx = input(n);
+  load(db, fx.events);
+  const args = ["--at", fx.at, "--format", "json", "--github", fx.github ? "on" : "off", ...(fx.repos || []).flatMap((r) => ["--repo", r])];
+  return { fx, report: json(cli(db, args, {}, n)) };
+}
+
+test("every fixture's report equals its reviewed expected JSON, and each issue equals the view's row", opts, (t) => {
+  assert.deepEqual(names, ["github", "lapsed-claim", "parked", "queue", "v2", "v2-waiting"]);
+  for (const n of names) {
+    const db = newDb(t);
+    const { fx, report } = runFixture(db, n);
+    if (process.env.UPDATE_FIXTURES) fs.writeFileSync(expectedFile(n), `${JSON.stringify(report, null, 2)}\n`);
+    assert.deepEqual(report, JSON.parse(fs.readFileSync(expectedFile(n), "utf8")), n);
+    const rows = JSON.parse(db.query(`SET TimeZone = 'UTC'; SELECT coalesce(jsonb_agg(to_jsonb(v) ORDER BY v.repo, v.issue), '[]') FROM factory.issue_state_at('${fx.at}') v`, "reader"));
+    let checked = 0;
+    for (const repo of report.repos) {
+      for (const i of repo.issues.concat(repo.recent).filter((x) => x.source === "event")) {
+        const row = rows.find((r) => r.repo === repo.repo && r.issue === i.issue);
+        assert.ok(row, `${n} #${i.issue}: no row in the view`);
+        assert.deepEqual([i.state, i.state_since, i.holder], [row.state, new Date(row.state_since).toISOString(), row.holder], `${n} #${i.issue}`);
+        assert.equal(repo.recent.includes(i), row.ended, `${n} #${i.issue}: ended`);
+        checked += 1;
+      }
+    }
+    assert.ok(checked > 0, n);
+  }
+});
+
+test("every issue has what factory-loop's parse.ts and factory-reconcile read", opts, (t) => {
+  const parse = fs.readFileSync(path.join(ROOT, "plugins", "factory-loop", "hooks", "parse.ts"), "utf8");
+  const stages = [...(/STAGES[^=]*=\s*\[([^\]]*)\]/.exec(parse) || [, ""])[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map((m) => m[1] || m[2]);
+  assert.ok(stages.length >= 9, "parse.ts STAGES");
+  for (const n of names) {
+    const db = newDb(t);
+    const { report } = runFixture(db, n);
+    for (const repo of report.repos) {
+      for (const i of repo.issues.concat(repo.recent)) {
+        const at = `${n} #${i.issue}`;
+        assert.ok(stages.includes(i.stage), `${at}: stage ${i.stage}`);
+        if (i.entered_at !== null) assert.equal(new Date(i.entered_at).toISOString(), i.entered_at, at);
+        assert.ok(i.stuck === null || typeof i.stuck.rule === "string", at);
+        assert.equal(i.run, null, at);
+        assert.equal(i.v2 === null, i.life === null, `${at}: v2 is null exactly when there is no deciding transition`);
+      }
+    }
+    for (const s of report.skipped_events) assert.deepEqual(Object.keys(s).sort(), ["count", "derived", "type", "type_version"]);
+  }
+});
+
+test("lapsed claim: a claim-only designing issue shows as queued with the lapse text and no v2 record", opts, (t) => {
+  const db = newDb(t);
+  const { report } = runFixture(db, "lapsed-claim");
+  const lapsed = all(report).filter((i) => i.life === null && i.state === "designing" && i.lease && i.lease.lapsed);
+  assert.ok(lapsed.length >= 2);
+  for (const i of lapsed) {
+    assert.equal(i.stage, "queued");
+    assert.match(i.detail, /^claim lapsed at \S+/);
+    assert.equal(i.detail, `claim lapsed at ${i.lease.until}`);
+    assert.equal(i.v2, null, "factory-reconcile's orphanOf only sees an issue with no v2 record");
+  }
+  const live = all(report).find((i) => i.life === null && i.state === "designing" && i.lease && !i.lease.lapsed);
+  assert.ok(live, "a claim inside its lease stays designing");
+  assert.equal(live.stage, "designing");
+  assert.match(live.detail, /^v2 designing/);
+});
+
+test("closed with why done, merged-by-hand or merged reads as merged, and another why as closed without merge", opts, (t) => {
+  const db = newDb(t);
+  const close = (n, why) => [claim(n, `${D}09:00:00.000Z`), tr(n, `${D}09:30:00.000Z`, 3, "building", "closed", { why })];
+  load(db, [...close(1, "done"), ...close(2, "merged-by-hand"), ...close(3, "merged"), ...close(4, "dropped"), ...close(5, null)]);
+  const r = json(cli(db, AT));
+  assert.deepEqual([1, 2, 3, 4, 5].map((n) => issue(r, n).stage), ["merged", "merged", "merged", "closed without merge", "closed without merge"]);
+  assert.equal(issue(r, 4).detail, "v2 closed (dropped)");
+  assert.equal(issue(r, 5).detail, "v2 closed (no why)");
+  assert.equal(r.repos[0].issues.length, 0);
+});
+
+test("--at: the report before and after a transition shows the state of then", opts, (t) => {
+  const db = newDb(t);
+  load(db, [claim(7, `${D}09:00:00.000Z`), tr(7, `${D}09:01:00.000Z`, 0, null, "queued"), tr(7, `${D}10:00:00.000Z`, 1, "queued", "designing", { step: "design" }),
+    tr(7, `${D}11:00:00.000Z`, 2, "designing", "building", { step: "build" })]);
+  const at = (iso) => json(cli(db, ["--at", iso, "--github", "off", "--format", "json"]));
+  const before = at(`${D}10:30:00Z`);
+  assert.equal(issue(before, 7).state, "designing");
+  assert.equal(issue(before, 7).minutes_in_stage, 30);
+  assert.equal(before.at_source, "--at");
+  const after = at(`${D}11:30:00Z`);
+  assert.deepEqual([issue(after, 7).state, issue(after, 7).stage, issue(after, 7).minutes_in_stage], ["building", "implementing", 30]);
+  assert.deepEqual(at(`${D}08:00:00Z`).repos, [], "before any event nothing is placed");
+});
+
+test("a closed life followed by a claim starts a new life; the older life is not the state", opts, (t) => {
+  const db = newDb(t);
+  load(db, [claim(8, `${D}06:00:00.000Z`), tr(8, `${D}06:01:00.000Z`, 0, null, "queued"), tr(8, `${D}07:00:00.000Z`, 3, "building", "closed", { why: "dropped" }),
+    claim(8, `${D}10:00:00.000Z`), claim(9, `${D}10:00:00.000Z`), tr(9, `${D}10:01:00.000Z`, 0, null, "queued", { life: "t3xq10" })]);
+  const r = json(cli(db, AT));
+  assert.equal(issue(r, 8).state, "designing", "reclaimed after the close");
+  assert.equal(issue(r, 8).life, null);
+  assert.equal(issue(r, 9).state, "queued");
+});
+
+test("counts and devices come from the event log, per repo and device", opts, (t) => {
+  const db = newDb(t);
+  load(db, [claim(1, `${D}09:00:00.000Z`), claim(2, `${D}09:30:00.000Z`, 120), { ...claim(3, `${D}11:00:00.000Z`), device: "dev-b" }, { ...claim(4, `${D}11:30:00.000Z`), repo: "Other/Repo" }]);
+  const r = json(cli(db, AT));
+  const c = r.repos.find((x) => x.repo === A).coverage;
+  assert.equal(c.events, 3);
+  assert.equal(c.last_event_at, `${D}11:00:00.000Z`);
+  assert.deepEqual(c.devices, [{ device: "dev-a", events: 2, last_event_at: `${D}09:30:00.000Z` }, { device: "dev-b", events: 1, last_event_at: `${D}11:00:00.000Z` }]);
+  assert.ok(r.repos.some((x) => x.repo === "other/repo"), "repo names are lower-cased");
+  const one = json(cli(db, [...AT, "--repo", "Other/Repo"]));
+  assert.deepEqual(one.repos.map((x) => x.repo), ["other/repo"]);
+});
+
+// ---------------------------------------------------------------- stuck
+
+const stuckEvents = [
+  claim(1, `${D}06:00:00.000Z`), tr(1, `${D}06:01:00.000Z`, 1, "queued", "designing", { step: "design" }), // designing 359 min: past 240
+  claim(2, `${D}11:00:00.000Z`), tr(2, `${D}11:00:00.000Z`, 1, "designing", "building", { step: "build" }), // building 60 min: not past 60
+  claim(3, `${D}10:30:00.000Z`), tr(3, `${D}10:30:00.000Z`, 1, "building", "building", { step: "build" }), // building 90 min: past 60
+  claim(4, `${D}11:00:00.000Z`), tr(4, `${D}11:00:00.000Z`, 1, "building", "reviewing", { step: "review" }), // reviewing: no rule
+  claim(5, `${D}11:00:00.000Z`), tr(5, `${D}11:00:00.000Z`, 1, "reviewing", "merge-queue", { step: "queue", pr: 55 }), // merge-queue 60: past 30
+  claim(6, `${D}11:50:00.000Z`), tr(6, `${D}11:50:00.000Z`, 1, "building", "parked", { question: "Which one?" }), // parked 10: fine
+];
+
+test("stuck without --rule is the view's flag; the top-level list names state, stage, rule and minutes", opts, (t) => {
+  const db = newDb(t);
+  load(db, stuckEvents);
+  const r = json(cli(db, AT));
+  assert.deepEqual(r.stuck.map((s) => [s.issue, s.state, s.stage, s.rule, s.minutes_in_state]), [
+    [1, "designing", "designing", "designing", 359], [3, "building", "implementing", "building", 90], [5, "merge-queue", "ready to merge", "merge-queue", 60],
   ]);
-  assert.equal(a.calls.some((c) => c.marker.startsWith("-- fs:queue")), false, "--source old never reads the queue");
+  assert.deepEqual(issue(r, 3).stuck, { rule: "building", minutes: 60 });
+  assert.equal(issue(r, 2).stuck, null);
+  assert.equal(issue(r, 6).question, "Which one?");
+  assert.equal(issue(r, 4).stuck, null, "reviewing has no rule");
+  assert.deepEqual(r.rules, { designing: 240, building: 60, fixing: null, "merge-queue": 30, parked: 30, queued: null, reviewing: null, waiting: null });
 });
 
-test("CLI: without --at the database clock is used and named", () => {
-  const r = cli(["--format", "json", "--github", "off"]);
+test("--rule moves a threshold by state name or by the S1..S4 alias, and echoes it", opts, (t) => {
+  const db = newDb(t);
+  load(db, stuckEvents);
+  const byName = json(cli(db, [...AT, "--rule", "building=5"]));
+  assert.ok(byName.stuck.some((s) => s.issue === 2), "#2 is 60 minutes in building");
+  assert.equal(byName.rules.building, 5);
+  assert.deepEqual(issue(byName, 2).stuck, { rule: "building", minutes: 5 });
+  const alias = json(cli(db, [...AT, "--rule", "S2=5"]));
+  assert.deepEqual(alias.stuck, byName.stuck);
+  assert.deepEqual(alias.rules, byName.rules);
+  const loose = json(cli(db, [...AT, "--rule", "S1=999", "--rule", "S2=999", "--rule", "S4=999"]));
+  assert.deepEqual(loose.stuck, []);
+  assert.deepEqual([loose.rules.designing, loose.rules.building, loose.rules["merge-queue"], loose.rules.parked], [999, 999, 999, 30]);
+  const tight = json(cli(db, [...AT, "--rule", "reviewing=5", "--rule", "parked=5"]));
+  assert.deepEqual(tight.stuck.filter((s) => [4, 6].includes(s.issue)).map((s) => [s.issue, s.rule]), [[4, "reviewing"], [6, "parked"]]);
+  const s3 = json(cli(db, [...AT, "--rule", "S3=5"]));
+  assert.equal(s3.rules.parked, 5);
+});
+
+test("--rule: S5, S6, an unknown name and a bad number exit 2", opts, (t) => {
+  const db = newDb(t);
+  for (const rule of ["S5=1", "S6=1", "bogus=5", "building=0", "building=x", "building", "S1"]) {
+    const r = cli(db, [...AT, "--rule", rule]);
+    assert.equal(r.status, 2, rule);
+    assert.match(r.stderr, /usage: callum-flow-factory-state/);
+  }
+});
+
+test("don't-merge: a merge-queue issue the owner holds shows the flag and is not stuck", opts, (t) => {
+  const db = newDb(t);
+  load(db, stuckEvents);
+  const gh = (labels) => {
+    const f = path.join(tmp, "dm.input.json");
+    fs.writeFileSync(f, JSON.stringify({ github: { [A]: { ok: true, open: { 5: { labels } }, states: {}, claims: {} } } }));
+    return f;
+  };
+  const run = (labels) => {
+    const f = gh(labels);
+    return json(cli(db, ["--at", "2026-10-10T12:00:00Z", "--format", "json"], { FS_FIXTURE: f }));
+  };
+  const plain = run(["factory:merge-queue"]);
+  assert.ok(plain.stuck.some((s) => s.issue === 5));
+  assert.deepEqual(issue(plain, 5).flags, []);
+  const held = run(["factory:merge-queue", "Don't-Merge"]);
+  assert.equal(held.stuck.some((s) => s.issue === 5), false);
+  assert.ok(issue(held, 5).flags.includes("held: don't-merge (waits on the owner)"));
+  assert.equal(issue(held, 5).stuck, null);
+  assert.ok(held.stuck.some((s) => s.issue === 1), "other issues keep their rules");
+});
+
+// ---------------------------------------------------------------- skipped events, queue
+
+test("skipped events: a type or version the shapes file does not list is counted, and derived marks the ones the view reads", opts, (t) => {
+  const db = newDb(t);
+  load(db, [claim(1, `${D}09:00:00.000Z`), ev("transition", `${D}09:05:00.000Z`, 1, { life: "t3xq00", to_state: "building" }, { version: 2 }),
+    ev("transition", `${D}09:06:00.000Z`, 1, { life: "t3xq00", to_state: "parked" }, { version: 2 }), ev("some_future_type", `${D}09:07:00.000Z`, 1, {}, { version: 1 })]);
+  const r = json(cli(db, AT));
+  assert.deepEqual(r.skipped_events, [
+    { type: "some_future_type", type_version: 1, count: 1, derived: false },
+    { type: "transition", type_version: 2, count: 2, derived: true },
+  ]);
+  assert.equal(issue(r, 1).state, "designing", "a skipped transition changes no state");
+  assert.match(cli(db, [...AT.slice(0, 2), "--github", "off"]).stdout, /skipped events: some_future_type v1 x1, transition v2 x2 \(derived\)/);
+  assert.deepEqual(json(cli(db, [...AT, "--repo", "nobody/else"])).skipped_events, []);
+});
+
+test("the view types the tool lists equal the VALUES list of migration 0033", () => {
+  const sql = fs.readFileSync(path.join(MIGRATIONS, "0033_issue_state.sql"), "utf8");
+  const start = sql.indexOf("(l.type, l.type_version) IN (VALUES");
+  assert.ok(start > 0, "the VALUES list");
+  const block = sql.slice(start, sql.indexOf("\n),\ntv AS", start));
+  const listed = [...block.matchAll(/\('([a-z_]+)', (\d+)\)/g)].map((m) => [m[1], Number(m[2])]);
+  assert.deepEqual(listed.map((x) => x[0]).sort(), [...mod.VIEW_TYPES].sort());
+  const current = JSON.parse(fs.readFileSync(path.join(BASE, "factory-event-shapes.json"), "utf8")).current;
+  for (const [type, version] of listed) assert.equal(current[type], version, `${type} is current at the version the view reads`);
+});
+
+test("queue fixture: the newest snapshot at --at wins, the top is 10 entries without factors, a repo without one is n/a", opts, (t) => {
+  const db = newDb(t);
+  const { fx, report } = runFixture(db, "queue");
+  const q = report.repos.find((r) => r.repo === A).queue;
+  assert.equal(q.reason, "heartbeat");
+  assert.equal(q.age_minutes, 5);
+  assert.equal(q.top.length, 10);
+  assert.ok(q.top.every((c) => !("factors" in c)));
+  assert.deepEqual(q.rest, [{ why: "blocked", count: 2 }]);
+  assert.deepEqual(report.repos.find((r) => r.repo === "acme/gadgets").queue, { "n/a": "no queue_snapshot for this repo at or before --at" });
+  // a snapshot after --at is not shown, and it never counts as an event of the repo
+  const before = report.repos.find((r) => r.repo === A).coverage.events;
+  const snap = fx.events.filter((e) => e.type === "queue_snapshot").pop();
+  load(db, [{ ...snap, ts: `${D}12:30:01.000Z`, data: { ...snap.data, taken_at: `${D}12:30:00.000Z`, reason: "changed" } }]);
+  const again = json(cli(db, ["--at", fx.at, "--format", "json", "--github", "off"]));
+  assert.deepEqual(again.repos.find((r) => r.repo === A).queue, q);
+  assert.equal(again.repos.find((r) => r.repo === A).coverage.events, before);
+  const later = json(cli(db, ["--at", `${D}13:00:00Z`, "--format", "json", "--github", "off"]));
+  assert.equal(later.repos.find((r) => r.repo === A).queue.reason, "changed");
+});
+
+test("queue: text output prints the snapshot line, the controls line and the n/a line", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("queue").events);
+  const r = cli(db, ["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
   assert.equal(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout);
-  assert.equal(out.at, "2026-10-10T12:00:00.000Z");
-  assert.equal(out.at_source, "database now()");
+  assert.ok(r.stdout.includes("queue (snapshot 5m old, heartbeat): #200 score 100, #201 score 95, #202 score 90 (blocked), #203 score - (unknown), #204 score 80 (blocked), #205 score 75 (blocked), #206 score 70 (blocked), #207 score 65 (blocked), #208 score 60 (blocked), #209 score 55 (blocked), +4 more\n"), r.stdout);
+  assert.ok(r.stdout.includes("queue controls: free slots 1, priority #300 #301, only none, one at a time off, no new work on\n"));
+  assert.ok(r.stdout.includes("queue: n/a: no queue_snapshot for this repo at or before --at\n"));
 });
 
-test("CLI: github facts come from callum-flow-issue-read and match the pure derivation", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z", "--format", "json"], {}, "github");
+test("queue: a database before migration 0023 is n/a with exit 0, and a failing queue read is n/a too", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("queue").events);
+  const old = cli(db, AT, { FS_QUEUE_COLUMNS: "0" });
+  for (const r of json(old).repos) assert.deepEqual(r.queue, { "n/a": "factory.event_log has no queue_snapshot columns (the factory database predates migration 0023)" });
+  assert.equal(old.calls.some((c) => c.marker === "-- fs:queue"), false);
+  const bad = json(cli(db, AT, { FS_QUEUE_FAIL: "4" }));
+  for (const r of bad.repos) assert.match(r.queue["n/a"], /^cannot read the queue snapshot: cannot read the factory database through dev-query --factory \(exit 4\): psql: queue exploded$/);
+  assert.ok(bad.repos[0].coverage.events > 0, "the issues are still read");
+});
+
+// ---------------------------------------------------------------- GitHub
+
+test("github: closure beats events, labels and claim holders are cross-checked, labelled issues unknown to the database appear", opts, (t) => {
+  const db = newDb(t);
+  const { report } = runFixture(db, "github");
+  const st = (n) => issue(report, n);
+  assert.equal(st(80).stage, "closed without merge");
+  assert.equal(st(80).source, "github");
+  assert.match(st(80).detail, /^closed on GitHub \(completed\)/);
+  assert.match(st(82).flags.join(), /queued, but the issue has no 'ready' label/);
+  assert.deepEqual(st(84).flags, [], "a claim needs no label (v2 SPEC 3.6)");
+  assert.match(st(81).flags.join(), /dev-b/);
+  assert.match(st(86).flags.join(), /could not be read/);
+  assert.deepEqual([90, 91].map((n) => [st(n).stage, st(n).source]), [["queued", "github"], ["implementing", "github"]]);
+  assert.equal(st(92), undefined, "an unrelated open issue is not in the factory");
+  assert.equal(st(83).stage, "merged");
+  assert.equal(st(83).source, "event");
+});
+
+test("github: factory labels are checked against the state, and factory:rejected on a closed issue is no flag", opts, (t) => {
+  const db = newDb(t);
+  const { report } = runFixture(db, "v2");
+  assert.deepEqual(issue(report, 100).flags, [], "building with factory:building");
+  const flagged = all(report).filter((i) => i.flags.length);
+  assert.ok(flagged.length > 0, "the fixture carries label mismatches");
+  assert.ok(flagged.every((i) => i.flags.every((f) => f.startsWith("label:") || f.startsWith("claim:") || f.startsWith("github:"))));
+  assert.equal(all(report).some((i) => i.issue === 113), false, "an open issue with only factory:rejected is not in the factory");
+});
+
+test("github: an unreadable GitHub is n/a for that repo, not an error", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("v2").events);
+  const f = path.join(tmp, "empty-gh.input.json");
+  fs.writeFileSync(f, JSON.stringify({ github: {} }));
+  const out = json(cli(db, ["--at", "2026-10-10T12:00:00Z", "--format", "json"], { FS_FIXTURE: f }));
+  assert.match(out.repos[0].coverage.notes.join(" "), /GitHub not read for this repo/);
+  assert.ok(out.repos[0].issues.length > 3);
+});
+
+// ---------------------------------------------------------------- the CLI
+
+test("source: new is the default and silent; old and shadow warn once and read the view; anything else exits 2", opts, (t) => {
+  const db = newDb(t);
+  load(db, [claim(1, `${D}09:00:00.000Z`)]);
+  const base = json(cli(db, AT));
+  for (const args of [[...AT, "--source", "new"], [...AT, "--source=new"]]) {
+    const r = cli(db, args);
+    assert.equal(r.stderr, "");
+    assert.deepEqual(JSON.parse(r.stdout), base);
+  }
+  assert.equal(cli(db, AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "new" }).stderr, "");
+  const eventsDir = path.join(tmp, "events");
+  for (const [args, env] of [[[...AT, "--source", "old"], {}], [[...AT, "--source=shadow"], {}], [AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }]]) {
+    const r = cli(db, args, { CALLUM_EVENTS_DIR: eventsDir, ...env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr.trim().split("\n").length, 1, r.stderr);
+    assert.match(r.stderr, /retired/);
+    assert.match(r.stderr, /factory\.issue_state/);
+    assert.deepEqual(JSON.parse(r.stdout), base);
+    assert.equal(r.calls.every((c) => c.factory), true);
+  }
+  assert.equal(fs.existsSync(eventsDir), false, "no shadow record is written");
+  for (const [args, env] of [[[...AT, "--source", "bad"], {}], [AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" }], [[...AT, "--source"], {}]]) {
+    const r = cli(db, args, env);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /usage: callum-flow-factory-state/);
+  }
+});
+
+test("the tool reads only the factory database: every call is dev-query --factory and no old table is named", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("v2").events);
+  const r = cli(db, AT);
   assert.equal(r.status, 0, r.stderr);
-  const want = JSON.parse(JSON.stringify(derive(input("github"), { queue: OLD_QUEUE })));
-  want.skipped_events = [];
-  assert.deepEqual(JSON.parse(r.stdout), want);
+  assert.ok(r.calls.length >= 6);
+  assert.ok(r.calls.every((c) => c.factory), "no plain dev-query");
+  const text = r.calls.map((c) => c.sql).join("\n");
+  assert.match(text, /factory\.issue_state_at\(:'at'::timestamptz\)/);
+  assert.match(text, /factory\.stuck_rules/);
+  assert.doesNotMatch(text, /nomistakes|factory\.events\b|workers_status|run_link/);
+  assert.doesNotMatch(text, /\bdata\b/, "named view columns only, never the data jsonb");
+  for (const sql of [mod.SQL_META, mod.SQL_STATE, mod.SQL_RULES, mod.SQL_COUNTS, mod.SQL_SKIPPED, mod.SQL_QUEUE_META, mod.SQL_QUEUE]) {
+    assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
+  }
+  for (const sql of [mod.SQL_STATE, mod.SQL_COUNTS, mod.SQL_SKIPPED, mod.SQL_QUEUE]) assert.match(sql, /:'at'::timestamptz/);
 });
 
-test("CLI: an unreadable GitHub is n/a for that repo, not an error", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z", "--format", "json"], {}, "missing-run-started");
+test("a database migrated only to 0032 exits 1 naming migration 0033 and the migrate command", opts, (t) => {
+  const old = fs.mkdtempSync(path.join(os.tmpdir(), "migrations-at-0032-"));
+  t.after(() => fs.rmSync(old, { recursive: true, force: true }));
+  for (const f of fs.readdirSync(MIGRATIONS)) if (f < "0033") fs.copyFileSync(path.join(MIGRATIONS, f), path.join(old, f));
+  const db = createDb(t, { migrationsDir: old, readerPassword: RPW });
+  const r = cli(db, AT);
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  assert.equal(r.stderr.trim().split("\n").length, 1);
+  assert.match(r.stderr, /0033/);
+  assert.match(r.stderr, /factory-db-bootstrap --migrate/);
+});
+
+test("CLI: output is byte-identical twice, and without --at the database clock is used and named", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("v2").events);
+  const a = cli(db, AT);
+  assert.equal(a.stdout, cli(db, AT).stdout);
+  const now = json(cli(db, ["--github", "off", "--format", "json"]));
+  assert.equal(now.at_source, "database now()");
+  assert.ok(!Number.isNaN(Date.parse(now.at)));
+});
+
+test("CLI: text output lists stage, holder and PR", opts, (t) => {
+  const db = newDb(t);
+  load(db, input("v2").events);
+  const r = cli(db, ["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
   assert.equal(r.status, 0, r.stderr);
-  const repo = JSON.parse(r.stdout).repos[0];
-  assert.match(repo.coverage.notes.join(" "), /GitHub not read for this repo/);
-  assert.equal(repo.issues.length, 3);
-});
-
-test("CLI: a missing factory.workers_status is n/a with the reason and exit 0; an existing one is named", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /Workers\nn\/a: factory\.workers_status does not exist/);
-  const s = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"], { FS_WORKERS: "1" });
-  assert.match(JSON.parse(s.stdout).workers["n/a"], /does not read it yet/);
-});
-
-test("CLI: nomistakes.runs is optional: missing, it is n/a with the reason, no run places an issue, and the exit is 0", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"], { FS_NORUNS: "1" });
-  assert.equal(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout);
-  assert.deepEqual(out.runs, { "n/a": "nomistakes.runs does not exist in the database" });
-  assert.equal(r.calls.some((c) => c.marker === "-- fs:runs"), false, "the runs are not queried");
-  assert.deepEqual(out.repos[0].issues.map((i) => [i.issue, i.stage, i.run]), [[20, "implementing", null], [21, "implementing", null], [22, "implementing", null]]);
-  assert.equal(JSON.parse(cli(["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"]).stdout).runs, "read");
-  const text = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off"], { FS_NORUNS: "1" });
-  assert.match(text.stdout, /\nPipeline runs: n\/a: nomistakes\.runs does not exist in the database\n/);
-});
-
-test("CLI: text output is stable and lists stage, holder, run and PR", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
-  assert.match(r.stdout, /#21 +ready to merge +10m +dev-a +r21 +#121 /);
+  assert.match(r.stdout, /#102 +in pipeline +20m +dev-a +#202 /);
+  assert.match(r.stdout, /Recently ended \(24h\)/);
 });
 
 test("CLI: bad arguments exit 2", () => {
+  const db = { readerUrl: "postgres://unused" };
   for (const args of [["--bogus"], ["--repo", "nope"], ["--repo"], ["--at", "yesterday"], ["--at", "2026-10-10"], ["--format", "xml"],
-    ["--rule", "S1"], ["--rule", "S9=5"], ["--rule", "S1=x"], ["--rule", "S6=5"], ["--github", "maybe"]]) {
-    const r = cli(args);
+    ["--rule", "S1"], ["--rule", "S9=5"], ["--rule", "S1=x"], ["--rule", "S5=5"], ["--rule", "S6=5"], ["--github", "maybe"], ["--source", "xml"]]) {
+    const r = cli(db, args);
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stderr, /usage: callum-flow-factory-state/);
   }
 });
 
 test("CLI: a failing dev-query exits 1, and a missing one too", () => {
-  const r = cli(["--at", "2026-10-10T12:00:00Z"], { FS_FAIL: "3" });
+  const db = { readerUrl: "postgres://unused" };
+  const r = cli(db, ["--at", "2026-10-10T12:00:00Z"], { FS_FAIL: "3" });
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /cannot read the fleet database/);
+  assert.match(r.stderr, /cannot read the factory database through dev-query --factory \(exit 3\)/);
   assert.equal(r.stdout, "");
-  const none = cli(["--at", "2026-10-10T12:00:00Z"], { CALLUM_FLOW_DEV_QUERY_BIN: path.join(tmp, "absent") });
-  assert.equal(none.status, 1);
+  assert.equal(cli(db, ["--at", "2026-10-10T12:00:00Z"], { CALLUM_FLOW_DEV_QUERY_BIN: path.join(tmp, "absent") }).status, 1);
 });
 
 test("CLI: --help prints usage and exits 0", () => {
-  const r = cli(["--help"]);
+  const r = cli({ readerUrl: "postgres://unused" }, ["--help"]);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /^usage: callum-flow-factory-state/);
+  assert.match(r.stdout, /--rule <state>=<minutes>/);
 });
 
 // ---------------------------------------------------------------- skill, docs, allow list
@@ -404,11 +548,15 @@ test("the historical-number and windowed-report skills route 'right now' to fact
   }
 });
 
-test("docs/factory-state.md defines the stages, rules and one worked example per fixture", () => {
+test("docs/factory-state.md is written around the view: sections, stages, states, one worked example per fixture", () => {
   const doc = fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8");
   for (const st of mod.STAGES) assert.ok(doc.includes(`\`${st}\``), `stage ${st}`);
-  for (const r of ["S1", "S2", "S3", "S4", "S5", "S6"]) assert.ok(doc.includes(r), r);
+  for (const st of ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"]) assert.ok(doc.includes(`\`${st}\``), `state ${st}`);
+  for (const h of ["Usage", "States", "Lives", "Holder and lease", "`--at`", "Stuck rules", "Output", "Queue", "GitHub flags", "Skipped events", "Worked examples", "The issue_state view"]) {
+    assert.ok(new RegExp(`^#{2,3} ${h.replace(/[`]/g, "\\`")}$`, "m").test(doc), `heading ${h}`);
+  }
   for (const n of names) assert.ok(doc.includes(`\`${n}\``), `worked example for ${n}`);
+  for (const gone of ["nomistakes", "run_link", "S5", "S6", "coverage class", "pipeline only", "old|new|shadow"]) assert.ok(!doc.includes(gone), `no ${gone}`);
 });
 
 for (const rel of ["templates/.claude/settings.json", ".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
@@ -418,426 +566,3 @@ for (const rel of ["templates/.claude/settings.json", ".claude/settings.json", "
     assert.ok(allow.includes("Bash(callum-flow-factory-state *)"));
   });
 }
-
-test("lapsed claim (#465): a claim only counts as designing while its lease is live", () => {
-  const r = derive(input("lapsed-claim"));
-  const stage = (n) => issue(r, A, n).stage;
-  assert.deepEqual([1, 5].map(stage), ["queued", "queued"], "unrenewed claims lapse: legacy 120 min default, and a `lease: 30` note");
-  assert.equal(issue(r, A, 1).detail, "claim lapsed at 2026-10-12T02:00:00.000Z");
-  assert.equal(issue(r, A, 5).detail, "claim lapsed at 2026-10-12T06:50:00.000Z");
-  assert.deepEqual([2, 3, 4].map(stage), ["designing", "designing", "designing"], "fresh, renewed, and briefed-then-renewed claims stay live");
-  assert.equal(stage(6), "closed without merge", "renewed after closed does not reopen");
-  assert.equal(stage(7), "implementing", "housekeeping noise after delegated changes nothing");
-  assert.equal(stage(8), "in pipeline", "a running run is not a claim");
-  const all = r.repos[0].issues.map((i) => i.stage);
-  assert.equal(all.filter((s) => s === "designing").length, 3);
-});
-
-test("factory loop v2: a record closed with why=done (its work had merged already) reads as merged", () => {
-  const i = input("v2");
-  let n = 0;
-  for (const e of i.events || []) {
-    if (e.state === "transition" && e.issue === 103 && e.note.includes("why=merged")) { e.note = e.note.replace("why=merged", "why=done"); n++; }
-  }
-  assert.equal(n, 1, "the fixture's close of 103 was found");
-  const st = issue(derive(i), A, 103);
-  assert.equal(st.stage, "merged");
-  assert.equal(st.v2.why, "done");
-});
-
-test("factory loop v2 (v2 SPEC 3.6, 7.3): the newest transition of the current life places the issue, above the mirror's runs", () => {
-  const r = derive(input("v2"));
-  const st = (n) => issue(r, A, n);
-  assert.deepEqual([st(100).stage, st(100).source, st(100).run, st(100).detail], ["implementing", "event", null, "v2 building, step build, attempt 1"], "a running v1 run no longer sets the stage");
-  assert.equal(st(100).entered_at, "2026-10-10T11:20:00.000Z", "time in stage from the record's since");
-  assert.deepEqual(st(100).v2, { state: "building", step: "build", attempt: 1, life: "t3xq00", seq: 2, why: null });
-  assert.deepEqual([st(101).stage, st(101).stuck.rule], ["parked", "S3"], "the stuck rules stay as they are");
-  assert.equal(st(102).stage, "in pipeline");
-  assert.deepEqual(st(102).flags, ["label: v2 reviewing, but the issue lacks 'factory:reviewing'"]);
-  assert.deepEqual([100, 101, 107, 109].map((n) => st(n).flags), [[], [], [], []], "the factory label of its state is all a v2 issue needs");
-  assert.equal(st(103).stage, "merged", "closed as merged by its why, with its merged event lost");
-  assert.deepEqual([st(104).stage, r.repos[0].recent.map((i) => i.issue)], ["closed without merge", [104]], "a dropped record has ended");
-  assert.deepEqual([st(105).stage, st(105).v2], ["queued", null], "ready after a closed record is a new life before any v2 state");
-  assert.deepEqual([st(106).stage, st(106).holder, st(106).v2], ["designing", "dev-b", null], "a claim-lost close is another device's issue");
-  assert.deepEqual([st(111).stage, st(111).v2, st(111).flags], ["queued", null, []], "a ghost a sweep released shows no v2 state, whatever its last transition's to");
-  assert.deepEqual([st(112).stage, st(112).holder, st(112).v2.life, st(112).flags], ["implementing", "dev-b", "t3xq10", []],
-    "an older life's claim-lost close, logged later on another device, never hides the live life's view");
-  assert.deepEqual([st(107).stage, st(107).lease], ["queued", { until: "2026-10-10T10:00:00.000Z", lapsed: true }]);
-  assert.deepEqual([st(109).stage, st(109).lease.lapsed], ["designing", true], "a v2 record keeps its state while its claim lapsed: the loop claims it again");
-  assert.deepEqual([st(108).stage, st(108).source], ["in pipeline", "github"], "an open issue with a factory label and no events is listed from the label");
-  assert.equal(st(110), undefined, "an open issue with neither a factory label nor ready is not in the factory");
-  assert.equal(st(113), undefined, "factory:rejected names no stage: a rejected issue is out of the factory");
-  assert.deepEqual(st(100).lease, { until: "2026-10-10T13:50:00.000Z", lapsed: false }, "the lease runs from the newest renewal");
-});
-
-test("waiting (the loop's hold on wait conditions): a v2 record or a factory:waiting label gives the waiting stage", () => {
-  const r = derive(input("v2-waiting"));
-  const st = (n) => issue(r, A, n);
-  assert.deepEqual([st(200).stage, st(200).source, st(200).flags], ["waiting", "event", []], "a waiting record with factory:waiting has no label problem");
-  assert.equal(st(200).stuck, null, "waiting has no stuck rule, even after more than 24 h");
-  assert.deepEqual(r.repos[0].issues.map((i) => i.stage).filter((s) => ["queued", "parked", "waiting"].includes(s)),
-    ["queued", "parked", "waiting", "waiting", "waiting", "waiting"], "waiting sorts right after parked");
-  assert.match(st(201).flags.join(";"), /label: .*waiting/, "a waiting record that carries factory:parked is a label problem");
-  assert.deepEqual([st(204).stage, st(204).source], ["waiting", "github"], "an issue with only a factory:waiting label is waiting from github");
-  assert.ok(st(205).flags.some((f) => f.startsWith("claim:")), "another device's claim on a waiting issue trips the claim check");
-});
-
-// ---------------------------------------------------------------- the source switch (#898)
-
-// The inverse of the old mapper, for the tests: a factory.events row as the factory.event_log row the
-// new store holds for it (docs/factory-events/translator.md), or null when the line makes no new event.
-const NEW_TYPE = { reclaimed: "requeued", renewed: "claim_renewed", verdict: "finding_handled" };
-const NEW_TYPES = new Set(Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, "images", "base", "factory-event-shapes.json"), "utf8")).current));
-const tokens = (note) => Object.fromEntries(String(note || "").split(" ").filter((w) => w.indexOf("=") > 0)
-  .map((w) => [w.slice(0, w.indexOf("=")), decodeURIComponent(w.slice(w.indexOf("=") + 1))]).map(([k, v]) => [k, v === "none" ? null : v]));
-function toEventLog(r) {
-  const type = r.state === "loop" ? (/(^| )kind=passes( |$)/.test(r.note) ? "loop_passes" : "loop_entry") : NEW_TYPE[r.state] || r.state;
-  if (!NEW_TYPES.has(type)) return null;
-  const o = {
-    type, type_version: 1, repo: r.repo, device: r.device, ts: r.ts, issue: r.issue, pr: r.pr === undefined ? null : r.pr, branch: r.branch || null,
-    to_state: null, from_state: null, life: null, state_since: null, step: null, attempt: null, seq: null, why: null, reason: null, lease_minutes: null,
-  };
-  if (r.state === "transition") {
-    const f = tokens(r.note);
-    Object.assign(o, {
-      to_state: f.to, from_state: f.from, life: f.life, step: f.step || null, why: f.why || null,
-      attempt: f.attempt === undefined ? null : Number(f.attempt), seq: f.seq === undefined ? null : Number(f.seq),
-      state_since: f.since ? new Date(Number(f.since)).toISOString() : null,
-    });
-  } else if (r.state === "claimed" || r.state === "renewed") {
-    const m = /lease: *(\d+)/.exec(r.note || "");
-    o.lease_minutes = m ? Number(m[1]) : 120;
-  } else if (r.state === "closed" || r.state === "abandoned") o.reason = r.note || null;
-  return o;
-}
-const withNew = (n) => {
-  const fx = input(n);
-  const f = path.join(tmp, `${n}-new.input.json`);
-  fs.writeFileSync(f, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
-  return f;
-};
-const withEventLog = (n, rows) => {
-  const f = path.join(tmp, `${n}.event-log.json`);
-  fs.writeFileSync(f, JSON.stringify(rows));
-  return f;
-};
-const shadowRecords = () => {
-  const f = path.join(tmp, "events", "factory", ".shadow", "factory-state.jsonl");
-  return fs.existsSync(f) ? fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
-};
-const AT = ["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"];
-
-test("source: a bad --source or variable exits 2 with the usage; the flag beats the variable; new is the default, old the way back", () => {
-  const bad = cli([...AT, "--source", "bad"]);
-  assert.equal(bad.status, 2);
-  assert.match(bad.stderr, /invalid source 'bad' from the --source flag: use one of old, new, shadow/);
-  assert.match(bad.stderr, /usage: callum-flow-factory-state/);
-  const env = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" });
-  assert.equal(env.status, 2);
-  assert.match(env.stderr, /CALLUM_FLOW_FACTORY_STATE_SOURCE/);
-  const flag = cli([...AT, "--source", "old"], { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" });
-  assert.equal(flag.status, 0, flag.stderr);
-  assert.equal(flag.calls.some((c) => c.factory), false, "old never reads the factory database");
-  const viaEnv = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "new", FS_FIXTURE: withNew("v2-waiting") });
-  assert.equal(viaEnv.status, 0, viaEnv.stderr);
-  assert.equal(viaEnv.calls.some((c) => c.marker === "-- fs:events"), false, "the variable chose new");
-  const dflt = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "", FS_FIXTURE: withNew("v2-waiting") });
-  assert.equal(dflt.status, 0, dflt.stderr);
-  assert.ok(dflt.calls.some((c) => c.marker === "-- fs:event_log"), "the default reads the new store");
-  assert.equal(dflt.calls.some((c) => c.marker === "-- fs:events"), false, "the default does not read old");
-  const before = shadowRecords().length;
-  cli(AT, { FS_FIXTURE: withNew("v2-waiting") });
-  assert.equal(shadowRecords().length, before, "the default writes no shadow record");
-  const oldVar = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "old", FS_FIXTURE: withNew("v2-waiting") });
-  assert.equal(oldVar.status, 0, oldVar.stderr);
-  assert.ok(oldVar.calls.some((c) => c.marker === "-- fs:events"), "the old variable reads old");
-  assert.equal(oldVar.calls.some((c) => c.marker === "-- fs:event_log"), false, "the old variable does not read new");
-});
-
-test("SQL_EVENT_LOG: named view columns only, never the data jsonb, read-only and bounded by --at", () => {
-  assert.doesNotMatch(mod.SQL_EVENT_LOG, /\bdata\b|\*/);
-  assert.doesNotMatch(mod.SQL_EVENT_LOG, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
-  assert.match(mod.SQL_EVENT_LOG, /FROM factory\.event_log/);
-  assert.match(mod.SQL_EVENT_LOG, /<= :'at'::timestamptz/);
-});
-
-const L = (extra) => ({ repo: A, device: "dev-a", ts: "2026-10-10T11:00:00.000Z", issue: 7, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
-const TRANSITION = "row=T11 life=t3xq00 seq=2 from=queued to=building seqAt=1791631200000 since=1791631200000 step=build attempt=1 why=none";
-const PAIRS = [
-  ["ready", L({ state: "ready" })],
-  ["claimed with a lease", L({ state: "claimed", note: "lease: 30" })],
-  ["claimed without one", L({ state: "claimed" })],
-  ["renewed", L({ state: "renewed", note: "lease: 45" })],
-  ["reclaimed", L({ state: "reclaimed", note: "lease expired" })],
-  ["verdict", L({ state: "verdict", note: "CORRECT: r1-2 fixed" })],
-  ["loop entry", L({ state: "loop", note: "kind=agent-step key=i7/a status=done" })],
-  ["loop passes", L({ state: "loop", note: "kind=passes key=passes:1 status=done" })],
-  ["closed", L({ state: "closed", note: "completed" })],
-  ["abandoned", L({ state: "abandoned", note: "reason=drop note=gone" })],
-  ["merged", L({ state: "merged", pr: 12 })],
-  ["transition", L({ state: "transition", pr: 12, branch: "issue-7", note: TRANSITION })],
-  ["transition to closed", L({ state: "transition", note: "row=T20 life=t3xq00 seq=9 from=merge-queue to=closed since=none step=none attempt=0 why=merged" })],
-];
-const NEW_NAME = { reclaimed: "requeued", renewed: "claim_renewed", verdict: "finding_handled" };
-
-test("mapping: the new store's row becomes the common event the old line becomes", () => {
-  for (const [name, row] of PAIRS) {
-    const log = toEventLog(row);
-    const want = mod.mapOldRow(row);
-    if (name.startsWith("loop")) assert.equal(want.type, "loop", name);
-    assert.deepEqual(mod.mapEventLogRow(log), want, name);
-    if (NEW_NAME[row.state]) assert.equal(log.type, NEW_NAME[row.state]);
-  }
-  assert.deepEqual(mod.mapOldRow(PAIRS[11][1]), {
-    type: "transition", repo: A, device: "dev-a", issue: 7, t: Date.parse("2026-10-10T11:00:00.000Z"), pr: 12, branch: "issue-7", run: null,
-    to_state: "building", from_state: "queued", life: "t3xq00", state_since: 1791631200000, step: "build", attempt: 1, seq: 2, why: null,
-    reason: null, lease_minutes: null,
-  });
-  assert.equal(mod.mapOldRow(PAIRS[1][1]).lease_minutes, 30);
-  assert.equal(mod.mapOldRow(PAIRS[2][1]).lease_minutes, 120, "a claim with no lease note holds the default");
-});
-
-test("mapping: new-only types are known and ignored by name, an unknown type or version is refused", () => {
-  for (const type of mod.IGNORED_TYPES) {
-    const m = mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type });
-    assert.equal(m.type, type.startsWith("loop_") ? "loop" : type, "loop_entry and loop_passes map to loop");
-  }
-  assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "mystery" }), /unknown factory event: mystery v1/);
-  assert.throws(() => mod.mapEventLogRow({ ...toEventLog(L({ state: "ready" })), type: "claimed", type_version: 2 }), /unknown factory event: claimed v2/);
-});
-
-test("CLI new: the lease and the stages equal the old path's for the same claims", () => {
-  for (const n of ["v2-waiting", "closed-outside", "replayed-events"]) {
-    const fx = input(n);
-    const file = path.join(tmp, `${n}-new.input.json`);
-    fs.writeFileSync(file, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
-    const args = ["--at", fx.at, "--github", "off", "--format", "json"];
-    const old = cli([...args, "--source", "old"], {}, n);
-    const nu = cli([...args, "--source", "new"], { FS_FIXTURE: file });
-    assert.equal(nu.status, 0, nu.stderr);
-    assert.deepEqual(mod.normalizeForCompare(JSON.parse(nu.stdout)), mod.normalizeForCompare(JSON.parse(old.stdout)), n);
-    assert.ok(nu.calls.filter((c) => c.marker === "-- fs:event_log").every((c) => c.factory), "event_log is read through dev-query --factory");
-    assert.equal(nu.calls.some((c) => c.marker === "-- fs:events"), false);
-  }
-  const fx = input("lapsed-claim");
-  const file = path.join(tmp, "lapsed-new.input.json");
-  fs.writeFileSync(file, JSON.stringify({ ...fx, event_log: fx.events.map(toEventLog).filter(Boolean) }));
-  const lease = (r) => Object.fromEntries(JSON.parse(r.stdout).repos[0].issues.map((i) => [i.issue, i.lease]));
-  const args = ["--at", fx.at, "--github", "off", "--format", "json"];
-  const a = lease(cli([...args, "--source", "old"], {}, "lapsed-claim"));
-  const b = lease(cli([...args, "--source", "new"], { FS_FIXTURE: file }));
-  assert.ok(Object.keys(a).length > 3);
-  assert.deepEqual(b, a);
-});
-
-test("DERIVED_TYPES and IGNORED_TYPES partition the current types of the shapes file", () => {
-  const current = Object.keys(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "images", "base", "factory-event-shapes.json"), "utf8")).current);
-  assert.ok(current.length >= 20);
-  for (const t of current) assert.equal([mod.DERIVED_TYPES, mod.IGNORED_TYPES].filter((set) => set.includes(t)).length, 1, t);
-  for (const t of [...mod.DERIVED_TYPES, ...mod.IGNORED_TYPES]) assert.ok(current.includes(t), `${t} is not a current type`);
-});
-
-test("CLI new: an event_log row of an unknown type or version is left out and named; shadow records no difference", () => {
-  const fx = input("v2-waiting");
-  const good = fx.events.map(toEventLog).filter(Boolean);
-  const rows = [...good];
-  const claimed = good.find((r) => r.type === "claimed");
-  rows.push({ ...claimed, type: "mystery" }, { ...claimed, type_version: 2 });
-  const file = withEventLog("bad", rows);
-  const nu = cli([...AT, "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
-  assert.equal(nu.status, 0, nu.stderr);
-  const report = JSON.parse(nu.stdout);
-  assert.deepEqual(report.skipped_events, [
-    { type: "claimed", type_version: 2, count: 1, derived: true },
-    { type: "mystery", type_version: 1, count: 1, derived: false },
-  ]);
-  const clean = cli([...AT, "--source", "new"], { FS_EVENT_LOG: withEventLog("good", good) }, "v2-waiting");
-  assert.deepEqual(clean.status, 0, clean.stderr);
-  assert.deepEqual(JSON.parse(clean.stdout).skipped_events, []);
-  assert.deepEqual(mod.normalizeForCompare(report), mod.normalizeForCompare(JSON.parse(clean.stdout)));
-  const text = cli(["--at", fx.at, "--github", "off", "--source", "new"], { FS_EVENT_LOG: file }, "v2-waiting");
-  assert.equal(text.status, 0, text.stderr);
-  assert.match(text.stdout, /^skipped events: claimed v2 x1 \(derived\), mystery v1 x1$/m);
-  assert.doesNotMatch(clean.stdout, /skipped events/);
-  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
-  const sh = cli([...AT, "--source", "shadow"], { FS_EVENT_LOG: file }, "v2-waiting");
-  const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
-  assert.equal(sh.status, 0, sh.stderr);
-  assert.equal(sh.stdout, old.stdout, "shadow prints the old answer");
-  assert.deepEqual(JSON.parse(old.stdout).skipped_events, []);
-  const rec = shadowRecords();
-  assert.equal(rec.length, 1);
-  assert.equal(rec[0].tool, "factory-state");
-  assert.equal(rec[0].differences, 0);
-  assert.equal(rec[0].new_error, null);
-});
-
-test("CLI shadow: a matching run records zero differences, a seeded difference is recorded by path; the exit follows the old read", () => {
-  const fx = input("v2-waiting");
-  const rows = fx.events.map(toEventLog).filter(Boolean);
-  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
-  const ok = cli(AT, { FS_EVENT_LOG: withEventLog("match", rows), CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.deepEqual(shadowRecords().map((r) => [r.differences, r.paths, r.new_error]), [[0, [], null]]);
-  assert.equal(ok.stderr, "");
-  const seeded = rows.map((r) => (r.type === "transition" && r.issue === 200 ? { ...r, to_state: "parked" } : r));
-  assert.notDeepEqual(seeded, rows);
-  const diff = cli(AT, { FS_EVENT_LOG: withEventLog("seeded", seeded), CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
-  const old = cli([...AT, "--source", "old"], {}, "v2-waiting");
-  assert.equal(diff.status, 0);
-  assert.equal(diff.stdout, old.stdout);
-  const rec = shadowRecords();
-  assert.equal(rec.length, 2);
-  assert.ok(rec[1].differences > 0, JSON.stringify(rec[1]));
-  assert.match(rec[1].paths[0].path, /^\$\.(repos|stuck)/);
-  assert.match(diff.stderr, /shadow: \d+ difference\(s\)/);
-  // a new read that fails is a record, not a failure
-  const down = cli(AT, { FS_NEW_FAIL: "78", CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }, "v2-waiting");
-  assert.equal(down.status, 0);
-  assert.equal(down.stdout, old.stdout);
-  assert.match(shadowRecords()[2].new_error, /cannot read the factory database/);
-  // and a failing old read fails the tool, as before
-  const oldDown = cli(AT, { FS_FAIL: "3", CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" });
-  assert.equal(oldDown.status, 1);
-});
-
-// ---------------------------------------------------------------- the queue snapshot (#1147)
-
-const QA = "acme/widgets";
-const queueRepo = (r, repo) => r.repos.find((x) => x.repo === repo).queue;
-
-test("queue fixture: the newest snapshot wins, the top is 10 entries without factors, a repo without one is n/a", () => {
-  const r = derive(input("queue"));
-  const q = queueRepo(r, QA);
-  assert.equal(q.reason, "heartbeat");
-  assert.equal(q.age_minutes, 5);
-  assert.equal(q.top.length, 10);
-  assert.ok(q.top.every((c) => !("factors" in c)));
-  assert.deepEqual(q.top.map((c) => c.rank), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.deepEqual(q.rest, [{ why: "blocked", count: 2 }]);
-  assert.deepEqual(queueRepo(r, "acme/gadgets"), { "n/a": "no queue_snapshot for this repo at or before --at" });
-  assert.deepEqual(derive(input("queue"), { queue: undefined }).repos[0].queue, { "n/a": "not read" });
-});
-
-test("queue: shuffled rows give the same report, and a repo only in the queue rows is not added", () => {
-  const i = input("queue");
-  const shuffled = { ...i, queue: { available: true, rows: [...i.queue.rows].reverse().concat([{ ...i.queue.rows[0], repo: "acme/other" }]) } };
-  assert.equal(JSON.stringify(derive(shuffled)), JSON.stringify(derive(i)));
-});
-
-test("queue: renderText prints the snapshot line, the controls line and the n/a line", () => {
-  const text = mod.renderText(JSON.parse(JSON.stringify(derive(input("queue")))));
-  assert.ok(text.includes("queue (snapshot 5m old, heartbeat): #200 score 100, #201 score 95, #202 score 90 (blocked), #203 score - (unknown), #204 score 80 (blocked), #205 score 75 (blocked), #206 score 70 (blocked), #207 score 65 (blocked), #208 score 60 (blocked), #209 score 55 (blocked), +4 more\n"));
-  assert.ok(text.includes("queue controls: free slots 1, priority #300 #301, only none, one at a time off, no new work on\n"));
-  assert.ok(text.includes("queue: n/a: no queue_snapshot for this repo at or before --at\n"));
-  const i = input("queue");
-  const empty = { ...i, queue: { available: true, rows: [{ ...i.queue.rows[1], candidates: [], considered: 0, free_slots: null, owner_priority: [], owner_serial: true, owner_new_off: false }] } };
-  const t2 = mod.renderText(JSON.parse(JSON.stringify(derive(empty))));
-  assert.ok(t2.includes("queue (snapshot 5m old, heartbeat): empty\n"));
-  assert.ok(t2.includes("queue controls: free slots unset, priority none, only none, one at a time on, no new work off\n"));
-});
-
-const queueFixture = (name, extra = {}) => {
-  const fx = input("queue");
-  const late = { ...fx.queue.rows[1], ts: "2026-10-10T12:30:01.000Z", taken_at: "2026-10-10T12:30:00.000Z", reason: "changed" };
-  const f = path.join(tmp, `${name}.input.json`);
-  fs.writeFileSync(f, JSON.stringify({ ...fx, queue_rows: [...fx.queue.rows, late], event_log: fx.events.map(toEventLog).filter(Boolean), ...extra }));
-  return f;
-};
-
-test("CLI new: reads the queue through --factory, bounded by --at, byte-identical twice, equal to the pure derivation", () => {
-  const file = queueFixture("queue-cli");
-  const args = [...AT, "--source", "new"];
-  const a = cli(args, { FS_FIXTURE: file }, "queue");
-  const b = cli(args, { FS_FIXTURE: file }, "queue");
-  assert.equal(a.status, 0, a.stderr);
-  assert.equal(a.stdout, b.stdout);
-  const meta = a.calls.findIndex((c) => c.marker === "-- fs:queue_meta");
-  const q = a.calls.findIndex((c) => c.marker === "-- fs:queue");
-  assert.ok(meta >= 0 && q > meta && a.calls[meta].factory && a.calls[q].factory);
-  assert.equal(a.calls[q].vars.at, "2026-10-10T12:00:00.000Z");
-  assert.match(a.calls[q].sql, /row_number\(\) OVER \(PARTITION BY lower\(repo\) ORDER BY taken_at DESC, ts DESC, device DESC, event_id DESC\)/);
-  assert.doesNotMatch(a.calls[q].sql, /DISTINCT ON|@>|\bdata\b/);
-  const out = JSON.parse(a.stdout);
-  assert.deepEqual(queueRepo(out, QA), JSON.parse(JSON.stringify(queueRepo(derive(input("queue")), QA))), "the snapshot after --at is not shown");
-});
-
-test("CLI new: a database before migration 0023 is n/a with exit 0 and the queue is never read; a failing read is n/a too", () => {
-  const file = queueFixture("queue-cli-n");
-  const args = [...AT, "--source", "new"];
-  const old = cli(args, { FS_FIXTURE: file, FS_QUEUE_COLUMNS: "0" }, "queue");
-  assert.equal(old.status, 0, old.stderr);
-  assert.equal(old.calls.some((c) => c.marker === "-- fs:queue"), false);
-  for (const r of JSON.parse(old.stdout).repos) assert.deepEqual(r.queue, { "n/a": "factory.event_log has no queue_snapshot columns (the factory database predates migration 0023)" });
-  const bad = cli(args, { FS_FIXTURE: file, FS_QUEUE_FAIL: "4" }, "queue");
-  assert.equal(bad.status, 0, bad.stderr);
-  for (const r of JSON.parse(bad.stdout).repos) {
-    assert.match(r.queue["n/a"], /^cannot read the queue snapshot: cannot read the factory database through dev-query --factory \(exit 4\): psql: queue exploded$/);
-  }
-  assert.equal(JSON.parse(bad.stdout).repos[0].coverage.events, 1, "the events are still read");
-});
-
-test("CLI old: no queue query runs and every repo shows the old-store n/a", () => {
-  const r = cli([...AT, "--source", "old"], {}, "queue");
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.calls.some((c) => c.marker.startsWith("-- fs:queue")), false);
-  for (const repo of JSON.parse(r.stdout).repos) assert.deepEqual(repo.queue, { "n/a": "the old store has no queue snapshots" });
-  assert.match(cli(["--at", "2026-10-10T12:00:00Z", "--source", "old", "--github", "off"], {}, "queue").stdout, /queue: n\/a: the old store has no queue snapshots/);
-});
-
-test("CLI shadow: a queue on the new side only is no difference, and the printed old answer carries the old-store n/a", () => {
-  const file = queueFixture("queue-shadow");
-  fs.rmSync(path.join(tmp, "events"), { recursive: true, force: true });
-  const sh = cli([...AT, "--source", "shadow"], { FS_FIXTURE: file }, "queue");
-  assert.equal(sh.status, 0, sh.stderr);
-  assert.ok(sh.calls.some((c) => c.marker === "-- fs:queue"), "the new side reads the queue");
-  assert.deepEqual(shadowRecords().map((r) => [r.differences, r.new_error]), [[0, null]]);
-  for (const repo of JSON.parse(sh.stdout).repos) assert.deepEqual(repo.queue, { "n/a": "the old store has no queue snapshots" });
-});
-
-test("real PostgreSQL: SQL_QUEUE_META sees the 0023 columns and SQL_QUEUE picks each repo's newest snapshot at or before --at", { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" }, (t) => {
-  const db = createDb(t);
-  const sub = (sql, vars) => Object.entries(vars).reduce((q, [k, v]) => q.replaceAll(`:'${k}'`, `'${v}'`), sql);
-  const run = (sql, vars) => JSON.parse(db.query(sub(sql, vars), "reader"));
-  assert.deepEqual(run(mod.SQL_QUEUE_META, {}), { columns: true });
-  let seq = 0;
-  const put = (repo, taken, type = "queue_snapshot", extra = {}) => {
-    seq += 1;
-    const data = { taken_at: taken, reason: "changed", considered: 1, candidates: [{ issue: seq, rank: 1, score: 5, factors: [], claimable: true, why: null }], rest: [], free_slots: null, owner_priority: [], owner_only: [], owner_serial: false, owner_new_off: false, folded: 0, ...extra };
-    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, device_seq, data)
-      VALUES (1, '${crypto.randomUUID()}', '${taken}', '${type}', 1, '${repo}', 'dev', 'agent', ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
-  };
-  put("Acme/Widgets", "2026-10-10T09:00:00.000Z");
-  put("acme/widgets", "2026-10-10T11:00:00.000Z", "queue_snapshot", { reason: "heartbeat" });
-  put("acme/widgets", "2026-10-10T13:00:00.000Z");
-  put("acme/gadgets", "2026-10-10T10:00:00.000Z");
-  const rows = run(mod.SQL_QUEUE, { at: "2026-10-10T12:00:00.000Z", repos: "" });
-  assert.deepEqual(rows.map((r) => [r.repo.toLowerCase(), r.taken_at, r.reason]), [
-    ["acme/gadgets", "2026-10-10T10:00:00.000Z", "changed"], ["acme/widgets", "2026-10-10T11:00:00.000Z", "heartbeat"],
-  ]);
-  assert.deepEqual(run(mod.SQL_QUEUE, { at: "2026-10-10T12:00:00.000Z", repos: "acme/gadgets" }).map((r) => r.repo), ["acme/gadgets"]);
-  assert.deepEqual(run(mod.SQL_QUEUE, { at: "2026-10-10T08:00:00.000Z", repos: "" }), []);
-});
-
-test("SQL_EVENT_LOG leaves queue_snapshot out, so a snapshot never changes coverage", () => {
-  assert.match(mod.SQL_EVENT_LOG, /AND type <> 'queue_snapshot'/);
-});
-
-test("normalizeForCompare drops the queue", () => {
-  const n = mod.normalizeForCompare(derive(input("queue")));
-  assert.ok(n.repos.length === 2 && n.repos.every((r) => r.queue === undefined));
-});
-
-test("normalizeForCompare drops only the counts, the v1 run id and an abandoned final's free text", () => {
-  const r = derive(input("v2-waiting"));
-  const n = mod.normalizeForCompare(r);
-  const repo = n.repos[0];
-  assert.equal(repo.coverage.events, undefined);
-  assert.equal(repo.coverage.last_event_at, undefined);
-  assert.ok(repo.coverage.devices.every((d) => d.events === undefined && d.last_event_at === undefined && d.device));
-  assert.ok(repo.issues.every((i) => i.run === undefined && i.stage));
-  const fake = { repos: [{ coverage: { class: "full", devices: [] }, issues: [{ detail: "abandoned (reason=drop note=x)", stage: "closed without merge", run: "r1" }], recent: [{ detail: "closed (done)" }] }] };
-  const m = mod.normalizeForCompare(fake).repos[0];
-  assert.equal(m.issues[0].detail, "abandoned");
-  assert.equal(m.recent[0].detail, "closed (done)");
-});

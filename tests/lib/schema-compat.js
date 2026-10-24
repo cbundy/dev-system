@@ -294,7 +294,7 @@ async function listReaders(tagDir, label) {
     }
   }
   const state = path.join(tagDir, "images", "base", "callum-flow-factory-state");
-  if (fs.existsSync(state) && fs.readFileSync(state, "utf8").includes("factory.event_log")) readers.push({ id: "callum-flow-factory-state", kind: "state" });
+  if (fs.existsSync(state) && /factory\.(event_log|issue_state_at)/.test(fs.readFileSync(state, "utf8"))) readers.push({ id: "callum-flow-factory-state", kind: "state" });
   return readers;
 }
 

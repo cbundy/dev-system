@@ -1,11 +1,118 @@
 {
  "at": "2026-10-10T12:00:00.000Z",
  "repos": [],
- "workers": {
-  "available": false,
-  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
- },
- "runs": [],
+ "events": [
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T09:00:00.000Z",
+   "issue": 205,
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-09T06:00:00.000Z",
+   "issue": 200,
+   "type": "transition",
+   "data": {
+    "life": "w1",
+    "seq": 0,
+    "from_state": "building",
+    "to_state": "waiting",
+    "seq_at": "2026-10-09T06:00:00.000Z",
+    "state_since": "2026-10-09T06:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-200"
+   }
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:00:00.000Z",
+   "issue": 201,
+   "type": "transition",
+   "data": {
+    "life": "w1",
+    "seq": 0,
+    "from_state": "building",
+    "to_state": "waiting",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-201"
+   }
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:00:00.000Z",
+   "issue": 202,
+   "type": "transition",
+   "data": {
+    "life": "w1",
+    "seq": 0,
+    "from_state": "building",
+    "to_state": "parked",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-202"
+   }
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:00:00.000Z",
+   "issue": 203,
+   "type": "transition",
+   "data": {
+    "life": "w1",
+    "seq": 0,
+    "from_state": null,
+    "to_state": "queued",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-203"
+   }
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:00:00.000Z",
+   "issue": 205,
+   "type": "transition",
+   "data": {
+    "life": "w1",
+    "seq": 0,
+    "from_state": "building",
+    "to_state": "waiting",
+    "seq_at": "2026-10-10T11:00:00.000Z",
+    "state_since": "2026-10-10T11:00:00.000Z",
+    "step": null,
+    "attempt": 1,
+    "why": null,
+    "question": null,
+    "branch": "issue-205"
+   }
+  }
+ ],
  "github": {
   "acme/widgets": {
    "ok": true,
@@ -52,79 +159,5 @@
     }
    }
   }
- },
- "events": [
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T09:00:00.000Z",
-   "state": "claimed",
-   "issue": 205,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-09T06:00:00.000Z",
-   "state": "transition",
-   "issue": 200,
-   "run_id": null,
-   "branch": "issue-200",
-   "pr": null,
-   "note": "row=T1 life=w1 seq=0 from=building to=waiting seqAt=1791525600000 since=1791525600000 resumeTo=building step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=wait brief=none question=none notes=none wait=issue:57,tag:35bb655",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
-   "issue": 201,
-   "run_id": null,
-   "branch": "issue-201",
-   "pr": null,
-   "note": "row=T1 life=w1 seq=0 from=building to=waiting seqAt=1791630000000 since=1791630000000 resumeTo=building step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=wait brief=none question=none notes=none wait=pr:812",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
-   "issue": 202,
-   "run_id": null,
-   "branch": "issue-202",
-   "pr": null,
-   "note": "row=T1 life=w1 seq=0 from=building to=parked seqAt=1791630000000 since=1791630000000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=wait brief=none question=none notes=none",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
-   "issue": 203,
-   "run_id": null,
-   "branch": "issue-203",
-   "pr": null,
-   "note": "row=T1 life=w1 seq=0 from=none to=queued seqAt=1791630000000 since=1791630000000 resumeTo=none step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=wait brief=none question=none notes=none",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-10T11:00:00.000Z",
-   "state": "transition",
-   "issue": 205,
-   "run_id": null,
-   "branch": "issue-205",
-   "pr": null,
-   "note": "row=T1 life=w1 seq=0 from=building to=waiting seqAt=1791630000000 since=1791630000000 resumeTo=building step=none attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=wait brief=none question=none notes=none wait=issue:9",
-   "actor": "agent"
-  }
- ]
+ }
 }

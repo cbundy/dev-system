@@ -45,11 +45,13 @@ for _ in $(seq 1 60); do
 done
 # The default-user bootstrap path (cbundy/dev-system#797): no --user, no FACTORY_DB_MIGRATIONS_DIR.
 expected_schema=$(in_image '. /usr/local/share/dev-system/factory-db.sh; factory_db_expected_version' --entrypoint "")
+# The reader role's password lets callum-flow-factory-state (#1293) read this database below.
+FIC_RPW="fic-reader-$RUN_ID"
 check "factory-db-bootstrap runs as the default user against the baked migrations" bash -c '
   out=$(docker run --rm --network "$1" --entrypoint factory-db-bootstrap \
-    -e FACTORY_DB_ADMIN_URL="postgres://av:$2@$3-pg:5432/postgres?sslmode=require" "$4" --db factory_image_check 2>&1) || exit 1
+    -e FACTORY_DB_ADMIN_URL="postgres://av:$2@$3-pg:5432/postgres?sslmode=require" -e FACTORY_DB_READER_PASSWORD="$6" "$4" --db factory_image_check 2>&1) || exit 1
   echo "$out" | grep -q " ready " && echo "$out" | grep -q "schema version $5\$" &&
-  ! echo "$out" | grep -qF "$2"' _ "$net" "$SECRET" "$RUN_ID" "$IMAGE" "$expected_schema"
+  ! echo "$out" | grep -qF "$2"' _ "$net" "$SECRET" "$RUN_ID" "$IMAGE" "$expected_schema" "$FIC_RPW"
 avdata=$(docker volume create --label "$RUN_ID")
 avclaude=$(docker volume create --label "$RUN_ID")
 # write_session <volume> <session id>: a minimal Claude Code transcript
@@ -143,51 +145,15 @@ check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
   echo "$out" | grep -q "waiting: no"'
-# Seeding for the callum-flow-factory-state check below (#345): the mirrored runs of nm-fixture.js
-# (r1 to r11) pushed through the real nm-push-loop path, plus a factory.events table seeded for run
-# r3 and the run-to-issue link (#343). The saved queries of docs/metrics.md read the factory database
-# and are checked against a throwaway one by tests/metrics-queries.test.js (#652), not here.
+# Seeding for the export query below: the mirrored runs of nm-fixture.js (r1 to r11) pushed through the
+# real nm-push-loop path. The saved queries of docs/metrics.md read the factory database and are checked
+# against a throwaway one by tests/metrics-queries.test.js (#652), not here. callum-flow-factory-state
+# reads the factory database only (#1293) and is seeded by factory_state_query.
 psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
-nm_seed_factory_state() {
-  local root ddl
-  root=$(cd "$TEST_DIR/../../.." && pwd)
+nm_seed_mirror() {
   nm_fixture metrics && nm_push || return 1
-  # factory.events as event-push-loop creates it (its DDL is read from the script), then the
-  # orchestrator events for issue 42: claimed 300 s before run r3 was created, merged 120 s after it ended.
-  ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/event-push-loop")
-  printf '%s\n' "$ddl" | psql_file >/dev/null || return 1
-  psql_file >/dev/null <<'SQL'
-INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw) VALUES
-  ('nm-metrics', 'acme/widgets', 1, to_timestamp(1700000700), 'claimed', 42, NULL, '{}'),
-  ('nm-metrics', 'acme/widgets', 2, to_timestamp(1700001010), 'run_started', 42, 'r3', '{}'),
-  ('nm-metrics', 'acme/widgets', 3, to_timestamp(1700001720), 'merged', 42, NULL, '{}')
-ON CONFLICT DO NOTHING;
--- Issues for the run-to-issue link (#343), modelled on merged issues with no run_started event.
--- The runs are in nm-fixture.js (r5 to r11); times are epoch seconds.
---   51  one run on feat/issue-51-no-event, no run_started event
---   52  repo spelled 'Acme/Widgets' (factory.events is not lowercased); first run cancelled
---   53  a run_started event 20 s after the run was created: the mirror time wins
---   54  run on an off-convention branch, linked only by a legacy run_started event
-INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw)
-SELECT 'nm-metrics', v.repo, v.seq, to_timestamp(v.t), v.state, v.issue, v.run_id, '{}'::jsonb
-FROM (VALUES
-  ('acme/widgets', 10, 1700010000, 'ready', 51, NULL), ('acme/widgets', 11, 1700010060, 'claimed', 51, NULL),
-  ('acme/widgets', 12, 1700010360, 'delegated', 51, NULL), ('acme/widgets', 13, 1700011260, 'merge_ready', 51, NULL),
-  ('acme/widgets', 14, 1700012460, 'merged', 51, NULL),
-  ('Acme/Widgets', 1, 1700020000, 'ready', 52, NULL), ('Acme/Widgets', 2, 1700020060, 'claimed', 52, NULL),
-  ('Acme/Widgets', 3, 1700020360, 'delegated', 52, NULL), ('Acme/Widgets', 4, 1700021660, 'merge_ready', 52, NULL),
-  ('Acme/Widgets', 5, 1700021960, 'merged', 52, NULL),
-  ('acme/widgets', 20, 1700030000, 'ready', 53, NULL), ('acme/widgets', 21, 1700030060, 'claimed', 53, NULL),
-  ('acme/widgets', 22, 1700030360, 'delegated', 53, NULL), ('acme/widgets', 23, 1700030680, 'run_started', 53, 'r8'),
-  ('acme/widgets', 24, 1700031260, 'merge_ready', 53, NULL), ('acme/widgets', 25, 1700031560, 'merged', 53, NULL),
-  ('acme/widgets', 30, 1700040000, 'ready', 54, NULL), ('acme/widgets', 31, 1700040060, 'claimed', 54, NULL),
-  ('acme/widgets', 32, 1700040360, 'delegated', 54, NULL), ('acme/widgets', 33, 1700040670, 'run_started', 54, 'r9'),
-  ('acme/widgets', 34, 1700041460, 'merge_ready', 54, NULL), ('acme/widgets', 35, 1700041560, 'merged', 54, NULL)
-) AS v(repo, seq, t, state, issue, run_id)
-ON CONFLICT DO NOTHING;
-SQL
 }
-check "the mirrored runs and the orchestrator events for callum-flow-factory-state are seeded" nm_seed_factory_state
+check "the mirrored runs for the export query are seeded" nm_seed_mirror
 # The fleet-wide export query in docs/metrics.md (#274): run it against the same PostgreSQL, then
 # feed the JSON lines to callum-flow-evaluate --nm-export inside the image.
 nm_export_query() {
@@ -213,22 +179,37 @@ nm_export_query() {
       if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
 }
 check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
-# callum-flow-factory-state (#345) runs its real SQL through dev-query against the data the checks
-# above loaded: the events of issues 42 and 51 to 54 (issue 52 spelled 'Acme/Widgets', issue 54 linked
-# to its run only by a legacy run_started event) and their mirrored runs. All five were merged, and
-# with GitHub off the tool must place each on its run, lower-casing the repo.
+# callum-flow-factory-state (#345, #1293) reads the factory database only, as the reader role through
+# dev-query --factory. Seed factory_image_check (bootstrapped above) with v2 events and run the tool in
+# the image against it with GitHub off: issue 42 merged, 51 building, 52 (repo spelled 'Acme/Widgets')
+# parked, 53 claimed with a live lease and no transition yet.
 factory_state_query() {
-  local out
-  out=$(docker exec "$RUN_ID-b" callum-flow-factory-state --source old --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
+  local out url
+  docker exec -i "$RUN_ID-pg" psql -U av -d factory_image_check -v ON_ERROR_STOP=1 -qtA >/dev/null <<'SQL' || return 1
+INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+SELECT 1, gen_random_uuid(), v.ts::timestamptz, v.type, 1, v.repo, 'nm-metrics', 'agent', v.issue, v.n, v.data::jsonb
+FROM (VALUES
+  (1, '2023-11-15T01:00:00Z', 'claimed', 'acme/widgets', 42, '{"lease_minutes":120}'),
+  (2, '2023-11-15T01:01:00Z', 'transition', 'acme/widgets', 42, '{"life":"lh0000","seq":0,"from_state":"queued","to_state":"building","seq_at":"2023-11-15T01:01:00Z","state_since":"2023-11-15T01:01:00Z","step":"build","attempt":1}'),
+  (3, '2023-11-15T20:00:00Z', 'merged', 'acme/widgets', 42, '{"pr":142,"by":"factory"}'),
+  (4, '2023-11-15T21:00:00Z', 'claimed', 'acme/widgets', 51, '{"lease_minutes":120}'),
+  (5, '2023-11-15T21:01:00Z', 'transition', 'acme/widgets', 51, '{"life":"lh0001","seq":0,"from_state":"designing","to_state":"building","seq_at":"2023-11-15T21:01:00Z","state_since":"2023-11-15T21:01:00Z","step":"build","attempt":1}'),
+  (6, '2023-11-15T21:30:00Z', 'claimed', 'Acme/Widgets', 52, '{"lease_minutes":120}'),
+  (7, '2023-11-15T21:31:00Z', 'transition', 'Acme/Widgets', 52, '{"life":"lh0002","seq":0,"from_state":"building","to_state":"parked","seq_at":"2023-11-15T21:31:00Z","state_since":"2023-11-15T21:31:00Z","question":"Which schema?"}'),
+  (8, '2023-11-15T23:30:00Z', 'claimed', 'acme/widgets', 53, '{"lease_minutes":120}')
+) AS v(n, ts, type, repo, issue, data);
+SQL
+  url="postgres://factory_image_check_reader:$FIC_RPW@$RUN_ID-pg:5432/factory_image_check?sslmode=require"
+  out=$(docker exec -e FACTORY_DB_READER_URL="$url" "$RUN_ID-b" callum-flow-factory-state --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
   printf '%s' "$out" | node -e '
     const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
     if (r.repos.length !== 1 || r.repos[0].repo !== "acme/widgets" || r.at_source !== "--at") process.exit(1);
-    if (r.repos[0].coverage.class !== "full" || !r.workers["n/a"]) process.exit(1);
-    const by = Object.fromEntries(r.repos[0].issues.map((i) => [i.issue, i]));
-    for (const n of [42, 51, 52, 53, 54]) if (!by[n] || by[n].stage !== "merged") process.exit(1);
-    if (by[51].run !== "r5" || by[54].run !== "r9" || by[42].run !== "r3") process.exit(1);'
+    const by = Object.fromEntries(r.repos[0].issues.concat(r.repos[0].recent).map((i) => [i.issue, i]));
+    const want = { 42: ["closed", "merged"], 51: ["building", "implementing"], 52: ["parked", "parked"], 53: ["designing", "designing"] };
+    for (const [n, [state, stage]] of Object.entries(want)) if (!by[n] || by[n].state !== state || by[n].stage !== stage) process.exit(1);
+    if (!r.repos[0].recent.some((i) => i.issue === 42) || by[52].question !== "Which schema?" || by[51].holder !== "nm-metrics") process.exit(1);'
 }
-check "callum-flow-factory-state reads the mirrored runs and events through dev-query and places the merged issues" factory_state_query
+check "callum-flow-factory-state reads factory.issue_state_at through dev-query --factory and places the issues" factory_state_query
 # Event identity survives losing the file (#229). The table starts as the old one (primary
 # key (device, repo, seq)) with three old-format rows; the real event-push-loop (container b)
 # migrates it, then a wiped log (with and without its marker) must still land every event.

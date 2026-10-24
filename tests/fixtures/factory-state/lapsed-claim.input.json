@@ -1,217 +1,122 @@
 {
  "at": "2026-10-12T07:00:00.000Z",
  "repos": [],
- "workers": {
-  "available": false,
-  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
- },
  "events": [
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T00:00:00.000Z",
-   "state": "claimed",
    "issue": 1,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
+   "type": "claimed",
+   "data": {}
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T06:30:00.000Z",
-   "state": "claimed",
    "issue": 2,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T01:00:00.000Z",
-   "state": "claimed",
    "issue": 3,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T06:00:00.000Z",
-   "state": "renewed",
    "issue": 3,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T02:00:00.000Z",
-   "state": "claimed",
    "issue": 4,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-12T03:00:00.000Z",
-   "state": "briefed",
-   "issue": 4,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T06:40:00.000Z",
-   "state": "renewed",
    "issue": 4,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T06:20:00.000Z",
-   "state": "claimed",
    "issue": 5,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 30",
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 30
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T01:00:00.000Z",
-   "state": "claimed",
    "issue": 6,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
+   "type": "claimed",
+   "data": {}
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T02:00:00.000Z",
-   "state": "closed",
    "issue": 6,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "completed",
-   "actor": "agent"
+   "type": "closed",
+   "data": {
+    "reason": "completed"
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T06:50:00.000Z",
-   "state": "renewed",
    "issue": 6,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
+   "type": "claim_renewed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T04:00:00.000Z",
-   "state": "claimed",
    "issue": 7,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-12T04:30:00.000Z",
-   "state": "delegated",
-   "issue": 7,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-12T06:50:00.000Z",
-   "state": "untrusted_stripped",
-   "issue": 7,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   },
   {
    "repo": "acme/widgets",
    "device": "dev-a",
    "ts": "2026-10-12T05:00:00.000Z",
-   "state": "claimed",
    "issue": 8,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": "lease: 120",
-   "actor": "agent"
-  },
-  {
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "ts": "2026-10-12T05:30:00.000Z",
-   "state": "delegated",
-   "issue": 8,
-   "run_id": null,
-   "branch": null,
-   "pr": null,
-   "note": null,
-   "actor": "agent"
-  }
- ],
- "runs": [
-  {
-   "id": "r8",
-   "repo": "acme/widgets",
-   "device": "dev-a",
-   "branch": "fix/issue-8-x",
-   "status": "running",
-   "pr_url": null,
-   "pr_state": null,
-   "issue": 8,
-   "awaiting_agent_since": null,
-   "created_at": "2026-10-12T05:45:00.000Z",
-   "updated_at": "2026-10-12T06:50:00.000Z"
+   "type": "claimed",
+   "data": {
+    "lease_minutes": 120
+   }
   }
  ]
 }

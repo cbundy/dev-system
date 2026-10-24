@@ -1669,20 +1669,19 @@ differed to `factory/.shadow/evaluate.jsonl` (skipped when `--events` is given w
 `factory-source.js` and `evaluate-new-events.js` beside itself, else under `$DEV_SYSTEM_SHARE`. Metrics that need a
 v1-only event read `n/a` under `new` ([`docs/metrics.md`](../../docs/metrics.md#reading-the-new-events)).
 
-`callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule S1..S5=<minutes>]... [--github on|off]`
-answers "what is the factory doing right now?": per repo, each live issue with its stage (queued,
-designing, implementing, in pipeline, parked, ready to merge, merged, closed without merge), time in stage, holder device, run,
-PR, stuck flag, the claim's lease (`until`, `lapsed`) and, for an issue the factory loop v2 placed,
-its v2 state, step and attempt (from its newest `transition` event, above the mirror's runs); the stuck items
-with the rule that tripped; and coverage per repo and device, so a data
-gap never reads as idle. It is read-only. It queries `factory.events` and, when it exists, the `nomistakes`
-mirror through `dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
-claim comment) through `callum-flow-issue-read`, so a past `--at` is exact for the database but not for
-GitHub; `--github off` skips it. Stages, source precedence (GitHub closure first), stuck rules and
-coverage classes and the reader's liveness coverage are defined in
-[`docs/factory-state.md`](../../docs/factory-state.md). Unreadable GitHub, and a missing `nomistakes.runs`, show as `n/a` with the reason. Exit 2 is bad arguments, 1 when
-`factory.events` cannot be read. The `factory-state` skill runs it and adds a short narrative. It is in
-the synced allow list.
+`callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule <state>=<minutes>]... [--github on|off]`
+answers "what is the factory doing right now?": per repo, each live issue with its state (queued, designing,
+building, reviewing, fixing, merge-queue, parked, waiting, closed) and the stage older readers parse, time in
+state, holder device, PR, stuck flag, the claim's lease (`until`, `lapsed`) and the transition's step, attempt and
+life; the stuck items with the state that tripped; and the event counts per repo and device. It is read-only. It
+reads only the factory database, through `dev-query --factory`: the `factory.issue_state_at` view function and
+`factory.stuck_rules` (migration 0033), the per-repo counts and the queue snapshot from `factory.event_log`.
+It reads GitHub (open or closed, labels, claim comment) through `callum-flow-issue-read`, so a past `--at` is
+exact for the database but not for GitHub; `--github off` skips it. The states, stuck rules (the per-state
+thresholds of the view, `--rule` to override) and flags are defined in
+[`docs/factory-state.md`](../../docs/factory-state.md). An unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad
+arguments, 1 when the factory database cannot be read or has no migration 0033. The `factory-state` skill runs it
+and adds a short narrative. It is in the synced allow list.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard. Checking is read-only;
@@ -1897,7 +1896,7 @@ and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `claim_renewed` event (`lease_minutes`) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#states) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -2067,7 +2066,7 @@ Unknown columns are tolerated (they land in `raw`), but a rename or removal show
 or a skipped table until the exporter is updated. Check `runs.no_mistakes_version` when a
 column goes quiet. The upstream ask for a stable, schema-versioned export is
 [kunchenguid/no-mistakes#985](https://github.com/kunchenguid/no-mistakes/issues/985).
-The run-to-issue link rules are in [docs/factory-state.md](../../docs/factory-state.md#linking-pipeline-runs-to-issues),
+The run-to-issue link rules are in [docs/metrics.md](../../docs/metrics.md#the-run-to-issue-link),
 and the fleet export query that `callum-flow-evaluate` reads is in
 [docs/metrics.md](../../docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export).
 
