@@ -119,6 +119,7 @@ function reviewedData(e: ReviewedEvent): Record<string, unknown> {
     infos: e.infos,
     reviewer: e.reviewer,
     answer_path: e.answer,
+    ...(e.uiCapture === undefined ? {} : { ui_capture: e.uiCapture }),
   }
 }
 

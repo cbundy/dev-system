@@ -221,6 +221,20 @@ test("intake_stamp: a full event is written and validates; one without version i
   assert.notDeepEqual(reader.validateStrict("intake_stamp", 1, { ...good, outcome: "maybe" }), []);
 });
 
+test("reviewed: ui_capture (command, none, unset) is written and validates; a review without it still does; another value fails strict validation (dev-system#1270)", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "reviewed.v1.json"), "utf8")).examples[0];
+  for (const ui_capture of ["command", "none", "unset"]) {
+    const { r, lines } = native(["--type", "reviewed", "--issue", "7", "--data", JSON.stringify({ ...good, ui_capture })]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, "");
+    assert.equal(JSON.parse(lines[0]).data.ui_capture, ui_capture);
+    assert.deepEqual(reader.validateStrict("reviewed", 1, JSON.parse(lines[0]).data), []);
+  }
+  assert.deepEqual(reader.validateStrict("reviewed", 1, good), []);
+  assert.equal("ui_capture" in good, false);
+  assert.notDeepEqual(reader.validateStrict("reviewed", 1, { ...good, ui_capture: "maybe" }), []);
+});
+
 test("intake_stamp: a run with token totals and one with null tokens are written and validate; an event without the tokens (an older loop) still does; a negative or text total fails strict validation", () => {
   const [withTokens, nullTokens] = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "intake_stamp.v1.json"), "utf8")).examples;
   assert.equal(withTokens.mode, "run");

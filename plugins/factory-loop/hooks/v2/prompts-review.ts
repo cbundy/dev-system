@@ -39,6 +39,14 @@ function priorLines(i: ReviewInput): string[] {
   ]
 }
 
+// captureCheck: check 4, which follows the repo's UI capture policy (config uiCapture). Unset and a
+// capture command hold a visible change without evidence as an error; none (capture off) makes it
+// at most a warning.
+function captureCheck(setting: string | null): string {
+  if (setting === 'none') return '  4. a visible (UI) change has screenshot or video evidence in the PR body, unless the repo has turned UI capture off (no capture tooling): then a missing capture is at most a warning and never an error, and the PR\'s evidence should say capture is off.'
+  return '  4. a visible (UI) change has screenshot or video evidence in the PR body.'
+}
+
 // adjudicatorPrompt: the interim reviewer's prompt for one review.
 export function adjudicatorPrompt(i: ReviewInput, env: ReviewPromptEnv): string {
   const issueUrl = `https://github.com/${env.repo}/issues/${i.issue}`
@@ -69,7 +77,7 @@ export function adjudicatorPrompt(i: ReviewInput, env: ReviewPromptEnv): string 
     '  1. every acceptance criterion and owner requirement in the brief is met;',
     '  2. nothing unrelated to the issue was added;',
     '  3. no test was deleted, skipped or weakened;',
-    '  4. a visible (UI) change has screenshot or video evidence in the PR body.',
+    captureCheck(i.uiCapture),
     'Report a defect as an error only once you have shown it: build the smallest failing case (a test or a command you ran, and its output) and name it in the finding. A claim about how a tool behaves is a claim to reproduce, not a fact. Style, preference and anything the brief does not ask for are at most warnings or infos.',
     '',
     'What you may do: read anything, run the tests and other read-only commands in your folder, and write throwaway files only under the system temp dir. Do not edit files in the repository, commit, push, comment, review, label or change the PR: the loop posts your review on the PR.',

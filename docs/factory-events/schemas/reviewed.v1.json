@@ -18,6 +18,7 @@
     "warnings": { "type": "integer", "minimum": 0, "description": "Findings of severity warning." },
     "infos": { "type": "integer", "minimum": 0, "description": "Findings of severity info." },
     "reviewer": { "type": "string", "minLength": 1, "description": "Which reviewer answered, for example adjudicator." },
+    "ui_capture": { "type": ["string", "null"], "enum": ["command", "none", "unset", null], "description": "The repo's UI capture policy the review ran under: command (a capture command is set), none (capture is off, so a missing capture is at most a warning) or unset. Optional: absent or null on a review recorded before the field existed." },
     "answer_path": { "type": "string", "minLength": 1, "description": "The reviewer's answer file on the loop's device. Identifies the review: one event per answer.", "x-column": true }
   },
   "examples": [
