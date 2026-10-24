@@ -837,6 +837,24 @@ test("hasRunItHeading and callum-flow-rollout agree on the same bodies", async (
   }
 });
 
+test("callum-flow-rollout reads a summary-plus-Details brief as it reads the same brief without the details lines", () => {
+  const rollout = path.join(__dirname, "..", "images", "base", "callum-flow-rollout");
+  const nested = (value) => `## Design brief (designer, 2026-10-24)\n\nPlain summary.\n\n<details><summary>Exploration</summary>\n\nRead things.\n\n</details>\n\n## Acceptance criteria\nOne line.\n\n<details><summary>Details</summary>\n\n- a\n\n</details>\n\n## Rollout\n${value}\n\n## Open decisions\nnone\n`;
+  const strip = (b) => b.split("\n").filter((l) => !/^(<details>|<\/details>|<summary>)/.test(l)).join("\n");
+  for (const value of ["merge - plain", "run-it - has a Run it", "keep-open - research"]) {
+    const outs = [nested(value), strip(nested(value))].map((brief) => {
+      const r = spawnSync(rollout, ["5"], {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "callum-flow-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: "Do it.\n", STUB_BRIEF: brief },
+        timeout: 30_000,
+      });
+      return { status: r.status, stdout: r.stdout };
+    });
+    assert.deepEqual(outs[0], outs[1], value);
+    assert.match(outs[0].stdout, new RegExp(`ROLLOUT ${value.split(" ")[0]}`));
+  }
+});
+
 test("rollout-check's declaration file names exactly the module's exports", async () => {
   const mod = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "rollout-check.mjs")).href);
   const dts = fs.readFileSync(path.join(PLUGIN, "hooks", "v2", "rollout-check.d.mts"), "utf8");

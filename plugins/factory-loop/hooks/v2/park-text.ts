@@ -4,7 +4,8 @@
 //   (the record's `question`, which question.mjs's renderQuestion made for an agent's structured
 //   question, or a machine-written reason with no options), how to resume, and where it parked
 //   from. The sections of a structured question (Context, Options, Recommendation) sit inside the
-//   question's text, so they come in order between the decision sentence and How to resume.
+//   question's text, so they come in order between the decision sentence and How to resume. A
+//   context's later paragraphs sit in a Details block inside that text, before the Options.
 // - decisionOf: the decision sentence alone, for a tell.
 // - ticksOf: the owner's ticks in a park comment's Options section, read when the issue is
 //   unparked by its label (rules-state.ts unparkOf).

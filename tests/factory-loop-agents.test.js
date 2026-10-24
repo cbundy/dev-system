@@ -231,7 +231,7 @@ test("the v2 designer has a section on waiting between its question and split se
 
 test("the v2 designer makes every new decision observable, and the reviewer holds the change to it", () => {
   const raw = read("plugins/factory-loop/agents/designer-v2.md");
-  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Compatibility\n[^\n]*\n\n## Sequencing/);
+  assert.match(raw, /## Test plan\n[^\n]*\n\n<details><summary>Details<\/summary>\n\n[\s\S]*?\n\n<\/details>\n\n## Observability\n[^\n]*\n\n## Compatibility\n[^\n]*\n\n## Sequencing/);
   const body = raw.replace(/\s+/g, " ");
   assert.match(body, /prefer optional fields on an existing event type/);
   assert.match(body, /add its query to `docs\/metrics\.md`/);
@@ -266,7 +266,77 @@ test("the v2 designer explores with its own reads: no Agent tool, no explorer, a
   assert.match(body, /tests that pin the text or behavior/);
   assert.match(body, /every path and line range the brief cites exists at `origin\/<base>`/);
   const shape = raw.slice(raw.indexOf("## Design brief (designer,"));
-  assert.ok(shape.indexOf("Exploration: <") !== -1 && shape.indexOf("Exploration: <") < shape.indexOf("## Acceptance criteria"));
+  assert.ok(shape.indexOf("<details><summary>Exploration</summary>") !== -1 && shape.indexOf("<details><summary>Exploration</summary>") < shape.indexOf("## Acceptance criteria"));
+});
+
+// The brief template's two layers: a plain summary line under the title and under each of the
+// Acceptance criteria, Files to touch and Test plan headings, then a collapsed Details block.
+function briefShapeProblems(template, { exploration = true } = {}) {
+  const problems = [];
+  const lines = template.split("\n");
+  let inDetails = false;
+  let section = null;
+  const sections = {};
+  lines.forEach((line, i) => {
+    if (/^<details>/.test(line)) {
+      if (!/^<details><summary>[^<]+<\/summary>$/.test(line)) problems.push(`line ${i + 1}: details without a summary`);
+      if (lines[i + 1] !== "") problems.push(`line ${i + 1}: no blank line after <details><summary>`);
+      inDetails = true;
+      if (section !== null) sections[section].details += 1;
+    } else if (/^<\/details>/.test(line)) {
+      if (lines[i - 1] !== "") problems.push(`line ${i + 1}: no blank line before </details>`);
+      inDetails = false;
+    } else if (/^#{1,6} /.test(line)) {
+      if (inDetails) problems.push(`line ${i + 1}: heading inside details: ${line}`);
+      section = line.replace(/^#+ /, "").replace(/ \(designer.*$/, "");
+      sections[section] = { details: 0, first: null };
+    } else if (section !== null && !inDetails && line.trim() !== "" && sections[section].first === null) sections[section].first = line;
+  });
+  const summarised = ["Design brief", "Acceptance criteria", "Files to touch", "Test plan"];
+  for (const name of summarised) {
+    const s = sections[name];
+    if (!s) problems.push(`${name} is missing`);
+    else {
+      if (s.first === null || /^<\/?(details|summary)/.test(s.first)) problems.push(`${name}: no plain summary line before the details`);
+      if (s.details < 1 && (exploration || name !== "Design brief")) problems.push(`${name}: no details block`);
+    }
+  }
+  for (const name of ["Risk", "Observability", "Compatibility", "Sequencing", "Rollout", "Open decisions", "Run it"]) {
+    if (sections[name] && sections[name].details > 0) problems.push(`${name} is collapsed`);
+  }
+  if (!/^## Rollout\nmerge \| run-it \| keep-open - /m.test(template)) problems.push("Rollout line is not `merge | run-it | keep-open - ...`");
+  return problems;
+}
+
+const templateOf = (file) => {
+  const raw = read(file);
+  const at = raw.indexOf("## Design brief (designer,");
+  return raw.slice(at, raw.indexOf("\n```", at));
+};
+
+test("the three designer brief templates are a plain summary plus a collapsed Details block, and their readers' sections stay visible (#1269)", () => {
+  for (const file of ["plugins/factory-loop/agents/designer-v2.md", "plugins/callum-flow/agents/designer.md", "plugins/factory-loop/agents/designer.md"]) {
+    const t = templateOf(file);
+    assert.deepEqual(briefShapeProblems(t, { exploration: file.endsWith("designer-v2.md") }), [], file);
+  }
+  assert.match(templateOf("plugins/factory-loop/agents/designer-v2.md"), /<details><summary>Exploration<\/summary>/);
+  const body = read("plugins/factory-loop/agents/designer-v2.md").replace(/\s+/g, " ");
+  assert.match(body, /plain prose for a non-engineer/);
+  assert.match(body, /blank line after every `<\/summary>` and before every `<\/details>`/);
+  assert.match(body, /Open decisions` is never collapsed/);
+});
+
+test("the brief template guard fails on a heading in details, a missing summary line and a collapsed Rollout (fixtures)", () => {
+  const good = templateOf("plugins/factory-loop/agents/designer-v2.md");
+  assert.deepEqual(briefShapeProblems(good), []);
+  const headingIn = good.replace("<details><summary>Details</summary>\n\n- path:line - what changes", "<details><summary>Details</summary>\n\n## Risk\n- path:line - what changes");
+  assert.ok(briefShapeProblems(headingIn).some((p) => /heading inside details/.test(p)));
+  const noSummary = good.replace("## Files to touch\n<one or two plain lines: which areas change>\n\n", "## Files to touch\n");
+  assert.ok(briefShapeProblems(noSummary).some((p) => /Files to touch: no plain summary/.test(p)));
+  const rolled = good.replace("## Rollout\nmerge | run-it | keep-open - one reason", "## Rollout\n<details><summary>Details</summary>\n\nmerge | run-it | keep-open - one reason\n\n</details>");
+  assert.ok(briefShapeProblems(rolled).some((p) => /Rollout is collapsed/.test(p)));
+  const noBlank = good.replace("</summary>\n\n- requirement", "</summary>\n- requirement");
+  assert.ok(briefShapeProblems(noBlank).some((p) => /no blank line after/.test(p)));
 });
 
 test("the designer, builder and reviewer hold a flake bug to a reproduction under load and a consecutive stress run (#867)", () => {
