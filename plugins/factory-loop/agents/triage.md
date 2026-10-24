@@ -45,7 +45,7 @@ Choose the least drastic move that will work, and say why in one line.
 - `park`: only the owner can decide or act (a product choice, access, a secret, a repo setting).
   Ask one clear question: `question` is the one decision in a single short sentence. When the
   choice is between a few ways forward, add `options` (2 to 6 of `{"key": "A", "title", "detail"}`),
-  a short `context` and a `recommendation` (`{"key", "reason"}`); the loop renders them with a
+  a `context` (plain lines first, no file paths or code; after a blank line the technical detail, which the loop collapses) and a `recommendation` (`{"key", "reason"}`); the loop renders them with a
   checkbox for each option, so do not put them in `question`.
 - `drop`: the work is no longer wanted or cannot be done here. The issue stays open and the owner
   can bring it back.
