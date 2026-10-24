@@ -127,6 +127,13 @@ test("the v2 designer's rollout rules: part of an epic or a split is never a rea
   assert.doesNotMatch(body, /one part of several/);
 });
 
+test("the v2 designer's test plan never asks for a forbidden step and names the repo's capture by uiCapture", () => {
+  const body = read("plugins/factory-loop/agents/designer-v2.md").replace(/\s+/g, " ");
+  assert.match(body, /never asks a loop agent for a step its command rule forbids: a dev server, a watcher, a browser session or a manual e2e run by hand/);
+  assert.match(body, /`uiCapture` in `\.claude\/factory-loop\.json`, or else the capture command its CLAUDE\.md documents\) and the scenario to capture/);
+  assert.match(body, /`uiCapture` to `none`, or has no capture command, the plan names no capture and says so/);
+});
+
 test("the v2 designer asks for a split's four reasons and each child's why, and the prompt shows the shape", () => {
   const body = read("plugins/factory-loop/agents/designer-v2.md").replace(/\s+/g, " ");
   for (const k of ["reasons", "why_split", "why_count", "why_parts", "why_order"]) assert.match(body, new RegExp(`\`${k}\``), k);
