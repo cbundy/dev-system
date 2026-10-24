@@ -1750,6 +1750,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     maxTriages: 2,
     fixes: 0,
     conflicts: 0,
+    envBlocked: null,
     fixCap: 3,
     conflictFixCap: 5,
     round: 0,

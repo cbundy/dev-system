@@ -166,11 +166,11 @@ the foundation (section 13) and the glue:
   `driver-controls`, `driver-between`, `driver-pass-log`).
 - **Observe.** `observe.ts` with `observe-github.ts` and `observe-milestone.ts`, `derive.ts`,
   `parse.ts` and `state.ts`.
-- **Act.** `act.ts` (the dispatcher and `EXECUTORS`) with `act-cli.ts`, `act-merge.ts` and
-  `act-between.ts`, `exec.ts` and `agent-tools.ts`.
+- **Act.** `act.ts` (the dispatcher and `EXECUTORS`) with `act-cli.ts`, `act-merge.ts`,
+  `act-between.ts` and `exec.ts`.
 - **Control.** `control.ts` with `control-files.ts` and `control-help.ts`.
 - **Configuration.** `config.ts` with `config-keys.ts` and `config-view.ts`.
-- **Shared.** `foundation.ts`, `rails.ts`, `ledger.ts`, `wake.ts`, `prompts.ts`, `replies.ts`,
+- **Shared.** `foundation.ts`, `rails.ts`, `ledger.ts`, `wake.ts`, `prompts.ts`,
   `report.ts`, `trace.ts`, `within.ts`, `types.ts` and the answer contract (`contract.mjs`).
 
 `hooks/v2/` holds the loop itself, one module per area and kind:
@@ -186,7 +186,7 @@ the foundation (section 13) and the glue:
 - `prompts-*` (agent prompts): `prompts-review`, `prompts-triage`, `prompts-work`.
 - `sources-*` (what observe reads): `sources-dualwrite`, `sources-interventions`, `sources-prs`,
   `sources-release`, `sources-waits`, `sources-workspace`. The release hold is `rules-release-hold`.
-- The named singles: `plan.ts`, `observe.ts`, `registry.ts`, `table.ts`, `record.ts`,
+- The named singles: `plan.ts`, `observe.ts`, `registry.ts`, `table.ts` with `table-fix.ts` (the fixing-state rows), `record.ts`,
   `reconcile.ts`, `events.ts` with `event-reader.ts` and `event-schemas.ts`, `release.ts`,
   `lives.ts`, `keys.ts`, `store.ts`, `settings.ts`, `ops.ts`, `argv.ts`, `workspace.ts`,
   `wind-down.ts` with `wind-down-files.ts`, `question.mjs`, `reviewer.ts`, `park-text.ts` and `types.ts`.
@@ -564,7 +564,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
 and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts`) and `conflictFixCap` is 5 (`config.ts`). `maxTriages` is 2. "Step
-states" are designing, building, reviewing, fixing and the merge-queue head. 37 rows. The Events
+states" are designing, building, reviewing, fixing and the merge-queue head. 40 rows. The Events
 column names what a row's seq logs. The loop no longer writes a state's own entry event
 (`delegated`, `fix_requested`, `merge_ready`): the `transition` beside it carries the same facts (#1141, 7.1).
 
@@ -591,9 +591,11 @@ column names what a row's seq logs. The loop no longer writes a state's own entr
 | T8 | reviewing | ok | - | merge-queue | approvedPatch and pr set | transition, `merge_ready` |
 | T9 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; the counter of the not-ok's kind is under its cap (a base-caused not-ok, 8.6: conflicts < conflictFixCap; any other: fixes < fixCap) | fixing | that counter +1 (`conflicts` for a base-caused not-ok, else `fixes`); pr set; findings, failed checks or the conflict to notes | transition, `fix_requested` |
 | T10 | reviewing, merge-queue | not-ok | changes, `ci-red` or `conflict`; the counter of the not-ok's kind is at its cap | parked | question (the fix cap, or for a base-caused not-ok the cap of rounds for conflicts and red CI after other merges, naming the count; with the findings); resumeTo fixing; pr set | transition |
-| T11 | fixing | ok | - | reviewing | head set; round +1 | transition |
-| T12 | fixing | not-ok | `declined` | reviewing | decline reasons to notes; round +1 | transition |
-| T17 | fixing | not-ok | `unchanged` | reviewing | fixed and decline reasons to notes; round +1; via `unchanged` | transition |
+| T11 | fixing | ok | no environment-blocked finding, or `envBlocked` null (8.6) | reviewing | head set; round +1; `envBlocked` set to this round's reasons, or null | transition |
+| T12 | fixing | not-ok | `declined`; no environment-blocked finding, or `envBlocked` null | reviewing | decline reasons to notes; round +1; `envBlocked` set as T11 | transition |
+| T17 | fixing | not-ok | `unchanged`; no environment-blocked finding, or `envBlocked` null | reviewing | fixed and decline reasons to notes; round +1; via `unchanged`; `envBlocked` set as T11 | transition |
+| T19 | fixing | ok | an environment-blocked finding and `envBlocked` not null (8.6) | parked | head set; question (`[ACTION]`, both rounds' reasons); resumeTo reviewing; via `env-blocked` | transition |
+| T20 | fixing | not-ok | `declined` or `unchanged`; an environment-blocked finding and `envBlocked` not null | parked | question as T19; resumeTo reviewing; via `env-blocked` | transition |
 | T13 | merge-queue | ok | - | closed | why merged | transition |
 | T14 | merge-queue | not-ok | `patch` | reviewing | approvedPatch cleared; round +1 | transition |
 | T15 | merge-queue | not-ok | `policy` | parked | question (the guard's FAIL lines); resumeTo merge-queue | transition |
@@ -661,7 +663,7 @@ Interventions (7.2) are not listed per row. `rules-interventions.ts` derives the
 | designing | T2 | T3, T4, T16, T18 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | building | T5 | T6, T7 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | reviewing | T8 | T9, T10 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
-| fixing | T11 | T12, T17 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
+| fixing | T11, T19 | T12, T17, T20 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 or E7 | E4 or E7 | E5 | U1-U4 |
 | merge-queue | T13 | T9, T10, T14, T15 | U1-U4 | X1-X5 | E1 | E7 | E7 | E2 | E3 | E4 | E5 | U1-U4 (a running step) or E6 (waiting) |
 | parked | E7 | E7 | E7 | E7 | E1 | E7 | P1 | E2 | E3 | E7 | E5 | E6 |
 | waiting | E7 | E7 | E7 | E7 | E1 | C1 | P1 | E2 | E3 or E7 | E4 or E7 | E5 | E6 |
@@ -1370,8 +1372,8 @@ type Finding = { id: string; severity: 'error' | 'warning' | 'info'; file: strin
 
 The existing merge adjudicator's judgement, given the brief and the whole diff, in a
 definition of its own: `agents/reviewer.md`, agent type `factory-loop:reviewer`. The
-adjudicator's definition (`agents/adjudicator.md`) is a no-mistakes gate adjudicator with another
-output contract, so the reviewer is not an edit of it.
+v1 adjudicator definition, a no-mistakes gate adjudicator with another output contract, was
+retired, and the reviewer was never an edit of it.
 
 - **Model** `reviewerModel` (default `opus`). It runs in the issue's slot as a reader, on
   the PR head.
@@ -1558,7 +1560,17 @@ is a new `Reviewer` implementation and a setting, nothing more.
   new round's reviewer judges the declines, and a failed check gets the new round's re-run. That
   costs a round, not a fix.
 - A fixer that pushes nothing but fixed a finding outside the branch (on the PR description or evidence) answers `unchanged`; the PR goes back to reviewing with notes naming each finding (T17), and the answer's evidence is written into the PR body. A `fixed` answer whose origin head did not move stays an unknown bad-answer.
-- An owner resume resets `fixes` and `conflicts` (P1).
+- A fixer declines a finding it cannot do because it needs a tool, access, a secret or a process it
+  is forbidden or unable to run with `blocker: "environment"` (fix contract; the decline note reads
+  `(environment blocker)`, and its `finding_handled` event carries `blocker`). The record keeps
+  `envBlocked`, the one clipped line of the previous fix round's environment-blocker reasons in
+  this life, null when that round had none; every fix result (T11, T12, T17) sets it. A fix round
+  with an environment-blocked finding while `envBlocked` is not null parks the issue at once (T19 on
+  ok, T20 on not-ok; via `env-blocked`; resumeTo reviewing) with an `[ACTION]` question quoting both
+  rounds' reasons: the owner provides the tool or access, a repo setting (for example
+  `uiCapture: "none"`) or an answer to the finding. A round without one resets it, so a later single
+  blocker does not park. The fix cap (T10) is unchanged.
+- An owner resume resets `fixes`, `conflicts` and `envBlocked` (P1); a new record (S0, S7) starts at null.
 - Rounds have no cap of their own. Without outside pushes they are bounded by `fixCap`,
   `conflictFixCap` and `maxTriages` (property 7).
 

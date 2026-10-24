@@ -567,6 +567,17 @@ test("transition conflicts=: the optional conflict-entry count", () => {
   for (const v of ["x", "-1", "none"]) assert.match(missOf(withNote(base, `${base.note} conflicts=${v}`)), /conflicts=/, v);
 });
 
+test("transition envBlocked=: the optional environment-blocker reasons of the previous fix round", () => {
+  const base = sample("transition");
+  const before = translate(base).event.data;
+  const r = translate(withNote(base, `${base.note} envBlocked=r1-1:%20no%20browser`));
+  assert.ok(r.event, JSON.stringify(r));
+  assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+  assert.equal(r.event.data.env_blocked, "r1-1: no browser");
+  assert.equal("env_blocked" in before, false, "a note without envBlocked= leaves the key out");
+  assert.equal(translate(withNote(base, `${base.note} envBlocked=none`)).event.data.env_blocked, null);
+});
+
 test("transition question parts: decision, context, options, recommended, recommendation (dev-system#1064)", () => {
   const base = sample("transition");
   const opts3 = [{ key: "A", title: "One", detail: null }, { key: "B", title: "Two", detail: "More" }, { key: "C", title: "Three", detail: "Even more" }];

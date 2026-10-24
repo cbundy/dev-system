@@ -84,6 +84,8 @@ export type ReusedEvent = {
   size?: PrSize | null
   // when GitHub says the PR merged (merged.v1 merged_at), read with the size
   mergedAt?: string | null
+  // a verdict: the declined finding was an environment blocker (finding_handled.v1 blocker)
+  blocker?: 'environment' | null
 }
 
 // One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by

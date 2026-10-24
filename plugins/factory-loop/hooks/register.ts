@@ -89,13 +89,7 @@ export const register: Register = (on, opts) => {
   // never offered them, so it keeps to the callum-flow agents it knows. The engine asks too when a
   // message resumes an agent, and resumes none of a type it does not offer: while the loop's own
   // repair message to one is on its way (repairTo), its type is offered (#559)
-  on('agent.offer', { agent: 'factory-loop:adjudicator' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  on('agent.offer', { agent: 'factory-loop:designer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  // v2's agent types (v2/types.ts STEP_AGENT), hidden the same way
+  // the loop's agent types (v2/types.ts STEP_AGENT and the intake agent), hidden as above
   for (const agent of new Set([...Object.values(STEP_AGENT), INTAKE_AGENT])) {
     on('agent.offer', { agent }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
   }

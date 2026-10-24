@@ -255,7 +255,7 @@ export function reviewedEvent(at: ReviewedAt, d: ReviewData | null): ReviewedEve
 }
 
 // One finding a fixer handled: fixed, or declined with its reason.
-export type Disposition = { id: string; fixed: boolean; reason: string }
+export type Disposition = { id: string; fixed: boolean; reason: string; blocker: 'environment' | null }
 
 const FIXED_WORDS: readonly string[] = ['fixed', 'correct']
 const DECLINED_WORDS: readonly string[] = ['declined', 'wrong']
@@ -266,7 +266,7 @@ function dispositionOf(v: unknown): Disposition | null {
   const word = typeof o.disposition === 'string' ? o.disposition.toLowerCase() : null
   const fixed = typeof o.fixed === 'boolean' ? o.fixed : word !== null && FIXED_WORDS.includes(word) ? true : word !== null && DECLINED_WORDS.includes(word) ? false : null
   if (fixed === null) return null
-  return { id: o.id.trim(), fixed, reason: typeof o.reason === 'string' ? o.reason : '' }
+  return { id: o.id.trim(), fixed, reason: typeof o.reason === 'string' ? o.reason : '', blocker: !fixed && o.blocker === 'environment' ? 'environment' : null }
 }
 
 // dispositionsOf: what a fix step's result data says of each finding it handled: its
@@ -292,5 +292,5 @@ const VERDICT_NOTE_MAX = 500
 // events.ts logs it with actor fixer.
 export function verdictEvent(at: { issue: number; branch: string; pr: number | null; head: string | null }, d: Disposition): ReusedEvent {
   const note = clip(`${d.fixed ? 'CORRECT' : 'WRONG'}: ${d.id} ${d.reason === '' ? (d.fixed ? 'fixed' : 'declined') : d.reason}`, VERDICT_NOTE_MAX)
-  return { state: 'verdict', issue: at.issue, branch: at.branch, pr: at.pr, head: at.head, note }
+  return { state: 'verdict', issue: at.issue, branch: at.branch, pr: at.pr, head: at.head, note, ...(d.blocker === null ? {} : { blocker: d.blocker }) }
 }

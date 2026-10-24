@@ -488,6 +488,7 @@ The fixer fixed or declined one review finding. Written by the loop from the fix
 | `finding` | string | required | no | minLength 1 |  | The finding's id in the review, for example r1-2 (round 1, finding 2). |
 | `outcome` | enum | required | no | one of "fixed", "declined" | yes | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `detail` | string | required | no |  |  | The fixer's one-line reason, for people; never parse it. |
+| `blocker` | enum | optional | yes | one of "environment", null |  | environment: the fixer declined the finding because it needs a tool, access, a secret or a process the agent is forbidden or unable to run; absent or null otherwise. |
 
 Example:
 
@@ -1394,6 +1395,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 | yes | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
 | `conflicts` | integer | optional | yes | minimum 0 |  | Loop state, for the record rebuild: the entries to fixing in this life caused by a conflict or red CI after other merges. Absent (or null) before the loop counted them; absent is read as 0. |
+| `env_blocked` | string | optional | yes | maxLength 1000 |  | Loop state, for the record rebuild: the environment-blocker reasons of the previous fix round in this life (one clipped line); null when that round had none. A second fix round with one parks the issue. Absent is read as null. |
 | `lives` | integer | required | no | minimum 1 | yes | This life's number among the issue's lives since the count last started; the issue is rejected at the configured maximum. |
 
 Example:

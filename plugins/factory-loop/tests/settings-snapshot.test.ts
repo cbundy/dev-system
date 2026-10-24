@@ -137,11 +137,12 @@ describe('agentModelsOf', () => {
     }
     const a = await agentModelsOf(read, '/p1')
     await agentModelsOf(read, '/p1')
-    expect(a).toEqual({ designer: 'opus', builder: 'opus', fixer: null, adjudicator: 'opus' })
-    expect(reads).toHaveLength(4)
+    expect(a).toEqual({ designer: 'opus', builder: 'opus', fixer: null })
+    expect(reads).toHaveLength(3)
+    expect(reads.some(r => r.includes('adjudicator'))).toBe(false)
     expect(reads).toContain('/p1/agents/designer-v2.md')
     await agentModelsOf(read, '/p2')
-    expect(reads).toHaveLength(8)
+    expect(reads).toHaveLength(6)
   })
 })
 

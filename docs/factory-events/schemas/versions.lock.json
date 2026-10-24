@@ -403,6 +403,12 @@
   "finding_handled.v1": {
     "additionalProperties": false,
     "properties": {
+      "blocker": {
+        "enum": [
+          "environment",
+          null
+        ]
+      },
       "branch": {
         "minLength": 1,
         "type": "string"
@@ -2281,6 +2287,13 @@
       },
       "decision": {
         "maxLength": 2000,
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "env_blocked": {
+        "maxLength": 1000,
         "type": [
           "null",
           "string"

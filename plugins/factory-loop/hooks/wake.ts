@@ -234,8 +234,7 @@ function fieldsOf(raw: unknown): WakeFields | null | string {
   return out
 }
 
-// A brief is a comment URL on the wake's issue of this repo (the retired v1 designer reply, as the designer's
-// RESULT line; replies.ts isBriefUrl is the same rule).
+// A brief is a comment URL on the wake's issue of this repo (the retired v1 designer's rule).
 function briefOk(url: string, repo: string, issue: number | null): boolean {
   const m = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)#issuecomment-\d+$/.exec(url)
   if (m === null || (m[1] ?? '').toLowerCase() !== repo.toLowerCase()) return false
