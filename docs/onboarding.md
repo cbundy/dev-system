@@ -17,6 +17,7 @@ instructions as a skill (generated from this page, never edited by hand).
 - `grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .` prints
   nothing.
 - `npx callum-dev check` exits 0. Besides template drift it needs a UI capture policy: `uiCapture` in `.claude/factory-loop.json` (a capture command, or `"none"`), unless CLAUDE.md says `n/a - no UI`, or an empty `.callum-dev/evidence-off` file turns evidence collection off for the repo.
+- UI capture is set up or turned off (`uiCapture` set in `.claude/factory-loop.json`), see [3h](#3h-ui-capture).
 - The checks in [Verify](#5-verify) pass.
 - If the user asked for the factory loop (step 7): a loop workspace runs in act mode, and the
   loop has claimed one issue labelled `ready` and merged its PR after CI passed.
@@ -194,7 +195,7 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .
 |---|---|---|
 | `.claude/factory-loop.json` | `gateCommands` (lint, then test) | The commands from "Settle the commands first", working in a **fresh worktree with no dependencies installed**: include the install step, e.g. `npm ci && npm run lint`. With no tests yet, use a command that exits 0 and say so to the user. Init fills them from its prompts. |
 | `.github/workflows/ci.yml` | toolchain-and-install step, lint and test `run:` lines | The toolchain setup and install the commands need, and the same lint and test commands as `gateCommands` (step 3f) |
-| `CLAUDE.md` | e2e visual verification doc path | The repo's UI screenshot doc. For a repo with no UI, replace it with `n/a - no UI`. |
+| `CLAUDE.md` | e2e visual verification doc path | The repo's UI capture doc, or `n/a - no UI`; decided in [3h](#3h-ui-capture), and it stays in step with `uiCapture`. |
 | `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `gateCommands` minus the install step, and which CI job calls each (the real job names from `ci.yml`, step 3f) |
 | `CLAUDE.md` | worktree mechanism | `a treehouse worktree` unless the user says otherwise |
 | `CLAUDE.md` | repo-specific variations | Extra build or boot steps before the app can run, or delete the line |
@@ -298,6 +299,26 @@ now:
   adopt them, copy the template from `node_modules/@callum/dev-system/templates/` and fill it in
   as in steps 3c and 3f.
 
+
+### 3h. UI capture
+
+Decide this for every repo, in exactly one of three cases. The outcome is `uiCapture` in
+`.claude/factory-loop.json` and the CLAUDE.md placeholder from step 3c, which stay in step.
+
+1. **No UI.** Set `"uiCapture": "none"` and fill the CLAUDE.md placeholder with `n/a - no UI`.
+2. **A UI that boots non-interactively on a port, or a repo that already uses Playwright.**
+   - Add an `e2e:capture` script to `package.json` that wraps `callum-flow-capture` (flags in
+     [callum-flow-capture](../images/base/README.md#callum-flow-capture), not copied here). Reuse the
+     repo's existing Playwright install where there is one.
+   - Add Playwright and Chromium to the per-repo image (step 3e; see
+     [For a UI repo: the owner's action](../images/base/README.md#callum-flow-capture)).
+   - Write a short doc in the repo, for example `docs/e2e-visual-verification.md`, naming the command,
+     the scenarios with their `--path`, and the evidence route: `callum-flow-evidence-upload` when
+     evidence storage is configured; on exit 78 a committed capture linked by a commit-pinned blob URL.
+   - Point the CLAUDE.md placeholder at that doc and set `"uiCapture": "npm run e2e:capture --"`.
+3. **A UI that cannot be captured** (needs a login, hardware, a native window, or will not boot
+   headless). Set `"uiCapture": "none"`, and tell the user why and that UI PRs will carry no screenshots.
+
 ## 4. Commit (and GitHub, if the user said yes)
 
 ```bash
@@ -328,6 +349,11 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev . || ec
 test -f .github/workflows/ci.yml && echo "ci.yml present" || echo "BAD: no ci.yml (step 3f)"
 git check-ignore -v .claude/factory-loop.json .callum-dev.json .callum-dev/baseline/CLAUDE.md && echo "BAD: tracked file ignored" || echo ok
 ```
+
+For case (2) of [3h](#3h-ui-capture), run the capture command once on a real page:
+`npm run e2e:capture -- <scenario>`. It must exit 0 with the files written, or exit 78 with the files
+kept when the repo has no evidence storage (the doc then names the commit-pinned route). Exit 69 means
+the per-repo image lacks Playwright or Chromium: report it, never ignore it.
 
 Once committed, run the `gateCommands` in a fresh worktree, the way the loop's slot does,
 then remove it:
@@ -421,7 +447,7 @@ The settings a repo usually sets in `.claude/factory-loop.json`:
 | `maxInFlightIssues` | `3` | How many issues the loop works on at once. Parked and waiting issues do not count. The loop also holds fewer when the container's memory cannot hold that many (see `slotMemoryMiB`). |
 | `slotMemoryMiB` | `auto` | The memory one issue's slot is assumed to use, in MiB. `auto` measures it from the stop gates' memory and uses 3072 until three runs are measured. The container's memory less `memoryReserveMiB`, over this, is the most issues held at once. |
 | `memoryReserveMiB` | `2048` | The container's memory kept free of slots, in MiB. |
-| `uiCapture` | `none` | Unset (shown as `none`) keeps a missing capture an error. Otherwise the repo's documented, self-stopping UI capture command (like `"npm run e2e:capture --"`), which builders and fixers run first for a visible change; or `"none"` when the repo has no capture tooling, so the reviewer treats a missing screenshot as a warning, not an error. Unset keeps a missing capture an error. |
+| `uiCapture` | `none` | Unset (shown as `none`) keeps a missing capture an error. Otherwise the repo's documented, self-stopping UI capture command (like `"npm run e2e:capture --"`), which builders and fixers run first for a visible change; or `"none"` when the repo has no capture tooling, so the reviewer treats a missing screenshot as a warning, not an error. See [3h](#3h-ui-capture). |
 | `skipLabels` | `[]` | Labels that keep an issue from being claimed even when it is `ready`. |
 | `minimumReleaseCadence` | `6h` | For a repo that releases: the longest the judge lets merged work wait for a release, at least `1h`. |
 | `releaseBranchPrefix` | `none` | The branch prefix of a release's bump PR (like `"chore/release-"`). While such a PR is open the merge queue holds its merges, so the bump PR's CI is not preempted. Unset turns the hold off. |
@@ -545,6 +571,7 @@ Report:
 - what was created and what was merged,
 - the commands you chose, their clean and deliberately broken output, and any command you
   could not determine,
+- the UI capture outcome: the command and doc, or `none` with the reason (for a UI that cannot be captured, say UI PRs carry no screenshots),
 - if step 7 ran: the loop workspace's name, its mode, and the first issue it merged (or where
   that issue is now),
 - what the user still has to do, with the commands:
