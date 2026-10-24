@@ -876,8 +876,8 @@ contended. An issue is **stuck** when it is claimed (a `claimed` after its last 
 bookkeeping), and `reviewed` and `intervention` (the factory loop v2's review results and step-ins),
 for more than twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
-use `callum-flow-factory-state` ([factory-state.md](factory-state.md)): it has six stuck rules with
-adjustable thresholds and puts GitHub closure first.
+use `callum-flow-factory-state` ([factory-state.md](factory-state.md)): it reads the
+per-state thresholds of `factory.stuck_rules` (adjustable per run with `--rule`) and puts GitHub closure first.
 
 ```sql
 -- double-claims: one row per pair of overlapping claims
@@ -3487,7 +3487,7 @@ jq -c '.offPass[]? | select(.cmd == "title" and .error != null)' trace-2026-10-2
 
 ## Shadow runs (source switch)
 
-Shadow is opt-in for `callum-flow-factory-state`, `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
+Shadow is opt-in for `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
 kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`, written only when set to `shadow`, as the claim tools' are). Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
@@ -3548,7 +3548,7 @@ export is passed (see the skill).
 
 - `throughput` (query 1) and `waiting` (query 7) take every pipeline run start from the linked
   runs of the no-mistakes source (`state.sqlite` or `--nm-export`), by the rules in
-  [Linking pipeline runs to issues](factory-state.md#linking-pipeline-runs-to-issues); `run_started` events are read only for the legacy link, never for a
+  [The run-to-issue link](#the-run-to-issue-link); `run_started` events are read only for the legacy link, never for a
   timestamp. Each lead-time row carries `run_source`: `mirror` (the first linked run is linked by
   its branch), `run_started` (linked only by a legacy event) or `none`. With no linked run in the
   source, `implementation` and `pipeline` are `null`, never a number from the events, and nothing
@@ -3602,6 +3602,25 @@ export is passed (see the skill).
   before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
+
+### The run-to-issue link
+
+`run_started` is logged only when an agent remembers to, so a share of the merged issues have none. The
+no-mistakes database records every run itself, so it is the source of every pipeline fact (start time,
+status, parked time, PR). `callum-flow-evaluate` links a run to an issue by these rules (they were once a
+SQL block of `docs/factory-state.md`; the factory-state tool no longer reads runs). A run belongs to
+issue N of repo R when:
+
+- the run's `repo` equals the lower-cased R (the exporter lowercases `repo`; the event log's `repo` is not
+  lowercased, so compare after lowercasing), and
+- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` convention the
+  `implement-issue` skill uses (up to nine digits are read).
+
+Legacy fallback: a run whose branch carries no issue number is linked through a `run_started` event with
+the same run id, so old rows keep working. The branch wins when the two disagree. Every other run,
+including one with no `repo`, is unlinked: it is left out of per-issue numbers, never counted against an
+issue by guess. The start of a pipeline run in any issue-level number is the linked run's `created_at`;
+`run_started` timestamps are never read.
 
 ### Regimes
 
@@ -3662,8 +3681,8 @@ from migration 0021. The fleet export is
 
 An image that lags the writers skips an event whose type or version `factory-event-shapes.json` does not
 list as current, and counts it, instead of failing the read. See what was skipped with
-`callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the derivation reads
-that type, so the view may be incomplete), and
+`callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the `factory.issue_state` view reads
+that type, so a state may be stale), and
 `callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
 (`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`. The loop's reaction is in "Readers behind the loop".
 

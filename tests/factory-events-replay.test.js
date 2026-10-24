@@ -128,23 +128,6 @@ test("compare: the self-test reader matches on the corpus", opts, (t) => {
   assert.match(r.out, /old and new match/);
 });
 
-test("compare: the factory-state reader matches on the corpus", opts, (t) => {
-  const old = oldStore(t, corpus);
-  const dest = createDb(t);
-  const dir = tmp(t);
-  assert.equal(cli(["load", "--db", dest.name, "--since", SINCE, "--out", path.join(dir, "fs.json")], dest, old).status, 0);
-  const reader = path.join(ROOT, "scripts", "factory-events-replay", "readers", "factory-state.js");
-  const r = cli(["compare", "--reader", reader, "--db", dest.name, "--since", SINCE], dest, old);
-  assert.equal(r.status, 0, r.out + r.err);
-  assert.match(r.out, /old and new match/);
-  // the reader sees the corpus: a seeded change in the new store shows up
-  const [id] = dest.query("SELECT event_id FROM factory.event_store WHERE type = 'transition' ORDER BY ts LIMIT 1").split("|");
-  dest.query(`UPDATE factory.event_store SET issue = issue + 1000 WHERE event_id = '${id}'`);
-  const seeded = cli(["compare", "--reader", reader, "--db", dest.name, "--since", SINCE], dest, old);
-  assert.equal(seeded.status, 1, seeded.out + seeded.err);
-  assert.match(seeded.out, /difference\(s\)/);
-});
-
 test("compare: the evaluate reader matches on the corpus, apart from the documented n/a metrics", opts, (t) => {
   const old = oldStore(t, corpus);
   const dest = createDb(t);

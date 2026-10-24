@@ -26,7 +26,6 @@ const { test } = require("node:test");
 const { available, createDb } = require("./lib/factory-db.js");
 const { oldStore } = require("./lib/factory-events-old.js");
 const { psql } = require("../scripts/factory-events-replay/pg.js");
-const { extractRunLink } = require("./metrics-blocks.js");
 const { ddl: nomistakesDdl } = require("../images/base/nm-export");
 
 const ROOT = path.join(__dirname, "..");
@@ -146,8 +145,9 @@ test("the static check catches what it bans", () => {
   assert.deepEqual(problems("SELECT 1 FROM factory.event_log -- the note and the median, 'note'"), []);
 });
 
-test("the moved run link is in docs/factory-state.md and the nomistakes section is gone from metrics.md", () => {
-  assert.match(extractRunLink(fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8")), /^WITH run_link AS/);
+test("the run-to-issue link rules are prose in docs/metrics.md, factory-state.md has no run link, and the nomistakes section is gone from metrics.md", () => {
+  assert.match(markdown, /^### The run-to-issue link$/m);
+  assert.ok(!fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8").includes("run_link"), "docs/factory-state.md still carries a run link");
   for (const gone of ["## 5. Adjudicator agreement", "## Linking pipeline runs to issues", "## no-mistakes pipeline data"]) {
     assert.ok(!markdown.includes(gone), `${gone} is still in docs/metrics.md`);
   }

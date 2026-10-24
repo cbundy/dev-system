@@ -2,54 +2,48 @@
   "at": "2026-10-10T12:00:00.000Z",
   "at_source": "--at",
   "rules": {
-    "S1": 240,
-    "S2": 60,
-    "S3": 30,
-    "S4": 30,
-    "S5": 30,
-    "S6": "n/a"
+    "building": 60,
+    "designing": 240,
+    "fixing": null,
+    "merge-queue": 30,
+    "parked": 30,
+    "queued": null,
+    "reviewing": null,
+    "waiting": null
   },
   "github": {
     "read": "live",
     "note": "GitHub labels, state and claim comments are read now, not as of --at"
   },
-  "approximate": null,
-  "workers": {
-    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
-  },
-  "runs": "read",
   "stuck": [
     {
       "repo": "acme/widgets",
       "issue": 101,
+      "state": "parked",
       "stage": "parked",
-      "rule": "S3",
-      "minutes_in_stage": 60,
-      "detail": "parked for more than 30 minutes"
+      "rule": "parked",
+      "minutes_in_state": 60
     },
     {
       "repo": "acme/widgets",
       "issue": 112,
+      "state": "building",
       "stage": "implementing",
-      "rule": "S2",
-      "minutes_in_stage": 90,
-      "detail": "implementing, with no pipeline run in progress, for more than 60 minutes"
+      "rule": "building",
+      "minutes_in_state": 90
     }
   ],
+  "skipped_events": [],
   "repos": [
     {
       "repo": "acme/widgets",
       "coverage": {
-        "class": "full",
-        "events": 38,
-        "runs": 1,
+        "events": 37,
         "last_event_at": "2026-10-10T11:50:00.000Z",
-        "last_run_update_at": "2026-10-10T11:55:00.000Z",
-        "heartbeat": "n/a (see workers)",
         "devices": [
           {
             "device": "dev-a",
-            "events": 32,
+            "events": 31,
             "last_event_at": "2026-10-10T11:50:00.000Z"
           },
           {
@@ -64,8 +58,7 @@
           }
         ],
         "live_issue_sources": {
-          "mirror": 0,
-          "event": 10,
+          "event": 9,
           "github": 1
         },
         "notes": []
@@ -73,8 +66,19 @@
       "issues": [
         {
           "issue": 105,
+          "state": "queued",
+          "step": null,
+          "attempt": null,
+          "life": null,
+          "why": null,
+          "state_since": "2026-10-10T10:00:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "queued",
-          "detail": null,
+          "detail": "v2 queued",
           "entered_at": "2026-10-10T10:00:00.000Z",
           "minutes_in_stage": 120,
           "holder": "dev-a",
@@ -82,8 +86,6 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -92,14 +94,21 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T10:00:00.000Z",
-            "lapsed": true
-          },
           "v2": null
         },
         {
           "issue": 107,
+          "state": "queued",
+          "step": "lease",
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T08:01:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "queued",
           "detail": "v2 queued, step lease, attempt 1",
           "entered_at": "2026-10-10T08:01:00.000Z",
@@ -109,8 +118,6 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -119,10 +126,6 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T10:00:00.000Z",
-            "lapsed": true
-          },
           "v2": {
             "state": "queued",
             "step": "lease",
@@ -134,8 +137,19 @@
         },
         {
           "issue": 111,
+          "state": "queued",
+          "step": null,
+          "attempt": null,
+          "life": null,
+          "why": null,
+          "state_since": "2026-10-10T11:30:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T11:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "queued",
-          "detail": null,
+          "detail": "v2 queued",
           "entered_at": "2026-10-10T11:30:00.000Z",
           "minutes_in_stage": 30,
           "holder": "dev-a",
@@ -143,8 +157,6 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -154,39 +166,51 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T11:00:00.000Z",
-            "lapsed": true
-          },
           "v2": null
         },
         {
           "issue": 106,
+          "state": "designing",
+          "step": null,
+          "attempt": null,
+          "life": null,
+          "why": null,
+          "state_since": "2026-10-10T11:00:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T13:00:00.000Z",
+            "lapsed": false
+          },
           "stage": "designing",
-          "detail": null,
-          "entered_at": "2026-10-10T10:00:00.000Z",
-          "minutes_in_stage": 120,
+          "detail": "v2 designing",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
           "holder": "dev-b",
           "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [],
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T13:00:00.000Z",
-            "lapsed": false
-          },
           "v2": null
         },
         {
           "issue": 109,
+          "state": "designing",
+          "step": "design",
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T11:50:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "designing",
           "detail": "v2 designing, step design, attempt 1",
           "entered_at": "2026-10-10T11:50:00.000Z",
@@ -196,8 +220,6 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -206,10 +228,6 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T10:00:00.000Z",
-            "lapsed": true
-          },
           "v2": {
             "state": "designing",
             "step": "design",
@@ -221,6 +239,17 @@
         },
         {
           "issue": 100,
+          "state": "building",
+          "step": "build",
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T11:20:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T13:50:00.000Z",
+            "lapsed": false
+          },
           "stage": "implementing",
           "detail": "v2 building, step build, attempt 1",
           "entered_at": "2026-10-10T11:20:00.000Z",
@@ -230,8 +259,6 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -240,10 +267,6 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T13:50:00.000Z",
-            "lapsed": false
-          },
           "v2": {
             "state": "building",
             "step": "build",
@@ -255,6 +278,17 @@
         },
         {
           "issue": 112,
+          "state": "building",
+          "step": "build",
+          "attempt": 1,
+          "life": "t3xq10",
+          "why": null,
+          "state_since": "2026-10-10T10:30:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
           "stage": "implementing",
           "detail": "v2 building, step build, attempt 1",
           "entered_at": "2026-10-10T10:30:00.000Z",
@@ -263,12 +297,10 @@
           "run": null,
           "pr": null,
           "stuck": {
-            "rule": "S2",
-            "text": "implementing, with no pipeline run in progress, for more than 60 minutes"
+            "rule": "building",
+            "minutes": 60
           },
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -277,10 +309,6 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T13:30:00.000Z",
-            "lapsed": false
-          },
           "v2": {
             "state": "building",
             "step": "build",
@@ -292,6 +320,17 @@
         },
         {
           "issue": 102,
+          "state": "reviewing",
+          "step": "review",
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T11:40:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T13:00:00.000Z",
+            "lapsed": false
+          },
           "stage": "in pipeline",
           "detail": "v2 reviewing, step review, attempt 1",
           "entered_at": "2026-10-10T11:40:00.000Z",
@@ -301,8 +340,6 @@
           "pr": 202,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -313,10 +350,6 @@
           "flags": [
             "label: v2 reviewing, but the issue lacks 'factory:reviewing'"
           ],
-          "lease": {
-            "until": "2026-10-10T13:00:00.000Z",
-            "lapsed": false
-          },
           "v2": {
             "state": "reviewing",
             "step": "review",
@@ -328,8 +361,16 @@
         },
         {
           "issue": 108,
+          "state": "fixing",
+          "step": null,
+          "attempt": null,
+          "life": null,
+          "why": null,
+          "state_since": null,
+          "question": null,
+          "lease": null,
           "stage": "in pipeline",
-          "detail": "GitHub label only, no events or runs",
+          "detail": "GitHub label only, no events",
           "entered_at": null,
           "minutes_in_stage": null,
           "holder": null,
@@ -337,8 +378,6 @@
           "pr": null,
           "stuck": null,
           "source": "github",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -347,11 +386,21 @@
             "claim": null
           },
           "flags": [],
-          "lease": null,
           "v2": null
         },
         {
           "issue": 101,
+          "state": "parked",
+          "step": null,
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T11:00:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
           "stage": "parked",
           "detail": "v2 parked, attempt 1",
           "entered_at": "2026-10-10T11:00:00.000Z",
@@ -360,12 +409,10 @@
           "run": null,
           "pr": null,
           "stuck": {
-            "rule": "S3",
-            "text": "parked for more than 30 minutes"
+            "rule": "parked",
+            "minutes": 30
           },
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [
@@ -374,10 +421,6 @@
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T13:30:00.000Z",
-            "lapsed": false
-          },
           "v2": {
             "state": "parked",
             "step": null,
@@ -386,9 +429,22 @@
             "seq": 4,
             "why": null
           }
-        },
+        }
+      ],
+      "recent": [
         {
           "issue": 103,
+          "state": "closed",
+          "step": null,
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": "merged",
+          "state_since": "2026-10-10T11:30:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T12:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "merged",
           "detail": "v2 closed (merged)",
           "entered_at": "2026-10-10T11:30:00.000Z",
@@ -398,18 +454,12 @@
           "pr": 203,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [],
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T12:00:00.000Z",
-            "lapsed": true
-          },
           "v2": {
             "state": "closed",
             "step": null,
@@ -418,13 +468,22 @@
             "seq": 6,
             "why": "merged"
           }
-        }
-      ],
-      "recent": [
+        },
         {
           "issue": 104,
+          "state": "closed",
+          "step": null,
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": "dropped",
+          "state_since": "2026-10-10T11:00:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T12:00:00.000Z",
+            "lapsed": true
+          },
           "stage": "closed without merge",
-          "detail": "abandoned (reason=dropped note=dropped)",
+          "detail": "v2 closed (dropped)",
           "entered_at": "2026-10-10T11:00:00.000Z",
           "minutes_in_stage": 60,
           "holder": "dev-a",
@@ -432,18 +491,12 @@
           "pr": null,
           "stuck": null,
           "source": "event",
-          "approximate": false,
-          "hint": null,
           "github": {
             "state": "open",
             "labels": [],
             "claim": null
           },
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T12:00:00.000Z",
-            "lapsed": true
-          },
           "v2": {
             "state": "closed",
             "step": null,
@@ -454,9 +507,8 @@
           }
         }
       ],
-      "other_runs": [],
       "queue": {
-        "n/a": "not read"
+        "n/a": "no queue_snapshot for this repo at or before --at"
       }
     }
   ]

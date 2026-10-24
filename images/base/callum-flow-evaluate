@@ -77,7 +77,7 @@ const REARM_ONLY_TOOLS = new Set(['Monitor', 'TaskStop', 'ToolSearch']);
 // from an agent-logged event (cbundy/dev-system#343).
 const STAGE_STATES = ['ready', 'claimed', 'delegated', 'merge_ready', 'merged'];
 // A run belongs to issue N when its branch names it; the same convention as docs/metrics.md
-// "Linking pipeline runs to issues" and callum-flow-sweep.
+// "The run-to-issue link" and callum-flow-sweep.
 const ISSUE_BRANCH_RE = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/;
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
@@ -501,8 +501,8 @@ function readyFor(n, issueEvents, readyTimes) {
   return ev ? { t: ev.t, source: 'event' } : null;
 }
 
-// Links the source's runs (already restricted to one repo) to issues, like the run_link CTE in
-// docs/metrics.md. Returns { byIssue: Map(issue -> [{ id, t, source }] by start time), linked: Set(run id) }.
+// Links the source's runs (already restricted to one repo) to issues, by the rules of docs/metrics.md
+// "The run-to-issue link". Returns { byIssue: Map(issue -> [{ id, t, source }] by start time), linked: Set(run id) }.
 // `source` is 'mirror' (branch) or 'run_started' (legacy: a branch with no issue number, linked
 // by an agent-logged event with the same run_id). The branch wins when the two disagree.
 function linkRuns(runs, events) {
@@ -1663,7 +1663,7 @@ function computePipeline(nm, win, linked) {
   const pipeline = {
     runs: runs.length,
     by_status: Object.fromEntries(Object.keys(byStatus).sort().map((k) => [k, byStatus[k]])),
-    // this repo's runs in the window that no issue claims (the link rules of docs/factory-state.md)
+    // this repo's runs in the window that no issue claims (the link rules of docs/metrics.md "The run-to-issue link")
     unlinked_runs: runs.filter((r) => !linked.has(r.id)).length,
   };
   if (nm.rounds) {

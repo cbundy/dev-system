@@ -118,10 +118,9 @@ differences left were issues decided by such devices). The event names this devi
 `scope_floor`. Under `new` the claim tools lack that history until the 7-day window passes the floor (for
 cbundy/dev-system, 2026-10-17 13:26 UTC, so until 2026-10-24 13:26 UTC).
 
-Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
-default `new`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
-shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)) and
-`heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `new`; its replay reader is
+`callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898)) left the switch with [#1293](https://github.com/cbundy/dev-system/issues/1293): it reads only the `factory.issue_state_at` view of the factory database, and `--source old` and `--source shadow` only print a warning ([factory-state.md](../factory-state.md#usage)).
+
+Tools behind the switch: `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `new`; its replay reader is
 `scripts/factory-events-replay/readers/heartbeat-state.js`; `new` reads this device's local new log under a 500 ms
 deadline, and a shadow record is kept for every difference or error but an agreeing run only once per quiet period).
 
@@ -173,11 +172,11 @@ records ([metrics.md](../metrics.md#shadow-runs-source-switch)).
 
 | Tool | Moved | Evidence | Way back |
 |---|---|---|---|
-| `callum-flow-factory-state` | 2026-10-18 | owner's decision to skip shadow runs; corpus compare in `npm test`; full-history compare (see below) | `CALLUM_FLOW_FACTORY_STATE_SOURCE=old` |
+| `callum-flow-factory-state` | 2026-10-18; left the switch with #1293 | the tool now reads the `factory.issue_state_at` view only | none: `CALLUM_FLOW_FACTORY_STATE_SOURCE=old` and `shadow` only warn |
 | `callum-flow-evaluate` | 2026-10-18 | the same; evaluate's v1-only metrics read n/a under `new` | `CALLUM_FLOW_EVALUATE_SOURCE=old` |
 | `heartbeat-state` | 2026-10-18 | the same; `new` reads only this device's local new log under a 500 ms deadline, so an issue whose only lifecycle events came before the device's dual write reads idle | `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=old` |
 | the factory loop (`eventsSource`: record rebuild, facts, ledger rebuild, once keys) | 2026-10-18 | the owner decided to skip the `loop-facts` shadow run (it had no compare, since v0.59.0 was not yet run by the loop); the `loop-records` compares of query 6b for cbundy/dev-system: 3 compares on 2026-10-18 between 21:42 and 23:42 UTC, 0 differences, 1 live difference (push lag, not counted), no failed reads | `/factory config set eventsSource old` (next pass) |
-| the factory HUD (via factory-state) | 2026-10-18 | it passes no source when `FACTORY_HUD_SOURCE` is unset, so it follows factory-state | `FACTORY_HUD_SOURCE=old` |
+| the factory HUD (via factory-state) | 2026-10-18 | it passes no source when `FACTORY_HUD_SOURCE` is unset, so it follows factory-state | none: factory-state warns on `old` and `shadow` and reads the view |
 
 Full-history compare (`load`, then `compare --reader scripts/factory-events-replay/readers/<tool>.js` from
 2026-10-16T02:00Z): the builder of this change could not run it. The slot has no `FACTORY_DB_ADMIN_URL` and no

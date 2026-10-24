@@ -2,51 +2,44 @@
   "at": "2026-10-10T12:00:00.000Z",
   "at_source": "--at",
   "rules": {
-    "S1": 240,
-    "S2": 60,
-    "S3": 30,
-    "S4": 30,
-    "S5": 30,
-    "S6": "n/a"
+    "building": 60,
+    "designing": 240,
+    "fixing": null,
+    "merge-queue": 30,
+    "parked": 30,
+    "queued": null,
+    "reviewing": null,
+    "waiting": null
   },
   "github": {
     "n/a": "not read (--github off)"
   },
-  "approximate": null,
-  "workers": {
-    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
-  },
-  "runs": "read",
   "stuck": [
     {
       "repo": "acme/widgets",
       "issue": 50,
+      "state": "parked",
       "stage": "parked",
-      "rule": "S3",
-      "minutes_in_stage": 45,
-      "detail": "parked for more than 30 minutes"
+      "rule": "parked",
+      "minutes_in_state": 170
     }
   ],
+  "skipped_events": [],
   "repos": [
     {
       "repo": "acme/widgets",
       "coverage": {
-        "class": "full",
-        "events": 5,
-        "runs": 2,
-        "last_event_at": "2026-10-10T11:16:00.000Z",
-        "last_run_update_at": "2026-10-10T11:55:00.000Z",
-        "heartbeat": "n/a (see workers)",
+        "events": 8,
+        "last_event_at": "2026-10-10T11:40:00.000Z",
         "devices": [
           {
             "device": "dev-a",
-            "events": 5,
-            "last_event_at": "2026-10-10T11:16:00.000Z"
+            "events": 8,
+            "last_event_at": "2026-10-10T11:40:00.000Z"
           }
         ],
         "live_issue_sources": {
-          "mirror": 2,
-          "event": 0,
+          "event": 2,
           "github": 0
         },
         "notes": []
@@ -54,54 +47,77 @@
       "issues": [
         {
           "issue": 50,
+          "state": "parked",
+          "step": null,
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T09:10:00.000Z",
+          "question": "Which of the two schemas should the migration keep?",
+          "lease": {
+            "until": "2026-10-10T18:40:00.000Z",
+            "lapsed": false
+          },
           "stage": "parked",
-          "detail": null,
-          "entered_at": "2026-10-10T11:15:00.000Z",
-          "minutes_in_stage": 45,
+          "detail": "v2 parked, attempt 1",
+          "entered_at": "2026-10-10T09:10:00.000Z",
+          "minutes_in_stage": 170,
           "holder": "dev-a",
-          "run": "r50",
+          "run": null,
           "pr": null,
           "stuck": {
-            "rule": "S3",
-            "text": "parked for more than 30 minutes"
+            "rule": "parked",
+            "minutes": 30
           },
-          "source": "mirror",
-          "approximate": false,
-          "hint": null,
+          "source": "event",
           "github": null,
           "flags": [],
-          "lease": {
-            "until": "2026-10-10T10:40:00.000Z",
-            "lapsed": true
-          },
-          "v2": null
+          "v2": {
+            "state": "parked",
+            "step": null,
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 2,
+            "why": null
+          }
         },
         {
           "issue": 51,
-          "stage": "parked",
-          "detail": null,
-          "entered_at": "2026-10-10T11:55:00.000Z",
-          "minutes_in_stage": 5,
-          "holder": "dev-a",
-          "run": "r51",
-          "pr": null,
-          "stuck": null,
-          "source": "mirror",
-          "approximate": false,
-          "hint": null,
-          "github": null,
-          "flags": [],
+          "state": "parked",
+          "step": null,
+          "attempt": 1,
+          "life": "t3xq00",
+          "why": null,
+          "state_since": "2026-10-10T11:40:00.000Z",
+          "question": "Is the flag meant to default on?",
           "lease": {
-            "until": "2026-10-10T12:20:00.000Z",
+            "until": "2026-10-10T20:20:00.000Z",
             "lapsed": false
           },
-          "v2": null
+          "stage": "parked",
+          "detail": "v2 parked, attempt 1",
+          "entered_at": "2026-10-10T11:40:00.000Z",
+          "minutes_in_stage": 20,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "github": null,
+          "flags": [],
+          "v2": {
+            "state": "parked",
+            "step": null,
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 2,
+            "why": null
+          }
         }
       ],
       "recent": [],
-      "other_runs": [],
       "queue": {
-        "n/a": "not read"
+        "n/a": "no queue_snapshot for this repo at or before --at"
       }
     }
   ]
