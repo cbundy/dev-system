@@ -1,4 +1,4 @@
--- 0031: notification payloads that name nothing (cbundy/dev-system#1265). PostgreSQL has no
+-- 0032: notification payloads that name nothing (cbundy/dev-system#1265). PostgreSQL has no
 -- privilege on LISTEN, so the panel role (0030) can listen on factory_events and factory_workers
 -- like any connected role, and the payloads used to carry the repo, issue, event type and device
 -- of rows the panel may not read. They now carry nothing a reader needs a secret to hold: the

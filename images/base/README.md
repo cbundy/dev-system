@@ -2093,7 +2093,7 @@ The nullable `config` column (jsonb) holds the settings snapshot of the factory 
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
 intervals); readers use the view and never their own rule. In the agentsview database, an `AFTER INSERT OR UPDATE` trigger from the guarded DDL runs
 `pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`; in the factory database the
-payload is empty since migration 0031 (see [docs/factory-db.md](../../docs/factory-db.md)). The guarded DDL goes to the agentsview database
+payload is empty since migration 0032 (see [docs/factory-db.md](../../docs/factory-db.md)). The guarded DDL goes to the agentsview database
 only, with the first beat of the process and after a failed beat of that target; the writer role cannot run DDL, so
 the factory database gets the UPSERT alone. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
 (log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) when either URL is configured, and `dev-doctor` prints
