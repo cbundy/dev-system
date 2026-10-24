@@ -331,7 +331,7 @@ function world(): { state: State; ledger: LedgerEntry[] } {
   const ledger = [own, answered, ended, ensured]
   const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false, lease: null, leasedAt: null, leaseBranch: 'issue-470-x' }] }
   const agents = [
-    { id: 'agent-own', type: 'factory-loop:designer', status: 'running' as const },
+    { id: 'agent-own', type: 'factory-loop:designer-v2', status: 'running' as const },
     { id: 'agent-answered', type: 'callum-flow:fixer', status: 'waiting' as const },
     { id: 'agent-ended', type: 'callum-flow:fixer', status: 'completed' as const },
     // the model's own agent, at work: listed, but never the loop's

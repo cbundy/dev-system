@@ -1302,7 +1302,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
   test("the loop's own agent types are never offered to the model, v2's steps included; the callum-flow ones are (#548)", ENGINE_TEST, async ($, on) => {
     host(on, { config: ACT })
     const offer = (agent: string) => $.agent.offer({ agent, description: 'an agent', source: 'plugin', provider: { plugin: agent.split(':')[0] ?? '', tier: 'user' } })
-    for (const agent of ['factory-loop:adjudicator', 'factory-loop:designer', ...new Set(Object.values(STEP_AGENT))]) expect(await offer(agent)).toEqual({ isOffered: false })
+    for (const agent of new Set(Object.values(STEP_AGENT))) expect(await offer(agent)).toEqual({ isOffered: false })
     expect(await offer('callum-flow:adjudicator')).toEqual({ isOffered: true })
     expect(await offer('callum-flow:designer')).toEqual({ isOffered: true })
   })
