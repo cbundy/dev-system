@@ -89,9 +89,16 @@ function eventsOf(kind: EventKind): TableEvent[] {
 const ALL_EVENTS: TableEvent[] = EVENT_KINDS.flatMap(eventsOf)
 
 // The sweeps over every record and event take a few seconds alone, and more while other suites
-// share the machine (npm test runs them side by side): room past the default 5 s, so a busy
-// machine never fails them.
+// share the machine (npm test runs them side by side): room past the default 5 s. They assert once
+// over gathered mismatches, not once per combination (a million expect calls cost most of the run),
+// so they stay a few seconds even on a busy machine.
 const SWEEP = { timeoutMs: 30_000 }
+
+// One assertion over a sweep's gathered mismatches; a broken table can mismatch thousands of
+// combinations, so a failure shows the count and the first few, which name the record and event.
+function expectNone(bad: string[]): void {
+  expect({ count: bad.length, first: bad.slice(0, 10) }).toEqual({ count: 0, first: [] })
+}
 
 // The rows 4.3's totality grid allows in each cell, by state, whether the record runs its own step
 // or triage, and the event kind. A not-ok whose reason the state's own step cannot give is unknown
@@ -151,12 +158,18 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     // S7: a split child's claim carrying a park makes the parked record, resumeTo designing (8.7)
     const parked = madeRecord({ issue: 8, life: 'ss1x2k', branch: 'issue-8', pr: null, others: [], park: { question: 'Which API?', parent: 7 } }, NOW)
     expect(parked).toMatchObject({ state: 'parked', step: null, resumeTo: 'designing', question: 'Which API?', pr: null, notes: [expect.stringContaining('#7')] })
-    for (const r of records()) for (const e of ALL_EVENTS) expect(['S0', 'S7']).not.toContain(rowFor(r, e, CFG).id)
+    const strayed: string[] = []
+    for (const r of records()) for (const e of ALL_EVENTS) {
+      const id = rowFor(r, e, CFG).id
+      if (id === 'S0' || id === 'S7') strayed.push(`${stateKey(r)} on ${e.kind}: ${id}`)
+    }
+    expectNone(strayed)
   })
 
   test('property 1, totality: exactly one row for every (state, step, event, guard input), the one 4.3\'s grid names; closed is absorbing', SWEEP, () => {
     const reached = new Map<string, Set<string>>()
     let combos = 0
+    const bad: string[] = []
     for (const r of records()) {
       for (const e of ALL_EVENTS) {
         // rowFor throws when two rows match: the guards are exclusive
@@ -166,10 +179,11 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
         const set = reached.get(cell) ?? new Set<string>()
         set.add(row.id)
         reached.set(cell, set)
-        expect({ cell, row: row.id, allowed: expected(r.state, r.step === 'triage', e.kind).includes(row.id) }).toEqual({ cell, row: row.id, allowed: true })
-        if (r.state === 'closed') expect(row.id).toBe('E7')
+        if (!expected(r.state, r.step === 'triage', e.kind).includes(row.id)) bad.push(`${stateKey(r)} on ${e.kind}: ${cell} gave ${row.id}, not one the grid allows`)
+        if (r.state === 'closed' && row.id !== 'E7') bad.push(`${stateKey(r)} on ${e.kind}: closed gave ${row.id}, not E7`)
       }
     }
+    expectNone(bad)
     expect(combos).toBeGreaterThan(50_000)
     // and every row the grid names is reached somewhere in the domain
     for (const [cell, rows] of reached) {
@@ -262,17 +276,22 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
   })
 
   test('every row keeps the record well formed: seq + 1 at now, since moved only with the state, counters within bounds, and the store reads it back', SWEEP, () => {
+    const bad: string[] = []
+    const VIA = /^[a-z-]+(:[a-z-]+)?$/
     for (const r of REACHED) {
-      expect({ r: stateKey(r), ok: wellFormed(r) }).toEqual({ r: stateKey(r), ok: true })
+      const key = stateKey(r)
+      if (!wellFormed(r)) bad.push(`${key}: wellFormed`)
       for (const e of ALL_EVENTS) {
         const n = next(r, e, NOW + 1000)
         if (n === null) continue
-        expect(n.seq).toBe(r.seq + 1)
-        expect(n.seqAt).toBe(NOW + 1000)
-        expect(n.since).toBe(n.state === r.state ? r.since : NOW + 1000)
-        expect({ via: viaOf(rowFor(r, e, CFG), normalize(r, e)) }).toEqual({ via: expect.stringMatching(/^[a-z-]+(:[a-z-]+)?$/) })
+        if (n.seq !== r.seq + 1) bad.push(`${key} on ${e.kind}: seq ${n.seq}, want ${r.seq + 1}`)
+        if (n.seqAt !== NOW + 1000) bad.push(`${key} on ${e.kind}: seqAt ${n.seqAt}, want ${NOW + 1000}`)
+        if (n.since !== (n.state === r.state ? r.since : NOW + 1000)) bad.push(`${key} on ${e.kind}: since ${n.since}`)
+        const via = viaOf(rowFor(r, e, CFG), normalize(r, e))
+        if (!VIA.test(via)) bad.push(`${key} on ${e.kind}: via ${via}`)
       }
     }
+    expectNone(bad)
   })
 
   test('a triage answer other than park or drop starts a step that is not triage: the state\'s own, at attempt 1 (retry: 2), with no cut, even when the answer leads to the state the record is in', SWEEP, () => {
