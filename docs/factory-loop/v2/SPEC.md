@@ -965,9 +965,9 @@ has to read facts of the earlier loop.
   holds them, so nothing else would ever end them (#286, #289, #290, #468 and #469 on dev-system
   showed as queued for 3 to 6 days with no holder; #590 there, and #54 and #57 on plant-console,
   as queued after the loops' claims lapsed). One labelled `ready` is in the queue and is left out,
-  and so is a record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the state its
-  factory-state stage maps to (designing to designing, implementing to building, in pipeline and
-  parked to reviewing, ready to merge to merge-queue; any other stage, queued among them, 2 h):
+  and so is a record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the v2 state
+  the view shows (`state`: designing to designing, building to building, reviewing, fixing and
+  parked to reviewing, merge-queue to merge-queue; any other state, queued among them, 2 h):
   - a no-mistakes run of the issue's branch updated within `T`, as the `factory` source reports it;
   - the open PR's head pushed, a check run started or finished, or a review within `T`;
   - a slot of the earlier loop checked out on the issue's branch whose tree or HEAD changed within `T`.
@@ -1033,7 +1033,7 @@ has to read facts of the earlier loop.
 - After a release the issue no longer shows as active: its labels are off, and its newest decision
   event is `reclaimed` or `abandoned`, which every factory reader takes as the end of a claim
   (`docs/metrics.md`, section 6; `docs/factory-state.md`, "Stages"). No new kind is needed.
-- The release's free-text field reads `no live step in <stage>: <what was checked>`.
+- The release's free-text field reads `no live step in <state>: <what was checked>`.
 - The issue's open PR is never updated or closed. A requeued issue's next claim adopts it (3.5),
   and the report names it, so the owner can re-add `ready` for an issue that left.
 
@@ -1261,11 +1261,10 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
 
 - **`callum-flow-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes:
   - A new step between 2 and 3: an issue whose current life has a `transition` event takes its
-    stage from the newest one's `to`. queued maps to `queued`, designing to `designing`, building to
-    `implementing`, reviewing and fixing to `in pipeline`, merge-queue to `ready to merge`, parked
-    to `parked`, and closed to `merged` or `closed without merge` by its `why`. The detail column
-    shows the v2 state, the step and the attempt. Mirror runs no longer set the stage of such an
-    issue. Stuck rules S1 to S5 stay as they are.
+    `state` from the newest one's `to` (queued, designing, building, reviewing, fixing, merge-queue,
+    parked, waiting or closed, with a `why` for closed). The loop reads that `state`
+    (hooks/factory-state-map.ts turns a row into it; a row of an older image has only the old `stage`
+    word, which maps to a state there). Mirror runs no longer set the state of such an issue. Stuck rules S1 to S5 stay as they are.
   - `nomistakes.runs` becomes an optional source, shown as `n/a` when missing, as
     `factory.workers_status` already is (`images/base/callum-flow-factory-state`);
   - the label checks without `In development` (3.6).
@@ -2579,8 +2578,6 @@ every passEveryMs (60 s), or at once when pinged:
 ```ts
 type Ms = number                                   // epoch milliseconds
 type Tier = 'normal' | 'slow' | 'stop-new' | 'stop-all'
-type Stage = 'queued' | 'designing' | 'implementing' | 'in pipeline' | 'parked' | 'waiting'
-           | 'ready to merge' | 'merged' | 'closed without merge'
 type SourceName = 'factory' | 'facts' | 'runs' | 'queue' | 'github' | 'usage' | 'pool' | 'milestone'
 
 type State = {
@@ -2619,8 +2616,9 @@ type Usage = {
 
 type IssueView = {
   number: number
-  stage: Stage | null             // callum-flow-factory-state; null when the database never saw it
-  stageSince: Ms | null           // entered_at of that stage
+  state: IssueState | null        // callum-flow-factory-state's v2 state; null when the database never saw it
+  merged: boolean                 // a closed issue that was merged (merged, merged-by-hand, done)
+  stateSince: Ms | null           // state_since of that state
   holder: string | null           // device of the latest claim
   run: string | null
   pr: number | null
@@ -3768,12 +3766,12 @@ are ms into the pass):
   seen, as across a reload); `ended`; `deliverMs` (queued to delivered); and `answerMs`
   (delivered to ended).
 - `waiting`: what each issue waits on, one row each: `issue` (null for what holds the whole pass,
-  such as a source being down), `stage`, `rule`, `on`, `since` and `forMs`. A row is one of three
+  such as a source being down), `state`, `rule`, `on`, `since` and `forMs`. A row is one of three
   things. A skip plan gave: `on` is its reason, and `since` is when that issue's skip under that
   rule was first seen in an unbroken run of passes, so a stall like a step waiting out its timeout
   shows as a growing `forMs` even while its words change. A running ledger entry: `on` is
   `<key> running`, since the entry started. Or a live issue of this device that nothing names and
-  nothing acts on: `on` is `no rule acts on it`, since its stage began. Skip ages start over when
+  nothing acts on: `on` is `no rule acts on it`, since its state began. Skip ages start over when
   the module reloads.
 
 The trace files stay within `traceMaxBytes` (100 MiB) in all. Before each write, the oldest trace

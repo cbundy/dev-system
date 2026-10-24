@@ -21,6 +21,7 @@
 //
 // Pure: the time is state.now.
 import { gate, skip, wake, want } from '../foundation'
+import { LIVE_STATES } from '../factory-state-map'
 import type { Config, IssueView, LedgerEntry, Ms } from '../types'
 import { capOf, capText } from './capacity'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
@@ -169,9 +170,6 @@ function finishClaims(ctx: V2Ctx): Set<number> {
 // --- S1: new claims ------------------------------------------------------------------------------------
 
 
-// The stages of another device's live work.
-const LIVE_STAGES: readonly string[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
-
 // blockedWhy: the filter's reason for an issue with this many open blockers.
 function blockedWhy(count: number): string {
   return `blocked by ${count} open issue${count > 1 ? 's' : ''}`
@@ -201,7 +199,7 @@ function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): 
   if (issue.subIssues === null) return 'sub-issues unknown'
   if (issue.subIssues > 0) return 'tracker (has sub-issues)'
   if (issue.epic === true) return 'tracker (title)'
-  if (issue.holder !== null && issue.holder !== state.device && issue.stage !== null && LIVE_STAGES.includes(issue.stage)) return `another device holds it (${issue.holder})`
+  if (issue.holder !== null && issue.holder !== state.device && issue.state !== null && LIVE_STATES.includes(issue.state)) return `another device holds it (${issue.holder})`
   if (state.control.skip.includes(n)) return 'owner: skip'
   if (state.control.paused.includes(n)) return 'owner: paused'
   return null
@@ -310,7 +308,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
         continue
       }
       key = latest.key
-    } else if (latest !== undefined && claimedOf(latest) === 'lost' && latest.startedAt > (issues.get(n)?.stageSince ?? 0)) {
+    } else if (latest !== undefined && claimedOf(latest) === 'lost' && latest.startedAt > (issues.get(n)?.stateSince ?? 0)) {
       skip(ctx, 'S1', n, 'another device holds it')
       row(n, scored, 'another device holds it')
       continue

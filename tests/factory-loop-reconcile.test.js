@@ -63,7 +63,30 @@ function slot(name, branch, head, tree = null) {
   return dir;
 }
 
-const live = (issue, stage, entered, extra = {}) => ({ issue, stage, entered_at: iso(entered), holder: DEVICE, run: null, pr: null, detail: null, stuck: null, source: "event", ...extra });
+// a row as the tool now reports it: the v2 state with its time (and `why` for a closed one), and the
+// stage it shows as, kept for older readers. A claim whose lease lapsed keeps the state it had.
+const STATE_OF_STAGE = { queued: "queued", designing: "designing", implementing: "building", "in pipeline": "reviewing", parked: "parked", waiting: "waiting", "ready to merge": "merge-queue", merged: "closed" };
+const live = (issue, stage, entered, extra = {}) => {
+  const lapsed = typeof extra.detail === "string" && extra.detail.startsWith("claim lapsed at");
+  return {
+    issue,
+    state: lapsed ? "designing" : STATE_OF_STAGE[stage],
+    state_since: iso(entered),
+    why: stage === "merged" ? "merged" : null,
+    life: extra.v2 ? extra.v2.life : null,
+    stage,
+    entered_at: iso(entered),
+    holder: DEVICE,
+    run: null,
+    pr: null,
+    detail: null,
+    stuck: null,
+    source: "event",
+    ...extra,
+  };
+};
+// the same row from an image older than the tool switch: only the stage, its time and the v2 object
+const oldShape = ({ state, state_since, why, life, ...row }) => row;
 const ghIssue = (number, labels, state = "open") => ({ issue: { number, title: `issue ${number}`, state, labels: labels.map((name) => ({ name })) }, stripped: 0 });
 
 // the fixture factory, each issue named by what it shows
@@ -281,6 +304,22 @@ before(() => {
 });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+test("a report with only the old stage words gives the same proposals as one with the v2 state, and a row with a life but no v2 key is a record", () => {
+  const answers = (f) => ({ ...fx.answers, "callum-flow-factory-state": [{ match: ".", stdout: f }] });
+  const now = fx.answers["callum-flow-factory-state"][0].stdout;
+  const old = { ...now, repos: now.repos.map((r) => ({ ...r, issues: r.issues.map(oldShape), recent: r.recent.map(oldShape) })) };
+  const a = world(fx.answers).run([]);
+  const b = world(answers(old)).run([]);
+  assert.equal(a.status, 0, a.stderr);
+  assert.equal(b.status, 0, b.stderr);
+  assert.equal(b.stdout, a.stdout);
+  // orphanOf reads `life`, so a row with no v2 key and a life is a record (#43 queued is never looked at)
+  const noV2 = { ...now, repos: now.repos.map((r) => ({ ...r, issues: r.issues.map(({ v2, ...row }) => row) })) };
+  const c = world(answers(noV2)).run([]);
+  assert.equal(c.status, 0, c.stderr);
+  assert.equal(line(c.stdout, 43), "");
+});
+
 test("observe lists this device's live claims with no v2 record, the live issues with no holder, the pool's other slots and the leftover labels, each with its proposal, and changes nothing", () => {
   const w = world(fx.answers);
   const r = w.run([]);
@@ -306,7 +345,7 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.ok(!w.calls().some((c) => c.name === "callum-flow-issue-read" && c.argv.join(" ") === "--json 43"), "nothing of it is read");
   assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 41), "", "an issue in the queue (ready) is no ghost");
-  assert.match(line(out, 42), /in pipeline for 1h00m with no holder; .*run R42 updated 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
+  assert.match(line(out, 42), /reviewing for 1h00m with no holder; .*run R42 updated 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(out, /^- With a v2 record, left to the loop: #16\.$/m);
   assert.match(line(out, 17), /Proposal: closed on GitHub \(the sweep logs it\): remove the label\./);
   assert.match(line(out, 18), /Proposal: not read \(an untrusted author\): check again later\./);
@@ -320,7 +359,7 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.equal(slotLine(out, 1) + slotLine(out, 4) + slotLine(out, 6) + slotLine(out, 9), "", "a candidate's slot is on its own line; the loop's and an available one are not listed");
   // In development with no live claim, open or closed
   assert.equal(out.split("\n").filter((l) => l.startsWith("- #20")).length, 1, "#20's release takes its label off: it is not listed twice");
-  assert.match(line(out, 21), /^- #21 \(closed\): merged\. Proposal: remove the label\.$/);
+  assert.match(line(out, 21), /^- #21 \(closed\): closed\. Proposal: remove the label\.$/);
   // nothing written but the report
   assert.deepEqual(writes(w.calls()), []);
   const report = fs.readFileSync(path.join(w.loopDir, "reconcile-2026-10-15.md"), "utf8");
@@ -562,7 +601,7 @@ test("the migration's events pass the real callum-flow-event: one native line ea
   }
   const [ab10, iv10, ab11] = lines.map((e) => e.data);
   assert.deepEqual([ab10.reason, ab10.lives, ab10.stage, ab10.branch, ab10.pr], ["reconcile", null, "designing", "feat/issue-10-x", null]);
-  assert.deepEqual([ab11.stage, ab11.branch, ab11.pr], ["implementing", "feat/issue-11-y", 111]);
+  assert.deepEqual([ab11.stage, ab11.branch, ab11.pr], ["building", "feat/issue-11-y", 111]);
   assert.deepEqual([iv10.who, iv10.cause], ["person", "reconcile"]);
   assert.match(iv10.fact, /^i10\/reconcile\/[0-9a-z]+\/event$/);
 });

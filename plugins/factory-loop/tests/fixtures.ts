@@ -16,10 +16,9 @@ import type {
   Slot,
   Source,
   SourceName,
-  Stage,
   State,
 } from '../hooks/types'
-import type { IssueRecord } from '../hooks/v2/types'
+import type { IssueRecord, IssueState } from '../hooks/v2/types'
 
 // 2026-10-13T03:00:00Z
 export const NOW = Date.UTC(2026, 9, 13, 3, 0)
@@ -91,8 +90,9 @@ export function failing(s: State, name: SourceName, since: number | null): State
 export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
   return {
     number: n,
-    stage: 'queued',
-    stageSince: NOW - 30 * MIN,
+    state: 'queued',
+    merged: false,
+    stateSince: NOW - 30 * MIN,
     holder: null,
     run: null,
     pr: null,
@@ -119,9 +119,9 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
   }
 }
 
-// mine: an issue this device holds, in the given stage.
-export function mine(n: number, stage: Stage, over: Partial<IssueView> = {}): IssueView {
-  return issue(n, { stage, holder: DEVICE, labels: ['enhancement', 'In development'], ...over })
+// mine: an issue this device holds, in the given state.
+export function mine(n: number, state: IssueState, over: Partial<IssueView> = {}): IssueView {
+  return issue(n, { state, holder: DEVICE, labels: ['enhancement', 'In development'], ...over })
 }
 
 export function brief(n: number) {

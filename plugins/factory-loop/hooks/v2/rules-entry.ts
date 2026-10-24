@@ -83,8 +83,8 @@ function stops(ctx: V2Ctx, r: IssueRecord): Action[] {
 // transition is planned, so that transition never shows as the merge (mergedItem).
 function mergedLogged(ctx: V2Ctx, r: IssueRecord): boolean {
   const view = ctx.state.issues.find(i => i.number === r.issue)
-  const since = view?.stageSince ?? null
-  return view?.stage === 'merged' && since !== null && since >= (lifeAt(r.life) ?? 0)
+  const since = view?.stateSince ?? null
+  return view?.state === 'closed' && view.merged && since !== null && since >= (lifeAt(r.life) ?? 0)
 }
 
 // heldByOther: another device holds a live claim on the issue: its labels are the winner's, so a

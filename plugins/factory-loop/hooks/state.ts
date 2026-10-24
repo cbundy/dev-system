@@ -96,8 +96,9 @@ export function buildState(o: Observed): State {
       const g = o.github.get(n)
       return {
         number: n,
-        stage: f?.stage ?? null,
-        stageSince: f?.stageSince ?? null,
+        state: f?.state ?? null,
+        stateSince: f?.stateSince ?? null,
+        merged: f?.merged ?? false,
         holder: f?.holder ?? null,
         run: f?.run ?? null,
         pr: f?.pr ?? null,

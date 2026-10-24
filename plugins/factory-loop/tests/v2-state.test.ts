@@ -249,7 +249,7 @@ describe('S1: claims', () => {
       issue(25, { blockedBy: 2 }),
       issue(26, { subIssues: 3 }),
       issue(27, { epic: true }),
-      issue(28, { holder: OTHER, stage: 'designing' }),
+      issue(28, { holder: OTHER, state: 'designing' }),
       issue(29),
       issue(30),
       issue(31),
@@ -288,7 +288,7 @@ describe('S1: claims', () => {
     ])
     expect(said(r, 42)).toContain('another device holds it')
     // queued again after the lost claim: a new claim
-    const requeued = { ...s, issues: [issue(40), issue(41), issue(42, { stageSince: NOW - MIN })] }
+    const requeued = { ...s, issues: [issue(40), issue(41), issue(42, { stateSince: NOW - MIN })] }
     expect(plan(requeued, { ...CFG, maxInFlightIssues: null }).actions.filter(a => a.kind === 'claim').map(a => a.issue)).toContain(42)
   })
 
@@ -516,7 +516,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const split = rec(77, { state: 'closed', step: null, why: 'split', seq: 4, seqAt: NOW - MIN, since: NOW - MIN })
     const lost = rec(78, { state: 'closed', step: null, why: 'claim-lost', seq: 5, seqAt: NOW - MIN, since: NOW - MIN })
     const child = (k: string, n: number) => done(`${seqKey({ ...split, seq: 3 })}/child/${k}`, 'split', { issue: 77, outcome: { kind: 'split', child: n } })
-    const s = withLedger(world([merged, split, lost], { issues: [issue(76, { stage: 'ready to merge' }), issue(78, { holder: OTHER, stage: 'designing' })] }), [
+    const s = withLedger(world([merged, split, lost], { issues: [issue(76, { state: 'merge-queue' }), issue(78, { holder: OTHER, state: 'designing' })] }), [
       transitioned(merged, 'E3', 'reviewing', 'pr-merged'),
       transitioned(split, 'T4', 'designing', 'split'),
       transitioned(lost, 'E5', 'building', 'claim-lost'),
@@ -533,7 +533,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(r, 78)).toEqual(['event transition'])
     // the rollout read run-it, and the factory holds the merge: the later milestone, no merged event
     const read = withLedger(
-      { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } },
+      { ...s, issues: [issue(76, { state: 'closed', merged: true, stateSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } },
       [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } }), ivLogged(merged)],
     )
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
@@ -543,7 +543,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const key = followKey(merged, 'close-tracker')
     const read = (rollout: 'merge' | 'run-it' | 'keep-open' | null, closeIssue: number | null = null) => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue } })
-    const checks = (extra: LedgerEntry[], r = merged) => plan(withLedger({ ...world([r]), issues: [issue(r.issue, { stage: 'merged', stageSince: NOW - 2 * MIN })] }, [transitioned(r, 'T13', 'merge-queue', 'merged'), ...extra])).actions.filter(a => a.kind === 'close-tracker')
+    const checks = (extra: LedgerEntry[], r = merged) => plan(withLedger({ ...world([r]), issues: [issue(r.issue, { state: 'closed', merged: true, stateSince: NOW - 2 * MIN })] }, [transitioned(r, 'T13', 'merge-queue', 'merged'), ...extra])).actions.filter(a => a.kind === 'close-tracker')
     const closed = (k: string, parent: number, isClosed: boolean) => done(k, 'close-tracker', { issue: 76, outcome: { kind: 'close-tracker', parent, closed: isClosed, open: [] } })
     // waits for the rollout read
     expect(checks([])).toEqual([])
@@ -649,7 +649,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })
     const at = (rollout: 'merge' | 'run-it' | 'keep-open', blocking: number | null, extra: LedgerEntry[] = []) =>
-      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
+      withLedger({ ...world([merged]), issues: [issue(76, { state: 'closed', merged: true, stateSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, openIssues: [], expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
     const tells = (s: State) => of(plan(s), 76).filter(a => a.kind === 'tell')
     const out = tells(at('keep-open', 2))
     expect(out).toHaveLength(1)
@@ -696,7 +696,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
   test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
     const r = rec(79, { state: 'closed', step: null, why: 'merged', pr: 779, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
     const closed = transitioned(r, 'T13', 'merge-queue', 'merged')
-    const at = (stageSince: number | null, extra: LedgerEntry[] = []) => withLedger(world([r], { issues: stageSince === null ? [] : [issue(79, { stage: 'merged', stageSince })] }), [closed, ...extra])
+    const at = (stateSince: number | null, extra: LedgerEntry[] = []) => withLedger(world([r], { issues: stateSince === null ? [] : [issue(79, { state: 'closed', merged: true, stateSince })] }), [closed, ...extra])
     // the close: callum-flow-merge logged merged before it
     expect(kinds(plan(at(NOW - 2 * MIN)), 79)).toEqual(['event transition', 'label clear', 'rollout'])
     // the entry actions done; then the sweep's `closed` (the view's stage time moves past the close),
@@ -710,6 +710,9 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const merged = entry(entryKey(r, 'event/merged'), 'event', { issue: 79, status: 'lost', attempts: 1, startedAt: NOW - MIN, endedAt: NOW })
     expect(kinds(plan(at(NOW, [merged])), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
     expect(kinds(plan(at(NOW, [...settled, merged])), 79)).toEqual(['event merged'])
+    // a view closed without a merge (closed on GitHub, dropped) is no logged merge: the close still logs it
+    const unmerged = withLedger(world([r], { issues: [issue(79, { state: 'closed', merged: false, stateSince: NOW - 2 * MIN })] }), [closed])
+    expect(kinds(plan(unmerged), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
   })
 
   test('a new seq stops the old step that still runs and kills its slot\'s processes, best effort: the step starts once both ended, however they ended', () => {
@@ -1296,20 +1299,20 @@ describe('H1: claims renewed and claimed again', () => {
   test('a lapsed claim is claimed again onto its record: a `reclaimed` event after its claim, the factory showing this device\'s claim lapsed, or another device showing as holder; the re-claim logs its transition again; none while one runs', () => {
     const r = rec(122)
     const claimed = done(claimKey(122, LIFE), 'claim', { issue: 122, startedAt: NOW - 40 * MIN, endedAt: NOW - 40 * MIN, outcome: { kind: 'adopt', branch: 'issue-122', pr: null, others: [] } })
-    const at = (view: Parameters<typeof issue>[1], queue: number[] = []) => plan(withLedger(world([r], { queue, issues: [issue(122, { stage: 'designing', holder: DEVICE, labels: ['enhancement'], ...view })] }), [claimed]))
+    const at = (view: Parameters<typeof issue>[1], queue: number[] = []) => plan(withLedger(world([r], { queue, issues: [issue(122, { state: 'designing', holder: DEVICE, labels: ['enhancement'], ...view })] }), [claimed]))
     const claims = (p: PlanResult) => p.actions.filter(a => a.kind === 'claim')
     expect(claims(at({ reclaimedAt: NOW - 5 * MIN }))).toEqual([expect.objectContaining({ issue: 122, rule: 'H1', class: 'free', reason: 'its claim lapsed: the sweep gave it back (reclaimed)' })])
-    expect(claims(at({ claimLapsedAt: NOW - 5 * MIN, stage: 'queued' }))).toEqual([expect.objectContaining({ issue: 122, rule: 'H1', reason: 'its claim lapsed: the factory shows its lease ended' })])
+    expect(claims(at({ claimLapsedAt: NOW - 5 * MIN, state: 'queued' }))).toEqual([expect.objectContaining({ issue: 122, rule: 'H1', reason: 'its claim lapsed: the factory shows its lease ended' })])
     // the label list lags behind edits: the issue listed ready just after its claim is no lapse
     expect(claims(at({ labels: ['enhancement', 'ready'] }, [122]))).toEqual([])
     // facts from before the last claim are no lapse: a re-claim is not made twice
     expect(claims(at({ reclaimedAt: NOW - 50 * MIN, claimLapsedAt: NOW - 45 * MIN }))).toEqual([])
     // another device's claim lapsing says nothing of this one
     expect(claims(at({ claimLapsedAt: NOW - 5 * MIN, holder: OTHER }, []))).toEqual([expect.objectContaining({ reason: `the factory shows ${OTHER} holding it` })])
-    const other = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, stage: 'designing', labels: ['enhancement'] })] }), [claimed]))
+    const other = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, state: 'designing', labels: ['enhancement'] })] }), [claimed]))
     expect(other.actions.find(a => a.kind === 'claim')).toMatchObject({ issue: 122, rule: 'H1' })
     const again = done(reclaimKey(r, lifeOf(NOW - 2 * MIN)), 'claim', { issue: 122, startedAt: NOW - 2 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'claim', result: 'claimed' } })
-    const logged = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, stage: 'designing', reclaimedAt: NOW - 5 * MIN })] }), [claimed, again]))
+    const logged = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, state: 'designing', reclaimedAt: NOW - 5 * MIN })] }), [claimed, again]))
     expect(logged.actions.filter(a => a.kind === 'claim')).toEqual([])
     expect(logged.actions.find(a => a.kind === 'event' && a.key === `${again.key}/transition`)).toMatchObject({ event: { state: 'transition', record: r, via: 'reclaim' } })
     const inFlight = entry(reclaimKey(r, lifeOf(NOW - MIN)), 'claim', { issue: 122, status: 'running', endedAt: null, startedAt: NOW - MIN })

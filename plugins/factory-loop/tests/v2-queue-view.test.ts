@@ -47,7 +47,7 @@ describe('why-codes of the claim filters', () => {
       issue(14, { subIssues: null }),
       issue(15, { trusted: null }),
       issue(16, { open: null }),
-      issue(17, { holder: 'other-device', stage: 'implementing' }),
+      issue(17, { holder: 'other-device', state: 'building' }),
     ]
     const s = world([...issues], { control: control({ skip: [4], paused: [5] }), queue: [...issues.map(i => i.number), 99] })
     expect(whys(s)).toEqual({ 1: null, 2: 'blocked', 3: 'skipped', 4: 'skipped', 5: 'paused', 6: 'rejected', 7: 'tracker', 8: 'tracker', 9: 'untrusted', 10: 'unknown', 11: 'unknown', 12: 'unknown', 13: 'unknown', 14: 'unknown', 15: 'unknown', 16: 'unknown', 17: 'held', 99: 'unknown' })

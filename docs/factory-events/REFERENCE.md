@@ -292,7 +292,7 @@ The factory stopped work on the issue and it left the factory without a merge: i
 | `why_parts` | string | optional | yes |  |  | split: why the boundaries between the parts fall where they do; null otherwise. |
 | `why_order` | string | optional | yes |  |  | split: why the blockedBy order is what it is, or that the parts are independent; null otherwise. |
 | `child_whys` | array of string | optional | yes |  |  | split: what makes each new issue a part of its own, in the order of split_into; null otherwise. |
-| `stage` | string | required | yes |  |  | reconcile and rejected: the stage callum-flow-factory-state showed the issue in, in its words, not a transition state; null otherwise. |
+| `stage` | string | required | yes |  |  | reconcile and rejected: the v2 state (building, reviewing, merge-queue and so on) callum-flow-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
 | `lives` | integer | required | yes | minimum 1 | yes | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The abandoned work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The abandoned work's pull request, when there is one. |
@@ -1176,7 +1176,7 @@ The issue's claim was given back and the issue is in the queue again (ready labe
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `reason` | enum | required | no | one of "lease-expired", "reconcile" | yes | Why: lease-expired (no renewal in time) or reconcile (reconcile found no live work behind the claim and requeued it). |
-| `stage` | string | required | yes |  |  | reconcile: the stage callum-flow-factory-state showed the issue in, in its words (queued, designing, implementing, in pipeline, parked), not a transition state; null otherwise. |
+| `stage` | string | required | yes |  |  | reconcile: the v2 state (queued, designing, building, reviewing, fixing, parked and so on) callum-flow-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
 | `lives` | integer | required | yes | minimum 1 | yes | reconcile: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The released work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The released work's open pull request, when there is one. |

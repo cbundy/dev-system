@@ -1,19 +1,9 @@
 // Pure parsers for what observe reads: each turns one command's output into typed values,
 // or reports that it could not. No I/O here, so the tests and the replay harness (plain
 // Node) drive them directly. Types only are imported.
-import type { Bump, Checkout, Milestone, Pool, Stage, Usage } from './types'
-
-const STAGES: readonly Stage[] = [
-  'queued',
-  'designing',
-  'implementing',
-  'in pipeline',
-  'parked',
-  'waiting',
-  'ready to merge',
-  'merged',
-  'closed without merge',
-]
+import { stateOfRow } from './factory-state-map'
+import type { Bump, Checkout, Milestone, Pool, Usage } from './types'
+import type { IssueState } from './v2/types'
 
 export function isoMs(value: unknown): number | null {
   if (typeof value !== 'string' || value === '') return null
@@ -25,8 +15,10 @@ export function isoMs(value: unknown): number | null {
 
 export type FactoryIssue = {
   number: number
-  stage: Stage
-  stageSince: number | null
+  // the v2 state the row shows (hooks/factory-state-map.ts), whether a closed one was merged, and since when
+  state: IssueState
+  merged: boolean
+  stateSince: number | null
   holder: string | null
   run: string | null
   pr: number | null
@@ -99,14 +91,16 @@ export function parseFactoryState(json: string, repo: string): Factory | null {
   const take = (list: unknown[] | undefined, ended: boolean) => {
     for (const raw of list ?? []) {
       const i = raw as Record<string, unknown>
-      const stage = i.stage as Stage
-      if (typeof i.issue !== 'number' || !STAGES.includes(stage)) continue
+      if (typeof i.issue !== 'number') continue
+      const of = stateOfRow({ ...i, ended: ended || i.ended === true })
+      if (of === null) continue
       const stuck = i.stuck as { rule?: unknown } | null
       const gh = i.github as { state?: unknown; labels?: unknown } | null
       issues.push({
         number: i.issue,
-        stage,
-        stageSince: isoMs(i.entered_at),
+        state: of.state,
+        merged: of.merged,
+        stateSince: isoMs(i.state_since) ?? isoMs(i.entered_at),
         holder: typeof i.holder === 'string' ? i.holder : null,
         run: typeof i.run === 'string' ? i.run : null,
         pr: typeof i.pr === 'number' ? i.pr : null,

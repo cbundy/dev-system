@@ -10,12 +10,12 @@
 //
 // Observe (the default) changes nothing. It lists this device's live claims (from
 // callum-flow-factory-state) that have no v2 record, and the issues the factory shows as live with
-// no live claim and no `ready` label: those with no holder at all, in a live stage or queued, and
+// no live claim and no `ready` label: those with no holder at all, in a live state or queued, and
 // those queued after their claim ended or lapsed, whatever device made it (but a v2 record's
 // queued state, which is live work). These are ghosts no device holds, which nothing else would
 // ever end. For each it looks for live evidence within T, the timeout of the v2
-// state its stage maps to (designing to designing, implementing to building, in pipeline and
-// parked to reviewing, ready to merge to merge-queue's wait; any other stage, queued among them,
+// state it shows (the v2 state, hooks/factory-state-map.ts: designing, building, reviewing, fixing
+// and parked to reviewing, merge-queue to its wait; any other state, queued among them,
 // 2 h): a no-mistakes run of the issue's branch updated (the fleet database's mirror); the open
 // PR's head pushed (its head commit's date), a check run started or finished, or a review; a slot
 // of the pool on the issue's branch whose HEAD or tree changed. It also lists the pool's other
@@ -82,12 +82,12 @@ const USAGE = `usage: ${ME} --repo <owner/name> [--device <name>] [--checkout <d
 
 const MIN = 60_000
 const HOUR = 60 * MIN
-// any stage the timeouts do not name (6.3)
+// any state the timeouts do not name (6.3)
 const OTHER_T = 2 * HOUR
 // a slot that changed this recently, or runs a process, is freed only when its issue is named
 const BUSY_MS = 2 * HOUR
-// the v2 state each stage maps to, by its key in the stateTimeoutMs setting
-const STAGE_TIMEOUT = { designing: 'design', implementing: 'build', 'in pipeline': 'review', parked: 'review', 'ready to merge': 'queueWait' }
+// the stateTimeoutMs key of each v2 state the timeouts name
+const STATE_TIMEOUT = { designing: 'design', building: 'build', reviewing: 'review', fixing: 'review', parked: 'review', 'merge-queue': 'queueWait' }
 const FACTORY_PREFIX = 'factory-loop:'
 // the claim tool's claim label, which v2 drops (3.6); labels compare without regard to case
 const IN_DEV = 'In development'
@@ -145,15 +145,15 @@ const RESOLVE = `export async function resolve(specifier, context, next) {
 
 let hooks = null
 
-// loadHooks: release.ts (what a release removes and logs), events.ts (every v2 event's argv),
-// keys.ts (the release's keys), config.ts (the settings) and contract.mjs (the loop dir).
+// loadHooks: release.ts (what a release removes and logs), factory-state-map.ts (the v2 state of a
+// factory-state row), events.ts (every v2 event's argv), keys.ts (the release's keys), config.ts (the settings) and contract.mjs (the loop dir).
 async function loadHooks() {
   if (hooks !== null) return hooks
   register(`data:text/javascript,${encodeURIComponent(RESOLVE)}`)
   const dir = path.join(__dirname, '..', 'hooks')
   const load = (f) => import(pathToFileURL(path.join(dir, f)).href)
-  const [release, events, keys, config, contract] = await Promise.all([load('v2/release.ts'), load('v2/events.ts'), load('v2/keys.ts'), load('config.ts'), load('contract.mjs')])
-  hooks = { release, events, keys, config, contract }
+  const [release, stateMap, events, keys, config, contract] = await Promise.all([load('v2/release.ts'), load('factory-state-map.ts'), load('v2/events.ts'), load('v2/keys.ts'), load('config.ts'), load('contract.mjs')])
+  hooks = { release, stateMap, events, keys, config, contract }
   return hooks
 }
 
@@ -194,12 +194,13 @@ const hasLabel = (labels, name) => labels.some((l) => l.toLowerCase() === name.t
 // --- the report (pure: what was read in, the proposals out) -------------------------------------------
 
 // orphanOf: how the factory shows an issue with no live claim as active (6.3): with no holder, in a
-// live stage or queued; or queued with a holder whose claim ended or lapsed. A v2 record's queued
-// state is live work, never one. null for any other issue.
+// live state or queued; or queued with a holder whose claim ended or lapsed. A v2 record's queued
+// state is live work, never one (a row with a life, or in an older image a v2 object, has a record).
+// null for any other issue. A row has its v2 state in `state` (gather reads it through stateOfRow).
 function orphanOf(i, h) {
-  if (i.v2 !== null && i.v2 !== undefined) return null
-  if (!i.holder && (i.stage === 'queued' || h.release.LIVE_STAGES.includes(i.stage))) return 'no holder'
-  if (i.holder && i.stage === 'queued') return 'no live claim'
+  if ((i.life ?? i.v2 ?? null) !== null) return null
+  if (!i.holder && (i.state === 'queued' || h.stateMap.LIVE_STATES.includes(i.state))) return 'no holder'
+  if (i.holder && i.state === 'queued') return 'no live claim'
   return null
 }
 
@@ -207,7 +208,7 @@ function orphanOf(i, h) {
 function buildReport(input, h) {
   const { at, device } = input
   const factory = input.factory
-  const live = new Map(factory.issues.filter((i) => i.holder && h.release.LIVE_STAGES.includes(i.stage)).map((i) => [i.issue, i]))
+  const live = new Map(factory.issues.filter((i) => i.holder && h.stateMap.LIVE_STATES.includes(i.state)).map((i) => [i.issue, i]))
   const hasRecord = (n) => {
     const c = input.claims.get(n)
     return c !== undefined && c.transition !== null && (c.claimed === null || c.transition >= c.claimed)
@@ -226,8 +227,8 @@ function buildReport(input, h) {
   // a ghost: it is left out (null).
   const assess = (f, orphan) => {
     const n = f.issue
-    const since = ms(f.entered_at)
-    const key = STAGE_TIMEOUT[f.stage]
+    const since = ms(f.state_since) ?? ms(f.entered_at)
+    const key = STATE_TIMEOUT[f.state]
     const T = key === undefined ? OTHER_T : input.timeouts[key]
     const cutoff = at - T
     const gh = input.issues.get(n) || { ok: false, error: 'not read' }
@@ -292,7 +293,7 @@ function buildReport(input, h) {
         claim: h.keys.lifeOf(claimAt),
         outcome: 'leave',
         lives: null,
-        stage: f.stage,
+        stage: f.state,
         checked: `${what}: ${checked.join('; ')}`,
         branch,
         pr,
@@ -320,7 +321,7 @@ function buildReport(input, h) {
     }
     return {
       issue: n,
-      stage: f.stage,
+      state: f.state,
       since,
       T,
       run: f.run ?? null,
@@ -378,7 +379,7 @@ function buildReport(input, h) {
       if (names.length === 0) continue
       p.removeLabels = [...new Set([...p.removeLabels, ...names])]
       const f = factory.recent.find((r) => r.issue === i.number) || factory.issues.find((r) => r.issue === i.number)
-      labelRows.push({ issue: i.number, state: i.state, why: f ? `${f.stage}${f.detail ? ` (${f.detail})` : ''}` : 'no live claim', proposal: 'remove the label' })
+      labelRows.push({ issue: i.number, state: i.state, why: f ? `${f.state}${f.detail ? ` (${f.detail})` : ''}` : 'no live claim', proposal: 'remove the label' })
     }
   }
 
@@ -410,7 +411,7 @@ function renderReport(r) {
   const issueLine = (c, whose) => {
     const labels = c.labels.length ? c.labels.join(', ') : 'none'
     return (
-      `- #${c.issue}: ${c.stage} for ${dur(r.at - (c.since ?? r.at))} with ${whose}; checked within ${dur(c.T)}: ${c.checked.join('; ')}. ` +
+      `- #${c.issue}: ${c.state} for ${dur(r.at - (c.since ?? r.at))} with ${whose}; checked within ${dur(c.T)}: ${c.checked.join('; ')}. ` +
       `Proposal: ${c.proposal}. Labels: ${labels}. Open PR: ${c.pr === null ? 'none' : `#${c.pr}`}. Slot: ${c.slots.length ? c.slots.join(', ') : 'none'}.`
     )
   }
@@ -508,7 +509,13 @@ function gather(o, io, settings) {
   const at = ms(doc.at)
   const entry = Array.isArray(doc.repos) ? doc.repos.find((r) => String(r.repo).toLowerCase() === repo.toLowerCase()) : undefined
   if (at === null) throw new ReadError('callum-flow-factory-state: no time in its report')
-  const factory = { issues: entry && Array.isArray(entry.issues) ? entry.issues : [], recent: entry && Array.isArray(entry.recent) ? entry.recent : [] }
+  // each row carries its v2 state in `state` (stateOfRow: a row of an older image has only a stage); a row
+  // that is neither is left out. A recent row is ended, whatever its state says.
+  const withState = (list, ended) => (Array.isArray(list) ? list : []).flatMap((r) => {
+    const s = settings.stateOfRow({ ...r, ended })
+    return s === null ? [] : [{ ...r, state: s.state }]
+  })
+  const factory = { issues: withState(entry && entry.issues, false), recent: withState(entry && entry.recent, true) }
 
   // this device's newest claim and transition per issue: the claim's time, and a v2 record
   const claims = new Map()
@@ -531,7 +538,7 @@ function gather(o, io, settings) {
 
   // this device's live claims, and the issues that show as active with no live claim (6.3)
   const candidates = factory.issues
-    .filter((i) => (i.holder === device && settings.liveStages.includes(i.stage)) || ((i.v2 === null || i.v2 === undefined) && (i.stage === 'queued' || (!i.holder && settings.liveStages.includes(i.stage)))))
+    .filter((i) => (i.holder === device && settings.liveStates.includes(i.state)) || ((i.life ?? i.v2 ?? null) === null && (i.state === 'queued' || (!i.holder && settings.liveStates.includes(i.state)))))
     .map((i) => i.issue)
   const readEnv = { env: { CALLUM_FLOW_REPO: repo } }
   // the candidates' labels and state, through the trusted reader
@@ -917,7 +924,7 @@ const readFile = (p) => {
 // file, then the workspace's (register.ts runtime's order).
 function settingsOf(h, checkout, configDir, machine) {
   const { config } = h.config.loadConfig(readFile(path.join(checkout, '.claude', 'factory-loop.json')), readFile(path.join(h.contract.loopBaseOf(configDir), 'config.json')))
-  return { timeouts: config.stateTimeoutMs, readyLabel: config.readyLabel, inDevLabel: IN_DEV, liveStages: h.release.LIVE_STAGES, machine }
+  return { timeouts: config.stateTimeoutMs, readyLabel: config.readyLabel, inDevLabel: IN_DEV, liveStates: h.stateMap.LIVE_STATES, stateOfRow: (row) => h.stateMap.stateOfRow(row), machine }
 }
 
 async function main(argv, env = process.env, deps = {}) {

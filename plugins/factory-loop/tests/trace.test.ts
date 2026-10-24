@@ -597,7 +597,7 @@ describe('waits and wakes', () => {
   })
 
   test('each issue waits on its skips, its running entries, or its stage when nothing names it', () => {
-    const s = state({ issues: [mine(5, 'in pipeline'), mine(7, 'implementing', { stageSince: NOW - 40 * MIN }), mine(8, 'designing'), issue(9)] })
+    const s = state({ issues: [mine(5, 'reviewing'), mine(7, 'building', { stateSince: NOW - 40 * MIN }), mine(8, 'designing'), issue(9)] })
     const result = planned({
       skipped: [skip(5, 'M1', 'PR #505 waits for its head to move'), skip(5, 'M1', 'a second M1 skip'), skip(null, 'G2', 'blind')],
       actions: [{ kind: 'claim', key: 'claim:8:new', class: 'start', rule: 'D1', reason: 'ready', issue: 8 }],
@@ -605,13 +605,13 @@ describe('waits and wakes', () => {
     const ledger = [entry('implement:7', 'delegate', { issue: 7, rule: 'D4', status: 'running', startedAt: NOW - 30 * MIN, endedAt: null })]
     const since = new Map([['5:M1', NOW - 25 * MIN]])
     expect(waitingRows(s, result, ledger, since)).toEqual([
-      { issue: null, stage: null, rule: 'G2', on: 'blind', since: iso(NOW), forMs: 0 },
-      { issue: 5, stage: 'in pipeline', rule: 'M1', on: 'PR #505 waits for its head to move', since: iso(NOW - 25 * MIN), forMs: 25 * MIN },
-      { issue: 7, stage: 'implementing', rule: 'D4', on: 'implement:7 running', since: iso(NOW - 30 * MIN), forMs: 30 * MIN },
+      { issue: null, state: null, rule: 'G2', on: 'blind', since: iso(NOW), forMs: 0 },
+      { issue: 5, state: 'reviewing', rule: 'M1', on: 'PR #505 waits for its head to move', since: iso(NOW - 25 * MIN), forMs: 25 * MIN },
+      { issue: 7, state: 'building', rule: 'D4', on: 'implement:7 running', since: iso(NOW - 30 * MIN), forMs: 30 * MIN },
     ])
     // a live issue no rule names and no action touches waits in its stage
     const quiet = waitingRows(s, planned(), [], new Map())
-    expect(quiet.find(r => r.issue === 7)).toEqual({ issue: 7, stage: 'implementing', rule: null, on: 'no rule acts on it', since: iso(NOW - 40 * MIN), forMs: 40 * MIN })
+    expect(quiet.find(r => r.issue === 7)).toEqual({ issue: 7, state: 'building', rule: null, on: 'no rule acts on it', since: iso(NOW - 40 * MIN), forMs: 40 * MIN })
     expect(quiet.some(r => r.issue === 9)).toBe(false)
   })
 
