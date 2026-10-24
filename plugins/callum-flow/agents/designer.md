@@ -29,17 +29,37 @@ new comment, never edit an old one. Use exactly this shape:
 ```
 ## Design brief (designer, <YYYY-MM-DD>)
 
+<one or two plain lines: what the change does, how risky it is, anything the owner must know>
+
 ## Acceptance criteria
+<one or two plain lines: what the change must achieve>
+
+<details><summary>Details</summary>
+
 - requirement, stated so it can be checked (becomes the pipeline --intent)
 
+</details>
+
 ## Files to touch
+<one or two plain lines: which areas change>
+
+<details><summary>Details</summary>
+
 - path:line - what changes
+
+</details>
 
 ## Risk
 low | medium | high - one line why
 
 ## Test plan
+<one or two plain lines: how the change is proven>
+
+<details><summary>Details</summary>
+
 - what proves each criterion, including the regression test for a bug
+
+</details>
 
 ## Sequencing
 - what must merge first, or "none"
@@ -50,6 +70,13 @@ merge | run-it | keep-open - one reason
 ## Open decisions
 - options for the owner, never decided by you, or "none"
 ```
+
+The summary lines are plain prose for a non-engineer (no file paths, no line
+numbers, no code beyond a command name); the collapsed `<details>` block holds
+the full list, nothing dropped. Put a blank line after every `</summary>` and
+before every `</details>`. Every `##` heading sits outside any `<details>`, and
+`## Risk`, `## Sequencing`, `## Rollout` and `## Open decisions` stay visible,
+never collapsed.
 
 `## Risk` is a single value from `low`, `medium`, `high`, followed by a dash and
 one reason; later tooling parses it.

@@ -201,3 +201,60 @@ describe('the owner\'s tick (ticksOf, tickNote)', () => {
     expect(ticksOf('no options here\n- [x] **A** - x')).toEqual({ chosen: [], unknown: [] })
   })
 })
+
+describe('a context with technical detail (summary visible, the rest in a Details block)', () => {
+  const SUMMARY = 'Two stores hold the events and the owner must pick which one the replay reads.'
+  const EVIDENCE = 'store-old.ts:12 writes first.\n\nThe migration 0042 drops it.'
+  const withDetails = { ...STRUCTURED, context: `${SUMMARY}\n\n${EVIDENCE}` }
+  const questionOf = (input: unknown) => {
+    const c = design(input)
+    return (designResult(c.ok ? c.outcome : null).data as { question: string }).question
+  }
+
+  test('the first paragraph is visible and the rest sits in a Details block with the blank lines GitHub needs', () => {
+    const q = questionOf(withDetails)
+    expect(q).toContain(`#### Context\n\n${SUMMARY}\n\n<details><summary>Details</summary>\n\n${EVIDENCE}\n\n</details>\n\n#### Options`)
+    // the question, options note, recommendation never sit inside a details block
+    const open = q.indexOf('<details>')
+    const close = q.indexOf('</details>')
+    for (const part of ['#### Options', '- [ ] **A**', '_Tick one box', '#### Recommendation']) {
+      expect(q.indexOf(part)).toBeGreaterThan(close)
+    }
+    expect(q.indexOf('Should the replay')).toBeLessThan(open)
+  })
+
+  test('a one-paragraph context renders as before, and a context with a trailing blank adds no empty block', () => {
+    expect(renderQuestion({ question: 'Q?', context: 'One paragraph.' })).toBe('Q?\n\n#### Context\n\nOne paragraph.')
+    expect(renderQuestion({ question: 'Q?', context: 'One paragraph.\n\n  \n' })).toBe('Q?\n\n#### Context\n\nOne paragraph.')
+  })
+
+  test('decisionOf, ticksOf and tickNote answer the same as for the same comment with a plain context', () => {
+    const tick = (b: string) => b.replace('- [ ] **B**', '- [x] **B**')
+    const detailed = parkText(parked(questionOf(withDetails)), 'designing', 'question')
+    const plain = parkText(parked(questionOf({ ...STRUCTURED, context: SUMMARY })), 'designing', 'question')
+    expect(decisionOf(questionOf(withDetails))).toBe(decisionOf(questionOf({ ...STRUCTURED, context: SUMMARY })))
+    expect(ticksOf(tick(detailed))).toEqual(ticksOf(tick(plain)))
+    expect(tickNote(ticksOf(tick(detailed)))).toBe('Owner chose option B: Read the new store')
+    expect(tickNote(ticksOf(detailed))).toBeNull()
+  })
+
+  test('a tick line inside the collapsed context is not a tick', () => {
+    const q = questionOf({ ...STRUCTURED, context: `${SUMMARY}\n\n- [x] **A** - quoted` })
+    expect(ticksOf(parkText(parked(q), 'designing', 'question'))).toEqual({ chosen: [], unknown: [] })
+  })
+
+  test('the cap counts the wrapper: a context that fits only without it is refused with its rendered length', () => {
+    const parts = { options: STRUCTURED.options, recommendation: STRUCTURED.recommendation }
+    const flat = (context: string, question: string) => renderQuestion({ question, context, options: STRUCTURED.options.map(o => ({ detail: null, ...o })), recommendation: parts.recommendation })
+    const context = `${'s'.repeat(100)}\n\n${'t'.repeat(100)}`
+    const base = flat('x', 'q').length
+    // pad the question so the text with the flat (one paragraph) form of this context is exactly the cap
+    const question = 'q'.repeat(2000 - (flat(context.replace('\n\n', ' '), 'q').length - 1))
+    expect(flat(context.replace('\n\n', ' '), question).length).toBe(2000)
+    expect(base).toBeLessThan(2000)
+    const wrapped = flat(context, question)
+    expect(wrapped.length).toBeGreaterThan(2000)
+    expect(problemsOf(design({ ...STRUCTURED, question, context }))).toEqual([`question comes to ${wrapped.length} characters once rendered with its context, options and recommendation; at most 2000`])
+    expect(problemsOf(design({ ...STRUCTURED, question, context: context.replace('\n\n', ' ') }))).toEqual([])
+  })
+})
