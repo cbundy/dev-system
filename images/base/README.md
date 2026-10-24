@@ -752,6 +752,10 @@ on every failure:
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
   `FAIL` with the tool's message when the setup breaks the per-repo boundary (account SAS, wrong scope,
   a missing file). One `INFO` line when there is no checkout with an origin remote;
+- UI capture, in the workspace checkout when it has `.claude/factory-loop.json` and CLAUDE.md does not say
+  `n/a - no UI`: `OK UI capture: ...` when `uiCapture` is a command (with its npm script defined) or `none`;
+  a `FAIL` with a `fix:` hint when it is unset or wrong. A `.callum-dev/evidence-off` file in the checkout
+  turns off both this line and the evidence storage line, leaving one `INFO` line. Same rules as `callum-dev check`;
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
   counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);

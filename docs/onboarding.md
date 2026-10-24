@@ -16,7 +16,7 @@ instructions as a skill (generated from this page, never edited by hand).
   `github:cbundy/dev-system#semver:0.x`.
 - `grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .` prints
   nothing.
-- `npx callum-dev check` exits 0.
+- `npx callum-dev check` exits 0. Besides template drift it needs a UI capture policy: `uiCapture` in `.claude/factory-loop.json` (a capture command, or `"none"`), unless CLAUDE.md says `n/a - no UI`, or an empty `.callum-dev/evidence-off` file turns evidence collection off for the repo.
 - The checks in [Verify](#5-verify) pass.
 - If the user asked for the factory loop (step 7): a loop workspace runs in act mode, and the
   loop has claimed one issue labelled `ready` and merged its PR after CI passed.
@@ -320,6 +320,7 @@ The push includes `.github/workflows/ci.yml`, so the gh token needs the `workflo
 Run all of these and report each result.
 
 ```bash
+# also needs uiCapture in .claude/factory-loop.json, or .callum-dev/evidence-off, unless CLAUDE.md says n/a - no UI
 npx callum-dev check
 node -e 'JSON.parse(require("fs").readFileSync(".claude/settings.json","utf8"))'
 node -e 'const c=JSON.parse(require("fs").readFileSync(".claude/factory-loop.json","utf8")); if(!Array.isArray(c.gateCommands)||c.gateCommands.length<1) throw new Error("no gateCommands")'
