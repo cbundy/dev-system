@@ -29,3 +29,16 @@ test('template and root CLAUDE.md say what a loop agent leaves to the loop, in t
     assert.match(synced, /runs only the subsets it changes and leaves the full gate commands to that stop gate/, p);
   }
 });
+
+test('template placeholder ties the capture doc to uiCapture, and onboarding decides all three cases', () => {
+  const m = /e2e visual verification tooling \(([^)]*)\)/.exec(read('templates/CLAUDE.md'));
+  assert.ok(m, 'placeholder parses without a ) inside');
+  const inner = m[1].replace(/\s+/g, ' ');
+  assert.match(inner, /uiCapture/);
+  assert.match(inner, /n\/a - no UI/);
+  const doc = read('docs/onboarding.md');
+  assert.match(doc, /### 3h\. UI capture/);
+  assert.match(doc, /"uiCapture": "none"/);
+  assert.match(doc, /npm run e2e:capture/);
+  assert.match(doc, /UI capture is set up or turned off \(`uiCapture` set in `\.claude\/factory-loop\.json`\)/);
+});

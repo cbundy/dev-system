@@ -1,4 +1,4 @@
-// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 38 rows, each
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 40 rows, each
 // naming the states it applies to, the event it takes, a pure guard, the next state and the pure
 // change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
@@ -10,6 +10,7 @@
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
 import { waitKey } from './sources-waits'
+import { fixRows } from './table-fix'
 import type { IssueRecord, IssueState, ParkParts, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
@@ -70,6 +71,8 @@ export type EventData = {
   conditions?: WaitCondition[]
   // P1: the owner's note, or the trusted comments posted after the park
   note?: string
+  // T11, T12, T17, T19, T20: the fix round's environment-blocked findings, each `<id>: <reason>`
+  blocked?: string[]
 }
 
 export function dataOf(e: TableEvent): EventData {
@@ -300,25 +303,7 @@ const ROWS: readonly Row[] = [
     }),
     via: 'fix-cap:',
   },
-  { id: 'T11', states: ['fixing'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'fix' },
-  {
-    id: 'T12',
-    states: ['fixing'],
-    on: 'not-ok',
-    when: (r, e) => ownStep(r) && e.reason === 'declined',
-    next: 'reviewing',
-    change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'every finding declined')])) }),
-    via: 'declined',
-  },
-  {
-    id: 'T17',
-    states: ['fixing'],
-    on: 'not-ok',
-    when: (r, e) => ownStep(r) && e.reason === 'unchanged',
-    next: 'reviewing',
-    change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'a finding fixed without a code change')])) }),
-    via: 'unchanged',
-  },
+  ...fixRows({ ownStep, dataOf, textOf, clip, own }),
   { id: 'T13', states: ['merge-queue'], on: 'ok', when: r => ownStep(r), next: 'closed', change: () => ({ why: 'merged' }), via: 'merged' },
   { id: 'T14', states: ['merge-queue'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'patch', next: 'reviewing', change: r => ({ approvedPatch: null, round: r.round + 1 }), via: 'patch' },
   {
@@ -418,7 +403,7 @@ const ROWS: readonly Row[] = [
     states: ['parked', 'waiting'],
     on: 'unpark',
     next: 'queued',
-    change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
+    change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, conflicts: 0, envBlocked: null, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
     via: 'unpark:',
   },
 ]
@@ -552,6 +537,7 @@ function madeQueued(claim: Claimed, now: Ms, lives: number): IssueRecord {
     triages: 0,
     fixes: 0,
     conflicts: 0,
+    envBlocked: null,
     round: 0,
     question: null,
     parts: null,

@@ -363,7 +363,12 @@ const sameSha = (a: string, b: string) => a.startsWith(b) || b.startsWith(a)
 
 // declines: a fix answer's declined findings, as notes for the next review round (T12).
 export function declines(a: FixAnswer): string[] {
-  return a.findings.filter(f => f.disposition === 'declined').map(f => `the fixer declined ${f.id}: ${f.reason}`)
+  return a.findings.filter(f => f.disposition === 'declined').map(f => `the fixer declined ${f.id}${f.blocker === 'environment' ? ' (environment blocker)' : ''}: ${f.reason}`)
+}
+
+// blockedOf: a fix answer's environment-blocked findings, each `<id>: <reason>` (T11, T12, T17, T19, T20).
+export function blockedOf(a: FixAnswer): string[] {
+  return a.findings.filter(f => f.disposition === 'declined' && f.blocker === 'environment').map(f => `${f.id}: ${f.reason}`)
 }
 
 // resolutions: a fix answer's findings fixed without a code change, as notes for the next round (T17).
@@ -376,8 +381,8 @@ export function resolutions(a: FixAnswer): string[] {
 // (10.8).
 export async function fixResult(ctx: ExecCtx, record: StepRecord, answer: unknown): Promise<StepResult> {
   const a = answer as FixAnswer
-  if (a.result === 'declined') return notOk('declined', { ...a, notes: declines(a), text: a.summary })
-  if (a.result === 'unchanged') return notOk('unchanged', { ...a, notes: [...resolutions(a), ...declines(a)], text: a.summary })
+  if (a.result === 'declined') return notOk('declined', { ...a, notes: declines(a), blocked: blockedOf(a), text: a.summary })
+  if (a.result === 'unchanged') return notOk('unchanged', { ...a, notes: [...resolutions(a), ...declines(a)], blocked: blockedOf(a), text: a.summary })
   if (a.result !== 'fixed' || a.head === null) return unknownResult('bad-answer', 'the fix answer is neither fixed with a head, declined nor unchanged')
   if (record.slot === null) return unknownResult('cli', 'the fix step has no slot to read origin from')
   const read = await originHead(ctx, record.branch, record.slot)
@@ -390,7 +395,7 @@ export async function fixResult(ctx: ExecCtx, record: StepRecord, answer: unknow
   const held = await holds(ctx, record.slot, a.head, read.sha)
   if ('failed' in held) return unknownResult('cli', `origin's ${record.branch} did not read: ${held.failed}`)
   if (!held.held) return unknownResult('bad-answer', `the answered head ${a.head.slice(0, 12)} is not on origin's ${record.branch}, whose head is ${read.sha.slice(0, 12)}: it was not pushed`)
-  return ok(read.sha, { ...a, notes: declines(a) })
+  return ok(read.sha, { ...a, notes: declines(a), blocked: blockedOf(a) })
 }
 
 const says = (field: 'result', notOkValues: readonly string[]) => (answer: unknown) => {

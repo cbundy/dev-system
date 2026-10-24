@@ -27,8 +27,8 @@
   If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way
   (a factory loop agent names it in its answer instead, since its change holds only what the brief asks).
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
-  using this repo's e2e visual verification tooling (<REPLACE: path to your e2e visual verification doc, e.g.
-  `docs/design/e2e-visual-verification.md`>), upload each capture with `callum-flow-evidence-upload pr-<N>/<slug> <file>...`
+  using this repo's e2e visual verification tooling (<REPLACE: path to your repo's capture doc, kept in step with uiCapture in .claude/factory-loop.json, e.g.
+  `docs/e2e-visual-verification.md`, or n/a - no UI for a repo with no UI>), upload each capture with `callum-flow-evidence-upload pr-<N>/<slug> <file>...`
   and attach the printed URLs to the PR description before the PR is considered ready. Commit an image only when it is a
   durable reference image the repo keeps.
 - Keep PR descriptions brief and concise. They are reviewed by a head of engineering, not an engineer,

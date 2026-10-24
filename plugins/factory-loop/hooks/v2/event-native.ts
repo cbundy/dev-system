@@ -98,6 +98,7 @@ function transitionData(e: TransitionEvent): Record<string, unknown> {
     lives: r.lives,
     wait: waitData(r.wait),
     conflicts: r.conflicts,
+    env_blocked: r.envBlocked,
     decision: p === null ? null : p.decision,
     context: p === null ? null : p.context,
     options: p === null ? null : p.options,
@@ -220,7 +221,7 @@ function mergedData(e: ReusedEvent): Record<string, unknown> {
 function verdictData(e: ReusedEvent): Record<string, unknown> {
   const m = /^(CORRECT|WRONG):\s+(\S+)\s*([\s\S]*)$/.exec(e.note)
   if (m === null) throw new Error(`a verdict note reads as neither CORRECT nor WRONG: ${JSON.stringify(e.note.slice(0, 60))}`)
-  return { branch: text(e.branch), pr: e.pr, head: text(e.head), finding: (m[2] as string).replace(/:$/, ''), outcome: m[1] === 'CORRECT' ? 'fixed' : 'declined', detail: (m[3] as string).trim() }
+  return { branch: text(e.branch), pr: e.pr, head: text(e.head), finding: (m[2] as string).replace(/:$/, ''), outcome: m[1] === 'CORRECT' ? 'fixed' : 'declined', detail: (m[3] as string).trim(), ...(e.blocker === 'environment' ? { blocker: 'environment' } : {}) }
 }
 
 // nativeOf: the call that writes this event: its type, data, issue, and its actor when it has its

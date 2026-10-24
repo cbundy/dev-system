@@ -91,7 +91,7 @@ low | medium | high - one line why
 
 <details><summary>Details</summary>
 
-- what proves each criterion, including the regression test for a bug
+- what proves each criterion, including the regression test for a bug; a visible change names the repo's capture command and the scenario to capture
 
 </details>
 
@@ -120,6 +120,14 @@ before every `</details>`, or GitHub shows the markdown inside as plain text. Ev
 sits outside any `<details>`. `## Risk`, `## Observability`, `## Compatibility`, `## Sequencing`
 and `## Rollout` stay one visible line each, never in a `<details>`. `## Open decisions` is never
 collapsed: an open decision is written visibly.
+
+The Test plan only asks for steps a loop agent can carry out. It never asks a loop agent for a step
+its command rule forbids: a dev server, a watcher, a browser session or a manual e2e run by hand
+(such as "run `npm run dev` and click through"). For a visible change, the plan names the repo's
+capture command (`uiCapture` in `.claude/factory-loop.json`, or else the capture command its
+CLAUDE.md documents) and the scenario to capture. When the repo sets `uiCapture` to `none`, or has no
+capture command, the plan names no capture and says so, and describes what to check in words or in
+tests instead.
 
 `## Risk` is a single value from `low`, `medium`, `high`, followed by a dash and one reason;
 later tooling parses it.

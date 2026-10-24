@@ -58,7 +58,9 @@ Global agent instructions.
   which one CI calls, so they can't drift), and this repo's worktree/isolation mechanism for the
   manual path. A loop agent works in the loop's slot instead.
 - One placeholder inside the synced screenshot-evidence bullet: the path to this repo's
-  e2e visual verification doc. Fill that in even though the surrounding bullet is synced.
+  repo's UI capture doc (kept in step with `uiCapture` in `.claude/factory-loop.json`), or
+  `n/a - no UI` for a repo with no UI. Onboarding step 3h ([UI capture](../docs/onboarding.md#3h-ui-capture))
+  decides it. Fill that in even though the surrounding bullet is synced.
   The bullet tells agents to upload captures with `callum-flow-evidence-upload` and to commit
   only durable reference images.
 

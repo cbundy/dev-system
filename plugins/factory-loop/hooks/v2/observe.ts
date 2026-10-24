@@ -161,6 +161,8 @@ export function recordOf(raw: unknown): IssueRecord | null {
   const lives = o.lives === undefined ? 1 : o.lives
   const conflicts = o.conflicts === undefined || o.conflicts === null ? 0 : o.conflicts
   if (!isInt(conflicts, 0)) return null
+  const envBlocked = o.envBlocked === undefined ? null : o.envBlocked
+  if (!strOrNull(envBlocked)) return null
   if (!isInt(lives, 1)) return null
   return {
     issue: o.issue,
@@ -181,6 +183,7 @@ export function recordOf(raw: unknown): IssueRecord | null {
     triages: o.triages,
     fixes: o.fixes,
     conflicts,
+    envBlocked,
     round: o.round,
     question: o.question,
     parts,

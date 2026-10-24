@@ -57,6 +57,8 @@
 //       "findings": [{ "id": "r2-1", "disposition": "declined", "reason": "..." }] }
 //     { "result": "unchanged", "summary": "...", "evidence": "..." | null,
 //       "findings": [{ "id": "r2-1", "disposition": "fixed", "reason": "..." }] }
+//   A declined finding may add "blocker": "environment" when it cannot be done because it needs a
+//   tool, access, a secret or a process the agent is forbidden or unable to run (never on a fixed one).
 //   unchanged: nothing pushed, at least one finding fixed outside the branch (the PR's description
 //   or evidence), the rest declined. A conflict is fixed only by a pushed merge, so never here.
 //
@@ -75,6 +77,8 @@ export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait',
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
 export const FIX_RESULTS = Object.freeze(['fixed', 'declined', 'unchanged'])
 export const DISPOSITIONS = Object.freeze(['fixed', 'declined'])
+// A declined finding that cannot be done because the agent lacks a tool, access, a secret or a process.
+export const BLOCKERS = Object.freeze(['environment'])
 export const ROLLOUTS = Object.freeze(['merge', 'run-it', 'keep-open'])
 // A brief and a child's body may be long: GitHub takes 65 536 characters in a comment or a body.
 // Every other text is short: a title, a reason, the PR's summary and evidence (neutral() keeps
@@ -512,7 +516,7 @@ function findingsOf(v, problems) {
       problems.push(`findings[${i}] must be an object { id, disposition, reason }`)
       return
     }
-    strays(f, ['id', 'disposition', 'reason'], `findings[${i}]`, problems)
+    strays(f, ['id', 'disposition', 'reason', 'blocker'], `findings[${i}]`, problems)
     const id = typeof f.id === 'string' && FINDING_ID.test(f.id) ? f.id : null
     if (id === null) problems.push(`${where}id ${show(f.id)} is not a finding id`)
     else if (seen.has(id)) problems.push(`${where}id ${id} is given twice`)
@@ -520,7 +524,13 @@ function findingsOf(v, problems) {
     const disposition = DISPOSITIONS.find(d => d === f.disposition)
     if (disposition === undefined) problems.push(`${where}disposition ${show(f.disposition)} is not one of ${DISPOSITIONS.join(', ')}`)
     const reason = text(f, 'reason', LIMITS.findingReason, 'required', problems, where)
-    if (id !== null && disposition !== undefined && reason !== null) out.push({ id, disposition, reason })
+    let blocker = null
+    if (f.blocker !== undefined && f.blocker !== null) {
+      if (!BLOCKERS.includes(f.blocker)) problems.push(`${where}blocker ${show(f.blocker)} is not ${BLOCKERS.map(b => `"${b}"`).join(' or ')}`)
+      else if (disposition === 'fixed') problems.push(`${where}blocker is only for a declined finding, and ${id ?? 'this one'} is fixed`)
+      else blocker = f.blocker
+    }
+    if (id !== null && disposition !== undefined && reason !== null) out.push({ id, disposition, reason, blocker })
   })
   return out
 }

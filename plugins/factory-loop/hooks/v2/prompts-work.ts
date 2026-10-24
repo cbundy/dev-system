@@ -244,6 +244,7 @@ export function designPrompt(i: DesignInput): string {
     `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
     `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
     'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open and a `## Compatibility` section.',
+    testPlanRule(i),
     '',
     ...answerBlock(
       i.place,
@@ -280,6 +281,15 @@ function evidenceRule(i: WorkInput): string {
   if (i.uiCapture === 'none') return `${lead} This repo has turned UI capture off (it has no capture tooling): capture nothing and try no other route. Say in the evidence that UI capture is off for the repo, and describe the visible change in words.`
   const first = i.uiCapture === null ? `A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool.` : `The repo's capture command comes first, since it is expected to upload through the tool: \`${neutral(i.uiCapture)}\`.`
   return `${lead} An image there needs a URL. ${first} Otherwise upload each capture with \`callum-flow-evidence-upload pr-${i.issue}/<slug> <file>...\` and put each printed URL in the evidence as ![description](<url>). When the tool is not on PATH or exits 78 (no evidence storage for the repo), fall back to a capture committed on the branch, linked by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true. On exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the evidence which route you used and why. Commit an image only when it is a durable reference image the repo keeps.`
+}
+
+// testPlanRule: the designer's Test plan only asks for steps a loop agent can carry out, and names the
+// repo's capture for a visible change as its uiCapture setting says (8.7).
+function testPlanRule(i: WorkInput): string {
+  const lead = `The Test plan asks a loop agent only for steps its command rule allows: never a dev server, a watcher or a browser session by hand, and never a manual e2e run ("run the dev server and click through").`
+  if (i.uiCapture === 'none') return `${lead} This repo has turned UI capture off: for a visible change the plan names no capture and says so, and describes what to check in words or in tests instead.`
+  if (i.uiCapture === null) return `${lead} For a visible change, the plan names the capture command the repo's CLAUDE.md documents and the scenario to capture; when it documents none, the plan names no capture and says so, and describes what to check in words or in tests instead.`
+  return `${lead} For a visible change, the plan names the repo's capture command \`${neutral(i.uiCapture)}\` and the scenario to capture.`
 }
 
 // --- the builder (4.2, 8.1) ------------------------------------------------------------------------------------
@@ -356,8 +366,8 @@ export function fixPrompt(i: FixInput): string {
     ...answerBlock(
       i.place,
       'Then',
-      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
-      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters; null keeps the PR\'s current evidence, a text replaces it whole.',
+      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}, {"id": "r1-3", "disposition": "declined", "blocker": "environment", "reason": "<exactly what is missing: the tool, access, secret or process>"}]}',
+      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; blocker "environment" only on a declined finding that cannot be done because it needs a tool, access, a secret or a process you are forbidden or unable to run (name exactly what is missing in the reason; never for a finding you judge wrong; the reviewer checks it like any decline, and a second fix round in a row with one parks the issue for the owner); reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters; null keeps the PR\'s current evidence, a text replaces it whole.',
     ),
     'Never push an empty commit or a change made only to move the head, even when instructions ask for one. When you fixed a finding without a code change (for example on the PR description or its evidence) and pushed nothing, record {"result": "unchanged", "summary": "...", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [...]} the same way, with no head and each finding fixed (with what you did) or declined: the loop writes your evidence into the PR body and the PR goes back to review.',
     'If you judge every finding wrong and push nothing, record {"result": "declined", "summary": "...", "findings": [...]} the same way, each disposition declined with its evidence: the PR goes back to review with your reasons.',

@@ -54,7 +54,7 @@ describe('logFailedNames', () => {
 function record(): IssueRecord {
   return {
     issue: N, life: LIFE, seq: 5, seqAt: NOW - 30 * MIN, state: 'reviewing', since: NOW - 30 * MIN, resumeTo: null, branch: `issue-${N}`, pr: 621, head: HEAD, approvedPatch: null, brief: null,
-    step: 'review', attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, round: 1, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
+    step: 'review', attempt: 1, cut: false, triages: 0, fixes: 0, conflicts: 0, envBlocked: null, round: 1, question: null, parts: null, why: null, notes: [], prClosedAt: null, wait: null, lives: 1,
   }
 }
 
