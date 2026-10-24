@@ -47,12 +47,9 @@
           "state_since": "2026-10-10T10:20:00.000Z",
           "question": null,
           "lease": null,
-          "stage": "queued",
           "detail": "v2 queued",
-          "entered_at": "2026-10-10T10:20:00.000Z",
-          "minutes_in_stage": 100,
+          "minutes_in_state": 100,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -65,8 +62,7 @@
           },
           "flags": [
             "label: queued, but the issue has no 'ready' label"
-          ],
-          "v2": null
+          ]
         },
         {
           "issue": 90,
@@ -78,12 +74,9 @@
           "state_since": null,
           "question": null,
           "lease": null,
-          "stage": "queued",
           "detail": "GitHub label only, no events",
-          "entered_at": null,
-          "minutes_in_stage": null,
+          "minutes_in_state": null,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "github",
@@ -94,8 +87,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 81,
@@ -110,12 +102,9 @@
             "until": "2026-10-10T12:20:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T10:20:00.000Z",
-          "minutes_in_stage": 100,
+          "minutes_in_state": 100,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -133,8 +122,7 @@
           },
           "flags": [
             "claim: GitHub comment says dev-b, events say dev-a"
-          ],
-          "v2": null
+          ]
         },
         {
           "issue": 84,
@@ -149,12 +137,9 @@
             "until": "2026-10-10T12:20:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T10:20:00.000Z",
-          "minutes_in_stage": 100,
+          "minutes_in_state": 100,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -163,8 +148,7 @@
             "labels": [],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 86,
@@ -179,12 +163,9 @@
             "until": "2026-10-10T12:20:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T10:20:00.000Z",
-          "minutes_in_stage": 100,
+          "minutes_in_state": 100,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -195,8 +176,7 @@
           },
           "flags": [
             "github: state could not be read"
-          ],
-          "v2": null
+          ]
         },
         {
           "issue": 91,
@@ -208,12 +188,9 @@
           "state_since": null,
           "question": null,
           "lease": null,
-          "stage": "implementing",
           "detail": "GitHub label only, no events",
-          "entered_at": null,
-          "minutes_in_stage": null,
+          "minutes_in_state": null,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "github",
@@ -224,43 +201,10 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         }
       ],
       "recent": [
-        {
-          "issue": 83,
-          "state": "closed",
-          "step": null,
-          "attempt": null,
-          "life": null,
-          "why": "merged",
-          "state_since": "2026-10-10T11:10:00.000Z",
-          "question": null,
-          "lease": {
-            "until": "2026-10-10T12:20:00.000Z",
-            "lapsed": false
-          },
-          "stage": "merged",
-          "detail": "v2 closed (merged)",
-          "entered_at": "2026-10-10T11:10:00.000Z",
-          "minutes_in_stage": 50,
-          "holder": "dev-a",
-          "run": null,
-          "pr": 183,
-          "stuck": null,
-          "source": "event",
-          "github": {
-            "state": "open",
-            "labels": [
-              "In development"
-            ],
-            "claim": null
-          },
-          "flags": [],
-          "v2": null
-        },
         {
           "issue": 80,
           "state": "designing",
@@ -274,12 +218,9 @@
             "until": "2026-10-10T12:20:00.000Z",
             "lapsed": false
           },
-          "stage": "closed without merge",
           "detail": "closed on GitHub (completed)",
-          "entered_at": "2026-10-10T11:40:00.000Z",
-          "minutes_in_stage": 20,
+          "minutes_in_state": 20,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "github",
@@ -290,8 +231,35 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
+        },
+        {
+          "issue": 83,
+          "state": "closed",
+          "step": null,
+          "attempt": null,
+          "life": null,
+          "why": "merged",
+          "state_since": "2026-10-10T11:10:00.000Z",
+          "question": null,
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "detail": "v2 closed (merged)",
+          "minutes_in_state": 50,
+          "holder": "dev-a",
+          "pr": 183,
+          "stuck": null,
+          "source": "event",
+          "github": {
+            "state": "open",
+            "labels": [
+              "In development"
+            ],
+            "claim": null
+          },
+          "flags": []
         }
       ],
       "queue": {

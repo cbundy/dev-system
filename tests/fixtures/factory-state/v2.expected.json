@@ -20,7 +20,6 @@
       "repo": "acme/widgets",
       "issue": 101,
       "state": "parked",
-      "stage": "parked",
       "rule": "parked",
       "minutes_in_state": 60
     },
@@ -28,7 +27,6 @@
       "repo": "acme/widgets",
       "issue": 112,
       "state": "building",
-      "stage": "implementing",
       "rule": "building",
       "minutes_in_state": 90
     }
@@ -77,12 +75,9 @@
             "until": "2026-10-10T10:00:00.000Z",
             "lapsed": true
           },
-          "stage": "queued",
           "detail": "v2 queued",
-          "entered_at": "2026-10-10T10:00:00.000Z",
-          "minutes_in_stage": 120,
+          "minutes_in_state": 120,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -93,8 +88,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 107,
@@ -109,12 +103,9 @@
             "until": "2026-10-10T10:00:00.000Z",
             "lapsed": true
           },
-          "stage": "queued",
           "detail": "v2 queued, step lease, attempt 1",
-          "entered_at": "2026-10-10T08:01:00.000Z",
-          "minutes_in_stage": 239,
+          "minutes_in_state": 239,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -125,15 +116,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "queued",
-            "step": "lease",
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 0,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 111,
@@ -148,12 +131,9 @@
             "until": "2026-10-10T11:00:00.000Z",
             "lapsed": true
           },
-          "stage": "queued",
           "detail": "v2 queued",
-          "entered_at": "2026-10-10T11:30:00.000Z",
-          "minutes_in_stage": 30,
+          "minutes_in_state": 30,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -165,8 +145,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 106,
@@ -181,12 +160,9 @@
             "until": "2026-10-10T13:00:00.000Z",
             "lapsed": false
           },
-          "stage": "designing",
           "detail": "v2 designing",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": "dev-b",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -195,8 +171,7 @@
             "labels": [],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 109,
@@ -211,12 +186,9 @@
             "until": "2026-10-10T10:00:00.000Z",
             "lapsed": true
           },
-          "stage": "designing",
           "detail": "v2 designing, step design, attempt 1",
-          "entered_at": "2026-10-10T11:50:00.000Z",
-          "minutes_in_stage": 10,
+          "minutes_in_state": 10,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -227,15 +199,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "designing",
-            "step": "design",
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 1,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 100,
@@ -250,12 +214,9 @@
             "until": "2026-10-10T13:50:00.000Z",
             "lapsed": false
           },
-          "stage": "implementing",
           "detail": "v2 building, step build, attempt 1",
-          "entered_at": "2026-10-10T11:20:00.000Z",
-          "minutes_in_stage": 40,
+          "minutes_in_state": 40,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -266,15 +227,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "building",
-            "step": "build",
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 2,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 112,
@@ -289,12 +242,9 @@
             "until": "2026-10-10T13:30:00.000Z",
             "lapsed": false
           },
-          "stage": "implementing",
           "detail": "v2 building, step build, attempt 1",
-          "entered_at": "2026-10-10T10:30:00.000Z",
-          "minutes_in_stage": 90,
+          "minutes_in_state": 90,
           "holder": "dev-b",
-          "run": null,
           "pr": null,
           "stuck": {
             "rule": "building",
@@ -308,15 +258,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "building",
-            "step": "build",
-            "attempt": 1,
-            "life": "t3xq10",
-            "seq": 2,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 102,
@@ -331,12 +273,9 @@
             "until": "2026-10-10T13:00:00.000Z",
             "lapsed": false
           },
-          "stage": "in pipeline",
           "detail": "v2 reviewing, step review, attempt 1",
-          "entered_at": "2026-10-10T11:40:00.000Z",
-          "minutes_in_stage": 20,
+          "minutes_in_state": 20,
           "holder": "dev-a",
-          "run": null,
           "pr": 202,
           "stuck": null,
           "source": "event",
@@ -349,15 +288,7 @@
           },
           "flags": [
             "label: v2 reviewing, but the issue lacks 'factory:reviewing'"
-          ],
-          "v2": {
-            "state": "reviewing",
-            "step": "review",
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 3,
-            "why": null
-          }
+          ]
         },
         {
           "issue": 108,
@@ -369,12 +300,9 @@
           "state_since": null,
           "question": null,
           "lease": null,
-          "stage": "in pipeline",
           "detail": "GitHub label only, no events",
-          "entered_at": null,
-          "minutes_in_stage": null,
+          "minutes_in_state": null,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "github",
@@ -385,8 +313,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 101,
@@ -401,12 +328,9 @@
             "until": "2026-10-10T13:30:00.000Z",
             "lapsed": false
           },
-          "stage": "parked",
           "detail": "v2 parked, attempt 1",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": {
             "rule": "parked",
@@ -420,15 +344,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "parked",
-            "step": null,
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 4,
-            "why": null
-          }
+          "flags": []
         }
       ],
       "recent": [
@@ -445,12 +361,9 @@
             "until": "2026-10-10T12:00:00.000Z",
             "lapsed": true
           },
-          "stage": "merged",
           "detail": "v2 closed (merged)",
-          "entered_at": "2026-10-10T11:30:00.000Z",
-          "minutes_in_stage": 30,
+          "minutes_in_state": 30,
           "holder": "dev-a",
-          "run": null,
           "pr": 203,
           "stuck": null,
           "source": "event",
@@ -459,15 +372,7 @@
             "labels": [],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "closed",
-            "step": null,
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 6,
-            "why": "merged"
-          }
+          "flags": []
         },
         {
           "issue": 104,
@@ -482,12 +387,9 @@
             "until": "2026-10-10T12:00:00.000Z",
             "lapsed": true
           },
-          "stage": "closed without merge",
           "detail": "v2 closed (dropped)",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -496,15 +398,7 @@
             "labels": [],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "closed",
-            "step": null,
-            "attempt": 1,
-            "life": "t3xq00",
-            "seq": 3,
-            "why": "dropped"
-          }
+          "flags": []
         }
       ],
       "queue": {

@@ -184,7 +184,7 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
       const line = argv.join(' ')
       switch (argv[0]) {
         case 'callum-flow-factory-state':
-          return { stdout: factoryDoc([{ issue: N, stage: 'reviewing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
+          return { stdout: factoryDoc([{ issue: N, state: 'reviewing', state_since: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
         case `${TOOLS}/queue-watch.sh`:

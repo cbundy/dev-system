@@ -20,7 +20,6 @@
       "repo": "acme/widgets",
       "issue": 202,
       "state": "parked",
-      "stage": "parked",
       "rule": "parked",
       "minutes_in_state": 60
     }
@@ -56,12 +55,9 @@
           "state_since": "2026-10-10T11:00:00.000Z",
           "question": null,
           "lease": null,
-          "stage": "queued",
           "detail": "v2 queued, attempt 1",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -72,15 +68,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "queued",
-            "step": null,
-            "attempt": 1,
-            "life": "w1",
-            "seq": 0,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 202,
@@ -92,12 +80,9 @@
           "state_since": "2026-10-10T11:00:00.000Z",
           "question": null,
           "lease": null,
-          "stage": "parked",
           "detail": "v2 parked, attempt 1",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": {
             "rule": "parked",
@@ -111,15 +96,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "parked",
-            "step": null,
-            "attempt": 1,
-            "life": "w1",
-            "seq": 0,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 200,
@@ -131,12 +108,9 @@
           "state_since": "2026-10-09T06:00:00.000Z",
           "question": null,
           "lease": null,
-          "stage": "waiting",
           "detail": "v2 waiting, attempt 1",
-          "entered_at": "2026-10-09T06:00:00.000Z",
-          "minutes_in_stage": 1800,
+          "minutes_in_state": 1800,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -147,15 +121,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": {
-            "state": "waiting",
-            "step": null,
-            "attempt": 1,
-            "life": "w1",
-            "seq": 0,
-            "why": null
-          }
+          "flags": []
         },
         {
           "issue": 201,
@@ -167,12 +133,9 @@
           "state_since": "2026-10-10T11:00:00.000Z",
           "question": null,
           "lease": null,
-          "stage": "waiting",
           "detail": "v2 waiting, attempt 1",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -185,15 +148,7 @@
           },
           "flags": [
             "label: v2 waiting, but the issue lacks 'factory:waiting'"
-          ],
-          "v2": {
-            "state": "waiting",
-            "step": null,
-            "attempt": 1,
-            "life": "w1",
-            "seq": 0,
-            "why": null
-          }
+          ]
         },
         {
           "issue": 204,
@@ -205,12 +160,9 @@
           "state_since": null,
           "question": null,
           "lease": null,
-          "stage": "waiting",
           "detail": "GitHub label only, no events",
-          "entered_at": null,
-          "minutes_in_stage": null,
+          "minutes_in_state": null,
           "holder": null,
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "github",
@@ -221,8 +173,7 @@
             ],
             "claim": null
           },
-          "flags": [],
-          "v2": null
+          "flags": []
         },
         {
           "issue": 205,
@@ -237,12 +188,9 @@
             "until": "2026-10-10T11:00:00.000Z",
             "lapsed": true
           },
-          "stage": "waiting",
           "detail": "v2 waiting, attempt 1",
-          "entered_at": "2026-10-10T11:00:00.000Z",
-          "minutes_in_stage": 60,
+          "minutes_in_state": 60,
           "holder": "dev-a",
-          "run": null,
           "pr": null,
           "stuck": null,
           "source": "event",
@@ -260,15 +208,7 @@
           },
           "flags": [
             "claim: GitHub comment says dev-b, events say dev-a"
-          ],
-          "v2": {
-            "state": "waiting",
-            "step": null,
-            "attempt": 1,
-            "life": "w1",
-            "seq": 0,
-            "why": null
-          }
+          ]
         }
       ],
       "recent": [],

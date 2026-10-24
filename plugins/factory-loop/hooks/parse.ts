@@ -20,7 +20,6 @@ export type FactoryIssue = {
   merged: boolean
   stateSince: number | null
   holder: string | null
-  run: string | null
   pr: number | null
   stuck: string | null
   // the lease end of a claim the tool shows lapsed (its detail `claim lapsed at <ISO>`), else null
@@ -100,9 +99,8 @@ export function parseFactoryState(json: string, repo: string): Factory | null {
         number: i.issue,
         state: of.state,
         merged: of.merged,
-        stateSince: isoMs(i.state_since) ?? isoMs(i.entered_at),
+        stateSince: isoMs(i.state_since),
         holder: typeof i.holder === 'string' ? i.holder : null,
-        run: typeof i.run === 'string' ? i.run : null,
         pr: typeof i.pr === 'number' ? i.pr : null,
         stuck: stuck !== null && typeof stuck === 'object' && typeof stuck.rule === 'string' ? stuck.rule : null,
         lapsedAt: typeof i.detail === 'string' ? isoMs(/^claim lapsed at (\S+)/.exec(i.detail)?.[1]) : null,

@@ -919,7 +919,7 @@ closed_issue 7 completed
 closed_issue 8 completed
 issue 9 OPEN
 echo '[]' > "$d/comments-9.json"
-echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"},{"issue":9,"stage":"parked"}],"recent":[{"issue":8}]}]}' > "$d/fs-json"
+echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"state":"reviewing"},{"issue":9,"state":"parked"}],"recent":[{"issue":8}]}]}' > "$d/fs-json"
 FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
 expect_rc 0 "sweep mirror-only"
 events | jq -e 'select(.type == "closed" and .issue == 7 and .actor == "sweep")' > /dev/null || fail "mirror-only not closed: $(events)"
@@ -932,7 +932,7 @@ FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
 reset
 closed_issue 7 completed
 seed abandoned 7
-echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"}],"recent":[]}]}' > "$d/fs-json"
+echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"state":"reviewing"}],"recent":[]}]}' > "$d/fs-json"
 FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
 expect_rc 0 "sweep abandoned then mirror run"
 events | tail -n 1 | jq -e '.type == "closed" and .issue == 7 and .actor == "sweep"' > /dev/null || fail "abandoned then mirror run not closed: $(events)"

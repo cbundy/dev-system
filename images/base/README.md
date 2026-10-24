@@ -1671,7 +1671,7 @@ v1-only event read `n/a` under `new` ([`docs/metrics.md`](../../docs/metrics.md#
 
 `callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule <state>=<minutes>]... [--github on|off]`
 answers "what is the factory doing right now?": per repo, each live issue with its state (queued, designing,
-building, reviewing, fixing, merge-queue, parked, waiting, closed) and the stage older readers parse, time in
+building, reviewing, fixing, merge-queue, parked, waiting, closed), time in
 state, holder device, PR, stuck flag, the claim's lease (`until`, `lapsed`) and the transition's step, attempt and
 life; the stuck items with the state that tripped; and the event counts per repo and device. It is read-only. It
 reads only the factory database, through `dev-query --factory`: the `factory.issue_state_at` view function and

@@ -146,16 +146,15 @@ export function runsFromEvents(factory: Factory, facts: Facts): RunView[] {
       .flat()
       .filter(e => e.issue === issue.number && e.run !== null && e.run !== 'unknown' && !facts.superseded.has(e.run))
       .map(e => e.run as string)
-    const run = [issue.run, ...seen].filter((r): r is string => r !== null).sort().pop()
+    const run = seen.sort().pop()
     if (run === undefined) continue
     const branch = branchOf(facts, run)
     if (branch === null) continue
     const events = (facts.pipeline.get(branch) ?? []).filter(e => e.run === run || e.run === 'unknown')
     const last = events[events.length - 1]
     const lastPark = [...events].reverse().find(e => e.state === 'parked')
-    // a run newer than the mirror's has no mirror stage yet: the watcher's events decide
-    const stageOf = run === issue.run ? issue : { ...issue, state: 'reviewing' as const }
-    const state = runState(stageOf, last, lastPark, facts.answered.get(run) ?? 0)
+    // the watcher's events decide, not the mirror's state
+    const state = runState({ ...issue, state: 'reviewing' as const }, last, lastPark, facts.answered.get(run) ?? 0)
     if (state === null) continue
     runs.push({
       branch,

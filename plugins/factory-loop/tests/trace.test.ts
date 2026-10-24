@@ -230,7 +230,7 @@ describe('trace on', () => {
   test('each pass names what asked for it: the timer, an agent, a wake, an owner op', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
-    const issues = [{ issue: 470, stage: 'designing', entered_at: iso(since), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]
+    const issues = [{ issue: 470, state: 'designing', state_since: iso(since), holder: DEVICE, pr: null, stuck: null, github: null }]
     const store = ledgerOf([
       SWEPT,
       entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),

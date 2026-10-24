@@ -23,25 +23,14 @@ export type Readout = {
 
 // The v2 states callum-flow-factory-state reports (docs/factory-state.md) that count as live (waiting stays out).
 const LIVE = ['designing', 'building', 'reviewing', 'fixing', 'parked', 'merge-queue']
-// A report from an image older than the tool switch has only the old stage word: it maps to a state here.
-// This is a small copy of plugins/factory-loop/hooks/factory-state-map.ts (a separate mod, no import): change both together.
-const STAGE_STATE: Record<string, string> = {
-  queued: 'queued',
-  designing: 'designing',
-  implementing: 'building',
-  'in pipeline': 'reviewing',
-  parked: 'parked',
-  waiting: 'waiting',
-  'ready to merge': 'merge-queue',
-}
 const STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting', 'closed']
 
 // stateOf: the v2 state one issue row shows; an ended row or a lapsed claim is not live (it counts as closed or queued).
-function stateOf(issue: { state?: unknown; stage?: unknown; ended?: unknown; detail?: unknown }): string {
+function stateOf(issue: { state?: unknown; ended?: unknown; detail?: unknown }): string | null {
   if (issue.ended === true) return 'closed'
   if (typeof issue.detail === 'string' && issue.detail.startsWith('claim lapsed at')) return 'queued'
   if (typeof issue.state === 'string' && STATES.includes(issue.state)) return issue.state
-  return STAGE_STATE[String(issue.stage)] ?? String(issue.stage)
+  return null
 }
 const WINDOWS: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
 const STALE_MS = 5 * 60_000
@@ -49,7 +38,7 @@ const STALE_MS = 5 * 60_000
 // counts: the factory-state JSON document as the counts the entry shows, or undefined
 // when it is not one.
 export function counts(json: string, at: number): Factory | undefined {
-  let doc: { repos?: { issues?: { state?: unknown; stage?: unknown; ended?: unknown; detail?: unknown }[] }[] }
+  let doc: { repos?: { issues?: { state?: unknown; ended?: unknown; detail?: unknown }[] }[] }
   try {
     doc = JSON.parse(json)
   } catch {
@@ -57,7 +46,7 @@ export function counts(json: string, at: number): Factory | undefined {
   }
   if (!Array.isArray(doc?.repos)) return undefined
   const states = doc.repos.flatMap(repo => repo.issues ?? []).map(stateOf)
-  const n = (names: string[]) => states.filter(state => names.includes(state)).length
+  const n = (names: string[]) => states.filter(state => state !== null && names.includes(state)).length
   return {
     live: n(LIVE),
     design: n(['designing']),

@@ -63,30 +63,21 @@ function slot(name, branch, head, tree = null) {
   return dir;
 }
 
-// a row as the tool now reports it: the v2 state with its time (and `why` for a closed one), and the
-// stage it shows as, kept for older readers. A claim whose lease lapsed keeps the state it had.
-const STATE_OF_STAGE = { queued: "queued", designing: "designing", implementing: "building", "in pipeline": "reviewing", parked: "parked", waiting: "waiting", "ready to merge": "merge-queue", merged: "closed" };
-const live = (issue, stage, entered, extra = {}) => {
-  const lapsed = typeof extra.detail === "string" && extra.detail.startsWith("claim lapsed at");
-  return {
-    issue,
-    state: lapsed ? "designing" : STATE_OF_STAGE[stage],
-    state_since: iso(entered),
-    why: stage === "merged" ? "merged" : null,
-    life: extra.v2 ? extra.v2.life : null,
-    stage,
-    entered_at: iso(entered),
-    holder: DEVICE,
-    run: null,
-    pr: null,
-    detail: null,
-    stuck: null,
-    source: "event",
-    ...extra,
-  };
-};
-// the same row from an image older than the tool switch: only the stage, its time and the v2 object
-const oldShape = ({ state, state_since, why, life, ...row }) => row;
+// a row as the tool reports it: the loop's state with its time (and `why` for a closed one). A claim
+// whose lease lapsed keeps the state it had.
+const live = (issue, state, entered, extra = {}) => ({
+  issue,
+  state,
+  state_since: iso(entered),
+  why: state === "closed" ? "merged" : null,
+  life: null,
+  holder: DEVICE,
+  pr: null,
+  detail: null,
+  stuck: null,
+  source: "event",
+  ...extra,
+});
 const ghIssue = (number, labels, state = "open") => ({ issue: { number, title: `issue ${number}`, state, labels: labels.map((name) => ({ name })) }, stripped: 0 });
 
 // the fixture factory, each issue named by what it shows
@@ -116,24 +107,24 @@ function fixtures() {
         repo: REPO,
         issues: [
           live(10, "designing", AT - 3 * HOUR),
-          live(11, "implementing", AT - 2 * HOUR, { run: "R11", source: "mirror" }),
-          live(12, "in pipeline", AT - HOUR, { run: "R12", source: "mirror" }),
+          live(11, "building", AT - 2 * HOUR),
+          live(12, "reviewing", AT - HOUR),
           live(13, "parked", AT - 2 * HOUR, { pr: 113 }),
-          live(14, "implementing", AT - 3 * HOUR),
+          live(14, "building", AT - 3 * HOUR),
           live(15, "designing", AT - HOUR, { holder: "other-dev" }),
           live(16, "designing", AT - 2 * HOUR),
-          live(17, "implementing", AT - 4 * HOUR),
-          live(18, "implementing", AT - 4 * HOUR),
-          { ...live(20, "queued", AT - HOUR, { detail: "claim lapsed at 2026-10-15T11:00:00.000Z" }) },
+          live(17, "building", AT - 4 * HOUR),
+          live(18, "building", AT - 4 * HOUR),
+          { ...live(20, "designing", AT - HOUR, { detail: "claim lapsed at 2026-10-15T11:00:00.000Z" }) },
           // no holder: #40 queued for days with no ready label (a ghost), #41 in the queue (ready),
           // #42 in a run no claim holds that moved five minutes ago (live)
           live(40, "queued", AT - 72 * HOUR, { holder: null }),
           live(41, "queued", AT - 2 * HOUR, { holder: null }),
-          live(42, "in pipeline", AT - HOUR, { holder: null, run: "R42", source: "mirror" }),
+          live(42, "reviewing", AT - HOUR, { holder: null }),
           // a v2 record queued for a slot: live work, never a ghost
-          live(43, "queued", AT - HOUR, { v2: { state: "queued", step: "lease", attempt: 1, life: "t3xq00", seq: 1, why: null } }),
+          live(43, "queued", AT - HOUR, { step: "lease", attempt: 1, life: "t3xq00" }),
         ],
-        recent: [{ ...live(21, "merged", AT - 5 * HOUR), holder: DEVICE }],
+        recent: [{ ...live(21, "closed", AT - 5 * HOUR), holder: DEVICE }],
       },
     ],
   };
@@ -304,20 +295,10 @@ before(() => {
 });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-test("a report with only the old stage words gives the same proposals as one with the v2 state, and a row with a life but no v2 key is a record", () => {
-  const answers = (f) => ({ ...fx.answers, "callum-flow-factory-state": [{ match: ".", stdout: f }] });
-  const now = fx.answers["callum-flow-factory-state"][0].stdout;
-  const old = { ...now, repos: now.repos.map((r) => ({ ...r, issues: r.issues.map(oldShape), recent: r.recent.map(oldShape) })) };
-  const a = world(fx.answers).run([]);
-  const b = world(answers(old)).run([]);
-  assert.equal(a.status, 0, a.stderr);
-  assert.equal(b.status, 0, b.stderr);
-  assert.equal(b.stdout, a.stdout);
-  // orphanOf reads `life`, so a row with no v2 key and a life is a record (#43 queued is never looked at)
-  const noV2 = { ...now, repos: now.repos.map((r) => ({ ...r, issues: r.issues.map(({ v2, ...row }) => row) })) };
-  const c = world(answers(noV2)).run([]);
-  assert.equal(c.status, 0, c.stderr);
-  assert.equal(line(c.stdout, 43), "");
+test("a row with a life is a record: orphanOf reads `life`, so #43 queued is never looked at", () => {
+  const out = world(fx.answers).run([]);
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(line(out.stdout, 43), "");
 });
 
 test("observe lists this device's live claims with no v2 record, the live issues with no holder, the pool's other slots and the leftover labels, each with its proposal, and changes nothing", () => {

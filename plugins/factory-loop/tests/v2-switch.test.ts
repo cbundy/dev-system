@@ -624,7 +624,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work' },
       store: { [`records:${REPO}`]: stored },
-      run: world({ queue: [7], issues: [{ issue: 470, stage: 'implementing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }] }),
+      run: world({ queue: [7], issues: [{ issue: 470, state: 'building', state_since: iso(NOW - HOUR), holder: DEVICE, pr: null, stuck: null, github: null }] }),
     })
     let down = true
     h.failGet = key => down && key === `records:${REPO}`

@@ -38,8 +38,7 @@ import { buildState, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
 import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, eventRow, eventsCsv, review, run, state, wakeAnswer } from './fixtures'
-import { REPORT_SHAPES, issuesRead, rowOf } from './host'
-import type { ReportShape } from './host'
+import { issuesRead } from './host'
 
 const REPO = 'cbundy/dev-system'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -60,31 +59,21 @@ const pl = (s: RunState, branch: string, run: string, over: Partial<PipelineRun>
 function factoryJson(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], extra: Record<string, unknown> = {}) {
   return JSON.stringify({ at: iso(NOW), at_source: '--at', ...extra, repos: [{ repo: REPO, issues, recent }] })
 }
-// The shape the rows of a report take (host.ts rowOf): the tool's now, or an older image's.
-let shape: ReportShape = 'new'
-const inShape = (s: ReportShape, run: () => void) => () => {
-  shape = s
-  try {
-    run()
-  } finally {
-    shape = 'new'
-  }
-}
-const fsIssue = (n: number, stage: string, over: Record<string, unknown> = {}) => rowOf({
+const fsIssue = (n: number, state: string, over: Record<string, unknown> = {}) => ({
   issue: n,
-  stage,
+  state,
   detail: null,
-  entered_at: iso(NOW - 30 * MIN),
-  minutes_in_stage: 30,
+  state_since: iso(NOW - 30 * MIN),
+  minutes_in_state: 30,
   holder: DEVICE,
-  run: null,
+  why: state === 'closed' ? 'merged' : null,
   pr: null,
   stuck: null,
   source: 'event',
   github: null,
   flags: [],
   ...over,
-}, shape)
+})
 
 function ev(over: Partial<FactoryEvent>): FactoryEvent {
   return { ts: NOW - 10 * MIN, state: 'parked', issue: 45, run: 'R45', branch: 'feat/issue-45-x', pr: null, head: 'h1', note: null, actor: 'watcher', device: DEVICE, ...over }
@@ -94,10 +83,10 @@ describe('parse', () => {
   test('factory-state: live and recent issues, stuck rule, GitHub when read', () => {
     const json = factoryJson(
       [
-        fsIssue(45, 'parked', { run: 'R45', pr: 545, stuck: { rule: 'S3', text: 'parked for more than 30 minutes' } }),
+        fsIssue(45, 'parked', { pr: 545, stuck: { rule: 'S3', text: 'parked for more than 30 minutes' } }),
         fsIssue(114, 'queued', { holder: null, github: { state: 'open', labels: ['enhancement', 'ready'], claim: null } }),
       ],
-      [fsIssue(271, 'merged', { run: 'R271', pr: 282 })],
+      [fsIssue(271, 'closed', { pr: 282 })],
     )
     const f = parseFactoryState(json, REPO)
     expect(f?.at).toBe(NOW)
@@ -117,36 +106,30 @@ describe('parse', () => {
     expect(parseFactoryState('not json', REPO)).toBeNull()
   })
 
-  test('factory-state: a new report and the same one with only the old stage words give the same states, merged flags and since times', () => {
-    // what the tool adds beyond the stage words, by issue: a lapsed claim keeps the state it had and shows
-    // the stage queued; a closed row has its why; GitHub closed #13 before the view saw it (it keeps its live state)
-    const extra: Record<number, Record<string, unknown>> = {
-      8: { state: 'designing', detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` },
-      11: { why: 'dropped' },
-      12: { why: 'merged-by-hand' },
-      13: { state: 'building' },
-    }
-    const read = (s: ReportShape) => {
-      shape = s
-      try {
-        const rows = (list: [number, string][]) => list.map(([n, stage]) => ({ ...fsIssue(n, stage), ...(s === 'new' ? extra[n] : {}), ...(s === 'old' && n === 8 ? { detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` } : {}) }))
-        const live = rows([[1, 'designing'], [2, 'implementing'], [3, 'in pipeline'], [4, 'ready to merge'], [5, 'parked'], [6, 'waiting'], [7, 'queued'], [8, 'queued']])
-        const recent = rows([[10, 'merged'], [11, 'closed without merge'], [12, 'merged'], [13, 'closed without merge']])
-        return parseFactoryState(factoryJson(live, recent), REPO)!.issues.map(i => [i.number, i.state, i.merged, i.stateSince, i.ended])
-      } finally {
-        shape = 'new'
-      }
-    }
-    const now = read('new')
-    expect(Object.fromEntries(now.map(r => [r[0], r[1]]))).toEqual({ 1: 'designing', 2: 'building', 3: 'reviewing', 4: 'merge-queue', 5: 'parked', 6: 'waiting', 7: 'queued', 8: 'queued', 10: 'closed', 11: 'closed', 12: 'closed', 13: 'closed' })
-    expect(now.filter(r => r[2]).map(r => r[0])).toEqual([10, 12])
-    expect(read('old')).toEqual(now)
+  test('factory-state: each state is read, a lapsed claim is queued, a closed row is merged by its why, and a row with no valid state is left out', () => {
+    const live = [
+      fsIssue(1, 'designing'),
+      fsIssue(2, 'building'),
+      fsIssue(3, 'reviewing'),
+      fsIssue(4, 'merge-queue'),
+      fsIssue(5, 'parked'),
+      fsIssue(6, 'waiting'),
+      fsIssue(7, 'queued'),
+      fsIssue(8, 'designing', { detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` }),
+      { ...fsIssue(9, 'building'), state: undefined, stage: 'implementing' },
+      fsIssue(14, 'mystery'),
+    ]
+    const recent = [fsIssue(10, 'closed'), fsIssue(11, 'closed', { why: 'dropped' }), fsIssue(12, 'closed', { why: 'merged-by-hand' }), fsIssue(13, 'building', { why: null })]
+    const rows = parseFactoryState(factoryJson(live, recent), REPO)!.issues.map(i => [i.number, i.state, i.merged, i.stateSince, i.ended])
+    expect(Object.fromEntries(rows.map(r => [r[0], r[1]]))).toEqual({ 1: 'designing', 2: 'building', 3: 'reviewing', 4: 'merge-queue', 5: 'parked', 6: 'waiting', 7: 'queued', 8: 'queued', 10: 'closed', 11: 'closed', 12: 'closed', 13: 'closed' })
+    expect(rows.filter(r => r[2]).map(r => r[0])).toEqual([10, 12])
+    expect(rows.every(r => r[3] === NOW - 30 * MIN)).toBe(true)
   })
 
   test('factory-state: the repo matches case-insensitively, both ways (the tool lower-cases it)', () => {
-    const lower = factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'cbundy/vost')
+    const lower = factoryJson([fsIssue(45, 'parked')]).replace(REPO, 'cbundy/vost')
     expect(parseFactoryState(lower, 'cbundy/Vost')?.issues.map(i => i.number)).toEqual([45])
-    const mixed = factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'CBundy/Vost')
+    const mixed = factoryJson([fsIssue(45, 'parked')]).replace(REPO, 'CBundy/Vost')
     expect(parseFactoryState(mixed, 'cbundy/vost')?.issues.map(i => i.number)).toEqual([45])
     expect(parseFactoryState(lower, 'other/repo')).toBeNull()
   })
@@ -704,22 +687,20 @@ describe('derive', () => {
     expect([...facts.superseded]).toEqual(['R44'])
   })
 
-  for (const s of REPORT_SHAPES) test(`runs: the mirror decides parked or running; the watcher refines the rest (${s} report)`, inShape(s, () => {
+  test('runs: the watcher refines a reviewing run to running, parked or merge-ready; a merge-queue run is merge-ready', () => {
     const facts = factsOf([
       ev({ state: 'parked', ts: NOW - 30 * MIN }),
       ev({ state: 'merge_ready', ts: NOW - 20 * MIN, head: 'h2' }),
       ev({ issue: 46, run: 'R46', branch: 'feat/issue-46-x', state: 'merge_ready', ts: NOW - 40 * MIN }),
       ev({ issue: 46, run: 'R46', branch: 'feat/issue-46-x', state: 'parked', ts: NOW - 30 * MIN }),
       ev({ issue: 46, run: 'R46', branch: 'feat/issue-46-x', state: 'verdict', note: 'NIT: x', actor: 'agent', ts: NOW - 29 * MIN }),
-      ev({ issue: 47, run: 'R47', branch: 'feat/issue-47-x', state: 'failed', note: 'cancelled' }),
       ev({ issue: 48, run: 'R48', branch: 'feat/issue-48-x', state: 'merge_ready' }),
     ])
     const factory = parseFactoryState(
       factoryJson([
-        fsIssue(45, 'in pipeline', { run: 'R45', pr: 545 }),
-        fsIssue(46, 'in pipeline', { run: 'R46' }),
-        fsIssue(47, 'implementing', { run: 'R47' }),
-        fsIssue(48, 'ready to merge', { run: 'R48', pr: 548 }),
+        fsIssue(45, 'reviewing', { pr: 545 }),
+        fsIssue(46, 'reviewing'),
+        fsIssue(48, 'merge-queue', { pr: 548 }),
       ]),
       REPO,
     )!
@@ -727,25 +708,24 @@ describe('derive', () => {
     expect(runs.map(r => [r.issue, r.state, r.head])).toEqual([
       [45, 'merge-ready', 'h2'],
       [46, 'running', 'h1'],
-      [47, 'cancelled', 'h1'],
       [48, 'merge-ready', 'h1'],
     ])
-  }))
+  })
 
-  for (const s of REPORT_SHAPES) test(`a park the mirror shows as running is still waiting until the log shows it answered (${s} report)`, inShape(s, () => {
+  test('a park the mirror shows as running is still waiting until the log shows it answered', () => {
     const park = ev({ state: 'parked', ts: NOW - 6 * MIN })
-    const factory = parseFactoryState(factoryJson([fsIssue(45, 'in pipeline', { run: 'R45' })]), REPO)!
+    const factory = parseFactoryState(factoryJson([fsIssue(45, 'reviewing')]), REPO)!
     expect(runsFromEvents(factory, factsOf([park]))[0]?.state).toBe('parked')
     const answered = [park, ev({ state: 'verdict', note: 'NIT: x', actor: 'agent', ts: NOW - 5 * MIN })]
     expect(runsFromEvents(factory, factsOf(answered))[0]?.state).toBe('running')
-  }))
+  })
 
-  test('a run the watcher saw that the mirror has not synced yet is the current run', () => {
+  test('the run is the newest the watcher saw for the issue', () => {
     const facts = factsOf([
       ev({ state: 'failed', run: 'R45A', note: 'cancelled', ts: NOW - 20 * MIN }),
       ev({ state: 'parked', run: 'R45B', branch: 'feat/issue-45-x-2', ts: NOW - 2 * MIN, head: 'h9' }),
     ])
-    const factory = parseFactoryState(factoryJson([fsIssue(45, 'implementing', { run: 'R45A' })]), REPO)!
+    const factory = parseFactoryState(factoryJson([fsIssue(45, 'building')]), REPO)!
     expect(runsFromEvents(factory, facts).map(r => [r.run, r.branch, r.state, r.head])).toEqual([['R45B', 'feat/issue-45-x-2', 'parked', 'h9']])
   })
 
@@ -774,13 +754,12 @@ describe('derive', () => {
 })
 
 describe('state', () => {
-  test('a parked run the mirror shows is carried into the state with its run id, whoever answered it', () => {
+  test('a run parked in the log is carried into the state with its run id', () => {
     const events: FactoryEvent[] = [
       ev({ state: 'renewed', issue: 45, run: null, branch: null, actor: 'agent', ts: NOW - 2 * MIN }),
       ev({ state: 'parked', ts: NOW - 6 * MIN }),
-      ev({ state: 'verdict', note: 'NIT: fine', actor: 'agent', ts: NOW - 5 * MIN }),
     ]
-    const factory = parseFactoryState(factoryJson([fsIssue(45, 'parked', { run: 'R45', pr: 545 })]), REPO)!
+    const factory = parseFactoryState(factoryJson([fsIssue(45, 'parked', { pr: 545 })]), REPO)!
     const facts = factsOf(events)
     const base = state()
     const s = buildState({
@@ -1165,7 +1144,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
 
   function host(over: Partial<World> = {}) {
     const world: World = {
-      factory: [fsIssue(45, 'parked', { run: R45, pr: 545 }), fsIssue(470, 'queued', { holder: null })],
+      factory: [fsIssue(45, 'parked', { pr: 545 }), fsIssue(470, 'queued', { holder: null })],
       recent: RECENT,
       week: null,
       pipeline: { stdout: `${LINES}\n` },
@@ -1470,7 +1449,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       outcome: wakeAnswer('hold'),
     })
     const loop = ev({ state: 'loop', issue: 50, run: null, branch: null, pr: 550, head: 'head50', note: loopNote(decided), actor: 'agent', ts: life + 60 * MIN })
-    const factory = [fsIssue(60, 'designing', { entered_at: iso(life) })]
+    const factory = [fsIssue(60, 'designing', { state_since: iso(life) })]
     const h = host({ factory, week: [loop, ...RECENT] })
     const obs = await h.pass(runtime(), stored({ ledger: null }))
     expect(obs.ledgerSource).toBe('events')
@@ -1721,9 +1700,9 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const R41 = RUN(41)
     const h = host({
       factory: [
-        fsIssue(40, 'parked', { run: R40, pr: 540, stuck: { rule: 'S3', text: 'parked for more than 30 minutes' } }),
-        fsIssue(41, 'in pipeline', { run: R41, pr: 541 }),
-        fsIssue(32, 'parked', { holder: OTHER, run: RUN(32), pr: 532 }),
+        fsIssue(40, 'parked', { pr: 540, stuck: { rule: 'S3', text: 'parked for more than 30 minutes' } }),
+        fsIssue(41, 'reviewing', { pr: 541 }),
+        fsIssue(32, 'parked', { holder: OTHER, pr: 532 }),
       ],
       pipeline: { stdout: `failed feat/issue-40-x ${R40} step=review pr=540 head=${SHA(40)}\nfailed feat/issue-41-x ${R41} step=review pr=541 head=${SHA(41)}\n` },
       queue: { stdout: `queue known=none now=${queue.join(',')}\n` },
@@ -1897,7 +1876,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
   })
 
   test('a derived skip makes the factory source fail and is not cached; a non-derived skip is kept', async () => {
-    const report = (skipped: unknown[]) => factoryJson([fsIssue(45, 'parked', { run: 'R45' })], [], { skipped_events: skipped })
+    const report = (skipped: unknown[]) => factoryJson([fsIssue(45, 'parked')], [], { skipped_events: skipped })
     const ioOf = (stdout: string): Io => ({
       now: async () => NOW,
       run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
@@ -1927,7 +1906,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       agents: async () => [],
     })
     const rt = { ...runtime(), repo: 'cbundy/Vost' }
-    const ok = await observe(ioOf(factoryJson([fsIssue(45, 'parked', { run: 'R45' })]).replace(REPO, 'cbundy/vost')), rt, emptyCache(), NOW, null, null, stored())
+    const ok = await observe(ioOf(factoryJson([fsIssue(45, 'parked')]).replace(REPO, 'cbundy/vost')), rt, emptyCache(), NOW, null, null, stored())
     expect(ok.state.sources.factory.ok).toBe(true)
     expect(ok.state.sources.factory.error).toBeUndefined()
     const other = await observe(ioOf(JSON.stringify({ at: iso(NOW), repos: [{ repo: 'other/repo', issues: [], recent: [] }] })), runtime(), emptyCache(), NOW, null, null, stored())

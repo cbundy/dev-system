@@ -13,33 +13,18 @@ export const LIVE_STATES: readonly IssueState[] = ['designing', 'building', 'rev
 // The states that hold a pool slot: the shadow's pool size and the replay's both count these (designing and waiting hold none).
 export const BUSY_STATES: readonly IssueState[] = ['building', 'reviewing', 'fixing', 'parked', 'merge-queue']
 
-// The fallback for a row with no valid `state` (an image older than the tool switch): its old stage word.
-export const STAGE_STATE: Readonly<Record<string, IssueState>> = {
-  queued: 'queued',
-  designing: 'designing',
-  implementing: 'building',
-  'in pipeline': 'reviewing',
-  parked: 'parked',
-  waiting: 'waiting',
-  'ready to merge': 'merge-queue',
-  merged: 'closed',
-  'closed without merge': 'closed',
-}
-
 const MERGED_WHYS: readonly string[] = ['merged', 'merged-by-hand', 'done']
 
-// stateOfRow: the v2 state of one issue row, and whether a closed one was merged; null for a row that has
-// neither a valid state nor a known stage. `ended` (GitHub closed it before the view saw it) gives closed;
-// a detail `claim lapsed at` gives queued (the tool's own lapsed-claim rule, as the old stage did).
+// stateOfRow: the v2 state of one issue row, and whether a closed one was merged; null for a row with no
+// valid state. `ended` (GitHub closed it before the view saw it) gives closed; a detail `claim lapsed at`
+// gives queued (the tool's own lapsed-claim rule). A closed row was merged when its `why` says so.
 export function stateOfRow(row: Record<string, unknown>): { state: IssueState; merged: boolean } | null {
-  const stage = typeof row.stage === 'string' ? row.stage : null
   const why = typeof row.why === 'string' ? row.why : null
   let state: IssueState | null = null
   if (row.ended === true) state = 'closed'
   else if (typeof row.detail === 'string' && row.detail.startsWith('claim lapsed at')) state = 'queued'
   else if (typeof row.state === 'string' && Object.hasOwn(STATES, row.state)) state = row.state as IssueState
-  else if (stage !== null && Object.hasOwn(STAGE_STATE, stage)) state = STAGE_STATE[stage]
   if (state === null) return null
-  const merged = state === 'closed' && (why !== null ? MERGED_WHYS.includes(why) : stage === 'merged')
+  const merged = state === 'closed' && why !== null && MERGED_WHYS.includes(why)
   return { state, merged }
 }

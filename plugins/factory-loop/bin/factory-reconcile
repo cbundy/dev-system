@@ -195,10 +195,10 @@ const hasLabel = (labels, name) => labels.some((l) => l.toLowerCase() === name.t
 
 // orphanOf: how the factory shows an issue with no live claim as active (6.3): with no holder, in a
 // live state or queued; or queued with a holder whose claim ended or lapsed. A v2 record's queued
-// state is live work, never one (a row with a life, or in an older image a v2 object, has a record).
-// null for any other issue. A row has its v2 state in `state` (gather reads it through stateOfRow).
+// state is live work, never one (a row with a life has a record).
+// null for any other issue. A row has its state in `state` (gather reads it through stateOfRow).
 function orphanOf(i, h) {
-  if ((i.life ?? i.v2 ?? null) !== null) return null
+  if ((i.life ?? null) !== null) return null
   if (!i.holder && (i.state === 'queued' || h.stateMap.LIVE_STATES.includes(i.state))) return 'no holder'
   if (i.holder && i.state === 'queued') return 'no live claim'
   return null
@@ -227,7 +227,7 @@ function buildReport(input, h) {
   // a ghost: it is left out (null).
   const assess = (f, orphan) => {
     const n = f.issue
-    const since = ms(f.state_since) ?? ms(f.entered_at)
+    const since = ms(f.state_since)
     const key = STATE_TIMEOUT[f.state]
     const T = key === undefined ? OTHER_T : input.timeouts[key]
     const cutoff = at - T
@@ -235,7 +235,7 @@ function buildReport(input, h) {
     const labels = gh.ok ? gh.labels : []
     if (orphan && gh.ok && hasLabel(labels, input.readyLabel)) return null
     // the evidence: runs of its branch, its open PRs, the slots on its branch
-    const runs = input.runs.ok ? input.runs.list.filter((r) => r.id === f.run || issueOfBranch(r.branch) === n) : []
+    const runs = input.runs.ok ? input.runs.list.filter((r) => issueOfBranch(r.branch) === n) : []
     const runAt = runs.reduce((m, r) => Math.max(m, r.updated ?? -Infinity), -Infinity)
     const onBranch = input.prs.ok ? input.prs.open.filter((p) => p.number === f.pr || issueOfBranch(p.branch) === n).sort((a, b) => b.number - a.number) : []
     const prs = onBranch.filter((p) => !input.prFacts.get(p.number)?.untrusted)
@@ -324,7 +324,6 @@ function buildReport(input, h) {
       state: f.state,
       since,
       T,
-      run: f.run ?? null,
       labels,
       checked,
       newest,
@@ -509,8 +508,7 @@ function gather(o, io, settings) {
   const at = ms(doc.at)
   const entry = Array.isArray(doc.repos) ? doc.repos.find((r) => String(r.repo).toLowerCase() === repo.toLowerCase()) : undefined
   if (at === null) throw new ReadError('callum-flow-factory-state: no time in its report')
-  // each row carries its v2 state in `state` (stateOfRow: a row of an older image has only a stage); a row
-  // that is neither is left out. A recent row is ended, whatever its state says.
+  // each row carries its v2 state in `state` (stateOfRow); a row with none is left out. A recent row is ended, whatever its state says.
   const withState = (list, ended) => (Array.isArray(list) ? list : []).flatMap((r) => {
     const s = settings.stateOfRow({ ...r, ended })
     return s === null ? [] : [{ ...r, state: s.state }]
@@ -538,7 +536,7 @@ function gather(o, io, settings) {
 
   // this device's live claims, and the issues that show as active with no live claim (6.3)
   const candidates = factory.issues
-    .filter((i) => (i.holder === device && settings.liveStates.includes(i.state)) || ((i.life ?? i.v2 ?? null) === null && (i.state === 'queued' || (!i.holder && settings.liveStates.includes(i.state)))))
+    .filter((i) => (i.holder === device && settings.liveStates.includes(i.state)) || ((i.life ?? null) === null && (i.state === 'queued' || (!i.holder && settings.liveStates.includes(i.state)))))
     .map((i) => i.issue)
   const readEnv = { env: { CALLUM_FLOW_REPO: repo } }
   // the candidates' labels and state, through the trusted reader
