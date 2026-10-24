@@ -43,6 +43,11 @@ check "dev-query is on PATH, prints usage, and exits 78 with no URL configured" 
 check "callum-flow-evidence-upload is on PATH, prints usage, and exits 78 with no credentials configured" in_image '
   [ -x "$(command -v callum-flow-evidence-upload)" ] && callum-flow-evidence-upload --help >/dev/null &&
   env -u ARTIFACT_SAS DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) callum-flow-evidence-upload --repo o/r --check 2>/dev/null; [ $? = 78 ]'
+check "callum-flow-capture is on PATH, shows usage, rejects bad usage, and exits 69 with no Playwright, leaving no server" in_image '
+  [ -x "$(command -v callum-flow-capture)" ] && callum-flow-capture --help >/dev/null &&
+  callum-flow-capture --start true 2>/dev/null; [ $? = 2 ] &&
+  d=$(mktemp -d) && cd "$d" && NODE_PATH= callum-flow-capture --start "echo \$\$ > $d/p; exec sleep 300" shot 2>/dev/null; [ $? = 69 ] &&
+  { [ ! -f "$d/p" ] || ! kill -0 "$(cat "$d/p")" 2>/dev/null; }'
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'

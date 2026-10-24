@@ -62,6 +62,7 @@ for (const rel of settingsFiles) {
       "Bash(gh issue create *)",
       "Bash(callum-flow-issue-read *)",
       "Bash(callum-flow-evidence-upload *)",
+      "Bash(callum-flow-capture *)",
     ]) {
       assert.ok(allow.includes(entry), `allow carries ${entry}`);
     }

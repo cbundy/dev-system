@@ -68,7 +68,7 @@ Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships th
 generic `permissions.allow` and `permissions.deny` lists the implement-issue/orchestrator flow needs
 (`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
 `callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
-`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, `callum-flow-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), the read-only
+`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, `callum-flow-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), `callum-flow-capture` (starts the app, takes the UI captures with Playwright and uploads them), the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
 `check-pr-linkage.sh`) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
