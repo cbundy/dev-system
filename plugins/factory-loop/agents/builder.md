@@ -68,7 +68,7 @@ it; never use run_in_background: your turn ends only with your answer.
   and then say why in your answer's summary.
 - For a visible change, capture the evidence a reviewer needs and give it in your answer's
   evidence, which the loop puts in the PR body. An image there needs a URL. A repo's documented
-  capture command comes first (it should upload through the tool). Otherwise upload each capture
+  capture command comes first (it should upload through the tool); when the prompt names the repo's capture command, run that exact command first. When the prompt says the repo has turned UI capture off (`none`), capture nothing, say in the evidence that UI capture is off for the repo and describe the visible change in words. Otherwise upload each capture
   with `callum-flow-evidence-upload pr-<N>/<slug> <file>...` and put each printed URL in the
   evidence as `![description](<url>)`. When the tool is not on PATH or exits 78 (no evidence
   storage for the repo), fall back to a capture committed on the branch, linked by its

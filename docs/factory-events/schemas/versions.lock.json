@@ -2024,6 +2024,18 @@
         "minimum": 1,
         "type": "integer"
       },
+      "ui_capture": {
+        "enum": [
+          "command",
+          "none",
+          "unset",
+          null
+        ],
+        "type": [
+          "null",
+          "string"
+        ]
+      },
       "verdict": {
         "enum": [
           "approve",

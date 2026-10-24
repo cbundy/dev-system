@@ -2323,6 +2323,65 @@ callum-flow-evidence-upload --check                            # validate creden
 | 2 | bad usage, a bad `<dest>` (empty, leading `/`, a `..` segment, whitespace), or a missing or unreadable file; nothing is uploaded |
 | 78 | no credentials for the repo; fall back to a committed capture |
 
+## callum-flow-capture
+
+`callum-flow-capture` starts a UI app, takes a desktop and a narrow full-page screenshot (and optionally a
+short video) with headless Chromium through Playwright, stops the app, and uploads the captures through
+[`callum-flow-evidence-upload`](#callum-flow-evidence-upload). It is repo-agnostic: the repo says how to
+start its app. It starts what it needs and stops it before it exits, on every exit path (success, failure,
+SIGINT, SIGTERM): the app's whole process group gets SIGTERM, then SIGKILL after a short grace, and the
+browser is closed.
+
+```sh
+callum-flow-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out DIR] [--dest pr-<N>/<slug>] <scenario>
+```
+
+- **App.** `<cmd>` runs with `sh -c` in its own process group on a free port, exported as `PORT`; `{port}` in
+  `<cmd>` is replaced by it. The tool waits up to `--timeout` seconds (default 60) for
+  `http://127.0.0.1:<port><path>` (`--path`, default `/`) to answer HTTP.
+- **Captures.** `<scenario>` matches `[a-z0-9][a-z0-9-]*`. It writes `<scenario>-desktop.png` (1440x900) and
+  `<scenario>-narrow.png` (390x844), both full-page, and with `--video` also `<scenario>.webm`. A navigation
+  status of 400 or more or an uncaught page error fails the capture.
+- **Output.** To `--out`, default `${TMPDIR:-/tmp}/callum-flow-capture/<scenario>-<timestamp>`. With `--dest`,
+  the files are uploaded and one URL per file is printed on stdout; without it the local file paths are
+  printed and nothing is uploaded. When the upload exits 78 (no evidence storage) the tool exits 78, keeps the
+  files and names the folder on stderr, so the caller can commit a copy and use a commit-pinned blob URL.
+- **Playwright** is resolved from the current directory's `node_modules` (`playwright`, then
+  `playwright-core`), then from the global npm root. The base image installs no browser.
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | the upload failed (files kept; the folder is named on stderr) |
+| 2 | bad usage |
+| 3 | the app exited or did not answer within `--timeout` |
+| 4 | a page error, or a navigation status of 400 or more |
+| 69 | Playwright or its Chromium build is not installed: see below |
+| 78 | no evidence storage for the repo (files kept; commit a copy instead) |
+
+Consumer wiring, a `package.json` script that the agents run as `npm run e2e:capture -- <scenario>`
+(add `--path` per scenario):
+
+```json
+"e2e:capture": "callum-flow-capture --start 'npm run dev -- --port {port}' --dest pr-$PR"
+```
+
+### For a UI repo: the owner's action
+
+The base image ships the capture tool only, not a browser. A UI repo installs the browser in its own
+per-repo dev image (`.devcontainer/Dockerfile`, onboarding step 3e). Add a pinned Playwright (as a
+devDependency or global) and install Chromium at that same version as root, plus ffmpeg for `--video`:
+
+```dockerfile
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g playwright@<version> \
+ && npx playwright install --with-deps chromium \
+ && apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+```
+
+Without this the tool exits 69 with a one-line reason. A repo that opts out of UI evidence (the
+`uiCapture: "none"` setting) needs none of this.
+
 ## Central session history (agentsview)
 
 The image ships [agentsview](https://github.com/kenn-io/agentsview), so every container

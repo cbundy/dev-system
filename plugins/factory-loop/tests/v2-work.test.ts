@@ -419,7 +419,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 const SCRATCH = `${LOOP_DIR}/scratch/300-${LIFE}-s2`
 const PLACE = { bin: BIN, file: `${LOOP_DIR}/answers/x.answer.json` }
 function input(over: Partial<WorkInput> = {}): WorkInput {
-  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], scratch: SCRATCH, place: PLACE, ...over }
+  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], uiCapture: null, scratch: SCRATCH, place: PLACE, ...over }
 }
 const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], ...over })
 
@@ -512,6 +512,20 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(COMMAND_RULE).toContain('A repo command that starts what it needs and stops it before it exits counts as a command known to exit.')
     // the rule about a glob under a variable ends it (#674): the agents' definitions carry it word for word
     expect(COMMAND_RULE.endsWith('Never `rm` a glob under an unguarded variable: use `"${VAR:?}"/*` or a literal path.')).toBe(true)
+  })
+
+  test('the repo\'s UI capture policy: a command comes first, none says capture is off, unset is the text as before (#1270)', () => {
+    for (const make of [(o: Partial<WorkInput>) => buildPrompt(input(o)), (o: Partial<WorkInput>) => fixPrompt(fixInput(o))]) {
+      const unset = make({ uiCapture: null })
+      expect(unset).toContain("A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool. Otherwise upload each capture")
+      const cmd = make({ uiCapture: 'npm run e2e:capture --' })
+      expect(cmd).toContain('The repo\'s capture command comes first, since it is expected to upload through the tool: `npm run e2e:capture --`. Otherwise upload')
+      expect(cmd.indexOf('npm run e2e:capture --')).toBeLessThan(cmd.indexOf('callum-flow-evidence-upload'))
+      const none = make({ uiCapture: 'none' })
+      expect(none).toContain('This repo has turned UI capture off')
+      expect(none).toContain('Say in the evidence that UI capture is off for the repo, and describe the visible change in words.')
+      expect(none).not.toContain('callum-flow-evidence-upload')
+    }
   })
 
   test('free text is neutralized: a closing keyword in a note or a check name links nothing; ids that are not ids are dropped', () => {

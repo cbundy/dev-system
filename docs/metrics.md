@@ -689,6 +689,21 @@ WHERE type = 'finding_handled'
 GROUP BY repo;
 ```
 
+### Reviews by UI capture policy
+
+Each `reviewed` event records the repo's `uiCapture` policy the review ran under in `ui_capture`
+(`command`, `none` for capture off, or `unset`; absent on a review recorded before the field
+existed); no `event_log` column lifts it, so the query reads `factory.event_store`. This counts reviews and verdicts per repo and policy over a window, one row per
+`(issue, round, patch)`.
+
+```sql
+SELECT repo, coalesce(data->>'ui_capture', 'absent') AS ui_capture, data->>'verdict' AS verdict,
+  count(DISTINCT (issue, data->>'round', data->>'patch')) AS reviews
+FROM factory.event_store
+WHERE type = 'reviewed' AND ts >= now() - interval '30 days'
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+```
+
 ### Fix rounds with no new head
 
 A fix round can end with no new head because a finding was fixed outside the branch (transition row
