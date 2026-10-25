@@ -3348,7 +3348,11 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   `hooks/session-tokens.ts` from the main session's transcript (only the bytes added since the
   previous minute's read, once per `requestId`; step agents are on `loop_entry`). They are read
   every minute, sent or not, and are null for the first read of a session in the process, when the
-  transcript cannot be found or read, and when the runtime knows no config dir. It is bookkeeping,
+  transcript cannot be found or read, and when the runtime knows no config dir. It also carries
+  `usage_tier` (`normal`, `slow`, `stop-new` or `stop-all`) and `usage_tier_overridden` (whether an owner
+  override held the tier at normal): `tierOf` (13.5.2) of the last pass that ended in the minute with a
+  plan, so the state in force at the minute's end; both are null when no pass in the minute reached a
+  plan (`passes` 0, or only error passes) and in events of older loops. It is bookkeeping,
   never a stage or progress, and builds no ledger entry; the reader does any weighting.
 
 The rate-cap holds and the ping-storm breaker are no longer logged as events (dev-system#1142): the

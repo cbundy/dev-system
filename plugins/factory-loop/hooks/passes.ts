@@ -5,6 +5,7 @@
 // returns null for it, so it never rebuilds a ledger entry. The reader does any weighting.
 
 import type { ObserveSplit } from './observe-clock'
+import type { Tier } from './types'
 
 export const MINUTE_MS = 60_000
 
@@ -17,6 +18,10 @@ export type PassRecord = {
   observeMs: number | null
   commandsMs: number | null
   inProcessMs: number | null
+  // the usage tier the pass planned with and whether an owner override held it at normal (tierOf);
+  // null when the pass reached no plan
+  tier: Tier | null
+  overridden: boolean | null
 }
 
 // The passes recorded, by the start (epoch ms) of the UTC minute in which each ended.
@@ -46,13 +51,16 @@ export type PassSummary = {
   outputTokens: number | null
   cacheReadTokens: number | null
   cacheCreationTokens: number | null
+  // the tier in force at the minute's end: that of the last pass with a plan; null when none
+  usageTier: Tier | null
+  usageTierOverridden: boolean | null
   settings: PassSettings
 }
 
 export const minuteOf = (ms: number): number => Math.floor(ms / MINUTE_MS) * MINUTE_MS
 
 // notePass: a pass ended at endedAtMs and took ms.
-export function notePass(book: PassBook, endedAtMs: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null): void {
+export function notePass(book: PassBook, endedAtMs: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null, tier: Tier | null = null, overridden: boolean | null = null): void {
   const minute = minuteOf(endedAtMs)
   const list = book.get(minute)
   const rec: PassRecord = {
@@ -62,6 +70,8 @@ export function notePass(book: PassBook, endedAtMs: number, ms: number, acted: b
     observeMs: split === null ? null : Math.round(split.ms),
     commandsMs: split === null ? null : Math.round(split.commandsMs),
     inProcessMs: split === null ? null : Math.round(split.inProcessMs),
+    tier,
+    overridden,
   }
   if (list === undefined) book.set(minute, [rec])
   else list.push(rec)
@@ -86,6 +96,7 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
   const idle = recs.filter(r => !(r.acted))
   const nums = (xs: readonly (number | null)[]) => xs.filter((x): x is number => x !== null)
   const inProc = nums(recs.map(r => r.inProcessMs))
+  const lastTiered = [...recs].reverse().find(r => r.tier !== null)
   return {
     from: minuteStartMs,
     to: minuteStartMs + MINUTE_MS,
@@ -106,6 +117,8 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
     outputTokens: null,
     cacheReadTokens: null,
     cacheCreationTokens: null,
+    usageTier: lastTiered?.tier ?? null,
+    usageTierOverridden: lastTiered?.overridden ?? null,
     settings,
   }
 }
@@ -169,6 +182,8 @@ export function passesEventArgv(s: PassSummary): string[] {
     output_tokens: s.outputTokens,
     cache_read_tokens: s.cacheReadTokens,
     cache_creation_tokens: s.cacheCreationTokens,
+    usage_tier: s.usageTier,
+    usage_tier_overridden: s.usageTierOverridden,
   }
   return ['callum-flow-event', '--type', 'loop_passes', '--data', JSON.stringify(data)]
 }

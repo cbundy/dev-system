@@ -109,12 +109,57 @@ describe('closeMinute', () => {
     expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
     expect(argv).toHaveLength(5)
     const data = JSON.parse(argv[4] as string)
-    expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'cache_creation_tokens', 'cache_read_tokens', 'errors', 'from_at', 'idle_mean_ms', 'input_tokens', 'max_ms', 'mean_ms', 'mode', 'observe_commands_mean_ms', 'observe_in_process_max_ms', 'observe_in_process_mean_ms', 'observe_mean_ms', 'output_tokens', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at'])
+    expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'cache_creation_tokens', 'cache_read_tokens', 'errors', 'from_at', 'idle_mean_ms', 'input_tokens', 'max_ms', 'mean_ms', 'mode', 'observe_commands_mean_ms', 'observe_in_process_max_ms', 'observe_in_process_mean_ms', 'observe_mean_ms', 'output_tokens', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at', 'usage_tier', 'usage_tier_overridden'])
+    expect([data.usage_tier, data.usage_tier_overridden]).toEqual([null, null])
     expect([data.input_tokens, data.output_tokens, data.cache_read_tokens, data.cache_creation_tokens]).toEqual([null, null, null, null])
     const withTokens = JSON.parse(passesEventArgv({ ...summary, inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheCreationTokens: 4 })[4] as string)
     expect([withTokens.input_tokens, withTokens.output_tokens, withTokens.cache_read_tokens, withTokens.cache_creation_tokens]).toEqual([1, 2, 3, 4])
     expect(data).toMatchObject({ from_at: new Date(summary.from).toISOString(), planner: 'v2', mode: SET.mode, pass_every_ms: SET.passEveryMs })
     // the note stays what the old-source reader parses, and gives no entry
     expect(entryFromLoop({ state: 'loop', note: passesNote(summary) } as never)).toBeNull()
+  })
+
+  describe('the usage tier', () => {
+    const tierOf = (book: PassBook) => {
+      const summary = closeMinute(book, M, SET)
+      const data = JSON.parse(passesEventArgv(summary)[4] as string)
+      return { summary, data }
+    }
+
+    test('the last pass with a plan gives the minute its tier', () => {
+      const book: PassBook = new Map()
+      notePass(book, M + 1_000, 10, false, false, null, 'slow', false)
+      notePass(book, M + 2_000, 10, false, false, null, 'stop-new', false)
+      const { summary, data } = tierOf(book)
+      expect([summary.usageTier, summary.usageTierOverridden]).toEqual(['stop-new', false])
+      expect([data.usage_tier, data.usage_tier_overridden]).toEqual(['stop-new', false])
+    })
+
+    test('a trailing error pass with no tier does not hide the earlier tiered pass', () => {
+      const book: PassBook = new Map()
+      notePass(book, M + 1_000, 10, false, false, null, 'slow', false)
+      notePass(book, M + 2_000, 10, false, true)
+      expect(tierOf(book).data).toMatchObject({ usage_tier: 'slow', usage_tier_overridden: false })
+    })
+
+    test('no passes, or only passes without a plan, give null', () => {
+      expect(tierOf(new Map()).data).toMatchObject({ usage_tier: null, usage_tier_overridden: null })
+      const book: PassBook = new Map()
+      notePass(book, M + 1_000, 10, false, true)
+      notePass(book, M + 2_000, 10, false, false)
+      expect(tierOf(book).data).toMatchObject({ usage_tier: null, usage_tier_overridden: null })
+    })
+
+    test('an overridden pass gives normal and overridden true', () => {
+      const book: PassBook = new Map()
+      notePass(book, M + 1_000, 10, false, false, null, 'normal', true)
+      expect(tierOf(book).data).toMatchObject({ usage_tier: 'normal', usage_tier_overridden: true })
+    })
+
+    test('the note does not carry the tier', () => {
+      const book: PassBook = new Map()
+      notePass(book, M + 1_000, 10, false, false, null, 'slow', false)
+      expect(passesNote(tierOf(book).summary)).not.toContain('tier')
+    })
   })
 })

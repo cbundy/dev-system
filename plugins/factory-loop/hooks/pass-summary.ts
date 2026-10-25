@@ -8,6 +8,7 @@ import type { PassBook } from './passes'
 
 import { newSessionTokenState, readSessionTokens } from './session-tokens'
 import type { ObserveSplit } from './observe-clock'
+import type { Tier } from './types'
 import type { Runtime } from './observe'
 import type { RunInit, RunResult } from './exec'
 
@@ -27,8 +28,8 @@ let lockHeld = false
 let timer: { cancel: () => void } | null = null
 
 // recordPass: a pass ended now and took ms.
-export function recordPass(at: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null): void {
-  notePass(book, at, ms, acted, error, split)
+export function recordPass(at: number, ms: number, acted: boolean, error: boolean, split: ObserveSplit | null = null, tier: Tier | null = null, overridden: boolean | null = null): void {
+  notePass(book, at, ms, acted, error, split, tier, overridden)
 }
 
 // holdsLock: the last pass this session finished did (or did not) hold the act lock.
