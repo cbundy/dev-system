@@ -378,8 +378,8 @@ export function reconcilable(
 // lost (the session restarted under it), or done before this module loaded. dev-restart-self
 // returns once Coder accepts the build, minutes before the container is replaced, so a restart
 // this module saw end is not done yet: the drain holds until the new session loads (D-15).
-// control.updateDue is then cleared, or the loop would drain forever. A failed restart keeps the
-// drain, and plan tells the owner (agent-failed).
+// control.updateDue is then cleared, or the loop would drain forever. A failed restart ends the
+// update instead (driver-pass-log failUpdate), and the owner's notice lasts (rules-fleet restartTells).
 export function updateDone(ledger: readonly LedgerEntry[], control: Control, loadedAt: Ms): boolean {
   const due = control.updateDue
   if (due === null) return false

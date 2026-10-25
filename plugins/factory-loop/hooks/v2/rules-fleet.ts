@@ -93,8 +93,8 @@ const HOLDS_ALWAYS = (e: LedgerEntry) => e.status === 'running' && e.kind === 'q
 // release task runs, and only on a pass that admitted nothing else (kept), as v1's H4 did: what
 // starts in the pass the restart ends would only be cut, a release task or a queue action among
 // them, and every agent step would spend its attempt's free re-run for nothing. A restart that
-// failed is used up (it runs once): the owner hears once (fleetTells), and it waits until the
-// update is asked for again.
+// failed ends the update (driver-pass-log failUpdate) and restartTells keeps the owner's notice;
+// an exhausted key an older loop left under a due update is only named.
 export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null {
   const due = ctx.state.control.updateDue
   if (due === null) return null
@@ -117,15 +117,15 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
   }
   // an intervention's event is no work a restart would cut: it is written before the restart, in
   // the same pass (rules-interventions.ts)
-  const starting = kept.filter(a => a.kind !== 'title' && !(a.kind === 'event' && a.key.startsWith('iv/'))).map(a => a.key)
-  if (starting.length > 0) {
-    skip(ctx, 'R2', null, `update due: this pass starts ${starting.slice(0, 5).join(', ')}${starting.length > 5 ? ` and ${starting.length - 5} more` : ''} first`)
-    return null
-  }
   const key = `restart:${due.at}`
   const g = gate(ctx, key, 'restart-self')
   if (g === 'exhausted') {
     skip(ctx, 'R2', null, `exhausted: ${key}`)
+    return null
+  }
+  const starting = kept.filter(a => a.kind !== 'title' && !(a.kind === 'event' && a.key.startsWith('iv/'))).map(a => a.key)
+  if (starting.length > 0) {
+    skip(ctx, 'R2', null, `update due: this pass starts ${starting.slice(0, 5).join(', ')}${starting.length > 5 ? ` and ${starting.length - 5} more` : ''} first`)
     return null
   }
   if (g !== 'go') return null
@@ -133,8 +133,11 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
   return { kind: 'restart-self', key, class: 'free', rule: 'R2', reason, issue: null, why: due.reason, at: due.at, windDownAt: windDown ? ctx.state.now : null }
 }
 
-// restartTells: an exhausted restart, told once (rule R2), before the plan's admission.
+// restartTells: a failed update restart, told to the owner (rule R2) every pass until the tell is done,
+// before the plan's admission. It is planned from control.updateFailed, not from the ledger.
 export function restartTells(ctx: PlanCtx): void {
-  const due = ctx.state.control.updateDue
-  if (due !== null && gate(ctx, `restart:${due.at}`, 'restart-self') === 'exhausted') ctx.exhausted.push(`restart:${due.at}`)
+  const failed = ctx.state.control.updateFailed
+  if (failed === null) return
+  const key = `restart:${failed.at}`
+  want(ctx, wake('tell', 'stalled', `tell:stalled:${key}`, 'R2', null, { key, kind: 'restart-self' }, [`error: ${failed.error}`, `retry: /factory update <reason> once the cause is fixed`]))
 }

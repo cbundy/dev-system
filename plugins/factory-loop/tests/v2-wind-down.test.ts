@@ -161,6 +161,39 @@ describe('the guard drops every start before admission', () => {
     expect(later.actions.filter(a => a.kind === 'transition')).toEqual([expect.objectContaining({ row: 'T13' })])
   })
 
+  test('R2: an exhausted restart is named before the this-pass-starts skip, while updateDue still points at it', () => {
+    const at = NOW - 5 * MIN
+    const open = world([], undefined, { queue: [5], issues: [issue(5)], control: control({ updateDue: { at, reason: 'new release' } }) })
+    const used = withLedger(open, [entry(`restart:${at}`, 'restart-self', { rule: 'R2', status: 'failed', attempts: 1, endedAt: NOW - MIN })])
+    const r = plan(used)
+    expect(kindsOf(r)).toContain('claim')
+    expect(r.skipped).toContainEqual({ rule: 'R2', issue: null, why: `exhausted: restart:${at}` })
+    expect(r.skipped.some(k => k.why.startsWith('update due: this pass starts'))).toBe(false)
+  })
+
+  test('a failed update restart is told every pass until the tell is done, and counts as an owner item', () => {
+    const at = NOW - 9 * MIN
+    const failed = { reason: 'new release', at, failedAt: NOW - 8 * MIN, error: 'dev-restart-self: no token' }
+    const tellKey = `tell:stalled:restart:${at}`
+    const s = world([], undefined, { control: control({ updateFailed: failed }) })
+    const tells = (r: PlanResult) => r.actions.filter(a => a.kind === 'tell' && a.key === tellKey)
+    const first = plan(s)
+    expect(tells(first)).toHaveLength(1)
+    expect(first.owner).toBe(1)
+    expect(kindsOf(first)).not.toContain('restart-self')
+    expect(first.skipped.some(k => k.why.includes('update due'))).toBe(false)
+    // a dropped submit is skipped (no attempt counted): planned again, and still counted
+    const dropped = withLedger(s, [entry(tellKey, 'tell', { rule: 'R2', status: 'lost', attempts: 0, endedAt: NOW - MIN })])
+    expect(tells(plan(dropped))).toHaveLength(1)
+    expect(plan(dropped).owner).toBe(1)
+    // delivered: not planned again, still counted while the notice stays
+    const sent = withLedger(s, [entry(tellKey, 'tell', { rule: 'R2', status: 'done', endedAt: NOW - MIN })])
+    expect(tells(plan(sent))).toHaveLength(0)
+    expect(plan(sent).owner).toBe(1)
+    // the owner cleared it: nothing
+    expect(tells(plan({ ...s, control: control({}) }))).toHaveLength(0)
+  })
+
   test('R2: an update that is due gives no restart-self, with a skip line', () => {
     const s = world([], undefined, { control: control({ updateDue: { at: NOW - 5 * MIN, reason: 'new release' } }) })
     expect(kindsOf(plan(s))).toContain('restart-self')

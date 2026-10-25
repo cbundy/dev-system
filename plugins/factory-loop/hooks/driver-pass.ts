@@ -31,7 +31,7 @@ import { actIo, acting, append, appendLine, fileIo, githubHealth, io, killed, lo
 import { offPassDone } from './driver-between'
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
-import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
+import { clearUpdate, failUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
 
@@ -312,6 +312,10 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       S.lastState = state
       // a request that went stale was told by the plan above: the restart never came, so the loop plans normally
       if (winding.mode === 'stale' && S.restartRequestAt !== null) [S.restartAsked, S.restartRequestAt] = [null, null]
+      // the restart for the update failed: the update ends and the owner's notice lasts (failUpdate)
+      const failedRestart = report.outcomes.find(o => o.kind === 'restart-self' && o.status === 'failed' && o.key === `restart:${state.control.updateDue?.at}`)
+      const failed = failedRestart === undefined ? null : await failUpdate($, rt, state.control.updateDue?.at ?? null, state.now, failedRestart.summary)
+      if (failed !== null) state = { ...state, control: { ...state.control, updateDue: null, updateFailed: failed } }
       const restarted = report.outcomes.find(o => o.kind === 'restart-self' && o.status === 'done')
       if (restarted !== undefined) {
         S.restartAsked = state.now

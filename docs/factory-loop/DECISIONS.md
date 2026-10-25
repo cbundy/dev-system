@@ -135,7 +135,9 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
   uncapped drain. The reconciler says an update is due through
   control state (`updateDue`): it owns which versions are wanted, and the loop owns when it is
   safe to switch. Whenever the owner wants one, `/factory update` sets it by hand
-  (owner, 2026-10-13).
+  (owner, 2026-10-13). A failed restart is not retried, since a retry cannot fix a missing token: it ends
+  the update (`updateDue` cleared, `updateFailed` set) and the owner is told until `/factory update <reason>`
+  or `/factory update off` clears the notice (#1346).
 - **Alternatives**: restarting stays a model or owner action; the reconciler filing an issue for
   the orchestrator to update itself.
 - **Why**: owner, 2026-10-13: the safe moment can be computed, so waiting for a person is

@@ -200,6 +200,8 @@ function fromLedger(ctx: V2Ctx): Planned[] {
       const refused = refusedKeyOf(p.rest)
       if (refused !== null) add(entry, 'loop', REFUSED_CAUSE[refused], refused === 'probe' ? `a run GitHub refused to start was re-run to probe whether Actions runs again (${p.rest})` : `a run GitHub refused to start was re-run once Actions ran again (${p.rest})`, p.life)
       else add(entry, 'loop', 'ci-rerun', `a failed check re-run (${p.rest.replace(/^rerun\//, '')})`, p.life)
+    } else if (entry.kind === 'restart-self' && entry.status === 'failed') {
+      add(entry, 'loop', 'update-failed', (entry.summary ?? 'the restart failed').slice(0, 300), null)
     } else if (entry.kind === 'pr' && done && p !== null && /^pr\/body\/a\d+$/.test(p.rest)) {
       add(entry, 'loop', 'queue:linkage', 'the PR body was written again after a linkage FAIL', p.life)
     } else if (entry.kind === 'claim' && done && p !== null && p.rest.startsWith('claim/')) {
@@ -419,6 +421,8 @@ export function controlDiff(before: string, after: string): { fields: string[]; 
   const issues = new Set<number>()
   for (const k of keysDiff(before, after)) {
     if (k === 'updateDue' && (a[k] === null || a[k] === undefined)) continue
+    // the loop's failure write sets updateFailed as it clears updateDue
+    if (k === 'updateFailed' && typeof a[k] === 'object' && a[k] !== null && b.updateDue !== null && b.updateDue !== undefined && (a.updateDue === null || a.updateDue === undefined)) continue
     fields.push(k)
     const [bx, ay] = [issuesIn(b[k]), issuesIn(a[k])]
     for (const [item, n] of [...bx, ...ay]) if (n !== null && bx.has(item) !== ay.has(item)) issues.add(n)

@@ -325,10 +325,11 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       return keep(`Retry #${op.issue}: its exhausted actions are cleared.`, { retryIssue: op.issue })
     case 'update':
       if (op.reason === null) {
-        return control.updateDue === null ? keep('No update is due.') : set({ updateDue: null }, 'Update cancelled: the loop stops draining.')
+        if (control.updateDue === null) return control.updateFailed === null ? keep('No update is due.') : set({ updateFailed: null }, 'Update failure notice cleared.')
+        return set({ updateDue: null, updateFailed: null }, 'Update cancelled: the loop stops draining.')
       }
       return set(
-        { updateDue: { reason: op.reason, at: now } },
+        { updateDue: { reason: op.reason, at: now }, updateFailed: null },
         `Update due (${op.reason}): the loop winds down (up to windDownMinutes), then restarts this workspace.`,
       )
     case 'drop': {
@@ -387,6 +388,7 @@ function ago(ms: Ms): string {
 export function directives(control: Control, now: Ms): string[] {
   const out: string[] = []
   if (control.noNewWork) out.push('no new work')
+  if (control.updateFailed !== null) out.push(`update failed at ${clock(control.updateFailed.failedAt, now)} (${control.updateFailed.reason || 'no reason'}): ${control.updateFailed.error} - fix it, then /factory update again`)
   if (control.updateDue !== null) out.push(`update due since ${clock(control.updateDue.at, now)} (${control.updateDue.reason || 'no reason'})`)
   if (control.only.length > 0) out.push(`only ${tags(control.only)}`)
   if (control.priority.length > 0) out.push(`priority ${tags(control.priority)}`)

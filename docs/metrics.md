@@ -1124,6 +1124,20 @@ GROUP BY repo, device, day
 ORDER BY repo, device, day;
 ```
 
+### Update restarts that failed
+
+A failed update restart ends the update and is one `intervention` with who `loop`, cause `update-failed` and fact
+`restart:<at>`; the restart's error is the event's `detail` (v2 SPEC 13.4.3).
+
+```sql
+-- failed update restarts per repo, device and error
+SELECT repo, device, detail, count(*) AS failed
+FROM factory.event_log
+WHERE type = 'intervention' AND cause = 'update-failed'
+GROUP BY repo, device, detail
+ORDER BY failed DESC;
+```
+
 ### Split trackers closed by the loop
 
 When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and
