@@ -69,13 +69,13 @@ cat > tests/evaluate.test.js <<'JS'
   check(mod.NM_EXPORT_SCHEMA);
 });
 JS
-commit "no-mistakes(ci): Removed the obsolete test requiring duplicated export SQL after the skill switched to linking the canonical query. Reproduced the CI failure first. Verification passed: 220 node tests, 18 shell suites, lint, and whitespace checks. Terraform lint checks were skipped because terraform is not on PATH"
-expect 8bc09bf "WEAKENED commit=SHA step=ci restored=no files=tests/evaluate.test.js kinds=removed-assertion"
+commit "Removed the obsolete test requiring duplicated export SQL after the skill switched to linking the canonical query. Reproduced the CI failure first. Verification passed: 220 node tests, 18 shell suites, lint, and whitespace checks. Terraform lint checks were skipped because terraform is not on PATH"
+expect 8bc09bf "WEAKENED commit=SHA restored=no files=tests/evaluate.test.js kinds=removed-assertion"
 # a later commit that puts the test back turns restored=no into restored=yes
 git checkout -q base -- tests/evaluate.test.js
 commit "restore the export query test"
 got=$(sh "$DET" --base base --head HEAD)
-printf '%s\n' "$got" | sed -n 1p | grep -q ' step=ci restored=yes files=tests/evaluate.test.js kinds=removed-assertion$' || fail "restore: expected restored=yes, got [$got]"
+printf '%s\n' "$got" | sed -n 1p | grep -q ' restored=yes files=tests/evaluate.test.js kinds=removed-assertion$' || fail "restore: expected restored=yes, got [$got]"
 [ "$(printf '%s\n' "$got" | wc -l | tr -d ' ')" = 1 ] || fail "restore: the restoring commit must not be flagged: [$got]"
 
 # --- cb78337: a repair commit with no pipeline subject added --warn-only --------
@@ -95,7 +95,7 @@ git add -A && git commit -q -m "feat: stale image check" && git tag -f base > /d
 sed -i 's|PATH=/tmp/stub:\$PATH dev-doctor 2>&1|PATH=/tmp/stub:$PATH dev-doctor --warn-only 2>\&1|' images/base/test/sections/06-dev-doctor.sh
 grep -q -- '--warn-only' images/base/test/sections/06-dev-doctor.sh || fail "fixture edit did not apply"
 commit "test(base): run the stale-image dev-doctor check with --warn-only"
-expect cb78337 "WEAKENED commit=SHA step=none restored=no files=images/base/test/sections/06-dev-doctor.sh kinds=warn-only"
+expect cb78337 "WEAKENED commit=SHA restored=no files=images/base/test/sections/06-dev-doctor.sh kinds=warn-only"
 
 # --- 7152dff: a review fix removed asserts in one file and strengthened another --
 new_repo r7152
@@ -135,8 +135,8 @@ check "dev-doctor FAILs without CALLUM_FLOW_TRUSTED_AUTHORS with the fix, and re
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067,other:2 dev-doctor 2>&1 | grep -qxF "dev-doctor: OK   CALLUM_FLOW_TRUSTED_AUTHORS is set (2 trusted author(s))"'
 SH
 echo '  ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '"'%s\\n'"' "$CALLUM_FLOW_TRUSTED_AUTHORS" | wc -l))"' > images/base/dev-doctor
-commit "no-mistakes(review): Fix trusted-author counts and remove source-only assertions"
-expect 7152dff "WEAKENED commit=SHA step=review restored=no files=coder/test/push-next.test.sh kinds=removed-assertion"
+commit "Fix trusted-author counts and remove source-only assertions"
+expect 7152dff "WEAKENED commit=SHA restored=no files=coder/test/push-next.test.sh kinds=removed-assertion"
 
 # --- commits that must not be flagged --------------------------------------------
 new_repo clean
@@ -189,16 +189,16 @@ printf 'check "one" run_one\n' > tests/b.test.sh
 git add -A && git commit -q -m "feat: tests" && git tag -f base > /dev/null
 printf 'test.skip("a", () => {\n  assert.ok(x);\n});\n' > tests/a.test.js
 printf 'check "one" run_one || true\n' > tests/b.test.sh
-commit "no-mistakes(test): make it pass"
-expect "skip and or-true" "WEAKENED commit=SHA step=test restored=no files=tests/a.test.js,tests/b.test.sh kinds=or-true,skip"
+commit "make it pass"
+expect "skip and or-true" "WEAKENED commit=SHA restored=no files=tests/a.test.js,tests/b.test.sh kinds=or-true,skip"
 printf 'test("a", () => {\n  assert.ok(x);\n});\n' > tests/a.test.js
 printf 'check "one" run_one\n' > tests/b.test.sh
 commit "undo"
 git tag base2
 printf 'test("a", () => {\n  // assert.ok(x);\n});\n' > tests/a.test.js
-commit "no-mistakes(lint): quiet"
+commit "quiet"
 got=$(sh "$DET" --base base2 --head HEAD)
-printf '%s\n' "$got" | grep -q 'step=lint restored=no files=tests/a.test.js kinds=removed-assertion,commented-assert$' || fail "commented-assert: $got"
+printf '%s\n' "$got" | grep -q 'restored=no files=tests/a.test.js kinds=removed-assertion,commented-assert$' || fail "commented-assert: $got"
 printf 'test("a", () => {\n  assert.ok(x);\n});\n' > tests/a.test.js
 printf 'test.only("b", () => {});\n' >> tests/a.test.js
 commit "add only"

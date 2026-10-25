@@ -23,7 +23,6 @@ them, so those scripts stay maintained.
    | Node LTS + npm | base image (`mcr.microsoft.com/devcontainers/javascript-node:24-trixie`) | image rebuild |
    | Claude Code | Anthropic's native installer, as `node` | **auto-updates in the running container** |
    | codex | `npm i -g @openai/codex`, as `node` (npm prefix is node-owned) | `npm i -g` as `node`, or image rebuild |
-   | no-mistakes | pinned release tarball (**v1.97.0**), checksum-verified, as `node`; the build fails unless `no-mistakes --version` is exactly the pin. Its background update check is off (`NO_MISTAKES_NO_UPDATE_CHECK=1`) | bump `NO_MISTAKES_VERSION` and both `NO_MISTAKES_SHA256_*` in the Dockerfile, after checking the upstream release notes against what the skills and scripts drive |
    | treehouse | shared repo [`install-treehouse.sh`](../../features/src/callum-tools/install-treehouse.sh), as `node`, into `/home/node/.local/bin`; latest tag from GitHub's `releases/latest` redirect, without the REST API | image rebuild |
    | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
@@ -34,7 +33,7 @@ them, so those scripts stay maintained.
    Also `jq`, `ripgrep`, `shellcheck` (shell linting), `tmux` (Claude's Remote Control session runs in it), `tini`
    (PID 1), `less` and `openssh-client`. No systemd runs in the container, and `systemctl`
    says so and fails (the devcontainers base image's own stub reports success, which sent
-   no-mistakes after a service that never starts - cbundy/dev-system#101). Every tool binary lives outside `/persist`, so a new image always
+   tools after a service that never starts - cbundy/dev-system#101). Every tool binary lives outside `/persist`, so a new image always
    brings fresh binaries.
 3. The persistence contract (below).
 4. The `/shared` mount point for NAS file sharing (below). The image defines it but
@@ -90,7 +89,7 @@ These belong to the consumer image or the runtime:
 - The checkout itself. The image carries at most the repo's URL (`DEV_REPO_URL`, set by
   CI in a consumer image) and clones it on first start; the checkout is work in progress
   and lives on the runtime's workspace volume, never in the image.
-- Repo config (`.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md` and so on). It is
+- Repo config (`treehouse.toml`, `CLAUDE.md` and so on). It is
   committed in each repo by `callum-dev`.
 - Docker-in-container, egress firewalling and IDE extensions.
 
@@ -106,18 +105,12 @@ environment variable set in the image.
 | `/persist/claude-auth` | Claude Code | `CLAUDE_SECURESTORAGE_CONFIG_DIR`, set only by a runtime that opts in to a [shared Claude login](#sharing-one-claude-login) | the shared login only (`.credentials.json`, with MCP server logins) and the locks Claude takes around a token refresh; empty and unused otherwise |
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
-| `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
-no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, linked from
-`~/.local/bin`. It is pinned, so do not run `no-mistakes update`: a new version arrives
-with a new image. `~/.no-mistakes/logs` is a link to
-`/persist/no-mistakes/logs`, because the callum-flow skills read run logs at that path.
-
 The same list is published as the image label
-`dev.cbundy.persist=/persist/claude,/persist/claude-auth,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview,/persist/events,/persist/dev-restart-self`, so
+`dev.cbundy.persist=/persist/claude,/persist/claude-auth,/persist/codex,/persist/gh,/persist/agentsview,/persist/events,/persist/dev-restart-self`, so
 runtimes and templates can read it. The list is defined once, as the `PERSIST_DIRS` build argument in
 the `Dockerfile`; the image's build-time `install -d`, the label and `/usr/local/share/dev-system/persist-dirs`
 (read by `dev-init` and `dev-doctor`) all come from it.
@@ -142,7 +135,6 @@ for a repo's containers, never shared with another repo. Sharing those breaks:
 
 | Directory | What breaks when two repos share it |
 |---|---|
-| `/persist/no-mistakes` | It holds the daemon's lock, PID file, socket and SQLite database. One container's daemon would serve every repo, with only its own toolchain and in its own PID namespace, and die when that container stops. `config.yaml` changes would leak between repos. |
 | `/persist/claude` | Session files are named by PID, and every container has its own PID namespace, so two Claudes can collide. Trust, onboarding and all history would be mixed across repos. |
 | `/persist/codex` | Its SQLite state, `sessions/` and `history` would be mixed across repos. |
 | `/persist/agentsview` | Its installation ID is the machine in the viewer, so it must follow the Claude and codex volumes (see [One machine per workspace](#one-machine-per-workspace)). |
@@ -222,7 +214,7 @@ session `claude`. Reach it with `coder ssh <workspace>`, then `tmux attach -t cl
   directory's ownership on first use, which is why the directories exist in the image
   owned by 1000.
 - **Docker (headless: `docker run`, compose)**: the same split by hand - per-project volumes
-  for claude, codex, no-mistakes, agentsview and events, plus the shared `dev-system-gh`. See
+  for claude, codex, agentsview and events, plus the shared `dev-system-gh`. See
   [First start, headless](#first-start-headless).
 - **Kubernetes**: one PVC per workspace mounted at `/persist`, with
   `securityContext.fsGroup: 1000` so `node` can write to it. `dev-init` creates any missing
@@ -232,8 +224,8 @@ session `claude`. Reach it with `coder ssh <workspace>`, then `tmux attach -t cl
   and its [gh](../../coder/dev-system/README.md#sharing-one-gh-login) and
   [Claude](../../coder/dev-system/README.md#sharing-one-claude-login) login sharing options.
 - **Host bind mounts** work if the host directory is writable by UID 1000. Avoid binding a
-  Windows-side directory (`${localEnv:USERPROFILE}`) under WSL: permissions and the
-  no-mistakes daemon socket do not behave there (cbundy/dev-system#19). Use named volumes.
+  Windows-side directory (`${localEnv:USERPROFILE}`) under WSL: permissions and
+  Unix sockets do not behave there (cbundy/dev-system#19). Use named volumes.
 
 If a directory is not writable, `dev-init` prints a warning naming the fix and `dev-doctor`
 fails that check. If it is writable but has no volume behind it (its state is lost with the
@@ -256,8 +248,8 @@ It is **not** for:
 - **Repo checkouts.** git on SMB or NFS is slow, its locking is unreliable, and a repo
   reached over SMB and NFS at once can be corrupted. Keep the checkout on a local disk or
   volume.
-- **Tool state.** That is `/persist`. no-mistakes keeps a SQLite database and a Unix
-  socket there, and neither works reliably over NFS.
+- **Tool state.** That is `/persist`. Tools keep SQLite databases and Unix
+  sockets there, and neither works reliably over NFS.
 
 **Nothing is mounted by default.** The NAS address and export are site-specific, so the
 consumer's config or the runtime supplies the mount. Unmounted, `/shared` is an empty
@@ -393,8 +385,7 @@ pending), and without either variable, it is the start directory, or `$HOME` if 
 `/`. The supervisor works it out again at every Claude start, so a repo cloned after
 Claude started is used from Claude's next restart.
 
-**What `dev-init` does**, on every start, after wiring git to gh's credentials and before
-the no-mistakes recovery:
+**What `dev-init` does**, on every start, after wiring git to gh's credentials:
 
 - **Workspace missing, or an empty directory:**
   `git clone [--branch $DEV_REPO_BRANCH] $DEV_REPO_URL $DEV_WORKSPACE`, limited to 120s.
@@ -427,7 +418,7 @@ is tried anyway.
 | The first container on a new host (no gh login yet) | None yet. The clone is tried anyway, since a public repo needs no credential. A private one fails with `Waiting for a GitHub login` in the log, and once gh's device login completes, `dev-login watch` (which the supervisor runs) runs `dev-init --repo` to clone it. After a login made any other way, run `dev-init --repo` yourself. |
 
 `dev-init --repo` runs only the repo steps: git credentials, the clone or fetch, the Claude
-plugins (below) and the no-mistakes recovery. `dev-init --plugins` runs only the Claude
+plugins (below). `dev-init --plugins` runs only the Claude
 plugins.
 
 **Claude plugins.** `dev-init` installs two sets of Claude Code plugins, at user scope, so
@@ -573,7 +564,7 @@ image metadata runs it as `postStartCommand`; everywhere else the image entrypoi
 (see below). With `DEV_REPO_URL` set it clones the repo itself (see
 [Workspace and repo](#workspace-and-repo)). A checkout made some other way after the
 container started needs `dev-init --repo` once it is there, so the repo's Claude plugins
-are installed and the no-mistakes recovery sees it. It is idempotent and best-effort: it logs problems but always exits 0, so a
+are installed. It is idempotent and best-effort: it logs problems but always exits 0, so a
 container never fails to start because of it.
 
 1. Checks that each `/persist` directory exists and is writable, creating missing ones and
@@ -597,61 +588,14 @@ container never fails to start because of it.
    With `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also writes codex's `[otel]` table there
    (and removes it once the endpoint is unset), unless you have `otel` settings of your
    own (see [Telemetry](#telemetry-opentelemetry-export)).
-4. Writes the no-mistakes pipeline's agent order, model pin and review roles in a managed
-   block of `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
-   `# END dev-system managed`. The block has three independent parts: the ordered agent list
-   (`agent: [codex, claude]`, from `AGENTS`; no-mistakes moves to the next agent when one
-   fails), the model pin (`agent_config`: codex, and claude's model and effort, so the
-   claude fallback runs on `CLAUDE_MODEL` at `CLAUDE_EFFORT`) and the review roles
-   (`review_agents`: the reviewer and the review fixer, both on `REVIEW_AGENT` /
-   `REVIEW_MODEL` at `REVIEW_EFFORT`, with no fallback by design). The models live in
-   `agent_config`, not `agent_args_override`, because native `agent_args_override` flags
-   would beat the `review_agents` values; there is no codex service tier. It is rewritten on
-   every start from [`models.env`](models.env) as it is on this repo's `main` branch,
-   fetched once per start from `DEV_MODELS_URL`, so a change merged to `main` reaches every
-   workspace on its next start, with no release or image rebuild. The fetch is short (3s to
-   connect, 8s in all) and never fails the start: if it fails, or the file sets no valid
-   key, one `WARNING` names the URL and the reason and the copy baked into the image is
-   used. Per key, a valid fetched value beats the baked one. Content outside the markers is
-   never touched. `DEV_NM_AGENTS` / `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` /
-   `DEV_CLAUDE_EFFORT` / `DEV_REVIEW_AGENT` / `DEV_REVIEW_MODEL` / `DEV_REVIEW_EFFORT`
-   override both; an empty value skips that part (`DEV_NM_AGENTS=""` writes no `agent`,
-   `DEV_CODEX_MODEL=""` no pin, `DEV_REVIEW_AGENT=""` no review roles; with all empty the
-   block is removed). To run codex only, with no claude fallback, set
-   `DEV_NM_AGENTS=codex`; this does not affect review. A key in
-   `models.env` that the image does not know yet (such as `CLAUDE_EFFORT` before 2.6.0) is
-   ignored, so a new key needs the image that reads it. A key of your own outside the markers
-   wins over its part only: a top-level `agent` drops the agent order, an
-   `agent_args_override` or `agent_config` drops the model pin, a `review_agents` drops the
-   review roles (delete the block, markers included, before setting them all by hand). A repo whose `.no-mistakes.yaml` sets `agent`
-   replaces the agent order for that repo. The unmarked pin older images wrote, and the
-   earlier `agent_args_override` block, are replaced by the new block.
-
-   Which agent and model runs each step (no-mistakes v1.97.0):
-
-   | Step | Runs on | Fallback |
-   |---|---|---|
-   | review, review fixes | claude `REVIEW_MODEL` (`claude-opus-5-5`), effort `REVIEW_EFFORT` | none: a failing review agent (for example out of usage) fails the review step visibly |
-   | test, lint repair, document, CI repair, PR, rebase conflict repair, intent | codex `CODEX_MODEL` (`gpt-6.1-sol`), effort medium | claude `CLAUDE_MODEL` (`claude-sonnet-5-5`) at `CLAUDE_EFFORT` |
-
-   v1.97.0 has no per-step agent or model key, so only two groups can differ: the review
-   loop (`review_agents`, one agent per role, no fallback list) and everything else, which
-   shares one ordered `agent` chain and one model per harness (`agent_config`). A non-review
-   step such as lint or PR therefore cannot be given its own agent or model.
+4. (Unused. This step used to write the no-mistakes config; no-mistakes was removed from
+   the image, and the other steps kept their numbers.)
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
    empty, or fetches when it is already a repo (see
    [Workspace and repo](#workspace-and-repo)).
-7. If the workspace (`$DEV_WORKSPACE` once it exists, else the current directory) is in a
-   git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
-   after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
-   the repo if needed. A daemon that is already running (a second `dev-init` in the same
-   container) is restarted instead when step 4 changed the managed block, since it reads the
-   config only at start-up. If git refuses the checkout because another user owns it ("dubious
-   ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
-   has its own short time limit (30s), so a daemon that never answers is logged with the
-   fix and never holds up the steps after it.
+7. (Unused. This step used to start the no-mistakes daemon; it was removed with step 4.)
 8. If an agentsview URL is configured (the secret file
    `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
    agentsview session push (see
@@ -672,21 +616,6 @@ container never fails to start because of it.
     source or a failed install is a `WARNING` with the fix. Last, and within `DEV_PLUGIN_INSTALL_TIMEOUT` (120s) in all, so it can
     never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
-
-The managed block in step 4 reads these variables. `dev-doctor` shows the block's agents,
-models and review roles as an info line, and warns when the review agent is not on `PATH`
-(every gate would then fail at review):
-
-| Variable | Default | Effect |
-|---|---|---|
-| `DEV_NM_AGENTS` | unset: the models file (`AGENTS`) | The pipeline's ordered agent list, comma-separated with no spaces (`codex,claude`; names such as `claude`, `codex`, `grok`, `opencode`, `acp:<name>`). Set, it beats the fetched and the baked models file; empty writes no `agent` in the block. An invalid list is skipped with a one-line note. |
-| `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty drops the model pin (and the block, when there is no agent order either). |
-| `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude. Set, it beats both models files; empty leaves claude unpinned. |
-| `DEV_CLAUDE_EFFORT` | unset: the models file (`CLAUDE_EFFORT`) | claude's reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. Set, it beats both models files; empty leaves claude's effort unpinned. Any other value is left out with a one-line note. |
-| `DEV_REVIEW_AGENT` | unset: the models file (`REVIEW_AGENT`) | The single agent both review roles (reviewer and review fixer) run on: one name, no comma, no fallback. Set, it beats both models files; empty writes no `review_agents`. An invalid value is skipped with a one-line note. |
-| `DEV_REVIEW_MODEL` | unset: the models file (`REVIEW_MODEL`) | The review roles' model. Set, it beats both models files; empty leaves the model unpinned. |
-| `DEV_REVIEW_EFFORT` | unset: the models file (`REVIEW_EFFORT`) | The review roles' reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. Set, it beats both models files; empty leaves it unpinned. |
-| `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the agents and models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
 
 ## `dev-doctor`
 
@@ -710,8 +639,6 @@ on every failure:
   a fine-grained one is probed for metadata, contents, issues, pull requests, actions and
   checks on the workspace repo, each missing piece a `FAIL` with the permission to grant
   (write access cannot be probed without writing, so it is an `INFO` line);
-- no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
-  working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
 - the workspace repo, each a `WARN`: with `DEV_REPO_URL` set, that it is cloned and its
   `origin` matches; headless without it, that Claude's workspace is a git repo (see
@@ -769,7 +696,7 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
 
 - the base image: the stamp the build writes to `/usr/local/share/dev-system/image-release`
   (`KEY=VALUE` lines: `IMAGE`, `VERSION`, `REVISION`, `CREATED`, `DEV_PLUGIN_REF`,
-  `AGENTSVIEW_VERSION`, `CODER_VERSION`, `NO_MISTAKES_VERSION`, from the same build args as the OCI labels) is
+  `AGENTSVIEW_VERSION`, `CODER_VERSION`, from the same build args as the OCI labels) is
   compared with the newest image published on GHCR (`base:<major>`, read through an
   anonymous pull token). `STALE` when the published `REVISION` differs: run
   `dev-restart-self` or rebuild the container;
@@ -787,7 +714,7 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
   installed);
 - claude, codex and treehouse (unpinned, refreshed by the weekly rebuild) against their
   latest upstream release (npm for claude and codex, GitHub releases for treehouse):
-  `STALE` when upstream is newer. agentsview, coder and no-mistakes are pinned by the image
+  `STALE` when upstream is newer. agentsview and coder are pinned by the image
   build, so their lines show the pin (`pinned=`) and the latest release but are never
   `STALE`.
 
@@ -1204,7 +1131,7 @@ project called `my-repo`:
 ```bash
 docker run -d --name my-repo \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
-  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
+  -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
   -v dev-system-gh:/persist/gh -v my-repo-workspaces:/workspaces \
   -v dev-system-secrets:/run/secrets/dev-system:ro \
   -e DEV_REPO_URL=https://github.com/me/my-repo.git -e DEV_MACHINE_NAME=docker-my-repo \
@@ -1238,7 +1165,6 @@ services:
     volumes:
       - claude:/persist/claude
       - codex:/persist/codex
-      - no-mistakes:/persist/no-mistakes
       - agentsview:/persist/agentsview
       - events:/persist/events
       - gh:/persist/gh
@@ -1247,7 +1173,6 @@ services:
 volumes:
   claude:
   codex:
-  no-mistakes:
   agentsview:
   events:
   workspaces:
@@ -1452,7 +1377,7 @@ docker run -d --name login-proxy --network dev -p 443:443 \
 docker run -d --name my-repo --network dev \
   -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_URL=https://<host>/login/my-repo/ \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
-  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
+  -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
   -v dev-system-gh:/persist/gh -v dev-system-secrets:/run/secrets/dev-system:ro \
   ghcr.io/cbundy/dev-system/base:2
 ```
@@ -1521,11 +1446,10 @@ it is:
   "build": { "dockerfile": "Dockerfile" },
   // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:2"
   "mounts": [
-    // Per-repo tool state. Keep these five as they are: ${devcontainerId} is
+    // Per-repo tool state. Keep these four as they are: ${devcontainerId} is
     // stable for this workspace folder and config file, and unique to them.
     { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
-    { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-agentsview", "target": "/persist/agentsview" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-events", "target": "/persist/events" }
   ]
@@ -1543,7 +1467,6 @@ secrets volumes, which the devcontainer CLI and VS Code merge into your config:
 | `dev-system-secrets` | `/run/secrets/dev-system`, read-only | every repo on the Docker host (image metadata); per-repo evidence storage lives in its `evidence/<owner>/<repo>/` folder ([setup](../../docs/evidence-storage.md)) |
 | `dev-system-<devcontainerId>-claude` | `/persist/claude` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
-| `dev-system-<devcontainerId>-no-mistakes` | `/persist/no-mistakes` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-agentsview` | `/persist/agentsview` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-events` | `/persist/events` | this repo (your `devcontainer.json`) |
 
@@ -1578,7 +1501,7 @@ entries into it.
 Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mistakes` and
 `-agentsview` volumes into every repo. 2.0 drops them:
 
-1. Add the five per-repo mounts above to each repo's `devcontainer.json` and move it to
+1. Add the four per-repo mounts above to each repo's `devcontainer.json` and move it to
    `base:2`. A repo scaffolded by `callum-dev` gets both from
    `npx callum-dev update --devcontainer base-image`.
 2. Rebuild. The new volumes start empty, so log Claude and codex in once in each repo.
@@ -1643,7 +1566,7 @@ so it is in the synced allow list. Inputs: Claude transcripts under
 `.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
 `${CALLUM_EVENTS_DIR:-/persist/events}/<owner>__<repo>.jsonl` (`--events` takes any
 `factory.events` export as JSON lines); `window.scope` says which scope each source covers.
-It reads no no-mistakes data. A missing source
+A missing source
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 `--source` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store, as in
@@ -1714,7 +1637,7 @@ The guard also runs `callum-flow-test-weakening --base origin/<pr base> --head <
 scans every non-merge commit of the PR for removed assertions, added `--warn-only` / `|| true` /
 skip / `.only` tokens and commented-out assertions in test files (judged per file; moved lines do
 not count). Each commit it cannot see restored prints an advisory `GUARD test-weakening WARN <sha7>
-step=<s> files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
+files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
 orchestrator sends each one to the adjudicator before merging. After a successful merge
 `callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
 (`callum-flow-event --type test_weakened --data`; `docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
@@ -2421,11 +2344,6 @@ With the endpoint set, the image adds what the endpoint alone does not turn on:
   `dev-init` writes nothing, logs that it left them alone, and drops its own table if one
   was there. To customise codex's export (headers, TLS, `environment`), replace the block,
   markers included, with your own `[otel]` table.
-- **no-mistakes** has no OTLP exporter of its own: its run logs are files under
-  `/persist/no-mistakes/logs` (`$NM_HOME/logs`), for a collector or log shipper to tail if
-  you want pipeline logs next to the rest. For the PostgreSQL pipeline mirror, see
-  [Factory event log](#factory-event-log).
-
 Traces are not turned on. `dev-doctor` reports the
 state in an `INFO` line, which never fails: export off, or on with the endpoint, the
 protocol and whether a TCP connection to the endpoint opens within 2s.

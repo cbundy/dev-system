@@ -27,12 +27,12 @@ else
       and \$m.mounts == [{\"type\": \"volume\", \"source\": \"dev-system-gh\", \"target\": \"/persist/gh\"},
         \"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]'"
 
-  # The five per-repo mounts exactly as the synced base-image template ships
+  # The four per-repo mounts exactly as the synced base-image template ships
   # them (#78), with $RUN_ID in place of the dev-system prefix.
   template="$(dirname "$0")/../../../templates/.devcontainer/devcontainer.base-image.json"
   template_mounts=$(grep -F '"target": "/persist/' "$template" | sed "s/\"dev-system-/\"$RUN_ID-/")
-  check "the base-image template's five per-repo mounts are found" \
-    [ "$(printf '%s\n' "$template_mounts" | grep -cF "\"$RUN_ID-\${devcontainerId}-")" = 5 ]
+  check "the base-image template's four per-repo mounts are found" \
+    [ "$(printf '%s\n' "$template_mounts" | grep -cF "\"$RUN_ID-\${devcontainerId}-")" = 4 ]
 
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
@@ -91,7 +91,7 @@ EOF
     pass "devcontainer up succeeds"
     check "volumes are mounted at every /persist dir (consumer overrides win over image defaults)" bash -c "
       mounts=\$(docker inspect -f '{{json .Mounts}}' '$cid')
-      for t in claude codex gh no-mistakes agentsview; do
+      for t in claude codex gh agentsview; do
         echo \"\$mounts\" | jq -e --arg t \"/persist/\$t\" 'map(select(.Destination == \$t and .Type == \"volume\" and (.Name | startswith(\"$RUN_ID-\")))) | length == 1' >/dev/null || { echo \"no volume at /persist/\$t: \$mounts\"; exit 1; }
       done"
     # node must stay UID 1000 even when the host user is not (CI runners are
@@ -158,9 +158,9 @@ EOF
     rc_volumes=$(persist_volumes)
     dc_down
     # Two workspace folders stand for two repos on one Docker host.
-    check "two workspaces get their own claude, codex, no-mistakes and agentsview volumes, and share gh" bash -c '
+    check "two workspaces get their own claude, codex and agentsview volumes, and share gh" bash -c '
       echo "workspace 1:"; echo "$1"; echo "workspace 2:"; echo "$2"
-      for t in claude codex no-mistakes agentsview; do
+      for t in claude codex agentsview; do
         a=$(echo "$1" | sed -n "s|^/persist/$t=||p"); b=$(echo "$2" | sed -n "s|^/persist/$t=||p")
         [[ "$a" =~ ^$3-[a-z0-9]+-$t$ ]] && [[ "$b" =~ ^$3-[a-z0-9]+-$t$ ]] && [ "$a" != "$b" ] ||
           { echo "$t: \"$a\" vs \"$b\""; exit 1; }

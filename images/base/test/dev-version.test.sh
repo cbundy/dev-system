@@ -55,7 +55,6 @@ case $1 in
 esac
 STUB
 printf '#!/bin/sh\necho "codex-cli $(cat "$FIX/codex.run")"\n' > "$bin/codex"
-printf '#!/bin/sh\necho "no-mistakes version v$(cat "$FIX/nm.run") (abc) 2026-01-01"\n' > "$bin/no-mistakes"
 printf '#!/bin/sh\necho "v$(cat "$FIX/treehouse.run")"\n' > "$bin/treehouse"
 printf '#!/bin/sh\necho "agentsview v0.44.0 (commit abc)"\n' > "$bin/agentsview"
 printf '#!/bin/sh\necho "Coder v2.36.6+abc Mon"\n' > "$bin/coder"
@@ -88,7 +87,6 @@ reset() {
   printf '{"config":{"Labels":{"org.opencontainers.image.revision":"aaaaaaa1111"}}}' > "$FIX/config.json"
   echo 1.0.0 > "$FIX/claude.latest"; echo 1.0.0 > "$FIX/claude.run"
   echo 2.0.0 > "$FIX/codex.latest"; echo 2.0.0 > "$FIX/codex.run"
-  echo 3.0.0 > "$FIX/nm.run"; echo v3.0.0 > "$FIX/gh.no-mistakes"
   echo 4.0.0 > "$FIX/treehouse.run"; echo v4.0.0 > "$FIX/gh.treehouse"
   echo v0.44.0 > "$FIX/gh.agentsview"; echo v2.36.6 > "$FIX/gh.coder"
   echo v0.2.0 > "$FIX/gh.dev-system"
@@ -100,7 +98,6 @@ REVISION=aaaaaaa1111
 CREATED=2026-01-01T00:00:00Z
 AGENTSVIEW_VERSION=0.44.0
 CODER_VERSION=2.36.6
-NO_MISTAKES_VERSION=3.0.0
 STAMP
 }
 
@@ -127,7 +124,7 @@ reset; run_cmd
 expect "all current" 0 '^dev-version: OK base-image running=aaaaaaa latest=aaaaaaa' \
   '^dev-version: OK callum-flow@callum\(user\) running=0.2.0 pin=0.2.0' \
   '^dev-version: OK claude running=1.0.0 latest=1.0.0' '^dev-version: OK codex' \
-  '^dev-version: OK no-mistakes' '^dev-version: OK treehouse' \
+  '^dev-version: OK treehouse' \
   '^dev-version: OK agentsview running=0.44.0 latest=0.44.0 pinned=0.44.0' \
   '^dev-version: OK coder' '^dev-version: INFO image-layers none'
 printf '%s\n' "$out" | grep -q 'STALE' && fail "all current: a STALE line"
@@ -176,8 +173,6 @@ reset; echo 9.9.9 > "$FIX/claude.run"; run_cmd
 expect "tool ahead of upstream is current" 0 '^dev-version: OK claude'
 reset; echo v9.9.9 > "$FIX/gh.treehouse"; run_cmd
 expect "treehouse behind upstream" 1 "^dev-version: STALE treehouse running="
-reset; echo v9.9.9 > "$FIX/gh.no-mistakes"; run_cmd
-expect "pinned no-mistakes is never STALE" 0 '^dev-version: OK no-mistakes running=3.0.0 latest=9.9.9 pinned=3.0.0'
 reset; echo v9.9.9 > "$FIX/gh.coder"; run_cmd
 expect "a pinned tool is never STALE" 0 '^dev-version: OK coder running=2.36.6 latest=9.9.9 pinned=2.36.6'
 
@@ -186,7 +181,7 @@ expect "no stamp" 0 '^dev-version: UNKNOWN base-image running=none'
 
 reset; touch "$FIX/offline"; run_cmd
 expect "offline" 0 '^dev-version: UNKNOWN base-image .*registry unreachable' '^dev-version: UNKNOWN claude running=1.0.0 latest=\?' \
-  '^dev-version: UNKNOWN no-mistakes'
+  '^dev-version: UNKNOWN treehouse'
 printf '%s\n' "$out" | grep -q STALE && fail "offline: a STALE line"
 
 reset; touch "$FIX/hang"
@@ -213,7 +208,7 @@ printf '%s\n' "$out" | grep -q 'image-layers none' && fail "layer stamp: still p
 reset; run_cmd --json
 expect "json" 0
 printf '%s\n' "$out" | jq -e '.status == "OK" and .local == false' > /dev/null || fail "json: status/local. Output: $out"
-for c in base-image 'callum-flow@callum(user)' claude codex no-mistakes treehouse agentsview coder gh node psql jq tmux; do
+for c in base-image 'callum-flow@callum(user)' claude codex treehouse agentsview coder gh node psql jq tmux; do
   printf '%s\n' "$out" | jq -e --arg c "$c" 'any(.components[]; .name == $c)' > /dev/null || fail "json: no component $c. Output: $out"
 done
 printf '%s\n' "$out" | jq -e '

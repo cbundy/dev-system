@@ -1,9 +1,9 @@
 {
   "id": "callum-tools",
-  "version": "1.3.3",
-  "name": "Callum's dev tools (no-mistakes, treehouse, Claude Code CLI) - DEPRECATED",
+  "version": "2.0.0",
+  "name": "Callum's dev tools (treehouse, Claude Code CLI) - DEPRECATED",
   "deprecated": true,
-  "description": "DEPRECATED: use the dev-system base image ghcr.io/cbundy/dev-system/base instead (cbundy/dev-system#89). Installs the tooling behind Callum's dev flow: the no-mistakes pipeline, the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
+  "description": "DEPRECATED: use the dev-system base image ghcr.io/cbundy/dev-system/base instead (cbundy/dev-system#89). Installs the tooling behind Callum's dev flow: the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
   "documentationURL": "https://github.com/cbundy/dev-system",
   "options": {
     "installClaudeCode": {
@@ -11,20 +11,10 @@
       "default": true,
       "description": "Install the Claude Code CLI globally via npm (requires a Node-capable base image)."
     },
-    "installNoMistakes": {
-      "type": "boolean",
-      "default": true,
-      "description": "Install the no-mistakes pipeline CLI (binary release from kunchenguid/no-mistakes)."
-    },
     "installTreehouse": {
       "type": "boolean",
       "default": true,
       "description": "Install treehouse, the reusable worktree pool for parallel agents (binary release from kunchenguid/treehouse)."
-    },
-    "codexModel": {
-      "type": "string",
-      "default": "gpt-6.1-sol",
-      "description": "Codex model the no-mistakes pipeline runs on. Kept in ~/.no-mistakes/config.yaml as agent_config (a global-only key) in a dev-system managed block, rewritten on every setup; a pin set by hand outside the block wins. Empty string removes the pin. Must match CODEX_MODEL in images/base/models.env."
     }
   },
   "postCreateCommand": "/usr/local/share/callum-tools/setup.sh",

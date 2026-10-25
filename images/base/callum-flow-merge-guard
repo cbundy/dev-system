@@ -47,7 +47,7 @@
 # Checking output: one line per failed guard,
 #   GUARD <name> FAIL <reason> class=<class>
 # Advisory lines can appear with exit 0 and never change the exit code:
-#   GUARD test-weakening WARN <sha7> step=<s> files=<f> kinds=<k> - <what to do>
+#   GUARD test-weakening WARN <sha7> files=<f> kinds=<k> - <what to do>
 #   GUARD test-weakening WARN detector error: <reason>
 # --emit-verified adds, on success only, the detector's WEAKENED lines verbatim
 # (restored ones included, for the test_weakened event) and then one line for
@@ -293,10 +293,9 @@ if [ "$author_ok" -eq 1 ] && [ -n "$pr_base" ] && [ -n "$pr_head" ] &&
     weakened=$(printf '%s\n' "$w_out" | grep '^WEAKENED ')
     printf '%s\n' "$weakened" | grep '^WEAKENED commit=.* restored=no ' | while IFS= read -r w_line; do
       w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')
-      w_step=$(printf '%s' "$w_line" | sed 's/.* step=\([^ ]*\) .*/\1/')
       w_files=$(printf '%s' "$w_line" | sed 's/.* files=\(.*\) kinds=.*/\1/')
       w_kinds=$(printf '%s' "$w_line" | sed 's/.* kinds=//')
-      printf 'GUARD test-weakening WARN %.7s step=%s files=%s kinds=%s - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified\n' "$w_commit" "$w_step" "$w_files" "$w_kinds"
+      printf 'GUARD test-weakening WARN %.7s files=%s kinds=%s - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified\n' "$w_commit" "$w_files" "$w_kinds"
     done
   fi
 fi

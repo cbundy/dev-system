@@ -131,7 +131,7 @@ for repo plugins, opt-outs and recovery when an install fails.
 | `extra_trusted_authors` | empty | yes | Only with `workspace_secrets_dir` set. Comma-separated `login:id` entries appended to the template's `trusted_authors` in `CALLUM_FLOW_TRUSTED_AUTHORS`. Takes effect on the next start. |
 | `git_email` | empty | yes | Only with `workspace_secrets_dir` set. Passed as `DEV_GIT_EMAIL` when non-empty. Takes effect on the next start. |
 | `cpus` | 2 | yes | CPU limit (1-16). |
-| `memory_gb` | 8 | yes | Memory limit in GB (1-16). 8 leaves room for an agent, a no-mistakes pipeline and a Playwright e2e run at once; 4 got the browser and test runners OOM-killed (cbundy/job-search#222). |
+| `memory_gb` | 8 | yes | Memory limit in GB (1-16). 8 leaves room for an agent, a review run and a Playwright e2e run at once; 4 got the browser and test runners OOM-killed (cbundy/job-search#222). |
 | `template_testing` | `false` | yes | Mounts the Template Admin token from `template_tester_secrets_dir`, so agents here can push `dev-system-next`. That token can change any template: only for a workspace developing dev-system. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `coder_login` | `false` | yes | Logs the `coder` CLI in inside this workspace from the token in `coder_login_secrets_dir`, so agents here can drive other workspaces (e.g. the factory loop's shadow and testbed runs). That token can reach every workspace its user can reach: only for a workspace that drives others. Takes effect on the next start. See [Coder CLI login (opt-in)](#coder-cli-login-opt-in). |
 
@@ -303,7 +303,7 @@ workspace ([First-run logins](#first-run-logins)).
   [Sharing one Claude login](#sharing-one-claude-login).
 
   There is deliberately **no home volume**. The image's tools (Claude Code, codex,
-  no-mistakes, treehouse) live under `/home/node`, and a volume there would keep the
+  treehouse) live under `/home/node`, and a volume there would keep the
   first start's copies forever, hiding every newer image. Anything else in the home
   directory is reset on each start, like any other container layer.
 - **Start-up.** The Coder agent replaces the image's entrypoint, so the agent's

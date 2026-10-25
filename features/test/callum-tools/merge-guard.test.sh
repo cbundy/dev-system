@@ -120,7 +120,7 @@ reset; g 7; expect_pass "no weakening"
 [ "$(cat "$st/weakening-args")" = "--base origin/main --head $SHA" ] || fail "detector arguments: $(cat "$st/weakening-args")"
 reset; printf '%s\n' "$W1" > "$st/weakening"; g 7
 [ "$rc" = 0 ] || fail "WARN must not fail the guard: $rc $out"
-want="GUARD test-weakening WARN $(printf %.7s "$SHA") step=ci files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified"
+want="GUARD test-weakening WARN $(printf %.7s "$SHA") files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified"
 [ "$out" = "$want" ] || fail "WARN line: [$out]"
 passed=$((passed + 1))
 reset; printf '%s\n' "$W2" > "$st/weakening"; g 7; expect_pass "restored weakening prints nothing"

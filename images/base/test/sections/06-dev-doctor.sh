@@ -52,7 +52,7 @@ check "dev-doctor warns, without failing, for each /persist dir with no volume b
   vol=\$(docker volume create --label '$RUN_ID')
   out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"
-  for t in codex gh no-mistakes agentsview events; do
+  for t in codex gh agentsview events; do
     echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
   done
   for t in dev-restart-self; do
@@ -104,21 +104,12 @@ check "dev-doctor --warn-only exits 0 with the same failures" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "FAIL "'
 
-check "dev-doctor fails (not 'registered') when no-mistakes is broken in a gated repo" bash -c "
-  vol=\$(docker volume create --label '$RUN_ID')
-  docker run --rm --user root -v \"\$vol:/persist/no-mistakes\" '$IMAGE' \
-    bash -c 'touch /persist/no-mistakes/.root-owned && chown -R root:root /persist/no-mistakes'
-  out=\$(docker run --rm -v \"\$vol:/persist/no-mistakes\" '$IMAGE' bash -c '
-    git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r && dev-doctor' 2>&1); rc=\$?
-  echo \"\$out\"
-  [ \$rc -ne 0 ] && echo \"\$out\" | grep -q 'FAIL no-mistakes: /tmp/r is not registered or no-mistakes is broken' &&
-  ! echo \"\$out\" | grep -q 'is registered'"
-check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash -c "
+check "dev-init exits 0 on a repo git refuses (dubious ownership) and dev-doctor fails it with the fix" bash -c "
   out=\$(docker run --rm --user root '$IMAGE' bash -c '
-    git init -q /ws && touch /ws/.no-mistakes.yaml
-    su node -c \"cd /ws && dev-init; dev-doctor\"' 2>&1)
+    git init -q /ws
+    su node -c \"cd /ws && dev-init; echo dev-init-rc=\\\$?; dev-doctor\"' 2>&1)
   echo \"\$out\"
-  echo \"\$out\" | grep -q 'dev-init: WARNING: git cannot read the repo at /ws' &&
+  echo \"\$out\" | grep -qx 'dev-init-rc=0' &&
   echo \"\$out\" | grep -q 'FAIL git cannot read the repo at /ws' &&
   echo \"\$out\" | grep -q 'safe.directory /ws'"
 
@@ -126,7 +117,7 @@ check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash
 # args, and the command and its dev-doctor summary degrade to UNKNOWN offline.
 check "the image carries a release stamp with non-empty keys" in_image '
   f=/usr/local/share/dev-system/image-release; cat "$f"
-  for k in IMAGE VERSION REVISION CREATED AGENTSVIEW_VERSION CODER_VERSION NO_MISTAKES_VERSION; do
+  for k in IMAGE VERSION REVISION CREATED AGENTSVIEW_VERSION CODER_VERSION; do
     [ -n "$(sed -n "s/^$k=//p" "$f")" ] || { echo "empty $k"; exit 1; }
   done
   [ "$(sed -n "s/^IMAGE=//p" "$f")" = ghcr.io/cbundy/dev-system/base ]' --entrypoint ""
@@ -159,16 +150,6 @@ check "dev-doctor reports a STALE base image as WARN with the rebuild fix, witho
 check "dev-doctor prints the versions INFO line and still exits 0 offline" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "dev-doctor: INFO versions: "' --network none
-check "dev-doctor shows the no-mistakes agents, models and review roles, and warns when the review agent is not on PATH" in_image '
-  dev-init >/dev/null 2>&1
-  out=$(dev-doctor --warn-only); echo "$out"
-  echo "$out" | grep -qE "INFO no-mistakes managed block: agents codex,claude; codex .*, claude .* \(.*\); review claude .* \(.*\), no fallback"
-  ! echo "$out" | grep -q "WARN the review agent"
-  sed -i "s/^    agent: claude\$/    agent: no-such-agent/" /persist/no-mistakes/config.yaml
-  out=$(dev-doctor --warn-only); echo "$out"
-  echo "$out" | grep -q "WARN the review agent .no-such-agent. is not on PATH"' \
-  -v "$vol:/persist" --entrypoint ""
-
 # The worker heartbeat (#466): dev-doctor reports the last beat, and fails when a URL is configured and the loop is not running.
 check "dev-doctor prints the heartbeat line, and fails when a configured URL has no running heartbeat loop" in_image '
   printf "last_beat=%s\nstate=busy\n" "$(date +%s)" > /tmp/dev-heartbeat.state

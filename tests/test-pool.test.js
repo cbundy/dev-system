@@ -403,7 +403,7 @@ test("invalid TEST_JOBS emits one error before missing required mod tooling", ()
 });
 
 test("test.sh fails, naming each file, when a suite writes into the sandboxed state dirs", () => {
-  const dirs = ["CALLUM_EVENTS_DIR", "NO_MISTAKES_HOME", "NM_PUSH_STATE_DIR", "AGENTSVIEW_DATA_DIR"];
+  const dirs = ["CALLUM_EVENTS_DIR", "AGENTSVIEW_DATA_DIR"];
   const repo = fakeRepo({
     nodeTests: { "ok.test.js": 'require("node:test")("ok", () => {});\n' },
     suites: {
@@ -419,7 +419,7 @@ test("test.sh fails, naming each file, when a suite writes into the sandboxed st
     });
     assert.strictEqual(r.status, 1, r.stderr);
     const leaked = fs.readFileSync(log, "utf8").trim().split("\n");
-    assert.strictEqual(leaked.length, 4);
+    assert.strictEqual(leaked.length, 2);
     const lines = r.stderr.trim().split("\n");
     for (const dir of leaked) assert.ok(lines.includes(`FAIL test isolation: ${dir}/leak`), r.stderr);
     assert.strictEqual(lines.pop(), "test: 1 failed");

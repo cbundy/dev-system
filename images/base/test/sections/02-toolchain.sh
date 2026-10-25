@@ -5,16 +5,9 @@
 # provides IMAGE, RUN_ID, SECRET, check, in_image and the rest; never run directly.
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck psql; do
+for tool in node npm claude codex gh git treehouse uv uvx agentsview shellcheck psql; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
-# no-mistakes is pinned (cbundy/dev-system#572): the binary is exactly the version the
-# image stamp records, and its background update check is off.
-check "no-mistakes is the pinned version from the image stamp, with update checks off" in_image '
-  pin=$(sed -n "s/^NO_MISTAKES_VERSION=//p" /usr/local/share/dev-system/image-release)
-  [ -n "$pin" ] && no-mistakes --version | grep -q "^no-mistakes version v$pin " &&
-  [ "$NO_MISTAKES_NO_UPDATE_CHECK" = 1 ] &&
-  [ "$(readlink /home/node/.local/bin/no-mistakes)" = /home/node/.no-mistakes/bin/no-mistakes ]'
 check "callum-flow-event writes one new event and no old line, rejects an unknown state, and event-push-loop is installed" in_image '
   d=$(mktemp -d) && CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ -z "$(find "$d" -maxdepth 1 -name "*.jsonl")" ] &&
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && [ -r /usr/local/share/dev-system/factory-event-translate.js ] &&
@@ -29,7 +22,7 @@ check "callum-flow-event --type writes a checked new-format event only to the ne
 check "factory-source.js loads and exports resolveSource, runShadow and diff" in_image '
   node -e "const m=require(\"/usr/local/share/dev-system/factory-source.js\");for(const k of [\"resolveSource\",\"runShadow\",\"diff\"])if(typeof m[k]!==\"function\")process.exit(1)"'
 check "heartbeat-state finds factory-source.js beside itself and prints a state under --source new" in_image '
-  d=$(mktemp -d) && CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=new CALLUM_EVENTS_DIR=$d NO_MISTAKES_HOME=$d CLAUDE_CONFIG_DIR=$d \
+  d=$(mktemp -d) && CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=new CALLUM_EVENTS_DIR=$d CLAUDE_CONFIG_DIR=$d \
     /usr/local/share/dev-system/heartbeat-state | node -e "const o=JSON.parse(require(\"fs\").readFileSync(0,\"utf8\"));if(!o||typeof o!==\"object\"||!o.state)process.exit(1)"'
 check "evaluate-new-events.js loads, and callum-flow-evaluate finds the shared helpers and rejects a bad --source" in_image '
   node -e "const m=require(\"/usr/local/share/dev-system/evaluate-new-events.js\");for(const k of [\"mapEvent\",\"loadNewEvents\",\"normalize\"])if(typeof m[k]!==\"function\")process.exit(1)" &&
@@ -106,7 +99,7 @@ check "uv installs a package and runs it with the image's python3, as node" in_i
   UV_PYTHON_DOWNLOADS=never uv run --no-project --with pytest python -c "import pytest"' \
   --entrypoint ""
 check "callum-tools scripts staged where the callum-flow skills call them" in_image '
-  for s in check-pr-linkage.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
+  for s in check-pr-linkage.sh queue-watch.sh usage-check.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
   done'
 check "the retired watchers and helper tools are neither on PATH nor in /usr/local/share/callum-tools" in_image '
@@ -114,11 +107,13 @@ check "the retired watchers and helper tools are neither on PATH nor in /usr/loc
     ! command -v "$t" >/dev/null 2>&1 || { echo "$t is on PATH"; exit 1; }
     [ ! -e "/usr/local/share/callum-tools/$t" ] || { echo "$t is in callum-tools"; exit 1; }
   done'
-check "models.env and models.sh are baked in, and the old codex-model.default is gone" in_image '
-  . /usr/local/share/dev-system/models.sh &&
-  models_value /usr/local/share/dev-system/models.env CODEX_MODEL &&
-  models_value /usr/local/share/dev-system/models.env CLAUDE_MODEL &&
-  [ ! -e /usr/local/share/dev-system/codex-model.default ]'
+check "no-mistakes, models.env and the retired model pin tooling are gone" in_image '
+  ! command -v no-mistakes >/dev/null 2>&1 && [ -z "${NO_MISTAKES_HOME+set}${NM_HOME+set}${NO_MISTAKES_NO_UPDATE_CHECK+set}" ] &&
+  [ ! -e /home/node/.no-mistakes ] && [ ! -e /persist/no-mistakes ] &&
+  ! grep -q NO_MISTAKES /usr/local/share/dev-system/image-release &&
+  for f in /usr/local/share/dev-system/models.sh /usr/local/share/dev-system/models.env /usr/local/share/callum-tools/recover-no-mistakes.sh /usr/local/share/callum-tools/pin-codex-model.sh; do
+    [ ! -e "$f" ] || { echo "$f is still there"; exit 1; }
+  done'
 # The Coder CLI is pinned to the deployment's server version by the Dockerfile's
 # CODER_VERSION: a mismatched CLI silently ignores flags (cbundy/dev-system#108).
 coder_pin=$(sed -n 's/^ARG CODER_VERSION=//p' "$(dirname "${BASH_SOURCE[0]}")/../../Dockerfile")

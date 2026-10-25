@@ -25,7 +25,6 @@ persist_dirs() {
       /persist/claude-auth) d=${CLAUDE_SECURESTORAGE_CONFIG_DIR-} ;;
       /persist/codex) d=${CODEX_HOME:-$d} ;;
       /persist/gh) d=${GH_CONFIG_DIR:-$d} ;;
-      /persist/no-mistakes) d=${NM_HOME:-$d} ;;
       /persist/agentsview) d=${AGENTSVIEW_DATA_DIR:-$d} ;;
       /persist/events) d=${CALLUM_EVENTS_DIR:-$d} ;;
       /persist/dev-restart-self) d=${DEV_RESTART_SELF_DIR:-$d} ;;

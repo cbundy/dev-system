@@ -1,13 +1,13 @@
 #!/bin/sh
 #
 # callum-flow-test-weakening: find commits in a branch that delete or weaken
-# tests (cbundy/dev-system#314). The /no-mistakes pipeline's auto-fix steps have
+# tests (cbundy/dev-system#314). Automated fix steps have
 # been seen to make a gate pass by removing an assertion, adding --warn-only or
 # commenting a check out. This only reads: it never changes the repo.
 #
 # Usage: callum-flow-test-weakening --base <ref> --head <sha>
-#   Looks at every non-merge commit in <base>..<head> (the pipeline's repair
-#   commits cannot be told apart by subject alone, so none is skipped) and only
+#   Looks at every non-merge commit in <base>..<head> (none is skipped by its
+#   subject) and only
 #   at its changes to test files. A path is a test file when it matches
 #   (^|/)tests?/, \.test\., _test\., \.spec\. or (^|/)test_[^/]*$, or the ERE in
 #   CALLUM_FLOW_TEST_PATHS when that is set (it widens the match).
@@ -27,9 +27,8 @@
 #   commented-assert   an added "#" or "//" copy of a removed assertion line
 #
 # Output: nothing when no commit is flagged; otherwise one line per commit,
-#   WEAKENED commit=<sha> step=<step> restored=<yes|no> files=<a,b> kinds=<k1,k2>
-# step is taken from a "no-mistakes(<step>): " subject (review, document, ci,
-# test, lint, rebase), otherwise none. restored=yes when every flagged removed
+#   WEAKENED commit=<sha> restored=<yes|no> files=<a,b> kinds=<k1,k2>
+# restored=yes when every flagged removed
 # line is present again in a test file at <head> and every flagged added line is
 # gone from its file at <head>.
 #
@@ -190,9 +189,6 @@ for c in $commits; do
   for k in removed-assertion warn-only or-true skip only commented-assert; do
     if printf '%s\n' "$all_kinds" | grep -qx "$k"; then kinds="${kinds:+$kinds,}$k"; fi
   done
-  subject=$(git log -1 --format=%s "$c" 2> /dev/null)
-  step=$(printf '%s\n' "$subject" | sed -n 's/^no-mistakes(\([a-z][a-z-]*\)).*/\1/p')
-  case "$step" in review | document | ci | test | lint | rebase) ;; *) step=none ;; esac
-  printf 'WEAKENED commit=%s step=%s restored=%s files=%s kinds=%s\n' "$c" "$step" "$restored" "$files" "$kinds"
+  printf 'WEAKENED commit=%s restored=%s files=%s kinds=%s\n' "$c" "$restored" "$files" "$kinds"
 done
 exit 0

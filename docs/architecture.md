@@ -93,8 +93,8 @@ job's output as a contiguous block in scheduled order, then a `FAIL test isolati
 line for each entry left in the sandboxed shared-state directories (counted as one
 failure), then `test: N failed` and exit non-zero. `scripts/test.sh` owns the slow-first
 order, the currently empty serial list, and the shared per-run environment block. That
-block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`,
-`NO_MISTAKES_HOME`, `NM_PUSH_STATE_DIR` and `AGENTSVIEW_DATA_DIR` each point to an empty
+block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`
+and `AGENTSVIEW_DATA_DIR` each point to an empty
 temporary directory, which is checked after the suites and removed on exit. The sandbox also keeps tests
 off the workspace's real databases: `DEV_SECRETS_DIR`, `DEV_WORKSPACE_SECRETS_DIR` and
 `DEV_MIGRATOR_SECRETS_DIR` point at missing folders inside it, the database URL variables are unset, and

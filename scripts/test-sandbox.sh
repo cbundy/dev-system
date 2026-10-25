@@ -1,9 +1,9 @@
 #!/bin/sh
 # Sourced by scripts/test.sh (cbundy/dev-system#336): keeps `npm test` away from the shared,
-# persistent state directories (the factory event log, the no-mistakes mirror, agentsview).
+# persistent state directories (the factory event log, agentsview).
 #
-#   test_sandbox_setup   one temp sandbox; exports CALLUM_EVENTS_DIR, NO_MISTAKES_HOME,
-#                        NM_PUSH_STATE_DIR and AGENTSVIEW_DATA_DIR, each an empty dir inside it
+#   test_sandbox_setup   one temp sandbox; exports CALLUM_EVENTS_DIR and AGENTSVIEW_DATA_DIR,
+#                        each an empty dir inside it
 #   test_sandbox_check   prints `FAIL test isolation: <file>` per stray entry; non-zero if any
 #   test_sandbox_clean   removes the sandbox
 #
@@ -49,20 +49,18 @@ test_sandbox_setup() {
     PATH="$TEST_SANDBOX/bin:$PATH"
   fi
   CALLUM_EVENTS_DIR="$TEST_SANDBOX/events"
-  NO_MISTAKES_HOME="$TEST_SANDBOX/no-mistakes"
-  NM_PUSH_STATE_DIR="$TEST_SANDBOX/nm-push-state"
   AGENTSVIEW_DATA_DIR="$TEST_SANDBOX/agentsview"
   # Not created: a test never reads the host's secrets.
   DEV_SECRETS_DIR="$TEST_SANDBOX/no-secrets"
   DEV_WORKSPACE_SECRETS_DIR="$TEST_SANDBOX/no-workspace-secrets"
   DEV_MIGRATOR_SECRETS_DIR="$TEST_SANDBOX/no-migrator-secrets"
   unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL FACTORY_DB_MIGRATOR_URL
-  mkdir -p "$CALLUM_EVENTS_DIR" "$NO_MISTAKES_HOME" "$NM_PUSH_STATE_DIR" "$AGENTSVIEW_DATA_DIR" || return 1
-  export PATH TEST_SANDBOX CALLUM_EVENTS_DIR NO_MISTAKES_HOME NM_PUSH_STATE_DIR AGENTSVIEW_DATA_DIR DEV_SECRETS_DIR DEV_WORKSPACE_SECRETS_DIR DEV_MIGRATOR_SECRETS_DIR
+  mkdir -p "$CALLUM_EVENTS_DIR" "$AGENTSVIEW_DATA_DIR" || return 1
+  export PATH TEST_SANDBOX CALLUM_EVENTS_DIR AGENTSVIEW_DATA_DIR DEV_SECRETS_DIR DEV_WORKSPACE_SECRETS_DIR DEV_MIGRATOR_SECRETS_DIR
 }
 
 test_sandbox_check() {
-  _tsc_stray=$(find "$CALLUM_EVENTS_DIR" "$NO_MISTAKES_HOME" "$NM_PUSH_STATE_DIR" "$AGENTSVIEW_DATA_DIR" -mindepth 1 2>/dev/null)
+  _tsc_stray=$(find "$CALLUM_EVENTS_DIR" "$AGENTSVIEW_DATA_DIR" -mindepth 1 2>/dev/null)
   _tsc_refused=$(cat "$TEST_SANDBOX"/db-refused/* 2> /dev/null || true)
   [ -z "$_tsc_stray$_tsc_refused" ] && return 0
   [ -z "$_tsc_stray" ] || printf '%s\n' "$_tsc_stray" | sed 's/^/FAIL test isolation: /'  >&2

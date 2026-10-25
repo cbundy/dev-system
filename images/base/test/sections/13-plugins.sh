@@ -191,7 +191,7 @@ plugin_check "DEV_DEFAULT_PLUGIN_REFS_WIN=1: a missing default plugin is a FAIL,
 # login): a workspace with every setting at its default and no repo comes up
 # with the callum-flow skills installed and enabled. command docker keeps the
 # image's DEV_DEFAULT_PLUGINS.
-check "a fresh workspace with no repo gets the real callum-flow plugin and its skills" command docker run --rm -e DEV_MODELS_URL= \
+check "a fresh workspace with no repo gets the real callum-flow plugin and its skills" command docker run --rm \
   --entrypoint "" "$IMAGE" bash -c '
   out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -i plugin
   list=$(cd / && claude plugin list --json); echo "$list"

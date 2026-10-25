@@ -5,7 +5,7 @@
 # One line per component:
 #   dev-version: OK|STALE|UNKNOWN <component> running=<x> latest=<y> [more]
 # Components: the base image, each per-repo image layer that stamped itself, the
-# callum-flow plugin (per scope), and the tools claude, codex, no-mistakes, treehouse,
+# callum-flow plugin (per scope), and the tools claude, codex, treehouse,
 # agentsview and coder.
 #
 # Usage: dev-version [--json] [--local] [--snapshot [FILE]]
@@ -24,7 +24,7 @@
 # STALE means something newer exists: a newer image published on GHCR (compared by the
 # git revision the image's stamp carries), a plugin installed below the release the
 # image pins, or a newer upstream release of an unpinned tool (claude, codex,
-# treehouse). agentsview, coder and no-mistakes are pinned by the image build, so they
+# treehouse). agentsview and coder are pinned by the image build, so they
 # show the pin and the upstream release but are never STALE. UNKNOWN is never a
 # failure: no network, no gh login, no stamp (a local build) or a lookup that timed out.
 #
@@ -212,7 +212,6 @@ run_job() {
     plugin) CLAUDE_PLUGIN_LIMIT=3 plugin_job ;;
     claude) TOOL_SRC=npm:@anthropic-ai/claude-code tool_job claude claude --version ;;
     codex) TOOL_SRC=npm:@openai/codex tool_job codex codex --version ;;
-    no-mistakes) TOOL_SRC=gh:kunchenguid/no-mistakes TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" NO_MISTAKES_VERSION) tool_job no-mistakes no-mistakes --version ;;
     treehouse) TOOL_SRC=gh:kunchenguid/treehouse tool_job treehouse treehouse --version ;;
     agentsview) TOOL_SRC=gh:kenn-io/agentsview TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" AGENTSVIEW_VERSION) tool_job agentsview agentsview --version ;;
     coder) TOOL_SRC=gh:coder/coder TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" CODER_VERSION) tool_job coder coder --version ;;
@@ -259,7 +258,7 @@ if [ -d "$STAMP_DIR" ]; then
     [ -f "$f" ] && jobs_list="$jobs_list layer:${f##*/}"
   done
 fi
-jobs_list="$jobs_list plugin claude codex no-mistakes treehouse agentsview coder"
+jobs_list="$jobs_list plugin claude codex treehouse agentsview coder"
 [ -z "$JSON" ] || jobs_list="$jobs_list extra:gh extra:node extra:psql extra:jq extra:tmux"
 
 pids=""

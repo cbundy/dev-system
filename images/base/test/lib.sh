@@ -5,11 +5,7 @@
 # wrapper, the check/in_image/put_secret helpers, the pass counters and the cleanup trap.
 # Sourced by test.sh after it sets IMAGE; never run directly.
 
-# Every container these tests start reads its models from the image's baked
-# models.env only (DEV_MODELS_URL empty): dev-init would otherwise fetch the
-# file from GitHub on each start, so results would depend on the network and on
-# what main holds. The fetch's own tests (section 5) set DEV_MODELS_URL inside
-# the container, which wins over this. Likewise no default Claude plugins
+# Every container these tests start gets no default Claude plugins
 # (DEV_DEFAULT_PLUGINS empty), or every dev-init would install callum-flow
 # from GitHub: section 13's tests set it inside the container, and its one
 # real install runs `command docker run` to keep the image's value. Exported,
@@ -19,7 +15,7 @@
 docker() {
   if [ "${1:-}" = run ]; then
     shift
-    command docker run -e DEV_MODELS_URL= -e DEV_DEFAULT_PLUGINS= "$@"
+    command docker run -e DEV_DEFAULT_PLUGINS= "$@"
   else
     command docker "$@"
   fi
@@ -28,7 +24,7 @@ export -f docker
 DEVCONTAINER="${DEVCONTAINER:-devcontainer}"
 # The persistence contract's directory names, in the image's order (the
 # PERSIST_DIRS ARG in the Dockerfile). Section 3 proves the image matches.
-PERSIST_NAMES="claude claude-auth codex gh no-mistakes agentsview events dev-restart-self"
+PERSIST_NAMES="claude claude-auth codex gh agentsview events dev-restart-self"
 RUN_ID="dsb-test-$$"
 PASSES=0
 FAILURES=0
