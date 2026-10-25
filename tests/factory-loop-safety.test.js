@@ -210,7 +210,7 @@ const files = [...sources(""), ...sources("v2"), SCRIPT];
 
 test("the literal scanner reads the hooks' commands and skips comments and regular expressions", () => {
   const cli = literals(fs.readFileSync(path.join(HOOKS, "act-cli.ts"), "utf8")).map((l) => l.text);
-  assert.ok(cli.includes("callum-flow-claim") && cli.includes("--heartbeat") && cli.includes("--remove-label"));
+  assert.ok(cli.includes("callum-flow-claim") && cli.includes("--heartbeat") && cli.includes("callum-flow-milestone"));
   const merge = literals(fs.readFileSync(path.join(HOOKS, "act-merge.ts"), "utf8")).map((l) => l.text);
   assert.ok(merge.includes("callum-flow-rollout"), "act-merge.ts: callum-flow-rollout");
   const rails = literals(fs.readFileSync(path.join(HOOKS, "rails.ts"), "utf8")).map((l) => l.text);

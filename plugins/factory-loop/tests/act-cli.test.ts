@@ -13,7 +13,6 @@ import type { Action, ActionKind, AgentView, LedgerEntry } from '../hooks/types'
 import { DEVICE, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
-const IN_DEV = 'in development'
 const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
 
 type Call = { argv: string[]; init: RunInit }
@@ -125,7 +124,7 @@ const A = {
 
 describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
   const argv = (a: Action) => {
-    const steps = stepsOf(a, REPO, IN_DEV, LOOP)
+    const steps = stepsOf(a, REPO, LOOP)
     if (typeof steps === 'string') throw new Error(steps)
     return steps.map(s => ('argv' in s ? s.argv : [`event:${s.event}`]))
   }
@@ -135,7 +134,7 @@ describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
     expect(argv(A.sweep())).toEqual([['callum-flow-sweep']])
     expect(argv(A.claim())).toEqual([['callum-flow-claim', '470']])
     expect(argv(A.close())).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
-    expect(argv(A.releaseParent())).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV], ['event:abandoned']])
+    expect(argv(A.releaseParent())).toEqual([['event:abandoned']])
     expect(argv(A.later())).toEqual([['callum-flow-milestone', 'plan', '470', 'later']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
     expect(argv(A.restart('R2'))).toEqual([['dev-restart-self']])
@@ -144,16 +143,16 @@ describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
 
   test('R2 with a wind-down writes the request first, in the status file\'s time form', () => {
     const at = Date.UTC(2026, 9, 19, 1, 2, 3, 456)
-    const steps = stepsOf({ ...A.restart('R2'), windDownAt: at } as Action, REPO, IN_DEV, LOOP)
+    const steps = stepsOf({ ...A.restart('R2'), windDownAt: at } as Action, REPO, LOOP)
     if (typeof steps === 'string') throw new Error(steps)
     expect(steps.map(s => ('argv' in s ? s.argv : []))).toEqual([['sh', '-c', WIND_DOWN_WRITE_SCRIPT, 'wind-down-request', `${LOOP}/wind-down.request`], ['dev-restart-self']])
     expect(steps[0]).toMatchObject({ stdin: '{"requested_at":"2026-10-19T01:02:03.456Z","trigger":"restart-self"}\n' })
   })
 
   test('refusals: an issue kind with no issue, restart-self outside H4, a kind that runs no command', () => {
-    expect(stepsOf(A.claim(null), REPO, IN_DEV, LOOP)).toBe('claim names no issue')
-    expect(stepsOf(A.restart('O1'), REPO, IN_DEV, LOOP)).toBe('restart-self comes only from rule H4 or R2, not O1')
-    expect(stepsOf(A.title(), REPO, IN_DEV, LOOP)).toBe('title runs no command')
+    expect(stepsOf(A.claim(null), REPO, LOOP)).toBe('claim names no issue')
+    expect(stepsOf(A.restart('O1'), REPO, LOOP)).toBe('restart-self comes only from rule H4 or R2, not O1')
+    expect(stepsOf(A.title(), REPO, LOOP)).toBe('title runs no command')
   })
 
   test('no template can pass a forbidden flag or command (v2 SPEC 13.6.1)', () => {
@@ -302,11 +301,10 @@ describe('a done close: close-issue logs closed, delete-branch is leased (8.7)',
 // the data of a split's abandoned event with no reasons read
 const SPLIT = { reason: 'split', split_into: [] as number[], why_split: null, why_count: null, why_parts: null, why_order: null, child_whys: null, stage: null, lives: null, branch: null, pr: null, detail: '' }
 
-describe('release-parent: the label, then the event, stopping at the first failure', () => {
-  test('release-parent: the claim label comes off, then `abandoned` notes the split', async () => {
+describe('release-parent: only the abandoned event, no label edit (#1353)', () => {
+  test('release-parent: runs no command, `abandoned` notes the split', async () => {
     const { result, calls, events } = await exec(A.releaseParent())
-    expect(calls.map(c => c.argv)).toEqual([['gh', 'issue', 'edit', '470', '--repo', REPO, '--remove-label', IN_DEV]])
-    expect(calls[0]?.init).toEqual({ timeoutMs: 60_000 })
+    expect(calls).toHaveLength(0)
     expect(events).toEqual([{ type: 'abandoned', data: { ...SPLIT, split_into: [471, 472], detail: 'split into 471,472' }, issue: 470 }])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'released #470, split into 471,472' })
   })
@@ -341,16 +339,18 @@ describe('release-parent: the label, then the event, stopping at the first failu
     expect(unread.events).toEqual([{ type: 'abandoned', data: { ...SPLIT, split_into: [471, 472], detail: 'split into 471,472' }, issue: 470 }])
   })
 
-  test('a failed label edit logs no event; a rate limit is flagged', async () => {
-    const { result, events } = await exec(A.releaseParent(), [{ exitCode: 1, stderr: RATE }])
-    expect(events).toHaveLength(0)
-    expect(result).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
+  test('a repo without an "in development" label: any command would fail, none runs, the split is released', async () => {
+    const missing = { exitCode: 1, stderr: "failed to update https://github.com/o/r/issues/470: 'in development' not found" }
+    const { result, calls, events } = await exec(A.releaseParent(), [missing, missing])
+    expect(calls).toHaveLength(0)
+    expect(events).toHaveLength(1)
+    expect(result).toMatchObject({ status: 'done' })
   })
 
   test('a failed event is failed; its usage exit is never retried', async () => {
     const usage = Object.assign(new Error('callum-flow-event: unknown type'), { exitCode: 2 })
     const { result, calls } = await exec(A.releaseParent(), [], { event: async () => Promise.reject(usage) })
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(0)
     expect(result).toEqual({
       status: 'failed',
       outcome: { kind: 'cli', exit: 2, detail: 'callum-flow-event: unknown type' },

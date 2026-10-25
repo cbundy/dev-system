@@ -51,13 +51,9 @@ export type Step =
 // stepsOf: the steps one action runs, in order (v2 SPEC 13.6.1), or why it is refused: a loop bug,
 // never retried. Every command runs from the main checkout. gh gets --repo, so a write can
 // only reach the configured repo (v2 SPEC 13.11.5).
-export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDir: string): Step[] | string {
+export function stepsOf(action: Action, repo: string, loopDir: string): Step[] | string {
   const n = action.issue === null ? null : String(action.issue)
   const noIssue = `${action.kind} names no issue`
-  const unlabel = (issue: string): Step => ({
-    argv: ['gh', 'issue', 'edit', issue, '--repo', repo, '--remove-label', inDevLabel],
-    timeoutMs: CLI_TIMEOUT_MS['release-parent'],
-  })
   switch (action.kind) {
     case 'heartbeat':
       return [{ argv: ['callum-flow-claim', '--heartbeat'], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
@@ -81,11 +77,11 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string, loopDi
     case 'milestone-later':
       return n === null ? noIssue : [{ argv: ['callum-flow-milestone', 'plan', n, 'later'], timeoutMs: CLI_TIMEOUT_MS['milestone-later'] }]
     case 'release-parent':
-      // the parent is now a tracker. The label comes off first, so the event records a release
-      // that happened, and a retry after a failed event repeats only the label edit.
+      // the parent is now a tracker. No label comes off: the claim has had no label since v2 SPEC 3.6,
+      // and the closed record's label clear takes the factory:* labels off (#1353).
       return n === null
         ? noIssue
-        : [unlabel(n), { event: 'abandoned', data: splitAbandonedData(action.created, action.reasons ?? null, action.childWhys ?? null), issue: action.issue as number }]
+        : [{ event: 'abandoned', data: splitAbandonedData(action.created, action.reasons ?? null, action.childWhys ?? null), issue: action.issue as number }]
     case 'restart-self':
       // only once the drain for an update is complete (rule H4, D-15), or v2's restart after a
       // capped wind-down (rule R2, v2 SPEC 14.1): R2 with wind-down on first writes the request,
@@ -214,7 +210,7 @@ function refused(why: string): Exec {
 function command(kind: CliKind): Executor {
   return async (ctx, action) => {
     if (action.kind !== kind) return refused(`the ${kind} executor got a ${action.kind} action`)
-    const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel, ctx.rt.loopDir)
+    const steps = stepsOf(action, ctx.rt.repo, ctx.rt.loopDir)
     if (typeof steps === 'string') return refused(steps)
     const ran = await runSteps(ctx, steps)
     return 'failed' in ran ? ran.failed : finish(action, ran.results)
@@ -226,7 +222,7 @@ function command(kind: CliKind): Executor {
 // loop down.
 const restartSelf: Executor = async (ctx, action) => {
   if (action.kind !== 'restart-self') return refused(`the restart-self executor got a ${action.kind} action`)
-  const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel, ctx.rt.loopDir)
+  const steps = stepsOf(action, ctx.rt.repo, ctx.rt.loopDir)
   if (typeof steps === 'string') return refused(steps)
   // the request write (if any) is every step but the last
   const written = steps.slice(0, -1)
