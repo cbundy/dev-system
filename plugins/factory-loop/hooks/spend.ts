@@ -63,6 +63,28 @@ export const unavailableSpend = (reason: string): Usage => ({
   fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true, auth: 'api-key', spend: null, reason,
 })
 
+// foldReading: one cost reading folded into the stored tally under the counter rules (v2 SPEC 13.5.2 G3):
+// the same process or a restored session adds the delta, a counter that went down or a new process adds the
+// whole reading, and a new period starts the sum again. `bad`: the stored record did not parse (a fresh one starts).
+function foldReading(prev: unknown, c: number, reading: Reading, periodStart: Ms, now: Ms): { tally: Tally; bad: boolean } {
+  const stored = prev === undefined || prev === null ? null : tallyOf(prev)
+  const bad = prev !== undefined && prev !== null && stored === null
+  const before: Tally = stored ?? { v: 1, periodStart, spentUsd: 0, counter: null, at: now }
+  const rolled = periodStart > before.periodStart
+  const last = before.counter
+  const sameProcess = last !== null && last.process === reading.process
+  const restored = last !== null && !sameProcess && last.session === reading.session
+  const add = last !== null && (sameProcess || restored) && c >= last.lastUsd ? c - last.lastUsd : c
+  const tally: Tally = {
+    v: 1,
+    periodStart: rolled ? periodStart : before.periodStart,
+    spentUsd: (rolled ? 0 : before.spentUsd) + add,
+    counter: { process: reading.process, session: reading.session, lastUsd: c },
+    at: now,
+  }
+  return { tally, bad }
+}
+
 // tallyStep: one reading folded into the tally. `prev` is what the store held (undefined or null: none).
 // Returns the usage the loop acts on and the tally to store (null: leave the store as it is). A reading
 // that cannot be had gives an unavailable usage with its reason, which tierOf holds at stop-new.
@@ -72,21 +94,7 @@ export function tallyStep(prev: unknown, reading: Reading, now: Ms, settings: Ap
   const c = reading.costUsd
   if (c === null || !num(c)) return { tally: null, usage: unavailableSpend('spend:no-session-cost') }
   const period = periodOf(budget.resetDay, now)
-  const stored = prev === undefined || prev === null ? null : tallyOf(prev)
-  const bad = prev !== undefined && prev !== null && stored === null
-  const before: Tally = stored ?? { v: 1, periodStart: period.start, spentUsd: 0, counter: null, at: now }
-  const rolled = period.start > before.periodStart
-  const last = before.counter
-  const sameProcess = last !== null && last.process === reading.process
-  const restored = last !== null && !sameProcess && last.session === reading.session
-  const add = last !== null && (sameProcess || restored) && c >= last.lastUsd ? c - last.lastUsd : c
-  const tally: Tally = {
-    v: 1,
-    periodStart: rolled ? period.start : before.periodStart,
-    spentUsd: (rolled ? 0 : before.spentUsd) + add,
-    counter: { process: reading.process, session: reading.session, lastUsd: c },
-    at: now,
-  }
+  const { tally, bad } = foldReading(prev, c, reading, period.start, now)
   if (bad) return { tally, usage: unavailableSpend('spend:bad-tally') }
   return {
     tally,
@@ -107,3 +115,30 @@ export function spendEventData(usage: Usage): Record<string, unknown> {
   }
 }
 
+
+// whatIfKey: the $.store key of a repo's subscription what-if tally (never the API-key `spend:<repo>`)
+export const whatIfKey = (repo: string) => `whatif:${repo}`
+
+// WhatIfStep: the subscription what-if tally after a reading. `spend` is the month's total at API prices
+// (null with a `reason` when it cannot be had); `tally` is what to store (null: leave the store as it is).
+export type WhatIfStep = { tally: Tally | null; spend: { usd: number; resetsAt: Ms } | null; reason?: string }
+
+// whatIfStep: fold the session's cost into the what-if tally over a calendar month (00:00 UTC on the 1st).
+// It never touches the Usage the tier reads: the total only rides on the usage event (usage-check.sh).
+export function whatIfStep(prev: unknown, reading: Reading, now: Ms): WhatIfStep {
+  const c = reading.costUsd
+  if (c === null || !num(c)) return { tally: null, spend: null, reason: 'spend:no-session-cost' }
+  const period = periodOf(1, now)
+  const { tally, bad } = foldReading(prev, c, reading, period.start, now)
+  if (bad) return { tally, spend: null, reason: 'spend:bad-tally' }
+  return { tally, spend: { usd: tally.spentUsd, resetsAt: period.resetsAt } }
+}
+
+// whatIfEnv: the environment usage-check.sh reads the what-if total from
+export function whatIfEnv(step: WhatIfStep): Record<string, string> {
+  if (step.spend === null) return { CALLUM_USAGE_SPEND_REASON: step.reason ?? 'spend:no-session-cost' }
+  return {
+    CALLUM_USAGE_SPEND_USD: String(Math.round(step.spend.usd * 1e6) / 1e6),
+    CALLUM_USAGE_SPEND_RESETS_AT: new Date(step.spend.resetsAt).toISOString().replace('.000Z', 'Z'),
+  }
+}

@@ -1241,8 +1241,10 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const h = host()
     await h.pass(runtime(), stored())
     expect(h.calls.length).toBeGreaterThan(6)
-    // the very object register built: observe adds nothing of its own
-    expect(h.calls.filter(c => c.env !== ENV || c.cwd !== '/work').map(c => c.argv.join(' '))).toEqual([])
+    // the very object register built: observe adds nothing of its own, except the what-if variables of the usage check
+    const isUsage = (c: Call) => c.argv[0] === `${TOOLS}/usage-check.sh`
+    expect(h.calls.filter(c => !isUsage(c) && (c.env !== ENV || c.cwd !== '/work')).map(c => c.argv.join(' '))).toEqual([])
+    expect(h.calls.filter(isUsage).every(c => c.cwd === '/work' && Object.entries(ENV).every(([k, v]) => c.env[k] === v))).toBe(true)
     expect(h.commands().some(c => c.includes('pipeline-watch'))).toBe(false)
     expect(h.commands()).toContain(`${TOOLS}/queue-watch.sh --once --repo ${REPO} --label ready --known 114`)
     expect(h.commands()).toContain(`${TOOLS}/usage-check.sh`)
@@ -1252,8 +1254,40 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const sinkEnv = { ...ENV, CALLUM_EVENTS_DIR: `${LOOP}/sink-events` }
     const o = host()
     await o.pass(runtime({ mode: 'observe', sink: `${LOOP}/sink-events`, env: sinkEnv }))
-    expect(o.calls.every(c => c.env === sinkEnv && c.cwd === '/work')).toBe(true)
+    expect(o.calls.filter(c => !isUsage(c)).every(c => c.env === sinkEnv && c.cwd === '/work')).toBe(true)
+    expect(o.calls.filter(isUsage).every(c => c.env.CALLUM_EVENTS_DIR === sinkEnv.CALLUM_EVENTS_DIR)).toBe(true)
     expect(o.commands()).toContain(`${TOOLS}/usage-check.sh`)
+  })
+
+  describe('subscription what-if tally', () => {
+    const usageEnv = (h: { calls: Call[] }) => h.calls.find(c => c.argv[0] === `${TOOLS}/usage-check.sh`)?.env ?? {}
+    const subRt = () => runtime({ workspace: { session: 's1', process: 'p1' } })
+
+    test('the pass folds the session cost into the tally, hands it to usage-check.sh and returns it', async () => {
+      const h = host({ cost: 7, tally: { v: 1, periodStart: Date.parse('2026-10-01T00:00:00Z'), spentUsd: 30, counter: { process: 'p1', session: 's1', lastUsd: 5 }, at: NOW } })
+      const o = await h.pass(subRt(), stored())
+      const env = usageEnv(h)
+      expect(env.CALLUM_USAGE_SPEND_USD).toBe('32')
+      expect(env.CALLUM_USAGE_SPEND_RESETS_AT).toBe('2026-11-01T00:00:00Z')
+      expect(env.CALLUM_USAGE_SPEND_REASON).toBeUndefined()
+      expect(o.spend).toMatchObject({ spentUsd: 32, counter: { lastUsd: 7 } })
+    })
+
+    test('the usage the tier reads carries no auth or spend', async () => {
+      const h = host({ cost: 7 })
+      const o = await h.pass(subRt(), stored())
+      expect(o.state.usage?.auth).toBeUndefined()
+      expect(o.state.usage?.spend).toBeUndefined()
+      expect(o.state.usage).toMatchObject({ fiveHour: 40, sevenDay: 60, unavailable: false })
+    })
+
+    test('without a session cost the reason is passed and nothing is stored', async () => {
+      const h = host()
+      const o = await h.pass(subRt(), stored())
+      expect(usageEnv(h).CALLUM_USAGE_SPEND_REASON).toBe('spend:no-session-cost')
+      expect(usageEnv(h).CALLUM_USAGE_SPEND_USD).toBeUndefined()
+      expect(o.spend).toBeNull()
+    })
   })
 
   describe('API-key mode', () => {
@@ -1320,7 +1354,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       const o = await h.pass(runtime(), stored())
       expect(h.commands()).toContain(`${TOOLS}/usage-check.sh`)
       expect(events(h)).toEqual([])
-      expect(o.spend).toBeNull()
+      // the subscription what-if tally is the only thing a subscription pass returns in `spend`
+      expect(o.spend).toMatchObject({ spentUsd: 91 })
       expect(o.state.usage?.auth).toBeUndefined()
     })
   })

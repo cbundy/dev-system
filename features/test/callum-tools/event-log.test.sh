@@ -666,13 +666,13 @@ printf '{"recorded_at":%s,"rate_limits":{"five_hour":{"used_percentage":41.2,"re
 out=$(PATH="$fakebin:$toolbin" CALLUM_USAGE_STATE="$tmpdir/state/usage.json" HOME="$tmpdir" "$SH" "$SRC/usage-check.sh") || fail "usage-check should exit 0"
 case "$out" in five_hour=42*source=statusline) ;; *) fail "usage-check stdout changed: $out" ;; esac
 want=$(jq -nc --arg a "$(date -u -d "@$((now + 3600))" +%Y-%m-%dT%H:%M:%SZ)" --arg b "$(date -u -d "@$((now + 86400))" +%Y-%m-%dT%H:%M:%SZ)" \
-  '{available: true, five_hour_pct: 42, five_hour_resets_at: $a, seven_day_pct: 50, seven_day_resets_at: $b, source: "statusline", reasons: []}')
+  '{available: true, five_hour_pct: 42, five_hour_resets_at: $a, seven_day_pct: 50, seven_day_resets_at: $b, source: "statusline", reasons: ["spend:no-tally", "spend:subscription-no-budget"], auth: "subscription", budget_usd: null, spend_usd: null, budget_resets_at: null}')
 [ "$(cat "$fakebin/event-calls")" = "--type usage --actor watcher --data $want" ] || fail "usage-check should record the reading natively: $(cat "$fakebin/event-calls")"
 
 # no snapshot and no token: the unavailable reading, with its reasons
 : > "$fakebin/event-calls"
 out=$(PATH="$fakebin:$toolbin" CALLUM_USAGE_STATE="$tmpdir/state/none.json" HOME="$tmpdir" CLAUDE_CONFIG_DIR="$tmpdir/noclaude" "$SH" "$SRC/usage-check.sh") || fail "usage-check should exit 0"
 [ "$out" = "usage=unavailable reason=oauth:no-token,statusline:no-snapshot" ] || fail "usage-check unavailable stdout: $out"
-[ "$(cat "$fakebin/event-calls")" = '--type usage --actor watcher --data {"available":false,"five_hour_pct":null,"five_hour_resets_at":null,"seven_day_pct":null,"seven_day_resets_at":null,"source":null,"reasons":["oauth:no-token","statusline:no-snapshot"]}' ] || fail "usage-check should record the unavailable reading: $(cat "$fakebin/event-calls")"
+[ "$(cat "$fakebin/event-calls")" = '--type usage --actor watcher --data {"available":false,"five_hour_pct":null,"five_hour_resets_at":null,"seven_day_pct":null,"seven_day_resets_at":null,"source":null,"reasons":["oauth:no-token","statusline:no-snapshot","spend:no-tally","spend:subscription-no-budget"],"auth":"subscription","budget_usd":null,"spend_usd":null,"budget_resets_at":null}' ] || fail "usage-check should record the unavailable reading: $(cat "$fakebin/event-calls")"
 
 echo "event-log: ok"

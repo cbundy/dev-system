@@ -80,7 +80,7 @@ const BANNED = [
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
 // 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
 // The startup migrates and the release hold reasons read loop_entry fields (database, versions, outcome, decision_reason) from event_store: no event_log column lifts them.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Claim order #0", "Claim order #3", "Queue snapshots #2", "Intake stamp #4", "Spend on an API key #2", "Reviews by UI capture policy #0", "Findings declined as environment blockers #0"]);
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0", "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Claim order #0", "Claim order #3", "Queue snapshots #2", "Intake stamp #4", "Spend by login #2", "Spend by login #4", "Reviews by UI capture policy #0", "Findings declined as environment blockers #0"]);
 
 function problems(sql, id) {
   const text = strip(sql);
@@ -119,7 +119,7 @@ const RUN_ONLY = [
   "Main after merge #0", "Main after merge #1",
   "Workers #0", "Workers #1", "Workers #2", "Workers #3", "Workers #4", "Workers #5", "Workers #6",
   "Settings #0", "Settings #1",
-  "Spend on an API key #0", "Spend on an API key #1", "Spend on an API key #2", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Tokens per merged issue #3", "What-if cost per merged issue #0", "What-if cost per merged issue #1", "What-if cost per merged issue #2", "What-if cost per merged issue #3", "Observe time per pass #0", "Orchestrator session tokens #0", "What-if cost of the loop's own work #0", "What-if cost of the loop's own work #1", "Usage tier in force #0", "Usage tier in force #1", "Pass time #0",
+  "Spend by login #0", "Spend by login #1", "Spend by login #2", "Spend by login #3", "Spend by login #4", "Tokens per merged issue #0", "Tokens per merged issue #1", "Tokens per merged issue #2", "Tokens per merged issue #3", "What-if cost per merged issue #0", "What-if cost per merged issue #1", "What-if cost per merged issue #2", "What-if cost per merged issue #3", "Observe time per pass #0", "Orchestrator session tokens #0", "What-if cost of the loop's own work #0", "What-if cost of the loop's own work #1", "Usage tier in force #0", "Usage tier in force #1", "Pass time #0",
   "Startup schema migrates #0", "10. Releases #3", "10. Releases #4", "Actions refusal spells #0", "Main-checkout tripwire notices #0",
   "Stuck issues #0",
   "Claim order #0", "Claim order #1", "Claim order #2", "Claim order #3",

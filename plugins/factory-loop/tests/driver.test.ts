@@ -2027,4 +2027,26 @@ describe('API-key mode: the spend tally', () => {
     expect(h.commands().some(s => s.argv[0] === `${TOOLS}/usage-check.sh`)).toBe(true)
     expect(h.store.has(KEY)).toBe(false)
   })
+
+  test('a subscription acting pass stores the what-if tally under its own key and hands it to usage-check.sh', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const base = factory({ queue: [470] }).run
+    const h = host(on, { config: { ...ACT }, run: (argv, seen) => (argv[0] === `${TOOLS}/usage-check.sh` ? { stdout: USAGE } : base(argv, seen)) })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.get(`whatif:${REPO}`)).toMatchObject({ v: 1, spentUsd: 12, counter: { session: SESSION, lastUsd: 12 } })
+    expect(h.store.has(KEY)).toBe(false)
+    expect(h.commands().find(s => s.argv[0] === `${TOOLS}/usage-check.sh`)?.env.CALLUM_USAGE_SPEND_USD).toBe('12')
+  })
+
+  test('a subscription observe pass stores nothing', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: (argv, seen) => (argv[0] === `${TOOLS}/usage-check.sh` ? { stdout: USAGE } : factory({ queue: [470] }).run(argv, seen)) })
+    h.cost = 12
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.store.has(`whatif:${REPO}`)).toBe(false)
+    expect(h.store.has(KEY)).toBe(false)
+  })
 })

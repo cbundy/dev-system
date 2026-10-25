@@ -50,7 +50,9 @@
 # Environment: CALLUM_USAGE_STATE (snapshot path, default
 # ${XDG_STATE_HOME:-~/.local/state}/callum-tools/usage.json),
 # CALLUM_USAGE_MAX_AGE, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_SECURESTORAGE_CONFIG_DIR,
-# CLAUDE_CONFIG_DIR.
+# CLAUDE_CONFIG_DIR. On a subscription (DEV_CLAUDE_AUTH not api-key) a check's event also takes the loop's
+# what-if dollar total: CALLUM_USAGE_SPEND_USD (a non-negative number) with CALLUM_USAGE_SPEND_RESETS_AT (ISO 8601
+# UTC), or CALLUM_USAGE_SPEND_REASON (why the loop has none). The printed line never carries them.
 set -eu
 
 URL=https://api.anthropic.com/api/oauth/usage
@@ -105,6 +107,22 @@ TO_DATA_JQ='    (split(" ") | map(capture("^(?<k>[^=]+)=(?<v>.*)$") | {key: .k, 
          seven_day_pct: ($t.seven_day | tonumber), seven_day_resets_at: $t.seven_day_resets_at,
          source: $t.source, reasons: []} + $auth
       end'
+
+# The subscription login's additions to the event data (check mode, DEV_CLAUDE_AUTH not api-key): auth, the
+# loop's what-if spend for the month and when it restarts (CALLUM_USAGE_SPEND_USD / _RESETS_AT), a null budget,
+# and the reason codes: why the total is missing (CALLUM_USAGE_SPEND_REASON, or spend:no-tally when nothing was
+# passed, spend:bad-input when a value does not parse) and spend:subscription-no-budget.
+# shellcheck disable=SC2016 # jq program text, not shell expansions
+SUBSCRIPTION_JQ='    (if $usd == "" and $at == "" then null
+       elif ($usd | test("^[0-9]+([.][0-9]+)?$")) and ($at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"))
+         then {usd: ($usd | tonumber), at: $at}
+       else "bad" end) as $s
+    | (if $s == null then [(if $why != "" then $why else "spend:no-tally" end)]
+       elif $s == "bad" then ["spend:bad-input"] else [] end) as $missing
+    | . + {auth: "subscription", budget_usd: null,
+           spend_usd: (if ($s | type) == "object" then $s.usd else null end),
+           budget_resets_at: (if ($s | type) == "object" then $s.at else null end)}
+    | .reasons += $missing + ["spend:subscription-no-budget"]'
 
 if [ "$mode" = to-data ]; then
   jq -Rc "$TO_DATA_JQ"
@@ -212,5 +230,12 @@ printf '%s\n' "$line"
 # status line refresh.
 if command -v callum-flow-event >/dev/null 2>&1; then
   data=$(printf '%s' "$line" | jq -Rc "$TO_DATA_JQ" 2>/dev/null) || data=
+  # A subscription login's reading names it and carries the loop's what-if total (check mode only: --to-data
+  # stays a pure translation of the printed line).
+  if [ -n "$data" ] && [ "${DEV_CLAUDE_AUTH-}" != api-key ]; then
+    data=$(printf '%s' "$data" | jq -c \
+      --arg usd "${CALLUM_USAGE_SPEND_USD-}" --arg at "${CALLUM_USAGE_SPEND_RESETS_AT-}" \
+      --arg why "${CALLUM_USAGE_SPEND_REASON-}" "$SUBSCRIPTION_JQ" 2>/dev/null) || data=
+  fi
   [ -z "$data" ] || callum-flow-event --type usage --actor watcher --data "$data" >/dev/null 2>&1 || :
 fi

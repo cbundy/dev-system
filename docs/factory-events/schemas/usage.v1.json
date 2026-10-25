@@ -2,26 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "usage.v1.json",
   "title": "usage",
-  "description": "A reading of the Claude subscription's usage windows. Written by usage-check, which the loop runs on its schedule. Shows how close the device is to a rate limit.",
+  "description": "A reading of the Claude subscription's usage windows. Written by usage-check, which the loop runs on its schedule. Shows how close the device is to a rate limit. On a subscription login the reading names it (auth subscription) and, when the loop passes one, carries the loop's what-if dollar total for the calendar month (what its work would have cost at API prices, not a bill) with no budget; reasons say why a total is missing.",
   "x-issue": "none",
   "type": "object",
   "additionalProperties": false,
   "required": ["available", "five_hour_pct", "five_hour_resets_at", "seven_day_pct", "seven_day_resets_at", "source", "reasons"],
   "properties": {
-    "available": { "type": "boolean", "description": "true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields.", "x-column": true },
+    "available": { "type": "boolean", "description": "true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. On a subscription every reading field except auth, the spend fields and their reasons is null when unavailable.", "x-column": true },
     "five_hour_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the five-hour window used, rounded up.", "x-column": true },
     "five_hour_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the five-hour window resets.", "x-column": true },
     "seven_day_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the most used seven-day window, rounded up.", "x-column": true },
     "seven_day_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When that seven-day window resets.", "x-column": true },
     "source": { "enum": ["oauth", "statusline", "spend", null], "description": "Where the reading came from; null when unavailable. spend is a spend reading against a budget, which has null window fields." },
     "auth": { "enum": ["subscription", "api-key", null], "description": "Which login the reading was taken under.", "x-column": true },
-    "spend_usd": { "type": ["number", "null"], "minimum": 0, "description": "Dollars spent in the current budget period up to the reading.", "x-column": true },
-    "budget_usd": { "type": ["number", "null"], "minimum": 0, "description": "The budget for that period, in dollars.", "x-column": true },
-    "budget_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the budget period resets.", "x-column": true },
-    "reasons": { "type": "array", "items": { "type": "string" }, "description": "When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise." }
+    "spend_usd": { "type": ["number", "null"], "minimum": 0, "description": "Dollars spent in the current budget period up to the reading. On a subscription: the loop's what-if total for the calendar month at API prices; null when it could not be had (see reasons).", "x-column": true },
+    "budget_usd": { "type": ["number", "null"], "minimum": 0, "description": "The budget for that period, in dollars. Null on a subscription, which has no dollar budget.", "x-column": true },
+    "budget_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the budget period resets. On a subscription: when the what-if total restarts (00:00 UTC on the 1st).", "x-column": true },
+    "reasons": { "type": "array", "items": { "type": "string" }, "description": "When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise. A subscription reading adds spend codes after them: spend:subscription-no-budget always, and why spend_usd is null (spend:no-tally, spend:no-session-cost, spend:bad-tally, spend:bad-input)." }
   },
   "examples": [
     { "available": true, "five_hour_pct": 21, "five_hour_resets_at": "2026-10-16T16:00:00.000Z", "seven_day_pct": 4, "seven_day_resets_at": "2026-10-23T11:00:00.000Z", "source": "oauth", "reasons": [] },
-    { "available": true, "five_hour_pct": null, "five_hour_resets_at": null, "seven_day_pct": null, "seven_day_resets_at": null, "source": "spend", "auth": "api-key", "spend_usd": 42.5, "budget_usd": 100, "budget_resets_at": "2026-11-01T00:00:00.000Z", "reasons": [] }
+    { "available": true, "five_hour_pct": null, "five_hour_resets_at": null, "seven_day_pct": null, "seven_day_resets_at": null, "source": "spend", "auth": "api-key", "spend_usd": 42.5, "budget_usd": 100, "budget_resets_at": "2026-11-01T00:00:00.000Z", "reasons": [] },
+    { "available": true, "five_hour_pct": 21, "five_hour_resets_at": "2026-10-16T16:00:00.000Z", "seven_day_pct": 4, "seven_day_resets_at": "2026-10-23T11:00:00.000Z", "source": "oauth", "auth": "subscription", "spend_usd": 12.5, "budget_usd": null, "budget_resets_at": "2026-11-01T00:00:00.000Z", "reasons": ["spend:subscription-no-budget"] }
   ]
 }
