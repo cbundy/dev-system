@@ -1,5 +1,6 @@
 {
   "gateCommands": ["npm run lint", "npm test"],
   "releaseBranchPrefix": "chore/release-",
-  "flakeEpic": 864
+  "flakeEpic": 864,
+  "mergeTrain": true
 }
