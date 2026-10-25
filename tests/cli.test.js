@@ -196,6 +196,126 @@ test("update surfaces a genuine conflict with markers and a non-zero exit", (t) 
   assert.match(result.stderr, /conflict resolution/);
 });
 
+// Update keeps the repo's text for template changes that only touch what the repo filled in.
+const TPL_CLAUDE = fs.readFileSync(path.join(TEMPLATES, "CLAUDE.md"), "utf-8");
+const CAPTURE_SPAN = /<REPLACE: path to your repo's capture doc[^>]*>/;
+const OLD_CAPTURE_SPAN =
+  "<REPLACE: path to your e2e visual verification doc, e.g.\n  `docs/design/e2e-visual-verification.md`>";
+const SUBAGENTS_SECTION = `## Implementation sub-agents (manual path)
+
+Any agent making code changes - solo or delegated - works inside a <REPLACE: this repo's
+worktree/isolation mechanism, e.g. a treehouse worktree>, then runs the gate commands
+before the PR opens.
+
+<REPLACE: note any repo-specific variations to the above.>
+`;
+
+function setClaude(repo, baseline, repoText) {
+  fs.writeFileSync(path.join(repo, ".callum-dev", "baseline", "CLAUDE.md"), baseline);
+  fs.writeFileSync(path.join(repo, "CLAUDE.md"), repoText);
+}
+
+function rewordedCaptureCase(t) {
+  const repo = initRepo(t);
+  const baseline = TPL_CLAUDE.replace(CAPTURE_SPAN, () => OLD_CAPTURE_SPAN);
+  assert.notEqual(baseline, TPL_CLAUDE);
+  const filled = baseline.replace(OLD_CAPTURE_SPAN, "docs/visual-verification.md");
+  setClaude(repo, baseline, filled);
+  return repo;
+}
+
+test("update keeps the repo's text when the template only rewords a placeholder the repo filled", (t) => {
+  const repo = rewordedCaptureCase(t);
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = read(repo, "CLAUDE.md");
+  assert.ok(merged.includes("tooling (docs/visual-verification.md), upload"));
+  assert.doesNotMatch(merged, /<<<<<<<|>>>>>>>/);
+  assert.match(result.stdout, /kept      CLAUDE.md: the repo's filled placeholder/);
+  assert.match(result.stdout, /merged    CLAUDE.md/);
+  assert.equal(read(repo, ".callum-dev/baseline/CLAUDE.md"), TPL_CLAUDE);
+});
+
+test("update still conflicts when the reworded placeholder's hunk also changes other text", (t) => {
+  const repo = rewordedCaptureCase(t);
+  const upstream = upstreamCopy(t, (dir) => {
+    const f = path.join(dir, "CLAUDE.md");
+    fs.writeFileSync(f, read(dir, "CLAUDE.md").replace("upload each capture", "upload each shot"));
+  });
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const merged = read(repo, "CLAUDE.md");
+  assert.match(merged, /<<<<<<< CLAUDE.md \(this repo\)/);
+  assert.doesNotMatch(merged, /\|\|\|\|\|\|\|/);
+  assert.doesNotMatch(result.stdout, /kept /);
+  assert.match(result.stderr, /conflict resolution/);
+});
+
+test("update still conflicts when the repo kept the old placeholder and changed the hunk", (t) => {
+  const repo = initRepo(t);
+  const baseline = TPL_CLAUDE.replace(CAPTURE_SPAN, () => OLD_CAPTURE_SPAN);
+  setClaude(repo, baseline, baseline.replace("upload each capture", "upload each shot"));
+  const result = run(repo, "update");
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.match(read(repo, "CLAUDE.md"), /<<<<<<< CLAUDE.md \(this repo\)/);
+});
+
+test("update keeps a filled repo-owned section the template removed", (t) => {
+  const repo = initRepo(t);
+  const end = "<!-- end repo-owned -->";
+  const baseline = TPL_CLAUDE.replace(end, () => `${SUBAGENTS_SECTION}${end}`);
+  const filledSection = SUBAGENTS_SECTION
+    .replace(/<REPLACE: this repo's\nworktree[^>]*>/, "treehouse worktree")
+    .replace(/<REPLACE: note[^>]*>/, "No extra steps.");
+  const mine = `${filledSection}\n## This repo\n\nOwn notes.\n`;
+  setClaude(repo, baseline, baseline.replace(SUBAGENTS_SECTION, () => mine));
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = read(repo, "CLAUDE.md");
+  assert.ok(merged.includes(mine), "filled section and own section kept word for word");
+  assert.doesNotMatch(merged, /<<<<<<<|>>>>>>>/);
+  assert.match(result.stdout, /kept      CLAUDE.md: the repo's filled section/);
+  assert.equal(read(repo, ".callum-dev/baseline/CLAUDE.md"), TPL_CLAUDE);
+});
+
+test("update still conflicts when the template removes a filled placeholder outside a repo-owned block", (t) => {
+  const repo = initRepo(t);
+  setClaude(repo, TPL_CLAUDE, TPL_CLAUDE.replace(CAPTURE_SPAN, () => "docs/visual-verification.md"));
+  const upstream = upstreamCopy(t, (dir) => {
+    const f = path.join(dir, "CLAUDE.md");
+    const lines = read(dir, "CLAUDE.md").split("\n");
+    const at = lines.findIndex((l) => l.includes("using this repo's e2e visual verification tooling"));
+    lines.splice(at, 5);
+    fs.writeFileSync(f, lines.join("\n"));
+  });
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.match(read(repo, "CLAUDE.md"), /<<<<<<< CLAUDE.md \(this repo\)/);
+  assert.doesNotMatch(result.stdout, /kept /);
+});
+
+test("update renders a left conflict intact when the repo side holds a ======= line", (t) => {
+  const repo = initRepo(t);
+  fs.writeFileSync(
+    path.join(repo, "CLAUDE.md"),
+    read(repo, "CLAUDE.md").replace(EM_DASH_RULE, `${EM_DASH_RULE}\n=======\nmine`),
+  );
+  const upstream = upstreamCopy(t, (dir) => {
+    const f = path.join(dir, "CLAUDE.md");
+    fs.writeFileSync(f, read(dir, "CLAUDE.md").replace(EM_DASH_RULE, EM_DASH_RULE + " (theirs)"));
+  });
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 1);
+  const merged = read(repo, "CLAUDE.md");
+  assert.ok(
+    merged.includes(
+      `<<<<<<< CLAUDE.md (this repo)\n${EM_DASH_RULE}\n=======\nmine\n=======\n${EM_DASH_RULE} (theirs)\n>>>>>>> template v${PKG_VERSION} (dev-system)\n`,
+    ),
+    merged.slice(merged.indexOf("<<<<<<<") - 50, merged.indexOf("<<<<<<<") + 400),
+  );
+  assert.match(result.stdout, /CONFLICT  CLAUDE.md \(1 conflict\(s\)/);
+});
+
 test("update stops syncing the retired pipeline files and leaves them byte for byte", (t) => {
   const repo = oldRepo(t);
 

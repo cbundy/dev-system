@@ -5,7 +5,9 @@
 //           and a pristine baseline copy of each template
 //   update  pull upstream template changes forward with a 3-way merge
 //           (baseline vs new template vs repo file, via `git merge-file`),
-//           surfacing conflicts instead of overwriting repo-owned edits;
+//           surfacing conflicts instead of overwriting repo-owned edits (the repo's text
+//           stays for a filled placeholder the template only reworded and for a filled
+//           repo-owned section the template removed);
 //           `--devcontainer <kind>` also switches the devcontainer template
 //   check   fail when the applied template version lags the installed package
 //           (suitable as a CI drift gate); then, for a repo that runs the factory loop
@@ -397,27 +399,133 @@ function carryRepoAddedKeys(target, current, baseline, keyPath) {
   return carried;
 }
 
+// A conflicting hunk that update resolves by itself, keeping the repo's text. Two rules, both
+// narrow, because the template only touched what the repo already filled in:
+//   reword  - the template only reworded a `<REPLACE ...>` placeholder the repo filled in.
+//             A placeholder's wording is first-fill guidance, not content, so the repo's
+//             filled text stays.
+//   removal - the template removed lines inside a repo-owned block and the repo filled a
+//             placeholder there. A repo-owned section is the repo's, so it stays.
+// Anything else stays a conflict, in the style plain `git merge-file` writes.
+const HUNK_MARKER = 32;
+const PLACEHOLDER_TOKEN = "<REPLACE>";
+
+function placeholderSpans(text) {
+  return text.match(/<REPLACE[^>]*>/g) ?? [];
+}
+
+function isLineSubsequence(small, big) {
+  const a = small.split("\n").filter((l, i, all) => !(i === all.length - 1 && l === ""));
+  const b = big.split("\n");
+  let at = 0;
+  for (const line of b) if (at < a.length && line === a[at]) at += 1;
+  return at === a.length;
+}
+
+// Whether the last ownership marker line in `lines` opens a repo-owned block.
+function insideRepoOwned(lines) {
+  let open = false;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith("<!--") && !t.startsWith("//")) continue;
+    if (/end repo-owned/.test(t)) open = false;
+    else if (/repo-owned: edit freely/.test(t)) open = true;
+    else if (/end synced|synced:/.test(t)) open = false;
+  }
+  return open;
+}
+
+function resolveHunk(hunk, precedingLines) {
+  const baseSpans = placeholderSpans(hunk.base);
+  if (baseSpans.length === 0) return null;
+  const stillThere = (span) => hunk.ours.includes(span);
+  const normalise = (s) => s.replace(/<REPLACE[^>]*>/g, PLACEHOLDER_TOKEN);
+  if (normalise(hunk.theirs) === normalise(hunk.base) && !baseSpans.some(stillThere)) return "reword";
+  if (
+    isLineSubsequence(hunk.theirs, hunk.base) &&
+    !baseSpans.every(stillThere) &&
+    insideRepoOwned(precedingLines)
+  ) {
+    return "removal";
+  }
+  return null;
+}
+
+// Parses `git merge-file -p --marker-size=32` output into text and conflict hunks, resolves the
+// hunks the two rules cover and re-renders the rest in the 7-character style.
+function resolveTemplateOnlyHunks(merged) {
+  const open = "<".repeat(HUNK_MARKER) + " ";
+  const mid = "|".repeat(HUNK_MARKER) + " ";
+  const eq = "=".repeat(HUNK_MARKER);
+  const close = ">".repeat(HUNK_MARKER) + " ";
+  const lines = merged.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const out = [];
+  const kept = [];
+  let conflicts = 0;
+  let hunk = null;
+  for (const line of lines) {
+    const bare = line.replace(/\n$/, "");
+    if (!hunk) {
+      if (line.startsWith(open)) hunk = { oursLabel: bare.slice(open.length), ours: "", base: "", theirs: "", side: "ours" };
+      else out.push(line);
+      continue;
+    }
+    if (hunk.side === "ours" && line.startsWith(mid)) hunk.side = "base";
+    else if (hunk.side !== "theirs" && bare === eq) hunk.side = "theirs";
+    else if (hunk.side === "theirs" && line.startsWith(close)) {
+      hunk.theirsLabel = bare.slice(close.length);
+      const rule = resolveHunk(hunk, out);
+      if (rule) {
+        kept.push({ rule });
+        if (hunk.ours) out.push(hunk.ours);
+      } else {
+        conflicts += 1;
+        const nl = (s) => (s === "" || s.endsWith("\n") ? s : s + "\n");
+        out.push(
+          `<<<<<<< ${hunk.oursLabel}\n${nl(hunk.ours)}=======\n${nl(hunk.theirs)}>>>>>>> ${hunk.theirsLabel}\n`,
+        );
+      }
+      hunk = null;
+    } else hunk[hunk.side] += line;
+  }
+  if (hunk) return null; // unterminated marker: let the caller fall back
+  return { text: out.join(""), conflicts, kept };
+}
+
 function mergeFile(repoFile, baseFile, newFile, oldVersion) {
-  const result = spawnSync(
-    "git",
-    [
-      "merge-file",
-      "-L", `${repoFile} (this repo)`,
-      "-L", `template v${oldVersion} (baseline)`,
-      "-L", `template v${PKG_VERSION} (dev-system)`,
-      repoFile,
-      baseFile,
-      newFile,
-    ],
-    { stdio: ["ignore", "inherit", "inherit"] },
-  );
-  if (result.error || result.status === null || result.status < 0) {
+  const labels = [
+    "-L", `${repoFile} (this repo)`,
+    "-L", `template v${oldVersion} (baseline)`,
+    "-L", `template v${PKG_VERSION} (dev-system)`,
+  ];
+  const fail = (result) => {
     throw new Error(
       `git merge-file failed for ${repoFile}: ${result.error ? result.error.message : "git not found or killed"}`,
     );
+  };
+  // --zdiff3 (git 2.35+) shows each conflict's base, which the rules need. -p keeps the repo
+  // file untouched until the result is known.
+  const probe = spawnSync(
+    "git",
+    ["merge-file", "-p", "--zdiff3", `--marker-size=${HUNK_MARKER}`, ...labels, repoFile, baseFile, newFile],
+    { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (probe.error || probe.status === null || probe.status < 0) fail(probe);
+  if (probe.status <= 127 && probe.status !== 129) {
+    const resolved = resolveTemplateOnlyHunks(probe.stdout);
+    if (resolved) {
+      if (probe.stderr) process.stderr.write(probe.stderr);
+      fs.writeFileSync(repoFile, resolved.text);
+      return { conflicts: resolved.conflicts, kept: resolved.kept };
+    }
   }
+  // Older git (no --zdiff3) or output we cannot parse: merge as plain git does, resolve nothing.
+  const result = spawnSync("git", ["merge-file", ...labels, repoFile, baseFile, newFile], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  if (result.error || result.status === null || result.status < 0) fail(result);
   // git merge-file exits with the number of conflicts (markers left in the file).
-  return result.status;
+  return { conflicts: result.status, kept: [] };
 }
 
 function update(options) {
@@ -494,7 +602,14 @@ function update(options) {
         }
         const newFile = path.join(tmpDir, "new");
         fs.writeFileSync(newFile, newContent);
-        const conflictCount = mergeFile(file, baseFile, newFile, oldVersion);
+        const { conflicts: conflictCount, kept } = mergeFile(file, baseFile, newFile, oldVersion);
+        for (const { rule } of kept) {
+          changed.push(
+            rule === "reword"
+              ? `kept      ${file}: the repo's filled placeholder (the template only reworded it)`
+              : `kept      ${file}: the repo's filled section (the template removed it)`,
+          );
+        }
         if (conflictCount > 0) {
           conflicts.push(file);
           changed.push(`CONFLICT  ${file} (${conflictCount} conflict(s) - resolve the markers)`);
@@ -629,7 +744,9 @@ Commands:
   init     Copy the template files into the current repo, prompting for
            repo-owned values, and record the applied template version.
   update   Merge upstream template changes into this repo (3-way, via
-           git merge-file). Repo-owned edits survive; conflicts are left
+           git merge-file). Repo-owned edits survive, and the repo's text
+           stays for a filled placeholder the template only reworded or a
+           filled repo-owned section it removed; other conflicts are left
            as markers and reported with a non-zero exit.
   check    Exit non-zero when the applied template version lags the
            installed package (use in CI to catch drift). For a repo with
