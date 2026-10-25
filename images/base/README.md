@@ -1708,6 +1708,17 @@ a branch with no issue). `--patch` takes no `--run` or `--update-behind`. The lo
 `--issue <N>`, its record's issue, so the guard never reads the issue from the branch name. Without
 `--patch` the guard is unchanged.
 
+`--patch <id> --tested-tree <sha>` is the merge train's check (v2 SPEC 9.4); `<sha>` is 40 lowercase hex, it needs
+`--patch` and is refused with `--update-behind`. It adds a `tree` guard: the guard fetches origin's base and the PR head
+and passes only when `git merge-tree --write-tree origin/<base> <head>` gives exactly `<sha>`, the tree CI passed on a
+train branch. A conflict or another tree prints `GUARD tree FAIL <reason> class=behind`, a failed fetch or read
+`class=read`. With the option a `BEHIND` merge state is no FAIL (the tree guard stands in for it); draft, conflicting,
+blocked and every other guard are unchanged. `callum-flow-merge` passes `--tested-tree` to the guard and takes
+`--train-dropped <reason>` (`head-moved`, `outside-merge`, `conflict`, `train-red`, `left-queue`, `tree-mismatch` or
+`refused`), which it keeps from the guard; the two are exclusive. The `merged` event then carries `train` (`rode`,
+`dropped` or null), `train_reason`, `tested_tree` and `tree_matched` (whether the merge commit's tree, read with
+`gh pr view <pr> --json mergeCommit` and git, equals the tested tree; null with a warning when it does not read).
+
 `callum-flow-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
 `git diff -U0 <merge base of origin/<base> and the head> <head> | git patch-id --stable`, with no
 colour, external diff, textconv or rename detection, and full object ids. With no context lines, a

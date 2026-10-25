@@ -2952,6 +2952,44 @@ GROUP BY repo, week
 ORDER BY week DESC;
 ```
 
+**Merges on the merge train** (#13, run only; cbundy/dev-system#1308): per repo and week, the factory's merges
+by `train` value - `rode` (the merge skipped its own update and CI run because CI had passed its tree),
+`dropped` (a built train was given up, with `train_reason`) and `none` (no train) - with the count of
+`tree_matched = false` (a train merge that left main on a tree other than the tested one, which should be 0),
+the `waiting_for_merge` minutes of that row's merges (merge-queue to merged, as in section 1), sorted. Take the
+median in code (medians are not SQL): of the `rode` rows' minutes against the `dropped` and `none` rows' together,
+per week. One merged event per `(pr, head)`,
+placed by `coalesce(merged_at, ts)`. Takes `-v repo=... -v since=...`.
+
+```sql
+WITH mg AS (
+  -- one merged event per pull request and head, a retried one counted once
+  SELECT repo, issue, coalesce(merged_at, ts) AS at, coalesce(train, 'none') AS train, train_reason, tree_matched
+  FROM (
+    SELECT e.*, row_number() OVER (PARTITION BY e.repo, coalesce(e.pr::text, e.event_id::text), e.head ORDER BY e.ts, e.device, e.device_seq) AS n
+    FROM factory.event_log e
+    WHERE e.type = 'merged' AND e.repo = :'repo'
+  ) x
+  WHERE n = 1 AND coalesce(merged_at, ts) >= :'since'::timestamptz
+), q AS (
+  -- the first time each issue reached the merge queue
+  SELECT repo, issue, min(seq_at) AS at
+  FROM factory.event_log
+  WHERE type = 'transition' AND to_state = 'merge-queue' AND repo = :'repo' AND issue IS NOT NULL
+  GROUP BY repo, issue
+), m AS (
+  SELECT mg.*, date_trunc('week', mg.at)::date AS week,
+         extract(epoch FROM mg.at - q.at) / 60 AS wait_min
+  FROM mg LEFT JOIN q ON q.repo = mg.repo AND q.issue = mg.issue AND q.at <= mg.at
+)
+SELECT repo, week, train, train_reason, count(*) AS merges,
+       count(*) FILTER (WHERE tree_matched = false) AS tree_mismatches,
+       array_agg(round(wait_min::numeric, 1) ORDER BY wait_min) FILTER (WHERE wait_min IS NOT NULL) AS waiting_for_merge_min
+FROM m
+GROUP BY repo, week, train, train_reason
+ORDER BY week DESC, train, train_reason;
+```
+
 `callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
 claimed before `since` read unlinked and shorten its overlap window; the saved queries above look at all
 time.

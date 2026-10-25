@@ -9,6 +9,8 @@
 #          [--base BRANCH] [--issue N] [--emit-verified]
 #        callum-flow-merge-guard <pr> --patch ID [--expect closing|refs]
 #          [--base BRANCH] [--issue N] [--emit-verified]
+#        callum-flow-merge-guard <pr> --patch ID --tested-tree SHA [--expect closing|refs]
+#          [--base BRANCH] [--issue N] [--emit-verified]
 #        callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]
 #   --patch ID is the factory loop's mode (docs/factory-loop/v2/SPEC.md 9.4): it checks only
 #   facts the loop owns. The head and gates guards and the run lookup are not run (no
@@ -19,6 +21,10 @@
 #   parses the reason's words: read is a fact the guard could not read, verify, derive or
 #   compute, its reason ending with what the read printed on stderr; policy is what only the owner can change (an untrusted author, another base, a
 #   draft, a branch without an issue). Without --patch the guard is as before.
+#   --tested-tree SHA (only with --patch) is the merge train's check (docs/factory-loop/v2/SPEC.md 9.4): the
+#   tree CI already passed. It adds the tree guard, which passes only when git merge-tree of origin/<pr
+#   base> and the PR head gives exactly that tree, and a BEHIND merge state is then no FAIL (the tree guard
+#   stands in for it). A conflict or another tree is class=behind, a failed fetch or read class=read.
 #   --update-behind is the one mode that writes (cbundy/dev-system#476): for a PR that is
 #   only BEHIND its base it rebases the branch in a throwaway worktree, proves the patch
 #   is unchanged against the gated run's head, and pushes with a lease on the old head.
@@ -48,6 +54,7 @@
 #          run per workflow and event is completed with success, skipped or neutral (a run
 #          with no job yet is in no check list)
 #   gates    the run has no step parked at a gate and is not failed or aborted
+#   tree     (--patch with --tested-tree only) merging the PR head onto origin/<pr base> gives the tested tree
 #   base     the PR targets the default branch, or --base BRANCH
 #   mergeable  GitHub would merge it now: open, not a draft, not conflicting,
 #          not behind its base, branch rules met (cbundy/dev-system#246)
@@ -100,17 +107,17 @@ PATCH_ID=${CALLUM_FLOW_PATCH_ID_BIN:-$here/callum-flow-patch-id}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
-  echo "usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID | --patch ID] [--base BRANCH] [--issue N] [--emit-verified] | <pr> --update-behind [--run ID] [--base BRANCH]" >&2
+  echo "usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID | --patch ID] [--base BRANCH] [--issue N] [--emit-verified] | <pr> --patch ID --tested-tree SHA [...] | <pr> --update-behind [--run ID] [--base BRANCH]" >&2
   exit 2
 }
 
-pr='' expect='' run='' base='' issue='' emit='' update_behind='' patch=''
+pr='' expect='' run='' base='' issue='' emit='' update_behind='' patch='' tested_tree=''
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) usage ;;
     --emit-verified) emit=1 ;;
     --update-behind) update_behind=1 ;;
-    --expect | --run | --base | --issue | --patch)
+    --expect | --run | --base | --issue | --patch | --tested-tree)
       [ $# -ge 2 ] || usage "$1 needs a value"
       case "$1" in
         --expect) expect=$2 ;;
@@ -118,6 +125,7 @@ while [ $# -gt 0 ]; do
         --base) base=$2 ;;
         --issue) issue=$2 ;;
         --patch) patch=$2 ;;
+        --tested-tree) tested_tree=$2 ;;
       esac
       shift
       ;;
@@ -131,6 +139,9 @@ case "$pr" in *[!0-9]*) usage "<pr> must be a number" ;; esac
 case "$expect" in "" | closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
 case "$issue" in *[!0-9]*) usage "--issue must be a number" ;; esac
 command -v jq > /dev/null 2>&1 || usage "jq not found"
+[ -z "$tested_tree" ] || [ -z "$update_behind" ] || usage "--tested-tree is refused with --update-behind"
+[ -z "$tested_tree" ] || [ -n "$patch" ] || usage "--tested-tree needs --patch"
+[ -z "$tested_tree" ] || printf '%s\n' "$tested_tree" | grep -Eqx '[0-9a-f]{40}' || usage "--tested-tree must be a tree sha (40 lowercase hex characters)"
 [ -z "$update_behind" ] || { [ -z "$emit" ] && [ -z "$expect" ] && [ -z "$issue" ] && [ -z "$patch" ]; } || usage "--update-behind takes only --run and --base"
 if [ -n "$patch" ]; then
   printf '%s\n' "$patch" | grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' || usage "--patch must be a patch id (40 or 64 hex characters)"
@@ -568,6 +579,30 @@ if [ -n "$patch" ]; then
   fi
 fi
 
+# --- tree (--tested-tree only) -------------------------------------------------------------
+# The merge of the PR head onto the base as it is now must give exactly the tree CI passed, so a
+# base that moved without changing that result (or a train that already carries it) still merges.
+if [ -n "$tested_tree" ]; then
+  if [ -z "$pr_head" ] || [ -z "$pr_base" ]; then
+    fail tree "cannot read the PR head or base, so the merge tree was not computed$pj_said" read
+  elif ! git fetch --quiet origin "+refs/heads/$pr_base:refs/remotes/origin/$pr_base" 2> "$errf"; then
+    fail tree "cannot fetch origin/$pr_base$(said)" read
+  elif ! git fetch --quiet origin "$pr_head" 2> "$errf" && ! git cat-file -e "$pr_head^{commit}" 2> /dev/null; then
+    fail tree "cannot fetch the PR head $pr_head$(said)" read
+  else
+    t_rc=0
+    t_out=$(git merge-tree --write-tree "origin/$pr_base" "$pr_head" 2> "$errf") || t_rc=$?
+    t_tree=$(printf '%s\n' "$t_out" | sed -n 1p)
+    if [ "$t_rc" -eq 1 ]; then
+      fail tree "merging $pr_head onto origin/$pr_base conflicts, so no tree can match the tested $tested_tree" behind
+    elif [ "$t_rc" -ne 0 ] || ! printf '%s\n' "$t_tree" | grep -Eqx '[0-9a-f]{40}'; then
+      fail tree "cannot compute the merge tree of $pr_head onto origin/$pr_base (exit $t_rc)$(said)" read
+    elif [ "$t_tree" != "$tested_tree" ]; then
+      fail tree "merging $pr_head onto origin/$pr_base gives tree $t_tree, not the tested $tested_tree" behind
+    fi
+  fi
+fi
+
 # --- base --------------------------------------------------------------------
 if [ -z "$pr_base" ]; then
   fail base "cannot read the PR base$pj_said" read
@@ -607,7 +642,7 @@ while :; do
       mverdict=fail mreason="conflicts with $mbase$rebase_fix" mclass=conflict
     else
       case "$mmss" in
-        BEHIND) mverdict=fail mreason="behind $mbase$behind_fix" mclass=behind ;;
+        BEHIND) if [ -n "$tested_tree" ]; then mverdict=pass; else mverdict=fail mreason="behind $mbase$behind_fix" mclass=behind; fi ;;
         BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews); read which rule is unmet, never use --admin" ;;
         CLEAN | UNSTABLE | HAS_HOOKS) mverdict=pass ;;
       esac

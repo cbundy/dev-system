@@ -312,7 +312,11 @@ export const SCHEMAS: Record<string, Shape> = {
       "merged_at": {"format":"date-time","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
       "recovered": {"type":"boolean"},
+      "tested_tree": {"pattern":"^[0-9a-f]{40}$","type":["null","string"]},
       "title": {"maxLength":256,"type":["null","string"]},
+      "train": {"enum":["dropped","rode",null]},
+      "train_reason": {"enum":["conflict","head-moved","left-queue","outside-merge","refused","train-red","tree-mismatch",null]},
+      "tree_matched": {"type":["boolean","null"]},
     },
   },
   "milestone_state.v1": {

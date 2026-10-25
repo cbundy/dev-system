@@ -30,10 +30,14 @@ name: CI
 #   compatibility test (tests/schema-compat.test.js), which runs the last 10 minor releases'
 #   writers and readers against head's factory schema (full clone with tags; TEST_REQUIRE_TAGS=1).
 # The heavy, path-filtered image and feature workflows stay separate.
+#
+# It also runs on every push to a `factory-train/**` branch: the factory loop's merge train
+# (docs/factory-loop/v2/SPEC.md 9.4) pushes the tree a merge would produce there, and the tree it
+# merges must have a CI run of its own, since the pull request's run tested another tree.
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "factory-train/**"]
   workflow_dispatch:
 
 permissions:

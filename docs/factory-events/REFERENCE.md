@@ -254,6 +254,7 @@ Example:
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `tag` | string | `released` | The release tag, for example v0.61.0. |
 | `taken_at` | string | `queue_snapshot` | When the pass that produced the view ended. |
+| `tested_tree` | string | `merged` | The tree sha CI passed on the train branch, set only when train is rode; null otherwise. |
 | `title` | string | `claimed`, `merged`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
@@ -261,6 +262,9 @@ Example:
 | `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
 | `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
 | `touches` | array of string | `intake_stamp` | The top-level paths the stamp says the issue touches. |
+| `train` | enum | `merged` | Whether the merge rode the merge train: rode when callum-flow-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
+| `train_reason` | enum | `merged` | Why a built train was dropped, set only when train is dropped; null otherwise. |
+| `tree_matched` | boolean | `merged` | When train is rode: whether the merge commit's tree equals tested_tree (false means main landed on a tree CI did not pass). null when there was no train or the merge commit's tree could not be read. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
 | `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
@@ -868,6 +872,10 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `merged_at` | string | optional | yes | format date-time | yes | When GitHub says the pull request merged (its mergedAt, copied as given). null when unknown. |
+| `train` | enum | optional | yes | one of "rode", "dropped", null | yes | Whether the merge rode the merge train: rode when callum-flow-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
+| `train_reason` | enum | optional | yes | one of "head-moved", "outside-merge", "conflict", "train-red", "left-queue", "tree-mismatch", "refused", null | yes | Why a built train was dropped, set only when train is dropped; null otherwise. |
+| `tested_tree` | string | optional | yes | pattern `^[0-9a-f]{40}$` | yes | The tree sha CI passed on the train branch, set only when train is rode; null otherwise. |
+| `tree_matched` | boolean | optional | yes |  | yes | When train is rode: whether the merge commit's tree equals tested_tree (false means main landed on a tree CI did not pass). null when there was no train or the merge commit's tree could not be read. |
 | `title` | string | optional | yes | maxLength 256 | yes | The closed issue's title when the event has an issue and its author is trusted, otherwise the pull request's title when its author is trusted, clipped to 256 characters. null when neither was read. |
 
 Example:

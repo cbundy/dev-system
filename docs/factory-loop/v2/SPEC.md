@@ -1839,7 +1839,8 @@ the guard checks only facts the loop owns:
 | linkage | `check-pr-linkage.sh` reports MATCH for the Rollout's expectation (it reads the issue from `issue-<N>` or `issue-<N>-...`; the loop also passes `--issue <N>`) | kept |
 | base | the PR targets the default branch | kept |
 | checks | at least one check, all passed or skipped, on the PR head; and the head's latest workflow run per workflow and event (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`) completed with success, skipped or neutral (a run with no job yet is in no check list); a failed, unparseable or truncated read is class `read` | kept |
-| mergeable | open, not a draft, not conflicting, not behind, branch rules met | kept |
+| mergeable | open, not a draft, not conflicting, not behind, branch rules met | kept; with `--tested-tree`, a `BEHIND` state passes (the `tree` guard stands in for it) |
+| tree | merging the PR head onto the current `origin/<base>` (`git merge-tree --write-tree`) gives exactly the tree `--tested-tree <sha>` names, the tree CI passed on a train branch; a conflict or another tree is class `behind`, a failed fetch or read class `read` | only with `--tested-tree` |
 | patch | the head's patch id (8.4) equals `--patch` | new |
 | head | the run's head against origin, the PR and every worktree | not run |
 | gates | the no-mistakes run has no parked step | not run |
