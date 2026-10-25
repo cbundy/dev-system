@@ -22,6 +22,7 @@ import type { StampOwned, StampTries, Stamps } from './stamps'
 import type { QueueView } from './queue-view'
 import type { MainReading } from './types-facts'
 import type { ReleasePrsRead } from './release-hold-types'
+import type { TrainAction, TrainDrop, TrainOutcome, TrainRead } from './train-types'
 
 export { LOOP_CAUSES, PERSON_CAUSES } from './types-facts'
 export type { InterventionWho, MainDeployment, MainReading, MainRun, MainWorkflow } from './types-facts'
@@ -264,7 +265,9 @@ export type V2Outcome =
   // prompt names it (5.1), and a resumed life finds a free's through rules-agent.ts leftoversOf; null
   // when nothing would have been lost
   | { kind: 'slot'; op: SlotOp; path: string | null; lease: string | null; head: string | null; killed: number | null; leftovers?: string | null }
-  | { kind: 'queue'; op: 'update' | 'merge'; merged: boolean; head: string | null; failClass: GuardClass | null; lines: string[] }
+  // drop: a train merge that fell back to the queue's own path, with why (9.8); the try is not counted toward the unknown
+  | { kind: 'queue'; op: 'update' | 'merge'; merged: boolean; head: string | null; failClass: GuardClass | null; lines: string[]; drop?: TrainDrop }
+  | TrainOutcome
   // an open PR adopted at claim (3.5)
   | { kind: 'adopt'; branch: string; pr: number | null; others: number[] }
 
@@ -274,7 +277,7 @@ export type V2Outcome =
 // checks this many trackers up (state.ts re-exports it).
 export const TRACKER_DEPTH = 3
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link', 'close-tracker', 'flake-bug', 'released', 'intake-stamp', 'upstream'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'queue-train', 'slot', 'link', 'close-tracker', 'flake-bug', 'released', 'intake-stamp', 'upstream'] as const
 // What F1 asks of the flake-bug executor: the test and its hash (the marker's), the bug's title and
 // body (without its markers; flakeIds are the flakes it lists), whether `ready` is allowed, the epic to link under, and what the bug's tell records.
 export type FlakeBugSpec = { hash: string; test: string; title: string; body: string; flakeIds: string[]; ready: boolean; epic: number | null; flakes: number; windowDays: number; firstFlakeAt: string; reason: string }
@@ -376,7 +379,9 @@ export type V2Action =
   | (ActionBase & { kind: 'ci-rerun'; pr: number; runId: string; round: number })
   // base: main's head at plan time (the key's); head: the PR's head as observe read it
   | (ActionBase & { kind: 'queue-update'; pr: number; base: string; head: string })
-  | (ActionBase & { kind: 'queue-merge'; issue: number; pr: number; head: string; patch: string })
+  // testedTree: the tree the train's CI passed (callum-flow-merge --tested-tree); trainDropped: why the record's train was dropped (--train-dropped); at most one
+  | (ActionBase & { kind: 'queue-merge'; issue: number; pr: number; head: string; patch: string; testedTree?: string; trainDropped?: TrainDrop })
+  | TrainAction
   | (ActionBase & { kind: 'slot'; op: SlotOp; life: string; path: string | null; lease: string | null; branch: string | null; marker: StepMarker | null; keepScratch: boolean })
 
 // --- labels and notices (appendix D) ---------------------------------------------------------------
@@ -445,7 +450,7 @@ export type V2Tell = (typeof V2_TELLS)[number]
 // --- rule ids (v2 SPEC 14.1) -------------------------------------------------------------------------
 
 export const V2_RULES = [
-  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1', 'I1',
+  'G1', 'G2', 'G3', 'G4', 'H1', 'H2', 'R1', 'R2', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Q1', 'Q2', 'Q3', 'W1', 'W2', 'O1', 'O2', 'O3', 'O4', 'O5', 'M1', 'F1', 'I1',
 ] as const
 export type V2Rule = (typeof V2_RULES)[number]
 
@@ -517,6 +522,8 @@ export type V2State = {
   waitsUnread?: Record<string, WaitUnread>
   // the open release bump PRs (sources-release.ts) the merge queue holds for; absent: none read
   releasePrs?: ReleasePrsRead
+  // the live trains' checks and the trees the rules compare (sources-train.ts); absent: none read
+  train?: TrainRead
   // the default branch as the last read that succeeded showed it (sources-main.ts); absent: none this pass
   main?: MainReading
   // the flakes in the window and the open flake bugs (sources-flakes.ts); absent: not read this pass

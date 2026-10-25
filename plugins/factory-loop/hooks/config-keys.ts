@@ -75,6 +75,7 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   minimumReleaseCadenceMs: 'next-pass',
   releaseBranchPrefix: 'next-pass',
   releaseHoldMs: 'next-pass',
+  mergeTrain: 'next-pass',
   releaseInProgressMs: 'next-pass',
   flakeWindowDays: 'next-pass',
   flakeBugMin: 'next-pass',

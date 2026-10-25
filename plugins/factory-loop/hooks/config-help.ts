@@ -91,6 +91,7 @@ export const SETTING_HELP: Record<string, string> = {
   windDownMinutes: 'minutes a requested wind-down may take; 0 turns wind-down off',
   minimumReleaseCadenceMs: 'the repo\'s minimum release cadence, at least 1h',
   releaseBranchPrefix: 'head-branch prefix of a release\'s bump PR; none turns the release hold off',
+  mergeTrain: 'on or off: test the record behind the head on a train branch and merge it right after the head without its own CI run',
   releaseHoldMs: 'the longest the merge queue holds per head of a bump PR; 0 turns the hold off',
   releaseInProgressMs: 'after a release task is done, no release review is planned for this long; 0 turns it off',
   flakeWindowDays: 'days back a test\'s flakes count toward a flake bug',

@@ -260,8 +260,50 @@ export function updateBranchArgv(repo: string, pr: number): string[] {
 
 // The merge, through the guard, on the approved patch only. The record's issue goes with it, so
 // the guard never reads the issue from the branch name (9.3).
-export function queueMergeArgv(pr: number, patch: string, issue: number): string[] {
-  return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue)]
+export function queueMergeArgv(pr: number, patch: string, issue: number, train: { testedTree?: string; trainDropped?: string } = {}): string[] {
+  return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue), ...(train.testedTree === undefined ? [] : ['--tested-tree', train.testedTree]), ...(train.trainDropped === undefined ? [] : ['--train-dropped', train.trainDropped])]
+}
+
+// --- the merge train (9.8, act-train.ts): git from the main checkout, touching no working tree ---------
+
+// A branch's tip, fetched into FETCH_HEAD only (no ref, no branch, no working tree), then read back.
+export function trainFetchArgv(branch: string): string[] {
+  return ['git', 'fetch', '--quiet', '--no-tags', 'origin', `refs/heads/${branch}`]
+}
+
+export function fetchHeadArgv(): string[] {
+  return ['git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}']
+}
+
+// The tree of merging two commits, with no working tree: exit 0 prints it first, exit 1 is a conflict.
+export function mergeTreeArgv(head: string, rider: string): string[] {
+  return ['git', 'merge-tree', '--write-tree', '--no-messages', head, rider]
+}
+
+// The train commit: the merged tree with the head and the rider as its parents.
+export function commitTreeArgv(tree: string, head: string, rider: string, message: string): string[] {
+  return ['git', 'commit-tree', tree, '-p', head, '-p', rider, '-m', message]
+}
+
+export function pushTrainArgv(sha: string, branch: string): string[] {
+  return ['git', 'push', '--quiet', 'origin', `${sha}:refs/heads/${branch}`]
+}
+
+export function deleteTrainArgv(branches: readonly string[]): string[] {
+  return ['git', 'push', '--quiet', 'origin', '--delete', ...branches.map(b => `refs/heads/${b}`)]
+}
+
+export function lsTrainArgv(prefix: string): string[] {
+  return ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${prefix}*`]
+}
+
+// A commit's check runs, and its tree (the loop compares trees, never trusts a name).
+export function commitChecksArgv(repo: string, sha: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${sha}/check-runs?per_page=100`]
+}
+
+export function commitTreeReadArgv(repo: string, sha: string): string[] {
+  return ['gh', 'api', `repos/${repo}/commits/${sha}`, '--jq', '.commit.tree.sha']
 }
 
 // A merged PR's size, for the recovered `merged` event (event-data.ts PrSize).

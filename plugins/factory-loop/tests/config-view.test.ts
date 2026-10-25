@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { GATE_CPUS, resolveGateConcurrency, shortDuration } from '../hooks/config'
+import { configHelpText } from '../hooks/config-help'
 import { configText, sourceOf, viewOf } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
@@ -32,7 +33,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Claims', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'passEvery', 'mainEvery', 'plugin', 'device', 'regime', 'maxInFlight', 'slotMemoryMiB', 'memoryReserveMiB', 'memory', 'memory ceiling', 'effective cap', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work', 'readyLabel', 'priorityLabel', 'skipLabels', 'queueScore', 'intakeStamp', 'intakeAreas',
-  'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'uiCapture', 'triageModel', 'intakeModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'reviewFixCap', 'conflictFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'releaseBranchPrefix', 'releaseHold', 'mergeTrain', 'releaseInProgress', 'stateTimeout', 'reviewer', 'reviewerModel', 'uiCapture', 'triageModel', 'intakeModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -247,6 +248,27 @@ describe('configText', () => {
     expect(line(set, 'releaseBranchPrefix')).toEndWith(' repo')
     expect(line(set, 'releaseHold')).toContain('off')
     expect(line(set, 'releaseHold')).toEndWith(' workspace')
+  })
+
+  test('mergeTrain (v2 SPEC 9.8) is off by default, takes true or false from the repo file and the workspace file, shows on or off with its source, and takes effect on the next pass', () => {
+    expect(DEFAULT_CONFIG.mergeTrain).toBe(false)
+    const def = configText(view({}), control(), NOW)
+    expect(line(def, 'mergeTrain')).toContain('off')
+    expect(line(def, 'mergeTrain')).toEndWith(' default')
+    const repo = configText(view({ mergeTrain: true }), control(), NOW)
+    expect(line(repo, 'mergeTrain')).toContain('on')
+    expect(line(repo, 'mergeTrain')).toEndWith(' repo')
+    // the workspace file wins over the repo's
+    const workspace = configText(view({ mergeTrain: true }, { mergeTrain: false }), control(), NOW)
+    expect(line(workspace, 'mergeTrain')).toContain('off')
+    expect(line(workspace, 'mergeTrain')).toEndWith(' workspace')
+    expect(loadConfig({ mergeTrain: true }).config.mergeTrain).toBe(true)
+    expect(loadConfig({}, { mergeTrain: true }).config.mergeTrain).toBe(true)
+    expect(loadConfig({ mergeTrain: 'yes' })).toMatchObject({ problems: ['mergeTrain: "yes" is not true or false'], config: { mergeTrain: false } })
+    expect(SETTING_EFFECT.mergeTrain).toBe('next-pass')
+    expect(checkSetting('mergeTrain', true)).toMatchObject({ ok: true, key: 'mergeTrain' })
+    expect(checkSetting('mergeTrain', 'yes')).toMatchObject({ ok: false, error: 'mergeTrain: "yes" is not true or false. Not changed.' })
+    expect(configHelpText()).toContain('mergeTrain')
   })
 
   test('releaseInProgress shows its value and source; 0 shows off', () => {
