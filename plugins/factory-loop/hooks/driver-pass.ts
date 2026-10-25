@@ -221,7 +221,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored, spendStored)
   const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
   S.passObserve = observeSplit
-  let state: State = { ...observed.state, hold: holdView() }
+  const holdSeen = holdView()
+  let state: State = { ...observed.state, hold: holdSeen }
   // the main checkout this pass read, for `/factory stamp` (driver-stamp.ts) in any mode
   S.checkout = state.checkout
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
@@ -461,7 +462,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     owner: result.owner,
     held: S.held === null ? null : { since: S.held.since },
   })
-  if (act) settleResumed()
+  if (act) settleResumed(holdSeen)
   const ledger = act ? live.ledger : state.ledger
   const offPass = S.offFinished.splice(0)
   if (tr !== null) {

@@ -95,8 +95,8 @@ const wake: Executor = async (ctx, action) => {
   const first = wakeLine(action, id, ctx.rt.repo)
   const details = [...action.context]
   try {
-    await ctx.io.submit(wakePrompt(first, details))
-    clearHeld(await ctx.io.now())
+    // only a confirmed delivery ends a hold: a prompt taken as queued may still be dropped (driver-io.ts)
+    if ((await ctx.io.submit(wakePrompt(first, details))) !== 'queued') clearHeld(await ctx.io.now())
   } catch (err) {
     if (SESSION_STOPPED.test(String(err))) markHeld(await ctx.io.now(), `${action.key}: ${String(err).slice(0, 200)}`)
     return { status: 'skipped', summary: `submit failed: ${String(err).slice(0, 200)}` }

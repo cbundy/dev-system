@@ -32,7 +32,9 @@ export type ActIo = {
   // TaskStop through $.tool.call, for one of the loop's own agents only (v2 SPEC 13.6.1, 13.13)
   stopAgent: (agentId: string) => Promise<{ stopped: boolean; error?: string }>
   // $.prompt.submit: a turn of its own once the session is idle (v2 SPEC 13.8.1)
-  submit: (text: string) => Promise<void>
+  // resolves 'queued' when the prompt is only queued after the grace window (it may still be dropped),
+  // else once it is confirmed delivered or throws when refused or dropped
+  submit: (text: string) => Promise<'queued' | void>
   // $.command.run rename (v2 SPEC 13.9.1)
   rename: (title: string) => Promise<void>
   // $.session.usage().rateLimits as percentages, for the pre-check before a token-spending

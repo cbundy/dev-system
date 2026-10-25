@@ -39,7 +39,8 @@ export function holdView(): HoldView {
   return { held: S.held, resumed: S.resumed }
 }
 
-// settleResumed: the pass logged the ended hold (or planned to), so it is not offered again.
-export function settleResumed(): void {
-  S.resumed = null
+// settleResumed: the pass planned with this view, so the ended hold it showed is not offered again.
+// A hold that ended after the view was read stays for the next pass to plan.
+export function settleResumed(seen: HoldView): void {
+  if (seen.resumed !== null && S.resumed === seen.resumed) S.resumed = null
 }

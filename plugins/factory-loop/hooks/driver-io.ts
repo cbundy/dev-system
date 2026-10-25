@@ -25,6 +25,7 @@ import type { V2Io } from './v2/types'
 import { processIdOf, withSlotLine } from './v2/workspace'
 import { newTitleFlight } from './title-flight'
 import { within } from './within'
+import { clearHeld } from './session-hold'
 import { DEFAULT_TOOLS_DIR, RENAME_TIMEOUT_MS, S, SPAWN_TIMEOUT_MS, STOP_TIMEOUT_MS, SUBMIT_GRACE_MS, live, liveV2, ping, settingsCache } from './driver-state'
 import type { AgentRow, Options } from './driver-state'
 
@@ -206,8 +207,12 @@ export function actIo($: EngineInterface): ActIo {
       )
       const early = await within($, SUBMIT_GRACE_MS, settled, 'submit').catch(() => 'queued')
       if (early === 'queued') {
-        void settled.then(why => (why === null ? undefined : S.lateDrop?.(prompt, why)))
-        return
+        // only a confirmed delivery ends a session hold: a queued prompt may still be dropped
+        void settled.then(async why => {
+          if (why === null) clearHeld(await $.clock.now())
+          else await S.lateDrop?.(prompt, why)
+        })
+        return 'queued'
       }
       if (early !== null) throw new Error(`the prompt was ${early}`)
     },

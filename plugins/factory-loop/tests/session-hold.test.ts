@@ -7,7 +7,7 @@ import { EMPTY_CONTROL } from '../hooks/config'
 import { statusText } from '../hooks/control'
 import { S } from '../hooks/driver-state'
 import { titleOf } from '../hooks/foundation'
-import { SESSION_STOPPED, clearHeld, heldSince, holdView, markHeld } from '../hooks/session-hold'
+import { SESSION_STOPPED, clearHeld, heldSince, holdView, markHeld, settleResumed } from '../hooks/session-hold'
 import type { HoldView } from '../hooks/session-hold'
 import type { Action } from '../hooks/types'
 import { planV2 } from '../hooks/v2/plan'
@@ -39,6 +39,20 @@ describe('the hold', () => {
     expect(heldSince()).toBeNull()
     expect(holdView().resumed).toEqual({ since: NOW, until: NOW + 60_000, spawns: 2, wakes: 1 })
     S.resumed = null
+  })
+})
+
+describe('settling an ended hold', () => {
+  test('only the view a plan saw is settled: a hold that ended during the pass waits for the next plan', () => {
+    S.held = null
+    S.resumed = null
+    markHeld(NOW, 'a')
+    const planned = holdView()
+    clearHeld(NOW + 1000)
+    settleResumed(planned)
+    expect(holdView().resumed).toMatchObject({ since: NOW })
+    settleResumed(holdView())
+    expect(holdView().resumed).toBeNull()
   })
 })
 
