@@ -6,8 +6,10 @@ import type { EngineInterface } from 'claude-code'
 import { MINUTE_MS, closeMinute, minuteOf, notePass, passesEventArgv } from './passes'
 import type { PassBook } from './passes'
 
+import { newSessionTokenState, readSessionTokens } from './session-tokens'
 import type { ObserveSplit } from './observe-clock'
 import type { Runtime } from './observe'
+import type { RunInit, RunResult } from './exec'
 
 export type SummaryHost = {
   // the last runtime the loop resolved
@@ -15,9 +17,12 @@ export type SummaryHost = {
   killed: () => Promise<boolean>
   // runs the event's argv, best-effort (one try, 60 s)
   send: (rt: Runtime, argv: string[]) => Promise<unknown>
+  // runs an argv (stat, dd, find) to read the session transcript, best-effort
+  run: (rt: Runtime, argv: string[], init: RunInit) => Promise<RunResult>
 }
 
 const book: PassBook = new Map()
+const sessionTokens = newSessionTokenState()
 let lockHeld = false
 let timer: { cancel: () => void } | null = null
 
@@ -39,6 +44,16 @@ export async function flushMinute($: EngineInterface, host: SummaryHost): Promis
   const rt = host.rt()
   if (rt === null) return
   const summary = closeMinute(book, minute, { mode: rt.mode, passEveryMs: rt.config.passEveryMs })
+  // read every minute, sent or not, so the offset advances and no tokens fall to a later minute
+  if (rt.configDir !== undefined && rt.sessionCwd !== undefined && rt.workspace !== undefined) {
+    const read = await readSessionTokens((argv, init) => host.run(rt, argv, init), sessionTokens, { configDir: rt.configDir, sessionCwd: rt.sessionCwd, session: rt.workspace.session }).catch(() => null)
+    if (read?.tokens) {
+      summary.inputTokens = read.tokens.input
+      summary.outputTokens = read.tokens.output
+      summary.cacheReadTokens = read.tokens.cacheRead
+      summary.cacheCreationTokens = read.tokens.cacheCreation
+    }
+  }
   if (rt.mode !== 'act' || rt.repo === '' || !lockHeld || (await host.killed())) return
   await host.send(rt, passesEventArgv(summary)).catch(() => undefined)
 }

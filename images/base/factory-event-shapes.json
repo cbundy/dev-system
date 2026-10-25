@@ -1044,6 +1044,20 @@
             "null"
           ]
         },
+        "cache_creation_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cache_read_tokens": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "errors": {
           "minimum": 0,
           "type": "integer"
@@ -1053,6 +1067,13 @@
           "type": "string"
         },
         "idle_mean_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input_tokens": {
           "minimum": 0,
           "type": [
             "integer",
@@ -1102,6 +1123,13 @@
           ]
         },
         "observe_mean_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_tokens": {
           "minimum": 0,
           "type": [
             "integer",

@@ -31,11 +31,12 @@ export function fieldsOf(t: StepTokens, sum: Omit<StepTokens, 'model'> = t): Tok
   return { input_tokens: sum.input, output_tokens: sum.output, cache_read_tokens: sum.cacheRead, cache_creation_tokens: sum.cacheCreation, model: t.model }
 }
 
-// tokensOf: a transcript's usage once per distinct requestId (the last one seen wins; a line without
-// a requestId is a request of its own), and the model of most requests (a tie goes to the one seen
-// later). An unparsable line is skipped; the `<synthetic>` model of the harness's own notices is not a model.
-export function tokensOf(text: string): StepTokens {
-  type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; model: string | null }
+export type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; model: string | null }
+
+// turnsOf: a transcript's requests by requestId, the last line of a request winning (a line without
+// a requestId is a request of its own, keyed with a NUL prefix). An unparsable line is skipped; the
+// `<synthetic>` model of the harness's own notices is not a model.
+export function turnsOf(text: string): Map<string, Turn> {
   const turns = new Map<string, Turn>()
   let anon = 0
   for (const raw of text.split('\n')) {
@@ -69,6 +70,13 @@ export function tokensOf(text: string): StepTokens {
       turn.cacheCreation = n('cache_creation_input_tokens')
     }
   }
+  return turns
+}
+
+// tokensOf: a transcript's usage once per distinct requestId, and the model of most requests (a tie
+// goes to the one seen later).
+export function tokensOf(text: string): StepTokens {
+  const turns = turnsOf(text)
   const total: StepTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, model: null }
   const seen = new Map<string, { count: number; last: number }>()
   let i = 0

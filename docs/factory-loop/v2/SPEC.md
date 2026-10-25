@@ -3343,8 +3343,13 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   error passes included; percentiles are nearest-rank; a value with nothing behind it is
   null, and a minute with no pass ends sends `passes` 0). Sent only while the loop runs in act
   mode, the kill switch is off and the last pass held the act lock; otherwise the minute is
-  dropped. It is bookkeeping, never a stage or progress, and builds no ledger entry; the reader
-  does any weighting.
+  dropped. It also carries the orchestrator session's own `input_tokens`, `output_tokens`,
+  `cache_read_tokens` and `cache_creation_tokens` for the minute (#1302), read by
+  `hooks/session-tokens.ts` from the main session's transcript (only the bytes added since the
+  previous minute's read, once per `requestId`; step agents are on `loop_entry`). They are read
+  every minute, sent or not, and are null for the first read of a session in the process, when the
+  transcript cannot be found or read, and when the runtime knows no config dir. It is bookkeeping,
+  never a stage or progress, and builds no ledger entry; the reader does any weighting.
 
 The rate-cap holds and the ping-storm breaker are no longer logged as events (dev-system#1142): the
 pass line's `capped` and `breaker` and the breaker's intervention record them.
