@@ -8,7 +8,7 @@
 # moves an older Claude login into a shared Claude login directory,
 # points codex's telemetry at OTEL_EXPORTER_OTLP_ENDPOINT when the runtime
 # sets one, re-points git at gh's credentials, clones the workspace repo
-# (DEV_REPO_URL) on first start, recovers no-mistakes runtime state, starts
+# (DEV_REPO_URL) on first start, starts
 # the agentsview session push when one is configured, checks the optional
 # /shared mount, starts the login page when DEV_LOGIN_PORT asks for it and,
 # last, installs the Claude plugins: the image's default ones
@@ -17,10 +17,9 @@
 # devcontainer metadata, or the runtime's own start hook).
 #
 # Usage: dev-init [--repo | --plugins]
-#   --repo runs only the repo steps (5a, 5, 6, 11, 7, in that order): the token login, git
-#   credentials, the clone or fetch, the Claude plugins and the no-mistakes
-#   recovery. dev-login runs it once gh's login is done, for a clone that was
-#   waiting for one.
+#   --repo runs only the repo steps (5a, 5, 6, 11, in that order): the token login, git
+#   credentials, the clone or fetch and the Claude plugins. dev-login runs it once
+#   gh's login is done, for a clone that was waiting for one.
 #   --plugins runs only step 11, the Claude plugins (the retry dev-doctor
 #   names for a missing default plugin).
 #
@@ -52,7 +51,6 @@ case "${1:-}" in
     ;;
 esac
 
-CALLUM_TOOLS=/usr/local/share/callum-tools
 # Held by the running agentsview push loop; container-local on purpose (see
 # start_agentsview_push). dev-doctor reads the same path.
 AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
@@ -193,105 +191,6 @@ seed_codex_config() {
 . /usr/local/share/dev-system/codex-otel.sh
 configure_codex_otel() {
   codex_otel_configure "${CODEX_HOME:-/persist/codex}/config.toml" /usr/local/share/dev-system/telemetry.sh
-}
-
-# 4. The no-mistakes managed block in the global config: three parts - the
-#    pipeline's ordered agent list (`agent: [codex, claude]`), the model pin
-#    (`agent_config`: codex, and claude's model and effort) and the review
-#    roles (`review_agents`: reviewer and fixer, no fallback). Rewritten on every start so a change
-#    reaches a workspace whose /persist outlived the image (pin-codex-model.sh
-#    has the rules: a key set by hand outside the block wins over its part
-#    only, the old unmarked block is migrated). Each value comes from the
-#    first of these that has it:
-#    - DEV_NM_AGENTS / DEV_CODEX_MODEL / DEV_CLAUDE_MODEL / DEV_CLAUDE_EFFORT /
-#      DEV_REVIEW_AGENT / DEV_REVIEW_MODEL / DEV_REVIEW_EFFORT, when set at
-#      all: an empty value skips that part (an empty agent list writes no
-#      `agent`, an empty codex model no pin, an empty review agent no
-#      review roles);
-#    - each file model_sources lists (models.sh parses them, never sources):
-#      the models file fetched once per start from DEV_MODELS_URL (default:
-#      images/base/models.env on this repo's main branch, so a merged change
-#      reaches every workspace on its next start; empty turns the fetch off),
-#      then the copy baked into the image, the offline fallback. Per key, a
-#      valid fetched value beats the baked one.
-#    A changed block makes step 7 restart a running daemon, which reads the
-#    config only at start-up.
-MODELS_BAKED=/usr/local/share/dev-system/models.env
-MODELS_FETCHED=""
-MODELS_URL_USED=""
-NM_PIN_CHANGED=false
-
-# The models files to read, highest precedence first.
-model_sources() {
-  [ -z "$MODELS_FETCHED" ] || echo "$MODELS_FETCHED"
-  echo "$MODELS_BAKED"
-}
-
-# resolve_model <env var> <models.env key>: the value to write, or nothing.
-resolve_model() {
-  local sources
-  mapfile -t sources < <(model_sources)
-  models_resolve "$1" "$2" "${sources[@]}"
-}
-
-# fetch_models: fetches the models file from DEV_MODELS_URL into
-# MODELS_FETCHED. Any failure is one WARNING, and the baked file is used.
-fetch_models() {
-  local url tmp reason
-  url=$(models_url) || return 0
-  if ! tmp=$(mktemp "${TMPDIR:-/tmp}/dev-models.XXXXXX"); then
-    log "WARNING: could not fetch the models file from $url (no temp file) - using the image's baked models"
-    return 0
-  fi
-  if reason=$(models_fetch "$url" "$tmp"); then
-    MODELS_FETCHED="$tmp"
-    MODELS_URL_USED="$url"
-  else
-    log "WARNING: could not use the models file from $url ($reason) - using the image's baked models"
-    rm -f "$tmp"
-  fi
-}
-
-seed_no_mistakes_model() {
-  local nm_home="${NM_HOME:-/persist/no-mistakes}" agents codex claude claude_effort out block pin
-  local review_agent review_model review_effort review
-  [ -w "$nm_home" ] || return 0
-  # shellcheck source=models.sh
-  . /usr/local/share/dev-system/models.sh
-  fetch_models
-  agents=$(resolve_model DEV_NM_AGENTS AGENTS)
-  codex=$(resolve_model DEV_CODEX_MODEL CODEX_MODEL)
-  claude=$(resolve_model DEV_CLAUDE_MODEL CLAUDE_MODEL)
-  claude_effort=$(resolve_model DEV_CLAUDE_EFFORT CLAUDE_EFFORT)
-  review_agent=$(resolve_model DEV_REVIEW_AGENT REVIEW_AGENT)
-  review_model=$(resolve_model DEV_REVIEW_MODEL REVIEW_MODEL)
-  review_effort=$(resolve_model DEV_REVIEW_EFFORT REVIEW_EFFORT)
-  if [ -n "$MODELS_FETCHED" ]; then
-    rm -f "$MODELS_FETCHED"
-    MODELS_FETCHED=""
-  fi
-  if ! out=$("$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$codex" "$claude" "$agents" "$claude_effort" "$review_agent" "$review_model" "$review_effort"); then
-    log "WARNING: could not write the no-mistakes managed block (agent order, model pin and review roles) to $nm_home/config.yaml"
-    return 0
-  fi
-  [ "$out" = changed ] || return 0
-  NM_PIN_CHANGED=true
-  if grep -q '^# BEGIN dev-system managed' "$nm_home/config.yaml"; then
-    # What the block holds: a key set by hand outside it drops its part.
-    block=$(sed -n '/^# BEGIN dev-system managed/,/^# END dev-system managed$/p' "$nm_home/config.yaml")
-    agents=$(printf '%s\n' "$block" | sed -n 's/^agent: \[\(.*\)\]$/\1/p' | sed 's/, /,/g')
-    pin="no model pin"
-    review="no review roles"
-    if printf '%s\n' "$block" | grep -q '^agent_config:'; then
-      pin="codex ${codex}${claude:+, claude $claude}${claude_effort:+ ($claude_effort)}"
-    fi
-    printf '%s\n' "$block" | grep -q '^review_agents:' \
-      && review="review ${review_agent}${review_model:+ $review_model}${review_effort:+ ($review_effort)}, no fallback"
-    log "no-mistakes managed block in $nm_home/config.yaml: agents ${agents:-not set}; $pin; $review"
-  else
-    log "removed dev-init's no-mistakes managed block from $nm_home/config.yaml"
-  fi
-  [ -z "$MODELS_URL_USED" ] || log "models read from $MODELS_URL_USED, with the image's baked models as the fallback"
 }
 
 # 5a. Token mode (cbundy/dev-system#728): with DEV_GH_TOKEN_FILE set, gh holds
@@ -477,7 +376,7 @@ sync_repo() {
   local ssh_cmd="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
   if [ -e "$ws/.git" ]; then
-    # No remote (or a repo git refuses to read, which step 7 reports): nothing to fetch.
+    # No remote (or a repo git refuses to read, which dev-doctor reports): nothing to fetch.
     [ -n "$(git -C "$ws" remote 2>/dev/null)" ] || return 0
     out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 "${gitx[@]}" -C "$ws" fetch --prune --quiet 2>&1) \
       || log "WARNING: git fetch in $ws failed ($(git_reason "$out")) - carrying on with the refs already there"
@@ -519,65 +418,6 @@ sync_repo() {
   fi
 }
 
-# 7. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
-#    the daemon is a process and is gone after every restart, so it is started
-#    whenever the workspace opts in (restarted instead when step 4 changed the
-#    managed block under a daemon that is already running). Then the callum-tools recovery re-registers
-#    a repo the daemon has lost (e.g. a fresh volume).
-#    `daemon start` waits up to 135s for a daemon that never answers
-#    (cbundy/dev-system#101), so each call here has its own short limit: a
-#    stuck no-mistakes never holds up the steps after this one (the login page
-#    above all). The recovery script bounds its own calls; the outer limit is
-#    only a backstop.
-NM_START_LIMIT=30
-NM_RECOVER_LIMIT=100
-recover_no_mistakes() {
-  local ws top out rc action nm_home="${NM_HOME:-/persist/no-mistakes}"
-  # shellcheck disable=SC2119 # the argument is optional; none means the default
-  ws=$(workspace)
-  command -v no-mistakes >/dev/null 2>&1 || return 0
-  [ -d "$ws" ] || return 0
-  if ! top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null); then
-    if [ -e "$ws/.git" ]; then
-      log "WARNING: git cannot read the repo at $ws (owned by $(stat -c %U "$ws" 2>/dev/null), not $(id -un)) - no-mistakes recovery skipped."
-      log "  Fix: chown -R 1000:1000 the checkout, or: git config --global --add safe.directory $ws"
-    fi
-    return 0
-  fi
-  [ -f "$top/.no-mistakes.yaml" ] || return 0
-  [ -w "$nm_home" ] || return 0
-  # A daemon already running (a second dev-init in this container) read the
-  # config before step 4 rewrote the managed block, so it is restarted to see it.
-  # `daemon status` exits 0 either way; only its text tells running from not.
-  action=start
-  if [ "$NM_PIN_CHANGED" = true ] \
-    && out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon status </dev/null 2>&1) \
-    && printf '%s\n' "$out" | grep -qi 'daemon running'; then
-    action=restart
-  fi
-  out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon "$action" </dev/null 2>&1)
-  rc=$?
-  case "$rc" in
-    0) [ "$action" = start ] || log "restarted the no-mistakes daemon so it runs on the new agent order and model pin" ;;
-    124 | 137)
-      log "WARNING: no-mistakes daemon $action did not finish within ${NM_START_LIMIT}s - the no-mistakes daemon is not running, and the repo recovery is skipped."
-      log "  Fix: see $nm_home/logs (cli.log, daemon-bootstrap.log), then run in $top: no-mistakes daemon $action && no-mistakes init"
-      return 0
-      ;;
-    *)
-      # Already running is the normal case on a second dev-init.
-      printf '%s\n' "$out" | grep -qi 'already running' \
-        || log "WARNING: no-mistakes daemon $action failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
-      ;;
-  esac
-  ( cd "$top" && timeout -k 5 "$NM_RECOVER_LIMIT" "$CALLUM_TOOLS/recover-no-mistakes.sh" </dev/null )
-  case $? in
-    124 | 137) log "WARNING: the no-mistakes recovery did not finish within ${NM_RECOVER_LIMIT}s - stopped. Fix: run in $top: no-mistakes init" ;;
-  esac
-  return 0
-}
-
-# Sets a top-level key in a TOML file: replaced where it already appears
 # before the first [table], otherwise prepended (top-level keys must come
 # before any table). The value is passed through the environment, not awk -v,
 # so backslashes in it reach the file unchanged. With "seed" as the fourth
@@ -785,7 +625,6 @@ if [ "${1:-}" = --repo ]; then
   sync_repo
   install_plugins
   write_versions
-  recover_no_mistakes
   exit 0
 fi
 if [ "${1:-}" = --plugins ]; then
@@ -801,13 +640,11 @@ seed_claude_config
 adopt_claude_login
 seed_codex_config
 configure_codex_otel
-seed_no_mistakes_model
 setup_claude_api_key
 setup_gh_token
 setup_git_credentials
 sync_repo
 run_factory_db_migrate
-recover_no_mistakes
 write_versions
 start_agentsview_push
 start_factory_event_push

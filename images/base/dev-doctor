@@ -158,67 +158,11 @@ if command -v gh >/dev/null 2>&1 && ! gh_token_mode; then
   esac
 fi
 
-if ! command -v no-mistakes >/dev/null 2>&1; then
-  fail "no-mistakes is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
-else
-  ok "no-mistakes is installed"
-  # The managed block's agents, models and review roles (dev-init writes it),
-  # read from the global config the daemon uses.
-  nm_cfg="${NO_MISTAKES_HOME:-${NM_HOME:-/persist/no-mistakes}}/config.yaml"
-  if [ -r "$nm_cfg" ] && grep -q '^# BEGIN dev-system managed' "$nm_cfg"; then
-    nm_block=$(sed -n '/^# BEGIN dev-system managed/,/^# END dev-system managed$/p' "$nm_cfg")
-    nm_agents=$(printf '%s\n' "$nm_block" | sed -n 's/^agent: \[\(.*\)\]$/\1/p' | sed 's/, /,/g')
-    # The first value of KEY under the top-level key "$1", optionally under its
-    # sub-key "$2" (a harness or a role).
-    nm_val() {
-      printf '%s\n' "$nm_block" | awk -v top="$1" -v sub1="$2" -v key="$3" '
-        /^[^ #]/ { in_top = ($0 == top ":"); in_sub = 0; next }
-        in_top && /^  [^ ]/ { in_sub = ($0 == "  " sub1 ":"); next }
-        in_top && in_sub && $1 == key ":" { print $2; exit }'
-    }
-    nm_codex=$(nm_val agent_config codex model)
-    nm_claude=$(nm_val agent_config claude model)
-    nm_claude_eff=$(nm_val agent_config claude effort)
-    nm_rev_agent=$(nm_val review_agents reviewer agent)
-    nm_rev_model=$(nm_val review_agents reviewer model)
-    nm_rev_eff=$(nm_val review_agents reviewer effort)
-    nm_summary="agents ${nm_agents:-not set}; "
-    if [ -n "$nm_codex" ]; then
-      nm_summary="${nm_summary}codex ${nm_codex}${nm_claude:+, claude $nm_claude}${nm_claude_eff:+ ($nm_claude_eff)}; "
-    else
-      nm_summary="${nm_summary}no model pin; "
-    fi
-    if [ -n "$nm_rev_agent" ]; then
-      nm_summary="${nm_summary}review ${nm_rev_agent}${nm_rev_model:+ $nm_rev_model}${nm_rev_eff:+ ($nm_rev_eff)}, no fallback"
-    else
-      nm_summary="${nm_summary}no review roles"
-    fi
-    info "no-mistakes managed block: $nm_summary"
-    # A review agent that is not installed fails every gate at review: it has no fallback.
-    if [ -n "$nm_rev_agent" ] && ! command -v "$nm_rev_agent" >/dev/null 2>&1; then
-      warn "the review agent '$nm_rev_agent' is not on PATH, so every no-mistakes gate will fail at review (the review roles have no fallback)" \
-        "install $nm_rev_agent, or set DEV_REVIEW_AGENT to an installed agent (empty drops the review roles)"
-    fi
-  fi
-  if top=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null); then
-    if [ -f "$top/.no-mistakes.yaml" ]; then
-      # Registered means a clean exit AND the repo line; anything else (not
-      # initialized, unwritable NM_HOME, a broken database) is a failure.
-      if status=$(cd "$top" && no-mistakes status 2>&1) \
-        && ! printf '%s\n' "$status" | grep -q "repo not initialized" \
-        && printf '%s\n' "$status" | grep -qE '^[[:space:]]*repo:'; then
-        ok "no-mistakes: $top is registered"
-      else
-        fail "no-mistakes: $top is not registered or no-mistakes is broken ($(printf '%s\n' "$status" | head -n 1))" \
-          "run: dev-init (or no-mistakes daemon start && no-mistakes init) in $top"
-      fi
-    fi
-  elif [ -e "$workspace/.git" ]; then
-    # git refuses repos owned by another user ("dubious ownership"), which
-    # hides the workspace from every git-based tool, no-mistakes included.
-    fail "git cannot read the repo at $workspace (owned by $(stat -c %U "$workspace" 2>/dev/null), not $(id -un))" \
-      "chown -R 1000:1000 the checkout, or run: git config --global --add safe.directory $workspace"
-  fi
+# git refuses repos owned by another user ("dubious ownership"), which hides
+# the workspace from every git-based tool.
+if ! git -C "$workspace" rev-parse --show-toplevel >/dev/null 2>&1 && [ -e "$workspace/.git" ]; then
+  fail "git cannot read the repo at $workspace (owned by $(stat -c %U "$workspace" 2>/dev/null), not $(id -un))" \
+    "chown -R 1000:1000 the checkout, or run: git config --global --add safe.directory $workspace"
 fi
 
 # The workspace repo (cbundy/dev-system#77). With DEV_REPO_URL set, its

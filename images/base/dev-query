@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # dev-query: run SQL against the central agentsview PostgreSQL (the factory.events
-# and nomistakes tables), or with --factory against the factory database (the
+# table; the old nomistakes tables remain but are no longer filled), or with --factory against the factory database (the
 # factory.event_log view, as the reader role), without the URL ever reaching argv, the environment, or
 # output (cbundy/dev-system#292). images/base/README.md, "dev-query".
 #

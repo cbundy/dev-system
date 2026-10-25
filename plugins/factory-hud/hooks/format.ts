@@ -96,7 +96,7 @@ export function statusText(r: Readout, now: number, zone: string | undefined): s
   return parts.join('  ')
 }
 
-// versionsText: Claude Code's version, then callum-flow, the base image and no-mistakes
+// versionsText: Claude Code's version, then callum-flow and the base image
 // from dev-version's snapshot when there is one.
 export function versionsText(claude: string, snapshot: string | undefined): string {
   const parts = [`cc ${claude.split(' ')[0]}`]
@@ -105,12 +105,9 @@ export function versionsText(claude: string, snapshot: string | undefined): stri
       const v = JSON.parse(snapshot) as {
         plugin_version?: string | null
         base_image?: string | null
-        components?: { name?: string; running?: string | null }[]
       }
       if (v.plugin_version) parts.push(`flow ${v.plugin_version}`)
       if (v.base_image) parts.push(`img ${v.base_image}`)
-      const nm = v.components?.find(c => c.name === 'no-mistakes')?.running
-      if (nm) parts.push(`nm ${nm}`)
     } catch {
       // A snapshot that is not JSON adds nothing.
     }

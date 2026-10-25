@@ -17,9 +17,8 @@ mkdir -p "$HOME/.local/bin"
 export PATH="$HOME/.local/bin:$PATH"
 
 # Each install is judged by its outcome (is the tool on PATH afterwards?),
-# not by the installer's exit code: the no-mistakes installer, for example,
-# also tries to start its daemon, and a best-effort daemon launch failing
-# must not abort the remaining installs. A requested tool that is genuinely
+# not by the installer's exit code, so a best-effort step failing does not
+# abort the remaining installs. A requested tool that is genuinely
 # missing at the end still fails the whole setup.
 FAILED=""
 
@@ -47,28 +46,7 @@ if [ "${INSTALL_CLAUDE_CODE}" = "true" ]; then
   fi
 fi
 
-# 2. no-mistakes pipeline CLI. Its installer places the binary under
-#    ~/.no-mistakes/bin and symlinks it into ~/.local/bin. ~/.no-mistakes may
-#    be a bind mount from the host; that is fine - the installer overwrites
-#    the binary in place.
-if [ "${INSTALL_NO_MISTAKES}" = "true" ]; then
-  curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh || true
-  command -v no-mistakes >/dev/null 2>&1 || FAILED="$FAILED no-mistakes"
-
-  # Pin the codex model in the global config (the only place no-mistakes
-  # honours it); pin-codex-model.sh documents the rules and is shared with the
-  # dev-system base image. Its `changed` report is only for dev-init.
-  /usr/local/share/callum-tools/pin-codex-model.sh "$HOME/.no-mistakes/config.yaml" "${CODEX_MODEL:-}" >/dev/null
-
-  # Auto-recover runtime state that a container rebuild wipes even when the
-  # binaries survive: the daemon (a process) and repo registration under
-  # ~/.no-mistakes/repos/ (machine-local, even under a host bind mount - see
-  # issue #18). Best-effort and idempotent: no-op unless the workspace has a
-  # checked-in .no-mistakes.yaml and is currently unregistered.
-  /usr/local/share/callum-tools/recover-no-mistakes.sh || true
-fi
-
-# 3. treehouse (reusable worktree pool for parallel agents).
+# 2. treehouse (reusable worktree pool for parallel agents).
 if [ "${INSTALL_TREEHOUSE}" = "true" ]; then
   /usr/local/share/callum-tools/install-treehouse.sh || true
   command -v treehouse >/dev/null 2>&1 || FAILED="$FAILED treehouse"

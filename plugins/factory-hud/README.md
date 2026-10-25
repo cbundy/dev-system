@@ -3,7 +3,7 @@
 A Claude Code mod that keeps a one-line readout on screen:
 
 ```text
-20:41  ctx 42%  5h 73%  7d 53%  | 6 live: design 2 dev 1 pipe 2 merge 1 | queued 2  | cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0
+20:41  ctx 42%  5h 73%  7d 53%  | 6 live: design 2 dev 1 pipe 2 merge 1 | queued 2  | cc 2.1.296 flow 0.27.0 img 2.27.0
 ```
 
 - the time (in the workspace's `TZ`), the context window fill, and the plan's 5-hour and
@@ -12,7 +12,7 @@ A Claude Code mod that keeps a one-line readout on screen:
   [`callum-flow-factory-state`](../../docs/factory-state.md) state: `live` is every active
   state (designing, building, reviewing, fixing, parked, merge-queue), `design` designing,
   `dev` building, `pipe` reviewing, fixing plus parked, `merge` merge-queue, `queued` queued. Refreshed every minute; counts at least five minutes old show their age;
-- the versions of Claude Code, callum-flow, the base image and no-mistakes.
+- the versions of Claude Code, callum-flow and the base image.
 
 On usage measurements, it shows a toast once per conversation for each threshold: context
 at 85% or more, 5-hour usage at 90% or more, and 7-day usage at 90% or more.

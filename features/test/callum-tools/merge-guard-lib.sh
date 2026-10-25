@@ -249,8 +249,8 @@ expect_pass() {
 
 
 # test-weakening fixtures (cbundy/dev-system#314), used by both suites
-W1="WEAKENED commit=${SHA} step=ci restored=no files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only"
-W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 step=review restored=yes files=tests/c.test.js kinds=skip"
+W1="WEAKENED commit=${SHA} restored=no files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only"
+W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 restored=yes files=tests/c.test.js kinds=skip"
 
 # SKIP: the branch names no issue, so --issue N and the PR linkage decide
 skip() { echo 'SKIP #7 feat' > "$st/linkage"; }

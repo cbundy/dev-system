@@ -124,7 +124,7 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
   its summary line notes the skip and CI's `ci.yml` runs them.
 - `npm test` - the canonical test entrypoint (`scripts/test.sh`); see the
   [test runner reference](docs/architecture.md#test-runner) for job grouping and concurrency. The run is
-  sandboxed (shared defaults for events, no-mistakes, push state and agentsview use temporary
+  sandboxed (shared defaults for events and agentsview use temporary
   directories) and fails if any entries remain in those directories after the suites. It also
   runs a real PostgreSQL (a private cluster, or CI's service) with one throwaway `factory_test_*`
   database per test, and fails if one is left behind.

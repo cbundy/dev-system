@@ -6,7 +6,7 @@
 //   the step's scratch folder); a reader writes nowhere in the repository. The repository is the slot and the main
 //   checkout, whose tree holds the pool's other slots.
 // - Every loop agent: no GitHub writes (the loop owns PRs, issues, labels and re-runs), no
-//   no-mistakes, no axi, no push to a remote but origin, no call in the background (Bash or
+//   axi, no push to a remote but origin, no call in the background (Bash or
 //   Agent), no isolated Agent call.
 // - A writer pushes only its branch to origin, never by force, creates no branch and no worktree.
 // - A reader neither commits nor pushes.
@@ -72,7 +72,7 @@ const GH_WRITES: Record<string, readonly string[] | '*'> = {
 const GH_VALUED = ['-R', '--repo', '-H', '--header', '-q', '--jq', '-t', '--template', '-p', '--preview', '--hostname', '--cache']
 const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
 const FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input']
-const LOOP_TOOLS = ['no-mistakes', 'axi']
+const LOOP_TOOLS = ['axi']
 
 // The git options that come before the subcommand and take a value.
 const GIT_VALUED = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']

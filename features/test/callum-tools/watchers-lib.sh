@@ -4,7 +4,7 @@
 # watcher-sleep-queue.test.sh): sourced, never run, and named so the `*.test.sh`
 # glob in scripts/test.sh does not pick it up.
 #
-# Like recover-no-mistakes.test.sh, the suites run the scripts from their source
+# Like the other plain-shell suites, these run the scripts from their source
 # location with a stub `gh` on PATH - no Docker, no container
 # build - so `npm test` runs them anywhere. Most cases use a one-second poll
 # interval; sleep-kill cases use longer intervals to check the remaining wait.

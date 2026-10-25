@@ -8,10 +8,10 @@ echo "== 3. persistence contract"
 check "env vars point at /persist/*" in_image '
   [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ -z "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ] &&
   [ "$CODEX_HOME" = /persist/codex ] &&
-  [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ] &&
+  [ "$GH_CONFIG_DIR" = /persist/gh ] &&
   [ "$AGENTSVIEW_DATA_DIR" = /persist/agentsview ]'
 check "every /persist dir exists, is owned 1000:1000 with mode 0700 and is writable by node" in_image '
-  for d in /persist/claude /persist/claude-auth /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self; do
+  for d in /persist/claude /persist/claude-auth /persist/codex /persist/gh /persist/agentsview /persist/events /persist/dev-restart-self; do
     [ "$(stat -c %u:%g:%a "$d")" = 1000:1000:700 ] || { echo "$d: $(stat -c %u:%g:%a "$d")"; exit 1; }
     touch "$d/.probe" && rm "$d/.probe" || exit 1
   done'
@@ -19,10 +19,10 @@ check "the image ships /persist empty (no build-time state baked in)" in_image '
   [ -z "$(find /persist -mindepth 2 | head -n 1)" ] || { find /persist -mindepth 2; exit 1; }' \
   --entrypoint ""
 check "no tool binary lives under /persist" in_image '
-  for b in claude codex gh git no-mistakes treehouse uv uvx agentsview node; do
+  for b in claude codex gh git treehouse uv uvx agentsview node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
   done'
-check "the persistence list file, the label and PERSIST_NAMES agree on the eight dirs" bash -c "
+check "the persistence list file, the label and PERSIST_NAMES agree on the seven dirs" bash -c "
   want=\$(for n in $PERSIST_NAMES; do printf '/persist/%s,' \"\$n\"; done); want=\${want%,}
   [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \"\$want\" ] &&
   [ \"\$(docker run --rm --entrypoint '' '$IMAGE' cat /usr/local/share/dev-system/persist-dirs | paste -sd,)\" = \"\$want\" ]"

@@ -166,31 +166,6 @@ check "a page started anyway is detected (the check above is not vacuous)" in_c 
   pgrep -fx "node /usr/local/share/dev-system/dev-login-page.js" >/dev/null && (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null'
 docker rm -f "$c" >/dev/null
 
-# A no-mistakes whose `daemon start` never returns (cbundy/dev-system#101):
-# dev-init stops it at its own limit, says why with the fix, skips the
-# recovery (init would only wait the same way) and still starts the page.
-STUB_NM='#!/bin/bash
-echo "$*" >> /tmp/nm-calls
-[ "$*" = "daemon start" ] && exec sleep 1000
-[ "$1" = status ] && echo "repo not initialized (run no-mistakes init first)"
-exit 0'
-c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_NM="$STUB_NM" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude \
-  --entrypoint /usr/bin/tini "$IMAGE" -- bash -c "$WITH_STUB && printf '%s\n' \"\$STUB_NM\" > /tmp/stub/no-mistakes &&
-    chmod +x /tmp/stub/no-mistakes && git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r &&
-    start=\$(date +%s) && dev-init 2> /tmp/dev-init.log; echo \$((\$(date +%s) - start)) > /tmp/dev-init-took
-    exec sleep infinity")
-check "a no-mistakes daemon start that hangs: dev-init stops it at 30s, names the fix and still starts the page" bash -c "
-  for _ in \$(seq 90); do docker exec '$c' test -s /tmp/dev-init-took && break; sleep 1; done
-  docker exec '$c' cat /tmp/dev-init.log /tmp/nm-calls; took=\$(docker exec '$c' cat /tmp/dev-init-took)
-  echo \"dev-init took \${took}s\"
-  [ \"\$took\" -ge 30 ] && [ \"\$took\" -lt 60 ] &&
-  docker exec '$c' grep -qF 'dev-init: WARNING: no-mistakes daemon start did not finish within 30s' /tmp/dev-init.log &&
-  docker exec '$c' grep -qF 'then run in /tmp/r: no-mistakes daemon start && no-mistakes init' /tmp/dev-init.log &&
-  ! docker exec '$c' grep -qx init /tmp/nm-calls &&
-  docker exec '$c' grep -qF 'dev-init: started the login page on port 8765' /tmp/dev-init.log &&
-  [ \"\$(docker exec '$c' curl -fsS -m 5 localhost:8765/healthz)\" = ok ]"
-docker rm -f "$c" >/dev/null
-
 # The page behind a reverse proxy that serves it under a path prefix (#79):
 # the README's nginx rule, on a network with two page containers that publish
 # nothing. One rule reaches each container by name, and the page's links,

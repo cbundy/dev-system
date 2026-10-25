@@ -22,8 +22,8 @@ under_npm_test=${TEST_RESULTS_DIR:+1}
   test_sandbox_setup || fail "setup failed"
   trap test_sandbox_clean EXIT
 
-  [ "$(printf '%s\n' "$CALLUM_EVENTS_DIR" "$NO_MISTAKES_HOME" "$NM_PUSH_STATE_DIR" "$AGENTSVIEW_DATA_DIR" | sort -u | wc -l)" -eq 4 ] || fail "four distinct dirs expected"
-  for d in "$CALLUM_EVENTS_DIR" "$NO_MISTAKES_HOME" "$NM_PUSH_STATE_DIR" "$AGENTSVIEW_DATA_DIR"; do
+  [ "$(printf '%s\n' "$CALLUM_EVENTS_DIR" "$AGENTSVIEW_DATA_DIR" | sort -u | wc -l)" -eq 2 ] || fail "two distinct dirs expected"
+  for d in "$CALLUM_EVENTS_DIR" "$AGENTSVIEW_DATA_DIR"; do
     [ -d "$d" ] || fail "$d should exist"
     case "$d" in /persist/*) fail "$d must be outside /persist" ;; esac
     [ -z "$(ls -A "$d")" ] || fail "$d should start empty"

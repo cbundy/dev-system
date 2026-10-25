@@ -918,7 +918,6 @@ function doctorLines(ctx, env) {
       HOME: ctx.dir,
       XDG_CONFIG_HOME: path.join(ctx.dir, "xdg"),
       AGENTSVIEW_DATA_DIR: path.join(ctx.dir, "agentsview"),
-      NO_MISTAKES_HOME: path.join(ctx.dir, "no-mistakes"),
       DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0`,
       DEV_DEFAULT_PLUGIN_REFS_WIN: "", // never the ambient switch
       ...env,

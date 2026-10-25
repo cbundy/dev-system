@@ -25,7 +25,7 @@ const FACTORY = JSON.stringify({
 const SNAPSHOT = JSON.stringify({
   plugin_version: '0.27.0',
   base_image: '2.27.0',
-  components: [{ name: 'no-mistakes', running: '1.84.0' }],
+  components: [{ name: 'treehouse', running: '1.84.0' }],
 })
 // 2026-10-11T20:41:00Z
 const NOW = Date.UTC(2026, 9, 11, 20, 41)
@@ -101,7 +101,7 @@ describe('format', () => {
   })
 
   test('versions from the snapshot, or Claude Code alone without one', () => {
-    expect(versionsText('2.1.296 (Claude Code)', SNAPSHOT)).toBe('cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0')
+    expect(versionsText('2.1.296 (Claude Code)', SNAPSHOT)).toBe('cc 2.1.296 flow 0.27.0 img 2.27.0')
     expect(versionsText('2.1.296', undefined)).toBe('cc 2.1.296')
     expect(versionsText('2.1.296', 'garbage')).toBe('cc 2.1.296')
   })
@@ -189,7 +189,7 @@ describe('in a session', () => {
     await drawn.clock.settle()
     expect(drawn.runs).toContain('callum-flow-factory-state --repo cbundy/dev-system --github off --format json')
     expect(drawn.status.at(-1)).toBe(
-      '20:41  ctx 20%  5h 30%  | 6 live: design 2 dev 1 pipe 2 merge 1 | queued 2  | cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0',
+      '20:41  ctx 20%  5h 30%  | 6 live: design 2 dev 1 pipe 2 merge 1 | queued 2  | cc 2.1.296 flow 0.27.0 img 2.27.0',
     )
   })
 
@@ -198,7 +198,7 @@ describe('in a session', () => {
     const drawn = world(on)
     await $.session.start(START)
     expect(drawn.runs).toEqual([])
-    expect(drawn.status.at(-1)).toBe('20:41  ctx 20%  5h 30%  | cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0')
+    expect(drawn.status.at(-1)).toBe('20:41  ctx 20%  5h 30%  | cc 2.1.296 flow 0.27.0 img 2.27.0')
   })
 
   test('the factory option forces the counts on', { options: { factory: 'on' } }, async ($, on) => {
@@ -214,7 +214,7 @@ describe('in a session', () => {
     const drawn = world(on, null)
     await $.session.start(START)
     await drawn.clock.settle()
-    expect(drawn.status.at(-1)).toBe('20:41  ctx 20%  5h 30%  | cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0')
+    expect(drawn.status.at(-1)).toBe('20:41  ctx 20%  5h 30%  | cc 2.1.296 flow 0.27.0 img 2.27.0')
   })
 
   test('a measurement redraws and toasts each threshold once', async ($, on) => {
@@ -246,7 +246,7 @@ describe('in a session', () => {
       await $.command.run(HUD)
       expect(drawn.status.at(-1)).toBeUndefined()
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } })
-      expect(drawn.status.at(-1)).toBe('20:41  | cc 2.1.296 flow 0.27.0 img 2.27.0 nm 1.84.0')
+      expect(drawn.status.at(-1)).toBe('20:41  | cc 2.1.296 flow 0.27.0 img 2.27.0')
       await $.session.measure(high)
       expect(drawn.status.at(-1)).toContain('ctx 88%')
       expect(drawn.toasts.filter(text => text === 'Context is 88% full')).toHaveLength(2)

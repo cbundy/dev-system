@@ -32,10 +32,10 @@ describe('reading a command line', () => {
       ['git', 'push', '-f'],
       ['echo', 'done'],
     ])
-    expect(simpleCommands("bash -lc 'npm test | tail -5' || env -u X sudo -u me no-mistakes")).toEqual([
+    expect(simpleCommands("bash -lc 'npm test | tail -5' || env -u X sudo -u me axi")).toEqual([
       ['npm', 'test'],
       ['tail', '-5'],
-      ['no-mistakes'],
+      ['axi'],
     ])
     expect(simpleCommands('x=$(git rev-parse HEAD) && echo "$x" `date`')).toEqual([['git', 'rev-parse', 'HEAD'], ['echo', '$x'], ['date']])
   })
@@ -84,7 +84,7 @@ describe('file writes', () => {
 
 describe('commands refused for every loop agent', () => {
   for (const g of [WRITER, READER]) {
-    test(`GitHub writes, no-mistakes and axi (${g.role})`, () => {
+    test(`GitHub writes and axi (${g.role})`, () => {
       for (const c of [
         'gh pr create --repo o/r --title t --body b',
         'gh pr merge 12 --repo o/r',
@@ -110,7 +110,6 @@ describe('commands refused for every loop agent', () => {
         'git status; echo "$(gh pr create --fill)"',
         'echo "merged: $(gh pr merge 12 --squash)"',
         'cat <<EOF > notes.txt\n$(gh pr create --fill)\nEOF',
-        'no-mistakes run',
         '/usr/local/bin/axi start',
       ]) {
         expect(cause(g, c)).toBe('guard:command')
