@@ -122,8 +122,8 @@ values are compared whole):
   is unioned in.
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
   `gh pr merge`, `callum-flow-merge` (the guarded merge; only
-  `callum-flow-merge-guard` is synced), `callum-flow-fix-linkage` (the linkage repair; only
-  the read-only `check-pr-linkage.sh` is synced), `gh pr edit`, and any pipeline/queue
+  `callum-flow-merge-guard` is synced), `gh pr edit` (the linkage repair; only
+  the read-only `check-pr-linkage.sh` is synced), and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
   `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
   rule for these orchestrator-only powers: committed settings apply in the main

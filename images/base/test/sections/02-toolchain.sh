@@ -55,9 +55,6 @@ check "callum-flow-patch-id is on PATH, exits 2 on bad usage and 1 outside a rep
   [ -x "$(command -v callum-flow-patch-id)" ] && callum-flow-patch-id 2>/dev/null; [ $? = 2 ] &&
   (cd "$(mktemp -d)" && callum-flow-patch-id issue-1 main 2>/dev/null; [ $? = 1 ]) &&
   callum-flow-merge-guard 7 --patch xyz 2>/dev/null; [ $? = 2 ]'
-check "callum-flow-regate is on PATH, shows usage, and exits 2 on a missing --issue" in_image '
-  [ -x "$(command -v callum-flow-regate)" ] && callum-flow-regate --help 2>/dev/null; [ $? = 2 ] &&
-  callum-flow-regate 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-milestone is on PATH, shows usage, and exits 2 on a bad subcommand" in_image '
   [ -x "$(command -v callum-flow-milestone)" ] && callum-flow-milestone --help >/dev/null &&
   callum-flow-milestone bogus 2>/dev/null; [ $? = 2 ]'
@@ -71,14 +68,9 @@ check "callum-flow-test-weakening is on PATH, exits 2 on bad usage and 1 on an u
   callum-flow-test-weakening --base nope --head HEAD 2>/dev/null; [ $? = 1 ]'
 check "callum-flow-rollout is on PATH and exits 2 on bad arguments" in_image '
   [ -x "$(command -v callum-flow-rollout)" ] && callum-flow-rollout 2>/dev/null; [ $? = 2 ] && callum-flow-rollout abc 2>/dev/null; [ $? = 2 ]'
-check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" in_image '
-  [ -x "$(command -v callum-flow-fix-linkage)" ] && callum-flow-fix-linkage 7 --bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-claim and callum-flow-sweep are on PATH and exit 2 on bad arguments" in_image '
   callum-flow-claim 2>/dev/null; [ $? = 2 ] && ! callum-flow-claim abc 2>/dev/null &&
   callum-flow-sweep --bogus 2>/dev/null; [ $? = 2 ]'
-check "callum-flow-design-route is on PATH and exits 2 on a bad argument and on a bad CALLUM_FLOW_DESIGN_SESSION_PCT" in_image '
-  [ -x "$(command -v callum-flow-design-route)" ] && callum-flow-design-route 2>/dev/null; [ $? = 2 ] && callum-flow-design-route abc 2>/dev/null; [ $? = 2 ] &&
-  CALLUM_FLOW_DESIGN_SESSION_PCT=abc callum-flow-design-route 1 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-implementer-route is on PATH and exits 2 on a bad argument and on a bad CALLUM_FLOW_IMPLEMENTER_OPUS_PCT, and --help exits 0" in_image '
   [ -x "$(command -v callum-flow-implementer-route)" ] && callum-flow-implementer-route 2>/dev/null; [ $? = 2 ] && callum-flow-implementer-route abc 2>/dev/null; [ $? = 2 ] &&
   CALLUM_FLOW_IMPLEMENTER_OPUS_PCT=abc callum-flow-implementer-route 1 2>/dev/null; [ $? = 2 ] &&
@@ -117,8 +109,13 @@ check "uv installs a package and runs it with the image's python3, as node" in_i
   UV_PYTHON_DOWNLOADS=never uv run --no-project --with pytest python -c "import pytest"' \
   --entrypoint ""
 check "callum-tools scripts staged where the callum-flow skills call them" in_image '
-  for s in check-pr-linkage.sh orchestrator-watch.sh pipeline-watch.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
+  for s in check-pr-linkage.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
+  done'
+check "the retired watchers and helper tools are neither on PATH nor in /usr/local/share/callum-tools" in_image '
+  for t in orchestrator-watch.sh pipeline-watch.sh callum-flow-regate callum-flow-fix-linkage callum-flow-design-route; do
+    ! command -v "$t" >/dev/null 2>&1 || { echo "$t is on PATH"; exit 1; }
+    [ ! -e "/usr/local/share/callum-tools/$t" ] || { echo "$t is in callum-tools"; exit 1; }
   done'
 check "models.env and models.sh are baked in, and the old codex-model.default is gone" in_image '
   . /usr/local/share/dev-system/models.sh &&

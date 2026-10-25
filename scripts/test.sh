@@ -75,8 +75,6 @@ fi
 # An entry that no longer exists is ignored; a suite not listed still runs.
 SLOW_FIRST="
 node
-features/test/callum-tools/watchers.test.sh
-features/test/callum-tools/orchestrator-watch.test.sh
 "
 
 # Jobs that cannot run beside any other job; they run alone after the pool drains. Keep this

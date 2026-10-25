@@ -1,24 +1,19 @@
 # shellcheck shell=sh
 #
-# Shared setup for the watcher suites (pipeline-watch*.test.sh,
-# pipeline-ci-stalled.test.sh, queue-watch*.test.sh, watcher-replay*.test.sh and
-# watcher-sleep-*.test.sh): sourced, never run, and named so the `*.test.sh`
+# Shared setup for the watcher suites (queue-watch*.test.sh, watcher-replay-transition.test.sh and
+# watcher-sleep-queue.test.sh): sourced, never run, and named so the `*.test.sh`
 # glob in scripts/test.sh does not pick it up.
 #
 # Like recover-no-mistakes.test.sh, the suites run the scripts from their source
-# location with stub `gh` and `no-mistakes` on PATH - no Docker, no container
+# location with a stub `gh` on PATH - no Docker, no container
 # build - so `npm test` runs them anywhere. Most cases use a one-second poll
 # interval; sleep-kill cases use longer intervals to check the remaining wait.
-# The container suite (test.sh) keeps covering the single-shot
-# states in depth.
 #
 # Waiting rules (cbundy/dev-system#478): a positive wait polls for the expected
 # file, line or pid (wait_lines, wait_events, wait_sleep). A negative "nothing
 # more happens" window never uses wall time: it is bounded by observed watcher
 # progress, the stub call logs below, so a loaded host can neither turn it into
 # a false pass nor a false fail.
-#   fakebin/nm-polls  one line per `no-mistakes runs` call: pipeline-watch makes
-#                     exactly one per poll, failing or not (wait_polls)
 #   fakebin/gh-calls  one line per queue listing call (its epoch second):
 #                     queue-watch makes exactly one per poll, except when its
 #                     reader fails before asking gh (wait_polls)
@@ -30,7 +25,6 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SRC="$SCRIPT_DIR/../../src/callum-tools"
-PIPELINE_WATCH="$SRC/pipeline-watch.sh"
 QUEUE_WATCH="$SRC/queue-watch.sh"
 SHARE="$SCRIPT_DIR/../../../images/base"
 READER="$SHARE/callum-flow-issue-read"
@@ -57,12 +51,11 @@ fakebin="$tmpdir/bin"
 toolbin="$tmpdir/tools"
 mkdir -p "$fakebin" "$toolbin"
 # A hermetic PATH: the stubs plus only the tools the scripts and stubs use,
-# so a real gh or no-mistakes (the base image has both) can never answer.
+# so a real gh (the base image has it) can never answer.
 for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat sort paste jq; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
-nm_home="$tmpdir/nm"
 
 # in_dir <dir> <command...>: exec the command from dir with the stub PATH.
 # Call it in a subshell: it changes directory and replaces the process.
@@ -70,12 +63,11 @@ in_dir() {
   cd "$1" || exit 1
   shift
   PATH="$fakebin:$toolbin"
-  NO_MISTAKES_HOME="$nm_home"
   # queue-watch lists through the real trusted-author reader (cbundy/dev-system#310)
   CALLUM_FLOW_ISSUE_READ_BIN="$READER"
   CALLUM_FLOW_SHARE_DIR="$SHARE"
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067
-  export PATH NO_MISTAKES_HOME CALLUM_FLOW_ISSUE_READ_BIN CALLUM_FLOW_SHARE_DIR CALLUM_FLOW_TRUSTED_AUTHORS
+  export PATH CALLUM_FLOW_ISSUE_READ_BIN CALLUM_FLOW_SHARE_DIR CALLUM_FLOW_TRUSTED_AUTHORS
   exec "$@"
 }
 
@@ -161,74 +153,12 @@ gone() {
   done
 }
 
-# Stub no-mistakes, modelled on the real v1.84 output: `axi status --run
-# <id>` prints runs/<id>.txt; `runs` prints one row per id in runs-order
-# (newest first) - "  <status>  <branch> <short-head>  <date>[  <pr-url>]", no run id;
-# `axi status` with no --run prints the newest run of the cwd's branch, or,
-# when that branch has none, the runs[N]{id,branch,status,head,pr} table.
-# Every call fails while an nm-fail marker exists (a transient failure), and
-# `axi status --run <id>` alone while an nm-status-fail-<id> marker does.
-# Every `runs` call is logged to nm-polls first, even a failing one.
-cat > "$fakebin/no-mistakes" <<'EOF'
-#!/bin/sh
-d=$(dirname "$0")
-[ "$1" != runs ] || echo x >> "$d/nm-polls"
-[ ! -e "$d/nm-fail" ] || exit 1
-# row <id>: "<branch> <status> <short-head>[ <pr-url>]" of a run
-row() {
-  awk '/^  branch: /{b=substr($0,11)} /^  status: /{s=substr($0,11)} /^  head_sha: /{h=substr($0,13,8)}
-    /^  pr: /{p=substr($0,7); gsub(/"/,"",p)}
-    END{print b, s, (h==""?"-":h), p}' "$d/runs/$1.txt"
-}
-order=$(cat "$d/runs-order" 2>/dev/null)
-case "$1 ${2-} ${3-}" in
-  "runs --limit "*)
-    [ -n "$order" ] || { echo "  no runs yet."; exit 0; }
-    for id in $order; do
-      set -- $(row "$id")
-      printf '  %-12s %s %s  2026-10-06 21:00%s\n' "$2" "$1" "$3" "${4:+  $4}"
-    done
-    ;;
-  "axi status --run")
-    [ ! -e "$d/nm-status-fail-$4" ] || exit 1
-    cat "$d/runs/$4.txt" 2>/dev/null
-    ;;
-  "axi status ")
-    cur=$(git rev-parse --abbrev-ref HEAD)
-    for id in $order; do
-      set -- $(row "$id")
-      [ "$1" != "$cur" ] || exec cat "$d/runs/$id.txt"
-    done
-    echo "current_branch: $cur"
-    [ ! -e "$d/no-table" ] || exit 0
-    echo "runs[9]{id,branch,status,head,pr}:"
-    for id in $order; do
-      set -- $(row "$id")
-      printf '  "%s",%s,%s,%s,""\n' "$id" "$1" "$2" "$3"
-    done
-    ;;
-  *) exit 1 ;;
-esac
-EOF
-# Stub gh: `pr view` prints pr-status.txt; fails while a gh-fail marker exists.
+# Stub gh: answers the queue listing; fails while a gh-fail marker exists.
 cat > "$fakebin/gh" <<'EOF'
 #!/bin/sh
 d=$(dirname "$0")
 [ ! -e "$d/gh-fail" ] || exit 1
 case "$1 $2" in
-  "pr view") cat "$d/pr-status.txt" ;;
-  "pr checks")
-    # a gh-checks marker means the PR has a check; else gh's no-checks reply
-    if [ -e "$d/gh-checks" ]; then echo "ci	pass	1m"; exit 0; fi
-    echo "no checks reported on the '$3' branch" >&2
-    exit 1
-    ;;
-  "api repos/{owner}/{repo}/contents/.github/workflows")
-    # a gh-workflows marker holds the number of workflow files; else a 404
-    if [ -e "$d/gh-workflows" ]; then cat "$d/gh-workflows"; exit 0; fi
-    echo "gh: Not Found (HTTP 404)" >&2
-    exit 1
-    ;;
   "api --paginate")
     # queue-watch lists through callum-flow-issue-read, which asks for the REST
     # issue list: pop the first line of queue-seq.txt (the last one repeats);
@@ -254,48 +184,8 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 EOF
-chmod +x "$fakebin/no-mistakes" "$fakebin/gh"
-: > "$fakebin/nm-polls"
+chmod +x "$fakebin/gh"
 : > "$fakebin/gh-calls"
-mkdir -p "$fakebin/runs"
-echo "MERGEABLE CLEAN" > "$fakebin/pr-status.txt"
-
-mkdir -p "$nm_home/logs/RUNA" "$nm_home/logs/RUNB"
-touch -d "2026-01-01 00:00" "$nm_home/logs/RUNA"
-touch -d "2026-01-01 00:01" "$nm_home/logs/RUNB"
-# runs_order <id>...: the runs `no-mistakes runs` lists, newest first
-runs_order() {
-  printf '%s\n' "$@" > "$fakebin/runs-order"
-}
-runs_order RUNB RUNA
-
-# run_state <run-id> <branch> <running|parked|failed> [head-sha]
-run_state() {
-  {
-    printf '%s\n' "current_branch: main" "other_branch_run:" "  id: \"$1\"" "  branch: $2"
-    case "$3" in
-      failed) echo "  status: failed" ;;
-      *) echo "  status: running" ;;
-    esac
-    [ -z "${4-}" ] || echo "  head_sha: $4"
-    echo "  steps[2]{step,status,findings,duration_ms}:"
-    case "$3" in
-      parked) echo "    review,awaiting_approval,1,1" ;;
-      *) echo "    review,completed,0,1" ;;
-    esac
-    echo "    push,pending,0,0"
-  } > "$fakebin/runs/$1.txt.next"
-  mv "$fakebin/runs/$1.txt.next" "$fakebin/runs/$1.txt"
-}
-
-# run_pr <run-id> <n>: give the run a PR, placed in its status as the real
-# `axi status` places it (the stub's `runs` row then ends with the URL, as a
-# real one does). Call it after run_state, which rewrites the file.
-run_pr() {
-  awk -v pr="  pr: \"https://github.com/o/r/pull/$2\"" '/^  steps\[/ { print pr } { print }' \
-    "$fakebin/runs/$1.txt" > "$fakebin/runs/$1.txt.next"
-  mv "$fakebin/runs/$1.txt.next" "$fakebin/runs/$1.txt"
-}
 
 # queue_seq <line>...: what successive queue listing calls return
 queue_seq() {
@@ -304,15 +194,6 @@ queue_seq() {
 }
 qw="$QUEUE_WATCH --repo o/r --label ready --interval 1"
 
-# The pipeline watcher runs inside the gated repo: a clone whose origin has feat/b.
-g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
-g init -q --bare "$tmpdir/origin.git"
-g clone -q "$tmpdir/origin.git" "$tmpdir/repo" 2>/dev/null
-g -C "$tmpdir/repo" checkout -q -b feat/b
-g -C "$tmpdir/repo" commit -q --allow-empty -m gated
-g -C "$tmpdir/repo" push -q origin feat/b
-b_head=$(g -C "$tmpdir/repo" rev-parse HEAD)
-repo="$tmpdir/repo"
 out="$tmpdir/out"
 
 # quiet_run <label> <counter-file> <known> [VAR=value...]: a single-shot
