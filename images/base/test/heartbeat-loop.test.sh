@@ -38,6 +38,7 @@ ln -s "$ROOT/images/base/agentsview.sh" "$share/agentsview.sh"
 ln -s "$ROOT/images/base/workspace.sh" "$share/workspace.sh"
 ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
 ln -s "$ROOT/images/base/mem-pressure.sh" "$share/mem-pressure.sh"
+ln -s "$ROOT/images/base/github-health.sh" "$share/github-health.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
@@ -47,7 +48,15 @@ cat > "$fakebin/psql" <<'STUB'
 d=$(dirname "$0")
 in="$d/psql-in.$$"
 cat > "$in"
-if head -n 1 "$in" | grep -qx -- '-- heartbeat config'; then
+if head -n 1 "$in" | grep -qx -- '-- heartbeat github'; then
+  kind=github
+  n=$(($(if [ -f "$d/github-calls" ]; then wc -l < "$d/github-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/github-sql-$n"
+  printf '%s\n' "$@" > "$d/github-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/github-db-$n"
+  echo x >> "$d/github-calls"
+  echo "github ${PGDATABASE:-}" >> "$d/order"
+elif head -n 1 "$in" | grep -qx -- '-- heartbeat config'; then
   kind=config
   n=$(($(if [ -f "$d/config-calls" ]; then wc -l < "$d/config-calls"; else echo 0; fi) + 1))
   mv "$in" "$d/config-sql-$n"
@@ -78,6 +87,7 @@ fail=0
 [ -e "$d/psql-fail-${PGDATABASE:-}" ] && fail=1
 [ "$kind" = stats ] && [ -e "$d/psql-fail-stats" ] && fail=1
 [ "$kind" = config ] && [ -e "$d/psql-fail-config" ] && fail=1
+[ "$kind" = github ] && [ -e "$d/psql-fail-github" ] && fail=1
 [ ! -e "$d/psql-hang" ] || exec sleep 60
 if [ "$fail" = 1 ]; then
   # Recording a call does not mean its error response has reached the loop.
@@ -85,6 +95,14 @@ if [ "$fail" = 1 ]; then
   echo "psql: error: connection to postgres://app:s3cret@db/x failed password=s3cret" >&2
   exit 2
 fi
+STUB
+# gh stub: records its argv, answers a real rate_limit reply (gh-fail: exits 1 like a logged-out gh)
+cat > "$fakebin/gh" <<'STUB'
+#!/bin/sh
+d=$(dirname "$0")
+printf '%s\n' "$*" >> "$d/gh-calls"
+[ ! -e "$d/gh-fail" ] || { echo "gh: To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; }
+echo '{"resources":{"core":{"limit":5000,"used":10,"remaining":4990,"reset":1700000000},"graphql":{"limit":5000,"used":4988,"remaining":12,"reset":1700000100},"search":{"limit":30,"remaining":30,"reset":1700000000}},"rate":{"limit":5000,"remaining":4990,"reset":1700000000}}'
 STUB
 cat > "$fakebin/dev-version" <<'STUB'
 #!/bin/sh
@@ -113,12 +131,12 @@ if [ -e "$(dirname "$0")/state-nocfg" ]; then
   echo '{"state":"busy","in_flight":[],"sessions":[],"claude_sessions":null,"config":null}'
   exit 0
 fi
-echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2},"config":{"v":1,"repo":"acme/widgets","at":"2026-10-19T08:00:00Z","settings":{"a":1}}}'
+echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2},"github_errors_1h":3,"config":{"v":1,"repo":"acme/widgets","at":"2026-10-19T08:00:00Z","settings":{"a":1}}}'
 STUB
-chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
+chmod +x "$fakebin/psql" "$fakebin/gh" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/config-* "$fakebin/order" "$share/state-args" "$share/state-nocfg" "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/config-* "$fakebin"/github-* "$fakebin/gh-calls" "$fakebin/gh-fail" "$fakebin/order" "$share/state-args" "$share/state-nocfg" "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
@@ -748,7 +766,7 @@ hb env HEARTBEAT_DDL_SENT=1 "$BASH" "$LOOP" --final || fail "--final"
 # two targets: config after each target's stats, agentsview first; a config failure on one skips nothing
 reset
 hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "two targets with config"
-[ "$(tr '\n' ',' < "$fakebin/order")" = 'main x,stats x,config x,main fdb,stats fdb,config fdb,' ] || fail "call order: $(tr '\n' ',' < "$fakebin/order")"
+[ "$(tr '\n' ',' < "$fakebin/order")" = 'main x,stats x,config x,github x,main fdb,stats fdb,config fdb,github fdb,' ] || fail "call order: $(tr '\n' ',' < "$fakebin/order")"
 reset
 touch "$fakebin/psql-fail-config"
 hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "config failures on both targets keep exit 0"
@@ -757,5 +775,57 @@ reset
 touch "$fakebin/psql-fail-x"
 hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 && fail "old target failing fails --once"
 [ "$(wc -l < "$fakebin/config-calls" | tr -d ' ')" = 1 ] && [ "$(cat "$fakebin/config-db-1")" = fdb ] || fail "only the target whose UPSERT landed gets config"
+
+# --- GitHub health: a fourth, separate call per target ------------------------------------
+garg() { sed -n "s/^$2=//p" "$fakebin/github-args-$1"; } # CALL name
+reset
+once > "$tmpdir/g.out" 2>&1 || fail "--once with github: $(cat "$tmpdir/g.out")"
+[ "$(wc -l < "$fakebin/github-calls" | tr -d ' ')" = 1 ] || fail "one github call expected"
+head -n 1 "$fakebin/github-sql-1" | grep -qx -- '-- heartbeat github' || fail "the github SQL is marked"
+grep -q 'CREATE TABLE' "$fakebin/github-sql-1" && fail "a github call never carries DDL"
+[ "$(garg 1 device)" = dev-box ] || fail "github device"
+[ "$(garg 1 github_core_remaining)" = 4990 ] && [ "$(garg 1 github_core_limit)" = 5000 ] || fail "core: $(cat "$fakebin/github-args-1")"
+[ "$(garg 1 github_core_reset_at)" = 2023-11-14T22:13:20Z ] || fail "core reset: $(cat "$fakebin/github-args-1")"
+[ "$(garg 1 github_graphql_remaining)" = 12 ] && [ "$(garg 1 github_graphql_limit)" = 5000 ] || fail "graphql: $(cat "$fakebin/github-args-1")"
+[ "$(garg 1 github_graphql_reset_at)" = 2023-11-14T22:15:00Z ] || fail "graphql reset"
+[ "$(garg 1 github_errors_1h)" = 3 ] || fail "errors from heartbeat-state: $(cat "$fakebin/github-args-1")"
+[ "$(cat "$fakebin/gh-calls")" = 'api rate_limit' ] || fail "gh is called once with api rate_limit only: $(cat "$fakebin/gh-calls")"
+sed -n '/^INSERT INTO factory.workers (/,$p' "$fakebin/psql-sql-1" | grep -q 'github' && fail "the UPSERT must not touch github"
+
+# a gh that fails (not logged in): every budget value empty, the errors still sent, exit 0
+reset
+touch "$fakebin/gh-fail"
+once > "$tmpdir/g.out" 2>&1 || fail "a failing gh must not fail --once"
+for k in github_core_remaining github_core_limit github_core_reset_at github_graphql_remaining github_graphql_limit github_graphql_reset_at; do
+  grep -qx -- "$k=" "$fakebin/github-args-1" || fail "$k should be empty: $(cat "$fakebin/github-args-1")"
+done
+[ "$(garg 1 github_errors_1h)" = 3 ] || fail "errors still sent"
+grep -q 'gh auth login' "$tmpdir/g.out" && fail "gh's output must not be logged"
+
+# a heartbeat-state with no github_errors_1h sends it empty
+reset
+touch "$share/state-nocfg"
+once > /dev/null 2>&1 || fail "--once without errors"
+grep -qx -- 'github_errors_1h=' "$fakebin/github-args-1" || fail "no errors sends an empty value"
+rm -f "$share/state-nocfg"
+
+# a failing github write: logged, masked, exit 0, the other calls delivered
+reset
+touch "$fakebin/psql-fail-github"
+rc=0
+once > "$tmpdir/g.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] || fail "a github failure must not fail --once, got $rc"
+[ "$(calls)" = 1 ] && [ -f "$fakebin/stats-calls" ] && [ -f "$fakebin/config-calls" ] || fail "UPSERT, stats and config still sent"
+grep -q 'heartbeat-loop: agentsview database github write failed' "$tmpdir/g.out" || fail "the failure is logged: $(cat "$tmpdir/g.out")"
+grep -q 's3cret' "$tmpdir/g.out" && fail "the github failure leaked the password"
+reset
+touch "$fakebin/psql-fail-github"
+hb env FACTORY_DB_WRITER_URL="$FDB" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "github failures on both targets keep exit 0"
+[ "$(wc -l < "$fakebin/github-calls" | tr -d ' ')" = 2 ] || fail "both targets still get their github call"
+
+# the stopped beat sends no github call and runs no gh
+reset
+hb env HEARTBEAT_DDL_SENT=1 "$BASH" "$LOOP" --final || fail "--final"
+[ ! -e "$fakebin/github-calls" ] && [ ! -e "$fakebin/gh-calls" ] || fail "the stopped beat must send no github call and run no gh"
 
 echo "heartbeat-loop: ok"

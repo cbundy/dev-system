@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// heartbeat-state: prints {state, in_flight, chat_active_at, sessions, claude_sessions, config} as JSON
+// heartbeat-state: prints {state, in_flight, chat_active_at, sessions, claude_sessions, config,
+// github_errors_1h} as JSON
 // for heartbeat-loop (cbundy/dev-system#339). One call per beat.
 //
 // Usage: heartbeat-state [--repo <owner/name>] [--source old|new|shadow]
@@ -11,6 +12,10 @@
 // with no --repo, a missing file, or a file that is unreadable, not valid JSON, not a JSON object
 // or over 256 KiB; every case but "missing" warns once on stderr and never fails the call. It is
 // not part of the answer the source shadow compares.
+// github_errors_1h is the number of entries of `errors` within the hour before now in the same
+// folder's github.json (the factory loop's GitHub API error list, cbundy/dev-system#1305). It is null
+// with no --repo, a missing, unreadable, invalid or over 256 KiB file, a `v` other than 1, or an
+// `at` older than 15 minutes (no loop is running on this device, so it cannot say).
 //
 // busy when any of these holds, otherwise idle:
 //   - an issue on THIS device whose latest lifecycle event is not merged,
@@ -375,8 +380,8 @@ function repoOf(argv) {
   return null;
 }
 
-// readConfig: the repo's settings snapshot (see the header), or null.
-function readConfig(configDir, repo) {
+// loopDirOf: the repo's folder of the loop under configDir, or null (see the header).
+function loopDirOf(configDir, repo) {
   if (!repo || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) return null;
   const base = `${configDir.replace(/\/+$/, '')}/factory-loop`;
   const want = repo.replace('/', '__');
@@ -388,6 +393,13 @@ function readConfig(configDir, repo) {
     if (!hit) return null;
     dir = path.join(base, hit);
   }
+  return dir;
+}
+
+// readConfig: the repo's settings snapshot (see the header), or null.
+function readConfig(configDir, repo) {
+  const dir = loopDirOf(configDir, repo);
+  if (!dir) return null;
   const file = path.join(dir, 'settings.json');
   try {
     const st = fs.statSync(file);
@@ -397,6 +409,30 @@ function readConfig(configDir, repo) {
     return v;
   } catch (e) {
     if (e.code !== 'ENOENT') warn(`config: ${e.message}`);
+    return null;
+  }
+}
+
+const GITHUB_WINDOW_MS = 3600 * 1000;
+const GITHUB_FRESH_MS = 15 * 60 * 1000;
+
+// readGithubErrors: the loop's GitHub API errors within the last hour (see the header), or null.
+function readGithubErrors(configDir, repo, nowMs) {
+  const dir = loopDirOf(configDir, repo);
+  if (!dir) return null;
+  const file = path.join(dir, 'github.json');
+  try {
+    if (fs.statSync(file).size > CONFIG_MAX_BYTES) { warn(`github: ${file} is over ${CONFIG_MAX_BYTES} bytes`); return null; }
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (v === null || typeof v !== 'object' || Array.isArray(v) || v.v !== 1 || !Array.isArray(v.errors)) return null;
+    const at = Date.parse(v.at);
+    if (!Number.isFinite(at) || nowMs - at > GITHUB_FRESH_MS) return null;
+    return v.errors.filter((e) => {
+      const t = typeof e === 'string' ? Date.parse(e) : NaN;
+      return Number.isFinite(t) && t <= nowMs && nowMs - t < GITHUB_WINDOW_MS;
+    }).length;
+  } catch (e) {
+    if (e.code !== 'ENOENT') warn(`github: ${e.message}`);
     return null;
   }
 }
@@ -453,12 +489,14 @@ async function main() {
   } catch (e) { warn(`sessions: ${e.message}`); }
   let config = null;
   try { config = readConfig(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), repo); } catch (e) { warn(`config: ${e.message}`); }
-  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts, config, skipped_events: source === 'old' ? [] : skipped })}\n`);
+  let githubErrors = null;
+  try { githubErrors = readGithubErrors(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), repo, now); } catch (e) { warn(`github: ${e.message}`); }
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts, config, github_errors_1h: githubErrors, skipped_events: source === 'old' ? [] : skipped })}\n`);
 }
 
 const fallback = (e) => {
   warn(e.message);
-  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, skipped_events: [] })}\n`);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, github_errors_1h: null, skipped_events: [] })}\n`);
 };
 
 if (require.main === module) {

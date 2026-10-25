@@ -10,6 +10,7 @@ import { loopBaseOf, loopDirOf } from './contract.mjs'
 import type { FileIo } from './control'
 import type { ActIo } from './exec'
 import type { Io, Runtime } from './observe'
+import { noteRun, writeGithubHealth } from './github-health'
 import { spendKey, tallyStep } from './spend'
 import { actLockPath, parseLease } from './rails'
 import type { LockIo } from './rails'
@@ -159,7 +160,7 @@ export function message(err: unknown): string {
 export function io($: EngineInterface, agents: AgentRow[]): Io {
   return {
     now: () => $.clock.now(),
-    run: (argv, init) => $.process.run(argv, init),
+    run: async (argv, init) => noteRun(await $.process.run(argv, init), await $.clock.now()),
     readFile: path => text($, path),
     sessionLimits: async () => (await $.session.usage()).rateLimits,
     sessionCost: async () => (await $.session.usage()).cost?.usd ?? null,
@@ -167,11 +168,21 @@ export function io($: EngineInterface, agents: AgentRow[]): Io {
   }
 }
 
+// githubHealth: an acting pass writes github.json (github-health.ts); returns the problems for the decision log.
+export async function githubHealth($: EngineInterface, loopDir: string, repo: string): Promise<string[]> {
+  try {
+    const now = await $.clock.now()
+    return await writeGithubHealth({ run: (argv, init) => $.process.run(argv, init), read: path => text($, path) }, loopDir, repo, now)
+  } catch (e) {
+    return [`github health: ${message(e)}`]
+  }
+}
+
 // actIo: the engine calls the act half makes (exec.ts ActIo).
 export function actIo($: EngineInterface): ActIo {
   return {
     now: () => $.clock.now(),
-    run: (argv, init) => $.process.run(argv, init),
+    run: async (argv, init) => noteRun(await $.process.run(argv, init), await $.clock.now()),
     spawnAgent: async input => {
       // an agent step starts in its slot: the companion reads the slot line (v2 SPEC 10.3)
       const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: withSlotLine(input.prompt, input.cwd), description: input.description }

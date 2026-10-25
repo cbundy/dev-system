@@ -62,7 +62,7 @@ export DEV_SECRETS_DIR="$tmpdir/secrets"
 mkdir -p "$DEV_SECRETS_DIR" "$tmpdir/hb" "$tmpdir/events" "$tmpdir/share"
 
 # the share: the real libraries and a heartbeat-state whose answer the test changes between beats
-for f in agentsview.sh factory-db.sh workspace.sh mem-pressure.sh; do ln -s "$ROOT/images/base/$f" "$tmpdir/share/$f"; done
+for f in agentsview.sh factory-db.sh workspace.sh mem-pressure.sh github-health.sh; do ln -s "$ROOT/images/base/$f" "$tmpdir/share/$f"; done
 cat > "$tmpdir/share/heartbeat-state" <<STUB
 #!/bin/sh
 printf '{"state":"%s","in_flight":[],"chat_active_at":null,"sessions":[],"config":%s}\n' "\$(cat "$tmpdir/state")" "\$(cat "$tmpdir/config" 2>/dev/null || echo null)"
@@ -75,6 +75,15 @@ names="$names $db"
 FACTORY_DB_ADMIN_URL=$ADMIN FACTORY_DB_WRITER_PASSWORD=$WPW \
   bash "$BOOTSTRAP" --db "$db" > "$tmpdir/boot.out" 2>&1 || fail "bootstrap: $(cat "$tmpdir/boot.out")"
 WURL=$(url_for "$db" "${db}_writer" "$WPW")
+
+# a gh stub, so no beat reaches GitHub: it answers a rate_limit reply, or fails when $tmpdir/gh-fail exists
+cat > "$tmpdir/gh" <<STUB
+#!/bin/sh
+[ ! -e "$tmpdir/gh-fail" ] || exit 4
+echo '{"resources":{"core":{"limit":5000,"remaining":4990,"reset":1700000000},"graphql":{"limit":5000,"remaining":12,"reset":1700000100}}}'
+STUB
+chmod +x "$tmpdir/gh"
+export HEARTBEAT_GH="$tmpdir/gh"
 
 beat() {
   DEV_SYSTEM_SHARE="$tmpdir/share" DEV_HEARTBEAT_DIR="$tmpdir/hb" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
@@ -130,6 +139,18 @@ echo null > "$tmpdir/config"
 beat || fail "beat with null config: $(cat "$tmpdir/beat.out")"
 [ "$(q "$db" "SELECT config IS NULL FROM factory.workers WHERE device = 'dev-box'")" = t ] || fail "a null config should clear the column"
 echo "heartbeat-loop config (factory database): ok"
+
+# GitHub health (cbundy/dev-system#1305): the budget lands in the worker row and in this beat's sample;
+# a gh that fails writes NULL and the beat still succeeds
+beat || fail "beat with github: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT github_core_remaining || '|' || github_core_limit || '|' || github_graphql_remaining || '|' || github_graphql_limit || '|' || (github_core_reset_at = '2023-11-14T22:13:20Z') || '|' || (github_graphql_reset_at = '2023-11-14T22:15:00Z') || '|' || (github_at IS NOT NULL) || '|' || coalesce(github_errors_1h::text, 'null') FROM factory.workers_status WHERE device = 'dev-box'")" = '4990|5000|12|5000|true|true|true|null' ] || fail "github columns of the worker row"
+[ "$(q "$db" "SELECT github_core_remaining || '|' || github_graphql_remaining FROM factory.worker_samples WHERE device = 'dev-box' ORDER BY sampled_at DESC LIMIT 1")" = '4990|12' ] || fail "the newest sample should carry the github columns"
+grep -q 'github write failed' "$tmpdir/beat.out" && fail "the github write failed: $(cat "$tmpdir/beat.out")"
+touch "$tmpdir/gh-fail"
+beat || fail "beat with a failing gh: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db" "SELECT github_core_remaining IS NULL AND github_core_reset_at IS NULL AND github_graphql_remaining IS NULL AND github_graphql_limit IS NULL AND github_at IS NOT NULL FROM factory.workers_status WHERE device = 'dev-box'")" = t ] || fail "a failing gh should write NULL"
+rm -f "$tmpdir/gh-fail"
+echo "heartbeat-loop github health (factory database): ok"
 
 # a workspace on another database: the writer file in its own folder (no env var) takes the beat
 db2="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')_ws"

@@ -217,6 +217,25 @@ test("factory.workers, workers_status and worker_samples have the memory pressur
   }
 });
 
+test("factory.workers, workers_status and worker_samples have the GitHub health columns", opts, (t) => {
+  const db = createDb(t);
+  const want = {
+    github_core_remaining: "integer", github_core_limit: "integer", github_core_reset_at: "timestamp with time zone",
+    github_graphql_remaining: "integer", github_graphql_limit: "integer", github_graphql_reset_at: "timestamp with time zone",
+    github_errors_1h: "integer",
+  };
+  for (const rel of ["workers", "workers_status", "worker_samples"]) {
+    for (const [col, type] of Object.entries(want)) {
+      const got = db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = '${rel}' AND column_name = '${col}'`);
+      assert.equal(got, type, `${rel}.${col}`);
+    }
+  }
+  for (const rel of ["workers", "workers_status"]) {
+    const got = db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = '${rel}' AND column_name = 'github_at'`);
+    assert.equal(got, "timestamp with time zone", `${rel}.github_at`);
+  }
+});
+
 test("loop_passes: the observe columns are null for an old minute and the given values for a new one", opts, (t) => {
   const db = createDb(t);
   const [old, , fresh] = load("loop_passes.v1.json").examples;
