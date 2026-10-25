@@ -2128,6 +2128,24 @@ GROUP BY s.repo, s.key, s.started_at, s.resumed_at, s.reason
 ORDER BY s.started_at DESC;
 ```
 
+### Session-stopped holds
+
+When the owner has stopped the main session the loop holds agent starts and owner messages instead of
+counting each refusal as a failure. A hold runs from a `hold:session-stopped` intervention to the
+`hold:session-resumed` one with the same fact. This gives, per device, how often and how long the
+loop was held, in the window.
+
+```sql
+SELECT s.repo, s.device, s.ts AS held_at, e.ts AS resumed_at,
+  round(extract(epoch FROM coalesce(e.ts, now()) - s.ts) / 60) AS minutes
+FROM factory.event_log s
+LEFT JOIN factory.event_log e
+  ON e.repo = s.repo AND e.device = s.device AND e.type = 'intervention'
+ AND e.cause = 'hold:session-resumed' AND e.fact = s.fact
+WHERE s.type = 'intervention' AND s.cause = 'hold:session-stopped' AND s.ts >= :'since'
+ORDER BY s.ts DESC;
+```
+
 ### Main-checkout tripwire notices
 
 (#829) How often the loop told the owner that the main checkout

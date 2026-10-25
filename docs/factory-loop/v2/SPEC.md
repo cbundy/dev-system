@@ -802,6 +802,13 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   ended in error, aborted or refused; an API error, a 429 included; an answer that fails its
   contract after its repair message; a CLI result outside the step's known outcomes; a GitHub
   wait past its bound (4.4).
+- **A stopped session is not a result.** When the owner has stopped the main session, the engine
+  refuses every agent start and prompt with `the session was stopped and nobody has sent input
+  since` until a person sends input. A spawn or a wake submit refused with that text (the match is
+  pinned to it; any other deny stays a failed attempt) is skipped as `held: session stopped`: no
+  attempt, no unknown, no triage, no breaker count, and plan asks again next pass. The loop shows
+  the hold in the title and `/factory status` and ends it itself at the first spawn or submit
+  that works (13.6.1).
 - **A GitHub blip is not a result.** An action whose attempt fails on a
   transient GitHub error runs again inside the attempt, after 5 s and then 15 s, before its
   failure counts (`registry.ts` `executorOf`): a 5xx, GraphQL's "Something went wrong", a gateway
@@ -889,6 +896,8 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   agent at once does not trip it. An unknown that ends while the breaker holds is the breaker's
   own (cause `breaker`, 5.1) and counts toward no trip, so a trip holds 30 minutes from the
   unknown that tripped it, never longer, and is told once.
+- **A stopped session counts nothing.** A spawn refused because the main session was stopped is
+  held, not failed (5.1), so it never reaches the unknown count or this breaker.
 - **Effect.** It closes the `start`, `develop` and `drive` classes for 30 minutes: no claims, no
   agent steps, no triage. The held steps show the skip line `breaker` and cannot time out (4.4).
   The owner hears once, on the first pass after the trip, whether or not that pass asks for
@@ -1183,6 +1192,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `hold` | `hold:dont-merge` when a merge-queue record is first held by the `don't-merge` label (on its issue or PR; the reason says which), and `hold:released` when the label is gone from both. One event for each toggle within a life, keyed `hold/i<N>/l<life>/k<n>` with `n` the count of the life's earlier hold events. A failed label read (`labels not read`) writes none (9.1) | the issue |
+| `hold:session-stopped`, `hold:session-resumed` | the loop's hold on agent starts and wakes while the owner has stopped the main session (13.6.1): the first refusal with the engine's `the session was stopped and nobody has sent input since` starts it, the first spawn or submit that works ends it. `who=loop`, no issue; fact `hold/session/<start, base 36>`; the detail names the refused step or wake key and the engine's text, and for the end how long it lasted and how many spawns and wakes were held. One of each per hold, however many refusals it held | none |
 | `hold:release` | the merge queue's start of a release hold window: a release bump PR's head is inside its window (9.1). `who=loop`, no issue, `pr` the bump PR, `head` its head; the detail names its branch, the head, the state of its checks, the end of its window and the heads held. Fact `hold/release/pr<p>/h<head12>/start` (a start in the old form `hold/release/pr<p>/start`, logged before the window was per head, is still ended once) | none |
 | `hold:release-merged`, `hold:release-closed`, `hold:release-pushed`, `hold:release-failed`, `hold:release-timeout` | the end of that window: the bump PR left the list and was merged or closed (its state read once); a push made a new head (`pushed`, and the new head's window starts); a check on the head failed or was cancelled (`failed`, the detail and `failed_jobs` name them); or its window ran out while the head was still open and its checks not red (`timeout`, which also plans the owner item `release-hold`, appendix D). `who=loop`; `head` the window's head; the detail names the heads whose merge it held. Fact `hold/release/pr<p>/h<head12>/end`. Both are logged once per device, derived from the ledger's start key and GitHub, so a restart between them still logs the end | none |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
@@ -3067,6 +3077,13 @@ mode's environment (13.4.1, 13.11.1). Every `gh` command gets `--repo <R>`, so a
 only reach the configured repo. The foundation's kinds are these; v2's twelve (`transition`,
 `label`, `comment`, `event`, `pr`, `split`, `link`, `agent-step`, `ci-rerun`, `queue-update`,
 `queue-merge`, `slot`) are in appendix B.
+
+A stopped main session is held, not failed (5.1): an `agent-step` whose spawn is denied with the
+engine's `the session was stopped and nobody has sent input since`, and a wake (`judge`, `task`,
+`tell`) whose submit is refused or dropped with it (in the grace window, or later by `lateDrop`),
+are `skipped` with the hold marked (`held: session stopped`) and no attempt counted. A spawn or
+submit that works clears the hold. The hold lives in the loop's memory (`session-hold.ts`); the
+title adds `held: session stopped since HH:MM` and `/factory status` a line saying work is held.
 
 | Kind | Class | Executor | Timeout | Retries | Outcome recorded |
 |---|---|---|---|---|---|

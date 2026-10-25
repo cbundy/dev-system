@@ -13,6 +13,8 @@ export type PassSummary = {
   title: string
   actions: number
   owner: number
+  // a stopped main session is holding agent starts and wakes since this time (absent: written by an older build)
+  held?: { since: number } | null
 }
 
 declare module 'claude-code' {

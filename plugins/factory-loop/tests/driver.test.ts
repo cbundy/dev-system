@@ -1002,6 +1002,22 @@ describe('act mode: a lease taken over during a long step', () => {
   })
 })
 
+// a claim that used up its attempts: the loop tells the owner (rule S1), a tell wake
+const stalled = (submit: HostOptions['submit']) => async ($: Engine, on: Parameters<typeof host>[0]) => {
+  const clock = mock.clock(on, { now: NOW })
+  const { run } = factory({ queue: [470] })
+  const store = ledgerOf([
+    entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+    entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+    entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
+  ])
+  const h = host(on, { config: ACT, run, store, submit })
+  await $.session.start(START)
+  await clock.advance(6_000)
+  return { clock, h, wake: `tell:stalled:${CLAIM_KEY}:${NOW - 2 * MIN}` }
+}
+
+
 describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => {
   // a triage step at work on 470 (v2 SPEC 10.8): its entry, and the record its spawn wrote, naming
   // the file it answers in with the answer script. With the test's engine, a repair message resumes
@@ -1460,21 +1476,6 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
     expect(h.entry(CLAIM_KEY)).toBeUndefined()
   })
-
-  // a claim that used up its attempts: the loop tells the owner (rule S1), a tell wake
-  const stalled = (submit: HostOptions['submit']) => async ($: Engine, on: Parameters<typeof host>[0]) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ queue: [470] })
-    const store = ledgerOf([
-      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
-    ])
-    const h = host(on, { config: ACT, run, store, submit })
-    await $.session.start(START)
-    await clock.advance(6_000)
-    return { clock, h, wake: `tell:stalled:${CLAIM_KEY}:${NOW - 2 * MIN}` }
-  }
 
   test('a wake prompt the engine drops is never left open: it uses no attempt, and the next pass asks again (v2 SPEC 13.8.1)', ENGINE_TEST, async ($, on) => {
     let drops = 1
@@ -2140,5 +2141,87 @@ describe('API-key mode: the spend tally', () => {
     await clock.advance(6_000)
     expect(h.store.has(`whatif:${REPO}`)).toBe(false)
     expect(h.store.has(KEY)).toBe(false)
+  })
+})
+
+describe('a stopped main session holds the loop (session-hold.ts; v2 SPEC 5.1, 5.3, 13.6.1)', () => {
+  const STOPPED = 'the session was stopped and nobody has sent input since'
+  const ivs = (h: Host, cause: string) => h.ledger().filter(e => e.key.startsWith(`iv/hold/${cause}/`))
+  const statusOf = async ($: Engine) => String((await factoryOp($, 'status')).text)
+
+  test('a wake refused with the stopped text holds: the title (as /factory status shows it) and the status line say so, and a working submit ends it, logged once', ENGINE_TEST, async ($, on) => {
+    let stopped = true
+    const { clock, h, wake } = await stalled(() => (stopped ? { drop: STOPPED } : undefined))($, on)
+    expect(h.entry(wake)).toBeUndefined()
+    await clock.advance(60_000)
+    expect(await statusOf($)).toContain('held: session stopped since')
+    expect(await statusOf($)).toContain('Agents held and wakes undelivered since')
+    expect(ivs(h, 'session-stopped')).toHaveLength(1)
+    expect(ivs(h, 'session-resumed')).toHaveLength(0)
+    stopped = false
+    await clock.advance(60_000)
+    expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
+    await clock.advance(60_000)
+    expect(await statusOf($)).not.toContain('held')
+    expect(await statusOf($)).not.toContain('Agents held')
+    expect(ivs(h, 'session-resumed')).toHaveLength(1)
+    await clock.advance(60_000)
+    expect(ivs(h, 'session-resumed')).toHaveLength(1)
+  })
+
+  test('a late drop with the stopped text marks the hold', ENGINE_TEST, async ($, on) => {
+    let drop: (r: { drop?: string }) => void = () => undefined
+    let first = true
+    // the first prompt is taken as queued, the engine drops it later, and it refuses the next ones as well
+    const { clock, h } = await stalled(() => (first ? ((first = false), new Promise(resolve => (drop = resolve))) : { drop: STOPPED }))($, on)
+    await clock.advance(6_000)
+    expect(await statusOf($)).not.toContain('Agents held')
+    drop({ drop: STOPPED })
+    await clock.settle()
+    await clock.advance(60_000)
+    await clock.advance(60_000)
+    expect(await statusOf($)).toContain('Agents held and wakes undelivered since')
+    expect(await statusOf($)).toContain('held: session stopped since')
+  })
+
+  const slotWorld = () => {
+    let leased = false
+    const { run } = factory({
+      queue: [470],
+      run: argv => {
+        if (argv[0] === 'treehouse') return { stdout: leased ? JSON.stringify([{ path: '/slots/1', lease_id: 'L1', lease_holder: 'factory-loop:470:tmtsc5', status: 'leased', processes: [] }]) : '[]' }
+        if (!argv[0]?.endsWith('factory-slot')) return undefined
+        if (argv.includes('lease')) leased = true
+        return { stdout: argv.includes('lease') ? 'LEASED path=/slots/1 lease=L1\n' : 'PREPARED head=abcdef1234567\n' }
+      },
+    })
+    return run
+  }
+
+  test('an agent start refused with the stopped text uses no attempt, no unknown and no triage over five passes, and the hold stands', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const run = slotWorld()
+    // the engine's test host hands a spawn no agent id, so a start that works is covered by v2-steps.test.ts and session-hold.test.ts
+    const h = host(on, { config: ACT, run, spawn: () => ({ deny: STOPPED }) })
+    await $.session.start(START)
+    for (let i = 0; i < 5; i++) await clock.advance(60_000)
+    expect(h.spawns.length).toBeGreaterThanOrEqual(3)
+    expect(h.ledger().filter(e => e.key.includes('/triage/') || e.key.includes('/design/'))).toEqual([])
+    expect(h.ledger().filter(e => e.status === 'failed' || e.status === 'unknown')).toEqual([])
+    expect(h.ledger().filter(e => /\(U\d, seq/.test(e.summary ?? ''))).toEqual([])
+    expect(ivs(h, 'session-stopped')).toHaveLength(1)
+    expect(await statusOf($)).toContain('held: session stopped since')
+    expect(await statusOf($)).toContain('Agents held and wakes undelivered since')
+  })
+
+  test('any other spawn deny is still a failed attempt and goes the unknown path', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: ACT, run: slotWorld(), spawn: () => ({ deny: 'not allowed' }) })
+    await $.session.start(START)
+    for (let i = 0; i < 5; i++) await clock.advance(60_000)
+    expect(h.ledger().filter(e => e.status === 'failed').length).toBeGreaterThan(0)
+    expect(h.ledger().some(e => /\(U\d, seq/.test(e.summary ?? ''))).toBe(true)
+    expect(await statusOf($)).not.toContain('held')
+    expect(ivs(h, 'session-stopped')).toHaveLength(0)
   })
 })

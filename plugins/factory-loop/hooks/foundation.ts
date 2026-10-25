@@ -393,6 +393,8 @@ export type TitleFrame = {
   capped: readonly string[]
   backoff: boolean
   owner: number
+  // when a stopped session began holding work (session-hold.ts)
+  held?: number | null
 }
 
 // titleDue: O1 is a throttle: a title goes out when it
@@ -417,6 +419,7 @@ export function titleOf(f: TitleFrame): string {
   for (const c of f.capped) words.push(`capped ${c}`)
   if (f.backoff) words.push('gh wait')
   if (f.owner > 0) words.push(`owner ${f.owner}`)
+  if (f.held != null) words.push(`held: session stopped since ${new Date(f.held).toISOString().slice(11, 16)}`)
   return [head, ...words].join(' · ')
 }
 

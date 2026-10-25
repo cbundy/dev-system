@@ -414,6 +414,7 @@ export function statusText(last: PassSummary | null, control: Control, now: Ms):
     lines.push(`Pass ${last.pass}, ${ago(now - last.at)} ago: ${last.mode}, tier ${last.tier}, ${last.actions} ${noun}, ${last.owner} for the owner.`)
     lines.push(last.title)
   }
+  if (last?.held != null) lines.push(`Agents held and wakes undelivered since ${new Date(last.held.since).toISOString().slice(11, 16)}: the session is stopped; send any message to resume.`)
   const d = directives(control, now)
   lines.push(d.length === 0 ? 'Directives: none.' : `Directives: ${d.join('; ')}.`)
   return lines.join('\n')

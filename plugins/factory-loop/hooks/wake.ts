@@ -11,6 +11,7 @@
 import type { ToolSpec } from 'claude-code'
 
 import { WAKE_POINTER } from './exec'
+import { SESSION_STOPPED, clearHeld, markHeld } from './session-hold'
 import type { Executor } from './exec'
 import type { Action, ActionKind, Config, LedgerEntry, LedgerStatus, Ms, Outcome, WakeKind } from './types'
 
@@ -94,8 +95,10 @@ const wake: Executor = async (ctx, action) => {
   const first = wakeLine(action, id, ctx.rt.repo)
   const details = [...action.context]
   try {
-    await ctx.io.submit(wakePrompt(first, details))
+    // only a confirmed delivery ends a hold: a prompt taken as queued may still be dropped (driver-io.ts)
+    if ((await ctx.io.submit(wakePrompt(first, details))) !== 'queued') clearHeld(await ctx.io.now())
   } catch (err) {
+    if (SESSION_STOPPED.test(String(err))) markHeld(await ctx.io.now(), `${action.key}: ${String(err).slice(0, 200)}`)
     return { status: 'skipped', summary: `submit failed: ${String(err).slice(0, 200)}` }
   }
   return { status: 'running', wakeId: id, summary: lineSummary(first) }
