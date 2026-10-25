@@ -850,8 +850,8 @@ ORDER BY week DESC, device, regime;
 `callum-flow-merge` logs one `test_weakened` event per commit that `callum-flow-test-weakening`
 flagged on a merged PR (a commit that deleted assertions, or added `--warn-only`, `|| true`, a
 skip or `.only`, or commented an assertion out; cbundy/dev-system#314). The event has `commit`,
-`restored` (true when a later commit put the test back), `kinds` and `files`. There is no step: the
-no-mistakes step that made the commit is not carried over. `callum-flow-evaluate` reports the same
+`restored` (true when a later commit put the test back), `kinds` and `files`. There is no step.
+`callum-flow-evaluate` reports the same
 counts as its `test_weakened` section.
 
 ```sql
@@ -1280,8 +1280,8 @@ A device is alive for 30 minutes after any `event_log` row it logged (`usage`, `
 `requeued`, `merged`, `abandoned` or `closed`.
 
 The pipeline-bound part and the B-or-gate rule that needed it are gone from this query: they read the
-no-mistakes mirror, which this document no longer covers. `callum-flow-evaluate`'s `waiting` section
-still makes that call from the no-mistakes source (see below).
+runs of a pipeline source that no longer exists. `callum-flow-evaluate`'s `waiting` section keeps the
+B-or-gate call with nothing pipeline-bound (see below).
 
 Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
 its baseline. The `ready` time therefore comes from each issue's GitHub timeline, the last
@@ -1371,8 +1371,8 @@ ORDER BY repo, issue;
 ```
 
 Sum the columns for totals. `sum(dispatcher_bound_other_idle) / sum(dispatcher_bound)` is the share of
-dispatcher-bound time with another device idle. The B-or-gate call needs the pipeline-bound seconds as
-well, so read it from `callum-flow-evaluate`'s `waiting` section, whose `decision` is `B` when more
+dispatcher-bound time with another device idle. The B-or-gate call is
+`callum-flow-evaluate`'s `waiting` section's `decision`: `B` when more
 than 50% of the wait was dispatcher-bound with another device idle and `gate` otherwise.
 
 ## 7a. How waits end
@@ -1534,8 +1534,7 @@ flight would undercount).
 The medians come from (a) in code, not from SQL: the median seconds of `reviewing_at - building_at`
 (the implementer's own time), of `green_at - reviewing_at` (review) and of `merged_at - building_at`
 (total), over the rows that have both times. The pipeline columns of the older version of this query
-(runs, auto-fix rounds, failed steps, parked time and pipeline tokens) read the no-mistakes mirror and
-are gone.
+(runs, auto-fix rounds, failed steps, parked time and pipeline tokens) are gone.
 
 The implementer's own token spend is in this database from the loop that writes it on (see
 [Tokens per merged issue](#tokens-per-merged-issue), per issue, model and role); for older issues read it
@@ -3323,8 +3322,8 @@ retry is a new agent. They take every attempt of a merged issue in every life. A
 event in the window; `since` narrows by when it merged. `steps_without_tokens` counts the ended agent steps (one per
 key) of those issues with no counted agent behind them, so a gap is visible rather than silently low.
 
-What they leave out: the loop's own main-session wakes and judge turns, the tells, and the no-mistakes pipeline's
-agents; only the step agents the loop spawned are here. A step's `role` is read from its key: `i<N>/l<life>/s<seq>/<step>/a<n>`
+What they leave out: the loop's own main-session wakes and judge turns, the tells, and any agent outside
+the loop's steps; only the step agents the loop spawned are here. A step's `role` is read from its key: `i<N>/l<life>/s<seq>/<step>/a<n>`
 or, for a review, `i<N>/l<life>/review/<patch>/r<round>/a<n>`.
 
 Per merged issue, the four token sums and their total over all its attempts:
@@ -3573,10 +3572,10 @@ jq -s --arg since 2026-10-18T00:00:00Z '
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--events <file>] [--nm-export <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/callum-flow-evaluate`)
+[--events <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/callum-flow-evaluate`)
 computes the numbers of queries 1 to 4, 6, 7 and 9 for a time window from an events file (`--events`,
 default the local event log; a `factory.events` export covers every device), plus token spend, waste
-and pipeline numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It reads the
+numbers from Claude Code transcripts. It reads no no-mistakes data. It reads the
 old event log, not the factory database. It is read-only, makes no network calls and is
 deterministic. The `evaluate-sessions` skill runs it and writes the report; every number in a report
 comes from this tool. Differences from the SQL above: the SQL reads the factory database; the window
@@ -3584,16 +3583,15 @@ selects issues by their `merged` event (query 1) or first `merge_ready` (query 2
 their own timestamp (query 3), and the events file is the one device's log unless a `factory.events`
 export is passed (see the skill).
 
-- `throughput` (query 1) and `waiting` (query 7) take every pipeline run start from the linked
-  runs of the no-mistakes source (`state.sqlite` or `--nm-export`), by the rules in
-  [The run-to-issue link](#the-run-to-issue-link); `run_started` events are read only for the legacy link, never for a
-  timestamp. Each lead-time row carries `run_source`: `mirror` (the first linked run is linked by
-  its branch), `run_started` (linked only by a legacy event) or `none`. With no linked run in the
-  source, `implementation` and `pipeline` are `null`, never a number from the events, and nothing
-  is pipeline-bound in the waiting split. `pipeline.unlinked_runs` counts this repo's runs created
-  in the window that no issue claims (runs with no `repo` belong to no
-  repo and are not counted). A run created before `--since` for an issue merged inside the window
-  must be in the source, so export the mirror from a lookback earlier than the window start.
+- `throughput` (query 1) takes each issue's pipeline start from its first `transition` to reviewing
+  (the factory loop v2); `run_started` events are never read for a timestamp. Each lead-time row
+  carries `run_source`: `transition` or `none`. With no such transition, `implementation` and
+  `pipeline` are `null`, never a number from the events, and nothing is pipeline-bound in the
+  `waiting` split (query 7).
+- `--nm-state <file>` and `--nm-export <file>` are retired: they are still accepted, their value is
+  never read, and `sources` gets one `no-mistakes` entry that says so. The report has no `pipeline`
+  section, no `window.pipeline_runs` and no `window.scope.pipeline`, and `spend` holds no
+  `pipeline:<step>` rows.
 - `per_device` (query 4, plus claims and `claim_lost` per device) and `claims` (query 6:
   `double_claims`, `claim_lost`, `reclaimed`, `stuck`) read each event's `device`. The stuck test
   is evaluated at the window's end; its lease comes from `CALLUM_FLOW_LEASE_MINUTES` (default 120).
@@ -3606,8 +3604,7 @@ export is passed (see the skill).
   judgement calls made in the window by kind and outcome, with those overridden; the lives claimed
   in the window and how each ended (`open` when it had not by the window's end, censored); and per
   merged issue its review and fix rounds and its time in flight less the time parked. Each counts a
-  retried event once, as section 9 does. A merged issue's lead-time row takes its pipeline start from
-  its first `transition` to reviewing when it has no linked run (`run_source` `transition`).
+  retried event once, as section 9 does.
 - `merges`, `prs` and `gaps` are section 9c's numbers over the window, from the new events' `pr`, `by`
   and `recovered` fields: the merges whose time is in the window (a `merged` event, a hand-merge
   transition or a person `hand-merge` intervention, one per issue and `pr`) by `by` and `recovered`,
@@ -3641,29 +3638,11 @@ export is passed (see the skill).
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
 
-### The run-to-issue link
-
-`run_started` is logged only when an agent remembers to, so a share of the merged issues have none. The
-no-mistakes database records every run itself, so it is the source of every pipeline fact (start time,
-status, parked time, PR). `callum-flow-evaluate` links a run to an issue by these rules (they were once a
-SQL block of `docs/factory-state.md`; the factory-state tool no longer reads runs). A run belongs to
-issue N of repo R when:
-
-- the run's `repo` equals the lower-cased R (the exporter lowercases `repo`; the event log's `repo` is not
-  lowercased, so compare after lowercasing), and
-- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` branch convention (up to nine digits are read).
-
-Legacy fallback: a run whose branch carries no issue number is linked through a `run_started` event with
-the same run id, so old rows keep working. The branch wins when the two disagree. Every other run,
-including one with no `repo`, is unlinked: it is left out of per-issue numbers, never counted against an
-issue by guess. The start of a pipeline run in any issue-level number is the linked run's `created_at`;
-`run_started` timestamps are never read.
-
 ### Regimes
 
 `--regime <factory_loop_v2|testbed|manual|unknown>` keeps only the events whose `regime` equals the value
 (a null, empty or missing regime is `unknown`; any other value, or none, exits 2 with the usage line). The
-filter runs before pipeline runs are linked and before the event metrics are computed, and `window.regime` says
+filter runs before the event metrics are computed, and `window.regime` says
 which value was given, or `all`. Without the flag, `throughput.by_regime` lists per regime `merged_issues` (the
 throughput derivation on that regime's events), `closed_issues` (distinct issues with a `closed` event in the
 window) and `claims` (`claimed` events in the window), and `spend.by_regime` lists the spend rows of each regime
@@ -3672,9 +3651,8 @@ events or attributed turns, sorted by name, and are omitted with `--regime`, whe
 
 A transcript turn has no regime of its own. It takes one through the transcript's session (a sub-agent takes its
 parent's): the regime of the latest regime-carrying event of that session at or before the turn's time, the first
-such event's regime for an earlier turn, and `unknown` when no event of the session carries one. Pipeline
-(no-mistakes) invocations have no session, so they are `unknown`. With `--regime R`, `spend.rows` counts only the
-turns attributed to R, and the pipeline rows only when R is `unknown`. `waste`, `pipeline` and
+such event's regime for an earlier turn, and `unknown` when no event of the session carries one. With
+`--regime R`, `spend.rows` counts only the turns attributed to R. `waste` and
 `sub_agent_model_mismatches` are not filtered by regime. A regime is never guessed from a device, workspace name
 or path. Events written before v0.81.0 carry no `regime` or `session_id` and read as `unknown` and no session.
 The shadow and replay comparisons leave both `by_regime` keys out (the old source's records carry no regime).
@@ -3723,84 +3701,17 @@ that type, so a state may be stale), and
 `callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
 (`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`. The loop's reaction is in "Readers behind the loop".
 
-### Scope and the fleet-wide no-mistakes export
+### Scope
 
 Every report says which scope each source covers, in `window.scope` (one `Scope:` line under
 `window` in markdown):
 
-- `pipeline`: `workspace` when the numbers come from this device's `state.sqlite`, `fleet` when
-  `--nm-export` is given.
 - `events`: `workspace` for the local event log, `fleet` when `--events` is given (a
   `factory.events` export is expected there).
 - `transcripts`: always `workspace`.
 
-`--nm-export <file>` replaces `state.sqlite` as the source of every pipeline number
-(`pipeline`, the `pipeline:<step>` rows in `spend`, `window.pipeline_runs`). The tool still opens
-`state.sqlite` for `repos.working_path`, which `nm-export` never ships, to find this checkout's
-transcripts; its `sources` row says it is used for transcript discovery only. The export is read
-offline, so the tool makes no network call in either mode.
-
-The file is JSON lines, one `{"table": "<name>", "row": {...}}` per row, with the column names of
-the `nomistakes` tables. The tool uses `runs`, `step_results`, `step_rounds` and
-`agent_invocations` and ignores any other table, unknown columns and lines that are not JSON,
-like `--events`. Timestamps are the ISO strings `timestamptz` gives; they give the same numbers
-as the epoch seconds in `state.sqlite`. A missing file makes the pipeline metrics `n/a` with the
-reason. A column that an older export lacks (`step_results.status`, `step_rounds.trigger_type`,
-`agent_invocations.purpose`, `runs.parked_ms`, `runs.awaiting_agent_since`) makes only the
-metrics that need it `n/a`. The export query, which covers every repo and device (the
-`raw` column is dropped) and the `step_results`, `step_rounds`, `agent_invocations` and
-`run_agent_sessions` of the runs it selects, plus `repos`:
-
-```sh
-dev-query -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
-WITH r AS (
-  SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
-), s AS (
-  SELECT x.* FROM nomistakes.step_results x JOIN r ON r.id = x.run_id
-)
-SELECT jsonb_build_object('table', 'runs', 'row', to_jsonb(r) - 'raw') FROM r
-UNION ALL
-SELECT jsonb_build_object('table', 'step_results', 'row', to_jsonb(s) - 'raw') FROM s
-UNION ALL
-SELECT jsonb_build_object('table', 'step_rounds', 'row', to_jsonb(d) - 'raw')
-FROM nomistakes.step_rounds d JOIN s ON s.id = d.step_result_id
-UNION ALL
-SELECT jsonb_build_object('table', 'agent_invocations', 'row', to_jsonb(i) - 'raw')
-FROM nomistakes.agent_invocations i JOIN r ON r.id = i.run_id
-UNION ALL
-SELECT jsonb_build_object('table', 'run_agent_sessions', 'row', to_jsonb(a) - 'raw')
-FROM nomistakes.run_agent_sessions a JOIN r ON r.id = a.run_id
-UNION ALL
-SELECT jsonb_build_object('table', 'repos', 'row', to_jsonb(p) - 'raw') FROM nomistakes.repos p;
-SQL
-```
-
-Do not filter by `device` or `repo`: `pipeline.by_device` and `pipeline.by_repo` need
-every device's rows, and the report should list every device that ran.
-
-### Pipeline definitions
-
-All of these are in `pipeline`, computed from the runs created in the window for `--repo`, from
-either source. A key is `n/a` on its own when its columns are missing.
-
-- **Gate first-pass rate** (`gates`): per `step_name`, the steps that ended `completed` or
-  `failed` (`skipped`, `pending` and `running` are left out), how many of those `completed` with
-  no round whose `trigger_type` is not `initial`, and that share as a percentage. This is the
-  pipeline's gate, not the issue-level `first_pass` of section 2.
-- **Fix rounds** (`fix_rounds`): step rounds with a `trigger_type` other than `initial` (in
-  practice `auto_fix`). Reported as the total, the count per `step_name` (every step that ran,
-  zero included) and `max_per_run`, the most in any one run.
-- **Tokens by model and purpose** (`tokens_by_model_purpose`): one row per `(model, purpose)`
-  with `invocations` and input, output, cache_read and cache_creation tokens, reported
-  separately. An empty model or purpose reads `unknown`. Sorted by model, then purpose.
-- **Time parked** (`parked`): over the runs with `parked_ms > 0`, the count (`runs_parked`), total,
-  median and max in seconds. `awaiting_agent` counts runs with `awaiting_agent_since` set, as of
-  when the data was read, which is the window's end only for a report run right after it.
-- **`by_device`**: the four metrics above per `device`, for `--repo`. In workspace mode there is
-  one row named `DEV_MACHINE_NAME`, else the hostname (the rule `nm-export --device` uses).
-- **`by_repo`**: the same per repo, over every repo in the source (workspace mode names a repo
-  from `repos.upstream_url`). It is the one key that ignores `--repo`, and its `scope` field says
-  so.
+The tool finds the transcripts of this checkout from the git toplevel of the directory it runs in,
+its `<toplevel>--*` worktree folders, and any `--projects-dir`. It makes no network call.
 
 ### Token and wake definitions
 
@@ -3813,8 +3724,7 @@ either source. A key is `n/a` on its own when its columns are missing.
 - **Regime**: a turn's regime comes from its session's events, see "Regimes" above; the `unknown` rule and the
   attribution apply to every spend row.
 - **Role**: the main session is `orchestrator`; a sub-agent's role is its `agent-<id>.meta.json`
-  `agentType`, else `unknown`; pipeline agent invocations are `pipeline:<step_name>`, restricted
-  to runs of the repo created in the window (their `turns` are `model_roundtrips`).
+  `agentType`, else `unknown`.
 - **Wake**: a user line carrying a `<task-notification>`, a `scheduled_task_fire` system line, or
   an owner prompt, in the main session. Kind: `monitor-event`, `monitor-timeout` (a Monitor that
   ended or a task stopped), `agent-done`, `bash-done`, `cron` or `owner`, from the notification
@@ -3826,7 +3736,7 @@ either source. A key is `n/a` on its own when its columns are missing.
 - **Re-arm**: an idle wake whose only calls relaunch a Monitor or a background `Bash` (calls to
   `ToolSearch` and `TaskStop` alongside are ignored). Counted within idle wakes.
 - **Stale wake**: a notification for a task id that already notified `completed`, or whose text
-  names an issue (`#N`) or a pipeline run id whose `merged` event is earlier than the wake.
+  names an issue (`#N`) or a run id whose `merged` event is earlier than the wake.
 - **Repeated check**: an identical, whitespace-normalised `Bash` command repeated within 10 minutes
   with no action call in between. Its tokens are those of the turns containing a repeat.
 

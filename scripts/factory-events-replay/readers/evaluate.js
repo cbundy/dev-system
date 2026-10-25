@@ -3,7 +3,7 @@
 // "What a reader issue passes"). Per repo in the window, old runs the tool's old source over the old
 // rows of factory.events (the JSON-lines export the evaluate-sessions skill takes) and new runs its new
 // source over the factory.event_log rows, so both go through the tool's own `evaluate()`. Only the
-// event-derived sections can differ: no transcripts and no no-mistakes database are read.
+// event-derived sections can differ: no transcripts are read.
 // normalize drops the differences that are known and documented (the sources block, and the metrics
 // that read n/a under the new source); everything else must match.
 
@@ -28,7 +28,7 @@ function reports(ctx, source, rowsSql, url) {
   const repos = lines(ctx.psql(ctx.oldUrl, `SELECT DISTINCT repo FROM factory.events WHERE ${when(ctx)} ORDER BY 1`));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-reader-"));
   // fixed names, so a "file not found" reason reads the same on both sides
-  const env = { HOME: "/nonexistent/evaluate-reader", CLAUDE_CONFIG_DIR: "/nonexistent/evaluate-reader/claude", NO_MISTAKES_HOME: "/nonexistent/evaluate-reader/nm", CALLUM_EVENTS_DIR: "/nonexistent/evaluate-reader/ev", DEV_MACHINE_NAME: "replay" };
+  const env = { HOME: "/nonexistent/evaluate-reader", CLAUDE_CONFIG_DIR: "/nonexistent/evaluate-reader/claude", CALLUM_EVENTS_DIR: "/nonexistent/evaluate-reader/ev", DEV_MACHINE_NAME: "replay" };
   try {
     const file = path.join(dir, `${source}.jsonl`);
     fs.writeFileSync(file, lines(ctx.psql(url, rowsSql)).join("\n") + "\n");

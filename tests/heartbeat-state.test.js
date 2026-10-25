@@ -17,7 +17,7 @@ let tmp;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hb-state-"));
-  for (const d of ["events", "nm", "claude/projects/p"]) fs.mkdirSync(path.join(tmp, d), { recursive: true });
+  for (const d of ["events", "claude/projects/p"]) fs.mkdirSync(path.join(tmp, d), { recursive: true });
 });
 
 function ev(state, issue, extra = {}) {
@@ -26,16 +26,6 @@ function ev(state, issue, extra = {}) {
 
 function writeEvents(lines, name = "o__r.jsonl") {
   fs.writeFileSync(path.join(tmp, "events", name), lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n") + "\n");
-}
-
-function writeRuns(rows) {
-  const { DatabaseSync } = require("node:sqlite");
-  const db = new DatabaseSync(path.join(tmp, "nm", "state.sqlite"));
-  db.exec("CREATE TABLE repos (id TEXT PRIMARY KEY, upstream_url TEXT NOT NULL)");
-  db.exec("INSERT INTO repos VALUES ('r', 'https://github.com/o/r.git'), ('x', 'git@github.com:Other/X.git')");
-  db.exec("CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT, branch TEXT, status TEXT NOT NULL)");
-  for (const [id, branch, status, repo = "r"] of rows) db.prepare("INSERT INTO runs VALUES (?, ?, ?, ?)").run(id, repo, branch, status);
-  db.close();
 }
 
 // A transcript line `ageS` seconds before NOW; the file is touched at the same time.
@@ -54,7 +44,6 @@ function run(extraEnv = {}, { args = [] } = {}) {
     env: {
       PATH: process.env.PATH,
       CALLUM_EVENTS_DIR: path.join(tmp, "events"),
-      NO_MISTAKES_HOME: path.join(tmp, "nm"),
       CLAUDE_CONFIG_DIR: path.join(tmp, "claude"),
       DEV_MACHINE_NAME: DEV,
       DEV_CONTEXT_WINDOW_DIR: path.join(tmp, "windows"),
@@ -138,43 +127,33 @@ test("unparseable lines and lines without an issue are skipped", () => {
   assert.equal(run().out.state, "idle");
 });
 
-test("a non-terminal no-mistakes run is busy and carries its issue by branch", () => {
-  writeRuns([["run1", "feat/issue-12-x", "running"], ["run2", "feat/issue-13-x", "completed"], ["run3", "feat/issue-14-x", "failed"], ["run4", "feat/issue-15-x", "cancelled"]]);
-  const { out } = run();
-  assert.equal(out.state, "busy");
-  assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 12, run_id: "run1", branch: "feat/issue-12-x", state: "running" }]);
+test("no-mistakes state is not read: an open run in NO_MISTAKES_HOME neither makes the beat busy nor adds an entry", () => {
+  const home = path.join(tmp, "nm");
+  fs.mkdirSync(home, { recursive: true });
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(home, "state.sqlite"));
+  db.exec("CREATE TABLE repos (id TEXT PRIMARY KEY, upstream_url TEXT NOT NULL)");
+  db.exec("INSERT INTO repos VALUES ('r', 'https://github.com/o/r.git')");
+  db.exec("CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT, branch TEXT, status TEXT NOT NULL)");
+  db.exec("INSERT INTO runs VALUES ('run1', 'r', 'feat/issue-12-x', 'running')");
+  db.close();
+  assert.deepEqual(run({ NO_MISTAKES_HOME: home }).out.in_flight, []);
+  assert.equal(run({ NO_MISTAKES_HOME: home }).out.state, "idle");
+  // the same file beside an event: only the event's entry, and no run_id from the run
+  writeEvents([ev("claimed", 12)]);
+  const { out, stderr } = run({ NO_MISTAKES_HOME: home });
+  assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 12, run_id: null, branch: null, state: "claimed" }]);
+  assert.equal(stderr, "");
 });
 
-test("a run is joined to its issue by run_started.run_id before the branch rule, and merges into the event entry", () => {
-  writeEvents([ev("run_started", 7, { run_id: "runA", branch: "feat/issue-7-x" })]);
-  writeRuns([["runA", "weird-branch", "running"]]);
-  const { out } = run();
-  assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 7, run_id: "runA", branch: "feat/issue-7-x", state: "run_started" }]);
-});
-
-test("an issue entry carries its lowercase repo, and a run joins only the issue of its own repo", () => {
-  writeEvents([ev("claimed", 5, { repo: "O/R" }), ev("claimed", 5, { repo: "a/b" }), ev("run_started", 8, { repo: "A/B", run_id: "runB" })]);
-  writeRuns([["run1", "feat/issue-5-x", "running"], ["run2", "feat/issue-5-y", "running", "x"], ["runB", "weird-branch", "running"]]);
+test("an issue entry carries its lowercase repo and the run_id of its own event", () => {
+  writeEvents([ev("claimed", 5, { repo: "O/R" }), ev("claimed", 5, { repo: "a/b" }), ev("run_started", 8, { repo: "A/B", run_id: "runB", branch: "feat/issue-8-x" })]);
   const { out } = run();
   assert.deepEqual(out.in_flight, [
-    { repo: "o/r", issue: 5, run_id: "run1", branch: "feat/issue-5-x", state: "claimed" },
+    { repo: "o/r", issue: 5, run_id: null, branch: null, state: "claimed" },
     { repo: "a/b", issue: 5, run_id: null, branch: null, state: "claimed" },
-    { repo: "a/b", issue: 8, run_id: "runB", branch: "weird-branch", state: "run_started" },
-    { repo: "other/x", issue: 5, run_id: "run2", branch: "feat/issue-5-y", state: "running" },
+    { repo: "a/b", issue: 8, run_id: "runB", branch: "feat/issue-8-x", state: "run_started" },
   ]);
-});
-
-test("the branch rule links only an issue-<N> path segment, as in docs/metrics.md", () => {
-  writeRuns([["run1", "fix/reissue-3-cache", "running"], ["run2", "feat/issue-12abc", "running"], ["run3", "issue-4", "running"]]);
-  const { out } = run();
-  assert.deepEqual(out.in_flight.map((e) => [e.run_id, e.issue]), [["run1", null], ["run2", null], ["run3", 4]]);
-});
-
-test("an open run on a branch with no issue number is still busy", () => {
-  writeRuns([["run9", "scratch", "awaiting_approval"]]);
-  const { out } = run();
-  assert.equal(out.state, "busy");
-  assert.equal(out.in_flight[0].issue, null);
 });
 
 test("a typed prompt 2 minutes old is busy, 6 minutes old is idle", () => {
@@ -216,14 +195,6 @@ test("missing files give idle and no throw", () => {
   assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, skipped_events: [] });
 });
 
-test("an unreadable state.sqlite degrades to the other sources and reports on stderr", () => {
-  fs.writeFileSync(path.join(tmp, "nm", "state.sqlite"), "not a database");
-  writeEvents([ev("claimed", 5)]);
-  const { out, stderr } = run();
-  assert.equal(out.state, "busy");
-  assert.match(stderr, /state\.sqlite/);
-});
-
 test("superseded is noise: after merged stays idle, after claimed stays busy", () => {
   writeEvents([ev("merged", 5), ev("superseded", 5, { ts: "2026-10-12T11:00:00Z", run_id: "r1" }),
     ev("claimed", 6), ev("superseded", 6, { ts: "2026-10-12T11:00:00Z", run_id: "r1" })]);
@@ -252,13 +223,6 @@ test("implementer_routed (#506) is a new-life decision: after merged or abandone
     const { out } = run();
     assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[5, "implementer_routed"]], terminal);
   }
-});
-
-test("a run named by a superseded event on this device is not busy, even while still running", () => {
-  writeEvents([ev("superseded", 12, { run_id: "run1" }), ev("superseded", 13, { run_id: "run2", device: "other" })]);
-  writeRuns([["run1", "feat/issue-12-x", "running"], ["run2", "feat/issue-13-x", "running"]]);
-  const { out } = run();
-  assert.deepEqual(out.in_flight.map((e) => e.run_id), ["run2"]);
 });
 
 for (const idle of ["ready", "reclaimed", "owner_wait"]) {
@@ -418,16 +382,15 @@ test("new: an in_flight entry has the new type as state, a null run_id and the p
   assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 7, run_id: null, branch: "issue-7", state: "claimed" }]);
 });
 
-test("new: .shadow and .pushed files are not read, and runs join by branch", () => {
+test("new: .shadow and .pushed files are not read", () => {
   writeNew([nev("merged", 1)]);
   for (const d of [".shadow", ".pushed"]) {
     fs.mkdirSync(path.join(tmp, "events", "factory", d), { recursive: true });
     fs.writeFileSync(path.join(tmp, "events", "factory", d, "x.jsonl"), JSON.stringify(nev("claimed", 2)) + "\n");
   }
   fs.writeFileSync(path.join(tmp, "events", "factory", ".shadow", "heartbeat-state.jsonl"), JSON.stringify(nev("claimed", 3)) + "\n");
-  writeRuns([["run1", "issue-4", "running"]]);
   const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
-  assert.deepEqual(out.in_flight.map((i) => [i.issue, i.run_id]), [[4, "run1"]]);
+  assert.deepEqual(out.in_flight, []);
 });
 
 test("new: a line longer than a read chunk and a torn line are handled", () => {
@@ -535,11 +498,12 @@ test("new: a slow read contributes nothing, with a warning, and the beat still a
   assert.match(stderr, /new read timed out/);
 });
 
-test("new: an unreadable new log warns and the answer comes from runs and chat only", () => {
+test("new: an unreadable new log warns and the answer comes from chat only", () => {
   fs.writeFileSync(path.join(tmp, "events", "factory"), "a file, not a folder");
-  writeRuns([["run1", "issue-4", "running"]]);
+  writeChat([prompt(60)]);
   const { out, stderr } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
-  assert.deepEqual(out.in_flight.map((i) => i.issue), [4]);
+  assert.deepEqual(out.in_flight, []);
+  assert.equal(out.state, "busy");
   assert.match(stderr, /heartbeat-state: events: /);
 });
 

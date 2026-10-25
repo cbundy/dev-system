@@ -25,8 +25,6 @@
 //     untrusted_stripped on any read; renewed is the claim heartbeat; loop is
 //     the factory loop's bookkeeping, DECISIONS D-09, logged for an issue in
 //     any stage, a queued one included).
-//   - a no-mistakes run whose status is not completed, failed or cancelled,
-//     unless a superseded event on this device names it
 //   - a typed prompt (classifyWake kind 'owner', not a sidechain) in a Claude
 //     transcript within the last 5 minutes
 //
@@ -61,8 +59,7 @@
 //           requeued, claimed or implementer_routed counts. A transition into building, fixing or merge-queue
 //           (from another state) also counts, as the old delegated, fix_requested or merge_ready line the loop
 //           writes there, with the transition's branch; it is never done, and only one into building
-//           starts a new life after a terminal state. Every other transition and type is noise. The no-mistakes
-//           run join uses the branch rule only: run_started and superseded are v1-only.
+//           starts a new life after a terminal state. Every other transition and type is noise.
 //   shadow  prints old's answer, runs new too and records how it differs in
 //           factory/.shadow/heartbeat-state.jsonl (an agreeing run at most once per quiet period).
 // An invalid value warns once on stderr and reads old. The new read has its own deadline: when it
@@ -70,7 +67,7 @@
 //
 // Environment: CALLUM_FLOW_HEARTBEAT_STATE_SOURCE, CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS (500),
 //   CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS (600), HEARTBEAT_TEST_NEW_DELAY_MS (tests),
-//   CALLUM_EVENTS_DIR, NO_MISTAKES_HOME, CLAUDE_CONFIG_DIR,
+//   CALLUM_EVENTS_DIR, CLAUDE_CONFIG_DIR,
 //   DEV_MACHINE_NAME, DEV_CONTEXT_WINDOW_DIR (default /tmp/dev-context-window),
 //   HEARTBEAT_EVALUATE (path of callum-flow-evaluate), HEARTBEAT_NOW_MS (tests).
 
@@ -99,7 +96,6 @@ const EV_NOISE = new Set(['claim_renewed', 'transition', 'reviewed', 'interventi
 const EV_DONE = new Set(['merged', 'abandoned', 'claim_lost', 'closed', 'ready', 'requeued']);
 const EV_TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
 const EV_LIFE = new Set(['ready', 'requeued', 'claimed', 'implementer_routed']);
-const NM_DONE = new Set(['completed', 'failed', 'cancelled']);
 const CHAT_WINDOW_MS = 5 * 60 * 1000;
 const TAIL_BYTES = 512 * 1024;
 
@@ -110,24 +106,14 @@ function device() {
   return process.env.DEV_MACHINE_NAME || os.hostname() || 'unknown';
 }
 
-// Same rule as repoOfUrl in callum-flow-evaluate.
-function repoOfUrl(url) {
-  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
-  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
-}
 const lowerRepo = (repo) => (repo ? String(repo).toLowerCase() : null);
 const issueKey = (repo, issue) => `${repo}#${issue}`;
 
-// deriveOld(events, dev): the in-flight issues over parsed old lines, plus the run facts the no-mistakes
-// join needs. Pure.
+// deriveOld(events, dev): the in-flight issues over parsed old lines. Pure.
 function deriveOld(events, dev) {
   const byIssue = new Map(); // "repo#issue" -> [{ts, ev}]
-  const runIssue = new Map(); // run_id -> {repo, issue}
-  const superseded = new Set(); // run_id
   for (const ev of events) {
     if (!ev || typeof ev !== 'object' || ev.device !== dev || typeof ev.state !== 'string') continue;
-    if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: lowerRepo(ev.repo), issue: ev.issue });
-    if (ev.state === 'superseded' && ev.run_id) superseded.add(String(ev.run_id));
     if (isNoise(ev.state) || !Number.isInteger(ev.issue)) continue;
     const key = issueKey(lowerRepo(ev.repo), ev.issue);
     if (!byIssue.has(key)) byIssue.set(key, []);
@@ -143,7 +129,7 @@ function deriveOld(events, dev) {
     }
     if (!DONE.has(cur.state)) issues.push(cur);
   }
-  return { issues, runIssue, superseded };
+  return { issues };
 }
 
 // deriveNew(events, dev): the same for parsed new events, in the local log's shape (payload under data)
@@ -173,7 +159,7 @@ function deriveNew(events, dev) {
     }
     if (!EV_DONE.has(cur.state)) issues.push(cur);
   }
-  return { issues, runIssue: new Map(), superseded: new Set() };
+  return { issues };
 }
 
 function readOldEvents(dir) {
@@ -241,23 +227,6 @@ function readNewEvents(dir, dev, timeoutMs, current = null, skipped = null) {
     } finally { fs.closeSync(fd); }
   }
   return events;
-}
-
-function readRuns(home) {
-  const file = path.join(home, 'state.sqlite');
-  if (!fs.existsSync(file)) return [];
-  try {
-    const { DatabaseSync } = require('node:sqlite');
-    const db = new DatabaseSync(file, { readOnly: true });
-    try {
-      db.exec('PRAGMA busy_timeout = 2000');
-      return db.prepare('SELECT r.id, r.branch, r.status, p.upstream_url FROM runs r LEFT JOIN repos p ON p.id = r.repo_id').all()
-        .filter((r) => !NM_DONE.has(r.status));
-    } finally { db.close(); }
-  } catch (e) {
-    warn(`state.sqlite: ${e.message}`);
-    return [];
-  }
 }
 
 function loadClassifyWake() {
@@ -370,38 +339,9 @@ function liveSessions(claudeDir, windowDir, counts) {
   return sessions;
 }
 
-// inFlightOf(derived, runs): the in-flight entries of one event source joined with the no-mistakes runs.
-// Pure: both sources get the same join (a run counts for its issue by the run_started fact, else by its
-// branch name; the new log has no run_started and superseded, so only the branch rule applies).
-function inFlightOf({ issues, runIssue, superseded }, runs) {
-  const inFlight = [];
-  const byIssue = new Map();
-  for (const ev of issues) {
-    const repo = lowerRepo(ev.repo);
-    const e = { repo, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
-    byIssue.set(issueKey(repo, ev.issue), e);
-    inFlight.push(e);
-  }
-  for (const r of runs) {
-    if (superseded.has(String(r.id))) continue;
-    let { repo, issue } = runIssue.get(String(r.id)) || {};
-    if (issue === undefined) {
-      const m = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/.exec(r.branch || '');
-      repo = repoOfUrl(r.upstream_url);
-      issue = m ? Number(m[1]) : null;
-    }
-    const key = issue !== null && repo ? issueKey(repo, issue) : null;
-    const e = key ? byIssue.get(key) : undefined;
-    if (e) {
-      e.run_id = e.run_id || r.id;
-      e.branch = e.branch || r.branch || null;
-    } else {
-      const n = { repo, issue, run_id: r.id, branch: r.branch || null, state: r.status };
-      if (key) byIssue.set(key, n);
-      inFlight.push(n);
-    }
-  }
-  return inFlight;
+// inFlightOf(derived): the in-flight entries of one event source. Pure.
+function inFlightOf({ issues }) {
+  return issues.map((ev) => ({ repo: lowerRepo(ev.repo), issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state }));
 }
 
 const answerOf = (inFlight, chatBusy) => ({ state: inFlight.length > 0 || chatBusy ? 'busy' : 'idle', in_flight: inFlight });
@@ -415,9 +355,9 @@ function normalize(answer) {
   return { state: answer.state, in_flight: inFlight };
 }
 
-// The replay reader's answers: events only, no runs and no chat.
-const answerOld = (events, dev) => answerOf(inFlightOf(deriveOld(events, dev), []), false);
-const answerNew = (events, dev) => answerOf(inFlightOf(deriveNew(events, dev), []), false);
+// The replay reader's answers: events only, no chat.
+const answerOld = (events, dev) => answerOf(inFlightOf(deriveOld(events, dev)), false);
+const answerNew = (events, dev) => answerOf(inFlightOf(deriveNew(events, dev)), false);
 
 function intEnv(name, fallback) {
   const n = Number(process.env[name]);
@@ -471,8 +411,7 @@ async function main() {
     source = r.source;
     repo = repoOf(r.argv);
   } catch (e) { warn(`${e.message}: reading old`); }
-  const runs = readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes');
-  const empty = { issues: [], runIssue: new Map(), superseded: new Set() };
+  const empty = { issues: [] };
   const derivedOld = () => {
     try { return deriveOld(readOldEvents(dir), dev); } catch (e) { warn(`events: ${e.message}`); return empty; }
   };
@@ -490,16 +429,16 @@ async function main() {
   try { chat = chatActiveAt(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')); } catch (e) { warn(`chat: ${e.message}`); }
   const chatBusy = chat !== null && now - Date.parse(chat) <= CHAT_WINDOW_MS;
   let answer;
-  if (source === 'old') answer = answerOf(inFlightOf(derivedOld(), runs), chatBusy);
+  if (source === 'old') answer = answerOf(inFlightOf(derivedOld()), chatBusy);
   else if (source === 'new') {
     let derived = empty;
     try { derived = derivedNew(); } catch (e) { warn(`events: ${e.message}`); }
-    answer = answerOf(inFlightOf(derived, runs), chatBusy);
+    answer = answerOf(inFlightOf(derived), chatBusy);
   } else {
     answer = await runShadow({
       tool: 'heartbeat-state',
-      old: () => answerOf(inFlightOf(derivedOld(), runs), chatBusy),
-      new: () => answerOf(inFlightOf(derivedNew(), runs), chatBusy),
+      old: () => answerOf(inFlightOf(derivedOld()), chatBusy),
+      new: () => answerOf(inFlightOf(derivedNew()), chatBusy),
       normalize,
       eventsDir: dir,
       quietMs: intEnv('CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS', 600) * 1000,

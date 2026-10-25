@@ -78,7 +78,7 @@ export function reconcile(ctx: V2Ctx): void {
 
 // ghostsOf: this device's live claims with no record, no claim in flight and no done release, by
 // issue number. S1 leaves these to R1, whose release ends their claim before any new one. A claim
-// whose release is done is not one: the factory may still show it live (a no-mistakes run's state
+// whose release is done is not one: the factory may still show it live (the factory's state
 // outlives the release until the factory tools end it, 6.4), and S1 may claim it again, whose
 // claim starts the new life.
 export function ghostsOf(ctx: V2Ctx): Ghost[] {

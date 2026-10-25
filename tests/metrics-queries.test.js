@@ -145,8 +145,10 @@ test("the static check catches what it bans", () => {
   assert.deepEqual(problems("SELECT 1 FROM factory.event_log -- the note and the median, 'note'"), []);
 });
 
-test("the run-to-issue link rules are prose in docs/metrics.md, factory-state.md has no run link, and the nomistakes section is gone from metrics.md", () => {
-  assert.match(markdown, /^### The run-to-issue link$/m);
+test("docs/metrics.md has no run-to-issue link, no fleet-wide export or pipeline definitions, factory-state.md has no run link, and the nomistakes section is gone", () => {
+  for (const gone of ["### The run-to-issue link", "### Scope and the fleet-wide no-mistakes export", "### Pipeline definitions"]) {
+    assert.ok(!markdown.includes(gone), `${gone} is still in docs/metrics.md`);
+  }
   assert.ok(!fs.readFileSync(path.join(ROOT, "docs", "factory-state.md"), "utf8").includes("run_link"), "docs/factory-state.md still carries a run link");
   for (const gone of ["## 5. Adjudicator agreement", "## Linking pipeline runs to issues", "## no-mistakes pipeline data"]) {
     assert.ok(!markdown.includes(gone), `${gone} is still in docs/metrics.md`);

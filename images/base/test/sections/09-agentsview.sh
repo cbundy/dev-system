@@ -145,40 +145,9 @@ check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
   echo "$out" | grep -q "waiting: no"'
-# Seeding for the export query below: the mirrored runs of nm-fixture.js (r1 to r11) pushed through the
-# real nm-push-loop path. The saved queries of docs/metrics.md read the factory database and are checked
-# against a throwaway one by tests/metrics-queries.test.js (#652), not here. callum-flow-factory-state
-# reads the factory database only (#1293) and is seeded by factory_state_query.
-psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
-nm_seed_mirror() {
-  nm_fixture metrics && nm_push || return 1
-}
-check "the mirrored runs for the export query are seeded" nm_seed_mirror
-# The fleet-wide export query in docs/metrics.md (#274): run it against the same PostgreSQL, then
-# feed the JSON lines to callum-flow-evaluate --nm-export inside the image.
-nm_export_query() {
-  local root out want
-  root=$(cd "$TEST_DIR/../../.." && pwd)
-  out=$(mktemp)
-  # the heredoc body of the first <<'SQL' block in metrics.md
-  awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/docs/metrics.md" |
-    docker exec -i "$RUN_ID-b" dev-query -At -v since=2000-01-01T00:00:00Z > "$out" || return 1
-  [ -s "$out" ] && ! grep -q '"raw"' "$out" || return 1
-  node -e '
-    const { TABLES } = require(process.argv[1]);
-    const seen = new Set(require("fs").readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).table));
-    if (!seen.size || [...seen].some((t) => !TABLES[t])) process.exit(1);' "$root/images/base/nm-export" "$out" || return 1
-  docker exec -i "$RUN_ID-b" sh -c 'cat > /tmp/nm-export.jsonl' < "$out" || return 1
-  want=$(psql_av "select count(*) from nomistakes.runs where repo = 'acme/widgets'")
-  docker exec -e NO_MISTAKES_HOME=/tmp/nmfix -e CALLUM_EVENTS_DIR=/tmp/nmfix "$RUN_ID-b" callum-flow-evaluate \
-    --repo acme/widgets --since 2000-01-01T00:00:00Z --until 2100-01-01T00:00:00Z --nm-export /tmp/nm-export.jsonl |
-    node -e '
-      const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
-      const want = Number(process.argv[1]);
-      if (r.window.scope.pipeline !== "fleet" || r.pipeline.runs !== want || want < 1) process.exit(1);
-      if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
-}
-check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
+# The saved queries of docs/metrics.md read the factory database and are checked against a throwaway
+# one by tests/metrics-queries.test.js (#652), not here. callum-flow-evaluate no longer reads
+# no-mistakes data (#1316), so no check here feeds it a mirror or an export.
 # callum-flow-factory-state (#345, #1293) reads the factory database only, as the reader role through
 # dev-query --factory. Seed factory_image_check (bootstrapped above) with v2 events and run the tool in
 # the image against it with GitHub off: issue 42 merged, 51 building, 52 (repo spelled 'Acme/Widgets')
@@ -222,6 +191,7 @@ ev_write() { # <count> <tag> [noid]: count lines for device d1, repo o/r
       printf "{\"v\":1,\"ts\":\"2026-10-10T10:00:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":1,\"note\":\"%s-%s\"%s}\n" "$TAG" "$i" "$id" >> "$CALLUM_EVENTS_DIR/o__r.jsonl"
     done'
 }
+psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
 event_identity() {
   local ddl root
   root=$(cd "$TEST_DIR/../../.." && pwd)
