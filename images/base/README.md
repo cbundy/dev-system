@@ -107,7 +107,7 @@ environment variable set in the image.
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`) | global `config.yaml`, repo registrations, gates, run logs |
-| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
+| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
@@ -657,7 +657,6 @@ container never fails to start because of it.
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
    cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the
-   no-mistakes push loop (see [Factory event log](#factory-event-log)) and the
    [worker heartbeat](#worker-heartbeat). Separately, with the factory database's writer secret
    (`factory-db-writer-url` or `FACTORY_DB_WRITER_URL`) and `psql`, starts `factory-event-push-loop`
    (log: `/tmp/dev-factory-event-push.log`); an unreadable secret gets a `WARNING`.
@@ -745,7 +744,7 @@ on every failure:
   `n/a - no UI`: `OK UI capture: ...` when `uiCapture` is a command (with its npm script defined) or `none`;
   a `FAIL` with a `fix:` hint when it is unset or wrong. A `.callum-dev/evidence-off` file in the checkout
   turns off both this line and the evidence storage line, leaving one `INFO` line. Same rules as `callum-dev check`;
-- event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
+- event push status (see [Factory event log](#factory-event-log)), the new event log's
   counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
@@ -802,11 +801,11 @@ unknown count) for plugin and tool drift, and a `WARN` for a stale image or imag
 
 **A missing base-image tool means the container is stale.** If `dev-query`, `psql`,
 `dev-version` or another tool this README documents is "command not found" (or
-`/usr/local/share/dev-system/image-release`, `event-push-loop`, `factory-event-push-loop` or `nm-push-loop` is missing),
+`/usr/local/share/dev-system/image-release`, `event-push-loop` or `factory-event-push-loop` is missing),
 the container's image is older than the base image that ships it. Rebuild the container
 (`dev-restart-self`, or Rebuild Container in a desktop dev container); do not install the
 tool by hand, because the install is lost on the next rebuild and hides the real problem.
-(`event-push-loop`, `factory-event-push-loop`, `nm-push-loop`, `nm-export`, `heartbeat-loop` and `heartbeat-state` are deliberately not on PATH; run them by
+(`event-push-loop`, `factory-event-push-loop`, `heartbeat-loop` and `heartbeat-state` are deliberately not on PATH; run them by
 their path under `/usr/local/share/dev-system/`.)
 
 The callum-flow plugin reaches containers whose image is too old to warn about itself, so it
@@ -815,11 +814,11 @@ carries two hooks (`hooks/stale-image.sh`), both silent outside a base-image con
 
 - `SessionStart` (`startup`, `resume`): adds context to the session, naming each missing
   item, when a tool or file the plugin expects from the image is missing (`psql`,
-  `dev-version`, `dev-query`, `image-release`, `event-push-loop`, `nm-push-loop`); otherwise
+  `dev-version`, `dev-query`, `image-release`, `event-push-loop`); otherwise
   when `dev-version` (hard 5 second limit) reports a `STALE` base image or image layer, quoting
   those lines. Tool and plugin drift is never surfaced. Both name the rebuild fix.
 - `PostToolUseFailure` (`Bash`): after exit 127 with `<tool>: command not found` for one of
-  those tools or `nm-export`, adds the likely cause and the fix, so it still reaches an agent
+  those tools or `event-push-loop`, adds the likely cause and the fix, so it still reaches an agent
   whose session-start context was compacted away.
 
 ### Machine-readable output and the version snapshot
@@ -1928,70 +1927,8 @@ found, missing and translator misses, then the extra new events per type. New ev
 to every repo, and `--since` to the device's earliest new event. It exits 0 only when missing, misses and extras are all
 zero, 1 otherwise, and 2 on a usage error, an unreachable or unconfigured store, or no new rows to start from.
 
-`nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with
-the same URL rules as `event-push-loop`. The source is `state.sqlite` under
-`NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`.
-
-The state is `$AGENTSVIEW_DATA_DIR/nm-push/device-<hex>/state` (default parent
-`/persist/agentsview/nm-push`), where `<hex>` is the UTF-8
-hex encoding of `DEV_MACHINE_NAME` (else hostname). `NM_PUSH_STATE_DIR` overrides the parent
-`nm-push` directory. Containers with separate no-mistakes databases must use distinct device
-names, keeping their checkpoints separate even when agentsview storage is shared.
-State is replaced through a temporary file and rename. `dev-init` starts the loop when a
-URL is configured and `psql` is on `PATH`, under `/tmp/dev-nm-push.lock`
-(log: `/tmp/dev-nm-push.log`). The URL is re-read each pass; a missing or unreadable URL
-stops the loop with exit 0, including when the SQLite file is absent. A missing SQLite
-file otherwise makes the pass a no-op. Run `/usr/local/share/dev-system/nm-push-loop --once`
-for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
-`dev-doctor` prints an INFO line with cumulative upsert counts (including repeated rows),
-the last push time and whether activity is newer than the checkpoint; it fails when a URL
-is configured but the loop is stopped.
-
-It mirrors six tables of the local `state.sqlite`: `repos`, `runs`, `step_results`, `step_rounds`,
-`agent_invocations` and `run_agent_sessions`. The tables are created on the first push
-(`CREATE SCHEMA/TABLE IF NOT EXISTS`) and written with upserts on the source key (`id`;
-`(run_id, role)` for `run_agent_sessions`), so a run is updated in place as it progresses.
-The exporter opens SQLite read-only and reads all available tables in one read transaction.
-Without a valid checkpoint, it backfills every row in each available table, even when a
-parent table is absent; unresolved repo attribution is NULL. Later passes send all
-nonterminal runs and terminal runs touched at or after the checkpoint (`>=`), with their
-children and repos. Touch timestamps come from `runs.updated_at`, step start/completion/
-activity, round creation, invocation completion and session updates. A missing table or
-one missing a primary-key column is skipped with a warning. Each push is one PostgreSQL
-transaction; the checkpoint advances only after success, so failures are retried in full.
-The exporter (`nm-export`) is the authoritative source for column names, types, keys and
-indexes; print the DDL from the repository root with
-`node -e 'console.log(require("./images/base/nm-export").ddl())'`.
-
-Column rules:
-
-- Every table has `device` (the exporter's device attribution) and
-  `repo` (lowercase `owner/name` from `repos.upstream_url`) beside the source columns.
-- Epoch-second `*_at` and `*_since` columns are `timestamptz`; other integers are `bigint`;
-  JSON columns (`findings_json`, `gates_json`, ...) stay `text`.
-- A column the mirror does not know goes into `raw jsonb` (blobs as base64) instead of failing
-  the push; a known column missing from the SQLite file is NULL.
-- Actual NUL characters are removed from string values before serialization; literal
-  backslash escape text is preserved.
-- Never shipped, and absent from `raw`: `repos.working_path`, `runs.worktree_dir`,
-  `step_results.log_path` and `agent_pid`, `step_rounds.global_config_yaml` and
-  `repo_config_yaml`, and the step log files.
-- `runs.no_mistakes_version` records which no-mistakes wrote the row.
-
-Stability: the mirror reads no-mistakes' internal `state.sqlite` directly. That layout is not a
-stable interface, and any no-mistakes release can add, rename or remove columns or tables.
-Unknown columns are tolerated (they land in `raw`), but a rename or removal shows up as NULLs
-or a skipped table until the exporter is updated. Check `runs.no_mistakes_version` when a
-column goes quiet. The upstream ask for a stable, schema-versioned export is
-[kunchenguid/no-mistakes#985](https://github.com/kunchenguid/no-mistakes/issues/985).
-
-`/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
-without connecting to PostgreSQL. `--mark N` selects an incremental export;
-`--mark-out FILE` writes the resulting `{ "mark": N, "rows": N }` metadata.
-`--device NAME` overrides row attribution (default `DEV_MACHINE_NAME`, else hostname);
-it does not change the push loop's checkpoint path. `--waiting` prints `yes` when the
-newest touch timestamp exceeds `--mark` (zero when omitted), otherwise `no`, then exits
-without emitting SQL. Export selection rules are in the linked metrics reference.
+The `nomistakes` schema in the agentsview database holds history from an earlier mirror of the no-mistakes
+pipeline database. Nothing fills it any more and nothing drops it; the saved queries that read it still parse.
 
 ### Worker heartbeat
 
@@ -2005,7 +1942,7 @@ skips the other. The loop runs while either URL is configured and stops when nei
 with a log line. It upserts: identity and the four versions from `dev-version --local --snapshot`, the full version
 document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-latest.json`, refreshed in the
 background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
-`push` (event file and push-marker modification times, the no-mistakes mirror's recorded last push, and
+`push` (event file and push-marker modification times and
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
 The nullable `config` column (jsonb) holds the settings snapshot of the factory loop (see [Settings snapshot](#settings-snapshot)); neither the UPSERT nor the stats UPDATE writes it. The guarded DDL adds it to an agentsview database that lacks it (migration 0015 does so in the factory database).
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
@@ -2081,8 +2018,7 @@ unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
 run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
-that failed on this beat, `[]` when none: `nm_push_not_running`
-(the respective container-local lock is free), `agentsview_push_not_running` (the container-local
+that failed on this beat, `[]` when none: `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
 `latest_lookup_failing` (the background lookup has failed for over an hour), and
 `factory_events_push_not_running` (the writer URL is configured and the `factory-event-push-loop` lock is free; never
@@ -2159,7 +2095,7 @@ and `factory.workers` with its view and notify triggers.
 ## dev-query
 
 `dev-query` (base image 2.15.0 and later) runs SQL against the central agentsview
-PostgreSQL (`factory.events`, the `nomistakes` mirror) from any container that has the
+PostgreSQL (`factory.events`) from any container that has the
 database URL; with `--factory` it reads the factory database instead (below). Agents use it instead of
 `psql "$AGENTSVIEW_PG_URL"`: the URL is deliberately not in the environment, so that
 fails. The saved queries are in [docs/metrics.md](../../docs/metrics.md).
@@ -2167,8 +2103,8 @@ fails. The saved queries are in [docs/metrics.md](../../docs/metrics.md).
 ```sh
 echo 'select count(*) from factory.events' | dev-query
 dev-query -At -c "select count(*) from factory.events where repo = 'owner/name'"
-dev-query -At -v since=2026-10-01T00:00:00Z > /tmp/nm-export.jsonl <<'SQL'
-select count(*) from nomistakes.runs where created_at >= :'since'::timestamptz
+dev-query -At -v repo=owner/name > /tmp/events-count.txt <<'SQL'
+select count(*) from factory.events where repo = :'repo'
 SQL
 ```
 

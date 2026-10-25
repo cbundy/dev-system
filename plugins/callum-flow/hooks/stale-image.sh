@@ -32,7 +32,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Tools on PATH, and internal files that are deliberately not on PATH.
 PATH_TOOLS="psql dev-version dev-query"
-SHARE_FILES="image-release event-push-loop nm-push-loop"
+SHARE_FILES="image-release event-push-loop"
 
 emit() { # event, context
   jq -n --arg e "$1" --arg c "$2" \
@@ -68,12 +68,12 @@ tool_failure() {
   input=$(cat)
   err=$(printf '%s' "$input" | jq -r '.error // empty' 2>/dev/null) || return 0
   case $err in "Exit code 127"*) ;; *) return 0 ;; esac
-  for c in $PATH_TOOLS nm-export event-push-loop nm-push-loop; do
+  for c in $PATH_TOOLS event-push-loop; do
     if printf '%s\n' "$err" | grep -qE "(^|[^A-Za-z0-9_.-])$c: command not found"; then t=$c; break; fi
   done
   [ -n "$t" ] || return 0
   case $t in
-    nm-export | event-push-loop | nm-push-loop)
+    event-push-loop)
       if [ -e "$share/$t" ]; then
         emit PostToolUseFailure "$t is an internal tool of the base image and is deliberately not on PATH. Run it by its path, $share/$t. If that is not what you meant, it is not a missing tool."
       else

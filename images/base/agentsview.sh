@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 #
 # agentsview.sh: shared PostgreSQL URL lookup and secret masking for dev-init,
-# dev-doctor, dev-query and the session, event and no-mistakes push loops;
+# dev-doctor, dev-query and the session and event push loops;
 # run_psql is shared by dev-query and the latter two loops
 # (cbundy/dev-system#103). Sourced, not run.
 #
@@ -15,12 +15,6 @@
 # agentsview_pg_url_file: the secret file's path.
 agentsview_pg_url_file() {
   echo "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/agentsview-pg-url"
-}
-
-nm_push_state_dir() {
-  local key
-  key=$(node -e 'process.stdout.write(Buffer.from(process.env.DEV_MACHINE_NAME || require("node:os").hostname() || "unknown").toString("hex"))') || return
-  printf '%s/device-%s\n' "${NM_PUSH_STATE_DIR:-${AGENTSVIEW_DATA_DIR:-/persist/agentsview}/nm-push}" "$key"
 }
 
 # agentsview_pg_url: prints the URL (surrounding whitespace and line ends

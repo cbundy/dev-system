@@ -31,7 +31,7 @@
 # the view factory.workers_status (age, stale), never their own rule.
 #
 # critical_failures is a JSON array of check codes, [] when all is well:
-#   nm_push_not_running, agentsview_push_not_running
+#   agentsview_push_not_running
 #       (a push loop whose lock is free; the loop is configured because this
 #       loop runs only with a URL)
 #   factory_events_push_not_running   (the writer URL is configured and the
@@ -118,7 +118,6 @@ CGROUP_DIR="${HEARTBEAT_CGROUP_DIR:-/sys/fs/cgroup}"
 PROC_DIR="${HEARTBEAT_PROC_DIR:-/proc}"
 LATEST_EVERY=900
 LATEST_FAIL_AFTER=3600
-NM_LOCK="${HEARTBEAT_NM_LOCK:-/tmp/dev-nm-push.lock}"
 AV_LOCK="${HEARTBEAT_AV_LOCK:-/tmp/dev-agentsview-push.lock}"
 FACTORY_EVENT_LOCK="${HEARTBEAT_FACTORY_EVENT_LOCK:-/tmp/dev-factory-event-push.lock}"
 EVENTS_DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
@@ -417,7 +416,6 @@ is_running() { # LOCKFILE: 0 when something holds the lock
 
 critical_failures() { # prints a JSON array
   local out='' now age
-  is_running "$NM_LOCK" || out="$out nm_push_not_running"
   if ! is_running "$AV_LOCK"; then
     # a watcher of another container sharing the data dir also counts
     if ! { [ -e "$AV_DIR/pg-watch.lock" ] && is_running "$AV_DIR/pg-watch.lock"; }; then
@@ -438,18 +436,15 @@ critical_failures() { # prints a JSON array
 }
 
 push_json() {
-  local ev_w ev_p nm av nmstate fe_w fe_p
+  local ev_w ev_p av fe_w fe_p
   ev_w=$(newest_mtime "$EVENTS_DIR"/*.jsonl)
   ev_p=$(newest_mtime "$EVENTS_DIR"/.pushed/*)
-  nmstate="$(nm_push_state_dir 2>/dev/null)/state"
-  nm=$(sed -n 's/^last_push=//p' "$nmstate" 2>/dev/null | sed -n 1p)
-  case "$nm" in '' | *[!0-9]*) nm='' ;; esac
   av=$(newest_mtime "$AV_DIR/pg-watch.log")
   fe_w=$(newest_mtime "$FACTORY_DIR"/*.jsonl)
   fe_p=$(newest_mtime "$FACTORY_DIR"/.pushed/*)
-  jq -nc --arg ew "$ev_w" --arg ep "$ev_p" --arg nm "$nm" --arg av "$av" --arg fw "$fe_w" --arg fp "$fe_p" '
+  jq -nc --arg ew "$ev_w" --arg ep "$ev_p" --arg av "$av" --arg fw "$fe_w" --arg fp "$fe_p" '
     def t: if . == "" then null else (tonumber | todate) end;
-    {events: {last_write: ($ew | t), last_push: ($ep | t)}, nm: {last_push: ($nm | t)}, agentsview: {last_push: ($av | t)},
+    {events: {last_write: ($ew | t), last_push: ($ep | t)}, agentsview: {last_push: ($av | t)},
      factory_events: {last_write: ($fw | t), last_push: ($fp | t)}}'
 }
 

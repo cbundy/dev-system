@@ -258,7 +258,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-evidence-upload \
   images/base/callum-flow-capture \
   /usr/local/bin/
-COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
+COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
 # The migrations factory-db-bootstrap applies (cbundy/dev-system#646); it finds them here.
 COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-system/factory-db/migrations/
 # COPY --chmod gives the directories it creates the files' mode, so node could not traverse them (cbundy/dev-system#797).

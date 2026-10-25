@@ -122,8 +122,8 @@ reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/config-* "$f
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
-    NM_PUSH_STATE_DIR="$tmpdir/nm" DEV_REPO_URL=https://github.com/Acme/Widgets.git \
-    HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
+    DEV_REPO_URL=https://github.com/Acme/Widgets.git \
+    HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
     AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets" \
     HEARTBEAT_FACTORY_EVENT_LOCK="$tmpdir/fev.lock"
   unset FACTORY_DB_WRITER_URL
@@ -187,12 +187,10 @@ has_arg 1 repo=acme/desk-repo || fail "with no DEV_REPO_URL the repo comes from 
 
 # --- critical_failures --------------------------------------------------------
 cf() { sed -n 's/^critical_failures=//p' "$fakebin/psql-args-$1"; }
-[ "$(cf 1)" = '["nm_push_not_running","agentsview_push_not_running"]' ] || fail "free locks must be reported (the old event-push-loop is no longer one): $(cf 1)"
+[ "$(cf 1)" = '["agentsview_push_not_running"]' ] || fail "free locks must be reported (the old event-push-loop is no longer one): $(cf 1)"
 reset
-for l in nm av; do
-  : > "$tmpdir/$l.lock"
-  flock -n "$tmpdir/$l.lock" sleep 20 &
-done
+: > "$tmpdir/av.lock"
+flock -n "$tmpdir/av.lock" sleep 20 &
 sleep 0.5
 once > /dev/null 2>&1 || fail "beat with locks held"
 [ "$(cf 1)" = '[]' ] || fail "held locks must give []: $(cf 1)"
@@ -514,6 +512,7 @@ reset
 once > /dev/null 2>&1
 [ "$(pushof .factory_events)" = '{"last_write":"2024-01-02T03:04:05Z","last_push":"2024-02-03T04:05:06Z"}' ] || fail "factory_events mtimes: $(pushof .factory_events)"
 [ "$(pushof .events)" = '{"last_write":null,"last_push":null}' ] || fail "the existing events key is unchanged: $(pushof .events)"
+[ "$(pushof 'has("nm")')" = false ] || fail "push has no nm key: $(pushof .)"
 rm -rf "$tmpdir/events/factory"
 
 # --- machine stats: a second, separate call per target -------------------------------
