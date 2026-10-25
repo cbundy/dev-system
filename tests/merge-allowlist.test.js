@@ -39,14 +39,11 @@ for (const rel of [
 // reader, and the deny list covers the issue reads (bare and `*` forms).
 const settingsFiles = ["templates/.claude/settings.json", ".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"];
 
-// This repo keeps the no-mistakes allow entries the template retired (dev-system#795): they are
-// repo-owned here now, so the root file matches the template once they are set aside.
-test("the template and its baseline are byte-identical, and the root file differs only by retired no-mistakes entries", () => {
+// This repo is a consumer of its own template, so all three files are byte-identical.
+test("the template, this repo's file and its baseline are byte-identical", () => {
   const [template, root, baseline] = settingsFiles.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf-8"));
   assert.equal(baseline, template);
-  const settings = JSON.parse(root);
-  settings.permissions.allow = settings.permissions.allow.filter((e) => !e.startsWith("Bash(no-mistakes "));
-  assert.equal(JSON.stringify(settings, null, 2) + "\n", template);
+  assert.equal(root, template);
 });
 
 for (const rel of settingsFiles) {

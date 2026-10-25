@@ -9,14 +9,11 @@
   "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
 
   "mounts": [
-    // Don't bind-mount a host ~/.no-mistakes (or other tool state) here: no-mistakes state
-    // is per repo (its daemon, socket and database), and a Windows-side bind under WSL
-    // breaks it (cbundy/dev-system#19, #73).
     // "<REPLACE: add repo-specific mounts here>"
   ],
 
   "remoteEnv": {
-    // "<REPLACE: repo-specific env vars, e.g. NM_HOME>": "<REPLACE>"
+    // "<REPLACE: repo-specific env vars, e.g. MY_TOOL_HOME>": "<REPLACE>"
   },
   // --- end repo-owned ---
 
@@ -27,7 +24,7 @@
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    // Installs no-mistakes, treehouse, and the rest of Callum's dev tooling.
+    // Installs treehouse, and the rest of Callum's dev tooling.
     "ghcr.io/cbundy/dev-system/callum-tools:1": {}
     // --- repo-owned: edit freely --- add extra features here if this repo needs more.
     // --- end repo-owned ---

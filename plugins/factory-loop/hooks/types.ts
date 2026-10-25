@@ -168,7 +168,7 @@ export type Rollout = 'merge' | 'run-it' | 'keep-open'
 export type AdjudicatorAction =
   | { type: 'approve'; reason: string | null }
   // ignore: the judged findings the fix leaves unselected, declined by name (respond --ignore,
-  // which no-mistakes 1.90+ requires); null when none
+  // the adjudicator's own rule); null when none
   | { type: 'fix'; findings: string | null; instructions: string | null; addFinding: string | null; ignore: string | null }
   | { type: 'skip' }
   | { type: 'escalate'; why: string }

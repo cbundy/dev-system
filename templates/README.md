@@ -29,12 +29,12 @@ with its own CI workflow deletes this one after checking its commands match.
 
 ## Retired templates
 
-`.no-mistakes.yaml` and `.github/pull_request_template.md` are no longer templates: onboarded
-repos are set up for the factory loop only (dev-system#795). On `callum-dev update`, a repo
-whose stamp lists them keeps both files byte for byte, gets one `unsynced` line each, and
-loses their baseline copies and stamp entries; the files are repo-owned from then on, so delete
-them if unused. The seven `no-mistakes` entries the settings template used to ship in
-`permissions.allow` are kept in the repo's file the same way (update says so once). Update
+`.github/pull_request_template.md` is no longer a template: onboarded repos are set up for
+the factory loop only (dev-system#795). On `callum-dev update`, a repo whose stamp lists it
+keeps the file byte for byte, gets one `unsynced` line, and loses its baseline copy and stamp
+entry; the file is repo-owned from then on, so delete it if unused. The retired pipeline tool's
+config file and permission entries are removed outright on every `update`, and its leftover
+state folder is reported, never deleted (see `docs/architecture.md`). Update
 never creates an init-only file that has no baseline (`.claude/factory-loop.json`,
 `.github/workflows/ci.yml` in an older repo): it prints a `new` line naming it, and
 `docs/onboarding.md` says how to add it. An init-only file that has a baseline
@@ -198,11 +198,9 @@ wires it, and it must never be added to `remoteEnv` or `containerEnv` here
 Any base image plus the `callum-tools` feature. No `/persist` contract.
 
 - Repo-owned: `name`, `image` (swap for whatever base this repo needs, or a `build` block
-  for a custom Dockerfile), `mounts` (empty by default; don't bind-mount a host `~/.no-mistakes` - its state is per
-  repo, and a Windows-side bind under WSL breaks it, cbundy/dev-system#19 and #73), and
-  `remoteEnv`.
+  for a custom Dockerfile), `mounts` (empty by default) and `remoteEnv`.
 - Synced: `features` (git, github-cli, and `callum-tools` - the dev-system feature that
-  installs no-mistakes, treehouse, etc.) and `remoteUser`. A nested repo-owned marker
+  installs treehouse, etc.) and `remoteUser`. A nested repo-owned marker
   inside `features` shows where to add extra features without disturbing the synced ones.
 
 ## `gitignore` -> `.gitignore`
@@ -213,7 +211,7 @@ named `.gitignore` from a package, so a `templates/.gitignore` would be missing 
 every install (verified with `npm pack --dry-run`). The CLI maps it to `.gitignore` in
 the consumer repo via the manifest's `src` field. Do not rename it back.
 
-- Synced: this system's own generated paths (`.no-mistakes/`, `.treehouse/`,
+- Synced: this system's own generated paths (`.treehouse/`,
   `.claude/worktrees/`, `.claude/settings.local.json`) plus the ecosystem defaults these
   projects consistently need - Node build output, Playwright reports, Python caches,
   secrets, logs, OS/editor cruft.
@@ -227,9 +225,7 @@ Two things about this file that are easy to get wrong:
   would be silently outranked by the synced rules below it, and a `!` un-ignore could
   never work.
 - **Some of this system's files must stay tracked** and are commented as such in the
-  template: `.claude/factory-loop.json`, `.no-mistakes.yaml` if the repo still has one (it
-  sits right beside the ignored `.no-mistakes/` state directory - hence the trailing slash
-  on that rule), and `.callum-dev.json` plus `.callum-dev/baseline/`, which are what make `callum-dev update`
+  template: `.claude/factory-loop.json` and `.callum-dev.json` plus `.callum-dev/baseline/`, which are what make `callum-dev update`
   a 3-way merge rather than an overwrite. Ignoring any of them looks tidy and breaks
   things quietly.
 
