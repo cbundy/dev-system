@@ -324,6 +324,30 @@ function fromHolds(ctx: V2Ctx): Planned[] {
   return out
 }
 
+// fromSessionHold: a stopped main session holds the loop's work (session-hold.ts). One event when the
+// hold starts (its fact keyed on the start time, however many refusals it holds) and one when it ends.
+function fromSessionHold(ctx: V2Ctx): Planned[] {
+  const hold = ctx.state.hold
+  if (hold === undefined) return []
+  const at = { issue: null, life: null, pr: null }
+  const out: Planned[] = []
+  const start = hold.held ?? hold.resumed
+  if (start === null) return out
+  const fact = factKey('hold', 'session', Math.trunc(start.since).toString(36))
+  if (hold.held !== null) {
+    out.push({ key: interventionKey(factKey('hold', 'session-stopped', Math.trunc(start.since).toString(36))), rule: 'H2', event: intervention('loop', 'hold:session-stopped', fact, `the session is stopped: ${hold.held.what}`, at) })
+  }
+  if (hold.resumed !== null) {
+    const r = hold.resumed
+    const stopped = interventionKey(factKey('hold', 'session-stopped', Math.trunc(r.since).toString(36)))
+    // a hold that ended inside one pass was never logged as started: log both
+    out.push({ key: stopped, rule: 'H2', event: intervention('loop', 'hold:session-stopped', fact, 'the session was stopped', at) })
+    const mins = Math.round((r.until - r.since) / MIN)
+    out.push({ key: interventionKey(factKey('hold', 'session-resumed', Math.trunc(r.since).toString(36))), rule: 'H2', event: intervention('loop', 'hold:session-resumed', fact, `held ${mins} min, ${r.spawns} agent starts and ${r.wakes} wakes held`, at) })
+  }
+  return out
+}
+
 // fromRestart: a module load that restarted the loop, with no restart-self of the loop's own around
 // it (R2's, or v1's H4). A load is a restart only when the loop ran before it: the ledger it loaded
 // holds an entry from before the load. The first start of a loop with no ledger restarts nothing
@@ -467,7 +491,7 @@ export function fileFacts(facts: InterventionFacts): FileFact[] {
 
 // interventionsOf: every intervention the facts hold, done or not; the gate leaves out the done.
 export function interventionsOf(ctx: V2Ctx): Planned[] {
-  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromHolds(ctx), ...fromReleaseHold(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
+  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromHolds(ctx), ...fromReleaseHold(ctx), ...fromRestart(ctx), ...fromSessionHold(ctx), ...fromSources(ctx)]
 }
 
 // interventionRules: one `event` action per intervention the ledger has not logged, marked logged

@@ -24,6 +24,7 @@ import { V2_CONTRACTS, jobPathOf, jobText, parseAnswer } from '../contract.mjs'
 import type { Job, V2Contract, V2ContractName } from '../contract.mjs'
 import { ANSWER_SCRIPT, answerPath } from '../exec'
 import type { AgentAnswer, Exec, ExecCtx, Executor } from '../exec'
+import { HELD_SUMMARY, SESSION_STOPPED, clearHeld, markHeld } from '../session-hold'
 import { scriptShaped } from '../prompts'
 import type { ScriptPlace } from '../prompts'
 import type { Action, ActionKind, LedgerEntry, Ms } from '../types'
@@ -395,8 +396,13 @@ export const stepExecutor = (deps: StepDeps = STEP_DEPS): Executor => async (ctx
   } catch (err) {
     return { status: 'failed', summary: clip(`${subagentType}: the spawn threw: ${message(err)}`) }
   }
+  if (typeof r.deny === 'string' && SESSION_STOPPED.test(r.deny)) {
+    markHeld(await ctx.io.now(), `${action.key}: ${r.deny}`, 'spawn')
+    return { status: 'skipped', summary: HELD_SUMMARY }
+  }
   if (typeof r.deny === 'string') return { status: 'failed', summary: clip(`${subagentType} denied: ${r.deny}`) }
   if (r.agentId === undefined || r.agentId === '') return { status: 'failed', summary: `${subagentType}: started with no agent id` }
+  clearHeld(await ctx.io.now())
   return { status: 'running', agentId: r.agentId, summary: clip(`${subagentType} started for #${action.issue} (${action.key}): ${r.agentId}`) }
 }
 

@@ -26,6 +26,7 @@ import { parseStepRecord, stepAnswerPath, stepAnswered, stepAnswers, stepExecuto
 import type { StepDeps, StepModule, StepRecord } from '../hooks/v2/steps'
 import { STEP_AGENT, WHY_CAUSE, unknownResult } from '../hooks/v2/types'
 import type { AgentStep } from '../hooks/v2/types'
+import { S } from '../hooks/driver-state'
 import { DEVICE, NOW, PLUGIN_ROOT, config, state } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -182,6 +183,21 @@ describe('the agent-step executor', () => {
       summary: 'factory-loop:builder denied: the companion found no step marker',
     })
     expect((await spawned(world(() => ({})), stepAction('build'))).exec).toEqual({ status: 'failed', summary: 'factory-loop:builder: started with no agent id' })
+    expect((await spawned(world(() => ({ deny: 'not allowed' })), stepAction('build'))).exec).toEqual({ status: 'failed', summary: 'factory-loop:builder denied: not allowed' })
+  })
+
+  test('a spawn refused because the session was stopped is skipped (no attempt) and marks the hold; a spawn that works clears it', async () => {
+    S.held = null
+    S.resumed = null
+    const stopped = 'the session was stopped and nobody has sent input since'
+    expect((await spawned(world(() => ({ deny: stopped })), stepAction('build'))).exec).toEqual({ status: 'skipped', summary: 'held: session stopped' })
+    expect(S.held?.spawns).toBe(1)
+    expect(S.held?.since).toBe(NOW)
+    expect(S.held?.what).toContain(stopped)
+    expect((await spawned(world(), stepAction('build'))).exec.status).toBe('running')
+    expect(S.held).toBeNull()
+    expect(S.resumed).toMatchObject({ since: NOW, until: NOW, spawns: 1, wakes: 0 })
+    S.resumed = null
   })
 })
 

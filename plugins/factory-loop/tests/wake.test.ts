@@ -3,6 +3,7 @@
 // one reminder and the timeouts' fallbacks.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { S } from '../hooks/driver-state'
 import { WAKE_POINTER } from '../hooks/exec'
 import type { ActIo, Exec, ExecCtx } from '../hooks/exec'
 import { exhausted, finish } from '../hooks/ledger'
@@ -195,6 +196,18 @@ describe('the prompt (v2 SPEC 13.8.1)', () => {
       'FLAGS: image',
       WAKE_POINTER,
     ])
+  })
+
+  test('a prompt refused because the session was stopped is skipped and marks the hold; a delivered one clears it', async () => {
+    S.held = null
+    S.resumed = null
+    const dropped = new Error('the prompt was dropped: the session was stopped and nobody has sent input since')
+    expect((await harness([], dropped).exec(w('tell', 'blind', { since: 'never' }))).status).toBe('skipped')
+    expect(S.held).toMatchObject({ since: NOW, spawns: 0, wakes: 1 })
+    expect((await harness().exec(w('tell', 'blind', { since: 'never' }))).status).toBe('running')
+    expect(S.held).toBeNull()
+    expect(S.resumed).toMatchObject({ since: NOW, wakes: 1 })
+    S.resumed = null
   })
 
   test('a submit that fails started no turn: skipped, so it uses no attempt; a non-wake action is a loop bug', async () => {

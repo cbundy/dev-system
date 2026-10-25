@@ -16,6 +16,7 @@ import { within } from './within'
 import { appendLine, killed, lockIo, lockOp, mayWrite, message, runtime } from './driver-io'
 import { stampEnded } from './driver-stamp'
 import { bareState, ensureLedger, hookEnv, persist } from './driver-store'
+import { SESSION_STOPPED, markHeld } from './session-hold'
 import { REPAIR_TIMEOUT_MS, S, TOOL_ANSWER_MS, between, delivered, live, ping, resuming } from './driver-state'
 import type { After } from './driver-state'
 
@@ -249,6 +250,7 @@ export async function lateDrop($: EngineInterface, prompt: string, why: string) 
     const rt = await ledgerFor($)
     if (rt === null) return
     const now = await $.clock.now()
+    if (SESSION_STOPPED.test(why)) markHeld(now, `${id}: ${why}`)
     const moved = transition(live, l => {
       const e = l.find(x => x.wakeId === id && x.status === 'running' && x.turnId === undefined)
       if (e === undefined) return l

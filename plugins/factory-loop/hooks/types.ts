@@ -265,6 +265,8 @@ export type State = {
   repo: string
   device: string
   loadedAt: Ms
+  // a stopped main session holding work, and one that just ended (session-hold.ts); the driver sets it
+  hold?: import('./session-hold').HoldView
   sources: Record<SourceName, Source>
   usage: Usage
   issues: IssueView[]
