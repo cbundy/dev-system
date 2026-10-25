@@ -83,17 +83,22 @@ const TEMPLATES = [
 // the factory loop only). `update` leaves the repo's copy untouched - it is repo-owned from
 // then on - and only drops the baseline copy and the stamp entry.
 const RETIRED_TEMPLATES = [
-  { file: ".no-mistakes.yaml", baseline: path.join(BASELINE_DIR, ".no-mistakes.yaml") },
   {
     file: ".github/pull_request_template.md",
     baseline: path.join(BASELINE_DIR, ".github", "pull_request_template.md"),
   },
 ];
 
-// The permissions.allow entries the template shipped for no-mistakes before #795. A repo's
-// copy keeps them (repo-owned from now on) instead of the usual "template dropped it, so drop
-// it" rule in mergeSettingsJson.
-const RETIRED_ALLOW = [
+// Files dev-system removed outright (no-mistakes is retired). `update` deletes the repo's copy
+// and its baseline on every run, whatever the stamp says, because a repo updated after #795 no
+// longer lists them.
+const REMOVED_FILES = [
+  { file: ".no-mistakes.yaml", baseline: path.join(BASELINE_DIR, ".no-mistakes.yaml") },
+];
+
+// The permissions.allow entries the template shipped for no-mistakes. `update` filters them out
+// of the merged file on every run, whether they come from the baseline or count as repo-added.
+const REMOVED_ALLOW = [
   "Bash(no-mistakes axi run *)",
   "Bash(no-mistakes rerun *)",
   "Bash(no-mistakes axi abort *)",
@@ -102,6 +107,10 @@ const RETIRED_ALLOW = [
   "Bash(no-mistakes runs *)",
   "Bash(no-mistakes axi logs *)",
 ];
+
+// The state folder no-mistakes left at the repo root. It is untracked and may hold the tool's
+// old worktrees, so `update` reports it and never deletes it.
+const LEFTOVER_DIRS = [".no-mistakes"];
 
 // The devcontainer template kinds, recorded in the stamp as `devcontainer`:
 //   base-image  the dev-system base image, with the per-repo /persist volumes synced
@@ -331,16 +340,18 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   for (const list of MERGED_BY_VALUE) {
     const key = list.split(".")[1];
     const get = (settings) => (settings.permissions && settings.permissions[key]) || [];
-    // A retired entry is no longer the template's, so it counts as repo-added.
-    const baselineEntries = new Set(
-      get(baseline).filter((entry) => list !== "permissions.allow" || !RETIRED_ALLOW.includes(entry)),
-    );
+    const baselineEntries = new Set(get(baseline));
     // Entries the repo added itself: present now but not in the old baseline.
     const repoOwned = get(current).filter((entry) => !baselineEntries.has(entry));
 
     const entries = [...get(next)];
     for (const entry of repoOwned) {
       if (!entries.includes(entry)) entries.push(entry);
+    }
+    if (list === "permissions.allow") {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (REMOVED_ALLOW.includes(entries[i])) entries.splice(i, 1);
+      }
     }
     if (entries.length > 0) {
       merged.permissions = { ...merged.permissions, [key]: entries };
@@ -349,13 +360,11 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   return JSON.stringify(merged, null, 2) + "\n";
 }
 
-// The retired allow entries a settings.json update is keeping for the first time: present in
-// both the repo's file and its baseline (a later update's baseline no longer lists them).
-function keptRetiredAllow(currentContent, baselineContent) {
-  if (!currentContent || !baselineContent) return [];
-  const allow = (content) => JSON.parse(content).permissions?.allow ?? [];
-  const inBaseline = allow(baselineContent);
-  return allow(currentContent).filter((e) => RETIRED_ALLOW.includes(e) && inBaseline.includes(e));
+// Whether the repo's settings.json still holds a removed allow entry.
+function hasRemovedAllow(currentContent) {
+  if (!currentContent) return false;
+  const allow = JSON.parse(currentContent).permissions?.allow ?? [];
+  return allow.some((e) => REMOVED_ALLOW.includes(e));
 }
 
 function isPlainObject(value) {
@@ -581,10 +590,8 @@ function update(options) {
           changed.push(`restored  ${file}`);
         } else {
           const merged = mergeSettingsJson(current, baseline, newContent);
-          if (keptRetiredAllow(current, baseline).length > 0) {
-            changed.push(
-              `kept      ${file}: the no-mistakes allow entries are no longer synced by dev-system (now repo-owned)`,
-            );
+          if (hasRemovedAllow(current)) {
+            changed.push(`removed   ${file}: the no-mistakes allow entries`);
           }
           if (merged !== current) {
             writeFile(file, merged);
@@ -627,6 +634,19 @@ function update(options) {
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  for (const removed of REMOVED_FILES) {
+    if (fs.existsSync(removed.file)) {
+      fs.rmSync(removed.file, { force: true });
+      changed.push(`removed   ${removed.file} (no-mistakes is retired)`);
+    }
+    fs.rmSync(removed.baseline, { force: true });
+  }
+  for (const dir of LEFTOVER_DIRS) {
+    if (fs.existsSync(dir)) {
+      changed.push(`leftover  ${dir}/ (no-mistakes state, no longer ignored - delete it)`);
+    }
   }
 
   for (const retired of RETIRED_TEMPLATES) {

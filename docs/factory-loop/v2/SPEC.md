@@ -42,7 +42,7 @@ Goals:
 Non-goals:
 
 - no-mistakes anywhere in the loop's path: not in its sources, its guard calls, its agent
-  definitions or its prompts. `.no-mistakes.yaml` is not changed.
+  definitions or its prompts.
 - Release sequencing in the merge path.
 - Running tests in the loop. GitHub CI is the test gate.
 - A GitHub merge queue: it needs an organisation-owned repo, and dev-system is user-owned.
@@ -2053,7 +2053,7 @@ hooks fire and block for timer-spawned agents (the spike notes):
     flags: the loop owns these. The companion's list (`hooks/guard.ts` `GH_WRITES`) also holds
     their aliases (`gh pr new`, `gh issue new`) and the other GitHub writes (`gh pr revert`,
     `gh repo edit`, `gh secret`, `gh variable`, `gh run rerun` and the like);
-  - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin`;
+  - in Bash, `axi` and a push to any remote but `origin`;
   - any call with `run_in_background: true`, `Bash` and `Agent` alike: a loop agent works in the
     foreground, a command under its 10-minute timeout (10.5), so it neither ends its turn while
     work it started runs nor sits polling for it. The
