@@ -3645,7 +3645,8 @@ The `loop_passes` event also carries the tokens the loop's own main session (the
 `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_creation_tokens`. The loop reads them from its own
 transcript, only the bytes added since the previous minute, once per request; step agents are not in them (they are on
 `loop_entry`, see "Tokens per merged issue"). They are null when the minute had no baseline (the first read in a process
-or of a new session), when the transcript could not be read, and in events of older loops.
+or of a new session), when the transcript could not be read, and in events of older loops. It also carries `cost_usd`, the
+what-if cost of those same requests (see [What-if cost of the loop's own work](#what-if-cost-of-the-loops-own-work)).
 
 Per hour, repo and device, the four sums, and `minutes_without_tokens`, the minutes sent with null tokens, so a gap shows
 rather than reading low:
@@ -3661,6 +3662,50 @@ FROM factory.event_log
 WHERE type = 'loop_passes' AND repo = :'repo' AND from_at >= :'since'::timestamptz
 GROUP BY 1, repo, device
 ORDER BY 1, repo, device;
+```
+
+## What-if cost of the loop's own work
+
+The loop's own main session (the orchestrator) is priced too, at Anthropic's public API prices, not a bill (the loop runs
+on a subscription), with the table of [What-if cost per merged issue](#what-if-cost-per-merged-issue). Two events carry it:
+
+- `loop_passes` carries `cost_usd` for each minute: the cost of the same requests its token fields count, each priced at its
+  own model. It is null when the tokens are null, when a model is unpriced and in events of older loops.
+- An ended `task` or `tell` `loop_entry` (a wake) carries `cost_usd`: the main session's requests whose time falls between
+  the wake's `started_at` and `ended_at`. The window is attributed by time from the shared main session, so it can include
+  other main-session turns in it (a judge wake, for example) and over-count where wakes overlap. It is null on a running
+  event, for an owner notice that ran no wake turn, when the transcript could not be read or is older than the read tail,
+  and when a model is unpriced (the decision log says `loop event <key>: unpriced model <id>`).
+
+Per repo and UTC day, the sum of the minutes' cost and `minutes_without_cost`, the minutes sent with a null cost, so a gap
+shows rather than reading low:
+
+```sql
+SELECT repo, date_trunc('day', from_at AT TIME ZONE 'UTC') AS day,
+  coalesce(sum(cost_usd), 0) AS cost_usd,
+  count(*) FILTER (WHERE cost_usd IS NULL) AS minutes_without_cost
+FROM factory.event_log
+WHERE type = 'loop_passes' AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+Per repo and wake, the ended task and tell wakes (the newest ended event of each key; running rows are not counted), their
+summed cost and how many have no cost (unpriced or unread):
+
+```sql
+WITH ended AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS rn
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind IN ('task', 'tell') AND e.status <> 'running'
+    AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz)
+SELECT repo, kind, coalesce(wake, 'none') AS wake, count(*) AS wakes,
+  coalesce(sum(cost_usd), 0) AS cost_usd,
+  count(*) FILTER (WHERE cost_usd IS NULL) AS without_cost
+FROM ended
+WHERE rn = 1
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
 ```
 
 ## Usage tier in force

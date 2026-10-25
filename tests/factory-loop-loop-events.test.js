@@ -112,7 +112,12 @@ test("every logged entry kind is one native loop_entry the real writer takes, wi
     assert.deepEqual(rest, oldTranslated(e).data);
     const tokens = { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, model, cost_usd };
     if (e.kind === "agent-step") assert.deepEqual(tokens, TOKEN_NULLS, `${e.key} has the six fields, null`);
-    else assert.deepEqual(Object.values(tokens), Array(6).fill(undefined), `${e.key} has none`);
+    else {
+      // a task or tell has cost_usd only (#1336), null without a reading, and none of the other five
+      const { cost_usd: cost, ...five } = tokens;
+      assert.deepEqual(Object.values(five), Array(5).fill(undefined), `${e.key} has none of the five`);
+      assert.equal(cost, e.kind === "task" || e.kind === "tell" ? null : undefined, `${e.key} cost_usd`);
+    }
   }
   assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
 });
@@ -132,6 +137,24 @@ test("an ended agent step with a reading writes its token totals and model throu
   assert.equal(lines[0].data.agent_id, "agent-9");
   // a running event never carries a reading, even when handed one
   assert.deepEqual(Object.fromEntries(Object.keys(reading).map((k) => [k, lines[1].data[k]])), TOKEN_NULLS);
+});
+
+test("an ended task or tell given a cost writes it through the real writer under strict validation; a running one writes null", () => {
+  const wake = entries.find((e) => e.kind === "task");
+  assert.ok(wake, "the fixture has a task");
+  const ended = { ...wake, key: "task:cost:1", status: "done", endedAt: wake.startedAt + 1000 };
+  const cost = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null, cost_usd: 0.012345 };
+  const got = [];
+  for (const argv of [ledger.loopEvent(ended, cost), ledger.loopEvent({ ...ended, status: "running", endedAt: null }, cost)]) {
+    const before = newLines().length;
+    const r = log(argv);
+    assert.equal(r.status, 0, `${argv.join(" ")}: exit ${r.status}: ${r.stderr}`);
+    assert.equal(r.stderr, "", "strict validation passes");
+    got.push(newLines()[before]);
+  }
+  assert.equal(got[0].data.cost_usd, 0.012345);
+  assert.equal(got[1].data.cost_usd, null);
+  for (const g of got) assert.equal(g.data.input_tokens, undefined);
 });
 
 test("the wake entries' decision and reason come through as the translator reads them", () => {
@@ -168,8 +191,8 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
     const old = translate({ ...LINE, state: "loop", note: passes.passesNote(summary) }, { ts: TS, sessionId: "s" }).event;
     // the four orchestrator token fields (#1302) are native only: the note has none, and they are null here
     // the usage tier fields are native only too: the last pass with a plan, null for an empty minute
-    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, usage_tier, usage_tier_overridden, ...rest } = got.data;
-    assert.deepEqual([input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens], [null, null, null, null]);
+    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd, usage_tier, usage_tier_overridden, ...rest } = got.data;
+    assert.deepEqual([input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd], [null, null, null, null, null]);
     const tiered = summary.passes > 0;
     assert.deepEqual([usage_tier, usage_tier_overridden], tiered ? ["stop-new", false] : [null, null]);
     assert.deepEqual(rest, old.data);

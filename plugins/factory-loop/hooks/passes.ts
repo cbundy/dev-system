@@ -51,6 +51,8 @@ export type PassSummary = {
   outputTokens: number | null
   cacheReadTokens: number | null
   cacheCreationTokens: number | null
+  // the what-if cost of the same requests, null when unread or a model is unpriced
+  costUsd: number | null
   // the tier in force at the minute's end: that of the last pass with a plan; null when none
   usageTier: Tier | null
   usageTierOverridden: boolean | null
@@ -117,6 +119,7 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
     outputTokens: null,
     cacheReadTokens: null,
     cacheCreationTokens: null,
+    costUsd: null,
     usageTier: lastTiered?.tier ?? null,
     usageTierOverridden: lastTiered?.overridden ?? null,
     settings,
@@ -182,6 +185,7 @@ export function passesEventArgv(s: PassSummary): string[] {
     output_tokens: s.outputTokens,
     cache_read_tokens: s.cacheReadTokens,
     cache_creation_tokens: s.cacheCreationTokens,
+    cost_usd: s.costUsd,
     usage_tier: s.usageTier,
     usage_tier_overridden: s.usageTierOverridden,
   }

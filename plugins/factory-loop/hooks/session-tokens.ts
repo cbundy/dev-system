@@ -6,6 +6,7 @@
 // throws: a failure is a problem string and null counts.
 import type { RunInit, RunResult } from './exec'
 import { byteLength } from './trace'
+import { priceOf } from './v2/prices'
 import { turnsOf } from './v2/step-tokens'
 
 type Cmd = (argv: string[], init: RunInit) => Promise<RunResult>
@@ -20,7 +21,9 @@ export type SessionTokenState = {
   recent: string[]
 }
 
-export type SessionTokenReading = { tokens: SessionTokens | null; problem: string | null }
+// cost: the what-if cost of the same requests the tokens count (each at its own model's price), null
+// when the tokens are null or a counted request's model is unpriced (named in `unpriced`)
+export type SessionTokenReading = { tokens: SessionTokens | null; cost: number | null; problem: string | null; unpriced?: string[] }
 
 export type SessionSource = { configDir: string; sessionCwd: string; session: string }
 
@@ -33,7 +36,7 @@ export function newSessionTokenState(): { state: SessionTokenState | null } {
   return { state: null }
 }
 
-const none = (problem: string): SessionTokenReading => ({ tokens: null, problem })
+const none = (problem: string): SessionTokenReading => ({ tokens: null, cost: null, problem })
 
 async function sizeOf(cmd: Cmd, path: string): Promise<number | null> {
   const r = await cmd(['stat', '-c', '%s', path], { timeoutMs: TIMEOUT_MS })
@@ -42,7 +45,7 @@ async function sizeOf(cmd: Cmd, path: string): Promise<number | null> {
   return Number.isInteger(n) && n >= 0 ? n : null
 }
 
-async function locate(cmd: Cmd, src: SessionSource): Promise<{ path: string; size: number } | null> {
+export async function locate(cmd: Cmd, src: SessionSource): Promise<{ path: string; size: number } | null> {
   const expected = `${src.configDir}/projects/${src.sessionCwd.replace(/[^A-Za-z0-9]/g, '-')}/${src.session}.jsonl`
   const size = await sizeOf(cmd, expected)
   if (size !== null) return { path: expected, size }
@@ -75,7 +78,7 @@ export async function readSessionTokens(cmd: Cmd, holder: { state: SessionTokenS
       holder.state = { ...prev, offset: at.size, recent: [] }
       return none('session transcript shrank')
     }
-    if (at.size === prev.offset) return { tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, problem: null }
+    if (at.size === prev.offset) return { tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, cost: 0, problem: null }
     const count = Math.min(CHUNK_BYTES, at.size - prev.offset)
     const r = await cmd(['dd', `if=${at.path}`, 'iflag=skip_bytes,count_bytes', `skip=${prev.offset}`, `count=${count}`, 'status=none'], { timeoutMs: TIMEOUT_MS })
     if (r.exitCode !== 0) {
@@ -84,7 +87,7 @@ export async function readSessionTokens(cmd: Cmd, holder: { state: SessionTokenS
     }
     const nl = r.stdout.lastIndexOf('\n')
     if (nl < 0) {
-      if (count < CHUNK_BYTES) return { tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, problem: null }
+      if (count < CHUNK_BYTES) return { tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, cost: 0, problem: null }
       holder.state = { ...prev, offset: at.size, recent: [] }
       return none('session transcript chunk has no newline')
     }
@@ -92,6 +95,8 @@ export async function readSessionTokens(cmd: Cmd, holder: { state: SessionTokenS
     const seen = new Set(prev.recent)
     const total: SessionTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
     const recent = [...prev.recent]
+    let cost = 0
+    const unpriced = new Set<string>()
     for (const [id, t] of turnsOf(consumed)) {
       if (!id.startsWith('\0')) {
         if (seen.has(id)) continue
@@ -102,9 +107,14 @@ export async function readSessionTokens(cmd: Cmd, holder: { state: SessionTokenS
       total.output += t.output
       total.cacheRead += t.cacheRead
       total.cacheCreation += t.cacheCreation
+      if (t.model === null && t.input + t.output + t.cacheRead + t.cacheCreation === 0) continue
+      const p = priceOf(t.model, t)
+      if (p === null) unpriced.add(t.model ?? '(none)')
+      else cost += p
     }
     holder.state = { ...prev, offset: prev.offset + byteLength(consumed), recent: recent.slice(-RECENT_MAX) }
-    return { tokens: total, problem: null }
+    if (unpriced.size > 0) return { tokens: total, cost: null, problem: null, unpriced: [...unpriced] }
+    return { tokens: total, cost: Math.round(cost * 1e6) / 1e6, problem: null }
   } catch (err) {
     holder.state = null
     return none(`session transcript unreadable: ${err instanceof Error ? err.message : String(err)}`)

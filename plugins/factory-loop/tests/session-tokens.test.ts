@@ -47,10 +47,10 @@ describe('readSessionTokens', () => {
   test('the first read is a null baseline at the file size; later reads count the added requests once', async () => {
     const f = fake({ [PATH]: line('r0', { in: 99 }) + '\n' })
     const h = newSessionTokenState()
-    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: null, problem: 'no baseline' })
+    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: null, cost: null, problem: 'no baseline' })
     expect(h.state?.offset).toBe(bytes(f.files[PATH] as string))
     f.files[PATH] += [line('r1', { in: 1, out: 2, read: 3, create: 4 }), line('r1', { in: 1, out: 2, read: 3, create: 4 }), line(null, { out: 10 })].join('\n') + '\n'
-    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: { input: 1, output: 12, cacheRead: 3, cacheCreation: 4 }, problem: null })
+    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: { input: 1, output: 12, cacheRead: 3, cacheCreation: 4 }, cost: null, problem: null, unpriced: ['m'] })
     expect((await readSessionTokens(f.cmd, h, SRC)).tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
   })
 
@@ -83,7 +83,7 @@ describe('readSessionTokens', () => {
     const h = newSessionTokenState()
     await readSessionTokens(f.cmd, h, SRC)
     const r = await readSessionTokens(f.cmd, h, { ...SRC, session: 'sess-2' })
-    expect(r).toEqual({ tokens: null, problem: 'no baseline' })
+    expect(r).toEqual({ tokens: null, cost: null, problem: 'no baseline' })
     expect(h.state?.session).toBe('sess-2')
   })
 
@@ -95,7 +95,7 @@ describe('readSessionTokens', () => {
     expect((await readSessionTokens(f.cmd, h, SRC)).problem).toBe('session transcript shrank')
     delete f.files[PATH]
     expect((await readSessionTokens(f.cmd, h, SRC)).problem).toBe('session transcript not found')
-    expect(await readSessionTokens(f.cmd, h, { ...SRC, session: '../x' })).toEqual({ tokens: null, problem: 'session transcript not found (no session)' })
+    expect(await readSessionTokens(f.cmd, h, { ...SRC, session: '../x' })).toEqual({ tokens: null, cost: null, problem: 'session transcript not found (no session)' })
   })
 
   test('the find fallback locates a transcript under another project folder', async () => {
@@ -135,7 +135,59 @@ describe('readSessionTokens', () => {
 
     f.files[PATH] += 'x'.repeat(CHUNK_BYTES + 1)
     const c = await readSessionTokens(f.cmd, h, SRC)
-    expect(c).toEqual({ tokens: null, problem: 'session transcript chunk has no newline' })
+    expect(c).toEqual({ tokens: null, cost: null, problem: 'session transcript chunk has no newline' })
     expect(h.state?.offset).toBe(bytes(f.files[PATH] as string))
+  })
+
+  describe('cost', () => {
+    const priced = (id: string, model: string, u: { in?: number; out?: number; c5?: number; c1?: number }) =>
+      JSON.stringify({
+        type: 'assistant',
+        requestId: id,
+        message: {
+          model,
+          usage: {
+            input_tokens: u.in ?? 0,
+            output_tokens: u.out ?? 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: (u.c5 ?? 0) + (u.c1 ?? 0),
+            cache_creation: { ephemeral_5m_input_tokens: u.c5 ?? 0, ephemeral_1h_input_tokens: u.c1 ?? 0 },
+          },
+        },
+      }) + '\n'
+
+    test('requests on two priced models cost their hand-computed sum, with the 5m and 1h cache split', async () => {
+      const f = fake({ [PATH]: '\n' })
+      const h = newSessionTokenState()
+      await readSessionTokens(f.cmd, h, SRC)
+      // opus-5: input 5, output 25, 5m write 6.25, 1h write 10 per million
+      f.files[PATH] += priced('a', 'claude-opus-5-5', { in: 1_000_000, out: 100_000, c5: 1_000_000, c1: 1_000_000 }) + priced('b', 'claude-opus-5-5', { in: 1_000_000 })
+      const r = await readSessionTokens(f.cmd, h, SRC)
+      expect(r.cost).toBe(5 + 2.5 + 6.25 + 10 + 5)
+      expect(r.unpriced).toBeUndefined()
+      expect(r.tokens?.input).toBe(2_000_000)
+    })
+
+    test('an unpriced model gives a null cost, keeps the tokens and names the model', async () => {
+      const f = fake({ [PATH]: '\n' })
+      const h = newSessionTokenState()
+      await readSessionTokens(f.cmd, h, SRC)
+      f.files[PATH] += priced('a', 'claude-opus-5-5', { in: 10 }) + priced('b', 'claude-future-9', { in: 20 })
+      const r = await readSessionTokens(f.cmd, h, SRC)
+      expect(r.cost).toBeNull()
+      expect(r.unpriced).toEqual(['claude-future-9'])
+      expect(r.tokens?.input).toBe(30)
+    })
+
+    test('a read with no new bytes costs 0, and a request straddling two reads is priced once', async () => {
+      const f = fake({ [PATH]: '\n' })
+      const h = newSessionTokenState()
+      await readSessionTokens(f.cmd, h, SRC)
+      expect((await readSessionTokens(f.cmd, h, SRC)).cost).toBe(0)
+      f.files[PATH] += priced('a', 'claude-opus-5-5', { in: 1_000_000 })
+      expect((await readSessionTokens(f.cmd, h, SRC)).cost).toBe(5)
+      f.files[PATH] += priced('a', 'claude-opus-5-5', { in: 1_000_000 }) + priced('b', 'claude-opus-5-5', { in: 1_000_000 })
+      expect((await readSessionTokens(f.cmd, h, SRC)).cost).toBe(5)
+    })
   })
 })

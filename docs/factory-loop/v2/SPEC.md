@@ -3334,7 +3334,7 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   finds it; when the file is absent one bounded `find` over the projects is tried). Usage is counted once
   per distinct `requestId`, the last line winning, over the agent and every agent nested under it
   (`.meta.json` `parentAgentId`, recursively); `model` is the step agent's own, the one of most turns.
-  They are null on a running event, on a tell or task, and when the transcript cannot be read (the event
+  They are null on a running event, on a tell or task (which carry none of the five), and when the transcript cannot be read (the event
   is still written and the pass's problems name the key: "transcript not found").
   The step also carries `cost_usd` (dev-system#1334): what the step would have cost at Anthropic's
   public API prices, not a bill. Each request is priced at its own transcript model with the table in
@@ -3345,7 +3345,14 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   It is null on a running event, on a tell or task, when the transcript cannot be read, and when any
   request with tokens ran on a model the table lacks or on none (never a guess): the token totals are
   still written and the pass's problems say `loop event <key>: unpriced model <id>`. The intake stamp
-  carries the same `cost_usd` for its run;
+  carries the same `cost_usd` for its run.
+  An ended `task` or `tell` carries `cost_usd` too (dev-system#1336): the what-if cost of the main
+  session's requests (`hooks/wake-cost.ts`) whose time lies in [`started_at`, `ended_at`], read from the
+  last 16 MiB of the entry's `session` transcript. It is attributed by time window from the shared main
+  session, so it may include other main-session turns in that window. It is null on a running event, for
+  an entry with no `session` (no problem), when the transcript cannot be read, when a model is unpriced
+  (`loop event <key>: unpriced model <id>`) and when the window is older than the read tail
+  (`wake window older than the read tail`);
 - a `loop_passes` pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
   timer aligned to the UTC minute: `from_at`, `to_at`, `passes`, `mean_ms`, `p50_ms`, `p90_ms`, `max_ms`,
   `acting`, `acting_mean_ms`, `idle_mean_ms`, `errors`, `mode`, `planner` (`v2`) and `pass_every_ms`. It sums up the passes
@@ -3354,7 +3361,8 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   null, and a minute with no pass ends sends `passes` 0). Sent only while the loop runs in act
   mode, the kill switch is off and the last pass held the act lock; otherwise the minute is
   dropped. It also carries the orchestrator session's own `input_tokens`, `output_tokens`,
-  `cache_read_tokens` and `cache_creation_tokens` for the minute (#1302), read by
+  `cache_read_tokens` and `cache_creation_tokens` for the minute (#1302), and `cost_usd` (#1336), the what-if
+  cost of the same requests, each at its own model's price, null when the tokens are null or a model is unpriced, read by
   `hooks/session-tokens.ts` from the main session's transcript (only the bytes added since the
   previous minute's read, once per `requestId`; step agents are on `loop_entry`). They are read
   every minute, sent or not, and are null for the first read of a session in the process, when the

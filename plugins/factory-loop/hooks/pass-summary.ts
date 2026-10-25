@@ -53,6 +53,7 @@ export async function flushMinute($: EngineInterface, host: SummaryHost): Promis
       summary.outputTokens = read.tokens.output
       summary.cacheReadTokens = read.tokens.cacheRead
       summary.cacheCreationTokens = read.tokens.cacheCreation
+      summary.costUsd = read.cost
     }
   }
   if (rt.mode !== 'act' || rt.repo === '' || !lockHeld || (await host.killed())) return

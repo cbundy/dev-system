@@ -21,10 +21,11 @@ import type { Action, ActionKind, AgentStatus, Config, Control, LedgerEntry, Ms,
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswers, stepRecorded } from './v2/steps'
-import { readStepTokens } from './v2/step-tokens'
+import { NO_TOKENS, readStepTokens } from './v2/step-tokens'
 import { gateHoldMs } from './v2/steps-gate'
 import { V2_ACTION_KINDS } from './v2/types'
 import { expireWakes, wakeExecutors } from './wake'
+import { readWakeCost } from './wake-cost'
 
 const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
@@ -165,6 +166,12 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
       const read = await readStepTokens(env.io, cmd, { configDir: env.rt.configDir, sessionCwd: env.rt.sessionCwd, session: entry.session ?? '', agentId: entry.agentId })
       if (read.problem !== null) env.problems.push(clip(`loop event ${entry.key}: ${read.problem}`))
       argv = loopEvent(entry, read.fields) ?? argv
+    }
+    // an ended task or tell carries the what-if cost of its window in its submitting session
+    if ((entry.kind === 'task' || entry.kind === 'tell') && entry.status !== 'running' && entry.session !== undefined && entry.session !== '' && entry.endedAt !== null && env.rt.configDir !== undefined && env.rt.sessionCwd !== undefined) {
+      const w = await readWakeCost(cmd, { configDir: env.rt.configDir, sessionCwd: env.rt.sessionCwd, session: entry.session }, entry.startedAt, entry.endedAt)
+      if (w.problem !== null) env.problems.push(clip(`loop event ${entry.key}: ${w.problem}`))
+      argv = loopEvent(entry, { ...NO_TOKENS, cost_usd: w.cost }) ?? argv
     }
     try {
       const r = await cmd(argv, { timeoutMs: EVENT_TIMEOUT_MS })

@@ -503,6 +503,59 @@ describe('an agent step\'s tokens in its loop event (#657)', () => {
     expect(f.env.problems).toEqual(['loop event i9/ltn0brb/review/abc/r1/a1: unpriced model claude-future-9'])
   })
 
+  describe('a task or tell wake carries the cost of its window (#1336)', () => {
+    const MAIN = '/cfg/projects/-work/session-1.jsonl'
+    const at = (ms: number) => new Date(ms).toISOString()
+    const req = (id: string, ms: number) => JSON.stringify({ type: 'assistant', requestId: id, timestamp: at(ms), message: { model: 'claude-opus-5-5', usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n'
+    const START = NOW - 60_000
+    const wake = (kind: 'task' | 'tell', status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}) =>
+      entry(`${kind}:x:1`, kind, { wake: 'runaway', class: 'owner', status, wakeId: 'w0', session: 'session-1', startedAt: START, endedAt: status === 'running' ? null : NOW, ...over })
+    const main = req('before', START - 1000) + req('in', START + 1000) + req('after', NOW + 1000)
+    const withMain = (ledger: LedgerEntry[], file: string | null = main) => {
+      const f = fake(ledger, argv => {
+        if (argv[0] === 'stat') return file === null ? { exitCode: 1 } : { stdout: `${file.length}\n` }
+        if (argv[0] === 'tail') return file === null ? { exitCode: 1 } : { stdout: file }
+        return {}
+      })
+      f.env.rt = { ...f.env.rt, configDir: '/cfg', sessionCwd: '/work' }
+      return f
+    }
+    const costs = (f: Fake) => dataOf(f).map(d => ({ status: d.status, cost: d.cost_usd, has: Object.keys(d).filter(k => k !== 'cost_usd' && ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'model'].includes(k)) }))
+
+    test('an ended task with a session writes the cost of the requests in its window; a running one writes null', async () => {
+      const f = withMain([wake('task', 'running')])
+      await logLoop(f.env, f.env.live.ledger)
+      await logLoop(f.env, transition(f.env.live, l => l.map(e => ({ ...e, status: 'done' as const, endedAt: NOW }))))
+      expect(costs(f)).toEqual([
+        { status: 'running', cost: null, has: [] },
+        { status: 'done', cost: 5, has: [] },
+      ])
+      expect(f.env.problems).toEqual([])
+    })
+
+    test('a tell with no session writes null and adds no problem', async () => {
+      const f = withMain([wake('tell', 'done', { session: undefined })])
+      await logLoop(f.env, f.env.live.ledger)
+      expect(costs(f)).toEqual([{ status: 'done', cost: null, has: [] }])
+      expect(f.env.problems).toEqual([])
+    })
+
+    test('an unreadable transcript writes null and adds the problem', async () => {
+      const f = withMain([wake('task', 'done')], null)
+      await logLoop(f.env, f.env.live.ledger)
+      expect(costs(f)).toEqual([{ status: 'done', cost: null, has: [] }])
+      expect(f.env.problems).toEqual(['loop event task:x:1: session transcript not found'])
+    })
+
+    test('a runtime without a config dir reads nothing', async () => {
+      const f = withMain([wake('task', 'done')])
+      f.env.rt = { ...f.env.rt, configDir: undefined }
+      await logLoop(f.env, f.env.live.ledger)
+      expect(costs(f)).toEqual([{ status: 'done', cost: null, has: [] }])
+      expect(f.env.problems).toEqual([])
+    })
+  })
+
   test('a tell carries none of the fields, and a runtime without a config dir reads nothing', async () => {
     const f = withTokens([entry('tell:x:1', 'tell', { wake: 'runaway', class: 'owner', wakeId: 'w0' })])
     await logLoop(f.env, f.env.live.ledger)

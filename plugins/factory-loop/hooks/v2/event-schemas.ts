@@ -263,6 +263,7 @@ export const SCHEMAS: Record<string, Shape> = {
       "acting_mean_ms": {"minimum":0,"type":["integer","null"]},
       "cache_creation_tokens": {"minimum":0,"type":["integer","null"]},
       "cache_read_tokens": {"minimum":0,"type":["integer","null"]},
+      "cost_usd": {"minimum":0,"type":["null","number"]},
       "errors": {"minimum":0,"type":"integer"},
       "from_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
       "idle_mean_ms": {"minimum":0,"type":["integer","null"]},

@@ -35,11 +35,12 @@ export function fieldsOf(t: StepTokens, sum: Omit<StepTokens, 'model'> = t, cost
 }
 
 // cacheWrite5m / cacheWrite1h split cacheCreation by cache lifetime for pricing.
-export type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; cacheWrite5m: number; cacheWrite1h: number; model: string | null }
+export type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; cacheWrite5m: number; cacheWrite1h: number; model: string | null; at: number | null }
 
 // turnsOf: a transcript's requests by requestId, the last line of a request winning (a line without
 // a requestId is a request of its own, keyed with a NUL prefix). An unparsable line is skipped; the
-// `<synthetic>` model of the harness's own notices is not a model.
+// `<synthetic>` model of the harness's own notices is not a model. `at` is the epoch ms of the
+// request's last line with a parsable `timestamp`, null without one.
 export function turnsOf(text: string): Map<string, Turn> {
   const turns = new Map<string, Turn>()
   let anon = 0
@@ -58,8 +59,12 @@ export function turnsOf(text: string): Map<string, Turn> {
     const key = typeof l.requestId === 'string' ? l.requestId : `\0anon${anon++}`
     let turn = turns.get(key)
     if (turn === undefined) {
-      turn = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheWrite5m: 0, cacheWrite1h: 0, model: null }
+      turn = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheWrite5m: 0, cacheWrite1h: 0, model: null, at: null }
       turns.set(key, turn)
+    }
+    if (typeof l.timestamp === 'string') {
+      const at = Date.parse(l.timestamp)
+      if (Number.isFinite(at)) turn.at = at
     }
     if (typeof msg.model === 'string' && msg.model !== '' && msg.model !== '<synthetic>') turn.model = msg.model
     const u = msg.usage
