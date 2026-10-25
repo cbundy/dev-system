@@ -1127,15 +1127,16 @@ ORDER BY repo, device, day;
 ### Update restarts that failed
 
 A failed update restart ends the update and is one `intervention` with who `loop`, cause `update-failed` and fact
-`restart:<at>`; the restart's error is the event's `detail` (v2 SPEC 13.4.3).
+`restart:<at>`; the restart's error is the event's `detail` (not a column of `event_log`; it is also in the
+decision log's `control` line `update failed: ...`) (v2 SPEC 13.4.3).
 
 ```sql
--- failed update restarts per repo, device and error
-SELECT repo, device, detail, count(*) AS failed
+-- failed update restarts per repo, device and day
+SELECT repo, device, date_trunc('day', ts)::date AS day, count(*) AS failed
 FROM factory.event_log
 WHERE type = 'intervention' AND cause = 'update-failed'
-GROUP BY repo, device, detail
-ORDER BY failed DESC;
+GROUP BY repo, device, day
+ORDER BY repo, device, day;
 ```
 
 ### Split trackers closed by the loop
