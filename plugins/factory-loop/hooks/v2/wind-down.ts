@@ -62,6 +62,9 @@ function starts(a: Action): boolean {
       return true
     case 'slot':
       return a.op === 'lease'
+    // a train build starts work; its delete and sweep only tidy up
+    case 'queue-train':
+      return a.op === 'build'
     case 'intake-stamp':
       return a.op === 'run'
     default:

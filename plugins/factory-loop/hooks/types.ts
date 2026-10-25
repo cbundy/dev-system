@@ -312,6 +312,8 @@ export type Config = {
   // the merge queue holds its merges while a release bump PR is open: the branch prefix that marks one (null: no hold), and the cap per head of the bump PR, from the head's anchor (0: no hold)
   releaseBranchPrefix: string | null
   releaseHoldMs: Ms
+  // the merge train (v2 SPEC 9.8): the queue tests the record behind the head on top of the head's update and merges it right after the head without its own update and CI run, when the tested tree still matches; off until the owner turns it on
+  mergeTrain: boolean
   // after a release task answered `done` (the judge started a release), no release review is planned until a newer tag is seen or this long has passed since it ended (0: no suppression)
   releaseInProgressMs: Ms
   // flake bugs (v2 SPEC 8.5 F1): the window in days, the flakes of one test that file a bug, the open flake bugs ready or in flight that hold a new one back from `ready`, and the epic a bug is linked under (null: none)

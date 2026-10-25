@@ -1,8 +1,10 @@
 // The merge queue (docs/factory-loop/v2/SPEC.md 9): its order, Q1 (update the head when it is
 // behind) and Q2 (merge the head when it is clean, green and its patch is the approved one). Only
-// the head is ever touched: updated, checked, re-run or merged. A record behind it waits untouched
-// however far behind main it falls, told after its period (E6), and no other open PR is updated,
-// rebased or closed by any rule.
+// the head is ever updated or merged. A record behind it waits untouched however far behind main it falls,
+// told after its period (E6), and no other open PR is updated, rebased or closed by any rule.
+// With the `mergeTrain` setting on, the record right behind the head is also tested on a train
+// branch the loop pushes, never on its own branch (rules-train.ts, 9.8), and merges right after the
+// head, once, with the tree that test passed (property 8).
 //
 // - Order (9.1): the records in merge-queue whose step is `queue`, oldest seqAt first, ties by
 //   issue; paused issues and records held by the owner's `don't-merge` label (on the issue or the PR;
@@ -26,8 +28,8 @@
 //   one that used up its attempts holds the record as stalled, told to the owner (4.5).
 // - PLANS gives that step to rules-state.ts, which calls it with the record's hold, so Q1 and Q2
 //   never start before the head's entry actions are done or while another event takes it.
-//   queueRules is the composer's hook for rules over the whole queue: there are none, since no
-//   record but the head is ever touched.
+//   queueRules is the composer's hook for rules over the whole queue: the merge train's (Q3,
+//   rules-train.ts), which builds, deletes and sweeps train branches and touches no PR.
 //
 // Pure: the time is state.now.
 import { want } from '../foundation'
@@ -38,6 +40,8 @@ import { lifeEntries, triggerOf, unknownOf } from './rules-agent'
 import { refusedLine } from './refused'
 import { releaseHoldOf, utcTime } from './rules-release-hold'
 import { RERUN_ATTEMPTS } from './rules-review'
+import { trainDroppedOf, trainRules, trainStateOf } from './rules-train'
+import type { TrainState } from './rules-train'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import type { PrView } from './sources-prs'
 import { ciOf, conflictNote, headFacts, mayHaveMerged, mergeKey, mergeResult, mergesAt, pastWait, redNotes, updateKey, updateResult } from './steps-queue'
@@ -93,9 +97,16 @@ export function dontMergeOf(ctx: V2Ctx, r: IssueRecord): string | null {
   return `merge queue: held by the ${DONT_MERGE_LABEL} label on ${h.where === 'issue' ? 'the issue' : `PR #${h.pr}`}`
 }
 
-// queueRules: the composer's hook (plan.ts) for rules over the whole queue. It plans nothing: the
-// head's Q1 and Q2 are its step's (PLANS.queue), and no other record is touched.
-export function queueRules(_ctx: V2Ctx): void {}
+// queueNow: the merge queue as this pass reads it, head first.
+export function queueNow(ctx: V2Ctx): IssueRecord[] {
+  return queueOf(ctx.v2.records, excludedOf(ctx.v2.records, ctx.state.control.paused, ctx.v2.reads, ctx.v2.prs.prs))
+}
+
+// queueRules: the composer's hook (plan.ts) for rules over the whole queue: the merge train's Q3. The
+// head's Q1 and Q2 are its step's (PLANS.queue), and no PR but the head's is touched.
+export function queueRules(ctx: V2Ctx): void {
+  trainRules(ctx, queueNow(ctx))
+}
 
 const fact = (f: string): Trigger => ({ kind: 'fact', fact: f })
 const held = (why: string): StepRead => ({ kind: 'held', why })
@@ -117,7 +128,7 @@ const queuePlan: StepPlan = env => {
   if (ctx.state.control.paused.includes(r.issue)) return held('merge queue: paused by the owner, so the queue moves past it')
   const why = dontMergeOf(ctx, r)
   if (why !== null) return held(why)
-  const queue = queueOf(ctx.v2.records, excludedOf(ctx.v2.records, ctx.state.control.paused, ctx.v2.reads, ctx.v2.prs.prs))
+  const queue = queueNow(ctx)
   const at = queue.findIndex(x => x.issue === r.issue && x.life === r.life)
   const head = queue[0]
   if (at > 0 && head !== undefined) return { kind: 'waiting', why: `merge queue: waits behind #${head.issue} (${at + 1} of ${queue.length})` }
@@ -154,7 +165,7 @@ function headStep(env: StepEnv): StepRead {
   if (view === undefined) return unread(env, facts, r.pr)
   if (view.state === 'closed') return reopen(env, facts, view, base)
   if (view.head === null) return wait(env, facts, view, `merge queue: the head of PR #${view.pr} is not read`)
-  return openHead(env, facts, view, view.head, base)
+  return openHead(env, facts, view, view.head, base, trainStateOf(ctx, queueNow(ctx), r))
 }
 
 // unread: the head's PR was not read this pass. An untrusted author is a fact (the reader's exit
@@ -179,7 +190,7 @@ function unread(env: StepEnv, facts: HeadFacts, pr: number): StepRead {
 // conflict, it is not behind and every check passed or was skipped. Behind is a fact the loop
 // reads itself: the PR's base is not main's head (GitHub computes mergeability lazily, so it shows
 // unknown for a while after main moves), or GitHub says so.
-function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, base: string | null): StepRead {
+function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, base: string | null, train: TrainState): StepRead {
   const { ctx, r } = env
   const at = `${view.pr}@${short(head)}`
   if (view.patch === null) return wait(env, facts, view, `merge queue: the patch id of ${short(head)} is not computed`)
@@ -200,7 +211,9 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
   }
   const main = ctx.v2.prs.main?.sha ?? null
   const moved = main !== null && view.base !== null && !sameSha(view.base, main)
-  if (moved || view.mergeable === 'behind') return update(env, facts, view, head)
+  // a record with a live train is behind main by the head it rides on: Q1 would only undo the train
+  if (train.kind === 'waiting') return wait(env, facts, view, `merge queue: ${train.why}`)
+  if ((moved || view.mergeable === 'behind') && train.kind !== 'ready') return update(env, facts, view, head)
   const ci = ciOf(r, view.checks, facts.reruns)
   switch (ci.kind) {
     case 'red': {
@@ -216,10 +229,10 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
     case 'none':
       return wait(env, facts, view, `merge queue: no check has reported on ${short(head)} yet`)
   }
-  if (!MERGEABLE.includes(view.mergeable ?? '')) return wait(env, facts, view, `merge queue: CI is green on ${short(head)}, and GitHub shows it ${view.mergeable ?? 'not computed'}`)
+  if (!(train.kind === 'ready' ? [...MERGEABLE, 'behind'] : MERGEABLE).includes(view.mergeable ?? '')) return wait(env, facts, view, `merge queue: CI is green on ${short(head)}, and GitHub shows it ${view.mergeable ?? 'not computed'}`)
   const release = releaseHoldOf(ctx)
   if (release !== null) return held(`merge queue: held for release PR #${release.pr} until ${utcTime(release.until)}`)
-  return merge(env, view, head, tries)
+  return merge(env, view, head, tries, train)
 }
 
 // update: Q1 (9.2): `gh pr update-branch`, keyed by main's head at plan time, once per base in
@@ -236,17 +249,22 @@ function update(env: StepEnv, facts: HeadFacts, view: PrView, head: string): Ste
 
 // merge: Q2 (9.3): `callum-flow-merge <p> --patch <approvedPatch>`, the guard inside it, keyed by
 // the head and the try.
-function merge(env: StepEnv, view: PrView, head: string, tries: readonly LedgerEntry[]): StepRead {
+function merge(env: StepEnv, view: PrView, head: string, tries: readonly LedgerEntry[], train: TrainState): StepRead {
   const { ctx, r } = env
   const patch = r.approvedPatch
   if (patch === null) return held('merge queue: no approved patch')
-  if (tries.length >= MERGE_TRIES) {
+  // a try that fell back from the train (a drop) is not a refusal of the guard to count
+  const counted = tries.filter(e => !(e.outcome?.kind === 'queue' && e.outcome.drop !== undefined))
+  if (counted.length >= MERGE_TRIES) {
     const entry = tries.at(-1) ?? null
-    const event = unknownOf(ctx, r, entry, 'cli', `the merge guard refused ${short(head)} ${tries.length} times while the loop read it as ready`)
+    const event = unknownOf(ctx, r, entry, 'cli', `the merge guard refused ${short(head)} ${counted.length} times while the loop read it as ready`)
     return result(event, entry === null ? fact(`queue-tries:${view.pr}@${short(head)}`) : triggerOf(entry))
   }
   const key = mergeKey(r, head, tries.length + 1)
-  const g = want(ctx, { kind: 'queue-merge', key, class: 'free', rule: 'Q2', reason: `merge PR #${view.pr} at ${short(head)}`, issue: r.issue, pr: view.pr, head, patch, maxAttempts: 1 })
+  // with a live train the merge carries its tree; otherwise it says why the record's train was dropped (9.8)
+  const dropped = train.kind === 'ready' ? null : trainDroppedOf(ctx, queueNow(ctx), r)
+  const via = train.kind === 'ready' ? { testedTree: train.train.tree } : dropped === null ? {} : { trainDropped: dropped }
+  const g = want(ctx, { kind: 'queue-merge', key, class: 'free', rule: 'Q2', reason: `merge PR #${view.pr} at ${short(head)}${train.kind === 'ready' ? ` on the train ${short(train.train.train)}` : ''}`, issue: r.issue, pr: view.pr, head, patch, ...via, maxAttempts: 1 })
   return planned(env, g, key, `the merge of PR #${view.pr}`)
 }
 

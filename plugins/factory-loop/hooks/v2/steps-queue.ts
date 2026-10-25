@@ -122,12 +122,15 @@ export function mayHaveMerged(e: LedgerEntry): boolean {
 }
 
 // mergeResult: a merge try that ended (9.3). Merged is ok; a refusal, done with the guard's class,
-// is read by its class; a failed try (a CLI failure, a refusal GitHub gave no reason for, a guard
-// that could not read: class read, act-queue.ts), or one lost to a reload, is unknown. The PR's
-// own merged state is read before this, so a lost try that merged is ok.
+// is read by its class, a train merge that fell back to the queue's own path (`drop`) by a fresh read
+// of the head; a failed try (a CLI failure, a refusal GitHub gave no reason for, a guard that could
+// not read: class read, act-queue.ts), or one lost to a reload, is unknown. The PR's own merged state
+// is read before this, so a lost try that merged is ok.
 export function mergeResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: string): TryRead {
   const o = e.outcome?.kind === 'queue' ? e.outcome : null
   if (e.status === 'done' && o?.merged === true) return { kind: 'result', event: { kind: 'ok', data: { pr: r.pr ?? undefined, head: o.head ?? e.head ?? undefined } } }
+  // a train merge that fell back to the queue's own path (9.8) is no answer about the PR: the head is read afresh
+  if (e.status === 'done' && o?.drop !== undefined) return { kind: 'again', cls: null }
   const text = linesOf(e)
   const pr = r.pr ?? undefined
   switch (e.status === 'done' ? (o?.failClass ?? null) : null) {

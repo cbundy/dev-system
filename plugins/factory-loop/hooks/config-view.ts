@@ -244,6 +244,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(ms('minimumReleaseCadenceMs')),
         ...render(row('releaseBranchPrefix', 'releaseBranchPrefix', c.releaseBranchPrefix ?? 'none')),
         ...render(row('releaseHold', 'releaseHoldMs', c.releaseHoldMs === 0 ? 'off' : shortDuration(c.releaseHoldMs))),
+        ...render(row('mergeTrain', 'mergeTrain', c.mergeTrain ? 'on' : 'off')),
         ...render(row('releaseInProgress', 'releaseInProgressMs', c.releaseInProgressMs === 0 ? 'off' : shortDuration(c.releaseInProgressMs))),
         ...render({ label: 'stateTimeout', value: '', source: from, ...(from === 'mixed' && changed.length > 0 ? { note: changed.join('; ') } : {}) }),
         clip(`    ${compact.slice(0, half).join(' ')}`),

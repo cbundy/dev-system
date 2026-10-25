@@ -26,6 +26,7 @@ import * as ARGV from './argv'
 import { pullOf } from './sources-prs'
 import type { Pull } from './sources-prs'
 import { GUARD_CLASSES } from './types'
+import type { TrainDrop } from './train-types'
 import type { GuardClass, V2Outcome } from './types'
 
 const SEC = 1000
@@ -65,8 +66,8 @@ function refused(why: string): Exec {
   return { status: 'failed', summary: clip(`refused: ${why}`), noRetry: true }
 }
 
-function outcome(op: 'update' | 'merge', head: string | null, failClass: GuardClass | null, lines: string[], merged = false): V2Outcome {
-  return { kind: 'queue', op, merged, head, failClass, lines }
+function outcome(op: 'update' | 'merge', head: string | null, failClass: GuardClass | null, lines: string[], merged = false, drop?: TrainDrop): V2Outcome {
+  return { kind: 'queue', op, merged, head, failClass, lines, ...(drop === undefined ? {} : { drop }) }
 }
 
 // linesOf: a command's output, as the outcome keeps it: its non-empty lines, each and in all capped.
@@ -104,6 +105,13 @@ export function failClassOf(lines: readonly string[]): GuardClass | null {
 export function refusalClass(stderr: string): GuardClass | null {
   const state = /merge state ([A-Z_]+)/.exec(stderr)?.[1]
   return state === 'BEHIND' ? 'behind' : state === 'DIRTY' ? 'conflict' : null
+}
+
+// trainDropOf: why a train merge fell back: the guard's tree check failed as behind or conflict (another
+// tree than the one CI passed), or GitHub refused it as behind after the guard passed; null otherwise.
+export function trainDropOf(fails: readonly string[], stderr: string): TrainDrop | null {
+  if (fails.some(l => /^GUARD tree FAIL .* class=(behind|conflict)$/.test(l))) return 'tree-mismatch'
+  return fails.length === 0 && refusalClass(stderr) === 'behind' ? 'refused' : null
 }
 
 // --- queue-update (9.2) -----------------------------------------------------------------------------------
@@ -162,15 +170,27 @@ const update: Executor = async (ctx, action) => {
 
 const merge: Executor = async (ctx, action) => {
   if (action.kind !== 'queue-merge') return refused(`the queue-merge executor got a ${action.kind} action`)
-  const argv = ARGV.queueMergeArgv(action.pr, action.patch, action.issue)
+  const argv = ARGV.queueMergeArgv(action.pr, action.patch, action.issue, { testedTree: action.testedTree, trainDropped: action.trainDropped })
+  const train = action.testedTree !== undefined
   const r = await run(ctx, argv, MERGE_MS)
   if (r.ok && r.r.exitCode === 0) {
     return { status: 'done', outcome: outcome('merge', action.head, null, linesOf(`${r.r.stdout}\n${r.r.stderr}`), true), summary: clip(`PR #${action.pr} merged at ${short(action.head)}`) }
   }
-  // exit 2: a usage error (a guard without --patch), never a fact of the PR
-  if (r.ok && r.r.exitCode === 2) return { ...commandFailure(argv, r.r), noRetry: true }
+  // exit 2: a usage error (a guard without --patch), never a fact of the PR; for a train merge it is an
+  // image that does not know --tested-tree: the train is dropped (`refused`), a fall back, not a fault
+  if (r.ok && r.r.exitCode === 2) {
+    if (!train) return { ...commandFailure(argv, r.r), noRetry: true }
+    return { status: 'done', outcome: outcome('merge', action.head, null, linesOf(detailOf(r.r)).slice(-3), false, 'refused'), summary: clip(`PR #${action.pr}: the train merge was refused as a usage error (${detailOf(r.r).slice(0, 100)}); the train is dropped`) }
+  }
   // the class is read from every FAIL line, whole, before the outcome caps what it keeps
   const fails = r.ok ? failLines(r.r.stdout) : []
+  // a train merge the tree check refused (another tree, or a conflict with main), or GitHub refused as
+  // behind after the guard passed (strict protection still on): the train is dropped, never counted
+  const drop = train ? trainDropOf(fails, r.ok ? r.r.stderr : '') : null
+  if (drop !== null) {
+    const kept = fails.length > 0 ? linesOf(fails.join('\n')) : linesOf(r.ok ? detailOf(r.r) : '').slice(-3)
+    return { status: 'done', outcome: outcome('merge', action.head, null, kept, false, drop), summary: clip(`PR #${action.pr} not merged on the train at ${short(action.head)} (${drop}): ${kept[0] ?? 'no reason given'}`) }
+  }
   const cls = failClassOf(fails) ?? (r.ok ? refusalClass(r.r.stderr) : null)
   const detail = r.ok ? detailOf(r.r) : r.exec.summary
   const kept = fails.length > 0 ? linesOf(fails.join('\n')) : linesOf(detail).slice(-3)

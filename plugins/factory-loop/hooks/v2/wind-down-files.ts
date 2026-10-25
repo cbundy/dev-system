@@ -55,7 +55,7 @@ const running = (e: LedgerEntry) => e.status === 'running'
 export function windDownStatus(state: State, wd: Extract<WindDown, { mode: 'active' }>) {
   const iso = (t: Ms) => new Date(t).toISOString()
   const steps = state.ledger.filter(e => running(e) && e.kind === 'agent-step')
-  const queue = state.ledger.some(e => running(e) && (e.kind === 'queue-update' || e.kind === 'queue-merge'))
+  const queue = state.ledger.some(e => running(e) && (e.kind === 'queue-update' || e.kind === 'queue-merge' || e.kind === 'queue-train'))
   const release = state.ledger.some(e => running(e) && e.kind === 'task' && e.wake === 'release')
   // the loop cannot see a stop gate apart from its step: a writer step that runs may be in its gate
   const gate = steps.some(e => e.step === 'build' || e.step === 'fix')
