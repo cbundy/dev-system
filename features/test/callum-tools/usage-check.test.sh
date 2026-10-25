@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for usage-check.sh, the issue-orchestrator usage gate's
+# Plain-shell tests for usage-check.sh, the factory loop's usage gate's
 # helper (cbundy/dev-system#170). It runs the script from its source location
 # with a stub `curl` on a hermetic PATH, so no real network call and no real
 # credentials are ever used, and `npm test` runs it anywhere.

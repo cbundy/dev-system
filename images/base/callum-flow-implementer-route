@@ -8,15 +8,15 @@
 # Usage: callum-flow-implementer-route <issue>
 #        callum-flow-implementer-route -h | --help
 #
-# Prints exactly one line, the model alias the orchestrator passes as `model`
-# on the callum-flow:implementer call. Order of decision:
+# Prints exactly one line, the model alias the factory loop passes as the
+# model of its builder. Order of decision:
 #   1. a `model:<alias>` label -> that alias (reason=label; with several, the
 #      first in sorted order, with a warning). The owner's pick, so the
 #      comparison leaves it out.
 #   2. CALLUM_FLOW_IMPLEMENTER_OPUS_PCT unset, empty or 0 -> sonnet (reason=default)
 #   3. bucket = POSIX `cksum` CRC of "implementer:<owner/repo>#<issue>" (repo
 #      lower-cased) mod 100; opus when bucket < pct, else sonnet (reason=hash).
-#      cksum is machine independent, so a resumed orchestrator, a re-delegation
+#      cksum is machine independent, so a resumed loop, a re-delegation
 #      or a second device decides alike. The `implementer:` salt keeps the
 #      buckets independent of callum-flow-design-route's, so the two splits
 #      never pick the same issues.

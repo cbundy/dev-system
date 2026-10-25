@@ -76,8 +76,8 @@ expect_calls() {
   [ "${#desc}" -le 128 ] || fail "$t: description is ${#desc} characters, Coder allows 128"
 }
 
-# 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest. dev-system and
-# orchestrator clear migrator_secrets_dir; orchestrator-loop passes no such variable and keeps
+# 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest. Only
+# dev-system clears migrator_secrets_dir; orchestrator-loop passes no such variable and keeps
 # terraform.tfvars' value (cbundy/dev-system#888).
 run dev-system
 expect_calls dev-system dev-system /icon/docker.svg \
@@ -93,24 +93,7 @@ expect_calls dev-system dev-system /icon/docker.svg \
   wind_down_minutes=0 \
   migrator_secrets_dir=
 
-# 2. orchestrator: session mode, resumed, the skill as the startup prompt, the resume
-# nudge (its comma survives coder's CSV parsing because the field is quoted), and an
-# emoji name format with spaces.
-run orchestrator
-expect_calls orchestrator Orchestrator /emojis/1f504.png \
-  role=orchestrator \
-  remote_control_default_mode=session \
-  remote_control_default_resume=true \
-  remote_control_default_skip_permissions=false \
-  remote_control_prompt=/callum-flow:issue-orchestrator \
-  'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.' \
-  'remote_control_name_format=🔄 {name} orchestrator' \
-  default_plugins= \
-  default_plugin_refs_win=false \
-  wind_down_minutes=0 \
-  migrator_secrets_dir=
-
-# 3. orchestrator-loop: the same session, starting the judge skill, with callum-flow, factory-loop
+# 2. orchestrator-loop: the same session, starting the judge skill, with callum-flow, factory-loop
 # and its companion factory-loop-workspace all pinned to this checkout's package version.
 ref=v$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$TEMPLATE_DIR/../../package.json")
 [ "$ref" != v ] || fail "cannot read the version in package.json"
@@ -127,8 +110,8 @@ expect_calls orchestrator-loop 'Orchestrator (loop)' /emojis/1f3ed.png \
   default_plugin_refs_win=true \
   wind_down_minutes=10
 
-# 4. Anything else is refused before any call.
-for args in '' dev-system-next 'dev-system orchestrator'; do
+# 3. Anything else is refused before any call.
+for args in '' dev-system-next 'dev-system orchestrator' orchestrator; do
   # shellcheck disable=SC2086 # split on purpose: each case is a list of arguments
   run $args
   [ "$rc" -eq 2 ] || fail "'$args': exit status $rc, wanted 2"

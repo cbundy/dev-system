@@ -217,7 +217,6 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .
 | `.github/workflows/ci.yml` | toolchain-and-install step, lint and test `run:` lines | The toolchain setup and install the commands need, and the same lint and test commands as `gateCommands` (step 3f) |
 | `CLAUDE.md` | e2e visual verification doc path | The repo's UI capture doc, or `n/a - no UI`; decided in [3h](#3h-ui-capture), and it stays in step with `uiCapture`. |
 | `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `gateCommands` minus the install step, and which CI job calls each (the real job names from `ci.yml`, step 3f) |
-| `CLAUDE.md` | worktree mechanism | `a treehouse worktree` unless the user says otherwise |
 | `CLAUDE.md` | repo-specific variations | Extra build or boot steps before the app can run, or delete the line |
 | `.devcontainer/devcontainer.json` | `remoteEnv` example | Delete the comment line, or add real env vars, e.g. `"DEV_LOGIN_TOOLS": "claude,gh"` for a repo that never uses codex |
 

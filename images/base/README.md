@@ -65,8 +65,7 @@ watcher prints one event line and exits by default; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
-The [issue-orchestrator skill](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md)
-owns the orchestrator's arming and restart policy. It uses `orchestrator-watch.sh`, which
+The watcher scripts' callers own the arming and restart policy. The scripts use `orchestrator-watch.sh`, which
 runs both as one process with one `--deadline` (single-shot or
 `--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
 baselines forward, and refuses a second copy per repository.
@@ -447,8 +446,8 @@ they land in `/persist/claude` and stay across rebuilds:
 - **The image's default plugins** (`DEV_DEFAULT_PLUGINS`, cbundy/dev-system#148): the
   base image lists `callum-flow` from this repo's marketplace (`callum-flow@callum`, added
   from `cbundy/dev-system`), so every workspace, with a repo or without, and onboarded or
-  not, has the dev-system skills (`issue-orchestrator`, `implement-issue`, `onboard`,
-  `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
+  not, has the dev-system skills (`onboard`, `update-dev`, `evaluate-sessions`,
+  `query-factory-data`, `factory-state`, `backlog-triage`, `dependency-chain`) and the plugin's hooks in its first Claude session, with no manual step.
   It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
   the release tag current at image build, never to main, and a repo's committed settings ref
   wins when it declares one - unless `DEV_DEFAULT_PLUGIN_REFS_WIN=1` (the Coder
@@ -1068,7 +1067,7 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | `DEV_REMOTE_CONTROL_NAME` | the workspace's repo name | The session name in claude.ai (the environment name in `server` mode). By default the repo name from the workspace's `origin` URL (`dev-system` for `github.com/cbundy/dev-system`), else the name of its git top-level directory, else (no git repo) the repo name in `DEV_REPO_URL`, else the hostname: the container ID under Docker unless you pass `--hostname`, the pod name on Kubernetes. Worked out at every Claude start. |
 | `DEV_REMOTE_CONTROL_NAME_FORMAT` | unset | `session` mode, when `DEV_REMOTE_CONTROL_NAME` is not set: the session name, with `{name}` replaced by the default name above, e.g. `🔄 {name} orchestrator` gives `🔄 dev-system orchestrator`. Emoji, spaces and `&` pass through as they are. |
 | `DEV_REMOTE_CONTROL_RESUME` | `0` | `session` mode: `1` resumes the workspace's last conversation on every start, when there is one. See [Resuming the conversation](#resuming-the-conversation). |
-| `DEV_REMOTE_CONTROL_PROMPT` | unset | `session` mode: the first message of a fresh conversation, e.g. a slash command such as `/callum-flow:issue-orchestrator`. Not sent when a conversation is resumed. |
+| `DEV_REMOTE_CONTROL_PROMPT` | unset | `session` mode: the first message of a fresh conversation, e.g. a slash command such as `/factory-loop:judge`. Not sent when a conversation is resumed. |
 | `DEV_REMOTE_CONTROL_RESUME_PROMPT` | unset | `session` mode: the message sent when a conversation is resumed, e.g. to re-arm a loop that did not survive the restart. |
 | `DEV_REMOTE_CONTROL_RESTORE_HOURS` | `24` | After a container restart, the other Remote Control sessions that were live at the restart and last seen live within this many hours are resumed, however long they sat idle. `0` turns it off. See [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart). |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
@@ -1686,7 +1685,7 @@ and adds a short narrative. It is in the synced allow list.
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard. Checking is read-only;
 the command is in the synced allow list. Its one writing mode, `--update-behind`, is reserved for
-the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
+the orchestrator.
 The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `file_lines`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions,mergedAt`, read after the merge; null with a warning when the read fails) and `merged_at` (GitHub's `mergedAt`; null when missing) and `title: null`; it is allowed only in the main
@@ -1812,7 +1811,7 @@ event of each valid asset whose tag the local log does not hold, with one stderr
 `type_version` this image's shapes lack is skipped, not written, so a newer image collects it later. Watched repos
 are the `--repo` flags, else `FACTORY_RELEASE_REPOS` (comma or space separated `owner/name`) plus the repos the
 device's own factory logs name. `factory-event-push-loop` runs it (below).
-For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
+For planning and readiness decisions, see the judge skill (`plugins/factory-loop/skills/judge/SKILL.md`) or [RELEASING.md](../../RELEASING.md).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line
 `Expected: <patch|minor|major> - <reason>`. A repo with no open `Next release` milestone is not opted in:
@@ -1929,9 +1928,9 @@ synced allow list. Set the percentage in a repo-owned place, not the synced `.cl
 labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
 `gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
 
-`callum-flow-implementer-route <issue>` prints the model the `callum-flow:implementer` sub-agent runs on for that
-issue, `sonnet` (its frontmatter model) or `opus`, so the two can be compared on real numbers (#506). The orchestrator
-passes it as `model` on every implementer call for the issue. A trusted `model:<alias>` label wins (the owner's pick,
+`callum-flow-implementer-route <issue>` prints the model the factory loop's builder runs on for that
+issue, `sonnet` (its frontmatter model) or `opus`, so the two can be compared on real numbers (#506). The factory loop
+passes it as the model of its builder for the issue. A trusted `model:<alias>` label wins (the owner's pick,
 left out of the comparison), else `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` (default `0`, a number from 0 to 100; anything else
 exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of `implementer:<owner/repo>#<issue>`, repo
 lower-cased, mod 100). The `implementer:` salt keeps it independent of the design split above, and the hash means a

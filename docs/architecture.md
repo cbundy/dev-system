@@ -42,7 +42,7 @@ instructing them. The owner and the factory share one trusted identity, so every
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain), agents (designer, explorer, implementer, fixer, adjudicator), hooks (forbid-git-stash, forbid-tmux-kill, forbid-broad-kill, forbid-coder-self, forbid-raw-gh-read, forbid-main-checkout-write, stale-image, fresh-worktree)
+plugins/callum-flow/              skills (update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain), hooks (forbid-git-stash, forbid-tmux-kill, forbid-broad-kill, forbid-coder-self, forbid-raw-gh-read, forbid-main-checkout-write, stale-image, fresh-worktree)
 plugins/factory-hud/              opt-in mod; reference and setup in its README.md
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
@@ -236,9 +236,9 @@ An init-only file is restored by `update` only if it was deleted and has a basel
 to a repo is reported, never created. `.no-mistakes.yaml` and `.github/pull_request_template.md`
 are retired templates: `update` stops syncing them and leaves the repo's copies alone.
 
-Never committed: `.claude/settings.local.json`. It holds powers that only the orchestrator
+Never committed: `.claude/settings.local.json`. It holds powers that only the factory loop
 in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `callum-flow-fix-linkage`, `gh pr edit`,
-`no-mistakes axi respond`, watchers). Treehouse worktrees start without it, so a worktree sub-agent cannot merge.
+`no-mistakes axi respond`, watchers). Treehouse worktrees start without it, so a worktree agent cannot merge.
 
 The per-file split between synced and repo-owned content, including files without ownership
 markers, is documented in [`templates/README.md`](../templates/README.md).
@@ -268,7 +268,7 @@ Where to look inside a running container. Full detail is in
 | `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url`, and per-repo evidence storage under `evidence/<owner>/<repo>/` ([setup](evidence-storage.md)) |
 | `/shared` | Optional NAS share for files exchanged with the PC. Not for checkouts or state. |
 | `/usr/local/bin/dev-*` | `dev-entrypoint`, `dev-init`, `dev-doctor`, `dev-login`, `dev-remote-control` |
-| `/usr/local/share/callum-tools/` | Watcher and usage-check scripts used by the orchestrator skill |
+| `/usr/local/share/callum-tools/` | Watcher and usage-check scripts used by the factory loop |
 
 **Logs and sessions**
 

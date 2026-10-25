@@ -198,5 +198,5 @@ check "a fresh workspace with no repo gets the real callum-flow plugin and its s
   [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
   echo "$list" | jq -e "any(.[]; .id == \"callum-flow@callum\" and .enabled == true)" >/dev/null &&
   skills=$(ls "$(echo "$list" | jq -r ".[] | select(.id == \"callum-flow@callum\") | .installPath")/skills") && echo "$skills" &&
-  for s in issue-orchestrator implement-issue onboard update-dev; do echo "$skills" | grep -qxF "$s" || exit 1; done &&
+  for s in onboard update-dev; do echo "$skills" | grep -qxF "$s" || exit 1; done &&
   echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"'
