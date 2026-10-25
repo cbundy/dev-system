@@ -622,6 +622,10 @@ container never fails to start because of it.
 `/usr/local/bin/dev-doctor` prints one line per check, `OK` or `FAIL`, with a `fix:` hint
 on every failure:
 
+- in a Coder workspace (`CODER_WORKSPACE_ID` set), whether it could restart itself
+  (`dev-restart-self --check`): `OK` naming the token source, or a `WARN` (never a failure)
+  naming the `coder_login` workspace parameter and [Coder CLI](#coder-cli) when the token or
+  URL is missing; nothing outside Coder;
 - each `/persist` directory is writable, with a `WARN` (not a failure) when it is not on a
   volume, so its state is lost with the container;
 - `/shared`: `mounted and writable`, `not mounted (optional)` (both OK), or a failure when
@@ -783,7 +787,8 @@ dev-restart-self              # default (alias --upgrade): one start build, no s
 dev-restart-self --restart    # scheduled restart; add --upgrade to also take the active template version
 dev-restart-self --parameter remote_control_resume=false   # change a parameter (repeatable)
 dev-restart-self --fresh      # the next start begins a new conversation, once
-dev-restart-self --dry-run    # print each request (token redacted), send nothing
+dev-restart-self --dry-run    # print each request (token redacted), send nothing; fails with no token
+dev-restart-self --check      # could this workspace restart itself? credentials only, no request
 dev-restart-self --resume     # dev-init runs this on every start
 ```
 
@@ -823,6 +828,12 @@ dev-restart-self --resume     # dev-init runs this on every start
   saved schedule (`null` when there was none) and `automatic_updates`, and deletes the marker.
   With no marker it does nothing. If the restore fails it keeps the marker and exits non-zero
   with a warning, so the one-off schedule never keeps firing daily without notice.
+- **`--check`** resolves the workspace id, URL and token as a real run does, sends no request
+  and writes nothing. Exit 0 prints `credentials found (token from env|secrets file|coder
+  config)`; exit 1 prints the message the real run would die with (no workspace id, URL or
+  token); exit 2 is a usage error (`--check` takes no other flag), which is also what an older
+  image without `--check` returns. `--dry-run` likewise exits 1 with no token. `dev-doctor`
+  runs `--check` inside a Coder workspace.
 - **Credentials**: the token comes from `CODER_SESSION_TOKEN`, then
   `$DEV_SECRETS_DIR/coder-session-token`, then `${CODER_CONFIG_DIR:-~/.config/coderv2}/session`;
   the URL from `CODER_URL`, then `${CODER_CONFIG_DIR:-~/.config/coderv2}/url`, then
