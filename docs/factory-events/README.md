@@ -166,7 +166,7 @@ SQL
   (`merged` with the pull request's files, per-file line counts (`file_lines`), additions and deletions, `merged_at`, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
   (`implementer_routed`) and `usage-check.sh` (`usage`), each with the type and data `translate()` made from the
   old line it wrote before ([translator.md](translator.md) has the mapping; `tests/factory-event-native.test.js`
-  pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` no longer log: their
+  pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` were removed (they no longer logged): their
   states (`design_routed`, `superseded`, the watcher's run states and `watcher_error`) have no new type.
   `queue-watch.sh` keeps the old-state call (`ready --if-changed`, which has no native form); it lands only here.
   The factory loop writes natively too (dev-system#1141): its `transition`, `reviewed`, `intervention`, `requeued`,

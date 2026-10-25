@@ -12,12 +12,11 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # the new store's log of the test repo (callum-flow-merge writes there only: --type ... --data)
 nlog="$events/factory/o__r.jsonl"
 
-# merge refuses on a worktree head mismatch (moved here from merge-guard.test.sh)
+# merge refuses when the PR head is not the approved patch, and merges nothing (moved here from merge-guard.test.sh)
 reset
-git -C "$work" commit -q --allow-empty -m unpushed
-m 7
-if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on worktree mismatch: $rc $out"; fi
-git -C "$work" reset -q --hard "$SHA"
+m 7 --patch 0000000000000000000000000000000000000001
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on another patch: $rc $out"; fi
+printf '%s' "$out" | grep -q '^GUARD patch FAIL .* class=patch$' || fail "patch FAIL line: $out"
 passed=$((passed + 1))
 
 reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - x'; m 7
@@ -168,15 +167,6 @@ passed=$((passed + 1))
 reset; echo BEHIND > "$st/mss"; m 7
 if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on behind: $rc $out"; fi
 printf '%s' "$out" | grep -q '^GUARD mergeable FAIL behind' || fail "merge on behind: $out"
-passed=$((passed + 1))
-
-# merge after --update-behind (cbundy/dev-system#476): the rebased head merges on the patch proof
-behind_setup
-g 7 --update-behind; [ "$rc" = 0 ] || fail "update-behind for merge: rc=$rc out=$out"
-NEWH=$(origin_b); echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
-m 7
-if [ "$rc" != 0 ] || ! grep -q -- "--match-head-commit $NEWH" "$st/gh-calls"; then fail "merge after update-behind: $rc $out"; fi
-jq -e --arg sha "$NEWH" '.type == "merged" and .data.head == $sha' "$nlog" > /dev/null || fail "merged event should carry the new head: $(cat "$nlog")"
 passed=$((passed + 1))
 
 echo "merge: $passed groups passed"

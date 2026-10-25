@@ -59,27 +59,17 @@ them, so those scripts stay maintained.
 12. Opt-in OpenTelemetry export for Claude Code and codex, on only when the runtime sets
     `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Telemetry](#telemetry-opentelemetry-export)).
 
-The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the read-only pre-merge issue-linkage check) are staged at
-`/usr/local/share/callum-tools/`, the same path the feature uses. For direct use, each
+The callum-tools watcher script (`queue-watch.sh`) and `check-pr-linkage.sh` (the read-only pre-merge issue-linkage check) are staged at
+`/usr/local/share/callum-tools/`, the same path the feature uses. For direct use, the
 watcher prints one event line and exits by default; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
-The watcher scripts' callers own the arming and restart policy. `orchestrator-watch.sh`
-runs both as one process with one `--deadline` (single-shot or
-`--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
-baselines forward, and refuses a second copy per repository.
-Its single-shot collection window is set by `ORCHESTRATOR_WATCH_WINDOW`, defaulting
-to 5 seconds when unset or empty. Nonnumeric values and the literal `0` are usage
-errors (exit 2); leading zeros are accepted and durations are interpreted as decimal.
-In both modes, all three retry a `sleep` killed from outside during polling waits,
-queue confirmation delays, or orchestrator deadline and collection-window timers.
-Each interruption prints exactly one stderr line,
-`<script>: sleep interrupted (status <rc>), sleeping the remaining <N>s`, and
-nothing on stdout. They compute the remaining wait from a `date +%s` deadline;
-only signal-terminated sleeps (status above 128) are retried.
+The watcher's caller owns the arming and restart policy. A `sleep` killed from outside during a polling wait or a
+queue confirmation delay is retried: each interruption prints exactly one stderr line,
+`<script>: sleep interrupted (status <rc>), sleeping the remaining <N>s`, and nothing on stdout; the remaining wait is computed from a `date +%s` deadline, and only signal-terminated sleeps (status above 128) are retried.
 
-`usage-check.sh`, staged beside them, prints the Claude plan's 5-hour and weekly usage as
+`usage-check.sh`, staged beside it, prints the Claude plan's 5-hour and weekly usage as
 one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
 usage gate. It reads the claude.ai usage endpoint with the logged-in OAuth token, falls back
 to a recent status line snapshot (its `--record` mode is a status line command), and prints
@@ -116,7 +106,7 @@ environment variable set in the image.
 | `/persist/claude-auth` | Claude Code | `CLAUDE_SECURESTORAGE_CONFIG_DIR`, set only by a runtime that opts in to a [shared Claude login](#sharing-one-claude-login) | the shared login only (`.credentials.json`, with MCP server logins) and the locks Claude takes around a token refresh; empty and unused otherwise |
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
-| `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
+| `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
@@ -1621,8 +1611,8 @@ It builds the old-format line, translates it and appends only the new event to
 `/persist/events/factory/<owner>__<repo>.jsonl`. The old log `/persist/events/<owner>__<repo>.jsonl` and
 `factory.events` get no new lines (#1143). It needs no network and never fails its caller: a state the
 translator skips writes nothing, and a miss, a missing `node` or translator, or a crashing translator writes
-nothing and prints one `callum-flow-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
-and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form; `pipeline-watch.sh` no longer logs; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
+nothing and prints one `callum-flow-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `usage-check.sh`)
+and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed queue watcher's first sight of a queued issue (one it did not see change) is logged with
 `--if-changed`, which translates first and skips an event with the same `type` and `data` as the issue's newest one in the
 new log (`loop_entry` and `loop_passes` skipped; `--branch` does not narrow it), so a restart never replays old events and a
@@ -1682,30 +1672,26 @@ thresholds of the view, `--rule` to override) and flags are defined in
 arguments, 1 when the factory database cannot be read or has no migration 0033. The `factory-state` skill runs it
 and adds a short narrative. It is in the synced allow list.
 
-`callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
-gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard. Checking is read-only;
-the command is in the synced allow list. Its one writing mode, `--update-behind`, is reserved for
-the orchestrator.
-The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
-through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
+`callum-flow-merge-guard <pr> --patch <id>` checks a PR is safe to merge (author, rollout, linkage, CI checks,
+patch, base, mergeable) and prints `GUARD <name> FAIL <reason> class=<class>` per failed guard. Checking is read-only;
+the command is in the synced allow list. `--patch` is its only mode: without it, or with `--run` or `--update-behind`, it exits 2 with one usage line.
+The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. `callum-flow-merge <pr> --patch <id>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `file_lines`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions,mergedAt`, read after the merge; null with a warning when the read fails) and `merged_at` (GitHub's `mergedAt`; null when missing) and `title: null`; it is allowed only in the main
-checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
+checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
 
-`callum-flow-merge-guard <pr> --patch <id>` is the factory loop's mode (v2,
+`--patch` is the factory loop's mode (v2,
 [`docs/factory-loop/v2/SPEC.md`](../../docs/factory-loop/v2/SPEC.md) 9.4), and `callum-flow-merge <pr> --patch <id>`
-passes it through. It checks only facts the loop owns: no run lookup (no `pipeline-watch.sh`, no
-no-mistakes call), no `head` or `gates` guard, and a `patch` guard that the PR head's patch id is
+passes it through. It checks only facts the loop owns, with a `patch` guard that the PR head's patch id is
 `<id>`, the one the loop's reviewer approved. Every FAIL line ends with ` class=<class>`, so the loop
 acts on the class and never on the reason's words: `behind` (the loop updates the head), `conflict`
 (a fixer), `checks` (failed or pending checks), `patch` (back to review), `linkage` (the loop writes
 the PR body again), `read` (a fact the guard could not read, verify, derive or compute; GitHub's
 `BLOCKED` too) and `policy` (only the owner can change it: an untrusted author, another base, a draft,
-a branch with no issue). `--patch` takes no `--run` or `--update-behind`. The loop also passes
-`--issue <N>`, its record's issue, so the guard never reads the issue from the branch name. Without
-`--patch` the guard is unchanged.
+a branch with no issue). The loop also passes
+`--issue <N>`, its record's issue, so the guard never reads the issue from the branch name.
 
 `--patch <id> --tested-tree <sha>` is the merge train's check (v2 SPEC 9.4); `<sha>` is 40 lowercase hex, it needs
 `--patch` and is refused with `--update-behind`. It adds a `tree` guard: the guard fetches origin's base and the PR head
@@ -1727,60 +1713,6 @@ the remote-tracking refs and never touches a working tree or HEAD. A head that c
 the base (main already has its change) has the zero id (`--stable` adds up one hash per file). Exit 1
 when it cannot be computed (a fetch failed, no merge base), 2 on bad usage. The loop's `prs` source and
 the guard's `patch` check both run it (override: `CALLUM_FLOW_PATCH_ID_BIN`).
-
-`callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]` updates only an open,
-`BEHIND`, nonconflicting PR targeting the default branch or the supplied base. It rebases in a
-throwaway worktree, compares the ordered per-commit `git patch-id --verbatim` values against the
-gated run, then pushes with `--force-with-lease` on the old PR head and removes the worktree.
-The proof compares each head's commits since its merge-base with the current base, preserves
-whitespace, and rejects merge commits or an empty patch range. The run must have reached `ci`,
-with every preceding step completed or skipped and no failed, aborted or cancelled run status.
-It never starts, aborts or reruns a pipeline. Success prints
-`UPDATED pr=N branch=B from=OLD to=NEW run=ID gated_patch=ID rebased_from=SHA`.
-`UPDATE-BEHIND FAIL` requires a full re-gate for a conflict, patch mismatch, unfinished or unclean
-run, unavailable run head, or failed push lease. `UPDATE-BEHIND SKIP` makes no push and needs no
-re-gate: follow its retry, base-selection or guard instruction. Both exit 1; success exits 0.
-
-`callum-flow-regate --issue <N> [--accept-dropped <sha>[,<sha>]] [--new-branch] [--base BRANCH]` leaves a
-rebased branch that already had a no-mistakes run ready for a fresh `axi run` on the same name
-(cbundy/dev-system#489). Run it in the worktree after the deliberate rebase; it never starts the run, because
-the caller owns the `--intent`. no-mistakes keeps a private mirror of the branch in its gate repo, and a
-rebase leaves that mirror with pipeline commits the branch no longer has, so the next run refuses
-(`preserved recovery evidence cannot be used safely`, `refusing to reconcile private mirror ref`). The
-helper refuses, changing nothing, on a dirty tree, a detached HEAD, the base branch, or a HEAD that lacks
-`origin/<base>`. It aborts a live run and waits for a terminal status, then acts on `axi sync --check`
-`next_action.code`: `run_pipeline` and `user_owned` need nothing, `recover_custody` runs the CLI's own
-printed `sync --recover` command, `inspect_and_reconcile_manually` runs `sync --recover --keep-local`,
-`adopt_published` runs only when `origin/<branch>` equals HEAD, and any other code falls back to a new
-branch. A gate ref that HEAD does not contain is deleted with `git push no-mistakes --delete`, and a
-diverged `origin/<branch>` is replaced with a `--force-with-lease` push on the observed sha. Everything
-that would be lost is first archived as `archive/<branch>-<mirror|run|remote>-<sha8>`. A dropped commit
-(in the run head, gate ref or origin branch, not in `origin/<base>`, no patch-id equivalent in HEAD) is
-listed on stderr, and a dropped `no-mistakes(...)` commit blocks until `--accept-dropped` names its sha.
-Nothing is deleted, pushed or recovered before that check passes, and the gate ref delete and origin push
-are leased on the tips the check saw: a commit a live run adds before it stops makes the helper refuse
-and ask for a rerun. `--new-branch` (after the live run is
-stopped), a sync recovery or gate-ref deletion that cannot finish, a recovery that moves HEAD, or a code
-with no safe action moves the rebased head to `<branch>-v<N>` (first name free locally, on origin and on
-the gate) and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
-`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`. The helper
-logs no event: the event store has no `superseded` type.
-Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. Preflight and
-dropped-commit refusals change nothing, but a later one (a run that did not stop, a refused lease push)
-may leave the run aborted or recovered and the gate ref deleted, with the archives kept. The behind-only
-path stays `callum-flow-merge-guard <pr> --update-behind`. Tests: `CALLUM_FLOW_NM_BIN`,
-`CALLUM_FLOW_EVENT_BIN`, `CALLUM_FLOW_REGATE_TRIES`, `CALLUM_FLOW_REGATE_SLEEP`.
-
-The head guard also accepts different run and PR heads when that clean-run patch proof holds,
-origin equals the PR head, and every worktree on the PR branch holds no commit the gated run
-lacks: each commit it has beyond the run head, the PR head and the base must carry the
-zero-context patch ID of a run commit the worktree does not already contain and, applied to that
-run commit's parent, give exactly its tree, one worktree commit per run commit. A worktree that lags (an `--update-behind` leaves every
-worktree behind the new head) or sits on a copy of the branch from before a rebase passes; a
-commit made outside the pipeline, an empty one included, fails `head` (#627). The guard reads only each worktree's HEAD, never uncommitted changes. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
-the `head` FAIL recovery. When the proof was tried and failed, the `head` FAIL line carries its reason after `(run <id>)`, for example `proof: patch changed by the rebase`. The proof ID hashes the ordered patch IDs; `rebased_from` is the gated
-run head. `--emit-verified` adds these fields to `VERIFIED`, empty when the heads match. A proof
-passes only the head guard: CI on the new head and all other merge guards must still pass.
 
 The guard also runs `callum-flow-test-weakening --base origin/<pr base> --head <pr head>`, which
 scans every non-merge commit of the PR for removed assertions, added `--warn-only` / `|| true` /
@@ -1840,15 +1772,6 @@ Rollout) `run-it` if the issue body has a `## Run it` heading and `merge` otherw
 says `merge` over a body with a `## Run it` heading prints `ROLLOUT conflict ...` and exits 1
 (exit 2 on bad arguments). It only reads, so it is in the synced allow list.
 
-`callum-flow-fix-linkage <pr> [--expect closing|refs]` repairs a PR body's issue linkage
-(`Closes #N` / `Refs #N`) and re-checks it. Without `--expect` it derives the keyword from the
-issue's Rollout like the merge guard, and edits nothing on a conflict, a failed lookup or a
-contradicting `--expect`. The keyword goes in the author text; the no-mistakes PR appendix
-is never edited; an unwanted closing keyword inside the appendix is reported on stderr (remove
-the appendix block and start a fresh pipeline run). It edits the PR, so, like `callum-flow-merge`,
-it is allowed only in the main checkout's `settings.local.json`; the read-only
-`check-pr-linkage.sh` stays in the synced allow list.
-
 Trusted authors (cbundy/dev-system#307). Issue, PR and comment text can be written by anyone, so
 `callum-flow-issue-read` is the filtered way to read it. An item is trusted only when its
 `user.login` (case-insensitive) and numeric `user.id` both match an entry of
@@ -1870,12 +1793,10 @@ content. A stripped dependency node is counted but writes no event, as the type 
 see trusted content (cbundy/dev-system#310; the agent and skill prose follows in #311, the deny
 hook in #312): `callum-flow-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
 a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author` guard fails a PR
-not opened by a trusted author and reads nothing further from it), `check-pr-linkage.sh` and
-`callum-flow-fix-linkage` (an untrusted PR is refused with one line, never parsed or rewritten),
+not opened by a trusted author and reads nothing further from it), `check-pr-linkage.sh` (an untrusted PR is refused with one line, never parsed),
 `callum-flow-claim` and `callum-flow-sweep` (only trusted `claimed-by:` comments count; claim
 refuses an untrusted issue, sweep skips it; an untrusted cross-referenced PR or
-actor never counts as a merge), `callum-flow-design-route` (an untrusted issue's labels are not
-read, so it routes to a sub-agent) and `queue-watch.sh` (an untrusted `ready` issue never enters
+actor never counts as a merge) and `queue-watch.sh` (an untrusted `ready` issue never enters
 the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
 a reader failure: it never treats it as "no comments". Write calls are unchanged.
 
@@ -1931,20 +1852,12 @@ reader exits 1 after the rest are swept. Liveness uses GitHub server times; the 
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
 
-`callum-flow-design-route <issue>` prints `session` or `subagent`: how an issue is designed (epic #286). The label
-`design:subagent` wins, then `design:session`, else `CALLUM_FLOW_DESIGN_SESSION_PCT` (default `0`, a number from 0 to 100; anything else
-exits 2) sends that percentage of issues to `session` by a stable hash (`cksum` of the lower-cased `<owner/repo>#<issue>` mod 100), so
-every device decides alike. Unreadable labels print `subagent` with a warning. It logs no event (the event store has no `design_routed` type), and it is in the
-synced allow list. Set the percentage in a repo-owned place, not the synced `.claude/settings.json` keys. Consumer repos create the
-labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
-`gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
-
 `callum-flow-implementer-route <issue>` prints the model the factory loop's builder runs on for that
 issue, `sonnet` (its frontmatter model) or `opus`, so the two can be compared on real numbers (#506). The factory loop
 passes it as the model of its builder for the issue. A trusted `model:<alias>` label wins (the owner's pick,
 left out of the comparison), else `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` (default `0`, a number from 0 to 100; anything else
 exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of `implementer:<owner/repo>#<issue>`, repo
-lower-cased, mod 100). The `implementer:` salt keeps it independent of the design split above, and the hash means a
+lower-cased, mod 100). The `implementer:` salt keeps it independent of the designer split, and the hash means a
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
 pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
@@ -1960,9 +1873,7 @@ Help is handled before percentage validation. Usage errors (a missing, empty or 
 percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
 
 `callum-flow-designer-route <issue>` prints the model the designer sub-agent runs on for that issue, `opus` (its frontmatter
-model, the control) or `sonnet` (the treatment), so the two can be compared on real numbers (#1040). It is distinct from
-`callum-flow-design-route` above, which picks whether an issue is designed in a session or by a sub-agent; this one picks the
-sub-agent's model. A trusted `model:<alias>` label wins (the owner's pick, left out of the comparison), else
+model, the control) or `sonnet` (the treatment), so the two can be compared on real numbers (#1040). A trusted `model:<alias>` label wins (the owner's pick, left out of the comparison), else
 `CALLUM_FLOW_DESIGNER_SONNET_PCT` (default `0`, a number from 0 to 100; anything else exits 2) sends that percentage of issues
 to `sonnet` by a stable hash (`cksum` of `designer:<owner/repo>#<issue>`, repo lower-cased, mod 100). An unknown repo or
 unreadable labels print `opus` with a warning. Each decision logs a `designer_routed` event (`model`, `reason`

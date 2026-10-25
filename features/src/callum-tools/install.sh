@@ -16,8 +16,6 @@ mkdir -p "$DEST"
 
 cp "$(dirname "$0")/setup.sh" "$DEST/setup.sh"
 chmod 755 "$DEST/setup.sh"
-cp "$(dirname "$0")/pipeline-watch.sh" "$DEST/pipeline-watch.sh"
-chmod 755 "$DEST/pipeline-watch.sh"
 cp "$(dirname "$0")/queue-watch.sh" "$DEST/queue-watch.sh"
 chmod 755 "$DEST/queue-watch.sh"
 cp "$(dirname "$0")/recover-no-mistakes.sh" "$DEST/recover-no-mistakes.sh"

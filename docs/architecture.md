@@ -237,7 +237,7 @@ to a repo is reported, never created. `.no-mistakes.yaml` and `.github/pull_requ
 are retired templates: `update` stops syncing them and leaves the repo's copies alone.
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the factory loop
-in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `callum-flow-fix-linkage`, `gh pr edit`,
+in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `gh pr edit`,
 `no-mistakes axi respond`, watchers). Treehouse worktrees start without it, so a worktree agent cannot merge.
 
 The per-file split between synced and repo-owned content, including files without ownership

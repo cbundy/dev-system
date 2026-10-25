@@ -33,7 +33,7 @@ function globbed(dir) {
   return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.test.sh')).sort().map((f) => `${dir}/${f}`) : []
 }
 
-const SLOW_FIRST = ['node', 'features/test/callum-tools/watchers.test.sh', 'features/test/callum-tools/orchestrator-watch.test.sh']
+const SLOW_FIRST = ['node']
 
 const full = list()
 

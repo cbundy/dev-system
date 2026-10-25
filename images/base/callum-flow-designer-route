@@ -4,7 +4,6 @@
 # for an issue, Opus (its frontmatter model, the control) or Sonnet (the
 # treatment), so the factory can compare the two on real numbers (cbundy/dev-system#1040).
 # The split must be stable and exact, so it is computed, never asked of a model.
-# Distinct from callum-flow-design-route, which picks session or sub-agent.
 #
 # Usage: callum-flow-designer-route <issue>
 #        callum-flow-designer-route -h | --help

@@ -131,7 +131,7 @@ reset; ISSUE=7; route 7 100; expect opus hash "$(bucket 7)" 100 "pct 100 any iss
 reset; route 506 69; expect opus hash 68 69 "bucket 68 below 69"
 reset; route 506 68; expect sonnet hash 68 68 "bucket 68 at 68"
 reset; route 506 50; expect sonnet hash 68 50 "bucket 68 at pct 50"
-# independent of callum-flow-design-route: #288 is design bucket 82 (sub-agent at
+# independent of the designer split: #288 had design bucket 82 (sub-agent at
 # 50) but implementer bucket 15 (opus at 50)
 reset; ISSUE=288; route 288 50; expect opus hash 15 50 "salted away from the design bucket"; ISSUE=506
 # an issue whose bucket is below 50

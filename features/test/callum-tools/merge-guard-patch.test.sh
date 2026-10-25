@@ -1,11 +1,10 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-merge-guard --patch, the factory loop's mode
-# (docs/factory-loop/v2/SPEC.md 9.4), and callum-flow-merge passing it through. With --patch the
-# guard checks only facts the loop owns: no run lookup (no pipeline-watch.sh, no no-mistakes
-# call), no head or gates guard, a patch guard against the real callum-flow-patch-id, and every
+# Plain-shell tests for callum-flow-merge-guard --patch, the factory loop's mode and the guard's only
+# one (docs/factory-loop/v2/SPEC.md 9.4), and callum-flow-merge passing it through. The guard checks
+# only facts the loop owns: a patch guard against the real callum-flow-patch-id, and every
 # FAIL line ends with its class. The shared stubs and real local origin live in merge-guard-lib.sh;
-# the guard's other modes are in merge-guard.test.sh and merge.test.sh.
+# the shared guards are in merge-guard.test.sh and merge.test.sh.
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
 
@@ -16,13 +15,8 @@ PATCH_ID="$ROOT/images/base/callum-flow-patch-id"
 OTHER=0123456789abcdef0123456789abcdef01234567
 CLASSES='behind|conflict|checks|patch|linkage|read|policy'
 
-# the run lookup's tools, which --patch must never call: each records its call and fails
-cat > "$tmpdir/forbidden" <<'STUB'
-#!/bin/sh
-echo "$0 $*" >> "${STUB_DIR:?}/forbidden-calls"
-exit 1
-STUB
-chmod +x "$tmpdir/forbidden"
+# this suite pins the real callum-flow-patch-id, in the guard and behind callum-flow-merge
+PID_BIN=$PATCH_ID
 
 # patch_setup: the PR's branch is one real change on main, pushed and clean; PH is its head and
 # PID its patch id, as the loop approved it
@@ -40,16 +34,15 @@ patch_setup() {
   PID=$(PATH="$toolbin" "$SH" "$PATCH_ID" "$PH" main)
 }
 
-# gp <args...>: the guard, as g runs it, but with the run lookup's tools forbidden; every FAIL
+# gp <args...>: the guard, as g runs it, without the shared patch-id stub; every FAIL
 # line it prints is kept in $tmpdir/all-fails. LINKAGE_BIN, when set, replaces the linkage stub.
 gp() {
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/forbidden" \
+  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" \
     CALLUM_FLOW_LINKAGE_BIN="${LINKAGE_BIN:-$tmpdir/linkage}" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/gh-linkage" \
-    CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$tmpdir/forbidden" \
-    NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+    CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
+    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
   printf '%s\n' "$out" | grep ' FAIL ' >> "$tmpdir/all-fails" || true
-  [ ! -f "$st/forbidden-calls" ] || fail "--patch called the run lookup: $(cat "$st/forbidden-calls")"
 }
 : > "$tmpdir/all-fails"
 
@@ -83,9 +76,7 @@ patch_setup
 printf '#!/bin/sh\necho "callum-flow-patch-id: cannot fetch origin/main" >&2\nexit 1\n' > "$tmpdir/nopatch"; chmod +x "$tmpdir/nopatch"
 CALLUM_FLOW_PATCH_ID_BIN="$tmpdir/nopatch" gp 7 --patch "$PID"; expect_class "patch id not computed" patch read "patch id of $PH not computed: callum-flow-patch-id: cannot fetch origin/main"
 
-# --- no head, no gates, no run --------------------------------------------------------------
-patch_setup; touch "$st/norun"; gp 7 --patch "$PID"; expect_pass "no pipeline run: nothing of a run is checked"
-patch_setup; echo failed > "$st/runstatus"; echo 'ci,awaiting_approval,0' > "$st/step"; gp 7 --patch "$PID"; expect_pass "a failed or parked run is not the loop's"
+# --- no head guard --------------------------------------------------------------------------
 patch_setup; git -C "$work" commit -q --allow-empty -m "a slot ahead"; gp 7 --patch "$PID"; expect_pass "a worktree ahead of the head is not checked"
 git -C "$work" reset -q --hard "$PH"
 
@@ -124,10 +115,6 @@ passed=$((passed + 1))
 # every FAIL line printed in --patch mode ends with one of the seven classes
 [ -s "$tmpdir/all-fails" ] || fail "no FAIL line was seen"
 ! grep -Ev " class=($CLASSES)\$" "$tmpdir/all-fails" || fail "a FAIL line without its class"
-passed=$((passed + 1))
-# without --patch, the guard is as it was: no class, the pipeline's recovery
-patch_setup; echo BEHIND > "$st/mss"; g 7
-case "$out" in *class=*) fail "a class without --patch: $out" ;; *"--update-behind"*) ;; *) fail "behind without --patch keeps its recovery: $out" ;; esac
 passed=$((passed + 1))
 
 # --- the loop's branch issue-<N>, against the real linkage check ------------------------------

@@ -6,7 +6,7 @@
 # `pr edit --body-file`, and derives closingIssuesReferences from the body the
 # way GitHub does - but only when the PR targets the default branch. The script
 # is read-only (cbundy/dev-system#233): every case asserts it never edited; the
-# repair itself is tested in fix-linkage.test.sh.
+# repaired body (--print-fix) is tested below.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -277,18 +277,21 @@ unset fail_node
 run_case "reject refs argument alias" $H main "Refs #12" "" "Refs #12" --expect=refs
 run_case "reject closing argument alias" $H main "Closes #12" "" "Closes #12" --expect=closing
 
-# --fix is gone: it must refuse, name the replacement, and edit nothing.
+# --fix is gone: it must refuse, name --print-fix, and edit nothing.
 for fixargs in "--fix" "--expect refs --fix"; do
   # shellcheck disable=SC2086
   run_case "--fix is refused ($fixargs)" $H main "Summary" "" "Summary" $fixargs
-  grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "--fix refusal does not name callum-flow-fix-linkage"
+  grep -q -- "--print-fix" "$tmpdir/stderr" || fail "--fix refusal does not name --print-fix"
+  if grep -q "callum-flow-fix-linkage" "$tmpdir/stderr"; then fail "--fix refusal names a removed tool"; fi
   if grep -qi "unknown flag" "$tmpdir/stderr"; then fail "--fix refused as a generic unknown flag"; fi
 done
 # The MISMATCH hints point at the replacement, and no case ever edited a PR.
 run_case "mismatch hint names the fix command" $H main "Summary" "MISMATCH #7" "Summary"
-grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "closing hint does not name callum-flow-fix-linkage"
+grep -q -- "--print-fix" "$tmpdir/stderr" || fail "closing hint does not name --print-fix"
+if grep -q "callum-flow-fix-linkage" "$tmpdir/stderr"; then fail "closing hint names a removed tool"; fi
 run_case "refs mismatch hint names the fix command" $H main "Summary" "MISMATCH #7" "Summary" --expect refs
-grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "refs hint does not name callum-flow-fix-linkage"
+grep -q -- "--print-fix" "$tmpdir/stderr" || fail "refs hint does not name --print-fix"
+if grep -q "callum-flow-fix-linkage" "$tmpdir/stderr"; then fail "refs hint names a removed tool"; fi
 if grep -q -- "--fix" "$tmpdir/stderr"; then fail "hint still mentions --fix"; fi
 # trust (cbundy/dev-system#310): an untrusted PR is refused before its body is read or
 # printed, in every mode, and a reader failure fails closed

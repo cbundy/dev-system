@@ -438,7 +438,7 @@ test("every tool call shape makes the type and data translate() makes from the o
 });
 
 test("the old-state lines of the tools that stopped logging make no new event", () => {
-  // design_routed (callum-flow-design-route), superseded (callum-flow-regate) and the pipeline watcher's states
+  // design_routed, superseded and the pipeline watcher's states (the tools that wrote them are gone, old logs keep them)
   // (parked, merge_ready, ci_stalled, head_mismatch, conflict, failed, watcher_error) are skipped by name
   for (const state of ["design_routed", "superseded", "parked", "merge_ready", "ci_stalled", "head_mismatch", "conflict", "failed", "watcher_error"]) {
     const t = TRANSLATE.translate(oldLine({ state, issue: 7, note: "x" }));
