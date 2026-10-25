@@ -1844,16 +1844,14 @@ the guard checks only facts the loop owns:
 | gates | the no-mistakes run has no parked step | not run |
 | test-weakening | advisory WARN lines | printed; not acted on, because the reviewer judges the detector (8.3) |
 
-- **No no-mistakes call.** With `--patch` the guard skips its run lookup, which otherwise calls
-  `pipeline-watch.sh --resolve` and `no-mistakes axi status` before any clause
-  (`images/base/callum-flow-merge-guard`). Its test asserts that `--patch` mode calls
-  neither.
+- **No no-mistakes call.** The guard has no run lookup: `pipeline-watch.sh --resolve` and
+  `no-mistakes axi status` are gone with the old modes (`images/base/callum-flow-merge-guard`).
 - **Classes.** In `--patch` mode each FAIL line ends with `class=<class>`, one of `behind`,
   `conflict`, `checks`, `patch`, `linkage`, `read` and `policy` (9.3). So the loop never parses
   the reasons' wording. A `read` reason ends with what the read printed on
   stderr, so a GitHub blip in it is tried again like any other (5.1).
-- Without `--patch` the guard behaves as today, for people
-  (`images/base/callum-flow-merge-guard`).
+- `--patch` is the guard's only mode: without it, or with `--run` or `--update-behind`, it exits 2
+  with one usage line (`images/base/callum-flow-merge-guard`).
 
 ### 9.5 No hold while main is red
 
@@ -2697,8 +2695,7 @@ agents, and wakes past their timeout (13.8.2).
 
 `queue-watch.sh` has a one-shot mode beside the watcher in `features/src/callum-tools/` (the
 image's source), with a shell test beside the existing ones. The streaming and single-shot modes
-are unchanged. `pipeline-watch.sh --once`, the pipeline poll the loop used to run, stays in the
-image for now; the loop does not call it.
+are unchanged. `pipeline-watch.sh`, the pipeline poll the loop used to run, is gone from the image.
 
 **`queue-watch.sh --repo <R> --label <L> [--known <list>] --once`**: one read of the queue, with
 the same reader and trust filter as the watch modes and no debounce, then exit 0, whether or not

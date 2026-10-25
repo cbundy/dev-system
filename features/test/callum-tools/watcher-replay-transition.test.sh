@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests that a restarted watcher does not replay old events (cbundy/dev-system#344): an observed transition, and queue-watch.
+# Plain-shell tests that a restarted watcher does not replay old events (cbundy/dev-system#344): queue-watch.
 # Shared setup, stubs and wait helpers: watchers-lib.sh (read its header for the
 # waiting rules: no fixed sleep as a wait, negative windows bounded by watcher
 # progress). Split from the old watchers.test.sh (cbundy/dev-system#478).
@@ -11,27 +11,6 @@ set -eu
 
 # 15. Restarts do not replay old events (cbundy/dev-system#344).
 real_event_log
-
-# an observed transition is logged: parked, running (quiet), parked on the same head
-rm -f "$evlog"
-mkdir -p "$nm_home/logs/RUNP"
-run_state RUNP feat/issue-150-p parked 4444444444444444444444444444444444444444
-runs_order RUNP
-start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches feat/issue-150-p
-wait_lines "$out" 1
-run_state RUNP feat/issue-150-p running 4444444444444444444444444444444444444444
-wait_polls "$fakebin/nm-polls" 2 # the watcher has seen it leave the parked state
-run_state RUNP feat/issue-150-p parked 4444444444444444444444444444444444444444
-wait_lines "$out" 2
-stop_bg
-# both parked lines were printed; the watcher logs neither (it no longer writes events)
-no_event_log "transition"
-start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches feat/issue-150-p
-wait_lines "$out" 1
-wait_polls "$fakebin/nm-polls" 2 # a logged line would be written by the end of the next whole poll
-stop_bg
-no_event_log "transition, restart"
-ok # pipeline-watch: an observed transition prints as always and nothing is logged
 
 # queue-watch: a restart with no baseline logs each issue once; a joiner after
 # the first poll is logged even when the log already ends with its ready event

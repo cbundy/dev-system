@@ -1,6 +1,6 @@
 # shellcheck shell=sh
 # Shared fixture for merge-guard.test.sh and merge.test.sh (cbundy/dev-system#480): the
-# real local origin, the hermetic toolbin, the stub gh / no-mistakes / linkage /
+# real local origin, the hermetic toolbin, the stub gh / patch-id / linkage /
 # weakening / milestone binaries and the g / m / expect_* helpers. Sourced, never run
 # by itself - its name does not match *.test.sh, so `npm test` does not pick it up.
 # The stubs read state with shell builtins (`read -r`), not a `cat` process per field.
@@ -9,7 +9,6 @@
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 # shellcheck disable=SC2034  # variables and helpers are used by the sourcing suites
 # shellcheck disable=SC2164  # the caller runs under set -e
-# shellcheck disable=SC2119,SC2120  # behind_setup takes optional arguments
 ROOT="$SCRIPT_DIR/../../.."
 GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
@@ -123,49 +122,6 @@ case "$1 $2" in
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 STUB
-# no-mistakes, replaying the real v1.84 shapes: `runs` rows carry no run id
-# (status, branch, short head, date, url, then a hint line), `axi status` from
-# a checkout whose branch has a run prints its `run:` detail, from any other
-# checkout the runs[N]{id,branch,status,head,pr} table, and `axi status --run
-# ID` the same nested `run:` detail. The watcher calls `no-mistakes` from PATH
-# (the guard's NM binary is only used for the status probe), so both resolve
-# to this stub.
-cat > "$tmpdir/nm" <<'STUB'
-#!/bin/sh
-d=${STUB_DIR:?}
-[ ! -e "$d/nm-fail" ] || exit 1
-read -r b < "$d/branch"
-read -r rh < "$d/runhead"
-read -r rs < "$d/runstatus"
-read -r stp < "$d/step"
-# optional multi-row steps (one 'step,status' per line), for runs with steps before ci
-if [ -f "$d/steps" ]; then
-  stp=''
-  while IFS= read -r l || [ -n "$l" ]; do stp="${stp:+$stp
-    }$l"; done < "$d/steps"
-fi
-h=${rh%"${rh#????????}"}
-detail() {
-  case "$1" in
-    RUN9) printf 'run:\n  id: "RUN9"\n  branch: other/b\n  status: completed\n  head: abc12345\n  head_sha: zzz\n' ;;
-    RUN1) printf 'run:\n  id: "RUN1"\n  branch: %s\n  status: %s\n  head: %s\n  head_sha: %s\n  steps[1]{step,status}:\n    %s\nbranch_sync:\n' "$b" "$rs" "$h" "$rh" "$stp" ;;
-    *) return 1 ;;
-  esac
-}
-case "$1 $2" in
-  'runs --limit')
-    printf '  %-12s %s %s  2026-01-01 10:00  https://example.test/pull/1\n' completed other/b abc12345
-    [ -e "$d/norun" ] || printf '  %-12s %s %s  2026-01-02 10:00  https://example.test/pull/7\n' "$rs" "$b" "$h"
-    printf '\n  (1 more runs, use --limit to see more)\n' ;;
-  'axi status')
-    if [ "$3" = --run ]; then detail "$4"; exit; fi
-    if [ "$(git rev-parse --abbrev-ref HEAD)" = "$b" ] && [ ! -e "$d/table" ] && [ ! -e "$d/norun" ]; then detail RUN1; exit; fi
-    printf 'current_branch: main\nruns_on_current_branch: 0\ncount: 2 of 2 total\nruns[2]{id,branch,status,head,pr}:\n'
-    [ -e "$d/norun" ] || printf '  "RUN1",%s,%s,%s,"https://example.test/pull/7"\n' "$b" "$rs" "\"$h\""
-    printf '  "RUN9",other/b,completed,"069be137","https://example.test/pull/1"\nhelp[1]: ...\n' ;;
-  *) exit 1 ;;
-esac
-STUB
 cat > "$tmpdir/linkage" <<'STUB'
 #!/bin/sh
 # linkage-actual: what the PR really does (closing|refs); the stub checks it against --expect
@@ -195,9 +151,16 @@ echo "$*" >> "$d/milestone-calls"
 if [ -f "$d/milestone-rc" ]; then read -r rc < "$d/milestone-rc"; exit "$rc"; fi
 exit 0
 STUB
-chmod +x "$tmpdir/milestone" "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage" "$tmpdir/weakening"
-ln -s "$tmpdir/nm" "$toolbin/no-mistakes"
-WATCH="$ROOT/features/src/callum-tools/pipeline-watch.sh"
+# the patch id of the PR head (callum-flow-patch-id): the shared-guard cases do not test the patch
+# guard, so by default the guard runs with --patch STUB_PID against a patch-id stub that prints it.
+# merge-guard-patch.test.sh pins the real callum-flow-patch-id (it sets PID_BIN to it).
+STUB_PID=0123456789abcdef0123456789abcdef0123abcd
+cat > "$tmpdir/patchid" <<STUB
+#!/bin/sh
+echo $STUB_PID
+STUB
+chmod +x "$tmpdir/milestone" "$tmpdir/gh" "$tmpdir/linkage" "$tmpdir/weakening" "$tmpdir/patchid"
+PID_BIN="$tmpdir/patchid"
 
 events="$tmpdir/events"
 passed=0
@@ -208,9 +171,6 @@ reset() {
   printf '%s\n' "$B" > "$st/branch"
   printf '%s\n' "$SHA" > "$st/prhead"
   printf '%s\n' main > "$st/base"
-  printf '%s\n' "$SHA" > "$st/runhead"
-  printf '%s\n' running > "$st/runstatus"
-  printf '%s\n' 'ci,completed' > "$st/step"
   printf '%s\n' '[{"name":"ci","bucket":"pass"}]' > "$st/checks"
   printf '%s\n' 'MATCH #7 issue=#12 expect=closing via=api actual=[12]' > "$st/linkage"
   echo 0 > "$st/linkage-rc"
@@ -232,20 +192,29 @@ issue_brief() {
 # the real reader behind the stub gh
 export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_WEAKENING_BIN="$tmpdir/weakening"
 
-# g <args...>: run the guard; sets out, rc
+# with_patch <args...>: the arguments, plus --patch STUB_PID unless they carry one
+with_patch() {
+  case " $* " in *" --patch "*) patch_args='' ;; *) patch_args="--patch $STUB_PID" ;; esac
+}
+# g <args...>: run the guard in the loop's mode; sets out, rc. Every FAIL line must end with a class.
 g() {
+  with_patch "$@"
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+  # shellcheck disable=SC2086 # patch_args is empty or two words
+  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_PATCH_ID_BIN="$PID_BIN" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
+    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" $patch_args 2> "$tmpdir/err") || rc=$?
+  ! printf '%s\n' "$out" | grep ' FAIL ' | grep -Ev ' class=(behind|conflict|checks|patch|linkage|read|policy)$' || fail "a FAIL line without its class: $out"
 }
 m() {
+  with_patch "$@"
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
+  # shellcheck disable=SC2086 # patch_args is empty or two words
+  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_PATCH_ID_BIN="$PID_BIN" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_GUARD_BIN="$GUARD" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
     CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
-    "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
+    "$SH" "$MERGE" "$@" $patch_args 2> "$tmpdir/err") || rc=$?
 }
 cat > "$tmpdir/event" <<STUB
 #!/bin/sh
@@ -254,6 +223,10 @@ STUB
 chmod +x "$tmpdir/event"
 
 # expect_fail <name> <guard>...: exit 1 and exactly those GUARD lines
+# expect_class <guard> <class>: the guard's FAIL line ends with that class
+expect_class() {
+  printf '%s\n' "$out" | grep -q "^GUARD $1 FAIL .* class=$2\$" || fail "want GUARD $1 FAIL ... class=$2: $out"
+}
 expect_fail() {
   name=$1
   shift
@@ -278,22 +251,5 @@ W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 step=review restore
 skip() { echo 'SKIP #7 feat' > "$st/linkage"; }
 refs_issue() { issue_brief 'keep-open - one part of several'; }
 
-# update-behind fixtures (cbundy/dev-system#476), used by both suites
+# the base the branch is cut from, for the patch suite
 BASE0=$(git -C "$work" rev-parse origin/main)
-behind_setup() { # behind_setup [other-file] [content]: main moves on touching that file
-  reset
-  (
-    cd "$work"
-    git checkout -q main && git reset -q --hard "$BASE0" && git push -q -f origin main
-    git checkout -q -B "$B" "$BASE0"
-    echo feature > f.txt && git add f.txt && git commit -q -m feature
-    git push -q -f origin "$B"
-    git checkout -q main
-    echo "${2-other}" > "${1-o.txt}" && git add . && git commit -q -m "main moves on"
-    git push -q origin main
-    git checkout -q "$B"
-  )
-  GATED=$(git -C "$work" rev-parse HEAD)
-  echo "$GATED" > "$st/prhead"; echo "$GATED" > "$st/runhead"; echo BEHIND > "$st/mss"
-}
-origin_b() { git -C "$origin" rev-parse "refs/heads/$B"; }

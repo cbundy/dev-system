@@ -1,5 +1,5 @@
-# The stub `gh pr view` answer for check-pr-linkage.test.sh and fix-linkage.test.sh,
-# shared so the two suites cannot drift. Not a test itself: it does not match *.test.sh.
+# The stub `gh pr view` answer for check-pr-linkage.test.sh,
+# shared with the other linkage suites. Not a test itself: it does not match *.test.sh.
 # Inputs (--rawfile / --arg): head, base, body (the stub state files), api (the body
 # the API derives closingIssuesReferences from; empty means the real body).
 # Equivalent to the node program the stubs used to start on every call; the PR that

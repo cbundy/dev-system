@@ -9,8 +9,8 @@
 # The orchestrator starts this with the queue it already knows about, so a
 # deliberately-untouched queue (blocked work, issues awaiting the owner)
 # never fires - only a genuine delta against that baseline does. Polling is
-# a token-free shell loop; the exit is the event delivery, mirroring
-# pipeline-watch.sh. It carries no state of its own: the baseline is passed
+# a token-free shell loop; the exit is the event delivery.
+# It carries no state of its own: the baseline is passed
 # in, so a crashed-and-restarted watcher catches up on its first cycle.
 # Transient gh failures skip the cycle rather than firing or dying.
 #
@@ -34,9 +34,6 @@
 #
 # --interval <seconds> sets the poll interval (default: the
 # QUEUE_WATCH_INTERVAL environment variable, else 120).
-#
-# Orchestrator callers: arm orchestrator-watch.sh instead (one watcher for the
-# queue and the pipelines); the rest of this note is for direct use.
 #
 # Arming: pass the numbers currently in the queue as --known, so deliberately
 # parked issues (blocked, awaiting the owner) never fire. The order does not

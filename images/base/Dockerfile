@@ -218,8 +218,6 @@ COPY --chmod=0755 \
   features/src/callum-tools/recover-no-mistakes.sh \
   features/src/callum-tools/pin-codex-model.sh \
   features/src/callum-tools/check-pr-linkage.sh \
-  features/src/callum-tools/orchestrator-watch.sh \
-  features/src/callum-tools/pipeline-watch.sh \
   features/src/callum-tools/queue-watch.sh \
   features/src/callum-tools/usage-check.sh \
   /usr/local/share/callum-tools/
@@ -242,15 +240,12 @@ COPY --chmod=0755 \
   images/base/callum-flow-dual-write-check \
   images/base/callum-flow-merge-guard \
   images/base/callum-flow-patch-id \
-  images/base/callum-flow-regate \
   images/base/callum-flow-test-weakening \
   images/base/callum-flow-rollout \
   images/base/callum-flow-merge \
-  images/base/callum-flow-fix-linkage \
   images/base/callum-flow-claim \
   images/base/callum-flow-milestone \
   images/base/callum-flow-released \
-  images/base/callum-flow-design-route \
   images/base/callum-flow-implementer-route \
   images/base/callum-flow-designer-route \
   images/base/callum-flow-issue-read \

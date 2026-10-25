@@ -24,8 +24,7 @@
 # Keep-open issues (--expect refs) must remain open.
 #
 # This script never writes to GitHub, so a worktree sub-agent may run it
-# unprompted. The repair is a separate command, `callum-flow-fix-linkage`, that
-# only the main checkout may run (cbundy/dev-system#233). `--fix` is refused.
+# unprompted. `--fix` is refused (cbundy/dev-system#233); --print-fix gives the repaired body.
 #
 # --print-fix writes the repaired body to stdout and nothing else: it appends
 # `Closes #N` (or `Refs #N`), or turns unwanted closing keywords into `Refs #M`.
@@ -75,7 +74,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --fix)
-      echo "Error: --fix was removed: this script is read-only. Repair the PR body with 'callum-flow-fix-linkage <pr> [--expect closing|refs]' from the main checkout." >&2
+      echo "Error: --fix was removed: this script is read-only. Print the repaired body with --print-fix and set it as the PR body." >&2
       exit 1
       ;;
     --print-fix)
@@ -281,9 +280,9 @@ if [[ "$PRINT_FIX" -eq 1 ]]; then
 fi
 
 if [[ "$EXPECT" == closing ]]; then
-  echo "PR #${PR} (${HEAD_REF}) must close exactly #${ISSUE}; it closes ${CURRENT}. Add 'Closes #${ISSUE}' and neutralize other closing keywords, or run 'callum-flow-fix-linkage ${PR}' from the main checkout." >&2
+  echo "PR #${PR} (${HEAD_REF}) must close exactly #${ISSUE}; it closes ${CURRENT}. Add 'Closes #${ISSUE}' and neutralize other closing keywords, or run '$(basename "$0") ${PR} --print-fix' for the repaired body." >&2
 else
-  echo "PR #${PR} (${HEAD_REF}) must reference #${ISSUE} with 'Refs #${ISSUE}' or 'Part of #${ISSUE}' and close nothing; it closes ${CURRENT}. Run 'callum-flow-fix-linkage ${PR} --expect refs' from the main checkout." >&2
+  echo "PR #${PR} (${HEAD_REF}) must reference #${ISSUE} with 'Refs #${ISSUE}' or 'Part of #${ISSUE}' and close nothing; it closes ${CURRENT}. Run '$(basename "$0") ${PR} --expect refs --print-fix' for the repaired body." >&2
 fi
 echo "MISMATCH #${PR} ${REPORT}"
 exit 1

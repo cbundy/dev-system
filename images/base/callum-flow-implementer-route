@@ -18,7 +18,7 @@
 #      lower-cased) mod 100; opus when bucket < pct, else sonnet (reason=hash).
 #      cksum is machine independent, so a resumed loop, a re-delegation
 #      or a second device decides alike. The `implementer:` salt keeps the
-#      buckets independent of callum-flow-design-route's, so the two splits
+#      buckets independent of the designer split, so the two splits
 #      never pick the same issues.
 # If the repo or the labels cannot be read it prints sonnet with a warning on
 # stderr (reason=fallback): delegation never blocks on routing.

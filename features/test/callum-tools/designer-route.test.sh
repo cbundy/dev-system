@@ -134,8 +134,7 @@ reset; ISSUE=7; route 7 100; expect sonnet hash "$(bucket 7)" 100 "pct 100 any i
 reset; route 14 74; expect sonnet hash 73 74 "bucket 73 below 74"
 reset; route 14 73; expect opus hash 73 73 "bucket 73 at 73"
 reset; route 14 50; expect opus hash 73 50 "bucket 73 at pct 50"
-# independent of callum-flow-design-route: #288 is design bucket 82 (not below 75)
-# but designer bucket 72 (sonnet at 75)
+# #288 once had design bucket 82 (not below 75) but designer bucket 72 (sonnet at 75)
 reset; ISSUE=288; route 288 75; expect sonnet hash 72 75 "salted away from the design bucket"; ISSUE=14
 # an issue whose bucket is below 50
 low=''

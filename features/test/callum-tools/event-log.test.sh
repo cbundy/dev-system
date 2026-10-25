@@ -659,22 +659,6 @@ out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/cal
 [ "$(cat "$fakebin/event-calls")" = 'ready --issue 9 --if-changed --data {"title":"b","labels":null,"parent":null} --actor watcher' ] || fail "queue-watch --once should record the new issue as a first sight: $(cat "$fakebin/event-calls")"
 
 : > "$fakebin/event-calls"
-rc=0
-out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/pipeline-watch.sh" --stream 2> /dev/null) || rc=$?
-[ "$rc" != 0 ] || fail "pipeline-watch without no-mistakes should fail"
-[ "$out" = "watcher-error no-mistakes not on PATH" ] || fail "pipeline-watch stdout changed: $out"
-[ ! -s "$fakebin/event-calls" ] || fail "pipeline-watch no longer logs, yet called callum-flow-event: $(cat "$fakebin/event-calls")"
-
-# pipeline-watch --once: the same failure is exit 1 and stderr only; its caller reports the failed source
-: > "$fakebin/event-calls"
-rc=0
-out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/pipeline-watch.sh" --once 2> "$tmpdir/once.err") || rc=$?
-[ "$rc" = 1 ] || fail "pipeline-watch --once without no-mistakes should exit 1, got $rc"
-[ -z "$out" ] || fail "pipeline-watch --once should print nothing on a fatal error: $out"
-grep -qx 'pipeline-watch.sh: no-mistakes not on PATH' "$tmpdir/once.err" || fail "pipeline-watch --once should give the reason: $(cat "$tmpdir/once.err")"
-[ ! -s "$fakebin/event-calls" ] || fail "pipeline-watch --once should log nothing on a fatal error: $(cat "$fakebin/event-calls")"
-
-: > "$fakebin/event-calls"
 now=$(date +%s)
 mkdir -p "$tmpdir/state"
 printf '{"recorded_at":%s,"rate_limits":{"five_hour":{"used_percentage":41.2,"resets_at":%s},"seven_day":{"used_percentage":50,"resets_at":%s}}}\n' \

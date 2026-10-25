@@ -69,7 +69,7 @@ export type Runtime = {
   // CALLUM_FLOW_REPO, CALLUM_EVENTS_DIR=<sink> when not acting, and PATH with the workspace
   // config's binDir in front (a testbed runs the branch's own CLIs before a release)
   env: Record<string, string>
-  // where pipeline-watch.sh, queue-watch.sh and usage-check.sh live (workspace config toolsDir)
+  // where queue-watch.sh and usage-check.sh live (workspace config toolsDir)
   toolsDir: string
   // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
   pluginRoot: string

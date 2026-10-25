@@ -14,8 +14,8 @@
 # checkout's gitignored .claude/settings.local.json, never in the synced
 # allow list.
 #
-# Usage: callum-flow-merge <pr> [--method squash|merge|rebase] [guard options]
-#   Guard options (--expect, --run, --patch, --base, --issue) go straight to the
+# Usage: callum-flow-merge <pr> --patch ID [--method squash|merge|rebase] [guard options]
+#   Guard options (--expect, --patch, --base, --issue) go straight to the
 #   guard; without --expect the guard derives the linkage from the issue's Rollout.
 #   The factory loop merges with --patch <id> (docs/factory-loop/v2/SPEC.md 9.3):
 #   the guard checks the approved patch instead of a pipeline run, and prints each
@@ -56,7 +56,7 @@ method=${CALLUM_FLOW_MERGE_METHOD:-squash}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge: $1" >&2
-  echo "usage: callum-flow-merge <pr> [--method squash|merge|rebase] [--expect closing|refs] [--run ID | --patch ID] [--base BRANCH] [--issue N]" >&2
+  echo "usage: callum-flow-merge <pr> --patch ID [--method squash|merge|rebase] [--expect closing|refs] [--base BRANCH] [--issue N]" >&2
   exit 2
 }
 

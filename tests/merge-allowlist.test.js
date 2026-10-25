@@ -11,7 +11,7 @@ const ROOT = path.join(__dirname, "..");
 // Permission rules match by prefix, so the check-only guard may be listed and the
 // merging command (callum-flow-merge) and gh pr merge may not. dev-system#233 does the same
 // for the PR-body edit: the read-only check-pr-linkage.sh is allowed, the repair
-// (callum-flow-fix-linkage, and gh pr edit) is not.
+// (gh pr edit) is not.
 for (const rel of [
   "templates/.claude/settings.json",
   ".claude/settings.json",
@@ -22,8 +22,6 @@ for (const rel of [
     assert.ok(allow.includes("Bash(callum-flow-merge-guard *)"));
     assert.ok(allow.includes("Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)"));
     const merging = [
-      "callum-flow-fix-linkage 7",
-      "callum-flow-fix-linkage 7 --expect refs",
       "gh pr edit 7 --body x",
       "callum-flow-merge 7", "callum-flow-merge 7 --method rebase", "gh pr merge 7 --squash"];
     const allows = (entry, cmd) => {
