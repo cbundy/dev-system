@@ -1181,6 +1181,21 @@
         "to_at": {
           "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
           "type": "string"
+        },
+        "usage_tier": {
+          "enum": [
+            "normal",
+            "slow",
+            "stop-all",
+            "stop-new",
+            null
+          ]
+        },
+        "usage_tier_overridden": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

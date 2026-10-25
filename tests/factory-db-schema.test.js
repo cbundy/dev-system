@@ -27,7 +27,7 @@ for (const f of schemaFiles) {
 const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop", "compared", "differences", "live_differences", "settle_seconds", "lease_minutes", "fixes", "triages", "lives", "attempts", "passes", "acting", "errors", "mean_ms", "p50_ms", "p90_ms", "max_ms", "acting_mean_ms", "idle_mean_ms", "pass_every_ms", "observe_mean_ms", "observe_commands_mean_ms", "observe_in_process_mean_ms", "observe_in_process_max_ms", "five_hour_pct", "seven_day_pct", "additions", "deletions", "bucket", "opus_pct", "sonnet_pct", "parent", "milestone_closed", "milestone_open", "flakes", "window_days", "filed_issue", "considered", "free_slots", "folded"]);
 const BIGINTS = new Set(["mem_start_bytes", "mem_peak_bytes", "mem_limit_bytes", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"]);
 const NUMERICS = new Set(["spend_usd", "budget_usd", "cost_usd"]);
-const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off", "needs_owner", "tree_matched"]);
+const BOOLS = new Set(["old_ok", "new_ok", "restored", "available", "holding", "flaky", "green", "recovered", "owner_serial", "owner_new_off", "needs_owner", "tree_matched", "usage_tier_overridden"]);
 const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at", "ended_at", "from_at", "to_at", "five_hour_resets_at", "seven_day_resets_at", "failed_at", "observed_at", "first_flake_at", "budget_resets_at", "taken_at", "merged_at"]);
 const JSONS = new Set(["cut_at_stop_keys", "notes", "files", "split_into", "labels", "prs", "failed_tests", "failed_jobs", "old_value", "new_value", "options", "candidates", "rest", "owner_priority", "owner_only", "touches", "dropped", "labels_set", "labels_kept", "file_lines", "issues", "issues_closed", "headlines"]);
 
@@ -126,6 +126,19 @@ test("merged: merged_at lifts as a timestamptz, title stays the ready/claimed te
   assert.equal(db.query("SELECT to_char(merged_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS') || ' ' || title || ' ' || (ts - merged_at) FROM factory.event_log WHERE device_seq = 2", "reader"), "2026-10-22T21:22:01 A merged title 18:53:59");
 });
 
+test("loop_passes: the usage tier lifts as columns, and an older loop's row reads NULL", opts, (t) => {
+  const db = createDb(t);
+  const base = { from_at: "2026-10-25T10:00:00.000Z", to_at: "2026-10-25T10:01:00.000Z", passes: 6, acting: 0, errors: 0, mode: "act", planner: "v2", pass_every_ms: 10000 };
+  [base, { ...base, usage_tier: "stop-new", usage_tier_overridden: false }, { ...base, usage_tier: "normal", usage_tier_overridden: true }].forEach((data, i) => {
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), now(), 'loop_passes', 1, 'o/r', 'd', 'a', NULL, ${i + 1}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  });
+  assert.equal(db.query("SELECT pg_typeof(usage_tier)::text || ' ' || pg_typeof(usage_tier_overridden)::text FROM factory.event_log LIMIT 1", "reader"), "text boolean");
+  assert.equal(db.query("SELECT usage_tier IS NULL AND usage_tier_overridden IS NULL FROM factory.event_log WHERE device_seq = 1", "reader"), "t");
+  assert.equal(db.query("SELECT usage_tier || ' ' || usage_tier_overridden FROM factory.event_log WHERE device_seq = 2", "reader"), "stop-new false");
+  assert.equal(db.query("SELECT usage_tier || ' ' || usage_tier_overridden FROM factory.event_log WHERE device_seq = 3", "reader"), "normal true");
+});
+
 test("merged: the merge-train fields lift as columns, and an older merged row reads NULL", opts, (t) => {
   const db = createDb(t);
   const base = { pr: 1, branch: "b", head: "f94eb46", by: "factory", recovered: false };
@@ -139,7 +152,7 @@ test("merged: the merge-train fields lift as columns, and an older merged row re
   assert.equal(db.query("SELECT train || ' ' || tested_tree || ' ' || tree_matched || ' ' || (train_reason IS NULL) FROM factory.event_log WHERE device_seq = 2", "reader"), `rode ${tree} false true`);
   assert.equal(db.query("SELECT train || ' ' || train_reason || ' ' || (tested_tree IS NULL) FROM factory.event_log WHERE device_seq = 3", "reader"), "dropped train-red true");
   const cols = db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'factory_public' AND table_name = 'event_log' ORDER BY ordinal_position").split("\n");
-  assert.deepEqual(cols.slice(-6, -1), ["merged_at", "train", "train_reason", "tested_tree", "tree_matched"], "the public view appends them after merged_at");
+  assert.deepEqual(cols.slice(-8, -3), ["merged_at", "train", "train_reason", "tested_tree", "tree_matched"], "the public view appends them after merged_at, before the usage tier and the cost");
 });
 
 test("released: issues, issues_closed and headlines lift as jsonb arrays, and read NULL on every other type", opts, (t) => {
@@ -295,5 +308,5 @@ test("regime: rows from before the migration read NULL, and a new row's regime r
   insert(after, ", regime", ", 'testbed'");
   assert.equal(db.query(`SELECT regime FROM factory.event_log WHERE event_id = '${after}'`, "reader"), "testbed");
   const cols = db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log' ORDER BY ordinal_position").split("\n");
-  assert.deepEqual(cols.slice(-11, -5), ["regime", "file_lines", "issues", "issues_closed", "headlines", "merged_at"], "OR REPLACE appends: regime keeps its place, 0028's file_lines, 0029's release columns and 0031's merged_at follow it");
+  assert.deepEqual(cols.slice(-13, -7), ["regime", "file_lines", "issues", "issues_closed", "headlines", "merged_at"], "OR REPLACE appends: regime keeps its place, 0028's file_lines, 0029's release columns and 0031's merged_at follow it");
 });

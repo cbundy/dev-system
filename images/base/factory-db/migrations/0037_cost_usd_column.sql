@@ -1,13 +1,13 @@
--- 0036: the what-if cost of an ended agent step or intake stamp as a column of factory.event_log
+-- 0037: the what-if cost of an ended agent step or intake stamp as a column of factory.event_log
 -- and factory_public.event_log: cost_usd (USD at Anthropic's public API prices, not a bill). NULL
 -- for every other event, while running, when a model is unpriced and on older loops.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. Grants come
 -- from the bootstrap, and the view replace keeps the views' existing ones.
 --
--- Builds on 0034 (every earlier column keeps its name, type and order). The column goes last in
+-- Builds on 0036 (every earlier column keeps its name, type and order). The column goes last in
 -- both views, since Postgres only adds columns at the end on OR REPLACE. The views are copied from
--- 0034 with it appended.
+-- 0036 with it appended.
 
 CREATE OR REPLACE VIEW factory.event_log AS
 SELECT
@@ -180,6 +180,8 @@ SELECT
   e.data ->> 'train_reason' AS train_reason,
   e.data ->> 'tested_tree' AS tested_tree,
   (e.data ->> 'tree_matched')::boolean AS tree_matched,
+  e.data ->> 'usage_tier' AS usage_tier,
+  (e.data ->> 'usage_tier_overridden')::boolean AS usage_tier_overridden,
   (e.data ->> 'cost_usd')::numeric AS cost_usd
 FROM factory.event_store e;
 
@@ -210,6 +212,7 @@ CREATE OR REPLACE VIEW factory_public.event_log WITH (security_barrier = true) A
     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, regime,
     file_lines, issues, issues_closed, headlines,
     merged_at, train, train_reason, tested_tree, tree_matched,
+    usage_tier, usage_tier_overridden,
     cost_usd
   FROM factory.event_log
   WHERE repo IN (SELECT repo FROM factory.public_repos);

@@ -281,6 +281,8 @@ export const SCHEMAS: Record<string, Shape> = {
       "passes": {"minimum":0,"type":"integer"},
       "planner": {"enum":["v1","v2"]},
       "to_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
+      "usage_tier": {"enum":["normal","slow","stop-all","stop-new",null]},
+      "usage_tier_overridden": {"type":["boolean","null"]},
     },
   },
   "main_state.v1": {

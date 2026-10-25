@@ -150,7 +150,9 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
   const book = new Map();
   passes.notePass(book, NOW + 1_000, 120, true, false);
   passes.notePass(book, NOW + 2_000, 80, false, true);
-  passes.notePass(book, NOW + 3_000, 90, false, false, { ms: 12.6, commandsMs: 7.1, inProcessMs: 5.5 });
+  passes.notePass(book, NOW + 3_000, 90, false, false, { ms: 12.6, commandsMs: 7.1, inProcessMs: 5.5 }, "slow", false);
+  passes.notePass(book, NOW + 4_000, 70, false, false, null, "stop-new", false);
+  passes.notePass(book, NOW + 5_000, 60, false, true);
   for (const summary of [passes.closeMinute(book, NOW, settings), passes.closeMinute(book, NOW + 60_000, settings)]) {
     const argv = passes.passesEventArgv(summary);
     assert.deepEqual(argv.slice(0, 3), ["callum-flow-event", "--type", "loop_passes"]);
@@ -165,8 +167,11 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
     assert.equal(got.type, "loop_passes");
     const old = translate({ ...LINE, state: "loop", note: passes.passesNote(summary) }, { ts: TS, sessionId: "s" }).event;
     // the four orchestrator token fields (#1302) are native only: the note has none, and they are null here
-    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, ...rest } = got.data;
+    // the usage tier fields are native only too: the last pass with a plan, null for an empty minute
+    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, usage_tier, usage_tier_overridden, ...rest } = got.data;
     assert.deepEqual([input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens], [null, null, null, null]);
+    const tiered = summary.passes > 0;
+    assert.deepEqual([usage_tier, usage_tier_overridden], tiered ? ["stop-new", false] : [null, null]);
     assert.deepEqual(rest, old.data);
   }
   assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
