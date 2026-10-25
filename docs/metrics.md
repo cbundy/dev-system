@@ -3502,7 +3502,7 @@ The queries use the same counting rule as [Tokens per merged issue](#tokens-per-
 `loop_entry` of an agent step per `(repo, agent_id)` that has tokens, over every attempt in every life of a merged
 issue, plus every `intake_stamp` of that issue that has a cost (a try is a stamp; a retried stamp costs again). A
 step's role is read from its key, and the stamps are role `intake`; a stamp's model is the alias the stamp ran on
-(for example `haiku`), not a full id.
+(for example `haiku`), not a full id. A per-model split groups by the event's own `model`, so a nested agent that ran on another model is counted under its step agent's model: it is the step agents' split, not an exact one.
 
 Per merged issue, the total and the cost by role:
 

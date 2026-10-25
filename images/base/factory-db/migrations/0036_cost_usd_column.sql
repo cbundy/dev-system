@@ -1,4 +1,4 @@
--- 0035: the what-if cost of an ended agent step or intake stamp as a column of factory.event_log
+-- 0036: the what-if cost of an ended agent step or intake stamp as a column of factory.event_log
 -- and factory_public.event_log: cost_usd (USD at Anthropic's public API prices, not a bill). NULL
 -- for every other event, while running, when a model is unpriced and on older loops.
 --
