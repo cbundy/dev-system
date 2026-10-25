@@ -621,6 +621,13 @@
           "null"
         ]
       },
+      "cost_usd": {
+        "minimum": 0,
+        "type": [
+          "null",
+          "number"
+        ]
+      },
       "dropped": {
         "items": {
           "type": "string"
@@ -827,6 +834,13 @@
           "free",
           "owner",
           "start"
+        ]
+      },
+      "cost_usd": {
+        "minimum": 0,
+        "type": [
+          "null",
+          "number"
         ]
       },
       "database": {

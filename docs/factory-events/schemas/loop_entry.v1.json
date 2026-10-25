@@ -35,6 +35,7 @@
     "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The output tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
     "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-read input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
     "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cost_usd": { "type": ["number", "null"], "minimum": 0, "description": "The what-if cost of an ended run at Anthropic's public API prices (each request priced at its own model), not a bill; null while running, on other kinds, when a model is unpriced and on older loops.", "x-column": true },
     "model": { "type": ["string", "null"], "description": "An ended agent step: the full id of the model the step's own agent ran on (for example claude-opus-5-5), the one of most turns; null otherwise.", "x-column": true }
   },
   "examples": [

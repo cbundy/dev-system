@@ -3335,7 +3335,17 @@ and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]
   per distinct `requestId`, the last line winning, over the agent and every agent nested under it
   (`.meta.json` `parentAgentId`, recursively); `model` is the step agent's own, the one of most turns.
   They are null on a running event, on a tell or task, and when the transcript cannot be read (the event
-  is still written and the pass's problems name the key: "transcript not found");
+  is still written and the pass's problems name the key: "transcript not found").
+  The step also carries `cost_usd` (dev-system#1334): what the step would have cost at Anthropic's
+  public API prices, not a bill. Each request is priced at its own transcript model with the table in
+  `plugins/factory-loop/hooks/v2/prices.ts` (rates per million tokens for input, output, 5-minute and
+  1-hour cache writes and cache reads, with their source and date; the longest model-id prefix wins), the
+  cache creation split by `usage.cache_creation` (without the split, or for what it leaves out, all at the
+  5-minute rate), and the costs are added over the agent and its nested agents, rounded to 6 decimals.
+  It is null on a running event, on a tell or task, when the transcript cannot be read, and when any
+  request with tokens ran on a model the table lacks or on none (never a guess): the token totals are
+  still written and the pass's problems say `loop event <key>: unpriced model <id>`. The intake stamp
+  carries the same `cost_usd` for its run;
 - a `loop_passes` pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
   timer aligned to the UTC minute: `from_at`, `to_at`, `passes`, `mean_ms`, `p50_ms`, `p90_ms`, `max_ms`,
   `acting`, `acting_mean_ms`, `idle_mean_ms`, `errors`, `mode`, `planner` (`v2`) and `pass_every_ms`. It sums up the passes

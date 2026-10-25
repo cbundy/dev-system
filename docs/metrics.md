@@ -3462,6 +3462,133 @@ GROUP BY m.repo, m.issue, m.merged_at, coalesce(t.regime, 'unknown')
 ORDER BY m.merged_at, m.issue, regime;
 ```
 
+## What-if cost per merged issue
+
+An ended agent step's `loop_entry` and an `intake_stamp` carry `cost_usd`
+([REFERENCE.md](factory-events/REFERENCE.md)): what the step would have cost at Anthropic's public API prices, not a
+bill (the loop runs on a subscription). The loop prices each request of the step agent and of every agent nested
+under it at that request's own model, from the table in `plugins/factory-loop/hooks/v2/prices.ts` (rates per
+million tokens, with their source and the date they were taken; keep it current), and adds them up. `cost_usd` is
+null on a running event, on every other kind, on events from a loop older than this field, when the transcript could
+not be read, and when a request ran on a model the table does not know (the token totals are still written, and the
+decision log says `unpriced model <id>`).
+
+The queries use the same counting rule as [Tokens per merged issue](#tokens-per-merged-issue): the newest ended
+`loop_entry` of an agent step per `(repo, agent_id)` that has tokens, over every attempt in every life of a merged
+issue, plus every `intake_stamp` of that issue that has a cost (a try is a stamp; a retried stamp costs again). A
+step's role is read from its key, and the stamps are role `intake`; a stamp's model is the alias the stamp ran on
+(for example `haiku`), not a full id.
+
+Per merged issue, the total and the cost by role:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+costed AS (SELECT * FROM tokens WHERE cost_usd IS NOT NULL),
+parts AS (
+  SELECT c.repo, c.issue, c.model,
+    CASE WHEN split_part(c.key, '/', 3) ~ '^s[0-9]+$' THEN split_part(c.key, '/', 4) ELSE split_part(c.key, '/', 3) END AS role,
+    c.cost_usd
+  FROM costed c
+  UNION ALL
+  SELECT i.repo, i.issue, i.model, 'intake', i.cost_usd
+  FROM factory.event_log i
+  WHERE i.type = 'intake_stamp' AND i.repo = :'repo' AND i.issue IS NOT NULL AND i.cost_usd IS NOT NULL),
+by_role AS (
+  SELECT repo, issue, role, sum(cost_usd) AS cost_usd
+  FROM parts
+  GROUP BY repo, issue, role)
+SELECT m.repo, m.issue, m.merged_at,
+  coalesce(sum(r.cost_usd), 0) AS total_cost_usd,
+  coalesce(jsonb_object_agg(r.role, r.cost_usd) FILTER (WHERE r.role IS NOT NULL), '{}'::jsonb) AS cost_by_role
+FROM merged m
+LEFT JOIN by_role r ON r.repo = m.repo AND r.issue = m.issue
+GROUP BY m.repo, m.issue, m.merged_at
+ORDER BY m.merged_at, m.issue;
+```
+
+The same cost per model:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+tokens AS (SELECT * FROM counted WHERE rn = 1),
+costed AS (SELECT * FROM tokens WHERE cost_usd IS NOT NULL),
+parts AS (
+  SELECT c.repo, c.issue, c.model,
+    CASE WHEN split_part(c.key, '/', 3) ~ '^s[0-9]+$' THEN split_part(c.key, '/', 4) ELSE split_part(c.key, '/', 3) END AS role,
+    c.cost_usd
+  FROM costed c
+  UNION ALL
+  SELECT i.repo, i.issue, i.model, 'intake', i.cost_usd
+  FROM factory.event_log i
+  WHERE i.type = 'intake_stamp' AND i.repo = :'repo' AND i.issue IS NOT NULL AND i.cost_usd IS NOT NULL)
+SELECT p.repo, coalesce(p.model, 'unknown') AS model, count(*) AS steps, sum(p.cost_usd) AS cost_usd
+FROM parts p
+JOIN merged m ON m.repo = p.repo AND m.issue = p.issue
+GROUP BY p.repo, coalesce(p.model, 'unknown')
+ORDER BY p.repo, cost_usd DESC;
+```
+
+The gaps: `steps_without_cost` counts the ended agent steps (one per key) of the merged issues with no priced agent
+behind them, so a missing cost is visible rather than silently low:
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.event_log
+  WHERE type = 'merged' AND issue IS NOT NULL AND repo = :'repo' AND ts >= :'since'::timestamptz
+  GROUP BY repo, issue),
+steps AS (
+  SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.key ORDER BY e.ts DESC, e.device_seq DESC) AS n
+  FROM factory.event_log e
+  WHERE e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND e.repo = :'repo'),
+counted AS (
+  SELECT s.*, row_number() OVER (PARTITION BY s.repo, s.agent_id ORDER BY s.ts DESC, s.device_seq DESC) AS rn
+  FROM factory.event_log s
+  WHERE s.type = 'loop_entry' AND s.kind = 'agent-step' AND s.status IN ('done', 'failed', 'timed-out', 'lost')
+    AND s.repo = :'repo' AND s.agent_id IS NOT NULL AND s.input_tokens IS NOT NULL),
+costed AS (SELECT * FROM counted WHERE rn = 1 AND cost_usd IS NOT NULL)
+SELECT m.repo, m.issue, m.merged_at,
+  count(s.key) FILTER (WHERE NOT EXISTS (SELECT 1 FROM costed c WHERE c.repo = s.repo AND c.agent_id = s.agent_id)) AS steps_without_cost
+FROM merged m
+LEFT JOIN steps s ON s.repo = m.repo AND s.issue = m.issue AND s.n = 1
+GROUP BY m.repo, m.issue, m.merged_at
+ORDER BY m.merged_at, m.issue;
+```
+
+The table lagging behind a new model: per model, the ended agent steps (and intake stamps) that have tokens but no
+cost, with the newest such end. A model in this list needs a row in `prices.ts`:
+
+```sql
+SELECT e.repo, coalesce(e.model, 'unknown') AS model, count(*) AS unpriced_steps, max(e.ts) AS last_seen
+FROM factory.event_log e
+WHERE e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+  AND ((e.type = 'loop_entry' AND e.kind = 'agent-step' AND e.status IN ('done', 'failed', 'timed-out', 'lost'))
+    OR e.type = 'intake_stamp')
+  AND e.input_tokens IS NOT NULL AND e.cost_usd IS NULL
+GROUP BY e.repo, coalesce(e.model, 'unknown')
+ORDER BY unpriced_steps DESC, e.repo, model;
+```
+
 ## Observe time per pass
 
 A `loop_passes` event ([REFERENCE.md](factory-events/REFERENCE.md)) summarises one UTC minute of the loop's passes. Four

@@ -481,8 +481,8 @@ describe('an agent step\'s tokens in its loop event (#657)', () => {
       await logLoop(f.env, ended)
       const [running, end] = dataOf(f)
       expect(dataOf(f)).toHaveLength(2)
-      expect(running).toMatchObject({ status: 'running', input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null })
-      expect(end).toMatchObject({ status, input_tokens: 4, output_tokens: 5, cache_read_tokens: 6, cache_creation_tokens: 7, model: 'claude-opus-5-5' })
+      expect(running).toMatchObject({ status: 'running', input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null, cost_usd: null })
+      expect(end).toMatchObject({ status, input_tokens: 4, output_tokens: 5, cache_read_tokens: 6, cache_creation_tokens: 7, model: 'claude-opus-5-5', cost_usd: 0.000192 })
       expect(f.env.problems).toEqual([])
     }
   })
@@ -493,6 +493,14 @@ describe('an agent step\'s tokens in its loop event (#657)', () => {
     expect(dataOf(f)).toHaveLength(1)
     expect(dataOf(f)[0]).toMatchObject({ status: 'failed', input_tokens: null, model: null })
     expect(f.env.problems).toEqual(['loop event i9/ltn0brb/review/abc/r1/a1: transcript not found'])
+  })
+
+  test('an unpriced model writes the totals with a null cost and a problem naming the key and the model', async () => {
+    const odd = transcript.replace('claude-opus-5-5', 'claude-future-9')
+    const f = withTokens([step('done')], { [PATH]: odd })
+    await logLoop(f.env, f.env.live.ledger)
+    expect(dataOf(f)[0]).toMatchObject({ status: 'done', input_tokens: 4, cost_usd: null })
+    expect(f.env.problems).toEqual(['loop event i9/ltn0brb/review/abc/r1/a1: unpriced model claude-future-9'])
   })
 
   test('a tell carries none of the fields, and a runtime without a config dir reads nothing', async () => {
