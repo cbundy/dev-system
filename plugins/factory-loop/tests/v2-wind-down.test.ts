@@ -194,6 +194,15 @@ describe('the guard drops every start before admission', () => {
     expect(tells(plan({ ...s, control: control({}) }))).toHaveLength(0)
   })
 
+  test('R2: a new update after a failed one plans restart:<newAt> while the old restart entry stays failed', () => {
+    const old = NOW - 9 * MIN
+    const at = NOW - MIN
+    const open = world([], undefined, { control: control({ updateDue: { at, reason: 'again' } }) })
+    const r = plan(withLedger(open, [entry(`restart:${old}`, 'restart-self', { rule: 'R2', status: 'failed', attempts: 1, endedAt: NOW - 8 * MIN })]))
+    expect(r.actions.filter(a => a.kind === 'restart-self').map(a => a.key)).toEqual([`restart:${at}`])
+    expect(r.actions.some(a => a.kind === 'tell' && a.key.startsWith('tell:stalled:restart:'))).toBe(false)
+  })
+
   test('R2: an update that is due gives no restart-self, with a skip line', () => {
     const s = world([], undefined, { control: control({ updateDue: { at: NOW - 5 * MIN, reason: 'new release' } }) })
     expect(kindsOf(plan(s))).toContain('restart-self')

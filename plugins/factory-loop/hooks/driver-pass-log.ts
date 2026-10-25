@@ -122,6 +122,6 @@ export async function failUpdate($: EngineInterface, rt: Runtime, at: Ms | null,
   })
   S.ops = run.catch(() => undefined)
   const failed = await run.catch(() => null)
-  if (failed !== null) await appendLine($, rt, { control: 'update off', text: `update failed: ${error}; the update is no longer due` })
+  if (failed !== null) await appendLine($, rt, { control: 'update failed', text: `update failed: ${error}; the update is no longer due` })
   return failed
 }

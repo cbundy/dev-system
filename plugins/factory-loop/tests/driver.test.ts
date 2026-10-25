@@ -1488,6 +1488,53 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
   })
 
+  test('a failed restart\'s tell survives dropped submits beside another owner tell, goes out once, and is not planned again (rule R2, D-15)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470] })
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
+    ])
+    const failed = { reason: 'image', at: 777, failedAt: NOW - MIN, error: 'dev-restart-self: no CODER_SESSION_TOKEN' }
+    let drops = 3
+    let turns = 0
+    const h = host(on, {
+      config: ACT,
+      run,
+      store,
+      files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateFailed: failed }) },
+      submit: text => {
+        if (drops-- > 0) return { drop: 'the session was stopped' }
+        void $.turn.start({ text, turnId: `turn-${++turns}` })
+        return undefined
+      },
+    })
+    const restartTell = 'tell:stalled:restart:777'
+    const restartPrompts = () => h.prompts.filter(p => p.includes('retry: /factory update'))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // three passes drop the one wake they may start: nothing is left open, nothing is spent, and both tells stay owner items
+    for (let pass = 0; pass < 2; pass += 1) await clock.advance(60_000)
+    expect(h.prompts).toHaveLength(3)
+    expect(h.ledger().filter(e => e.kind === 'tell')).toEqual([])
+    expect(restartPrompts()).toHaveLength(0)
+    expect((h.last().counts as { owner: number }).owner).toBe(2)
+    // submit works: one wake a pass, so the claim's tell goes first and the restart notice after it, exactly once
+    for (let pass = 0; pass < 4; pass += 1) {
+      await clock.advance(60_000)
+      if (turns > 0) await $.turn.complete({ turnId: `turn-${turns}`, answer: '[ACTION] Owner: told.', reason: 'answer', durationMs: 900, isAborted: false })
+    }
+    await clock.advance(60_000)
+    expect(restartPrompts()).toHaveLength(1)
+    expect(h.entry(restartTell)).toMatchObject({ status: 'done' })
+    expect(h.prompts).toHaveLength(5)
+    await clock.advance(60_000)
+    expect(restartPrompts()).toHaveLength(1)
+    // told, but both notices still stand until the owner acts
+    expect((h.last().counts as { owner: number }).owner).toBe(2)
+  })
+
   test('a busy session never holds a pass: the wake is taken as queued after 5 s, and a later drop asks again', ENGINE_TEST, async ($, on) => {
     let drop: (r: { drop?: string }) => void = () => undefined
     let first = true
