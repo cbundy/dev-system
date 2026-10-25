@@ -42,7 +42,7 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
-const RETIRED_ALLOW = [
+const REMOVED_ALLOW = [
   "Bash(no-mistakes axi run *)",
   "Bash(no-mistakes rerun *)",
   "Bash(no-mistakes axi abort *)",
@@ -65,14 +65,16 @@ function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) 
 // A repo scaffolded at the old template set: .no-mistakes.yaml and the PR template with
 // baselines and stamp entries, the seven no-mistakes allow entries in settings.json and its
 // baseline, and neither factory-loop.json nor ci.yml (nor baselines for them).
-function oldRepo(t) {
+// With `afterRetire`, a repo already updated after #795: the config file has no baseline and no
+// stamp entry, and the allow entries sit only in the repo's settings.json.
+function oldRepo(t, { afterRetire = false } = {}) {
   const repo = initRepo(t);
   const put = (file, content) => {
     fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
     fs.writeFileSync(path.join(repo, file), content);
   };
   put(".no-mistakes.yaml", OLD_PIPELINE_FILE);
-  put(".callum-dev/baseline/.no-mistakes.yaml", "# upstream pipeline config\n");
+  if (!afterRetire) put(".callum-dev/baseline/.no-mistakes.yaml", "# upstream pipeline config\n");
   put(".github/pull_request_template.md", OLD_PR_TEMPLATE);
   put(".callum-dev/baseline/.github/pull_request_template.md", "# upstream template\n");
   for (const file of NEW_FILES) {
@@ -80,12 +82,13 @@ function oldRepo(t) {
     fs.rmSync(path.join(repo, ".callum-dev/baseline", file), { force: true });
   }
   for (const file of [".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
+    if (afterRetire && file.startsWith(".callum-dev")) continue;
     const settings = JSON.parse(read(repo, file));
-    settings.permissions.allow.unshift(...RETIRED_ALLOW);
+    settings.permissions.allow.unshift(...REMOVED_ALLOW);
     put(file, JSON.stringify(settings, null, 2) + "\n");
   }
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
-  stamp.files = [".no-mistakes.yaml", ".github/pull_request_template.md", ...stamp.files.filter((f) => !NEW_FILES.includes(f))];
+  stamp.files = [...(afterRetire ? [] : [".no-mistakes.yaml"]), ".github/pull_request_template.md", ...stamp.files.filter((f) => !NEW_FILES.includes(f))];
   put(".callum-dev.json", JSON.stringify(stamp, null, 2) + "\n");
   return repo;
 }
@@ -196,38 +199,92 @@ test("update surfaces a genuine conflict with markers and a non-zero exit", (t) 
   assert.match(result.stderr, /conflict resolution/);
 });
 
-test("update stops syncing the retired pipeline files and leaves them byte for byte", (t) => {
-  const repo = oldRepo(t);
+function assertNoMistakesRemoved(repo, first) {
+  assert.equal(fs.existsSync(path.join(repo, ".no-mistakes.yaml")), false);
+  assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline/.no-mistakes.yaml")), false);
+  assert.ok(first.stdout.includes("removed   .no-mistakes.yaml (no-mistakes is retired)"), first.stdout);
+  assert.ok(first.stdout.includes("removed   .claude/settings.json: the no-mistakes allow entries"), first.stdout);
+  assert.match(first.stdout, /merged    \.claude\/settings\.json/);
+  const allow = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
+  for (const entry of REMOVED_ALLOW) assert.equal(allow.includes(entry), false, entry);
+  assert.ok(allow.includes("Bash(scripts/x *)"), "a repo-added entry survives");
+  const stamp = JSON.parse(read(repo, ".callum-dev.json"));
+  assert.equal(stamp.files.includes(".no-mistakes.yaml"), false);
+}
 
-  const first = run(repo, "update");
-  assert.equal(first.status, 0, first.stderr + first.stdout);
-  assert.equal(read(repo, ".no-mistakes.yaml"), OLD_PIPELINE_FILE);
-  assert.equal(read(repo, ".github/pull_request_template.md"), OLD_PR_TEMPLATE);
-  for (const file of [".no-mistakes.yaml", ".github/pull_request_template.md"]) {
+function addRepoEntry(repo) {
+  const file = path.join(repo, ".claude/settings.json");
+  const settings = JSON.parse(read(repo, ".claude/settings.json"));
+  settings.permissions.allow.push("Bash(scripts/x *)");
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+}
+
+for (const [name, opts] of [
+  ["a repo scaffolded with the old templates", {}],
+  ["a repo already updated after #795", { afterRetire: true }],
+]) {
+  test(`update removes the no-mistakes config and allow entries from ${name}, then stays quiet`, (t) => {
+    const repo = oldRepo(t, opts);
+    addRepoEntry(repo);
+
+    const first = run(repo, "update");
+    assert.equal(first.status, 0, first.stderr + first.stdout);
+    assertNoMistakesRemoved(repo, first);
+
+    // The PR template stays byte for byte, with its unsynced line and no baseline.
+    assert.equal(read(repo, ".github/pull_request_template.md"), OLD_PR_TEMPLATE);
     assert.ok(
       first.stdout.includes(
-        `unsynced  ${file} (no longer synced by dev-system; now repo-owned - delete it if unused)`,
+        "unsynced  .github/pull_request_template.md (no longer synced by dev-system; now repo-owned - delete it if unused)",
       ),
       first.stdout,
     );
-    assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline", file)), false, file);
-  }
-  const stamp = JSON.parse(read(repo, ".callum-dev.json"));
-  assert.equal(stamp.files.includes(".no-mistakes.yaml"), false);
-  assert.equal(stamp.files.includes(".github/pull_request_template.md"), false);
+    assert.equal(fs.existsSync(path.join(repo, ".callum-dev/baseline/.github/pull_request_template.md")), false);
 
-  // The seven allow entries stay, with a notice.
+    // A second update says nothing about any of it and changes nothing.
+    const before = read(repo, ".claude/settings.json");
+    const second = run(repo, "update");
+    assert.equal(second.status, 0, second.stderr + second.stdout);
+    assert.doesNotMatch(second.stdout, /unsynced|no-mistakes|removed/);
+    assert.equal(read(repo, ".claude/settings.json"), before);
+  });
+}
+
+test("update keeps other Bash(no-mistakes ...) entries a repo added itself", (t) => {
+  const repo = oldRepo(t);
+  const file = path.join(repo, ".claude/settings.json");
+  const settings = JSON.parse(read(repo, ".claude/settings.json"));
+  settings.permissions.allow.push("Bash(no-mistakes axi watch *)");
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  assert.equal(run(repo, "update").status, 0);
   const allow = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
-  for (const entry of RETIRED_ALLOW) assert.ok(allow.includes(entry), entry);
-  assert.match(first.stdout, /no-mistakes allow entries are no longer synced/);
+  assert.ok(allow.includes("Bash(no-mistakes axi watch *)"));
+  for (const entry of REMOVED_ALLOW) assert.equal(allow.includes(entry), false, entry);
+});
 
-  // A second update says nothing about any of it, and still keeps the entries.
-  const second = run(repo, "update");
-  assert.equal(second.status, 0, second.stderr + second.stdout);
-  assert.doesNotMatch(second.stdout, /unsynced|no-mistakes/);
-  assert.equal(read(repo, ".no-mistakes.yaml"), OLD_PIPELINE_FILE);
-  const again = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
-  for (const entry of RETIRED_ALLOW) assert.ok(again.includes(entry), entry);
+test("update reports a leftover .no-mistakes/ folder on every run and never deletes it", (t) => {
+  const repo = initRepo(t);
+  fs.mkdirSync(path.join(repo, ".no-mistakes/worktrees"), { recursive: true });
+  fs.writeFileSync(path.join(repo, ".no-mistakes/worktrees/keep.txt"), "x");
+  const line = "leftover  .no-mistakes/ (no-mistakes state, no longer ignored - delete it)";
+  for (let i = 0; i < 2; i++) {
+    const result = run(repo, "update");
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.ok(result.stdout.includes(line), result.stdout);
+    assert.ok(fs.existsSync(path.join(repo, ".no-mistakes/worktrees/keep.txt")));
+  }
+});
+
+test("a fresh init scaffolds no no-mistakes text", (t) => {
+  const repo = initRepo(t);
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      return e.isDirectory() ? walk(full) : [full];
+    });
+  for (const file of walk(repo)) {
+    assert.doesNotMatch(fs.readFileSync(file, "utf-8"), /no-mistakes|NM_HOME/i, path.relative(repo, file));
+  }
 });
 
 test("update does not create factory-loop.json or ci.yml in an older repo, and says so every time", (t) => {
@@ -291,7 +348,7 @@ test("update unions a repo-added permissions.allow entry with the synced list, a
   settings.permissions.allow.push(repoEntry);
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 
-  const upstreamEntry = "Bash(no-mistakes axi watch *)";
+  const upstreamEntry = "Bash(scripts/upstream-new *)";
   const upstream = upstreamCopy(t, (dir) => {
     const file = path.join(dir, ".claude/settings.json");
     const template = JSON.parse(read(dir, ".claude/settings.json"));
@@ -345,7 +402,7 @@ test("a repo-added key nested in a synced object survives update (dev-system#57)
     s.extraKnownMarketplaces.callum.autoUpdate = false;
   });
   const upstream = upstreamCopy(t, (dir) =>
-    editSettings(dir, (s) => s.permissions.allow.push("Bash(no-mistakes axi watch *)")),
+    editSettings(dir, (s) => s.permissions.allow.push("Bash(scripts/upstream-new *)")),
   );
 
   const result = run(repo, "update", { templates: upstream });
@@ -357,7 +414,7 @@ test("a repo-added key nested in a synced object survives update (dev-system#57)
     merged.extraKnownMarketplaces.callum.source,
     JSON.parse(read(TEMPLATES, ".claude/settings.json")).extraKnownMarketplaces.callum.source,
   );
-  assert.ok(merged.permissions.allow.includes("Bash(no-mistakes axi watch *)"));
+  assert.ok(merged.permissions.allow.includes("Bash(scripts/upstream-new *)"));
 });
 
 test("settings.json update: template keys win, template removals land, repo additions survive", (t) => {
@@ -436,7 +493,7 @@ test("update drops a permissions.allow entry the template removed, keeping repo-
 
 // Ask git itself what the scaffolded .gitignore does. Reading the patterns is not
 // good enough here: the rules that matter most are directory-vs-file distinctions
-// (.no-mistakes/ ignored, .no-mistakes.yaml tracked), which is exactly what eyeballing
+// (a directory ignored, a file beside it tracked), which is exactly what eyeballing
 // a pattern list gets wrong. Exit 0 = ignored, 1 = not ignored.
 function isIgnored(repo, target) {
   const result = spawnSync("git", ["check-ignore", "-q", "--no-index", target], {
@@ -455,7 +512,6 @@ test("the scaffolded .gitignore ignores this system's state but keeps its config
   // treehouse.toml sets root = "./", so worktrees (full copies of the repo) land here.
   for (const target of [
     ".treehouse/1/myrepo/package.json",
-    ".no-mistakes/worktrees/abc/run-1/server/index.ts",
     ".claude/worktrees/some-tree/file.ts",
     ".claude/settings.local.json",
     "node_modules/left-pad/index.js",
@@ -469,11 +525,9 @@ test("the scaffolded .gitignore ignores this system's state but keeps its config
   }
 
   // Committed on purpose. Ignoring any of these looks tidy and breaks things quietly:
-  // the two .callum-dev paths are what make `update` a 3-way merge, and .no-mistakes.yaml
-  // sits right beside the ignored .no-mistakes/ directory.
+  // the two .callum-dev paths are what make `update` a 3-way merge.
   for (const target of [
     ".claude/factory-loop.json",
-    ".no-mistakes.yaml",
     ".callum-dev.json",
     ".callum-dev/baseline/.claude/factory-loop.json",
     ".callum-dev/baseline/gitignore",

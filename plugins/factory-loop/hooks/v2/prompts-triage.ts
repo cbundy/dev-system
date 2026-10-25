@@ -8,7 +8,7 @@
 // keyword before a reference survives into the prompt.
 //
 // The v2 COMMAND_RULE is here too, the paragraph every v2 agent's prompt and definition carry (v1's
-// without its no-mistakes exception; v2 SPEC 10.5): agents/triage.md carries it word for word
+// had an exception for a retired tool; v2 SPEC 10.5): agents/triage.md carries it word for word
 // (tests/factory-loop-agents.test.js). Pure.
 import { neutral } from '../prompts'
 import type { ScriptPlace } from '../prompts'

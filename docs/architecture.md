@@ -233,12 +233,14 @@ runs its own checkout's CLI (`node bin/callum-dev.js`), and each release's bump 
 its stamp up to date (`RELEASING.md`).
 
 An init-only file is restored by `update` only if it was deleted and has a baseline; a template new
-to a repo is reported, never created. `.no-mistakes.yaml` and `.github/pull_request_template.md`
-are retired templates: `update` stops syncing them and leaves the repo's copies alone.
+to a repo is reported, never created. `.github/pull_request_template.md`
+is a retired template: `update` stops syncing it and leaves the repo's copy alone. no-mistakes is
+removed: `update` deletes a leftover `.no-mistakes.yaml`, drops its seven allow entries from
+`.claude/settings.json`, and reports a leftover `.no-mistakes/` folder without deleting it.
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the factory loop
 in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `gh pr edit`,
-`no-mistakes axi respond`, watchers). Treehouse worktrees start without it, so a worktree agent cannot merge.
+watchers). Treehouse worktrees start without it, so a worktree agent cannot merge.
 
 The per-file split between synced and repo-owned content, including files without ownership
 markers, is documented in [`templates/README.md`](../templates/README.md).
@@ -263,7 +265,7 @@ Where to look inside a running container. Full detail is in
 
 | Path | What |
 |---|---|
-| `/persist/{claude,claude-auth,codex,gh,no-mistakes,agentsview,events,dev-restart-self}` | Tool state, logins (a shared Claude login in `claude-auth`, where a runtime opts in), the factory event log and dev-restart-self's saved state. Directories added later reach existing volumes through `dev-init`. Mount layout depends on the runtime; see the [image persistence contract](../images/base/README.md#how-runtimes-should-mount-it). |
+| `/persist/{claude,claude-auth,codex,gh,agentsview,events,dev-restart-self}` | Tool state, logins (a shared Claude login in `claude-auth`, where a runtime opts in), the factory event log and dev-restart-self's saved state. Directories added later reach existing volumes through `dev-init`. Mount layout depends on the runtime; see the [image persistence contract](../images/base/README.md#how-runtimes-should-mount-it). |
 | `/workspaces/<repo>` | The checkout (`DEV_WORKSPACE`). Cloned from `DEV_REPO_URL` on the first start. |
 | `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url`, and per-repo evidence storage under `evidence/<owner>/<repo>/` ([setup](evidence-storage.md)) |
 | `/shared` | Optional NAS share for files exchanged with the PC. Not for checkouts or state. |
@@ -303,7 +305,7 @@ Deprecated by cbundy/dev-system#89 in favour of the base image. The feature
 (`ghcr.io/cbundy/dev-system/callum-tools`) and the `feature` devcontainer template get no
 new capabilities. Repos pinned to `callum-tools:1` keep working. Move them with
 `npx callum-dev update --devcontainer base-image`. The scripts in
-`features/src/callum-tools/` (setup, codex model pin, no-mistakes recovery, watchers) are
+`features/src/callum-tools/` (setup, codex model pin, watchers) are
 still maintained, because the image builds from them. `test-features.yml` still tests them.
 
 ## GHCR visibility

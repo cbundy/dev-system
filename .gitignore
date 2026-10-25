@@ -12,10 +12,6 @@
 
 # This system's own tooling.
 
-# no-mistakes pipeline state: its internal per-run worktrees, step logs and evidence.
-# Directory-only pattern on purpose - see the must-not-ignore note below.
-.no-mistakes/
-
 # treehouse worktrees. treehouse.toml ships `root = "./"`, which places them at
 # .treehouse/ inside the repo - each one a full working copy of this repo.
 .treehouse/
@@ -32,9 +28,6 @@
 #     Both are what make `callum-dev update` a real 3-way merge rather than an
 #     overwrite. Ignoring them breaks updates for every fresh clone (README.md).
 #   .claude/factory-loop.json   the factory loop's gate commands.
-#   .no-mistakes.yaml       if this repo still has one: its pipeline config, which lives
-#     right next to the ignored .no-mistakes/ state directory. This is why the rule above
-#     ends in a slash: a bare `.no-mistakes` would be one typo from catching the config.
 
 # Node / TypeScript.
 node_modules/
