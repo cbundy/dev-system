@@ -7,6 +7,7 @@ import type { AgentStep, IssueState, Model, ParkParts, SplitReasons, StateTimeou
 import type { CapInfo } from './v2/capacity'
 import type { QueueView } from './v2/queue-view'
 import type { QueueScoreWeights, ScoreResult } from './v2/score'
+import type { HoldView } from './session-hold'
 
 export type Ms = number
 
@@ -265,6 +266,8 @@ export type State = {
   repo: string
   device: string
   loadedAt: Ms
+  // a stopped main session holding work, and one that just ended (session-hold.ts); the driver sets it
+  hold?: HoldView
   sources: Record<SourceName, Source>
   usage: Usage
   issues: IssueView[]

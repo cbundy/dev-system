@@ -103,6 +103,7 @@ export function planV2(state: State, config: Config): PlanResult {
     capped: base.capped,
     backoff: state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil,
     owner: base.owner.size,
+    held: state.hold?.held?.since ?? null,
   })
   if (titleDue(state, config, title)) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   // the restart ends the session, so it goes after everything else, the title included

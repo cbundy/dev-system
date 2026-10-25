@@ -142,6 +142,10 @@ export const S = {
   saveNow: null as ((rt: Runtime) => void) | null,
   // lateDrop: a wake prompt the engine dropped after it was taken as queued (driver-between.ts)
   lateDrop: null as ((prompt: string, why: string) => void) | null,
+  // a stopped main session holds agent starts and wakes (session-hold.ts): the hold in force, and
+  // one that ended and awaits its event in the next pass
+  held: null as import('./session-hold').Hold | null,
+  resumed: null as import('./session-hold').Resumed | null,
   // stampJob: start a dry-run stamp's background job (driver-stamp.ts)
   stampJob: null as ((rt: Runtime, run: Stamp) => void) | null,
   // the dry-run stamps in progress, by issue (v2/intake.ts; `/factory stamp <N>`): in memory only

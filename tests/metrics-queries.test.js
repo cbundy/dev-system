@@ -108,7 +108,7 @@ const RUN_ONLY = [
   "Heartbeat twins of the loop's own workspace #0",
   "8b. Designer model comparison #0",
   "9. Interventions, judgement calls and claim completion #5",
-  "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7", "Loop-stopped agent unknowns #0",
+  "9. Interventions, judgement calls and claim completion #6", "9. Interventions, judgement calls and claim completion #7", "Loop-stopped agent unknowns #0", "Session-stopped holds #0",
   "9b. Permission prompts #0",
   "4. Merges per device #1", "9c. Merges, pull requests and gaps #7",
   "9c. Merges, pull requests and gaps #0", "9c. Merges, pull requests and gaps #1", "9c. Merges, pull requests and gaps #2",

@@ -18,7 +18,7 @@ import { digestOf } from './state'
 import { clocked } from './observe-clock'
 import type { ObserveSplit } from './observe-clock'
 import { attemptOf, begin, called, carve, newTracer, spent, traceRecord, tracedActIo, tracedIo, waitSince, waitingRows, wakeRows } from './trace'
-import type { Config, Ms, PlanResult } from './types'
+import type { Config, Ms, PlanResult, State } from './types'
 import { effectiveCap } from './v2/capacity'
 import type { V2Stored } from './v2/observe'
 import { transitionsOf } from './v2/plan'
@@ -31,6 +31,7 @@ import { actIo, acting, append, appendLine, fileIo, githubHealth, io, killed, lo
 import { offPassDone } from './driver-between'
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
+import { holdView, settleResumed } from './session-hold'
 import { clearUpdate, starvedOf, summaryOf, tellError, writeTrace } from './driver-pass-log'
 import { ASKED_MAX, ERROR_PASSES, S, STATES_PER_DAY, STATE_KEEP_BYTES, between, cache, delivered, live, liveV2, reportedWakes } from './driver-state'
 import type { AgentRow } from './driver-state'
@@ -220,7 +221,8 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : S.loadedAt, S.lastTitle, S.lastTitleAt, stored, v2Stored, spendStored)
   const observeSplit: ObserveSplit = clock.split(observeStart, performance.now())
   S.passObserve = observeSplit
-  let state = observed.state
+  const holdSeen = holdView()
+  let state: State = { ...observed.state, hold: holdSeen }
   // the main checkout this pass read, for `/factory stamp` (driver-stamp.ts) in any mode
   S.checkout = state.checkout
   // the settings in force, for whoever reads them (settings.json); best effort, a problem line when it fails
@@ -458,7 +460,9 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     title: result.title,
     actions: line.actions.length,
     owner: result.owner,
+    held: S.held === null ? null : { since: S.held.since },
   })
+  if (act) settleResumed(holdSeen)
   const ledger = act ? live.ledger : state.ledger
   const offPass = S.offFinished.splice(0)
   if (tr !== null) {
