@@ -18,11 +18,17 @@
     "additions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines added, as GitHub reports them at merge time. null when unknown.", "x-column": true },
     "deletions": { "type": ["integer", "null"], "minimum": 0, "description": "The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown.", "x-column": true },
     "merged_at": { "type": ["string", "null"], "format": "date-time", "description": "When GitHub says the pull request merged (its mergedAt, copied as given). null when unknown.", "x-column": true },
+    "train": { "enum": ["rode", "dropped", null], "description": "Whether the merge rode the merge train: rode when callum-flow-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise.", "x-column": true },
+    "train_reason": { "enum": ["head-moved", "outside-merge", "conflict", "train-red", "left-queue", "tree-mismatch", "refused", null], "description": "Why a built train was dropped, set only when train is dropped; null otherwise.", "x-column": true },
+    "tested_tree": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$", "description": "The tree sha CI passed on the train branch, set only when train is rode; null otherwise.", "x-column": true },
+    "tree_matched": { "type": ["boolean", "null"], "description": "When train is rode: whether the merge commit's tree equals tested_tree (false means main landed on a tree CI did not pass). null when there was no train or the merge commit's tree could not be read.", "x-column": true },
     "title": { "type": ["string", "null"], "maxLength": 256, "description": "The closed issue's title when the event has an issue and its author is trusted, otherwise the pull request's title when its author is trusted, clipped to 256 characters. null when neither was read.", "x-column": true }
   },
   "examples": [
     { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false },
     { "pr": 141, "branch": "issue-85-usage-panel", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false, "files": ["src/usage.js", "tests/usage.test.js"], "file_lines": [{ "path": "src/usage.js", "additions": 100, "deletions": 8 }, { "path": "tests/usage.test.js", "additions": 20, "deletions": 0 }], "additions": 120, "deletions": 8 },
+    { "pr": 1311, "branch": "issue-1290", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false, "train": "rode", "train_reason": null, "tested_tree": "0123456789abcdef0123456789abcdef01234567", "tree_matched": true },
+    { "pr": 1312, "branch": "issue-1291", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "factory", "recovered": false, "train": "dropped", "train_reason": "train-red", "tested_tree": null, "tree_matched": null },
     { "pr": 1230, "branch": "fix-sweep-title", "head": "f94eb46adde9adb19a154dc41e32877369596f3b", "by": "hand", "recovered": true, "merged_at": "2026-10-22T21:22:01Z", "title": "Merged events carry the time GitHub merged them" }
   ]
 }
