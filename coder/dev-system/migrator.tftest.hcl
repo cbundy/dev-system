@@ -89,7 +89,7 @@ run "set_gives_read_only_mount" {
   }
 }
 
-# dev-system and orchestrator are pushed with the variable empty.
+# dev-system is pushed with the variable empty.
 run "empty_gives_no_mount" {
   command = plan
 

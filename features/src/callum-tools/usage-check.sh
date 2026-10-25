@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Print the Claude plan's current usage as one line, for the issue-orchestrator
+# Print the Claude plan's current usage as one line, for the factory loop's
 # usage gate (cbundy/dev-system#170):
 #
 #   five_hour=<pct> resets_at=<iso> resets_in=<s> seven_day=<pct>

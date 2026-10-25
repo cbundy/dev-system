@@ -21,14 +21,12 @@ Remote Control mode default and the long-lived session's settings:
 | Template | Display | Remote Control mode default | For |
 |---|---|---|---|
 | `dev-system` | dev-system (Docker icon) | `auto`: `server` with a repo, else `session` | Working on a repo, one worktree per claude.ai session |
-| `orchestrator` | Orchestrator (🔄) | `session`, resumed on every start | One long-running interactive Claude running the issue orchestrator. See [Orchestrator workspace](#orchestrator-workspace). |
 | `orchestrator-loop` | Orchestrator (loop) (🏭) | `session`, resumed on every start | A repo run by the factory loop, with one long-running Claude as its judge. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 
 From the repo root, with the `coder` CLI logged in as a template admin:
 
 ```bash
 coder/push.sh dev-system
-coder/push.sh orchestrator
 coder/push.sh orchestrator-loop
 ```
 
@@ -56,22 +54,22 @@ privacy defaults are in
 | `docker_hosts` | one entry, the local socket: `[{"value":"local","name":"Local Docker","url":"unix:///var/run/docker.sock"}]` | Where workspace containers can run: a JSON list of `{"value", "name", "url"}` objects (`url` is the local socket or `ssh://user@host`; `value` is the stable key, `name` the label in the form). The first entry is the default. A string holding JSON, not an HCL list, because `coder templates push` reads `terraform.tfvars` with a parser that accepts only strings, numbers and lists of strings. See [Docker hosts](#docker-hosts). |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
 | `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of every template. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
-| `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
-| `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator`). |
+| `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator-loop`), not in `terraform.tfvars`. |
+| `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator-loop`). |
 | `remote_control_default_skip_permissions` | `false` | Default of the `remote_control_skip_permissions` parameter. Set per template by `push.sh` (`false` for both, for now). |
-| `remote_control_prompt` | empty | `session` mode: the first message of a fresh conversation (`DEV_REMOTE_CONTROL_PROMPT`). Set per template by `push.sh` (`/callum-flow:issue-orchestrator` for `orchestrator`). |
-| `remote_control_resume_prompt` | empty | `session` mode: the message sent when the conversation is resumed (`DEV_REMOTE_CONTROL_RESUME_PROMPT`). Set per template by `push.sh` (for `orchestrator`, a nudge to re-read its memory file and re-arm its loop). |
-| `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🔄 {name} orchestrator` for `orchestrator`). |
-| `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system` and `orchestrator`; for `orchestrator-loop`, callum-flow, factory-loop and factory-loop-workspace pinned to the pushing checkout's package version. |
-| `default_plugin_refs_win` | `false` | Whether the `default_plugins` refs beat a ref the workspace repo's committed `.claude/settings.json` declares (`DEV_DEFAULT_PLUGIN_REFS_WIN=1`, sent only when true), so the template owns the plugin version, and `dev-doctor` fails (not warns) on a missing default plugin or a marketplace at another ref. Set per template by `push.sh`: `true` for `orchestrator-loop`, `false` for `dev-system` and `orchestrator`. |
-| `wind_down_minutes` | `0` (off) | A whole number of minutes a workspace stop waits for the [factory loop](../../plugins/factory-loop/README.md) to finish its running steps. Above 0 the template adds a stop script (`wind-down.sh`, a `coder_script` with `run_on_stop`) and gives the container that long plus 60 s of Docker stop grace; 0 adds neither, so the plan is as before. Set per template by `push.sh`: `10` for `orchestrator-loop`, `0` for `dev-system` and `orchestrator`. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
+| `remote_control_prompt` | empty | `session` mode: the first message of a fresh conversation (`DEV_REMOTE_CONTROL_PROMPT`). Set per template by `push.sh` (`/factory-loop:judge` for `orchestrator-loop`). |
+| `remote_control_resume_prompt` | empty | `session` mode: the message sent when the conversation is resumed (`DEV_REMOTE_CONTROL_RESUME_PROMPT`). Set per template by `push.sh` (for `orchestrator-loop`, a nudge that the loop resumes by itself and the session answers its wakes as the judge). |
+| `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🏭 {name} loop` for `orchestrator-loop`). |
+| `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system`; for `orchestrator-loop`, callum-flow, factory-loop and factory-loop-workspace pinned to the pushing checkout's package version. |
+| `default_plugin_refs_win` | `false` | Whether the `default_plugins` refs beat a ref the workspace repo's committed `.claude/settings.json` declares (`DEV_DEFAULT_PLUGIN_REFS_WIN=1`, sent only when true), so the template owns the plugin version, and `dev-doctor` fails (not warns) on a missing default plugin or a marketplace at another ref. Set per template by `push.sh`: `true` for `orchestrator-loop`, `false` for `dev-system`. |
+| `wind_down_minutes` | `0` (off) | A whole number of minutes a workspace stop waits for the [factory loop](../../plugins/factory-loop/README.md) to finish its running steps. Above 0 the template adds a stop script (`wind-down.sh`, a `coder_script` with `run_on_stop`) and gives the container that long plus 60 s of Docker stop grace; 0 adds neither, so the plan is as before. Set per template by `push.sh`: `10` for `orchestrator-loop`, `0` for `dev-system`. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `gh_volume_name` | empty (off) | Named Docker volume behind the per-workspace **GitHub login** choice: workspaces that keep the default, *shared*, mount it at `/persist/gh` and share one gh login. Empty hides the choice, and every workspace keeps its own gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
 | `workspace_secrets_dir` | empty (off) | Directory on the Docker host with one folder per workspace, `<dir>/<lower(owner)>/<lower(workspace name)>/gh-token` (owner and workspace name lower-cased, as in the container name; the file owned 1000:1000, mode 0600). When set, every workspace mounts only its own folder, read-only, at `/run/secrets/dev-system-workspace`, whatever its GitHub login; the folder can also carry `factory-db-writer-url` and `factory-db-reader-url` to put that workspace on another factory database (see [docs/factory-db.md](../../docs/factory-db.md)). A workspace that picks **GitHub login** *This workspace's own token* also gets `DEV_GH_TOKEN_FILE`; one that picks **Claude login** *This workspace's own Anthropic API key* reads `anthropic-api-key` from the same folder (see [Sharing one Claude login](#sharing-one-claude-login)). Must not be `secrets_dir` or under it, since that one is mounted into every workspace (a validation rejects it). Docker creates a missing folder as an empty root-owned one, and `dev-init` then warns that the token is missing. Empty turns the choice off. Only the path passes through Terraform, never a token. See [Sharing one gh login](#sharing-one-gh-login). |
 | `claude_auth_volume_name` | empty (off) | Named Docker volume behind the per-workspace **Claude login** choice: workspaces that pick *shared* mount it at `/persist/claude-auth` and share one Claude login, keeping their own history and settings. Empty hides the choice, and every workspace keeps its own login. See [Sharing one Claude login](#sharing-one-claude-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `coder_login_secrets_dir` | empty (off) | Directory on the Docker host holding `coder-session-token` for the opt-in Coder CLI login, mounted read-only at `/run/secrets/dev-system-coder-login` only into workspaces with `coder_login` on. Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `push-next.sh` always pushes it empty. See [Coder CLI login (opt-in)](#coder-cli-login-opt-in). |
-| `migrator_secrets_dir` | empty (off) | Directory on the Docker host holding `factory-db-migrator-url`, mounted read-only at `/run/secrets/dev-system-migrator` into every workspace of the template it is set for, so `dev-init` can run `factory-db-migrate` at start-up (see [docs/factory-db.md](../../docs/factory-db.md)). Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `terraform.tfvars` sets `/etc/dev-system/migrator`; `push.sh` pushes it empty for `dev-system` and `orchestrator` and keeps the value for `orchestrator-loop`, so only the loop's workspaces migrate; `push-next.sh` always pushes it empty. |
+| `migrator_secrets_dir` | empty (off) | Directory on the Docker host holding `factory-db-migrator-url`, mounted read-only at `/run/secrets/dev-system-migrator` into every workspace of the template it is set for, so `dev-init` can run `factory-db-migrate` at start-up (see [docs/factory-db.md](../../docs/factory-db.md)). Must not be `secrets_dir` or `workspace_secrets_dir`, or under either (a validation rejects it). `terraform.tfvars` sets `/etc/dev-system/migrator`; `push.sh` pushes it empty for `dev-system` and keeps the value for `orchestrator-loop`, so only the loop's workspaces migrate; `push-next.sh` always pushes it empty. |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
 | `registry_auth_address` | `ghcr.io` | Registry the credentials are for. Only used with `registry_auth_config`. |
 
@@ -124,9 +122,9 @@ for repo plugins, opt-outs and recovery when an install fails.
 | `docker_host` | the first `docker_hosts` entry | no | The Docker host the workspace runs on. Shown only with more than one host in `docker_hosts`. See [Docker hosts](#docker-hosts). |
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
-| `remote_control_mode` | `auto` (`session` in `orchestrator`) | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
+| `remote_control_mode` | `auto` (`session` in `orchestrator-loop`) | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
 | `remote_control_skip_permissions` | `false` (from `remote_control_default_skip_permissions`) | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
-| `remote_control_resume` | `false` (`true` in `orchestrator`) | yes | `session` mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Sets `DEV_REMOTE_CONTROL_RESUME=1`. Ignored in `server` mode. See [Orchestrator workspace](#orchestrator-workspace). |
+| `remote_control_resume` | `false` (`true` in `orchestrator-loop`) | yes | `session` mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Sets `DEV_REMOTE_CONTROL_RESUME=1`. Ignored in `server` mode. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 | `claude_login` | `private` | yes | Shown with `claude_auth_volume_name` or `workspace_secrets_dir` set. `private`, `shared` (with the volume) or `api-key` (with `workspace_secrets_dir`: the workspace's own Anthropic API key, no Remote Control). See [Sharing one Claude login](#sharing-one-claude-login). |
 | `claude_budget_usd` | `0` | yes | Only with `workspace_secrets_dir` set. Monthly API-key budget in dollars; 0 means none. Passed as `DEV_CLAUDE_BUDGET_USD` only when `claude_login` is `api-key`. The factory loop counts its own spend against it and stops new work as it nears the budget (and at once when there is none). |
 | `claude_budget_reset_day` | `1` | yes | Only with `workspace_secrets_dir` set. The day of the month (1-31) the budget starts again at 00:00 UTC; a day past the month's end means its last day. Passed as `DEV_CLAUDE_BUDGET_RESET_DAY` only when `claude_login` is `api-key`. |
@@ -200,8 +198,8 @@ From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
 - **With a repo URL** (`repo_url`, or the `DEV_REPO_URL` a per-repo image carries),
   `dev-init` clones it into `/workspaces/<repo name>` on the first start and only fetches
   after that. Claude runs there. In `dev-system`, the Remote Control name (the session or
-  environment name in claude.ai) is the repo name; `orchestrator` formats it as
-  `🔄 <repo name> orchestrator`. Remote Control mode `auto` becomes `server`, so the
+  environment name in claude.ai) is the repo name; `orchestrator-loop` formats it as
+  `🏭 <repo name> loop`. Remote Control mode `auto` becomes `server`, so the
   `dev-system` workspace shows up in claude.ai as an environment where each new session
   gets its own worktree.
   - A private repo needs a GitHub credential: Coder external auth (`GIT_ASKPASS`), or
@@ -219,40 +217,6 @@ resolved mode for `dev-init` and `dev-remote-control --post-start`; the agent `e
 so a `coder ssh` shell, still holds `DEV_REMOTE_CONTROL_MODE=auto`, which the image
 rejects, so set the mode explicitly to run `dev-remote-control` by hand there. On an image older than
 2.1.0, nothing is cloned and Claude runs in `/workspaces`.
-
-## Orchestrator workspace
-
-The `orchestrator` template runs one long-lived interactive Claude, for the
-`issue-orchestrator` skill, that comes back as the same conversation after any stop,
-restart, rebuild, template update or crash (cbundy/dev-system#164; needs base image 2.5.0 or
-later). The intended unattended settings:
-
-- **`session` mode** (the template's default): one conversation, not one per claude.ai
-  session.
-- **Resume on** (`remote_control_resume`, on by default here): each start resumes the
-  workspace's last conversation and reattaches to the same claude.ai Remote Control
-  session, with its history. How the image picks the conversation is in
-  "Resuming the conversation" in the [image README](../../images/base/README.md).
-- **Auto-start**: a fresh conversation starts with `/callum-flow:issue-orchestrator`, so
-  nobody has to type the first message. A resumed one gets a nudge instead, to re-read
-  `.claude/orchestrator-memory.md` and re-arm its watcher and loop, since those
-  do not survive a process restart. Conversation selection and exclusions follow
-  [Resuming the conversation](../../images/base/README.md#resuming-the-conversation).
-- **Name**: `🔄 <repo> orchestrator` (`remote_control_name_format`), told apart from the
-  per-project sessions at a glance and stable across restarts.
-- **Auto-compact left on auto**, so the one Claude process can run indefinitely.
-- **A repo set** (`repo_url` or a per-repo image), so the memory file sits in the
-  workspace's checkout and Claude's transcripts in its `/persist`, both on that
-  workspace's volumes.
-- **Skip permissions** (`remote_control_skip_permissions`): off by default for now.
-  Whether the orchestrator acts without anyone approving tool calls is the owner's call;
-  until then, approve from claude.ai or the Claude app.
-
-**Durability.** The conversation history lives on the workspace's `/persist` volume, so
-it survives a stop, a restart, a rebuild and a template update. It does **not** survive deleting the
-workspace (both volumes are deleted with it, the memory file's checkout included), and a
-compaction can lose detail. Keep the orchestrator's durable state in its memory file and
-on GitHub, so a lossy compaction or a lost transcript costs little.
 
 ## Loop orchestrator workspace
 
@@ -298,8 +262,7 @@ workspace ([First-run logins](#first-run-logins)).
   pass. It acts only while its safety rails pass: the role is `orchestrator` (this template sets
   it), no other orchestrator workspace on the repo has sent a heartbeat in the last 2 minutes, and
   no other session in the workspace holds the act lock. While one fails it keeps observing, and the
-  decision log's `rails` field says why. Never run two loop workspaces, or a loop and an
-  `orchestrator` workspace, on one repo.
+  decision log's `rails` field says why. Never run two loop workspaces on one repo.
 - **Stop the loop**: `/factory new off` lets work in flight finish and starts nothing new.
   `/factory mode off` stops it from the next pass. The kill switch, which needs no session, is
   the `OFF` file: create `/persist/claude/factory-loop/OFF` in the workspace and the loop stops
@@ -374,7 +337,7 @@ workspace ([First-run logins](#first-run-logins)).
 - **Factory database migrator URL.** With `migrator_secrets_dir` set (only for the
   `orchestrator-loop` template, by `push.sh`), that directory is bind-mounted read-only at
   `/run/secrets/dev-system-migrator`; `dev-init` runs `factory-db-migrate` with the
-  `factory-db-migrator-url` in it before the loop starts. `dev-system`, `orchestrator` and
+  `factory-db-migrator-url` in it before the loop starts. `dev-system` and
   `dev-system-next` get no mount.
 - **Coder CLI login token, opt-in.** Only with `coder_login_secrets_dir` set and the
   workspace's `coder_login` parameter on, that directory is bind-mounted read-only at

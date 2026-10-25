@@ -320,7 +320,7 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
 
 # The Claude plugins every workspace gets (cbundy/dev-system#148): dev-init
 # installs each one on every start, with or without a repo, so the callum-flow
-# skills (issue-orchestrator, implement-issue, onboard, update-dev) are in
+# skills (onboard, update-dev and the rest) are in
 # every first Claude session. A whitespace-separated list of
 # <plugin>@<marketplace>=<marketplace source> entries (see plugins.sh). A
 # per-repo image (ENV DEV_DEFAULT_PLUGINS=...) or the runtime's environment

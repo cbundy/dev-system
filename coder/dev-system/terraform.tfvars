@@ -1,7 +1,7 @@
 # The homelab's values for this template's variables (main.tf), committed so
 # that no push can drop one. `coder templates push` reads terraform.tfvars from
 # the template directory on every push, so coder/push.sh (and even a plain
-# `coder templates push`) applies all of them, to dev-system and orchestrator
+# `coder templates push`) applies all of them, to dev-system and orchestrator-loop
 # alike. A --variable flag overrides a value here for one push: push.sh sets
 # remote_control_default_mode per template, and push-next.sh always clears
 # template_tester_secrets_dir, so dev-system-next workspaces never get the
@@ -38,7 +38,7 @@ template_tester_secrets_dir = "/etc/dev-system/template-tester"
 coder_login_secrets_dir = "/etc/dev-system/coder-login"
 
 # The factory database migrator URL (factory-db-migrator-url), mounted read-only for
-# factory-db-migrate. push.sh clears it for dev-system and orchestrator, so only
+# factory-db-migrate. push.sh clears it for dev-system, so only
 # orchestrator-loop workspaces get it; push-next.sh clears it too (see "Factory
 # database migrator" in README.md).
 migrator_secrets_dir = "/etc/dev-system/migrator"

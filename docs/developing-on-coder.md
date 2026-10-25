@@ -2,7 +2,7 @@
 
 A Coder workspace built from [`coder/dev-system`](../coder/dev-system/README.md) can develop
 this repo end to end, with no step on the PC. This was proven in [cbundy/dev-system#119](https://github.com/cbundy/dev-system/issues/119): the
-workspace `dev-system-orchestrator` ran the issue orchestrator and took `ready` issues to
+workspace `dev-system-orchestrator` ran the (since retired) skills-based issue orchestrator and took `ready` issues to
 merged PRs, with the no-mistakes pipeline and GitHub CI green (the merged PRs from
 [#176](https://github.com/cbundy/dev-system/pull/176) to [#186](https://github.com/cbundy/dev-system/pull/186), and [#192](https://github.com/cbundy/dev-system/pull/192), which closed [#148](https://github.com/cbundy/dev-system/issues/148)).
 
@@ -11,11 +11,11 @@ This page is for working on dev-system itself. To run some other repo on Coder, 
 
 ## Create the workspace
 
-Use the `orchestrator` template for one long-lived orchestrator session, or `dev-system`
+Use the `orchestrator-loop` template for one long-lived session run by the factory loop, or `dev-system`
 for one session per task:
 
 ```bash
-coder create dev-system-orchestrator --template orchestrator \
+coder create dev-system-loop --template orchestrator-loop \
   --parameter repo_url=https://github.com/cbundy/dev-system \
   --parameter remote_control_skip_permissions=true \
   --parameter cpus=4 \

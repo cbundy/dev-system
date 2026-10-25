@@ -303,6 +303,5 @@ says so; answer "what is planned" from `callum-flow-milestone show`.
 Read memory, check the loop with the `status` op, say in one line what it is doing, and end
 the turn.
 Arm nothing: the loop starts by itself and resumes by itself after `dev-restart-self`, and it
-refuses act mode while the old watcher is armed. To fall back to
-`/callum-flow:issue-orchestrator`, the owner first creates the kill switch
-`${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/OFF`.
+refuses act mode while the old watcher is armed. The owner stops the loop by creating the kill
+switch `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/OFF`.

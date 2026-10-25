@@ -236,8 +236,8 @@ const templateOf = (file) => {
   return raw.slice(at, raw.indexOf("\n```", at));
 };
 
-test("the three designer brief templates are a plain summary plus a collapsed Details block, and their readers' sections stay visible (#1269)", () => {
-  for (const file of ["plugins/factory-loop/agents/designer-v2.md", "plugins/callum-flow/agents/designer.md"]) {
+test("the designer brief template is a plain summary plus a collapsed Details block, and its readers' sections stay visible (#1269)", () => {
+  for (const file of ["plugins/factory-loop/agents/designer-v2.md"]) {
     const t = templateOf(file);
     assert.deepEqual(briefShapeProblems(t, { exploration: file.endsWith("designer-v2.md") }), [], file);
   }
