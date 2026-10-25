@@ -48,7 +48,7 @@ export function defaultText(key: string): string {
 export const SETTING_HELP: Record<string, string> = {
   readyLabel: 'the label that hands the loop an issue (ignores case)',
   priorityLabel: 'the label that scores an issue higher; order only, never a filter',
-  inDevLabel: 'the label the loop puts on an issue it works on (ignores case)',
+  inDevLabel: 'the old claim label, no longer put on anything; the one-time migration (factory-reconcile) removes it (ignores case)',
   skipLabels: 'labels that keep an issue from being claimed',
   trackerTitle: 'a title (regular expression) that marks a tracker issue',
   usageSlowPct: 'usage percent at which the loop slows its claims',

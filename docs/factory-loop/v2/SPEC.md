@@ -3092,7 +3092,7 @@ title adds `held: session stopped since HH:MM` and `/factory status` a line sayi
 | `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
 | `rollout` | free | `callum-flow-rollout <N>`, for a merged issue's follow-ups (11) | 60 s | 3 | the rollout: `merge`, `run-it` or `keep-open` |
 | `close-issue` | free | `gh issue close <N> --repo <R> --reason completed` | 60 s | 3 | exit code |
-| `release-parent` | free | `gh issue edit <N> --repo <R> --remove-label <inDevLabel>`, then `callum-flow-event abandoned --issue <N> --note "split into <list>"` | 60 s | 3 | exit codes |
+| `release-parent` | free | `callum-flow-event abandoned --issue <N> --note "split into <list>"` (no label edit; the closed record's `label` op `clear` takes the `factory:*` labels off) | 60 s | 3 | exit codes |
 | `milestone-later` | free | `callum-flow-milestone plan <N> later` | 60 s | 3 | exit code |
 | `restart-self` | free | `dev-restart-self`, only from rule `R2` | 600 s | 1 | the session restarts, and the loop resumes on load (13.7.5); a failure ends the update and leaves `updateFailed` for the owner (13.4.3) |
 | `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', task_id })`, only for an agent the ledger holds on a running entry | 30 s | 1 | stopped, or failed with the reason (13.13) |
@@ -4612,7 +4612,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | `shadowDevice` | `none` | a plugin option (13.4.1), observe mode only: plan as this device, the one that runs a live loop, so an observe run can be compared with it; `none` plans as this one; ignored in act mode |
 | `readyLabel` | `ready` | the queue and claim label (I-03). Labels are lower case for now, and every label comparison ignores case (owner, 2026-10-13) |
 | `priorityLabel` | `priority` | 3.3: the label of the `priority-label` score factor (S1 orders by score after the owner's `only`/`priority` list), ignoring case; order only, never a filter |
-| `inDevLabel` | `in development` | the claim label (I-03); ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
+| `inDevLabel` | `in development` | the old claim label (I-03), no longer put on anything; the one-time migration (`factory-reconcile`) removes it; ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
 | `skipLabels` | `[]` | labels that keep an issue out of rule `S1` (I-92) |
 | `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
 | `usageSlowPct` | `85` | the Slow tier (I-12 to I-16), in percent |
