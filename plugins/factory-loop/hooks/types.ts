@@ -7,6 +7,7 @@ import type { AgentStep, IssueState, Model, ParkParts, SplitReasons, StateTimeou
 import type { CapInfo } from './v2/capacity'
 import type { QueueView } from './v2/queue-view'
 import type { QueueScoreWeights, ScoreResult } from './v2/score'
+import type { HoldView } from './session-hold'
 
 export type Ms = number
 
