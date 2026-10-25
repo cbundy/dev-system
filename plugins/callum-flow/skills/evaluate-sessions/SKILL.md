@@ -37,21 +37,21 @@ callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format 
 ```
 
 Add `--regime <factory_loop_v2|testbed|manual|unknown>` to report one regime only (events of that
-regime, and the turns attributed to it through their session; `waste`, `pipeline` and
+regime, and the turns attributed to it through their session; `waste` and
 `sub_agent_model_mismatches` are not filtered). Without it, `throughput.by_regime` and `spend.by_regime`
 split the numbers per regime. A null or missing regime is `unknown`, and a regime is never guessed from a
 device or workspace name.
 
-It reads transcripts, the local event log and the no-mistakes database, makes no
+It reads transcripts and the local event log, makes no
 network calls, and needs no flags in a normal workspace. Exit 2 is a bad argument,
 exit 1 a source that exists but could not be read (report that and stop).
 
 If `callum-flow-evaluate` is not on PATH, the image predates it. It ships in the
-base image from version 2.10.0 (`images/base/VERSION`); `--nm-export` needs 2.14.0. Say which image version is
+base image from version 2.10.0 (`images/base/VERSION`). Say which image version is
 needed and stop. Never fall back to counting by hand, with `jq`, `grep` or `gh`.
 
 Read the `sources` table first. A source marked `n/a` (no event log, no
-no-mistakes database, no transcripts) makes the metrics that need it `n/a`; the
+transcripts) makes the metrics that need it `n/a`; the
 report says so rather than filling the gap.
 
 ### A window across several devices
@@ -83,21 +83,8 @@ events, and a device that logged nothing but `usage` still counts as alive. Chec
 that `per_device` lists every device that ran; a missing one means its events were
 never pushed, so say so rather than reporting on half the factory.
 
-For the pipeline numbers across devices, export the `nomistakes` schema too and pass
-it with `--nm-export` (it replaces this device's `state.sqlite` for every pipeline
-number; `state.sqlite` is then only used to find the transcripts). Run the query in
-[docs/metrics.md, "Scope and the fleet-wide no-mistakes export"](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export)
-with `since` set to a lookback earlier than the window's start (for example 14 days before
-it) and output to `/tmp/nm-export.jsonl`: the pipeline stage times of an issue merged inside the
-window start at its first run, which may have been created before the window. The report still
-counts only runs created inside the window (`--since` selects them).
-
-Do not filter by `device` or `repo`. Check that `pipeline.by_device` lists every
-device that ran; a missing one means its pipeline data was never pushed (see
-`nm-push-loop`), so say so rather than reporting on half the factory. Read
-`window.scope` first: it states whether `pipeline` and `events` cover the `workspace`
-or the `fleet`, and the report must say which. `pipeline.by_repo` is the one key
-that ignores `--repo`.
+Read `window.scope` first: it states whether `events` covers the `workspace` or the `fleet`,
+and the report must say which.
 
 Transcripts are always this device's.
 
@@ -117,7 +104,7 @@ callum-flow-issue-read --json --timeline <N> \
 Write `{"<N>": ["<ISO>", ...], ...}` to `/tmp/ready-times.json` (one array per issue,
 the timestamps exactly as GitHub returns them, no computing) and re-run both
 commands with `--ready-times /tmp/ready-times.json --events /tmp/events.jsonl`
-(plus `--nm-export /tmp/nm-export.jsonl` for a multi-device window). The
+The
 tool picks the last `ready` at or before the first claim. Check `throughput`
 shows `issues_without_ready: 0`; otherwise name those issues and say their lead
 time is not measured.
@@ -143,14 +130,11 @@ From the JSON, look at:
   its timestamp (session id and `ts` are in the row) and see what the wake did.
   Note what the model could have skipped (a re-armed Monitor that kept dying, a
   repeated `gh pr checks`, a notification for work already merged).
-- failed or parked runs: `pipeline.by_status`, `first_pass.setback_issues`, and the
+- failed or parked work: `first_pass.setback_issues`, and the
   `parked`, `failed` and `fix_requested` events for those issues in the event log.
-- model mismatches in `spend.sub_agent_model_mismatches`, fallback invocations and
-  review rounds in `pipeline`.
-- the gates that loop: `pipeline.gates` (first-pass rate per gate) and
-  `pipeline.fix_rounds` (total, per step, deepest run); who spends what:
-  `pipeline.tokens_by_model_purpose`; and where runs wait: `pipeline.parked`. Split
-  by `pipeline.by_device` and `pipeline.by_repo` when a gap is one machine or repo.
+- model mismatches in `spend.sub_agent_model_mismatches`, and review and fix rounds in
+  `rounds`.
+- where the work waits: `waiting`, split by `per_device` when a gap is one machine.
 
 Each piece of evidence is an id someone can open: a session id with a timestamp,
 a run id, a PR or issue number.

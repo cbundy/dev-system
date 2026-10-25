@@ -113,7 +113,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 
 | Source | Command | Cadence | Notes |
 |---|---|---|---|
-| `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses. `nomistakes.runs` is optional in that tool, so no-mistakes data can never blind the loop |
+| `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses |
 | `facts` | `dev-query --factory` with `NEW_EVENTS_SQL` (`eventsSource` `old`: `dev-query` with `EVENTS_SQL`, 3.3) | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
 | `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
@@ -967,7 +967,6 @@ has to read facts of the earlier loop.
   and so is a record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the v2 state
   the view shows (`state`: designing to designing, building to building, reviewing, fixing and
   parked to reviewing, merge-queue to merge-queue; any other state, queued among them, 2 h):
-  - a no-mistakes run of the issue's branch updated within `T`, as the `factory` source reports it;
   - the open PR's head pushed, a check run started or finished, or a review within `T`;
   - a slot of the earlier loop checked out on the issue's branch whose tree or HEAD changed within `T`.
 
@@ -1264,8 +1263,6 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
     parked, waiting or closed, with a `why` for closed). The loop reads that `state`
     (hooks/factory-state-map.ts turns a row into it; a row of an older image has only the old `stage`
     word, which maps to a state there). Mirror runs no longer set the state of such an issue. Stuck rules S1 to S5 stay as they are.
-  - `nomistakes.runs` becomes an optional source, shown as `n/a` when missing, as
-    `factory.workers_status` already is (`images/base/callum-flow-factory-state`);
   - the label checks without `In development` (3.6).
 - **`callum-flow-evaluate`** (`docs/metrics.md`, "Offline computation"). New sections, each also
   a saved query in `docs/metrics.md`:

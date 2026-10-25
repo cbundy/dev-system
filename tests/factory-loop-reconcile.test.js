@@ -117,7 +117,7 @@ function fixtures() {
           live(18, "building", AT - 4 * HOUR),
           { ...live(20, "designing", AT - HOUR, { detail: "claim lapsed at 2026-10-15T11:00:00.000Z" }) },
           // no holder: #40 queued for days with no ready label (a ghost), #41 in the queue (ready),
-          // #42 in a run no claim holds that moved five minutes ago (live)
+          // #42 with a PR whose head was pushed five minutes ago, no claim holding it (live)
           live(40, "queued", AT - 72 * HOUR, { holder: null }),
           live(41, "queued", AT - 2 * HOUR, { holder: null }),
           live(42, "reviewing", AT - HOUR, { holder: null }),
@@ -134,25 +134,21 @@ function fixtures() {
     { issue: 16, state: "claimed", ts: iso(AT - 2 * HOUR) },
     { issue: 16, state: "transition", ts: iso(AT - HOUR) },
   ];
-  const runs = [
-    { id: "R11", branch: "feat/issue-11-y", status: "parked", updated_at: iso(AT - 5 * HOUR) },
-    { id: "R12", branch: "feat/issue-12-v", status: "running", updated_at: iso(AT - 5 * MIN) },
-    { id: "R42", branch: "feat/issue-42-n", status: "running", updated_at: iso(AT - 5 * MIN) },
-  ];
   return {
     slots,
     answers: {
       "callum-flow-factory-state": [{ match: ".", stdout: factory }],
       "dev-query": [
-        { match: "to_regclass", stdout: "t\n" },
-        { match: "nomistakes\\.runs", stdout: runs },
         { match: "factory\\.events", stdout: claims },
       ],
       gh: [
-        { match: "^pr list --repo acme/widgets --state open", stdout: [{ number: 111, headRefName: "feat/issue-11-y", headRefOid: "sha111" }, { number: 113, headRefName: "fix/issue-13-z", headRefOid: "sha113" }, { number: 112, headRefName: "feat/issue-11-zz", headRefOid: "sha112" }, { number: 150, headRefName: "feat/issue-99-zz", headRefOid: "sha150" }] },
+        { match: "^pr list --repo acme/widgets --state open", stdout: [{ number: 111, headRefName: "feat/issue-11-y", headRefOid: "sha111" }, { number: 113, headRefName: "fix/issue-13-z", headRefOid: "sha113" }, { number: 112, headRefName: "feat/issue-11-zz", headRefOid: "sha112" }, { number: 150, headRefName: "feat/issue-99-zz", headRefOid: "sha150" }, { number: 120, headRefName: "feat/issue-12-v", headRefOid: "sha120" }, { number: 142, headRefName: "feat/issue-42-n", headRefOid: "sha142" }] },
         { match: "^api repos/acme/widgets/commits/sha111 ", stdout: `${iso(AT - 4 * HOUR)}\n` },
         { match: "^api repos/acme/widgets/commits/sha113 ", stdout: `${iso(AT - 6 * HOUR)}\n` },
+        { match: "^api repos/acme/widgets/commits/sha120 ", stdout: `${iso(AT - 5 * MIN)}\n` },
+        { match: "^api repos/acme/widgets/commits/sha142 ", stdout: `${iso(AT - 5 * MIN)}\n` },
         { match: "^pr checks 111 ", stdout: [{ name: "ci", state: "SUCCESS", startedAt: iso(AT - 4 * HOUR), completedAt: iso(AT - 4 * HOUR + 3 * MIN) }] },
+        { match: "^pr checks 1[24]\\d ", stderr: "no checks reported\n", code: 1 },
         { match: "^pr checks 113 ", stderr: "no checks reported on the 'fix/issue-13-z' branch\n", code: 1 },
         { match: "^issue edit ", stdout: "" },
       ],
@@ -161,6 +157,7 @@ function fixtures() {
         { match: "^--json --pr 111 --comments$", stdout: { pr: { number: 111 }, comments: [], review_comments: [], reviews: [{ id: 1, submitted_at: iso(AT - 5 * HOUR) }], stripped: 0 } },
         // a PR on #11's branch by an untrusted author: not the loop's, never read
         { match: "^--json --pr 112 --comments$", code: 3 },
+        { match: "^--json --pr 1[24]\\d --comments$", stdout: { pr: { number: 120 }, comments: [], review_comments: [], reviews: [], stripped: 0 } },
         { match: "^--json --pr 113 --comments$", stdout: { pr: { number: 113 }, comments: [], review_comments: [], reviews: [{ id: 2, submitted_at: iso(AT - 10 * MIN) }], stripped: 0 } },
         { match: "^--json 10$", stdout: ghIssue(10, ["bug", "In development", "factory:designing"]) },
         { match: "^--json 11$", stdout: ghIssue(11, ["ready", "In development"]) },
@@ -311,22 +308,25 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.match(out, /^Live, released only when named: #12 #13 #14 #42\.$/m);
   assert.match(out, /^Nothing is requeued: every release leaves the factory\. Re-add `ready` to bring back an issue still wanted; the loop adopts its open PR\.$/m);
   // no live step within T: released out of the factory, whatever its labels
-  assert.match(line(out, 10), /designing for 3h00m with no v2 record; checked within 45m: no run of its branch; no open PR; slot 1 on feat\/issue-10-x: HEAD moved 10h00m ago, tree changed 9h00m ago\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: bug, In development, factory:designing\. Open PR: none\. Slot: 1\.$/);
-  assert.match(line(out, 11), /checked within 1h30m: run R11 updated 5h00m ago; PR #112 by an untrusted author: not counted; PR #111: head pushed 4h00m ago, a check 3h57m ago, a review 5h00m ago; no slot on its branch\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: ready, In development\. Open PR: #111\./);
+  assert.match(line(out, 10), /designing for 3h00m with no v2 record; checked within 45m: no open PR; slot 1 on feat\/issue-10-x: HEAD moved 10h00m ago, tree changed 9h00m ago\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: bug, In development, factory:designing\. Open PR: none\. Slot: 1\.$/);
+  assert.match(line(out, 11), /checked within 1h30m: PR #112 by an untrusted author: not counted; PR #111: head pushed 4h00m ago, a check 3h57m ago, a review 5h00m ago; no slot on its branch\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: ready, In development\. Open PR: #111\./);
+  // no-mistakes is retired: nothing reads its mirror, and the checked list has no run evidence
+  assert.ok(!w.calls().some((c) => c.name === "dev-query" && /nomistakes|to_regclass/.test(c.argv.join(" "))), "the run mirror is not read");
+  assert.doesNotMatch(out, /\brun R\d|no run of its branch|runs n\/a|no run mirror/);
   assert.ok(!w.calls().some((c) => c.name === "gh" && (c.argv.includes("112") || c.argv.some((a) => a.endsWith("/sha112")))), "nothing of an untrusted PR is read");
-  // live evidence within T: a run update, a review, a slot's tree
-  assert.match(line(out, 12), /run R12 updated 5m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
+  // live evidence within T: a PR's head push, a review, a slot's tree
+  assert.match(line(out, 12), /PR #120: head pushed 5m ago, a check never, a review never.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(line(out, 13), /PR #113: head pushed 6h00m ago, a check never, a review 10m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(line(out, 14), /slot 4 on feat\/issue-14-w: HEAD moved 5h00m ago, tree changed 10m ago\. Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\. .*Slot: 4\./);
   // with no live claim: ghosts that leave (no holder; queued after its claim lapsed), one in the
   // queue left out, one live, and a v2 record's queued state never looked at
   assert.match(out, /^## Live in the factory with no live claim and no ready label$/m);
-  assert.match(line(out, 20), /^- #20: queued for 1h00m with no live claim; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no live claim and nothing is requeued\)\. Labels: bug, In development\. Open PR: none\. Slot: none\.$/);
+  assert.match(line(out, 20), /^- #20: queued for 1h00m with no live claim; checked within 2h00m: no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no live claim and nothing is requeued\)\. Labels: bug, In development\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 43), "", "a v2 record queued for its slot is live work");
   assert.ok(!w.calls().some((c) => c.name === "callum-flow-issue-read" && c.argv.join(" ") === "--json 43"), "nothing of it is read");
-  assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
+  assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 41), "", "an issue in the queue (ready) is no ghost");
-  assert.match(line(out, 42), /reviewing for 1h00m with no holder; .*run R42 updated 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
+  assert.match(line(out, 42), /reviewing for 1h00m with no holder; .*PR #142: head pushed 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(out, /^- With a v2 record, left to the loop: #16\.$/m);
   assert.match(line(out, 17), /Proposal: closed on GitHub \(the sweep logs it\): remove the label\./);
   assert.match(line(out, 18), /Proposal: not read \(an untrusted author\): check again later\./);
@@ -404,8 +404,8 @@ test("--act re-checks each named issue and releases it in order: labels off, its
       ["intervention", 10, "factory-reconcile", null, null],
       ["abandoned", 11, "factory-reconcile", "feat/issue-11-y", 111],
       ["intervention", 11, "factory-reconcile", null, 111],
-      ["abandoned", 12, "factory-reconcile", "feat/issue-12-v", null],
-      ["intervention", 12, "factory-reconcile", null, null],
+      ["abandoned", 12, "factory-reconcile", "feat/issue-12-v", 120],
+      ["intervention", 12, "factory-reconcile", null, 120],
     ],
   );
   assert.deepEqual([w.logged()[0].data.reason, w.logged()[0].data.stage, w.logged()[0].data.lives], ["reconcile", "designing", null]);

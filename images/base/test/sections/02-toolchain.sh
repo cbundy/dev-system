@@ -91,8 +91,8 @@ check "dev-doctor FAILs without CALLUM_FLOW_TRUSTED_AUTHORS with the fix, and re
 check "callum-flow-evaluate is on PATH, exits 2 on a bad argument and prints every report key (all n/a) for empty inputs" in_image '
   [ -x "$(command -v callum-flow-evaluate)" ] && callum-flow-evaluate --bogus 2>/dev/null; [ $? = 2 ] &&
   d=$(mktemp -d) &&
-  CLAUDE_CONFIG_DIR=$d CALLUM_EVENTS_DIR=$d NO_MISTAKES_HOME=$d callum-flow-evaluate --repo a/b --since 2026-01-01T00:00:00Z |
-    node -e "const r = JSON.parse(require(\"fs\").readFileSync(0, \"utf8\")); const keys = [\"window\", \"throughput\", \"first_pass\", \"review\", \"adjudicator_agreement\", \"spend\", \"waste\", \"pipeline\", \"sources\"]; if (keys.some((k) => !(k in r)) || !r.throughput[\"n/a\"] || !r.pipeline[\"n/a\"]) process.exit(1)"'
+  CLAUDE_CONFIG_DIR=$d CALLUM_EVENTS_DIR=$d callum-flow-evaluate --repo a/b --since 2026-01-01T00:00:00Z |
+    node -e "const r = JSON.parse(require(\"fs\").readFileSync(0, \"utf8\")); const keys = [\"window\", \"throughput\", \"first_pass\", \"review\", \"adjudicator_agreement\", \"spend\", \"waste\", \"sources\"]; if (keys.some((k) => !(k in r)) || \"pipeline\" in r || !r.throughput[\"n/a\"]) process.exit(1)"'
 check "callum-flow-factory-state is on PATH, exits 2 on a bad argument and prints its usage with --help" in_image '
   [ -x "$(command -v callum-flow-factory-state)" ] && callum-flow-factory-state --bogus 2>/dev/null; [ $? = 2 ] &&
   callum-flow-factory-state --help | grep -q "^usage: callum-flow-factory-state"'

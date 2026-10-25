@@ -16,9 +16,8 @@
 // ever end. For each it looks for live evidence within T, the timeout of the v2
 // state it shows (the v2 state, hooks/factory-state-map.ts: designing, building, reviewing, fixing
 // and parked to reviewing, merge-queue to its wait; any other state, queued among them,
-// 2 h): a no-mistakes run of the issue's branch updated (the fleet database's mirror); the open
-// PR's head pushed (its head commit's date), a check run started or finished, or a review; a slot
-// of the pool on the issue's branch whose HEAD or tree changed. It also lists the pool's other
+// 2 h): the open PR's head pushed (its head commit's date), a check run started or finished, or a
+// review; a slot of the pool on the issue's branch whose HEAD or tree changed. It also lists the pool's other
 // slots (those with no factory-loop: holder), and the issues that still carry `In development`
 // with no live claim, open or closed. Each issue or slot gets one line: why it shows as active,
 // what was checked, and the proposal: `leave the factory`, `free the slot`, `remove the label` or
@@ -234,9 +233,7 @@ function buildReport(input, h) {
     const gh = input.issues.get(n) || { ok: false, error: 'not read' }
     const labels = gh.ok ? gh.labels : []
     if (orphan && gh.ok && hasLabel(labels, input.readyLabel)) return null
-    // the evidence: runs of its branch, its open PRs, the slots on its branch
-    const runs = input.runs.ok ? input.runs.list.filter((r) => issueOfBranch(r.branch) === n) : []
-    const runAt = runs.reduce((m, r) => Math.max(m, r.updated ?? -Infinity), -Infinity)
+    // the evidence: its open PRs, the slots on its branch
     const onBranch = input.prs.ok ? input.prs.open.filter((p) => p.number === f.pr || issueOfBranch(p.branch) === n).sort((a, b) => b.number - a.number) : []
     const prs = onBranch.filter((p) => !input.prFacts.get(p.number)?.untrusted)
     const untrusted = onBranch.filter((p) => input.prFacts.get(p.number)?.untrusted).map((p) => `#${p.number}`)
@@ -246,15 +243,6 @@ function buildReport(input, h) {
     const times = []
     // what could not be read: with no live evidence found, a release waits until all of it is
     const unread = []
-    if (!input.runs.ok) {
-      checked.push(`runs n/a (${input.runs.error})`)
-      unread.push('runs')
-    } else if (input.runs.note) checked.push(input.runs.note)
-    else if (runs.length === 0) checked.push('no run of its branch')
-    else {
-      checked.push(`run ${short(runs.find((r) => r.updated === runAt)?.id ?? runs[0].id)} updated ${ago(Number.isFinite(runAt) ? runAt : null, at)}`)
-      if (Number.isFinite(runAt)) times.push(runAt)
-    }
     if (!input.prs.ok) {
       checked.push(`PRs n/a (${input.prs.error})`)
       unread.push('PRs')
@@ -279,7 +267,7 @@ function buildReport(input, h) {
     const newest = times.length ? Math.max(...times) : null
     const isLive = newest !== null && newest >= cutoff
     const pr = prs[0]?.number ?? f.pr ?? null
-    const branch = runs.find((r) => r.branch)?.branch ?? prs[0]?.branch ?? slots[0]?.branch ?? null
+    const branch = prs[0]?.branch ?? slots[0]?.branch ?? null
     // a slot is freed on the lease the report saw; one with no lease is the owner's to return
     const freeable = slots.filter((s) => s.lease)
     const unleased = slots.filter((s) => !s.lease).map((s) => s.name)
@@ -441,13 +429,6 @@ FROM (SELECT issue, state, max(ts) AS ts FROM factory.events
         AND state IN ('claimed', 'transition')
       GROUP BY issue, state) x;`
 
-const SQL_RUNS_EXIST = `SELECT to_regclass('nomistakes.runs') IS NOT NULL;`
-
-const SQL_RUNS = `SELECT coalesce(json_agg(json_build_object('id', id, 'branch', branch, 'status', status,
-  'updated_at', to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) ORDER BY updated_at, id), '[]'::json)
-FROM nomistakes.runs
-WHERE lower(repo) = lower(:'repo') AND branch IS NOT NULL AND updated_at > :'since'::timestamptz;`
-
 // io: the commands it runs, by name, through one runner a test can replace.
 function realIo(env) {
   const bins = {
@@ -522,18 +503,6 @@ function gather(o, io, settings) {
     c[row.state] = ms(row.ts)
     claims.set(row.issue, c)
   }
-  // the runs of the last week, when the mirror is there
-  let runs
-  try {
-    const exists = io.run('devQuery', ['-At', '-c', SQL_RUNS_EXIST])
-    if (exists.code !== 0) runs = { ok: false, error: `dev-query: ${why(exists)}` }
-    // no mirror (it is optional, 2.4): no run can be live evidence
-    else if (exists.stdout.trim() !== 't') runs = { ok: true, list: [], note: 'no run mirror (nomistakes.runs does not exist)' }
-    else runs = { ok: true, list: devQueryJson(io, SQL_RUNS, { repo, since: iso(at - 7 * 24 * HOUR) }).map((r) => ({ id: r.id, branch: r.branch, status: r.status, updated: ms(r.updated_at) })) }
-  } catch (err) {
-    runs = { ok: false, error: err.message }
-  }
-
   // this device's live claims, and the issues that show as active with no live claim (6.3)
   const candidates = factory.issues
     .filter((i) => (i.holder === device && settings.liveStates.includes(i.state)) || ((i.life ?? null) === null && (i.state === 'queued' || (!i.holder && settings.liveStates.includes(i.state)))))
@@ -589,7 +558,7 @@ function gather(o, io, settings) {
   const slotFacts = new Map()
   if (slots.ok) for (const s of slots.list) if (s.status !== 'available' && !s.holder.startsWith(FACTORY_PREFIX) && s.path) slotFacts.set(s.path, readSlot(io, s.path))
 
-  return { repo, device, at, timeouts: settings.timeouts, readyLabel: settings.readyLabel, inDevLabel: settings.inDevLabel, factory, claims, runs, issues, inDev, prs, prFacts, slots, slotFacts }
+  return { repo, device, at, timeouts: settings.timeouts, readyLabel: settings.readyLabel, inDevLabel: settings.inDevLabel, factory, claims, issues, inDev, prs, prFacts, slots, slotFacts }
 }
 
 // readPr: when the PR's head was pushed (its head commit's date), and the newest check start or

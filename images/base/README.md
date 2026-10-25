@@ -1632,22 +1632,19 @@ Every event also says which versions produced it: `base_image`, `dev_image`, `te
 event's old-format line `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `factory-event-push-loop`.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
+[--projects-dir <dir>]... [--events <file>] [--ready-times <file>]
 [--source old|new|shadow] [--new-events <file>] [--regime <value>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
-wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
+wakes, and for a two-device trial per-device merges and claims, double claims,
 lost races, stuck issues and the waiting split; the factory loop v2's interventions, untouched merges,
 judgement calls, claim completion, and review and fix rounds; definitions in `docs/metrics.md`). It only reads and makes no network calls,
 so it is in the synced allow list. Inputs: Claude transcripts under
 `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` (the project directories of this checkout and its
 `.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
 `${CALLUM_EVENTS_DIR:-/persist/events}/<owner>__<repo>.jsonl` (`--events` takes any
-`factory.events` export as JSON lines) and `${NO_MISTAKES_HOME:-~/.no-mistakes}/state.sqlite`
-(`--nm-state`). `--nm-export` takes a JSON-lines dump of the `nomistakes` schema (the query is in
-`docs/metrics.md`) and then every pipeline number, including the per-device and per-repo gate
-first-pass rate, fix rounds, tokens by model and purpose and time parked, comes from it and can
-cover the whole fleet; `window.scope` says which scope each source covers. A missing source
+`factory.events` export as JSON lines); `window.scope` says which scope each source covers.
+It reads no no-mistakes data. A missing source
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 `--source` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store, as in
@@ -1987,9 +1984,6 @@ Unknown columns are tolerated (they land in `raw`), but a rename or removal show
 or a skipped table until the exporter is updated. Check `runs.no_mistakes_version` when a
 column goes quiet. The upstream ask for a stable, schema-versioned export is
 [kunchenguid/no-mistakes#985](https://github.com/kunchenguid/no-mistakes/issues/985).
-The run-to-issue link rules are in [docs/metrics.md](../../docs/metrics.md#the-run-to-issue-link),
-and the fleet export query that `callum-flow-evaluate` reads is in
-[docs/metrics.md](../../docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export).
 
 `/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
 without connecting to PostgreSQL. `--mark N` selects an incremental export;
@@ -2081,13 +2075,12 @@ turn. `context_window` is the size the [factory-loop-workspace](../../plugins/fa
 or the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
 `DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without either plugin and
 for sub-agents. A session is live while it is listed in a row that is not `stale`; the stopped beat lists none.
-`state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
-`completed`, `failed` or `cancelled` and no `superseded` event on this device names it, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
+`state` is `busy` when this device has an issue in flight, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
-run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it; the runs join by branch only) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the runs and chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
+run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
