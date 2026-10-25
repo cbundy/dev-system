@@ -59,8 +59,6 @@ AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
 AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
 FACTORY_EVENT_PUSH_LOCK=/tmp/dev-factory-event-push.lock
 FACTORY_EVENT_PUSH_LOG=/tmp/dev-factory-event-push.log
-NM_PUSH_LOCK=/tmp/dev-nm-push.lock
-NM_PUSH_LOG=/tmp/dev-nm-push.log
 HEARTBEAT_LOCK=/tmp/dev-heartbeat.lock
 HEARTBEAT_LOG=/tmp/dev-heartbeat.log
 LOGIN_PAGE_LOCK=/tmp/dev-login-page.lock
@@ -689,23 +687,6 @@ start_factory_event_push() {
   log "started factory event push (new log) (log: $FACTORY_EVENT_PUSH_LOG)"
 }
 
-# 8c. The no-mistakes pipeline data push (cbundy/dev-system#273): with the same
-#     PostgreSQL URL, keep nm-push-loop running so state.sqlite is mirrored into
-#     the nomistakes schema.
-start_nm_push() {
-  local rc=0
-  # shellcheck source=agentsview.sh
-  . /usr/local/share/dev-system/agentsview.sh
-  agentsview_pg_url >/dev/null || rc=$?
-  [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
-  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - no-mistakes push not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
-  flock -n "$NM_PUSH_LOCK" true 2>/dev/null || return 0
-  : > "$NM_PUSH_LOG"
-  setsid nohup flock -n "$NM_PUSH_LOCK" /usr/local/share/dev-system/nm-push-loop \
-    >> "$NM_PUSH_LOG" 2>&1 < /dev/null &
-  log "started no-mistakes push (log: $NM_PUSH_LOG)"
-}
-
 # 8d. The worker heartbeat (cbundy/dev-system#339): with either the agentsview
 #     PostgreSQL URL or the factory database writer URL, keep heartbeat-loop
 #     running so this device's factory.workers row (in each configured database)
@@ -830,7 +811,6 @@ recover_no_mistakes
 write_versions
 start_agentsview_push
 start_factory_event_push
-start_nm_push
 start_heartbeat
 check_shared_dir
 start_login_page

@@ -38,7 +38,7 @@ function fixture({ share = true, files = [], tools = [], devVersion = null }) {
   return { env: { PATH: bin, DEV_SYSTEM_SHARE: root }, dir };
 }
 
-const ALL_FILES = ["image-release", "event-push-loop", "nm-push-loop"];
+const ALL_FILES = ["image-release", "event-push-loop"];
 const ALL_TOOLS = ["psql", "dev-query"];
 
 function run(mode, fx, input = "{}") {
@@ -54,7 +54,7 @@ test("session-start: an old image missing tools and files names each and the reb
   const fx = fixture({});
   const { out } = run("session-start", fx);
   const c = ctx(out);
-  for (const m of ["psql", "dev-version", "dev-query", "image-release", "event-push-loop", "nm-push-loop"]) {
+  for (const m of ["psql", "dev-version", "dev-query", "image-release", "event-push-loop"]) {
     assert.match(c, new RegExp(m));
   }
   assert.match(c, /rebuild the container/);
@@ -65,7 +65,8 @@ test("session-start: only the missing item is named", () => {
   const fx = fixture({ files: ALL_FILES, tools: ["psql"], devVersion: "echo 'dev-version: OK base-image'" });
   const c = ctx(run("session-start", fx).out);
   assert.match(c, /dev-query/);
-  assert.doesNotMatch(c, /nm-push-loop/);
+  assert.doesNotMatch(c, /event-push-loop/);
+  assert.doesNotMatch(c, /nm-push-loop|nm-export/);
 });
 
 test("session-start: a STALE base-image or layer line is quoted; tool drift is not", () => {
@@ -116,11 +117,19 @@ test("tool-failure: exit 127 for a manifest tool adds context", () => {
 });
 
 test("tool-failure: internal loops are explained when present, flagged missing when absent", () => {
-  const err = "Exit code 127\nbash: nm-push-loop: command not found";
-  const present = fixture({ files: ["nm-push-loop"] });
+  const err = "Exit code 127\nbash: event-push-loop: command not found";
+  const present = fixture({ files: ["event-push-loop"] });
   assert.match(ctx(run("tool-failure", present, JSON.stringify({ error: err })).out), /deliberately not on PATH/);
   const absent = fixture({});
   assert.match(ctx(run("tool-failure", absent, JSON.stringify({ error: err })).out), /rebuild the container/);
+});
+
+test("tool-failure: the deleted no-mistakes loops are no longer known, so they get no context", () => {
+  const fx = fixture({ files: ["nm-push-loop", "nm-export"] });
+  for (const name of ["nm-push-loop", "nm-export"]) {
+    const error = `Exit code 127\nbash: ${name}: command not found`;
+    assert.equal(run("tool-failure", fx, JSON.stringify({ error })).out, "");
+  }
 });
 
 test("tool-failure: silent for other tools, other exit codes and non-container hosts", () => {

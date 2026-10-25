@@ -7,7 +7,7 @@
 //
 // Against PostgreSQL (skipped without a server, like the other database tests): the replay corpus
 // plus tests/fixtures/metrics-queries/extra-old-rows.jsonl are loaded into an old-format
-// `factory.events` store (with empty `nomistakes` tables, so the old queries parse) and, with
+// `factory.events` store (with the empty `nomistakes` tables of tests/fixtures/metrics-queries/nomistakes.sql, so the old queries parse) and, with
 // scripts/factory-events-replay.js, into a bootstrap-made factory database. For each rewritten
 // query the frozen old query (tests/fixtures/metrics-queries/old/) runs on the old store and the
 // document's query on the new one, and the answers must agree: same rows, the same counts, flags and
@@ -26,7 +26,6 @@ const { test } = require("node:test");
 const { available, createDb } = require("./lib/factory-db.js");
 const { oldStore } = require("./lib/factory-events-old.js");
 const { psql } = require("../scripts/factory-events-replay/pg.js");
-const { ddl: nomistakesDdl } = require("../images/base/nm-export");
 
 const ROOT = path.join(__dirname, "..");
 const DOC = path.join(ROOT, "docs", "metrics.md");
@@ -424,7 +423,7 @@ test("the document's queries answer as the old queries did on the same events", 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mq-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const old = oldStore(t, [...corpus, ...extra]);
-  psql(old.url, nomistakesDdl());
+  psql(old.url, fs.readFileSync(path.join(FIXTURES, "nomistakes.sql"), "utf8"));
   const dest = createDb(t);
   const check = load(old, dest, dir);
   assert.equal(check.pass, true);
