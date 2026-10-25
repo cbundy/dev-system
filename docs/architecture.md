@@ -244,8 +244,9 @@ watchers). Treehouse worktrees start without it, so a worktree agent cannot merg
 
 The per-file split between synced and repo-owned content, including files without ownership
 markers, is documented in [`templates/README.md`](../templates/README.md).
-`update` uses `git merge-file`, leaves
-real conflicts as markers and exits non-zero. A missing or edited baseline breaks the merge,
+`update` uses `git merge-file`, keeps the repo's text when the template only rewords a
+placeholder the repo filled or removes a repo-owned section the repo filled, leaves
+every other conflict as markers and exits non-zero. A missing or edited baseline breaks the merge,
 so the baseline is committed.
 
 ## Runtime map

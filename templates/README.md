@@ -5,7 +5,8 @@ rules below. Marker-split files use `synced: do not edit (managed by dev-system)
 `repo-owned: edit freely` in their own comment syntax. `treehouse.toml`, `.claude/factory-loop.json`,
 `.github/workflows/ci.yml` and `.claude/settings.json` use the ownership rules documented in their
 sections instead.
-`callum-dev update` merges upstream changes with repo edits and surfaces conflicts.
+`callum-dev update` merges upstream changes with repo edits and surfaces conflicts, except that it keeps
+the repo's text when the template only rewords a placeholder the repo filled or removes a repo-owned section the repo filled.
 
 ## `treehouse.toml` -> `treehouse.toml`
 
@@ -53,11 +54,9 @@ Global agent instructions.
   which says what a factory loop agent does and leaves to the loop, and what the manual path
   (a worktree plus the gate commands) is for. It is the same for every
   repo, so it is synced and holds for loop agents whatever the repo-owned block says.
-- Repo-owned: `## Canonical commands` and `## Implementation sub-agents (manual path)` - both ship as
-  placeholder headings only. Fill in this repo's actual lint/test/typecheck commands (and
-  which one CI calls, so they can't drift), and this repo's worktree/isolation mechanism for the
-  manual path. A loop agent works in the loop's slot instead.
-- One placeholder inside the synced screenshot-evidence bullet: the path to this repo's
+- Repo-owned: `## Canonical commands` - ships as a placeholder heading only. Fill in this repo's
+  actual lint/test/typecheck commands (and which one CI calls, so they can't drift).
+- One placeholder inside the synced screenshot-evidence bullet: the path to this
   repo's UI capture doc (kept in step with `uiCapture` in `.claude/factory-loop.json`), or
   `n/a - no UI` for a repo with no UI. Onboarding step 3h ([UI capture](../docs/onboarding.md#3h-ui-capture))
   decides it. Fill that in even though the surrounding bullet is synced.
