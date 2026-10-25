@@ -67,7 +67,7 @@ Global agent instructions.
 ## `.claude/settings.json` -> `.claude/settings.json`
 
 Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
-generic `permissions.allow` and `permissions.deny` lists the implement-issue/orchestrator flow needs
+generic `permissions.allow` and `permissions.deny` lists the factory loop and the manual flow need
 (`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
 `callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
 `callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, `callum-flow-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), `callum-flow-capture` (starts the app, takes the UI captures with Playwright and uploads them), the read-only

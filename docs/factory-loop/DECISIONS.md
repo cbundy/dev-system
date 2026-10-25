@@ -247,6 +247,9 @@ skill does not use them, and notices for them would be new behaviour.
   with the plugin installed from acting by accident. The repo-local
   `allowActOutsideOrchestrator` lifts it for a testbed.
 
+  Retired by D-77: the released orchestrator skill and its watcher are gone, so only the role check
+  and the heartbeat guard against another loop remain relevant.
+
 ### D-29 Rollout follow-ups for every merge, hand merges too
 
 - **Decision**: the follow-ups act on every merged PR whose issue this device held, whether the
@@ -264,6 +267,7 @@ skill does not use them, and notices for them would be new behaviour.
 
 - **Decision**: `plugins/factory-loop/skills/judge/SKILL.md`, a draft written in phase 3. The
   released `issue-orchestrator` skill is not touched.
+  Retired by D-77: the `issue-orchestrator` skill no longer exists.
 - **Why**: the brief forbids changing the released skill. A separate skill can be reviewed and
   shipped on its own.
 
@@ -716,3 +720,17 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Same change**: a cadenced key (heartbeat, sweep) that used up its attempts stays exhausted
   while its next attempt runs, so its `tell:stalled` owner item does not drop out of the title's
   count for the length of the retry.
+
+### D-77 The skills-based orchestrator is retired (owner call)
+
+- **Decision**: the `issue-orchestrator` and `implement-issue` skills, the five `callum-flow`
+  agents (designer, explorer, implementer, fixer, adjudicator) and the `orchestrator` Coder
+  template are removed. The factory loop is the only orchestrator. The manual path is a person
+  working in a worktree, running the canonical commands and opening a plain PR that links its
+  issue. `coder/push.sh orchestrator` is refused; `orchestrator-loop` stays (owner, 2026-10-24,
+  cbundy/dev-system#1276, #667).
+- **Alternatives**: keep the template for a person to start an interactive orchestrator.
+- **Why**: the loop covers everything the skills did, and two orchestrators on one repo is the
+  hazard D-28 guards against. The `.claude/orchestrator-memory.md` file name stays: it is the
+  judge's memory. After the merge the owner deletes the live `orchestrator` template in Coder
+  once no workspace uses it.

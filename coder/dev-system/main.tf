@@ -4,7 +4,7 @@
 # (parameter docker_host, immutable: the volumes live on it), and the host-side
 # pieces (secrets directories, the shared gh and Claude login volumes) are per
 # host. See README.md next to this file. The
-# same Terraform is also pushed as the "orchestrator" template, which only
+# same Terraform is also pushed as the "orchestrator-loop" template, which only
 # changes variables: the Remote Control mode default and the long-lived
 # session's settings (variables remote_control_*); coder/push.sh holds each
 # template's name, look and variables.
@@ -150,7 +150,7 @@ variable "trusted_authors" {
 }
 
 # The Remote Control mode parameter's default, so one Terraform serves both
-# templates: dev-system keeps auto, orchestrator pushes session (coder/push.sh).
+# templates: dev-system keeps auto, orchestrator-loop pushes session (coder/push.sh).
 variable "remote_control_default_mode" {
   default     = "auto"
   description = "Default of the Remote Control mode parameter: auto, session or server."
@@ -161,7 +161,7 @@ variable "remote_control_default_mode" {
   }
 }
 
-# The orchestrator's long-lived session (cbundy/dev-system#164), generic so one
+# The loop's long-lived session (cbundy/dev-system#164), generic so one
 # Terraform serves both templates: coder/push.sh sets these per template, and
 # the defaults keep dev-system's behaviour.
 variable "remote_control_default_resume" {

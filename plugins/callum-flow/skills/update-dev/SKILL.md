@@ -13,8 +13,8 @@ version: 0.94.0
 
 # update-dev: propose a change to the shared dev system
 
-You are turning a rough request ("the orchestrator should X", "add Y to the
-implement-issue quality bar") into a reviewed upstream PR on
+You are turning a rough request ("the factory loop should X", "add Y to the
+onboarding checklist") into a reviewed upstream PR on
 `cbundy/dev-system`. The whole point of this skill is the upstream-not-fork
 discipline: shared behavior changes land in dev-system and flow out to
 consumers via a release; they are never patched locally.

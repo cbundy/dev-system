@@ -10,7 +10,7 @@ ROOT="$SCRIPT_DIR/../../.."
 ROUTE="$ROOT/images/base/callum-flow-implementer-route"
 SHARE="$ROOT/images/base"
 READER="$SHARE/callum-flow-issue-read"
-AGENT="$ROOT/plugins/callum-flow/agents/implementer.md"
+AGENT="$ROOT/plugins/factory-loop/agents/builder.md"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -99,10 +99,10 @@ usage_err() {
   [ ! -e "$d/ev" ] || fail "$1: logged on a usage error"
 }
 
-# the control is the implementer agent's frontmatter model
+# the control is the builder agent's frontmatter model
 control=$(sed -n 's/^model: *//p' "$AGENT")
 [ -n "$control" ] || fail "no model: line in $AGENT"
-reset; route 506; expect "$control" default - 0 "pct unset prints the implementer frontmatter model"
+reset; route 506; expect "$control" default - 0 "pct unset prints the builder frontmatter model"
 
 # label overrides: the owner's pick wins over the hash, in either direction
 reset; echo model:opus > "$d/labels"; route 506 0; expect opus label - 0 "opus label, pct 0"

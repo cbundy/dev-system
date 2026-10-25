@@ -83,14 +83,12 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
   its title, body, issue link and evidence from your answer; it runs review, waits on CI and
   merges through its own queue. Follow your agent definition and your prompt. Work only in your
   slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
-  never run no-mistakes, and never follow the `implement-issue` or `issue-orchestrator` skills or
-  a section of this file marked as the manual path. Never write to GitHub: where a rule here says
+  and never follow a section of this file marked as the manual path. Never write to GitHub: where a rule here says
   to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
   answer and the loop does it.
-- **The manual path**, for a person or an interactive session. Code changes go in a worktree
-  (the mechanism is in "Implementation sub-agents" below). Run every canonical command once
-  before the PR opens: they are the same commands CI and `.claude/factory-loop.json`
-  `gateCommands` run.
+- **The manual path**, for a person or an interactive session. Code changes go in a worktree.
+  Run every canonical command once before the PR opens (they are the same commands CI and
+  `.claude/factory-loop.json` `gateCommands` run), then open a plain PR that links its issue.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->
@@ -131,8 +129,8 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
   runs a real PostgreSQL (a private cluster, or CI's service) with one throwaway `factory_test_*`
   database per test, and fails if one is left behind.
 
-The factory loop's stop gate (`gateCommands` in `.claude/factory-loop.json`), the no-mistakes lint
-and test steps of the manual path (`.no-mistakes.yaml`) and CI all run exactly these two commands:
+The factory loop's stop gate (`gateCommands` in `.claude/factory-loop.json`) and CI all run
+exactly these two commands:
 `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
 on every pull request and every push to main; CI runs `npm test` as `TEST_SHARD=K/N` shards in
 parallel, joined by the `ci` job, while `npm test` with no shard stays the one whole gate. Its `ci` check is the one branch protection
@@ -163,9 +161,7 @@ architecture). Rules specific to working here:
   tooling in `images/base/`. The scripts in `features/src/callum-tools/` are still the
   image's source, so fixing them is fine.
 - Feature PRs never bump `images/base/VERSION`: the release bump PR does
-  (`node scripts/release-bump.js X.Y.Z --image A.B.C`, RELEASING.md). On the manual path, a PR that
-  is only behind main goes through `callum-flow-merge-guard <pr> --update-behind`, not a new pipeline
-  run. On the factory loop, the merge queue brings the PR at its head up to date itself, and a loop
+  (`node scripts/release-bump.js X.Y.Z --image A.B.C`, RELEASING.md). The merge queue brings the PR at its head up to date itself, and a loop
   agent leaves a PR that is only behind main alone.
 - Templates in `templates/` must keep a clear split between synced content and repo-owned
   values so `callum-dev update` can merge cleanly.
@@ -200,14 +196,6 @@ Sessions in this repo run the *released* callum-flow plugin from the marketplace
 checkout, so editing `plugins/callum-flow/` does not change the running session. In an interactive
 session, try a skill or hook change by starting a session with `claude --plugin-dir plugins/callum-flow`.
 A loop agent cannot start one, and checks the change with `npm test`.
-
-## Implementation sub-agents (manual path)
-
-On the manual path, any agent making code changes - solo or delegated - works inside a treehouse
-worktree it leases itself. Sub-agents delegated an issue follow the `implement-issue` skill for the
-full working procedure (worktree, build, verify, evidence, /no-mistakes pipeline, handoff).
-Interactive orchestration is driven by the `issue-orchestrator` skill. A factory loop agent does
-none of this (see "Two ways work gets done").
 
 There is no app to boot here. Image, devcontainer and feature changes cannot be exercised
 locally (see "No Docker in the dev environment" above), so their evidence is the PR's CI run.

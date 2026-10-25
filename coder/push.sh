@@ -2,14 +2,13 @@
 # Push one of the Coder templates built from coder/dev-system:
 #
 #   coder/push.sh dev-system     Remote Control mode defaults to auto (server with a repo)
-#   coder/push.sh orchestrator   one long-lived session: session mode, resumed on every
-#                                start, starting the issue-orchestrator skill by itself
 #   coder/push.sh orchestrator-loop
-#                                the same session, run by the factory loop: the factory-loop
-#                                plugin drives the repo and the session starts as its judge;
-#                                its companion factory-loop-workspace guards the loop's agents
+#                                one long-lived session (session mode, resumed on every start),
+#                                run by the factory loop: the factory-loop plugin drives the repo
+#                                and the session starts as its judge; its companion
+#                                factory-loop-workspace guards the loop's agents
 #
-# All three templates are the same Terraform. Each one's name, display name, icon, description
+# Both templates are the same Terraform. Each one's name, display name, icon, description
 # and variables live here, so a push never depends on remembering flags. The site's values
 # (docker_hosts, otlp_endpoint, ...) are in coder/dev-system/terraform.tfvars, which coder
 # reads on every push. Needs the coder CLI logged in as a template admin; CODER_BIN picks
@@ -23,7 +22,7 @@ TEMPLATE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/dev-system
 CODER=${CODER_BIN:-coder}
 
 usage() {
-  echo "usage: $0 dev-system|orchestrator|orchestrator-loop" >&2
+  echo "usage: $0 dev-system|orchestrator-loop" >&2
   exit 2
 }
 
@@ -53,24 +52,6 @@ case "$name" in
     wind_down_minutes=0
     migrator=none
     ;;
-  orchestrator)
-    role=orchestrator
-    display_name=Orchestrator
-    icon=/emojis/1f504.png # U+1F504, the clockwise arrows emoji
-    description='A dev-system workspace running one interactive Claude Code Remote Control session, e.g. for the issue orchestrator'
-    mode=session
-    resume=true
-    # Off for now: whether the orchestrator acts without approvals is the owner's
-    # decision (cbundy/dev-system#164), to be flipped separately.
-    skip_permissions=false
-    prompt=/callum-flow:issue-orchestrator
-    resume_prompt='The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.'
-    name_format='🔄 {name} orchestrator'
-    plugins=
-    refs_win=false
-    wind_down_minutes=0
-    migrator=none
-    ;;
   orchestrator-loop)
     role=orchestrator
     display_name='Orchestrator (loop)'
@@ -78,7 +59,8 @@ case "$name" in
     description='A dev-system orchestrator run by the factory loop, a deterministic plugin that claims, gates and merges issues'
     mode=session
     resume=true
-    # As for orchestrator, until the owner decides (cbundy/dev-system#164).
+    # Off for now: whether the loop's session acts without approvals is the owner's decision
+    # (cbundy/dev-system#164), to be flipped separately.
     skip_permissions=false
     prompt=/factory-loop:judge
     resume_prompt='The workspace restarted and this conversation was resumed. The factory loop resumes by itself; answer its wakes as its judge.'

@@ -42,8 +42,7 @@ Goals:
 Non-goals:
 
 - no-mistakes anywhere in the loop's path: not in its sources, its guard calls, its agent
-  definitions or its prompts. It stays for people and other repos; `.no-mistakes.yaml` is not
-  changed.
+  definitions or its prompts. `.no-mistakes.yaml` is not changed.
 - Release sequencing in the merge path.
 - Running tests in the loop. GitHub CI is the test gate.
 - A GitHub merge queue: it needs an organisation-owned repo, and dev-system is user-owned.
@@ -1382,7 +1381,7 @@ retired, and the reviewer was never an edit of it.
 - **Its prompt** (`hooks/v2/prompts-review.ts`) gives:
   - the issue and brief URLs, and the PR;
   - the diff to review (`origin/<default>...<head>`, three dots: the PR's own change);
-  - the TEST POLICY sentence (`plugins/callum-flow/agents/fixer.md`);
+  - the TEST POLICY sentence;
   - the instruction to run `callum-flow-test-weakening origin/<default>..HEAD` and judge its
     output;
   - its own earlier rounds and the fixer's dispositions, so it does not repeat itself;
@@ -4046,7 +4045,7 @@ The first entries are the owner's own decisions; they are settled.
 - **Decision:** the loop neither writes nor reads `In development`. The claim, heartbeat, sweep and
   factory-state tools use the claim comments, the claim events and the `factory:*` labels instead
   (3.6). The migration removes `In development` from the issues it touches (6.3).
-- **Alternatives:** keep it until the old orchestrator is retired.
+- **Alternatives:** keep it for the skills-based orchestrator (retired, D-77).
 - **Why:** one label set per issue.
 
 ### Small modules, and a size guard (owner)
@@ -4466,7 +4465,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | Key | Default | Meaning |
 |---|---|---|
 | `mode` | `observe` | `off`, `observe` or `act` (13.4.1): what the loop does. A plugin option; the workspace file's `mode`, which `/factory mode` writes, wins |
-| `shadowDevice` | `none` | a plugin option (13.4.1), observe mode only: plan as this device, the live orchestrator's, so an observe run can be compared with it; `none` plans as this one; ignored in act mode |
+| `shadowDevice` | `none` | a plugin option (13.4.1), observe mode only: plan as this device, the one that runs a live loop, so an observe run can be compared with it; `none` plans as this one; ignored in act mode |
 | `readyLabel` | `ready` | the queue and claim label (I-03). Labels are lower case for now, and every label comparison ignores case (owner, 2026-10-13) |
 | `priorityLabel` | `priority` | 3.3: the label of the `priority-label` score factor (S1 orders by score after the owner's `only`/`priority` list), ignoring case; order only, never a filter |
 | `inDevLabel` | `in development` | the claim label (I-03); ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |

@@ -7,7 +7,7 @@
     {
       "name": "callum-flow",
       "source": "./plugins/callum-flow",
-      "description": "Issue-orchestrator and implement-issue skills for running a GitHub ready-issue queue end to end."
+      "description": "Skills (update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain) and hooks for working in a dev-system repo."
     },
     {
       "name": "factory-hud",

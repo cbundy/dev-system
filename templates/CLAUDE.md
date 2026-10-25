@@ -84,14 +84,12 @@ Work in this repo takes one of two paths. A rule that names a path applies only 
   its title, body, issue link and evidence from your answer; it runs review, waits on CI and
   merges through its own queue. Follow your agent definition and your prompt. Work only in your
   slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
-  never run no-mistakes, and never follow the `implement-issue` or `issue-orchestrator` skills or
-  a section of this file marked as the manual path. Never write to GitHub: where a rule here says
+  and never follow a section of this file marked as the manual path. Never write to GitHub: where a rule here says
   to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
   answer and the loop does it.
-- **The manual path**, for a person or an interactive session. Code changes go in a worktree
-  (the mechanism is in "Implementation sub-agents" below). Run every canonical command once
-  before the PR opens: they are the same commands CI and `.claude/factory-loop.json`
-  `gateCommands` run.
+- **The manual path**, for a person or an interactive session. Code changes go in a worktree.
+  Run every canonical command once before the PR opens (they are the same commands CI and
+  `.claude/factory-loop.json` `gateCommands` run), then open a plain PR that links its issue.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->
@@ -116,12 +114,4 @@ each gate and when to run e2e locally, so the local command and the CI gate can 
 apart. If you add a new category of tests, extend the single entrypoint here rather than
 adding a bespoke CI step.>
 
-## Implementation sub-agents (manual path)
-
-Any agent making code changes - solo or delegated - works inside a <REPLACE: this repo's
-worktree/isolation mechanism, e.g. a treehouse worktree>, then runs the gate commands
-(`.claude/factory-loop.json` `gateCommands`, the same commands CI runs) before the PR opens.
-
-<REPLACE: note any repo-specific variations to the above (e.g. extra build/boot steps
-before an agent can safely run this repo's app).>
 <!-- end repo-owned -->

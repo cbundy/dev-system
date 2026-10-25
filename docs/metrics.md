@@ -3613,8 +3613,7 @@ issue N of repo R when:
 
 - the run's `repo` equals the lower-cased R (the exporter lowercases `repo`; the event log's `repo` is not
   lowercased, so compare after lowercasing), and
-- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` convention the
-  `implement-issue` skill uses (up to nine digits are read).
+- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` branch convention (up to nine digits are read).
 
 Legacy fallback: a run whose branch carries no issue number is linked through a `run_started` event with
 the same run id, so old rows keep working. The branch wins when the two disagree. Every other run,
