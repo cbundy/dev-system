@@ -226,7 +226,7 @@ COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-s
 RUN chmod 0755 /usr/local/share/dev-system/factory-db /usr/local/share/dev-system/factory-db/migrations
 # The claim rule callum-flow-claim and callum-flow-sweep share (cbundy/dev-system#660).
 COPY --chmod=0644 images/base/claim-events.sh /usr/local/share/dev-system/
-COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/claude-config.sh images/base/agentsview.sh images/base/factory-db.sh images/base/mem-pressure.sh \
+COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/claude-config.sh images/base/agentsview.sh images/base/factory-db.sh images/base/mem-pressure.sh images/base/github-health.sh \
   images/base/factory-event-translate.js images/base/factory-source.js images/base/evaluate-new-events.js images/base/factory-event-write.js images/base/release-contents.js images/base/factory-event-shapes.json images/base/telemetry.sh images/base/codex-otel.sh \
   images/base/gh.sh images/base/claude-auth.sh images/base/exec-hint.sh images/base/plugins.sh images/base/persist.sh images/base/trusted-authors.sh \
   /usr/local/share/dev-system/

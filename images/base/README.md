@@ -1892,6 +1892,26 @@ masked, as `heartbeat-loop: <target> config write failed`; it never changes the 
 other target. The stopped beat sends none and leaves `config` as it was. Judge a snapshot's freshness by
 `config->>'at'` (the loop's last observing pass), not by `last_seen`.
 
+#### GitHub health
+
+Each running beat also sends a fourth, separate psql call (`-- heartbeat github`) to every target whose UPSERT
+succeeded, after its config call: an UPDATE of the `github_*` columns of the worker's row (`github_at` is the
+database's `now()`) and of the `factory.worker_samples` row this beat's stats call inserted (the device's newest
+row within the last minute). The budget comes from one `gh api rate_limit` per beat (`timeout 10`, sourced helper
+`github-health.sh`; GitHub does not count the call against the limit; `HEARTBEAT_GH` is the test hook for the
+binary, and the reply is reduced to numbers by `jq` and never logged): `github_core_remaining`,
+`github_core_limit` and `github_core_reset_at` for the REST budget, and the same three with `graphql` for the
+GraphQL one (most `gh issue` and `gh pr` reads use GraphQL, so it is the budget that stalls the loop). The
+count `github_errors_1h` is `heartbeat-state --repo`'s reading of `github.json` in the factory loop's folder:
+the GitHub API errors the loop's own commands (observe and act) met in the last hour. It counts a command that
+exits non-zero with a rate limit, HTTP 5xx, 429 or 401, Bad credentials, or a connection or TLS failure to
+api.github.com in its stderr; a 404 or 422 is not counted. Agents' own gh calls (a builder pushing,
+`callum-flow-issue-read`) are not counted. Every value is NULL where it cannot be known: gh missing, not logged
+in, offline or timing out, a reply that is not the expected JSON, no loop running on this device (`github.json`
+missing, invalid or its `at` over 15 minutes old), or an older image. A failure (for example a database not yet
+at migration 0035) is logged, masked, as `heartbeat-loop: <target> github write failed`; it never changes the exit
+code, resends DDL or skips the other target. The stopped beat sends none and runs no gh.
+
 #### Machine stats
 
 Each running beat also sends a second, separate psql call to every target whose UPSERT succeeded: an UPDATE of
