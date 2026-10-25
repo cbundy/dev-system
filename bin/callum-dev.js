@@ -423,9 +423,9 @@ function isLineSubsequence(small, big) {
 }
 
 // Whether the last ownership marker line in `lines` opens a repo-owned block.
-function insideRepoOwned(lines) {
+function insideRepoOwned(chunks) {
   let open = false;
-  for (const line of lines) {
+  for (const line of chunks.join("").split("\n")) {
     const t = line.trim();
     if (!t.startsWith("<!--") && !t.startsWith("//")) continue;
     if (/end repo-owned/.test(t)) open = false;
@@ -513,7 +513,9 @@ function mergeFile(repoFile, baseFile, newFile, oldVersion) {
   if (probe.error || probe.status === null || probe.status < 0) fail(probe);
   if (probe.status <= 127 && probe.status !== 129) {
     const resolved = resolveTemplateOnlyHunks(probe.stdout);
-    if (resolved) {
+    // With no hunk resolved, plain git's own output (and conflict count) stands: --zdiff3 splits
+    // nearby conflicts that the default style joins.
+    if (resolved && resolved.kept.length > 0) {
       if (probe.stderr) process.stderr.write(probe.stderr);
       fs.writeFileSync(repoFile, resolved.text);
       return { conflicts: resolved.conflicts, kept: resolved.kept };
