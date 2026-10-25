@@ -268,7 +268,7 @@ echo "ok: regime lands in its column"
 mig_old=$tmpdir/mig-old
 mkdir -p "$mig_old"
 for f in "$ROOT"/images/base/factory-db/migrations/*; do
-  case "$(basename "$f")" in 0027_regime.sql | 0028_* | 0029_* | 0030_* | 0031_* | 0034_*) ;; *) cp "$f" "$mig_old/" ;; esac
+  case "$(basename "$f")" in 0027_regime.sql | 0028_* | 0029_* | 0030_* | 0031_* | 0034_* | 0035_*) ;; *) cp "$f" "$mig_old/" ;; esac
 done
 db_old="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 names="$names $db_old"
