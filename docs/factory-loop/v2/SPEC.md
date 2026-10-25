@@ -4529,6 +4529,9 @@ own test.
     started (a record's count, then one per R1 release after it), and the first claim after a
     rejection is life 1, logged as `unreject`. S1 never claims an issue that carries
     `factory:rejected`. No release re-adds `ready` at or past `maxLives`.
+21. **Merges land on a tested tree.** Every `queue-merge` is either the head after Q1 at
+    main's head, or carries `--tested-tree` equal to merge-tree(main, head), so every merge
+    leaves main on a tree CI passed (`v2-train.test.ts`, 'the tree property').
 
 ## Appendix A. Settings
 
