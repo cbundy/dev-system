@@ -127,8 +127,8 @@ Example:
 | `budget_resets_at` | string | `usage` | When the budget period resets. |
 | `budget_usd` | number | `usage` | The budget for that period, in dollars. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
-| `cache_creation_tokens` | integer | `intake_stamp`, `loop_entry` | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
-| `cache_read_tokens` | integer | `intake_stamp`, `loop_entry` | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_creation_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cache_read_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `candidates` | array of object | `queue_snapshot` | The first 50 candidates in rank order. why is null exactly when claimable is true. |
 | `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
@@ -171,7 +171,7 @@ Example:
 | `headlines` | array of string | `released` | The release notes' headlines, one per entry. |
 | `holding` | boolean | `milestone_state` | true when the newest release task for this milestone ended in hold and no release followed. |
 | `idle_mean_ms` | integer | `loop_passes` | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
-| `input_tokens` | integer | `intake_stamp`, `loop_entry` | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
+| `input_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read. |
 | `issues` | array of integer | `released` | Every issue those pull requests link, closing or not. |
 | `issues_closed` | array of integer | `released` | The issues those pull requests close. |
 | `key` | string | `loop_entry`, `settings_changed` | The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1. |
@@ -208,7 +208,7 @@ Example:
 | `options` | array of object | `transition` | parked: the options of the owner's question, set only when an agent structured the question; null otherwise. |
 | `opus_pct` | integer | `implementer_routed` | The configured share of issues routed to Opus, in percent. |
 | `outcome` | enum | `finding_handled`, `intake_stamp`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
-| `output_tokens` | integer | `intake_stamp`, `loop_entry` | The output tokens of an ended run, counted as input_tokens; null otherwise. |
+| `output_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The output tokens of an ended run, counted as input_tokens; null otherwise. |
 | `owner_new_off` | boolean | `queue_snapshot` | Whether the owner's 'no new work' control is on. |
 | `owner_only` | array of integer | `queue_snapshot` | The owner's 'only' list in force; empty when off. |
 | `owner_priority` | array of integer | `queue_snapshot` | The owner's priority list in force; empty when off. |
@@ -758,6 +758,10 @@ Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of 
 | `observe_commands_mean_ms` | integer | optional | yes | minimum 0 | yes | The mean time the passes' observe call had at least one read in flight, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
 | `observe_in_process_mean_ms` | integer | optional | yes | minimum 0 | yes | The mean in-process time of the passes' observe call, in milliseconds, rounded. Null means no pass in the minute had a measure; older loops leave the field out. |
 | `observe_in_process_max_ms` | integer | optional | yes | minimum 0 | yes | The longest in-process time of any pass's observe call, in milliseconds. Null means no pass in the minute had a measure; older loops leave the field out. |
+| `input_tokens` | integer | optional | yes | minimum 0 | yes | The orchestrator (the loop's own main session) input tokens of the requests first found in its transcript since the previous minute's read, once per requestId; step agents are excluded (they are on loop_entry). Null when the minute had no baseline (the first read in this process or of a new session), when the transcript could not be found or read, or when the runtime knows no config dir. Older loops leave the field out. |
+| `output_tokens` | integer | optional | yes | minimum 0 | yes | The orchestrator (the loop's own main session) output tokens of the requests first found in its transcript since the previous minute's read, once per requestId; step agents are excluded (they are on loop_entry). Null when the minute had no baseline (the first read in this process or of a new session), when the transcript could not be found or read, or when the runtime knows no config dir. Older loops leave the field out. |
+| `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | The orchestrator (the loop's own main session) cache-read tokens of the requests first found in its transcript since the previous minute's read, once per requestId; step agents are excluded (they are on loop_entry). Null when the minute had no baseline (the first read in this process or of a new session), when the transcript could not be found or read, or when the runtime knows no config dir. Older loops leave the field out. |
+| `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | The orchestrator (the loop's own main session) cache-write tokens of the requests first found in its transcript since the previous minute's read, once per requestId; step agents are excluded (they are on loop_entry). Null when the minute had no baseline (the first read in this process or of a new session), when the transcript could not be found or read, or when the runtime knows no config dir. Older loops leave the field out. |
 
 Example:
 

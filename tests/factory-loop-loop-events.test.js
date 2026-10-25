@@ -164,7 +164,10 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
     const got = lines[lines.length - 1];
     assert.equal(got.type, "loop_passes");
     const old = translate({ ...LINE, state: "loop", note: passes.passesNote(summary) }, { ts: TS, sessionId: "s" }).event;
-    assert.deepEqual(got.data, old.data);
+    // the four orchestrator token fields (#1302) are native only: the note has none, and they are null here
+    const { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, ...rest } = got.data;
+    assert.deepEqual([input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens], [null, null, null, null]);
+    assert.deepEqual(rest, old.data);
   }
   assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
 });

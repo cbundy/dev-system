@@ -41,6 +41,11 @@ export type PassSummary = {
   observeCommandsMean: number | null
   observeInProcessMean: number | null
   observeInProcessMax: number | null
+  // the orchestrator session's tokens of the minute (hooks/session-tokens.ts), null when unread
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheCreationTokens: number | null
   settings: PassSettings
 }
 
@@ -97,6 +102,10 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
     observeCommandsMean: mean(nums(recs.map(r => r.commandsMs))),
     observeInProcessMean: mean(inProc),
     observeInProcessMax: inProc.length === 0 ? null : Math.max(...inProc),
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
     settings,
   }
 }
@@ -156,6 +165,10 @@ export function passesEventArgv(s: PassSummary): string[] {
     // the event's schema still requires the field: the loop always plans with v2
     planner: 'v2',
     pass_every_ms: s.settings.passEveryMs,
+    input_tokens: s.inputTokens,
+    output_tokens: s.outputTokens,
+    cache_read_tokens: s.cacheReadTokens,
+    cache_creation_tokens: s.cacheCreationTokens,
   }
   return ['callum-flow-event', '--type', 'loop_passes', '--data', JSON.stringify(data)]
 }

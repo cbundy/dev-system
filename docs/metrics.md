@@ -3322,7 +3322,7 @@ retry is a new agent. They take every attempt of a merged issue in every life. A
 event in the window; `since` narrows by when it merged. `steps_without_tokens` counts the ended agent steps (one per
 key) of those issues with no counted agent behind them, so a gap is visible rather than silently low.
 
-What they leave out: the loop's own main-session wakes and judge turns, the tells, and any agent outside
+What they leave out: the loop's own main-session turns (see [Orchestrator session tokens](#orchestrator-session-tokens)), the tells, and any agent outside
 the loop's steps; only the step agents the loop spawned are here. A step's `role` is read from its key: `i<N>/l<life>/s<seq>/<step>/a<n>`
 or, for a review, `i<N>/l<life>/review/<patch>/r<round>/a<n>`.
 
@@ -3483,6 +3483,30 @@ SELECT date_trunc('hour', from_at) AS hour, repo, device,
 FROM factory.event_log
 WHERE type = 'loop_passes' AND observe_mean_ms IS NOT NULL AND passes > 0
   AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, repo, device
+ORDER BY 1, repo, device;
+```
+
+## Orchestrator session tokens
+
+The `loop_passes` event also carries the tokens the loop's own main session (the orchestrator) spent in the minute:
+`input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_creation_tokens`. The loop reads them from its own
+transcript, only the bytes added since the previous minute, once per request; step agents are not in them (they are on
+`loop_entry`, see "Tokens per merged issue"). They are null when the minute had no baseline (the first read in a process
+or of a new session), when the transcript could not be read, and in events of older loops.
+
+Per hour, repo and device, the four sums, and `minutes_without_tokens`, the minutes sent with null tokens, so a gap shows
+rather than reading low:
+
+```sql
+SELECT date_trunc('hour', from_at) AS hour, repo, device,
+  coalesce(sum(input_tokens), 0) AS input_tokens,
+  coalesce(sum(output_tokens), 0) AS output_tokens,
+  coalesce(sum(cache_read_tokens), 0) AS cache_read_tokens,
+  coalesce(sum(cache_creation_tokens), 0) AS cache_creation_tokens,
+  count(*) FILTER (WHERE input_tokens IS NULL) AS minutes_without_tokens
+FROM factory.event_log
+WHERE type = 'loop_passes' AND repo = :'repo' AND from_at >= :'since'::timestamptz
 GROUP BY 1, repo, device
 ORDER BY 1, repo, device;
 ```
