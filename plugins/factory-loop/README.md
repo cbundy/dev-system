@@ -103,7 +103,7 @@ Each change is logged and asks for a pass at once. The ops:
   on an issue that is not parked it changes nothing. See
   [the owner ops](../../docs/factory-loop/v2/SPEC.md#appendix-e-owner-ops) for what each op does;
 - `retry <N>`: let N's exhausted actions run again;
-- `update [<reason>]|off`: winds down (up to windDownMinutes), then restarts this workspace;
+- `update [<reason>]|off`: winds down (up to windDownMinutes), then restarts this workspace (refused, with the reason, when the workspace cannot restart itself);
 - `drop <N>`: abandon N and stop its agents;
 - `stamp <N>`: dry-run the intake reader on N and report its answer when it ends; writes nothing (no label, comment, event, stamp or ledger change), and works with `intakeStamp` off and in observe mode;
 - `note [<N>] <text>|off`: an instruction the next agent prompts carry, for N or for all (a newer note replaces the older one; off clears it);

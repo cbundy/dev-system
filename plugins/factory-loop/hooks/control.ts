@@ -21,6 +21,8 @@ import { configHelpText } from './config-help'
 import { CONFIG_VERBS, HELP_TOPICS, HELP_USAGE, OPS, USAGE, helpText, hintText } from './control-help'
 import type { HelpTopic, OpName } from './control-help'
 import type { Control, Mode, Ms } from './types'
+import { refusedText, uncheckedText } from './update-check'
+import type { RestartCheck } from './update-check'
 import { applyDrop, applyUnpark, onlyParked, parseUnpark, quoteNote, stopNow } from './v2/ops'
 import type { Unpark } from './v2/ops'
 
@@ -423,7 +425,13 @@ export type ControlPaths = { loopDir: string; configDir: string }
 // The caller: `last` for status; agentId when the tool call came from inside an agent's loop; the
 // issues parked now, as the last pass's records say (null: not known), so a resume of one that is
 // not parked changes nothing.
-export type OpFrom = { last?: PassSummary | null; agentId?: string; parked?: readonly number[] | null; view?: ConfigView | null }
+export type OpFrom = {
+  last?: PassSummary | null
+  agentId?: string
+  parked?: readonly number[] | null
+  view?: ConfigView | null
+  restartCheck?: () => Promise<RestartCheck>
+}
 
 // What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
 // a retry to run), so the driver pings the loop and logs `logged` (v2 SPEC 13.4.3). retryIssue: the
@@ -437,6 +445,8 @@ export type OpReply = {
   retryIssue: number | null
   mode: Mode | null
   logged: string | null
+  // a refusal worth a log line and an intervention (update-refused <reason>), without a ping
+  noted?: string | null
 }
 
 const refused = (text: string, op: Op | null = null): OpReply => ({
@@ -470,6 +480,13 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   if (from.agentId !== undefined && !viewOnly) return refused('Not changed: only the main conversation sets owner directives.', op)
   // the driver starts the dry run and answers (driver-stamp.ts); nothing is read or written here
   if (op.op === 'stamp') return { ok: true, text: '', op, control: null, ping: false, retryIssue: null, mode: null, logged: null }
+  // an update needs a workspace that can restart itself (update-check.ts); before control.json is touched
+  let unchecked = ''
+  if (op.op === 'update' && op.reason !== null && from.restartCheck !== undefined) {
+    const check = await from.restartCheck()
+    if (check.kind === 'missing') return { ...refused(refusedText(check.reason), op), noted: `update-refused ${check.reason}` }
+    if (check.kind === 'unchecked') unchecked = uncheckedText(check.why)
+  }
   if (op.op === 'stop-now') return stopNow(io, paths.loopDir, op, now)
   let loaded: LoadedControl
   try {
@@ -509,7 +526,7 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   const ping = !nothing && (applied.changed || Object.keys(applied.effects).length > 0)
   return {
     ok: true,
-    text: `${text}${aside}`,
+    text: `${text}${aside}${unchecked}`,
     op,
     control: applied.control,
     ping,

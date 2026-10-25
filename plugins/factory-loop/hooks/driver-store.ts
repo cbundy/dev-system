@@ -16,7 +16,7 @@ import { opsFrom } from './v2/rules-settings'
 import { loadV2 } from './v2/store'
 import { orphanedWakes } from './wake'
 import { actIo, acting, killed, mayWrite, message, text, v2StoreIo, wakeIdAt } from './driver-io'
-import { spendKey } from './spend'
+import { spendKey, whatIfKey } from './spend'
 import { S, live, liveV2 } from './driver-state'
 
 export const keysOf = (repo: string) => ({
@@ -29,6 +29,7 @@ export const keysOf = (repo: string) => ({
   settings: `settings:${repo}`,
   settingsOps: `settings-ops:${repo}`,
   spend: spendKey(repo),
+  whatIf: whatIfKey(repo),
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which

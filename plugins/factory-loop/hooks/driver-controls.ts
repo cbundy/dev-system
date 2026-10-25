@@ -14,6 +14,7 @@ import { armSummary } from './pass-summary'
 import { logOwnerOp } from './v2/act-events'
 import { opLanded, parkedOf } from './v2/ops'
 import { noteWritten, notingIo } from './v2/store'
+import { restartCheck } from './update-check'
 import { ANSWER_TOOL } from './wake'
 import { actIo, acting, configDir, fileIo, killed, runtime, v2StoreIo } from './driver-io'
 import { hookEnv, noteConfigOp, persist } from './driver-store'
@@ -46,7 +47,8 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const last = (await $.state.get(lastPassRef)).value ?? null
       const parked = parkedOf(S.lastState?.v2?.records)
       const view = viewOf(rt, S.lastState?.v2?.interventions.gates)
-      const from = agentId === undefined ? { last, parked, view } : { last, agentId, parked, view }
+      const check = () => restartCheck((argv, opts) => $.process.run(argv, opts))
+      const from = agentId === undefined ? { last, parked, view, restartCheck: check } : { last, agentId, parked, view, restartCheck: check }
       const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
@@ -59,6 +61,11 @@ export function ownerOp($: EngineInterface, input: string | Record<string, unkno
       const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
       const line = (problems: string[]) => ({ control: reply.logged, by, text: said, problems: problems.length > 0 ? problems : undefined })
       if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `${by === 'judge' ? 'judge' : 'owner'} ${reply.logged ?? ''}` })
+      // a refused update: a decision-log line and, in act mode, an intervention; no ping
+      if (reply.noted != null && claim()) {
+        const refusal = opLanded({ mode: rt.mode }, { op: 'update', reason: null }, reply.noted, [], now, by)
+        later($, { rt, run: refusal === null ? undefined : (env: ActEnv) => logOwnerOp(env, refusal), line: problems => ({ control: reply.noted, by, text: said, problems: problems.length > 0 ? problems : undefined }) })
+      }
       return { ok: reply.ok, text: said }
     })
     S.ops = run.catch(() => undefined)

@@ -198,7 +198,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   const passRt = act ? rt : rt.mode === 'act' ? observing(rt) : rt
   let stored: Stored | undefined
   // API-key mode's tally: read in every mode, written only by an acting pass
-  const spendStored = rt.apiKey === undefined ? undefined : await storeGet($, keys.spend)
+  const spendStored = await storeGet($, rt.apiKey === undefined ? keys.whatIf : keys.spend)
   if (act) {
     const backoff = await storeGet($, keys.backoff)
     const known = await storeGet($, keys.known)
@@ -374,7 +374,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
-    if (observed.spend !== null) await keepInStore(keys.spend, observed.spend)
+    if (observed.spend !== null) await keepInStore(rt.apiKey === undefined ? keys.whatIf : keys.spend, observed.spend)
     // an off-pass command that met the limit since the last pass counts as one this pass met
     const limited = report?.rateLimited === true || S.offRateLimited
     S.offRateLimited = false

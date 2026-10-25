@@ -260,6 +260,49 @@ grep -q "dry-run: PUT /api/v2/workspaces/$WS/autoupdates" "$C/out" || fail "dry-
 grep -q "$SECRET" "$C/out" && fail "dry-restart: token printed"
 [ ! -e "$C/state/pending.json" ] || fail "dry-restart: wrote a marker"
 
+# --- --dry-run without a token fails like the real run -----------------------------------------
+new_case dry-notoken
+UNSET="CODER_SESSION_TOKEN" run --dry-run
+assert_status 1 dry-notoken
+grep -q "no Coder session token" "$C/out" || fail "dry-notoken: message missing"
+grep -q "dry-run:" "$C/out" && fail "dry-notoken: printed a dry-run line"
+[ ! -s "$C/argv" ] || fail "dry-notoken: curl was called"
+
+# --- --check ----------------------------------------------------------------------------------
+new_case check
+run --check
+assert_status 0 check-env
+grep -q "credentials found (token from env)" "$C/out" || fail "check: env source not named"
+grep -q "$SECRET" "$C/out" && fail "check: token printed"
+printf 'file-secret-tok\n' > "$C/secrets/coder-session-token"
+UNSET="CODER_SESSION_TOKEN" run --check
+assert_status 0 check-file
+grep -q "token from secrets file" "$C/out" || fail "check: secrets file source not named"
+rm "$C/secrets/coder-session-token"
+printf 'cfg-secret-tok\n' > "$C/cfg/session"
+UNSET="CODER_SESSION_TOKEN" run --check
+assert_status 0 check-cfg
+grep -q "token from coder config" "$C/out" || fail "check: coder config source not named"
+[ ! -s "$C/argv" ] || fail "check: curl was called"
+[ -z "$(ls -A "$C/state" 2>/dev/null)" ] || fail "check: wrote under the state dir"
+rm "$C/cfg/session"
+UNSET="CODER_SESSION_TOKEN" run --check
+assert_status 1 check-notoken
+grep -q "no Coder session token" "$C/out" || fail "check: no-token message missing"
+UNSET="CODER_WORKSPACE_ID" run --check
+assert_status 1 check-nows
+grep -q "not running in a Coder workspace" "$C/out" || fail "check: no-workspace message missing"
+UNSET="CODER_URL" run --check
+assert_status 1 check-nourl
+grep -q "no Coder URL" "$C/out" || fail "check: no-url message missing"
+for f in --restart --dry-run --resume --upgrade --fresh; do
+  run --check "$f"
+  assert_status 2 "check-with-$f"
+done
+run --check --parameter a=b
+assert_status 2 check-with-parameter
+[ ! -s "$C/argv" ] || fail "check: curl was called by a usage error"
+
 # --- credential resolution order --------------------------------------------------------------
 new_case creds
 printf 'file-secret-tok\n' > "$C/secrets/coder-session-token"

@@ -77,6 +77,8 @@ run() {
     FAKE_CURL_BODY="$body" FAKE_CURL_CODE="${CODE:-200}" FAKE_CURL_LOG="$log" \
     ${CURL_FAIL:+FAKE_CURL_FAIL=1} FAKE_EVENT_LOG="$tmpdir/events" \
     ${DEV_AUTH:+DEV_CLAUDE_AUTH="$DEV_AUTH"} \
+    ${SPEND_USD:+CALLUM_USAGE_SPEND_USD="$SPEND_USD"} ${SPEND_AT:+CALLUM_USAGE_SPEND_RESETS_AT="$SPEND_AT"} \
+    ${SPEND_WHY:+CALLUM_USAGE_SPEND_REASON="$SPEND_WHY"} \
     "$SH" "$USAGE_CHECK" "$@" < "${STDIN:-/dev/null}" 2> "$tmpdir/stderr") || rc=$?
 }
 
@@ -220,5 +222,37 @@ ev_data=$(sed 's/^--type usage --actor watcher --data //' "$tmpdir/events")
 # Any other login is unchanged.
 DEV_AUTH=subscription CODE=200 run
 [ "$(field source)" = statusline ] || fail "a subscription login should still read the sources (the snapshot here): $out"
+
+# 13. A subscription reading's event names the login and carries the loop's what-if total; the printed line
+# and an API-key reading do not change.
+ev() { sed 's/^--type usage --actor watcher --data //' "$tmpdir/events"; }
+sub_fields() { ev | jq -c '[.auth, .spend_usd, .budget_usd, .budget_resets_at, .reasons]'; }
+write_creds still-valid
+printf '{"recorded_at":%s,"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":%s},"seven_day":{"used_percentage":60,"resets_at":%s}}}\n' "$now" "$soon" "$later" > "$state"
+rm -f "$tmpdir/events"; CODE=500 SPEND_USD=12.5 SPEND_AT=2026-11-01T00:00:00Z run
+[ "$(field source)" = statusline ] || fail "the printed line should be unchanged: $out"
+case "$out" in *spend*|*auth*) fail "the printed line must not carry the spend fields: $out" ;; esac
+[ "$(sub_fields)" = '["subscription",12.5,null,"2026-11-01T00:00:00Z",["spend:subscription-no-budget"]]' ] || fail "statusline event with a total: $(ev)"
+rm -f "$tmpdir/events"; CODE=500 run
+[ "$(sub_fields)" = '["subscription",null,null,null,["spend:no-tally","spend:subscription-no-budget"]]' ] || fail "event with no total: $(ev)"
+rm -f "$tmpdir/events"; CODE=500 SPEND_WHY=spend:no-session-cost run
+[ "$(sub_fields)" = '["subscription",null,null,null,["spend:no-session-cost","spend:subscription-no-budget"]]' ] || fail "event with the loop's reason: $(ev)"
+rm -f "$tmpdir/events"; CODE=500 SPEND_USD=abc SPEND_AT=2026-11-01T00:00:00Z run
+[ "$(sub_fields)" = '["subscription",null,null,null,["spend:bad-input","spend:subscription-no-budget"]]' ] || fail "event with a bad total: $(ev)"
+rm -f "$tmpdir/events"; CODE=500 SPEND_USD=3 run
+[ "$(sub_fields)" = '["subscription",null,null,null,["spend:bad-input","spend:subscription-no-budget"]]' ] || fail "event with a total and no reset: $(ev)"
+# an oauth reading
+rm -f "$state" "$tmpdir/events"; echo '{"five_hour":{"utilization":10,"resets_at":"'"$(api_iso "$soon")"'"},"seven_day":{"utilization":20,"resets_at":"'"$(api_iso "$later")"'"}}' > "$body"
+SPEND_USD=1 SPEND_AT=2026-11-01T00:00:00Z run
+[ "$(field source)" = oauth ] || fail "oauth reading: $out"
+[ "$(sub_fields)" = '["subscription",1,null,"2026-11-01T00:00:00Z",["spend:subscription-no-budget"]]' ] || fail "oauth event: $(ev)"
+# unavailable: its window reasons stay first
+rm -f "$state" "$tmpdir/events"; CODE=500 run
+[ "$(ev | jq -c '.reasons[2:]')" = '["spend:no-tally","spend:subscription-no-budget"]' ] || fail "unavailable event spend codes: $(ev)"
+[ "$(ev | jq -r '.auth, .available')" = "$(printf 'subscription\nfalse')" ] || fail "unavailable event auth: $(ev)"
+case "$(ev | jq -r '.reasons[0]')" in oauth:*) ;; *) fail "window reasons should come first: $(ev)" ;; esac
+# the API-key event ignores the spend env
+rm -f "$tmpdir/events"; DEV_AUTH=api-key SPEND_USD=9 SPEND_AT=2026-11-01T00:00:00Z run
+[ "$(ev | jq -c '.')" = '{"available":false,"five_hour_pct":null,"five_hour_resets_at":null,"seven_day_pct":null,"seven_day_resets_at":null,"source":null,"reasons":["subscription:api-key-mode"],"auth":"api-key"}' ] || fail "API-key event changed: $(ev)"
 
 echo "usage-check.test.sh: ok"

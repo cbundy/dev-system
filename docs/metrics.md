@@ -1109,6 +1109,21 @@ GROUP BY 1
 ORDER BY 1;
 ```
 
+### Update refused for missing credentials
+
+`/factory update` is refused when `dev-restart-self --check` finds the workspace cannot restart
+itself (v2 SPEC 13.4.3). Each refusal is an `intervention` with cause `op:update-refused` (in act
+mode); the reason is the event's `detail`.
+
+```sql
+-- refused updates per repo, device and day
+SELECT repo, device, date_trunc('day', ts)::date AS day, count(*) AS refused
+FROM factory.event_log
+WHERE type = 'intervention' AND cause = 'op:update-refused'
+GROUP BY repo, device, day
+ORDER BY repo, device, day;
+```
+
 ### Split trackers closed by the loop
 
 When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and
@@ -3270,7 +3285,7 @@ FROM factory.workers_status
 ORDER BY device;
 ```
 
-## Spend on an API key
+## Spend by login
 
 A `usage` event ([REFERENCE.md](factory-events/REFERENCE.md)) taken on an API key records dollars, not window
 percentages. `auth` says which login the reading was taken under (`subscription` or `api-key`). A spend reading has
@@ -3344,6 +3359,55 @@ FROM factory.event_log e
 JOIN factory.event_store s ON s.event_id = e.event_id
 CROSS JOIN LATERAL jsonb_array_elements_text(s.data->'reasons') AS r(reason)
 WHERE e.type = 'usage' AND NOT e.available AND e.auth = 'api-key'
+  AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
+GROUP BY e.repo, e.device, r.reason
+ORDER BY e.repo, e.device, readings DESC, r.reason;
+```
+
+On a subscription login the reading is a different one. A `usage` event taken under it has `auth` `subscription`. The factory loop also gives it its
+running what-if dollar total for the calendar month: what its work would have cost at API prices, from the same local
+tally of the session's cost as the API-key one, kept under its own key per repo. It is not a bill. `spend_usd` is that
+total and `budget_resets_at` the 00:00 UTC on the 1st when it restarts; `budget_usd` is always null, as a subscription
+has no dollar budget, and the total never changes the loop's usage tier (the plan's windows alone do). The loop passes
+the total to `usage-check.sh`, which writes the event; a reading taken outside the loop has none. Events from before
+this change have `auth` null on a subscription and are not counted by these queries.
+
+The reason codes are in `reasons`, after any window reasons of an unavailable reading: `spend:subscription-no-budget`
+on every subscription reading, and, when `spend_usd` is null, one of `spend:no-tally` (nothing was passed: a reading
+taken by hand, or by an older loop), `spend:no-session-cost` (the session gave no cost), `spend:bad-tally` (the stored
+tally did not parse and was restarted) or `spend:bad-input` (a value passed did not parse).
+
+What-if spend per day on a subscription, per repo and device: the day's last total and `spent_that_day`, that total
+less the previous day's last total in the same month (the same `budget_resets_at`), else the day's own total:
+
+```sql
+WITH last_per_day AS (
+  SELECT repo, device, date_trunc('day', ts) AS day, spend_usd, budget_resets_at
+  FROM (
+    SELECT e.*, row_number() OVER (PARTITION BY e.repo, e.device, date_trunc('day', e.ts) ORDER BY e.ts DESC) AS n
+    FROM factory.event_log e
+    WHERE e.type = 'usage' AND e.auth = 'subscription' AND e.spend_usd IS NOT NULL
+      AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz) r
+  WHERE n = 1)
+SELECT day::date AS day, repo, device, spend_usd,
+  CASE WHEN lag(day) OVER w IS NOT NULL AND lag(budget_resets_at) OVER w IS NOT DISTINCT FROM budget_resets_at
+       THEN spend_usd - lag(spend_usd) OVER w
+       ELSE spend_usd END AS spent_that_day
+FROM last_per_day
+WINDOW w AS (PARTITION BY repo, device ORDER BY day)
+ORDER BY repo, device, day;
+```
+
+Subscription readings with no what-if spend, per repo, device and reason (read from `factory.event_store`, as no
+`event_log` column lifts `reasons`). A reading with several spend codes counts once under each:
+
+```sql
+SELECT e.repo, e.device, r.reason, count(*) AS readings, min(e.ts) AS first_at, max(e.ts) AS last_at
+FROM factory.event_log e
+JOIN factory.event_store s ON s.event_id = e.event_id
+CROSS JOIN LATERAL jsonb_array_elements_text(s.data->'reasons') AS r(reason)
+WHERE e.type = 'usage' AND e.auth = 'subscription' AND e.spend_usd IS NULL
+  AND r.reason LIKE 'spend:%' AND r.reason <> 'spend:subscription-no-budget'
   AND e.repo = :'repo' AND e.ts >= :'since'::timestamptz
 GROUP BY e.repo, e.device, r.reason
 ORDER BY e.repo, e.device, readings DESC, r.reason;
