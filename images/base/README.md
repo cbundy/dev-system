@@ -65,7 +65,7 @@ watcher prints one event line and exits by default; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
-The watcher scripts' callers own the arming and restart policy. The scripts use `orchestrator-watch.sh`, which
+The watcher scripts' callers own the arming and restart policy. `orchestrator-watch.sh`
 runs both as one process with one `--deadline` (single-shot or
 `--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
 baselines forward, and refuses a second copy per repository.

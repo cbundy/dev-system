@@ -1381,7 +1381,7 @@ retired, and the reviewer was never an edit of it.
 - **Its prompt** (`hooks/v2/prompts-review.ts`) gives:
   - the issue and brief URLs, and the PR;
   - the diff to review (`origin/<default>...<head>`, three dots: the PR's own change);
-  - the TEST POLICY sentence (`plugins/callum-flow/agents/fixer.md`);
+  - the TEST POLICY sentence;
   - the instruction to run `callum-flow-test-weakening origin/<default>..HEAD` and judge its
     output;
   - its own earlier rounds and the fixer's dispositions, so it does not repeat itself;
