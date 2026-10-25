@@ -3710,6 +3710,14 @@ with no doubled or trailing `/` (`contract.mjs` `loopDirOf`):
   entry); `derived` holds `gateConcurrency`, `cpus`, `memoryBytes` and `effectiveCap` (integers or null; the slot estimate drifts each pass and is not kept), the agents' `models` and the two experiment
   shares (null when unset or unreadable); `problems` is what the loader left out. No secret is
   written. A failed write is a `settings snapshot:` problem in the decision line, never a failed pass;
+- `github.json`, the GitHub API errors of the last hour, `{v: 1, repo, at, errors: [<ISO time>, ...]}`:
+  every acting pass rewrites it atomically (observe-only and shadow sessions do not). A command run
+  through `io()` or `actIo()` counts once when it exits non-zero and its stderr shows GitHub refusing
+  or failing (a rate limit, HTTP 5xx, 429 or 401, Bad credentials, a connection or TLS failure to
+  api.github.com; a 404 or 422 does not); agents' own gh calls are not counted. It keeps the last
+  hour only (at most 2000), the first write of a process carries over the file's entries still in
+  the hour, and `heartbeat-state` reads it for `factory.workers.github_errors_1h`. A failed write is
+  a `github health:` problem in the decision line, never a failed pass;
 - the trace files (`trace-YYYY-MM-DD.jsonl`), in trace mode only, kept under `traceMaxBytes` in
   all (13.12.1);
 - recorded states (`states/YYYY-MM-DD/<pass>.json`): observe mode only, one per changed digest,

@@ -69,6 +69,8 @@ check "dev-doctor prints one memory line (INFO or WARN) and mem-pressure.sh is i
   else
     ! echo "$out" | grep -q "memory: "
   fi' --entrypoint ""
+check "github-health.sh (the heartbeat's GitHub budget probe) is installed" in_image '
+  test -f /usr/local/share/dev-system/github-health.sh' --entrypoint ""
 check "dev-doctor WARNs, naming the file, when an event log has fewer lines than its .pushed marker" in_image '
   d=$(mktemp -d); mkdir -p "$d/.pushed"
   printf "%s\n%s\n" a b > "$d/o__r.jsonl"; echo 5 > "$d/.pushed/o__r.jsonl"

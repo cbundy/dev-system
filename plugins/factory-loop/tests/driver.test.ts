@@ -11,6 +11,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { loopNote } from '../hooks/derive'
 import { pruneArgvs } from '../hooks/exec'
+import { resetGithubHealth } from '../hooks/github-health'
 import { CLI_TIMEOUT_MS } from '../hooks/act-cli'
 import { OFF_PASS_MARGIN_MS } from '../hooks/act-off'
 import type { LedgerEntry } from '../hooks/types'
@@ -32,8 +33,8 @@ const HANDSHAKE = { [handshakePath(`${CFG_DIR}/factory-loop`, SESSION)]: JSON.st
 const host: typeof engineHost = (on, opts = {}) => engineHost(on, { ...opts, files: { ...HANDSHAKE, ...opts.files } })
 
 const settingsRead = (s: Seen) => s.argv[0] === 'git' && (s.argv[1] === 'show' || s.argv[1] === 'symbolic-ref')
-// the pass's own settings.json write (settings-snapshot.ts): not a read of the factory, and it carries no repo env
-const snapshotWrite = (s: Seen) => s.argv[0] === 'sh' && s.argv[3] === 'settings-snapshot'
+// the pass's own settings.json and github.json writes (settings-snapshot.ts, github-health.ts): not reads of the factory, and they carry no repo env
+const snapshotWrite = (s: Seen) => s.argv[0] === 'sh' && (s.argv[3] === 'settings-snapshot' || s.argv[3] === 'github-health')
 
 // the claim of 470 at this clock, under v2's key (v2/keys.ts)
 const CLAIM_KEY = 'i470/claim/tmtsc5'
@@ -124,6 +125,16 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     expect(h.passes()).toHaveLength(2)
     expect(h.files.has(`${LOOP_DIR}/settings.json`)).toBe(false)
     expect(JSON.stringify(h.last())).toContain('settings snapshot: write failed')
+  })
+
+  test('an observe-only pass writes no github.json', ENGINE_TEST, async ($, on) => {
+    resetGithubHealth()
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.passes()).toHaveLength(1)
+    expect(h.files.has(`${LOOP_DIR}/github.json`)).toBe(false)
   })
 
   test('it never keeps a ledger, takes the act lock, spawns or wakes the model', ENGINE_TEST, async ($, on) => {
@@ -1608,6 +1619,30 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     await clock.advance(61_000)
     expect(settingsEvents()).toHaveLength(2)
     expect(h.store.get(`settings-ops:${REPO}`)).toEqual([])
+  })
+
+  test('an acting pass writes github.json with the GitHub errors its commands met in the last hour; a failed write is a problem line', ENGINE_TEST, async ($, on) => {
+    resetGithubHealth()
+    const clock = mock.clock(on, { now: NOW })
+    // every read of the factory state fails, alternately like a GitHub outage and like a 404 (which does not count)
+    let n = 0
+    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 1, stderr: ++n % 2 === 0 ? 'gh: Not Found (HTTP 404)' : 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : undefined) })
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const file = JSON.parse(h.files.get(`${LOOP_DIR}/github.json`) ?? '{}') as { v: number; repo: string; at: string; errors: string[] }
+    expect(file).toMatchObject({ v: 1, repo: REPO })
+    expect(Date.parse(file.at)).toBeGreaterThanOrEqual(NOW)
+    // a 502 was counted and a 404 was not; each entry is within the hour before `at`
+    expect(n).toBeGreaterThan(0)
+    expect(file.errors).toHaveLength(Math.ceil(n / 2))
+    expect(file.errors.every(e => Date.parse(file.at) - Date.parse(e) < 3_600_000)).toBe(true)
+    h.files.delete(`${LOOP_DIR}/github.json`)
+    h.failWrite = path => path.endsWith('/github.json')
+    await clock.advance(61_000)
+    expect(h.passes().length).toBeGreaterThanOrEqual(2)
+    expect(h.files.has(`${LOOP_DIR}/github.json`)).toBe(false)
+    expect(JSON.stringify(h.last())).toContain('github health: write failed')
   })
 
   test('/factory retry clears the issue\'s exhausted entries in the ledger', ENGINE_TEST, async ($, on) => {
