@@ -27,7 +27,7 @@ import {
   parseUsage,
 } from './parse'
 import type { Factory } from './parse'
-import { spendEventData, tallyStep, unavailableSpend } from './spend'
+import { spendEventData, tallyStep, unavailableSpend, whatIfEnv, whatIfStep } from './spend'
 import type { ApiKeySettings, Tally } from './spend'
 import { listedLive } from './foundation'
 import { BUSY_STATES, LIVE_STATES } from './factory-state-map'
@@ -169,7 +169,7 @@ export type Observation = {
   rateLimited: boolean
   // the PR heads v2 has seen (v2 SPEC 2.4), for act mode to keep; null when v2 read nothing
   v2Heads: Record<string, HeadSeen> | null
-  // API-key mode: the tally after this pass's reading, for an acting pass to store; null: leave it
+  // the tally after this pass's reading (API-key spend, or the subscription what-if total), for an acting pass to store; null: leave it
   spend: Tally | null
 }
 
@@ -414,9 +414,13 @@ export async function observe(
       }
     }
   } else {
+    // the what-if total (API prices) folds in every pass; it rides on the usage event only, never the tier
+    const cost = await (io.sessionCost?.() ?? Promise.resolve(null)).catch(() => null)
+    const whatIf = whatIfStep(spendStored, { costUsd: cost, process: rt.workspace?.process ?? '', session: rt.workspace?.session ?? '' }, now)
+    spend = whatIf.tally
     if (cache.usage === undefined || now - cache.usage.at >= cfg.usageEveryMs) {
       try {
-        const r = await run([tool('usage-check.sh')], undefined, 30_000)
+        const r = await run([tool('usage-check.sh')], undefined, 30_000, { ...rt.env, ...whatIfEnv(whatIf) })
         cache.usage = { at: now, value: parseUsage(r.stdout.trim()) }
       } catch {
         // unavailable: plan fails open as the skill says
