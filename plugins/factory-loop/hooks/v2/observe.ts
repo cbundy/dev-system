@@ -20,6 +20,9 @@ import { EMPTY_MAIN, readMain } from './sources-main'
 import type { MainCache } from './sources-main'
 import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
 import type { ReleaseCache } from './sources-release'
+import { readTrain } from './sources-train'
+import { EMPTY_TRAIN } from './train-types'
+import type { TrainRead } from './train-types'
 import { readBlockers } from './sources-blockers'
 import { readWaits } from './sources-waits'
 import { EMPTY_FLAKES, readFlakesCached } from './sources-flakes'
@@ -100,6 +103,8 @@ export type V2Cache = {
   blockers: BlockerTree | null
   // the release bump PRs the merge queue holds for (sources-release.ts)
   release: ReleaseCache
+  // the live trains' checks and the trees the rules compare (sources-train.ts)
+  train: TrainRead
   // the default branch's state, read in act mode only to be logged (sources-main.ts)
   main: MainCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
@@ -111,7 +116,7 @@ export type V2Cache = {
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES, paths: EMPTY_PATHS.cache }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, blockers: null, release: EMPTY_RELEASE, train: EMPTY_TRAIN, main: EMPTY_MAIN, dualWrite: null, flakes: EMPTY_FLAKES, paths: EMPTY_PATHS.cache }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -413,6 +418,9 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.release = release.read
   sources.releasePrs = release.source
 
+  // the live merge trains' checks and trees (sources-train.ts): none read unless one is live
+  cache.train = await readTrain(ctx, cache.train, cache.prs.main?.sha ?? null)
+
   // the default branch's state (sources-main.ts): act mode only, on its own cadence
   const main = await readMain(ctx, cache.main)
   cache.main = main.read
@@ -490,6 +498,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     ...(starvedSince === null ? {} : { starvedSince }),
     ...(cache.blockers === null ? {} : { blockers: cache.blockers }),
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
+    ...(cache.train === EMPTY_TRAIN ? {} : { train: cache.train }),
     ...(cache.main.reading === null ? {} : { main: cache.main.reading }),
     ...(cache.flakes.read === null ? {} : { flakes: cache.flakes.read }),
     changed: cache.changed,

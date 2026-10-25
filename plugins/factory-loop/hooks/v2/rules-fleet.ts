@@ -84,7 +84,7 @@ export function fleetTells(ctx: PlanCtx): void {
 }
 
 // The work R2 waits for with wind-down off, and names as unwaited-for with it on: a merge-queue action or the release task, running.
-const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || (e.kind === 'task' && e.wake === 'release'))
+const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || e.kind === 'queue-train' || (e.kind === 'task' && e.wake === 'release'))
 
 // A running merge is never cut by a restart, with wind-down on or off: it is the loop's one irreversible act.
 const HOLDS_ALWAYS = (e: LedgerEntry) => e.status === 'running' && e.kind === 'queue-merge'

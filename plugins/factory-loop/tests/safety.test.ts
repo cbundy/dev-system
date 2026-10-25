@@ -64,6 +64,14 @@ function runtime(repo = REPO): Runtime {
   }
 }
 
+// the merge train's shas, and the branch the last `git fetch` named (so a tip reads as that branch's)
+const TRAIN_HEAD = 'a'.repeat(40)
+const TRAIN_RIDER = 'b'.repeat(40)
+const TRAIN_MAIN = 'c'.repeat(40)
+const TRAIN_TREE = 'd'.repeat(40)
+const TRAIN_SHA = 'e'.repeat(40)
+let fetched = ''
+
 // reply: each CLI as it answers on success, so every executor runs every step it has
 function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...args] = argv
@@ -75,6 +83,14 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
     return { stdout: `${out[op ?? ''] ?? ''}\n` }
   }
   switch (cmd) {
+    // the merge train's git (v2/act-train.ts): each branch's tip, the merged tree, the train commit, and the refs on origin
+    case 'git':
+      if (args[0] === 'fetch') fetched = args.at(-1) ?? ''
+      if (args[0] === 'rev-parse') return { stdout: `${fetched.endsWith('issue-469') ? TRAIN_HEAD : TRAIN_RIDER}\n` }
+      if (args[0] === 'merge-tree') return { stdout: `${TRAIN_TREE}\n` }
+      if (args[0] === 'commit-tree') return { stdout: `${TRAIN_SHA}\n` }
+      if (args[0] === 'ls-remote') return { stdout: `${TRAIN_SHA}\trefs/heads/factory-train/i471-1234567\n${TRAIN_SHA}\trefs/heads/factory-train/i472-7654321\n` }
+      return {}
     case 'callum-flow-rollout':
       return { stdout: 'ROLLOUT run-it source=brief\n' }
     case 'callum-flow-released':
@@ -243,6 +259,12 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
   { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed' },
+  // the merge train (v2 SPEC 9.8): a merge on a tested tree, and a merge that says why its train was dropped; the build, the delete and the sweep
+  { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234/s3/m1`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed', testedTree: TRAIN_TREE },
+  { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234/s3/m2`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed', trainDropped: 'train-red' },
+  { ...base, kind: 'queue-train', key: `i470/l${LIFE}/queue/train/aaaaaaa-bbbbbbb-ccccccc/s3`, class: 'free', rule: 'Q3', op: 'build', pr: 512, branch: 'issue-470', rider: TRAIN_RIDER, headIssue: 469, headPr: 511, headBranch: 'issue-469', head: TRAIN_HEAD, main: TRAIN_MAIN, maxAttempts: 1 },
+  { ...base, kind: 'queue-train', key: `i470/l${LIFE}/queue/train/aaaaaaa-bbbbbbb-ccccccc/s3/del/merged`, class: 'free', rule: 'Q3', op: 'delete', branch: 'factory-train/i470-ddddddd', end: 'merged', maxAttempts: 3 },
+  { ...base, issue: null, kind: 'queue-train', key: 'train/sweep/1', class: 'free', rule: 'Q3', op: 'sweep', keep: ['factory-train/i472-7654321'], maxAttempts: 1 },
   { ...base, kind: 'slot', key: `i470/l${LIFE}/lease/1`, class: 'free', rule: 'W1', op: 'lease', life: LIFE, path: null, lease: null, branch: null, marker: null, keepScratch: false, maxAttempts: 3 },
   { ...base, kind: 'slot', key: `${at}/prepare/a1`, class: 'free', rule: 'S2', op: 'prepare', life: LIFE, path: SLOT, lease: 'lease-2', branch: 'issue-470', marker: { v: 1, repo: REPO, issue: 470, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-470', gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: LOOP_DIR, scratch: '' }, keepScratch: false, maxAttempts: 1 },
   { ...base, kind: 'slot', key: `${at}/kill`, class: 'free', rule: 'S3', op: 'kill', life: LIFE, path: SLOT, lease: 'lease-2', branch: null, marker: null, keepScratch: false, maxAttempts: 1 },
@@ -254,7 +276,7 @@ const V2_ACTIONS: Action[] = [
 // requeue, with every state label off in the same call.
 const STATE_LABEL = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
 const FACTORY = (l: string) => ALL_FACTORY_LABELS.some(x => x.name === l)
-function v2Shape(argv: readonly string[], action: Action | undefined): { repo?: string; labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean } {
+function v2Shape(argv: readonly string[], action: Action | undefined): { repo?: string; labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean; push?: boolean; git?: boolean } {
   const is = (...shape: (string | ((s: string) => boolean))[]) => shape.length === argv.length && shape.every((p, i) => (typeof p === 'string' ? p === argv[i] : p(argv[i] ?? '')))
   const num = (s: string) => /^[1-9]\d*$/.test(s)
   const text = (s: string) => s !== '' && !s.startsWith('-')
@@ -317,6 +339,23 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { repo?: 
         : {}
     case 'ci-rerun':
       return is('gh', 'run', 'rerun', num, '--failed', '--repo', REPO) ? { rerun: true } : {}
+    case 'queue-train': {
+      // the train: each tip fetched into FETCH_HEAD only (a branch of the action), the merged tree and the
+      // commit made with no working tree, and the only pushes: a train branch (a sha onto a branch under
+      // factory-train/) and the delete of branches under that prefix; nothing else is pushed or fetched
+      const sha = (s: string) => /^[0-9a-f]{40}$/.test(s)
+      const train = (r: string) => /^refs\/heads\/factory-train\/i[1-9]\d*-[0-9a-f]{7}$/.test(r)
+      if (action.op === 'build') {
+        if (is('git', 'fetch', '--quiet', '--no-tags', 'origin', r => r === `refs/heads/${action.headBranch}` || r === `refs/heads/${action.branch}`)) return { git: true }
+        if (is('git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}')) return { git: true }
+        if (is('git', 'merge-tree', '--write-tree', '--no-messages', sha, sha)) return { git: true }
+        if (is('git', 'commit-tree', sha, '-p', sha, '-p', sha, '-m', text)) return { git: true }
+        if (is('git', 'push', '--quiet', 'origin', r => sha(r.split(':')[0] ?? '') && train(r.split(':')[1] ?? ''))) return { git: true, push: true }
+      }
+      const deletes = argv.length >= 6 && argv.slice(0, 5).join(' ') === 'git push --quiet origin --delete' && argv.slice(5).every(r => train(r) || /^refs\/heads\/factory-train\/\S+$/.test(r))
+      if ((action.op === 'delete' || action.op === 'sweep') && deletes) return { git: true, push: true }
+      return {}
+    }
     default:
       return {}
   }
@@ -424,7 +463,7 @@ function bans(argv: readonly string[], action?: Action, own = REPO): string[] {
   // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
   const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote', 'ls-tree'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true)) out.push(`git ${verb}`)
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote', 'ls-tree'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step') && !(verb === 'push' && v2.push === true) && v2.git !== true) out.push(`git ${verb}`)
   return out
 }
 
@@ -482,6 +521,13 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470)],
+  ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470, { testedTree: TRAIN_TREE })],
+  ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470, { trainDropped: 'train-red' })],
+  ...V2_ACTIONS.filter(a => a.kind === 'queue-train').flatMap((a): [Action, string[]][] => {
+    if (a.kind !== 'queue-train') return []
+    const mine = a.op === 'build' ? [ARGV.trainFetchArgv(a.headBranch), ARGV.trainFetchArgv(a.branch), ARGV.fetchHeadArgv(), ARGV.mergeTreeArgv(a.head, a.rider), ARGV.commitTreeArgv(TRAIN_TREE, a.head, a.rider, 'factory train'), ARGV.pushTrainArgv(TRAIN_SHA, 'factory-train/i470-ddddddd')] : a.op === 'delete' ? [ARGV.deleteTrainArgv([a.branch])] : [ARGV.lsTrainArgv('factory-train/'), ARGV.deleteTrainArgv(['factory-train/i471-1234567', 'factory-train/i472-7654321'])]
+    return mine.map((argv): [Action, string[]] => [a, argv])
+  }),
   ['queue-merge', ARGV.patchIdArgv('issue-470', 'origin/main')],
   ['queue-update', ARGV.pollPauseArgv(2)],
   ['agent-step', ARGV.lsRemoteArgv('issue-470')],

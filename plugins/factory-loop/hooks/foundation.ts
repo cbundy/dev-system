@@ -45,6 +45,7 @@ export const GITHUB_V2: readonly ActionKind[] = [
   'ci-rerun',
   'queue-update',
   'queue-merge',
+  'queue-train',
   'released',
 ]
 

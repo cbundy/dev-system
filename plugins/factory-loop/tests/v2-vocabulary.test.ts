@@ -166,8 +166,8 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
         true,
       ])
     }
-    expect(V2_ACTION_KINDS).toHaveLength(17)
-    expect(V2_RULES).toHaveLength(26)
+    expect(V2_ACTION_KINDS).toHaveLength(18)
+    expect(V2_RULES).toHaveLength(27)
     expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'facts-shadow', 'wait-unreadable', 'starved', 'actions-refused', 'blind', 'reader-behind', 'release-hold'])
   })
 

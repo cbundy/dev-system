@@ -75,6 +75,8 @@ export const DEFAULT_CONFIG: Config = {
     'ci-rerun': 3,
     'queue-update': 1,
     'queue-merge': 1,
+    // a train build is tried once per key (a new main or head is a new key); a delete or sweep carries its own cap
+    'queue-train': 1,
   },
   retryBackoffMs: 2 * MIN,
   rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
@@ -130,6 +132,7 @@ export const DEFAULT_CONFIG: Config = {
   minimumReleaseCadenceMs: 6 * 60 * MIN,
   releaseBranchPrefix: null,
   releaseHoldMs: 45 * MIN,
+  mergeTrain: false,
   releaseInProgressMs: 2 * 60 * MIN,
   flakeWindowDays: 7,
   flakeBugMin: 2,

@@ -159,6 +159,35 @@ export function queueKey(r: Life, op: 'update' | 'merge', sha: string): string {
   return `${lifeKey(r)}/queue/${op}/${short(sha)}`
 }
 
+// trainKey: the build of the train for the record behind the head (9.8): the head H' it rides on,
+// its own head and main's head, each 7 characters, and its seq, so a new head or a new main is a new
+// train.
+export function trainKey(r: RecordRef, head: string, rider: string, main: string): string {
+  return `${lifeKey(r)}/queue/train/${short(head)}-${short(rider)}-${short(main)}/s${r.seq}`
+}
+
+// trainDeleteKey: the delete of a train's branch once it ended, by how it ended (a merged train or the
+// reason it was dropped); the reason is read back from the key.
+export function trainDeleteKey(buildKey: string, end: string): string {
+  return `${buildKey}/del/${end}`
+}
+
+// trainSweepKey: the sweep of the train branches on origin that no live train names, once per window
+// (a count of windows since the epoch).
+export function trainSweepKey(window: number): string {
+  return `train/sweep/${window}`
+}
+
+const TRAIN_KEY = /^(i[1-9]\d*\/l[0-9a-z]+\/queue\/train\/[0-9a-f]+-[0-9a-f]+-[0-9a-f]+\/s(\d+))(?:\/del\/([a-z-]+))?$/
+
+// trainKeyParts: the build key a train key names (the key itself for a build), its seq and, for a
+// delete, how the train ended; null for any other key.
+export function trainKeyParts(key: string): { build: string; seq: number; end: string | null } | null {
+  const m = TRAIN_KEY.exec(key)
+  if (m === null || m[1] === undefined || m[2] === undefined) return null
+  return { build: m[1], seq: Number(m[2]), end: m[3] ?? null }
+}
+
 // leaseKey: the life's n-th lease (W1); freeKey: a lease's free (W2), whoever held it.
 export function leaseKey(r: Life, n: number): string {
   return `${lifeKey(r)}/lease/${n}`

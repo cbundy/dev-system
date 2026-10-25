@@ -126,6 +126,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
 | `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
 | `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,headRefOid,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; per listed PR its head commit's time (`gh pr view N --repo R --json headRefOid,commits`, once per head) and its checks (`gh pr checks`, the bucket of each: `fail` or `cancel` is red, `pending` or none reported is pending, else green; with the earliest check start); a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed list read keeps the last reading and shows in `sources`; a failed head or checks read keeps the last reading of the same head, and a new head with none is held as pending, bounded by its window |
+| `train` | only while `mergeTrain` is on and a train is live (a done build with a train commit and no delete): the check runs of the train commit (`gh api repos/R/commits/<sha>/check-runs?per_page=100`, a list shorter than its `total_count` is not read), and, once main's head is not the sha the train was built on, the tree of the head's commit H' and of main's head (`gh api repos/R/commits/<sha> --jq .commit.tree.sha`, once each) | the checks every `prEveryMs`, the trees at once and once; none during a GitHub backoff or after a rate limit met this pass | the merge train (9.8): its CI, and the check that the head's merge left main on H''s tree. A failed read keeps the last reading of the same commit and shows in the reading's source |
 | `main` | act mode only: `gh api repos/R --jq .default_branch` (once per load), `gh api repos/R/commits/<branch> --jq .sha`, `gh api repos/R/commits/<head>/pulls` (only when the head moved), `gh api repos/R/actions/workflows?per_page=100` (the active workflows), for each `gh api repos/R/actions/workflows/<id>/runs?branch=<b>&per_page=10`, then `gh api repos/R/deployments?sha=<head>&per_page=100` (the newest of each environment) and for each `gh api repos/R/deployments/<id>/statuses?per_page=1` | `mainEveryMs`; none during a GitHub backoff or once a rate limit met this pass ends the loop's reads (checked before each call). When skipped or not yet due, the last reading stands | the `main_state` event (7.1, rule M1). Any failed call, or output not understood, fails the whole read: `sources.main` is not ok and the pass carries no reading, so a partial read is never shown as green |
 | `paths` | only while `intakeStamp` is `on`, for each record that is not closed and has a `head`, and only when the default branch is known (`checkout.defaultBranch`): `git fetch` of the base ref, `git fetch origin <head>` when the head is not here (as `callum-flow-patch-id`), then `git diff --name-only --no-renames <merge-base>..<head>`; each path is cut to its first segment, de-duplicated and sorted | once per `<issue> <head>`: a successful read is cached until the head moves; a failed read is null for that record this pass and is tried again on a later pass; nothing is read during a GitHub backoff or once a rate limit ended this pass's reads | the in-flight paths the `overlap` score factor reads (3.5, S1); while `intakeStamp` is `off` no git command runs for it |
 | `flakes` | act mode only: `dev-query --factory --csv -v repo=R -v since=<now - flakeWindowDays>` with the per-flake query of metrics 2d (a gate flake and a CI flake, each once; one row per flake per test with the first row's event id and the test name's hash), then, only when some test has `flakeBugMin` flakes, `callum-flow-issue-read --json --list --label flaky --state open` (the reader lists trusted authors only) for the open flake bugs: number, marker, whether labelled `ready`, the flake ids its body names | `githubEveryMs`, and at once after an action of rule F1 ended; none during a GitHub backoff or after a rate limit | rule F1 (8.5). A missing factory URL (`dev-query` exit 77) is no flakes; any other failure or an unreadable list fails the source, and F1 plans nothing (`V2State.flakes`, `sources.flakes`) |
@@ -1772,8 +1773,9 @@ The designer is a reader: it writes nothing to GitHub.
   head, minutes, checks), once per head. Each window is an intervention pair (7.2).
 - Every transition sets `seqAt`. So a head whose step ends other than ok (an unknown, a retry, a
   triage's retry) goes to the back, and the next PR becomes the head.
-- The head is the first. Only the head is ever touched: updated, checked or merged. A
-  PR behind the head waits untouched, however far behind main it falls.
+- The head is the first. Only the head is ever updated or merged. A PR behind the head waits
+  untouched, however far behind main it falls; with the merge train on (9.8) the PR right behind the
+  head is also *tested* on a train branch the loop pushes, never changed itself.
 - No other open PR is ever updated or rebased, by any rule. The safety tests check that
   `queue-update` names only the head's PR and that no rebase exists (17.1 property 8).
 
@@ -1807,6 +1809,9 @@ The designer is a reader: it writes nothing to GitHub.
   (`images/base/callum-flow-merge`). `--issue` is the record's issue: the guard never has
   to read it from the branch name. `check-pr-linkage.sh` reads `issue-<N>` from the branch too
   (the number followed by `-` or the end of the name), so the linkage is checked, never skipped, and a skipped check would park a green, approved PR.
+  With the merge train on (9.8) the command also carries `--tested-tree <T>` (a merge on a train that
+  passed) or `--train-dropped <reason>` (one that says why its train was dropped); the key then ends
+  `/s<seq>/m<k>`, the k-th merge try of the seq at this head.
 - **Outcomes.** Merged is `ok` (T13). A FAIL line of the guard carries a class (9.4), and each
   class has one outcome:
 
@@ -1855,8 +1860,11 @@ the guard checks only facts the loop owns:
 
 The queue never holds for a red main. The loop reads main's checks (2.4 `main`) only to log them as `main_state` events (7.1); no rule waits on them or tells the owner:
 
-- With "Require branches to be up to date" on, every PR's CI after its update runs on main plus
-  the PR, so the head's own checks already carry main's state.
+- Every merge leaves main on a tree CI passed (17.1 property 21). With "Require branches to be up to
+  date" on, GitHub enforces it: every PR's CI after its update runs on main plus the PR, so the
+  head's own checks already carry main's state. With the merge train on (9.8) the setting is off and
+  the guard's `tree` check enforces it instead: a merge goes only when merging the PR onto main as
+  it is now gives exactly the tree CI passed on the head's update or on its train.
 - A flake on main shows on the head as a failed check, and its one re-run clears it (8.5).
 - A real break on main shows as `ci-red` on the head. The owner's rule then applies: the PR leaves
   the queue for a fixer, and the queue moves on. A fixer may fix the break in the PR
@@ -1872,6 +1880,9 @@ The owner confirmed this (section 15).
 
 - A merge needs at most one update, one CI run and one merge: about 4 to 5 minutes, so 12 to 15
   merges an hour against a demand of about 1 (CI takes about 3 minutes).
+- With the merge train on, the record behind the head is tested while the head is in CI and merges
+  right after it with no update and no CI run of its own, so two approved PRs cost about one CI
+  run each in parallel, not in series: the second merge follows the first within a pass or two (9.8).
 - An outside merge during the head's CI wait makes the head `behind` again. Q1 then updates once
   more, under the new base's key. If main keeps moving, the GitHub wait bound and the unknown path
   bound it, and an unknown head goes to the back of the queue.
@@ -1887,6 +1898,55 @@ The owner confirmed this (section 15).
 - A finding fixed without a code change is answered `unchanged`, with no head and the evidence in the answer. A fixer never pushes an empty commit or a change made only to move the head.
 - After a fix the PR goes back through reviewing: a fix changes the patch, and approval is keyed
   by patch.
+
+### 9.8 The merge train
+
+Behind the `mergeTrain` setting (off by default). Strict branch protection ("Require branches to be
+up to date") makes every PR wait for its own update and CI run after the one before it merged. The
+train tests the next PR on top of the head while the head is still in CI, and merges it right after
+the head, when what CI passed is still what merging gives. The owner approved it on #971 (section 15).
+
+- **Depth 2.** Only the record right behind the head rides a train, and at most one train is live. The
+  train is a commit on a branch of the loop's own, `factory-train/i<N>-<tree7>`, never the PR's: the
+  next PR's branch is never changed, and no rule updates, rebases or merges a record but the head.
+- **Q3, build.** The setting is on, no train is live, and: the head has been updated onto main (its
+  base is main's head, and its head H' is one a `queue-update` of this seq produced), its CI runs or is
+  green; the next record N has an open PR whose patch is `approvedPatch`, which is not held, not
+  `dirty`, with N's own checks green. Then one `queue-train` (op `build`) from the main checkout, no
+  working tree touched: it fetches H' and N, checks each is still the sha the plan read (else the
+  drop `head-moved`), runs `git merge-tree --write-tree H' N` (exit 1 is the drop `conflict`), makes
+  the commit with `git commit-tree <T> -p H' -p N` (a fixed identity and date, so the same inputs make
+  the same commit) and pushes it as `factory-train/i<N>-<tree7>`. CI runs on it (`ci.yml` runs on
+  `factory-train/**` pushes). The ledger outcome records the tree T, the train commit, the branch,
+  H', N's head and main's head.
+- **The train's checks.** The `train` source (2.4) reads the check runs of the train commit while it is
+  live. Green, pending and red read as the head's checks do (8.5), without the re-run: a red train only
+  drops the train. No check started after `ciStartMs`, or checks unread that long, or checks running past
+  `ciRunMs` more, are red too, so a repo whose CI does not run on train pushes loses nothing.
+- **Q2 for N.** When H merges and N becomes the head with a live train: main's head is not the sha the
+  train was built on, and its tree equals H''s tree (the `train` source reads both, once each); the
+  train's checks are green; N's head is the one the train tested; N's patch is `approvedPatch`; and N's
+  own checks are green. Then Q1 is not planned although N's base is behind main, GitHub's `behind`
+  state is accepted, and the merge is `callum-flow-merge ... --tested-tree <T>` (9.3). The guard's
+  `tree` check (9.4) is the final word: it merges N onto main as it is now and compares the tree.
+- **Every invalidation drops the train and N takes today's path** (Q1, its own CI, Q2), each with its
+  reason, which the merge passes as `--train-dropped` and `callum-flow-merge` records on the `merged`
+  event (`train_reason`): `head-moved` (N, or the head, pushed again, or its branch is gone),
+  `outside-merge` (main moved and its tree is not H''s), `conflict` (the build found one), `train-red`
+  (red, never-started or failed train CI), `left-queue` (the head left the queue other than by
+  merging, N is not next any more, or the setting was turned off), `tree-mismatch` (a `GUARD tree
+  FAIL`), `refused` (the guard exited 2, an image without `--tested-tree`, or GitHub refused as
+  `behind` after the guard passed, strict protection still on). A try that fell back is a done try
+  with the drop in its outcome and never counts toward the tries after which a guard that refuses is
+  `unknown` (`MERGE_TRIES`, 9.3). All are read from facts each pass, so a restart loses none.
+- **Clean-up.** The loop deletes each train branch once it is over, with `queue-train` op `delete`
+  keyed `<build key>/del/<how it ended>` (`merged`, or the drop reason). A delete that failed is left
+  to the sweep: op `sweep`, keyed `train/sweep/<window>`, once per 15 minutes with the setting on, which
+  deletes every `factory-train/*` ref on origin that no live train names (a crash leaves some). With
+  the setting off the sweep still runs while a train was ever built that no delete or sweep cleaned,
+  so turning it off leaves none. Only a branch under `factory-train/` is ever deleted.
+- **Off.** No `queue-train` build is ever planned, no train check is read, and the queue behaves as in
+  9.1 to 9.3. Property 21 of 17.1 then rests on strict protection alone.
 
 ## 10. Workspaces
 
@@ -3881,7 +3941,7 @@ later child of #684.
 
 ### 14.1 Rule ids
 
-Twenty-six rules, by id.
+Twenty-seven rules, by id.
 
 | Id | Name | When | Then |
 |---|---|---|---|
@@ -3900,7 +3960,8 @@ Twenty-six rules, by id.
 | S5 | triage | U3 or T6 | the triage step; its answer through X1 to X5 |
 | S6 | owner and GitHub | drop, unpark, issue-closed, pr-merged, pr-closed, claim-lost, a waiting state's period | E1 to E7, P1 |
 | Q1 | update | the merge queue's head is behind | `queue-update` keyed by main's head |
-| Q2 | merge | the head is clean, green and approved | `queue-merge` keyed by its head |
+| Q2 | merge | the head is clean, green and approved | `queue-merge` keyed by its head; with a live train (9.8) the record that is now the head merges with `--tested-tree` though behind |
+| Q3 | train | `mergeTrain` is on, and the next record can be tested on the head's update (9.8); also a train that ended, and the stale branches on origin | `queue-train`: `build`, `delete`, `sweep` |
 | W1 | lease | a queued record with capacity, or a record in a slot state with no lease | `slot` op `lease` |
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
@@ -3988,7 +4049,19 @@ The first entries are the owner's own decisions; they are settled.
 - **Decision:** no hold. A failed check on the head gets one re-run, then a fixer, and the queue
   moves on (9.5).
 - **Why:** the owner's rule. With "up to date" on, the head's own CI carries main's
-  state; a hold would make the queue wait on a person while holding K slots.
+  state (or, with the merge train on, the guard's tree check does, 9.8); a hold would make the queue
+  wait on a person while holding K slots.
+
+### The merge queue may test and merge the next PR on a train (owner, #971)
+
+- **Decision:** option C of #971: the head-only rule is amended so the PR right behind the head is
+  tested on a branch of the loop's own, never changed, and merged right after the head when the tree
+  CI passed is still the tree merging gives (9.8). It ships behind the `mergeTrain` setting, off by
+  default; the owner turns it on, and turns "Require branches to be up to date" off, in a follow-up
+  (#1311). Every mismatch falls back to the queue as it was.
+- **Why:** strict protection serialises the merges: each PR waits for its own update and CI run
+  after the one before it. The train keeps the guarantee that main only ever moves to a tree CI
+  passed (17.1 property 21) and takes the second CI run out of the line.
 
 ### Interventions, by a person or by the loop (owner)
 
@@ -4411,9 +4484,12 @@ own test.
 7. **Bounded work.** On any event sequence without outside events (unpark, outside pushes), agent
    steps per life stay under the bound computed from `fixCap`, `conflictFixCap`, `maxTriages` and one free re-run
    per attempt.
-8. **Head only.** No plan has a `queue-update` or `queue-merge` for a record that is not the head;
-   no argv has `--rebase` or a force push; no action makes a branch other than the record's; no
-   action closes a PR.
+8. **Head only.** No plan has a `queue-update` or `queue-merge` for a record that is not the head, and no
+   rule updates or rebases any record but the head; with the merge train on (9.8) the one other
+   action is a `queue-train` build for the record right behind the head, which makes a branch under
+   `factory-train/` and nothing of the record's, and the record's merge, once it is the head, carries
+   `--tested-tree`; no argv has `--rebase` or a force push; no action makes a branch other than the
+   record's or a train's; no action closes a PR.
 9. **Patch-keyed approval.** Q2 never plans a merge when the head's patch is not `approvedPatch`.
 10. **The unknown path.** From any unknown the next steps are a free re-run at most once, then
     retry, then triage, then park, in that order and bounded; an invalid triage answer parks.
@@ -4447,6 +4523,9 @@ own test.
     started (a record's count, then one per R1 release after it), and the first claim after a
     rejection is life 1, logged as `unreject`. S1 never claims an issue that carries
     `factory:rejected`. No release re-adds `ready` at or past `maxLives`.
+21. **Merges land on a tested tree.** Every `queue-merge` is either the head after Q1 at
+    main's head, or carries `--tested-tree` equal to merge-tree(main, head), so every merge
+    leaves main on a tree CI passed (`v2-train.test.ts`, 'the tree property').
 
 ## Appendix A. Settings
 
@@ -4496,7 +4575,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | `starvedNoticeAfterMs` (written `starvedNoticeAfter`) | `1h` | a starved queue (S1: ready issues, every one unclaimable, nothing queued or in flight, no owner hold) this long tells the owner, naming the root blockers; applied `next-pass` |
 | `agentTimeoutMs` | `designer 1h, implementer 2h, adjudicator 30m, fixer 2h` | first loop only: accepted in a settings file, no effect |
 | `wakeTimeoutMs` (written `wakeTimeout`) | `judge 30m, task 6h, tell 30m` | per wake kind (13.8); a wake already running keeps the timeout it took |
-| `maxAttempts` | `claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, heartbeat 3, sweep 3, restart-self 1, stop-agent 1, judge 1, task 1, tell 1, agent-step 1, ci-rerun 3, queue-update 1, queue-merge 1` | per action kind or agent type, then the owner hears of it (`tell(task-timeout)` for a task); any other kind is 3, and v2's step kinds carry their own (appendix B). A task and a tell are asked once, with one reminder inside the attempt. Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47), and the owner item (`tell:stalled:<key>`) stays while a retry runs, until a run ends `done` |
+| `maxAttempts` | `claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, heartbeat 3, sweep 3, restart-self 1, stop-agent 1, judge 1, task 1, tell 1, agent-step 1, ci-rerun 3, queue-update 1, queue-merge 1, queue-train 1` | per action kind or agent type, then the owner hears of it (`tell(task-timeout)` for a task); any other kind is 3, and v2's step kinds carry their own (appendix B). A task and a tell are asked once, with one reminder inside the attempt. Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47), and the owner item (`tell:stalled:<key>`) stays while a retry runs, until a run ends `done` |
 | `retryBackoffMs` (written `retryBackoff`) | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
 | `rateCaps` | `start 30, spawn 120, wake 20, perIssueKind 6` | runaway protection (13.11.4): starts, spawns and wakes per rolling hour, and `perIssueKind` actions of one kind on one issue; no global cap on merges (DECISIONS D-24) |
 | `queueScore` | `priorityLabel 30, bug 25, unblocksDirect 10, unblocksTransitive 5, unblocksCap 40, closesEpic 20, nearlyClosesEpic 10, epicStarted 10, waitingPerHour 2, waitingCap 20, failedLife 10, failedLivesCap 30, areaFactory 20, needsOwner 40, overlap 15` | the weights of the claim score (S1, `hooks/v2/score.ts`): whole numbers of at least 0, penalties as positive magnitudes; set one with `/factory config set queueScore.<name> N`; applied `next-pass`. `unblocks` is `min(unblocksCap, unblocksDirect x direct + unblocksTransitive x transitive)`, where transitive walks `state.blockGraph`; `waiting` is `min(waitingCap, floor(waitingPerHour x hours claimable))`; `failed-lives` is `-min(failedLivesCap, failedLife x earlier lives not ended merged)`; the three intake weights score only while `intakeStamp` is `on` and the issue has a stamp (`stamps:<repo>`): `area-factory` is `+areaFactory` for the label `area:factory` (stacks on `bug`), `needs-owner` is `-needsOwner` for the label `needs-decision`, and `overlap` is `-overlap`, once, when the stamp's `touches` (cut to their first segment) meet the `paths` of any other live record |
@@ -4515,6 +4594,7 @@ have ops of their own) and `shadowDevice` (a plugin option), and `help config` l
 | `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake names it as `cadence` |
 | `releaseBranchPrefix` | `none` | 9.1: the head-branch prefix of a release's bump PR (like `chore/release-`), a non-empty string; `none` (null) turns the release hold off. Read every pass from both settings files; `/factory config` shows it with its source |
 | `releaseHoldMs` (written `releaseHold`) | `45m` | 9.1: the longest the merge queue holds per head of a bump PR, counted from the head's anchor; 0 turns the hold off. Read every pass from both settings files; `/factory config` shows it as `releaseHold` (`off` at 0) |
+| `mergeTrain` | `false` | 9.8: the merge train: test the record behind the head on a train branch and merge it right after the head, with no update and CI run of its own, when the tested tree still matches. `true` or `false`; off until the owner turns it on, and the owner also turns "Require branches to be up to date" off first (the guard's tree check stands in for it). Read every pass from both settings files; `/factory config` shows it as `mergeTrain` (`on` or `off`), with its source |
 | `releaseInProgressMs` (written `releaseInProgress`) | `2h` | 11, O3: after a release task answered `done`, no release review is planned until a newer tag is seen or this long has passed since it ended; 0 turns it off. Read every pass; `/factory config` shows it as `releaseInProgress` (`off` at 0) |
 | `flakeWindowDays` | `7` | 8.5: the days back a test's flakes count toward a flake bug, a whole number of at least 1 |
 | `flakeBugMin` | `2` | 8.5: the flakes of one test in the window that file a flake bug, a whole number of at least 1 |
@@ -4563,7 +4643,8 @@ settings file, and they have no effect. `/factory help config` lists them on one
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
-| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>`, off the pass | 1 per key |
+| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>`, off the pass; with a live train (9.8) also `--tested-tree <T>`, else after a dropped train `--train-dropped <reason>`. With `--tested-tree`, exit 2 (an image that does not know it), a `GUARD tree FAIL` of class `behind` or `conflict`, or a `BEHIND` refusal after the guard passed are answered (done, not merged) with the drop `refused` or `tree-mismatch` in the outcome, never a failure | 1 per key |
+| `queue-train` | free | rule Q3 (9.8), from the main checkout, no working tree touched. `build`: `git fetch --no-tags origin refs/heads/<branch>` and `git rev-parse FETCH_HEAD` for the head's and the record's branch, `git merge-tree --write-tree H' N`, `git commit-tree <T> -p H' -p N` (fixed identity and date), `git push origin <sha>:refs/heads/factory-train/i<N>-<tree7>`; `delete`: `git push origin --delete refs/heads/factory-train/...`; `sweep`: `git ls-remote --heads origin 'refs/heads/factory-train/*'`, then one delete of those the action does not keep. Only refs under `factory-train/` are ever deleted | build 1 per key, delete 3 per key, sweep 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
 | `released` | free | `callum-flow-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
@@ -4585,7 +4666,8 @@ deliberately, as one argv.
 | PR | `i571/lss1x2k/s8/pr/ensure`, `.../s12/pr/body/a1` |
 | split child | `i600/lss0q1z/s3/child/b` |
 | CI re-run | `i571/lss1x2k/rerun/r2/18342299123`; of a refused run (8.5): `i571/lss1x2k/refused/18342299123/p2` (a probe), `.../refused/18342299123/go` (on resume) |
-| queue | `i571/lss1x2k/queue/update/9e01b77`, `.../queue/merge/4c2d8aa` |
+| queue | `i571/lss1x2k/queue/update/9e01b77`, `.../queue/merge/4c2d8aa` (a merge's key also ends `/s<seq>/m<k>`, 9.3) |
+| train | the build for the record behind the head: `i572/lss1x2k/queue/train/<H'7>-<N7>-<main7>/s<seq>`; its delete `.../del/<merged or the drop reason>`; the sweep `train/sweep/<window>` (9.8) |
 | slot | `i571/lss1x2k/lease/1`, `slot/<lease id>/free` |
 | follow-up | `i571/lss1x2k/follow/rollout`, `.../follow/close-tracker`, `.../follow/close-tracker/up` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
