@@ -1,4 +1,4 @@
--- 0036: the loop_passes event's usage throttle tier as columns of factory.event_log and
+-- 0035: the loop_passes event's usage throttle tier as columns of factory.event_log and
 -- factory_public.event_log: usage_tier (normal, slow, stop-new or stop-all, the tier the loop
 -- planned with at the minute's end) and usage_tier_overridden (whether an owner override held it at
 -- normal). Every other event, and a loop_passes row from an older loop, reads NULL in both.
