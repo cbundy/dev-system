@@ -77,7 +77,7 @@ export function stepsOf(action: Action, repo: string, loopDir: string): Step[] |
     case 'milestone-later':
       return n === null ? noIssue : [{ argv: ['callum-flow-milestone', 'plan', n, 'later'], timeoutMs: CLI_TIMEOUT_MS['milestone-later'] }]
     case 'release-parent':
-      // the parent is now a tracker. No label comes off: the claim has had no label since SPEC 3.6,
+      // the parent is now a tracker. No label comes off: the claim has had no label since v2 SPEC 3.6,
       // and the closed record's label clear takes the factory:* labels off (#1353).
       return n === null
         ? noIssue

@@ -454,7 +454,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Decision**: every `gh` command carries `--repo`. The label, comment, PR, split, update-branch,
   run re-run and slot writes sit on the executor allowlist, one argv each. `abandon` removes the
   label before it logs `abandoned`; `release-parent` only logs `abandoned` (no label edit: the label
-  was dropped in SPEC 3.6 and a repo without it failed every split, #1353). `release-worktree` gives
+  was dropped in v2 SPEC 3.6 and a repo without it failed every split, #1353). `release-worktree` gives
   `treehouse return` empty stdin, never `--force`, and is done only when the slot reads
   `available`. `milestone-expect` puts its reason on one line. `stop-agent` refuses any agent the
   ledger does not hold running (v2 SPEC 13.6.1).
