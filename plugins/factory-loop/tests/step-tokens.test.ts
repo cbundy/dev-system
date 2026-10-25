@@ -5,12 +5,12 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { RunInit, RunResult } from '../hooks/exec'
 import { NO_TOKENS, readStepTokens, tokensOf, transcriptPath } from '../hooks/v2/step-tokens'
 
-type Usage = { in?: number; out?: number; read?: number; create?: number }
+type Usage = { in?: number; out?: number; read?: number; create?: number; c5?: number; c1?: number }
 const line = (requestId: string | null, model: string, u: Usage) =>
   JSON.stringify({
     type: 'assistant',
     ...(requestId === null ? {} : { requestId }),
-    message: { model, usage: { input_tokens: u.in ?? 0, output_tokens: u.out ?? 0, cache_read_input_tokens: u.read ?? 0, cache_creation_input_tokens: u.create ?? 0 } },
+    message: { model, usage: { input_tokens: u.in ?? 0, output_tokens: u.out ?? 0, cache_read_input_tokens: u.read ?? 0, cache_creation_input_tokens: u.create ?? 0, ...(u.c5 === undefined && u.c1 === undefined ? {} : { cache_creation: { ephemeral_5m_input_tokens: u.c5 ?? 0, ephemeral_1h_input_tokens: u.c1 ?? 0 } }) } },
   })
 
 describe('tokensOf', () => {
@@ -80,7 +80,7 @@ describe('readStepTokens', () => {
   test('reads the file at the primary path with no command', async () => {
     const w = world({ [file('a1')]: line('r1', 'claude-opus-5-5', { in: 1, out: 2, read: 3, create: 4 }) })
     expect(await readStepTokens(w.io, w.cmd, src('a1'))).toEqual({
-      fields: { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_creation_tokens: 4, model: 'claude-opus-5-5' },
+      fields: { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_creation_tokens: 4, model: 'claude-opus-5-5', cost_usd: 0.000082 },
       problem: null,
     })
     expect(w.cmds.filter(c => c[0] === 'find')).toEqual([])
@@ -119,7 +119,47 @@ describe('readStepTokens', () => {
       [meta('d1')]: '{"parentAgentId":"a1"',
     })
     const r = await readStepTokens(w.io, w.cmd, src('a1'))
-    expect(r.fields).toEqual({ input_tokens: 111, output_tokens: 11, cache_read_tokens: 5, cache_creation_tokens: 7, model: 'claude-opus-5-5' })
+    expect(r.fields).toEqual({ input_tokens: 111, output_tokens: 11, cache_read_tokens: 5, cache_creation_tokens: 7, model: 'claude-opus-5-5', cost_usd: 0.000538 })
+    expect(r.problem).toBeNull()
+  })
+
+  test('prices each request at its own model: an opus step with a nested haiku agent and a 5m/1h split', async () => {
+    const w = world({
+      [file('a1')]: line('r1', 'claude-opus-5-5', { in: 1000, out: 2000, read: 10000, create: 3000, c5: 1000, c1: 2000 }),
+      [file('b1')]: line('r2', 'claude-haiku-5-5', { in: 4000, out: 500, read: 20000, create: 1000, c5: 1000 }),
+      [meta('b1')]: '{"parentAgentId":"a1"}',
+    })
+    // opus: 1000*5 + 2000*25 + 1000*6.25 + 2000*10 + 10000*0.5 = 86250; haiku: 4000*1 + 500*5 + 1000*1.25 + 20000*0.1 = 9750
+    const r = await readStepTokens(w.io, w.cmd, src('a1'))
+    expect(r.fields.cost_usd).toBe(0.096)
+    expect(r.fields.cache_creation_tokens).toBe(4000)
+    expect(r.problem).toBeNull()
+  })
+
+  test('without a cache_creation split all of it is 5m; a split that falls short leaves the rest at 5m', async () => {
+    const m = 'claude-sonnet-5-5'
+    const a = world({ [file('a1')]: line('r1', m, { create: 1_000_000 }) })
+    expect((await readStepTokens(a.io, a.cmd, src('a1'))).fields.cost_usd).toBe(3.75)
+    const b = world({ [file('a1')]: line('r1', m, { create: 1_000_000, c5: 0, c1: 400_000 }) })
+    expect((await readStepTokens(b.io, b.cmd, src('a1'))).fields.cost_usd).toBe(0.6 * 3.75 + 0.4 * 6)
+  })
+
+  test('an unknown model in a nested agent makes cost null, keeps the totals and names the model', async () => {
+    const w = world({
+      [file('a1')]: line('r1', 'claude-opus-5-5', { in: 1, out: 1 }),
+      [file('b1')]: line('r2', 'claude-future-9', { in: 10 }),
+      [meta('b1')]: '{"parentAgentId":"a1"}',
+    })
+    const r = await readStepTokens(w.io, w.cmd, src('a1'))
+    expect(r.fields.cost_usd).toBeNull()
+    expect(r.fields.input_tokens).toBe(11)
+    expect(r.problem).toBe('unpriced model claude-future-9')
+  })
+
+  test('a synthetic zero-usage turn does not make the step unpriced', async () => {
+    const w = world({ [file('a1')]: [line('r1', 'claude-opus-5-5', { in: 1_000_000 }), line('r2', '<synthetic>', {})].join('\n') })
+    const r = await readStepTokens(w.io, w.cmd, src('a1'))
+    expect(r.fields.cost_usd).toBe(5)
     expect(r.problem).toBeNull()
   })
 })

@@ -140,6 +140,7 @@ Example:
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `considered` | integer | `queue_snapshot` | How many candidates the claim rule considered this pass: the whole list, before the cap on candidates below. |
 | `context` | string | `transition` | parked: the context of the owner's question, set only when an agent structured the question; null otherwise. |
+| `cost_usd` | number | `intake_stamp`, `loop_entry` | The what-if cost of an ended run at Anthropic's public API prices (each request priced at its own model), not a bill; null while running, on other kinds, when a model is unpriced and on older loops. |
 | `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
 | `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
 | `decision` | string | `loop_entry`, `transition` | A wake's decision, for example hold or done; null when the wake made none. |
@@ -608,6 +609,7 @@ One stamp attempt of one issue version: the intake step read the issue body and 
 | `output_tokens` | integer | optional | yes | minimum 0 | yes | The output tokens of an ended run, counted as input_tokens; null otherwise. |
 | `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cost_usd` | number | optional | yes | minimum 0 | yes | The what-if cost of an ended run at Anthropic's public API prices (each request priced at its own model), not a bill; null while running, on other kinds, when a model is unpriced and on older loops. |
 
 Example:
 
@@ -711,6 +713,7 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `output_tokens` | integer | optional | yes | minimum 0 | yes | The output tokens of an ended run, counted as input_tokens; null otherwise. |
 | `cache_read_tokens` | integer | optional | yes | minimum 0 | yes | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `cache_creation_tokens` | integer | optional | yes | minimum 0 | yes | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
+| `cost_usd` | number | optional | yes | minimum 0 | yes | The what-if cost of an ended run at Anthropic's public API prices (each request priced at its own model), not a bill; null while running, on other kinds, when a model is unpriced and on older loops. |
 | `model` | string | optional | yes |  | yes | An ended agent step: the full id of the model the step's own agent ran on (for example claude-opus-5-5), the one of most turns; null otherwise. |
 
 Example:

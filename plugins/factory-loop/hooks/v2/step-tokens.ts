@@ -6,19 +6,22 @@
 // agent nested under the step agent (its `.meta.json` names its `parentAgentId`); the model is the
 // step agent's own. Reading never throws: a failure is a reason, and the fields stay null.
 import type { ActIo, RunInit, RunResult } from '../exec'
+import { priceOf } from './prices'
 
 export type StepTokens = { input: number; output: number; cacheRead: number; cacheCreation: number; model: string | null }
 
-// The five loop_entry fields, null when nothing was read.
+// The six loop_entry fields, null when nothing was read.
 export type TokenFields = {
   input_tokens: number | null
   output_tokens: number | null
   cache_read_tokens: number | null
   cache_creation_tokens: number | null
   model: string | null
+  // the what-if cost at public API prices, null when a model is unpriced (#1334)
+  cost_usd: number | null
 }
 
-export const NO_TOKENS: TokenFields = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null }
+export const NO_TOKENS: TokenFields = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, model: null, cost_usd: null }
 
 // A reading: the fields, and why they are null when they are.
 export type TokenReading = { fields: TokenFields; problem: string | null }
@@ -27,11 +30,12 @@ const LOOKUP_TIMEOUT_MS = 5_000
 const NESTED_DEPTH = 6
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
 
-export function fieldsOf(t: StepTokens, sum: Omit<StepTokens, 'model'> = t): TokenFields {
-  return { input_tokens: sum.input, output_tokens: sum.output, cache_read_tokens: sum.cacheRead, cache_creation_tokens: sum.cacheCreation, model: t.model }
+export function fieldsOf(t: StepTokens, sum: Omit<StepTokens, 'model'> = t, cost: number | null = null): TokenFields {
+  return { input_tokens: sum.input, output_tokens: sum.output, cache_read_tokens: sum.cacheRead, cache_creation_tokens: sum.cacheCreation, model: t.model, cost_usd: cost }
 }
 
-export type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; model: string | null }
+// cacheWrite5m / cacheWrite1h split cacheCreation by cache lifetime for pricing.
+export type Turn = { input: number; output: number; cacheRead: number; cacheCreation: number; cacheWrite5m: number; cacheWrite1h: number; model: string | null }
 
 // turnsOf: a transcript's requests by requestId, the last line of a request winning (a line without
 // a requestId is a request of its own, keyed with a NUL prefix). An unparsable line is skipped; the
@@ -54,7 +58,7 @@ export function turnsOf(text: string): Map<string, Turn> {
     const key = typeof l.requestId === 'string' ? l.requestId : `\0anon${anon++}`
     let turn = turns.get(key)
     if (turn === undefined) {
-      turn = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, model: null }
+      turn = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cacheWrite5m: 0, cacheWrite1h: 0, model: null }
       turns.set(key, turn)
     }
     if (typeof msg.model === 'string' && msg.model !== '' && msg.model !== '<synthetic>') turn.model = msg.model
@@ -68,6 +72,15 @@ export function turnsOf(text: string): Map<string, Turn> {
       turn.output = n('output_tokens')
       turn.cacheRead = n('cache_read_input_tokens')
       turn.cacheCreation = n('cache_creation_input_tokens')
+      const cc = (u as Record<string, unknown>).cache_creation
+      const split = typeof cc === 'object' && cc !== null ? (cc as Record<string, unknown>) : {}
+      const m = (k: string) => {
+        const v = split[k]
+        return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
+      }
+      turn.cacheWrite1h = Math.min(m('ephemeral_1h_input_tokens'), turn.cacheCreation)
+      // what the split does not account for counts at the 5m rate
+      turn.cacheWrite5m = turn.cacheCreation - turn.cacheWrite1h
     }
   }
   return turns
@@ -95,6 +108,20 @@ export function tokensOf(text: string): StepTokens {
   for (const [model, m] of seen) if (best === null || m.count > best.count || (m.count === best.count && m.last > best.last)) best = { model, ...m }
   total.model = best === null ? null : best.model
   return total
+}
+
+// costOf: a transcript's what-if cost, each request at its own model's rates. A request with no
+// tokens and no model (a synthetic notice) adds nothing; a request with tokens at an unknown or
+// missing model makes the cost null and names the model in `unpriced`.
+export function costOf(text: string, unpriced: Set<string>): number {
+  let cost = 0
+  for (const t of turnsOf(text).values()) {
+    if (t.model === null && t.input + t.output + t.cacheRead + t.cacheCreation === 0) continue
+    const p = priceOf(t.model, t)
+    if (p === null) unpriced.add(t.model ?? '(none)')
+    else cost += p
+  }
+  return cost
 }
 
 // transcriptPath: where the session that spawned the agent keeps its transcript.
@@ -132,6 +159,8 @@ export async function readStepTokens(io: Pick<ActIo, 'readFile'>, cmd: Cmd, src:
     }
     if (text === null || path === null) return none('transcript not found')
     const own = tokensOf(text)
+    const unpriced = new Set<string>()
+    let cost = costOf(text, unpriced)
     const sum = { input: own.input, output: own.output, cacheRead: own.cacheRead, cacheCreation: own.cacheCreation }
     const dir = path.slice(0, path.lastIndexOf('/'))
     const visited = new Set<string>([src.agentId])
@@ -146,6 +175,7 @@ export async function readStepTokens(io: Pick<ActIo, 'readFile'>, cmd: Cmd, src:
           const t = await io.readFile(`${dir}/agent-${child}.jsonl`)
           if (t === null) continue
           const c = tokensOf(t)
+          cost += costOf(t, unpriced)
           sum.input += c.input
           sum.output += c.output
           sum.cacheRead += c.cacheRead
@@ -154,7 +184,8 @@ export async function readStepTokens(io: Pick<ActIo, 'readFile'>, cmd: Cmd, src:
       }
       level = next
     }
-    return { fields: fieldsOf(own, sum), problem: null }
+    if (unpriced.size > 0) return { fields: fieldsOf(own, sum, null), problem: `unpriced model ${[...unpriced].join(', ')}` }
+    return { fields: fieldsOf(own, sum, Math.round(cost * 1e6) / 1e6), problem: null }
   } catch (err) {
     return none(`transcript unreadable: ${err instanceof Error ? err.message : String(err)}`)
   }

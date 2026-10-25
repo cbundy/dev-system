@@ -89,6 +89,7 @@ function eventOf(ctx: ExecCtx, run: Run, told: Told, tokens: TokenFields): Recor
     output_tokens: tokens.output_tokens,
     cache_read_tokens: tokens.cache_read_tokens,
     cache_creation_tokens: tokens.cache_creation_tokens,
+    cost_usd: tokens.cost_usd,
   }
 }
 

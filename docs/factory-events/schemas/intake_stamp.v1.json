@@ -22,7 +22,8 @@
     "input_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The input tokens of an ended run's agent transcript and every agent nested under it, once per request (loop_entry: an agent step; intake_stamp: the stamp run); null while running, for other kinds and when the transcript could not be read.", "x-column": true },
     "output_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The output tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
     "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-read input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
-    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true }
+    "cache_creation_tokens": { "type": ["integer", "null"], "minimum": 0, "description": "The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise.", "x-column": true },
+    "cost_usd": { "type": ["number", "null"], "minimum": 0, "description": "The what-if cost of an ended run at Anthropic's public API prices (each request priced at its own model), not a bill; null while running, on other kinds, when a model is unpriced and on older loops.", "x-column": true }
   },
   "examples": [
     { "version": "3f2a9c1d", "mode": "run", "outcome": "ok", "area": "factory", "needs_owner": false, "reason": null, "touches": ["plugins", "docs"], "dropped": [], "labels_set": ["area:factory"], "labels_kept": [], "model": "sonnet", "input_tokens": 1840, "output_tokens": 212, "cache_read_tokens": 9600, "cache_creation_tokens": 410 },

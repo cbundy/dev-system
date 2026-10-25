@@ -264,7 +264,7 @@ const transcript = (...lines: object[]) => lines.map(l => JSON.stringify(l)).joi
 const assistant = (requestId: string, u: { in: number; out: number; read: number; create: number }) => ({
   type: 'assistant',
   requestId,
-  message: { model: 'claude-haiku-4-5', usage: { input_tokens: u.in, output_tokens: u.out, cache_read_input_tokens: u.read, cache_creation_input_tokens: u.create } },
+  message: { model: 'claude-haiku-5-5', usage: { input_tokens: u.in, output_tokens: u.out, cache_read_input_tokens: u.read, cache_creation_input_tokens: u.create } },
 })
 
 function world(over: { cfg?: Partial<Config>; store?: unknown; labels?: string[]; transcript?: boolean } = {}): World {
@@ -360,7 +360,7 @@ const settleAction = (n: number, version: string, why = 'timeout'): Action => ({
 const runEntry = (n: number, version: string, over: Partial<LedgerEntry> = {}): LedgerEntry => entry(intakeKey(n, version), 'intake-stamp', { issue: n, status: 'running', endedAt: null, class: 'develop', startedAt: NOW - MIN, agentId: 'a3', session: 's1', ...over })
 const storeOf = (w: World) => stampStoreFromStore(w.store.value)
 const labelArgvs = (w: World) => w.argvs.filter(a => a[0] === 'gh')
-const tokenFields = { input_tokens: 110, output_tokens: 25, cache_read_tokens: 990, cache_creation_tokens: 50 }
+const tokenFields = { input_tokens: 110, output_tokens: 25, cache_read_tokens: 990, cache_creation_tokens: 50, cost_usd: 0.000397 }
 
 describe('the run: the try first, then the reader', () => {
   test('it reads the issue and the listing, records the try, then spawns the reader named intake-<N>-<version> on intakeModel', async () => {
@@ -402,7 +402,7 @@ describe('the run: the try first, then the reader', () => {
       expect(r.status).toBe('failed')
       expect(storeOf(w).tries['3']).toMatchObject({ version: V1, outcome: 'failed', reason: 'spawn-failed' })
       expect(w.events).toHaveLength(1)
-      expect(w.events[0]).toMatchObject({ type: 'intake_stamp', at: { issue: 3 }, data: { mode: 'run', outcome: 'failed', reason: 'spawn-failed', version: V1, model: 'haiku', area: null, labels_set: [], input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null } })
+      expect(w.events[0]).toMatchObject({ type: 'intake_stamp', at: { issue: 3 }, data: { mode: 'run', outcome: 'failed', reason: 'spawn-failed', version: V1, model: 'haiku', area: null, labels_set: [], input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, cost_usd: null } })
     }
   })
 
@@ -539,7 +539,7 @@ describe('the end of a run: the outcome, the stamp, the labels, one event', () =
     const w = world({ store: running(), transcript: false })
     await intakeFinish(w.ctx(null, runEntry(3, V1)), runEntry(3, V1), { answer: ANSWER, reason: 'answer' })
     expect(w.events).toHaveLength(1)
-    expect(w.events[0]?.data).toMatchObject({ input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null })
+    expect(w.events[0]?.data).toMatchObject({ input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, cost_usd: null })
   })
 
   test('labels that cannot be read are not guessed: the stamp is stored with none set; a failed add is not the loop\'s label', async () => {
