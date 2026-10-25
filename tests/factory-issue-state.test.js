@@ -155,14 +155,14 @@ test("0033 applies to a database at 0032, and a second run changes nothing", opt
   const first = boot();
   assert.equal(first.status, 0, first.stdout + first.stderr);
   assert.equal(db.query(exists), "2");
-  assert.equal(db.query("SELECT max(version) FROM factory.schema_migrations"), "34");
+  assert.equal(db.query("SELECT max(version) FROM factory.schema_migrations"), "36");
   const snapshot = () => db.query("SELECT string_agg(version::text || ':' || applied_at::text, ',' ORDER BY version) FROM factory.schema_migrations")
     + db.query("SELECT pg_get_viewdef('factory.issue_state'::regclass) || pg_get_functiondef('factory.issue_state_at'::regproc) || pg_get_viewdef('factory.stuck_rules'::regclass)");
   const before = snapshot();
   const second = boot();
   assert.equal(second.status, 0, second.stdout + second.stderr);
   assert.equal(snapshot(), before, "the second run changed the schema or its record");
-  assert.match(second.stdout, /schema version 34/);
+  assert.match(second.stdout, /schema version 36/);
 });
 
 test("the SQL has no DISTINCT ON and no @>, and uses a window function", () => {

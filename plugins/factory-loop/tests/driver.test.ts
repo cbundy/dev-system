@@ -1864,6 +1864,24 @@ describe('the pass summary event (#680)', () => {
     expect(h.events().filter(e => e.includes('loop_passes'))).toHaveLength(5)
   })
 
+  for (const [name, usage, tier] of [['at or above Stop new', 91, 'stop-new'], ['below Slow', 10, 'normal']] as const) {
+    test(`usage ${name} sends usage_tier ${tier}, the tier on the minute's pass lines`, ENGINE_TEST, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const { run } = factory()
+      const h = host(on, { config: { ...ACT, passEveryMs: 20_000 }, run })
+      h.usage = [{ kind: 'five_hour', percentUsed: usage }]
+      await $.session.start(START)
+      await clock.advance(2 * 60_000 + 1_000)
+      const events = passesEvents(h)
+      expect(events.length).toBeGreaterThanOrEqual(2)
+      for (const e of events) {
+        expect(e.data.usage_tier).toBe(tier)
+        expect(e.data.usage_tier_overridden).toBe(false)
+      }
+      expect(h.passes().every(l => l.tier === tier)).toBe(true)
+    })
+  }
+
   test('a minute in which a pass hangs sends passes=0', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined

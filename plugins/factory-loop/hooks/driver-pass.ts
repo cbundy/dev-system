@@ -491,5 +491,5 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
   // the title says error until the store takes the ledger again (v2 SPEC 13.10 item 9)
   if (act && S.saveProblem !== null) throw new Error(`ledger: not saved: ${S.saveProblem}`)
   holdsLock(act)
-  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false, observeSplit)
+  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false, observeSplit, result.tier, result.overridden)
 }

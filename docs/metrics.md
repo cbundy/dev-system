@@ -3270,7 +3270,7 @@ against the default thresholds 85 / 90 / 95 (slow, stop-new, stop-all); they mir
 `plugins/factory-loop/hooks/config.ts` (`usageSlowPct`, `usageStopNewPct`, `usageStopAllPct`) and are edited here when
 the loop's are. A reading lasts until the next reading of the same device, at most 15 minutes (`usageStaleMs`); an
 unavailable reading counts as `stop-new`, as the loop holds new work then, and an available one with no spend or no
-budget counts as `unknown`:
+budget counts as `unknown`. For loops that write `usage_tier`, [Usage tier in force](#usage-tier-in-force) gives the tier the loop actually used:
 
 ```sql
 SELECT repo, device,
@@ -3509,6 +3509,37 @@ FROM factory.event_log
 WHERE type = 'loop_passes' AND repo = :'repo' AND from_at >= :'since'::timestamptz
 GROUP BY 1, repo, device
 ORDER BY 1, repo, device;
+```
+
+## Usage tier in force
+
+The `loop_passes` event also says which usage throttle tier the loop planned with at the end of the minute
+(`usage_tier`: `normal`, `slow`, `stop-new` or `stop-all`) and whether an owner override held it at normal
+(`usage_tier_overridden`). They are the tier of the last pass in the minute that reached a plan, the state the loop's rules
+acted on, not one worked out from usage readings. They are null when no pass in the minute reached a plan, and in events
+of older loops.
+
+Minutes in each tier, per repo and device (`unknown` is a minute with a null tier):
+
+```sql
+SELECT repo, device, coalesce(usage_tier, 'unknown') AS tier, bool_or(usage_tier_overridden) AS overridden, count(*) AS minutes
+FROM factory.event_log
+WHERE type = 'loop_passes' AND repo = :'repo' AND from_at >= :'since'::timestamptz
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+```
+
+The current state, the newest minute's tier per repo and device:
+
+```sql
+SELECT repo, device, from_at, usage_tier, usage_tier_overridden
+FROM (
+  SELECT repo, device, from_at, usage_tier, usage_tier_overridden,
+    row_number() OVER (PARTITION BY repo, device ORDER BY from_at DESC) AS n
+  FROM factory.event_log
+  WHERE type = 'loop_passes' AND repo = :'repo') r
+WHERE n = 1
+ORDER BY repo, device;
 ```
 
 ## Pass time
