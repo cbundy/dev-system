@@ -2,7 +2,7 @@
 // rules, the missing-reading reasons, a restart through the store's JSON, and the usage event's data.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { budgetOf, periodOf, spendEventData, spendPct, tallyStep } from '../hooks/spend'
+import { budgetOf, periodOf, spendEventData, spendPct, tallyStep, whatIfEnv, whatIfKey, whatIfStep } from '../hooks/spend'
 import type { ApiKeySettings, Reading, Tally } from '../hooks/spend'
 import { validateStrict } from '../hooks/v2/event-reader'
 
@@ -151,5 +151,47 @@ describe('spendEventData', () => {
     const gone = spendEventData(tallyStep(undefined, read(null), NOW, OK).usage)
     expect(gone).toMatchObject({ available: false, source: null, auth: 'api-key', reasons: ['spend:no-session-cost'] })
     expect(validateStrict('usage', 1, gone)).toEqual([])
+  })
+})
+
+describe('whatIfStep: the subscription what-if tally', () => {
+  test('a first reading starts the calendar month and gives the total and when it restarts', () => {
+    const s = whatIfStep(undefined, read(3), NOW)
+    expect(s.tally).toMatchObject({ spentUsd: 3, periodStart: at('2026-10-01T00:00:00Z'), counter: { process: 'p1', session: 's1', lastUsd: 3 } })
+    expect(s.spend).toEqual({ usd: 3, resetsAt: at('2026-11-01T00:00:00Z') })
+  })
+
+  test('the counter rules: same process adds the delta, a reset counter adds the whole reading, a restored session adds the delta', () => {
+    expect(whatIfStep(tallyOf(), read(7), NOW).spend?.usd).toBe(13)
+    expect(whatIfStep(tallyOf(), read(2), NOW).spend?.usd).toBe(12)
+    expect(whatIfStep(tallyOf(), read(6, 'p2', 's1'), NOW).spend?.usd).toBe(12)
+    expect(whatIfStep(tallyOf(), read(6, 'p2', 'other'), NOW).spend?.usd).toBe(16)
+  })
+
+  test('the month rolls at 00:00 UTC on the 1st', () => {
+    const s = whatIfStep(tallyOf(), read(5), at('2026-11-01T00:00:00Z'))
+    expect(s.tally).toMatchObject({ periodStart: at('2026-11-01T00:00:00Z'), spentUsd: 1 })
+    expect(s.spend).toEqual({ usd: 1, resetsAt: at('2026-12-01T00:00:00Z') })
+    expect(whatIfStep(tallyOf(), read(5), at('2026-10-31T23:59:59Z')).spend?.usd).toBe(11)
+  })
+
+  test('no session cost: no total, the store is left alone', () => {
+    for (const c of [null, -1, NaN]) expect(whatIfStep(tallyOf(), read(c), NOW)).toEqual({ tally: null, spend: null, reason: 'spend:no-session-cost' })
+  })
+
+  test('a stored record that does not parse gives spend:bad-tally and a fresh tally', () => {
+    const s = whatIfStep({ junk: true }, read(3), NOW)
+    expect(s.reason).toBe('spend:bad-tally')
+    expect(s.spend).toBeNull()
+    expect(s.tally).toMatchObject({ spentUsd: 3 })
+  })
+
+  test('the env: the total rounded to 1e-6 and when it restarts, or the reason', () => {
+    expect(whatIfEnv({ tally: null, spend: { usd: 1.23456789, resetsAt: at('2026-11-01T00:00:00Z') } })).toEqual({ CALLUM_USAGE_SPEND_USD: '1.234568', CALLUM_USAGE_SPEND_RESETS_AT: '2026-11-01T00:00:00Z' })
+    expect(whatIfEnv({ tally: null, spend: null, reason: 'spend:bad-tally' })).toEqual({ CALLUM_USAGE_SPEND_REASON: 'spend:bad-tally' })
+  })
+
+  test('its store key is not the API-key one', () => {
+    expect(whatIfKey('o/r')).toBe('whatif:o/r')
   })
 })

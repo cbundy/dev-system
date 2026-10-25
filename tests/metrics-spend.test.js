@@ -1,4 +1,4 @@
-// The saved queries of docs/metrics.md "Spend on an API key" (cbundy/dev-system#1114), run as the
+// The saved queries of docs/metrics.md "Spend by login" (cbundy/dev-system#1114), run as the
 // reader role on a real PostgreSQL database with seeded usage events.
 "use strict";
 
@@ -12,20 +12,20 @@ const { available, createDb } = require("./lib/factory-db.js");
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
-const sub = (sql, repo, since) => sql.replaceAll(":'repo'", `'${repo}'`).replaceAll(":'since'", `'${since}'`);
+const subst = (sql, repo, since) => sql.replaceAll(":'repo'", `'${repo}'`).replaceAll(":'since'", `'${since}'`);
 
 function blocks() {
   const doc = fs.readFileSync(path.join(__dirname, "..", "docs", "metrics.md"), "utf8");
-  const start = doc.indexOf("\n## Spend on an API key");
-  assert.ok(start >= 0, "docs/metrics.md has the section Spend on an API key");
+  const start = doc.indexOf("\n## Spend by login");
+  assert.ok(start >= 0, "docs/metrics.md has the section Spend by login");
   const rest = doc.slice(start + 1);
   const end = rest.indexOf("\n## ", 1);
   const found = [...rest.slice(0, end < 0 ? undefined : end).matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
-  assert.equal(found.length, 3, "the section holds three SQL blocks");
+  assert.equal(found.length, 5, "the section holds five SQL blocks");
   return found;
 }
 
-test("Spend on an API key: per-day spend against the budget, and time in each tier", opts, (t) => {
+test("Spend by login on an API key: per-day spend against the budget, and time in each tier", opts, (t) => {
   const db = createDb(t);
   let seq = 0;
   const put = (device, ts, data, repo = "o/a") => {
@@ -61,7 +61,7 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
   put("d1", "2026-09-22T10:25:00.000Z", spend(1, 100, R2));
 
   const [a, b, c] = blocks();
-  const rowsA = db.query(sub(a, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
+  const rowsA = db.query(subst(a, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
   assert.deepEqual(rowsA, [
     ["2026-09-19", "o/a", "d1", "86", "100", "86", "86"],
     ["2026-09-20", "o/a", "d1", "92", "100", "92", "6"],
@@ -69,7 +69,7 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
     ["2026-09-22", "o/a", "d1", "1", "100", "1", "1"],
   ]);
 
-  const rowsB = db.query(sub(b, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
+  const rowsB = db.query(subst(b, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
   // 09:00-10:00 at 10% (cap 15 min), 10:00-10:20 at 80% (cap 15), 10:20 at 86% to the next reading 10-20 (cap 15)
   // 10-20: 95% for 5 min, 92% for 15 min (the last reading of the day, the next is a day on, cap 15)
   // 10-21: 7% for 2 min, then the no-budget reading for 15 min
@@ -84,10 +84,54 @@ test("Spend on an API key: per-day spend against the budget, and time in each ti
   ]);
 
   // reasons: the o/a unavailable readings are no-session-cost x2, bad-tally x1 on d1, and "x" once (09-20 11:30)
-  const rowsC = db.query(sub(c, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|").slice(0, 4));
+  const rowsC = db.query(subst(c, "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|").slice(0, 4));
   assert.deepEqual(rowsC, [
     ["o/a", "d1", "spend:no-session-cost", "2"],
     ["o/a", "d1", "spend:bad-tally", "1"],
     ["o/a", "d1", "x", "1"],
+  ]);
+});
+
+test("Spend by login on a subscription: the what-if spend per day, and why it is missing", opts, (t) => {
+  const db = createDb(t);
+  let seq = 0;
+  const put = (device, ts, data, repo = "o/a") => {
+    seq += 1;
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, '${crypto.randomUUID()}', '${ts}', 'usage', 1, '${repo}', '${device}', 'watcher', NULL, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  };
+  const win = { five_hour_pct: 10, five_hour_resets_at: "2026-09-19T12:00:00.000Z", seven_day_pct: 5, seven_day_resets_at: "2026-09-25T12:00:00.000Z", source: "oauth" };
+  const NOBUDGET = "spend:subscription-no-budget";
+  const sub = (spendUsd, resets, reasons = [NOBUDGET]) => ({ available: true, ...win, auth: "subscription", spend_usd: spendUsd, budget_usd: null, budget_resets_at: resets, reasons });
+  const M1 = "2026-10-01T00:00:00.000Z";
+  const M2 = "2026-11-01T00:00:00.000Z";
+  // 09-30: 3 then 5 (the last); 10-01: the month rolled, so the day's own total, 1
+  put("d1", "2026-09-30T09:00:00.000Z", sub(3, M1));
+  put("d1", "2026-09-30T10:00:00.000Z", sub(5, M1));
+  put("d1", "2026-10-01T10:00:00.000Z", sub(1, M2));
+  // an old subscription reading (auth null), an API-key reading and another repo are skipped
+  put("d1", "2026-09-30T11:00:00.000Z", { available: true, ...win, reasons: [] });
+  put("d1", "2026-09-30T11:30:00.000Z", { available: true, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: "spend", auth: "api-key", spend_usd: 400, budget_usd: 500, budget_resets_at: M1, reasons: [] });
+  put("d2", "2026-09-30T12:00:00.000Z", sub(99, M1), "o/b");
+  // readings with no total: no-tally x2, no-session-cost x1 (one of them unavailable, its window reasons are not spend codes)
+  const none = (reasons) => ({ available: true, ...win, auth: "subscription", spend_usd: null, budget_usd: null, budget_resets_at: null, reasons });
+  put("d1", "2026-10-02T10:00:00.000Z", none(["spend:no-tally", NOBUDGET]));
+  put("d1", "2026-10-02T10:05:00.000Z", none(["spend:no-tally", NOBUDGET]));
+  put("d1", "2026-10-02T10:10:00.000Z", none(["spend:no-session-cost", NOBUDGET]));
+  put("d1", "2026-10-02T10:15:00.000Z", { available: false, five_hour_pct: null, five_hour_resets_at: null, seven_day_pct: null, seven_day_resets_at: null, source: null, auth: "subscription", spend_usd: null, budget_usd: null, budget_resets_at: null, reasons: ["oauth:network", "spend:bad-input", NOBUDGET] });
+  put("d1", "2026-10-02T10:20:00.000Z", { available: true, ...win, reasons: ["spend:no-tally"] });
+  put("d2", "2026-10-02T10:20:00.000Z", none(["spend:no-tally", NOBUDGET]), "o/b");
+
+  const all = blocks();
+  const rowsD = db.query(subst(all[3], "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|"));
+  assert.deepEqual(rowsD, [
+    ["2026-09-30", "o/a", "d1", "5", "5"],
+    ["2026-10-01", "o/a", "d1", "1", "1"],
+  ]);
+  const rowsE = db.query(subst(all[4], "o/a", "2026-09-01T00:00:00Z"), "reader").split("\n").map((l) => l.split("|").slice(0, 4));
+  assert.deepEqual(rowsE, [
+    ["o/a", "d1", "spend:no-tally", "2"],
+    ["o/a", "d1", "spend:bad-input", "1"],
+    ["o/a", "d1", "spend:no-session-cost", "1"],
   ]);
 });

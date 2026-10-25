@@ -120,12 +120,12 @@ Example:
 | `attempt` | integer | `prompt_denied`, `prompt_waiting`, `transition` | The attempt of that step; null when unknown. |
 | `attempts` | integer | `loop_entry` | Attempts of this key so far. |
 | `auth` | enum | `usage` | Which login the reading was taken under. |
-| `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. |
+| `available` | boolean | `usage` | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. On a subscription every reading field except auth, the spend fields and their reasons is null when unavailable. |
 | `branch` | string | `abandoned`, `finding_handled`, `main_state`, `merged`, `prompt_denied`, `prompt_waiting`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `brief_url` | string | `transition` | The URL of the design brief comment; null until the designer posts one. |
 | `bucket` | integer | `designer_routed`, `implementer_routed` | hash: the issue's stable bucket, 0 to 99 (sonnet, the treatment, when below sonnet_pct); null otherwise. |
-| `budget_resets_at` | string | `usage` | When the budget period resets. |
-| `budget_usd` | number | `usage` | The budget for that period, in dollars. |
+| `budget_resets_at` | string | `usage` | When the budget period resets. On a subscription: when the what-if total restarts (00:00 UTC on the 1st). |
+| `budget_usd` | number | `usage` | The budget for that period, in dollars. Null on a subscription, which has no dollar budget. |
 | `by` | enum | `merged` | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `cache_creation_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The cache-creation input tokens of an ended run, counted as input_tokens; null otherwise. |
 | `cache_read_tokens` | integer | `intake_stamp`, `loop_entry`, `loop_passes` | The cache-read input tokens of an ended run, counted as input_tokens; null otherwise. |
@@ -245,7 +245,7 @@ Example:
 | `seven_day_pct` | integer | `usage` | Percent of the most used seven-day window, rounded up. |
 | `seven_day_resets_at` | string | `usage` | When that seven-day window resets. |
 | `sonnet_pct` | integer | `designer_routed` | The configured share of issues routed to Sonnet (the treatment; the control is opus), in percent. Null only when the route tool could not run and logged a fallback. |
-| `spend_usd` | number | `usage` | Dollars spent in the current budget period up to the reading. |
+| `spend_usd` | number | `usage` | Dollars spent in the current budget period up to the reading. On a subscription: the loop's what-if total for the calendar month at API prices; null when it could not be had (see reasons). |
 | `split_into` | array of integer | `abandoned` | split: the new issues it was split into; empty otherwise. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
@@ -1481,7 +1481,7 @@ Example:
 
 ## usage
 
-A reading of the Claude subscription's usage windows. Written by usage-check, which the loop runs on its schedule. Shows how close the device is to a rate limit.
+A reading of the Claude subscription's usage windows. Written by usage-check, which the loop runs on its schedule. Shows how close the device is to a rate limit. On a subscription login the reading names it (auth subscription) and, when the loop passes one, carries the loop's what-if dollar total for the calendar month (what its work would have cost at API prices, not a bill) with no budget; reasons say why a total is missing.
 
 - Issue field (`x-issue`): none
 - Versions: v1 (current)
@@ -1491,17 +1491,17 @@ A reading of the Claude subscription's usage windows. Written by usage-check, wh
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `available` | boolean | required | no |  | yes | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. |
+| `available` | boolean | required | no |  | yes | true when a reading was had; false when no source gave one (then every reading field is null). A spend reading has available true and null window fields. On a subscription every reading field except auth, the spend fields and their reasons is null when unavailable. |
 | `five_hour_pct` | integer | required | yes | minimum 0 | yes | Percent of the five-hour window used, rounded up. |
 | `five_hour_resets_at` | string | required | yes | format date-time | yes | When the five-hour window resets. |
 | `seven_day_pct` | integer | required | yes | minimum 0 | yes | Percent of the most used seven-day window, rounded up. |
 | `seven_day_resets_at` | string | required | yes | format date-time | yes | When that seven-day window resets. |
 | `source` | enum | required | yes | one of "oauth", "statusline", "spend", null |  | Where the reading came from; null when unavailable. spend is a spend reading against a budget, which has null window fields. |
 | `auth` | enum | optional | yes | one of "subscription", "api-key", null | yes | Which login the reading was taken under. |
-| `spend_usd` | number | optional | yes | minimum 0 | yes | Dollars spent in the current budget period up to the reading. |
-| `budget_usd` | number | optional | yes | minimum 0 | yes | The budget for that period, in dollars. |
-| `budget_resets_at` | string | optional | yes | format date-time | yes | When the budget period resets. |
-| `reasons` | array of string | required | no |  |  | When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise. |
+| `spend_usd` | number | optional | yes | minimum 0 | yes | Dollars spent in the current budget period up to the reading. On a subscription: the loop's what-if total for the calendar month at API prices; null when it could not be had (see reasons). |
+| `budget_usd` | number | optional | yes | minimum 0 | yes | The budget for that period, in dollars. Null on a subscription, which has no dollar budget. |
+| `budget_resets_at` | string | optional | yes | format date-time | yes | When the budget period resets. On a subscription: when the what-if total restarts (00:00 UTC on the 1st). |
+| `reasons` | array of string | required | no |  |  | When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise. A subscription reading adds spend codes after them: spend:subscription-no-budget always, and why spend_usd is null (spend:no-tally, spend:no-session-cost, spend:bad-tally, spend:bad-input). |
 
 Example:
 
