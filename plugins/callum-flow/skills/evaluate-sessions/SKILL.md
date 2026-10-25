@@ -104,8 +104,7 @@ callum-flow-issue-read --json --timeline <N> \
 Write `{"<N>": ["<ISO>", ...], ...}` to `/tmp/ready-times.json` (one array per issue,
 the timestamps exactly as GitHub returns them, no computing) and re-run both
 commands with `--ready-times /tmp/ready-times.json --events /tmp/events.jsonl`
-The
-tool picks the last `ready` at or before the first claim. Check `throughput`
+The tool picks the last `ready` at or before the first claim. Check `throughput`
 shows `issues_without_ready: 0`; otherwise name those issues and say their lead
 time is not measured.
 

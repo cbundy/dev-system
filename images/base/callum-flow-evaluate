@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // callum-flow-evaluate: the offline, read-only numbers behind the evaluate-sessions skill
-// (cbundy/dev-system#258). It reads local Claude Code transcripts, the factory event log and
-// and prints one deterministic report of throughput, gate
-// quality, token spend and wasted agent wakes. No network, no gh, no psql, no LLM: the same
+// (cbundy/dev-system#258). It reads local Claude Code transcripts, the factory event log and prints
+// one deterministic report of throughput, gate quality, token spend and wasted agent wakes. No network, no gh, no psql, no LLM: the same
 // inputs give byte-identical output. docs/metrics.md defines every number.
 //
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]

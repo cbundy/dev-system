@@ -191,6 +191,7 @@ ev_write() { # <count> <tag> [noid]: count lines for device d1, repo o/r
       printf "{\"v\":1,\"ts\":\"2026-10-10T10:00:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":1,\"note\":\"%s-%s\"%s}\n" "$TAG" "$i" "$id" >> "$CALLUM_EVENTS_DIR/o__r.jsonl"
     done'
 }
+psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
 event_identity() {
   local ddl root
   root=$(cd "$TEST_DIR/../../.." && pwd)

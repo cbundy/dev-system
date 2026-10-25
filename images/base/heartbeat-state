@@ -59,7 +59,7 @@
 //           requeued, claimed or implementer_routed counts. A transition into building, fixing or merge-queue
 //           (from another state) also counts, as the old delegated, fix_requested or merge_ready line the loop
 //           writes there, with the transition's branch; it is never done, and only one into building
-//           starts a new life after a terminal state. Every other transition and type is noise..
+//           starts a new life after a terminal state. Every other transition and type is noise.
 //   shadow  prints old's answer, runs new too and records how it differs in
 //           factory/.shadow/heartbeat-state.jsonl (an agreeing run at most once per quiet period).
 // An invalid value warns once on stderr and reads old. The new read has its own deadline: when it
