@@ -61,7 +61,7 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.ok(seed(db) > 60);
   const ev = evaluate();
   const q = blocks("## 9c. Merges, pull requests and gaps");
-  assert.equal(q.length, 13, "the five merge queries, the two run-only ones (unrecorded merges, missing size), merges per day by regime, issue size, overlap, hottest files and merges by kind, and how late the sweep recorded merges");
+  assert.equal(q.length, 14, "the five merge queries, the two run-only ones (unrecorded merges, missing size), merges per day by regime, issue size, overlap, hottest files and merges by kind, how late the sweep recorded merges, and merges on the merge train");
 
   // merges per day: the same counts by merged_by and recovered
   const days = rows(db, q[0]);
@@ -210,6 +210,37 @@ test("section 9c's sweep-delay block gives ts - merged_at for a recovered merge 
   const r = rows(db, q[12]);
   assert.equal(r.length, 1);
   assert.deepEqual([r[0].repo, r[0].merges, r[0].min_delay, r[0].max_delay], [REPO, 1, "18:53:59", "18:53:59"], "only the sweep row that carries merged_at counts");
+});
+
+test("section 9c's merge-train block counts merges by train value and reason, tree mismatches and the median wait of train merges against the rest", opts, (t) => {
+  const db = createDb(t);
+  let seq = 0;
+  const ins = (type, issue, ts, data) => {
+    seq += 1;
+    db.query(`INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+      VALUES (1, gen_random_uuid(), '${ts}', '${type}', 1, '${REPO}', 'L', 'loop', ${issue}, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
+  };
+  const queue = (issue, ts) => ins("transition", issue, ts, { life: `l${issue}`, seq: 1, table_row: "T9", from_state: "reviewing", to_state: "merge-queue", via: "T9", seq_at: ts, state_since: ts, step: null, round: 0, pr: issue, question: null, why: null });
+  const merged = (issue, ts, extra) => ins("merged", issue, ts, { pr: issue, branch: `issue-${issue}`, head: `abc${issue}`, by: "factory", recovered: false, ...extra });
+  const TREE = "0123456789abcdef0123456789abcdef01234567";
+  // week of 2026-10-19: two train merges (10 and 30 minutes in the queue, one on another tree), one dropped, two plain
+  queue(1, "2026-10-20T10:00:00Z"); merged(1, "2026-10-20T10:10:00Z", { train: "rode", train_reason: null, tested_tree: TREE, tree_matched: true });
+  queue(2, "2026-10-20T11:00:00Z"); merged(2, "2026-10-20T11:30:00Z", { train: "rode", train_reason: null, tested_tree: TREE, tree_matched: false });
+  queue(3, "2026-10-21T10:00:00Z"); merged(3, "2026-10-21T11:00:00Z", { train: "dropped", train_reason: "train-red", tested_tree: null, tree_matched: null });
+  queue(4, "2026-10-21T12:00:00Z"); merged(4, "2026-10-21T12:20:00Z", {});
+  queue(5, "2026-10-22T09:00:00Z"); merged(5, "2026-10-22T10:40:00Z", { train: null, train_reason: null, tested_tree: null, tree_matched: null });
+  // a retried merged event counts once
+  merged(5, "2026-10-22T10:41:00Z", {});
+  const q = blocks("## 9c. Merges, pull requests and gaps");
+  const r = rows(db, q[13]).map((x) => [x.week, x.train, x.train_reason, x.merges, x.tree_mismatches, x.waiting_for_merge_min.map(Number)]);
+  assert.deepEqual(r, [
+    ["2026-10-19", "dropped", "train-red", 1, 0, [60]],
+    ["2026-10-19", "none", null, 2, 0, [20, 100]],
+    ["2026-10-19", "rode", null, 2, 1, [10, 30]],
+  ]);
+  // the median is taken in code: the train merges' 20 minutes against the rest's 60
+  const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+  assert.deepEqual([median(r[2][5]), median([...r[0][5], ...r[1][5]])], [20, 60]);
 });
 
 // The one code-file rule: held once in callum-flow-evaluate, written once in the doc, embedded in each new block.

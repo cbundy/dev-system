@@ -88,6 +88,11 @@ fi
 case "$1 $2" in
   'pr view')
     case "$*" in
+      *mergeCommit*)
+        # the merge commit the merge train reads after a merge: mergecommit-fails fails it, mergecommit holds its oid
+        [ ! -f "$d/mergecommit-fails" ] || exit 1
+        read -r oid < "$d/mergecommit"
+        printf '{"mergeCommit":{"oid":"%s"}}\n' "$oid" ;;
       *additions*)
         # the merged PR's size (callum-flow-merge reads it after the merge): size-fails fails it, size overrides it
         echo "$*" >> "$d/size-calls"
@@ -242,7 +247,7 @@ g() {
 m() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="${GUARD_BIN:-$GUARD}" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
     CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
     "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?

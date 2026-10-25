@@ -173,6 +173,49 @@ loop_setup issue-12; printf '%s\n' 'Refs #12' > "$st/body"; gl 7 --patch "$PID" 
 expect_class "issue-<N> that closes nothing" linkage linkage "MISMATCH #7 issue=#12 expect=closing"
 loop_setup feat/issue-12-x; gl 7 --patch "$PID"; expect_pass "a v1 branch issue-<N>-<slug> is checked as before"
 
+# --- --tested-tree: the merge train's tree guard -----------------------------------------------
+# tree_of: the tree merging the PR head onto origin/main gives
+tree_of() { git -C "$work" fetch -q origin && git -C "$work" merge-tree --write-tree origin/main "$PH" | sed -n 1p; }
+# main_moves <file> <content>: main gains a commit touching that file
+main_moves() {
+  (
+    cd "$work"
+    git checkout -q main && echo "$2" > "$1" && git add "$1" && git commit -q -m "main moves on" && git push -q origin main
+    git checkout -q "$B"
+  )
+}
+patch_setup; T=$(tree_of); gp 7 --patch "$PID" --tested-tree "$T"; expect_pass "the merge gives the tested tree"
+patch_setup; gp 7 --patch "$PID" --tested-tree "$OTHER"; expect_class "another tree" tree behind "gives tree $(tree_of), not the tested $OTHER"
+patch_setup; main_moves f.txt "main wrote it first"; gp 7 --patch "$PID" --tested-tree "$OTHER"; expect_class "conflicting merge" tree behind "conflicts"
+# a base that moved on without touching the PR: BEHIND is no FAIL with --tested-tree, and is one without it
+patch_setup; main_moves o.txt other; T=$(tree_of); echo BEHIND > "$st/mss"
+gp 7 --patch "$PID" --tested-tree "$T"; expect_pass "BEHIND, the tree is the tested one"
+gp 7 --patch "$PID"; expect_class "BEHIND without --tested-tree" mergeable behind "behind main"
+gp 7 --patch "$PID" --tested-tree "$OTHER"; expect_class "BEHIND, another tree" tree behind
+# draft, conflicting and blocked are unchanged
+patch_setup; T=$(tree_of); echo DRAFT > "$st/mss"; gp 7 --patch "$PID" --tested-tree "$T"; expect_class "draft with --tested-tree" mergeable policy "PR is a draft"
+patch_setup; T=$(tree_of); echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; gp 7 --patch "$PID" --tested-tree "$T"; expect_class "DIRTY with --tested-tree" mergeable conflict "conflicts with main"
+patch_setup; T=$(tree_of); echo BLOCKED > "$st/mss"; gp 7 --patch "$PID" --tested-tree "$T"; expect_class "BLOCKED with --tested-tree" mergeable read "branch rules not met"
+# a fetch that fails is a fact not read (the patch id is stubbed: it fetches too)
+printf '#!/bin/sh\necho "%s"\n' "$PID" > "$tmpdir/fixedpatch"; chmod +x "$tmpdir/fixedpatch"
+patch_setup; T=$(tree_of); git -C "$work" remote set-url origin "$tmpdir/no-such-origin.git"
+CALLUM_FLOW_PATCH_ID_BIN="$tmpdir/fixedpatch" gp 7 --patch "$PID" --tested-tree "$T"
+git -C "$work" remote set-url origin "$origin"
+expect_class "fetch fails" tree read "cannot fetch origin/main: "
+# --emit-verified is unchanged by the option
+patch_setup; T=$(tree_of); gp 7 --patch "$PID" --tested-tree "$T" --emit-verified
+[ "$rc" = 0 ] && [ "$out" = "VERIFIED pr=7 branch=$B head=$PH run= issue=12 close_issue= gated_patch= rebased_from=" ] || fail "VERIFIED with --tested-tree: rc=$rc out=$out"
+passed=$((passed + 1))
+# usage: needs --patch, refused with --update-behind, 40 lowercase hex
+patch_setup
+for args in "7 --tested-tree $OTHER" "7 --update-behind --tested-tree $OTHER" "7 --patch $PID --tested-tree" "7 --patch $PID --tested-tree xyz" "7 --patch $PID --tested-tree 0123456789ABCDEF0123456789ABCDEF01234567" "7 --patch $PID --tested-tree 0123456789abcdef"; do
+  rc=0
+  # shellcheck disable=SC2086
+  PATH="$toolbin" "$SH" "$GUARD" $args > /dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "usage '$args' should exit 2, got $rc"
+done
+passed=$((passed + 1))
+
 # --- usage ------------------------------------------------------------------------------------
 patch_setup
 for args in "7 --patch" "7 --patch xyz" "7 --patch $PID --run RUN1" "7 --patch $PID --update-behind"; do
@@ -192,6 +235,72 @@ passed=$((passed + 1))
 patch_setup; m 7 --patch "$OTHER"
 [ "$rc" = 1 ] && [ ! -f "$st/gh-calls" ] && [ ! -e "$events" ] || fail "merge with another patch must not merge: rc=$rc out=$out"
 printf '%s\n' "$out" | grep -q "^GUARD patch FAIL .* class=patch\$" || fail "the guard's FAIL line reaches the caller: $out"
+passed=$((passed + 1))
+
+# --- callum-flow-merge: --tested-tree and --train-dropped, and the merged event's train fields ---
+# a guard that records its arguments and then runs the real one
+cat > "$tmpdir/guard-spy" <<STUB
+#!/bin/sh
+echo "\$*" >> "\${STUB_DIR:?}/guard-args"
+exec "$SH" "$GUARD" "\$@"
+STUB
+chmod +x "$tmpdir/guard-spy"
+# merge_commit <tree>: a commit with that tree on origin, as the merge commit the stub gh reports
+merge_commit() {
+  mc=$(git -C "$work" commit-tree "$1" -p "$BASE0" -m "merge sim")
+  git -C "$work" push -q -f origin "$mc:refs/heads/merge-sim"
+  echo "$mc" > "$st/mergecommit"
+}
+# the four train fields of the one merged event
+train_fields() { jq -c '[.data.train, .data.train_reason, .data.tested_tree, .data.tree_matched]' "$events/factory/o__r.jsonl"; }
+
+patch_setup; T=$(tree_of); merge_commit "$T"; GUARD_BIN="$tmpdir/guard-spy" m 7 --patch "$PID" --tested-tree "$T"
+[ "$rc" = 0 ] || fail "train merge: rc=$rc out=$out err=$(cat "$tmpdir/err")"
+grep -q -- "--tested-tree $T" "$st/guard-args" || fail "--tested-tree must reach the guard: $(cat "$st/guard-args")"
+[ "$(train_fields)" = "[\"rode\",null,\"$T\",true]" ] || fail "a train merge on the tested tree: $(train_fields)"
+passed=$((passed + 1))
+# the merge commit has another tree: tree_matched false
+patch_setup; T=$(tree_of); merge_commit "$(git -C "$work" rev-parse "$BASE0^{tree}")"; m 7 --patch "$PID" --tested-tree "$T"
+[ "$rc" = 0 ] && [ "$(train_fields)" = "[\"rode\",null,\"$T\",false]" ] || fail "a train merge on another tree: rc=$rc $(train_fields)"
+passed=$((passed + 1))
+# the tree read fails: a warning, null, and the merge and event stand
+for bad in fails nooid; do
+  patch_setup; T=$(tree_of); merge_commit "$T"
+  case "$bad" in fails) touch "$st/mergecommit-fails" ;; nooid) echo 0000000000000000000000000000000000000001 > "$st/mergecommit" ;; esac
+  m 7 --patch "$PID" --tested-tree "$T"
+  [ "$rc" = 0 ] && [ -f "$st/gh-calls" ] || fail "tree read $bad must not fail the merge: rc=$rc"
+  [ "$(train_fields)" = "[\"rode\",null,\"$T\",null]" ] || fail "tree read $bad: $(train_fields)"
+  grep -q "warning: could not read the tree of PR #7's merge commit" "$tmpdir/err" || fail "tree read $bad: no warning: $(cat "$tmpdir/err")"
+done
+passed=$((passed + 1))
+# --train-dropped is recorded and never reaches the guard
+patch_setup; GUARD_BIN="$tmpdir/guard-spy" m 7 --patch "$PID" --train-dropped train-red
+[ "$rc" = 0 ] || fail "dropped train merge: rc=$rc out=$out err=$(cat "$tmpdir/err")"
+! grep -q -- "train" "$st/guard-args" || fail "--train-dropped must not reach the guard: $(cat "$st/guard-args")"
+[ "$(train_fields)" = '["dropped","train-red",null,null]' ] || fail "a dropped train: $(train_fields)"
+[ ! -e "$st/mergecommit" ] || fail "no tree read without a train"
+passed=$((passed + 1))
+for reason in head-moved outside-merge conflict train-red left-queue tree-mismatch refused; do
+  patch_setup; m 7 --patch "$PID" --train-dropped "$reason"
+  [ "$rc" = 0 ] && [ "$(train_fields)" = "[\"dropped\",\"$reason\",null,null]" ] || fail "drop reason $reason: rc=$rc $(train_fields)"
+done
+passed=$((passed + 1))
+# no train: all four null
+patch_setup; m 7 --patch "$PID"
+[ "$rc" = 0 ] && [ "$(train_fields)" = '[null,null,null,null]' ] || fail "no train: rc=$rc $(train_fields)"
+passed=$((passed + 1))
+# usage errors merge nothing
+patch_setup; T=$(tree_of)
+for args in "--patch $PID --train-dropped bogus" "--patch $PID --train-dropped" "--patch $PID --tested-tree $T --train-dropped train-red" "--patch $PID --tested-tree xyz"; do
+  # shellcheck disable=SC2086
+  m 7 $args
+  [ "$rc" = 2 ] || fail "merge '$args' should exit 2, got $rc: $out"
+  [ ! -f "$st/gh-calls" ] || fail "merge '$args' merged"
+done
+passed=$((passed + 1))
+# a tree that is not the tested one stops the merge, with the tree guard's line
+patch_setup; m 7 --patch "$PID" --tested-tree "$OTHER"
+[ "$rc" = 1 ] && [ ! -f "$st/gh-calls" ] && printf '%s\n' "$out" | grep -q '^GUARD tree FAIL .* class=behind$' || fail "another tree must not merge: rc=$rc out=$out"
 passed=$((passed + 1))
 
 echo "merge-guard-patch: $passed groups passed"
