@@ -284,7 +284,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
   re-adding `ready` brings it back.
 - `note [<N>] <text>|off`: an owner instruction the next agent prompts carry, for N or for all; a newer note replaces the older one, off clears it.
 - `update [<reason>]` / `update off`: wind down (up to windDownMinutes), then restart this workspace
-  for an update (D-15); off cancels.
+  for an update (D-15); off cancels. It is refused, with the reason, when the workspace cannot restart itself.
 - `mode off|observe|act`: only when the owner asks for that mode.
 - `trace on|off`: each pass's timing to a local trace file, for troubleshooting (v2 SPEC 13.12.1).
 - `stop-now`: during a wind-down, stop at once without waiting for what still runs; only when the owner asks.
