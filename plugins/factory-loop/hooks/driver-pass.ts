@@ -27,7 +27,7 @@ import { stateCounts } from './v2/rules-state'
 import { keepV2, noteIdle, noteKillSwitch, readStoredV2, storedV2 } from './v2/store'
 import { windDownFiles, withRemembered } from './v2/wind-down-files'
 import { windDownOf } from './v2/wind-down'
-import { actIo, acting, append, appendLine, fileIo, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
+import { actIo, acting, append, appendLine, fileIo, githubHealth, io, killed, lockIo, lockOp, observing, offTitle, originOf, runtime, setTitle, text, v2StoreIo, wakeIdAt } from './driver-io'
 import { offPassDone } from './driver-between'
 import { closeOrphans, ensureLedger, isMs, keepSettings, keysOf, noticesFrom, persist, railMemoryFrom, stale, storeDelete, storeGet, storeIo, storeSet } from './driver-store'
 import type { NoticeBook } from './driver-store'
@@ -383,6 +383,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     if (result.starved === true && stored?.starvedSince == null) await keepInStore(keys.starved, state.now)
     else if (result.starved === false && stored?.starvedSince != null) await storeDelete($, keys.starved, problems)
     if (snap !== null) await keepSettings(keepInStore, $, keys, snap, before)
+    problems.push(...(await githubHealth($, rt.loopDir, rt.repo)))
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 

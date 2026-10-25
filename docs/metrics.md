@@ -3194,6 +3194,31 @@ GROUP BY device, hour
 ORDER BY device, hour;
 ```
 
+Latest GitHub health per worker (the REST "core" and GraphQL budgets of the device's login, when each resets,
+and the GitHub API errors its factory loop hit in the last hour; every column is NULL where the device cannot
+fill it: no GitHub login, no loop running, an older image):
+
+```sql
+SELECT device, state, stale, github_at,
+       github_core_remaining, github_core_limit, github_core_reset_at,
+       github_graphql_remaining, github_graphql_limit, github_graphql_reset_at, github_errors_1h
+FROM factory.workers_status
+ORDER BY stale, device;
+```
+
+GitHub health per device, hourly over the last day (the lowest budget left and the most errors in any hour
+window; a device that ran short of budget or hit errors shows it here):
+
+```sql
+SELECT device, date_trunc('hour', sampled_at) AS hour,
+       min(github_core_remaining) AS core_remaining_min, min(github_graphql_remaining) AS graphql_remaining_min,
+       max(github_errors_1h) AS errors_1h_max
+FROM factory.worker_samples
+WHERE sampled_at > now() - interval '1 day'
+GROUP BY device, hour
+ORDER BY device, hour;
+```
+
 ## Settings
 
 Settings the loop runs on. A `settings_changed` event records one change of one setting (see

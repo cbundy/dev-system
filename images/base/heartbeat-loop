@@ -76,6 +76,15 @@
 # value reaches psql only as a -v variable. The stopped beat sends none and leaves config as it
 # was. Readers judge freshness by config->>'at' (the loop's last observing pass), not by last_seen.
 #
+# GitHub health: each running beat also sends a fourth, separate psql call per target, after the config
+# call: `-- heartbeat github`, an UPDATE of the github_* columns of the worker's row and of the
+# worker_samples row this beat's stats call inserted. The budget comes from one `gh api rate_limit`
+# (github-health.sh; REST "core" and "graphql" remaining, limit and reset), the error count
+# (github_errors_1h) from heartbeat-state's github.json reading. Each value is NULL when it cannot be
+# known (no gh login, offline, no loop running here). A database without the columns rejects only
+# this call, logged, masked, as "<target> github write failed", never changing the exit code. The
+# stopped beat sends none and runs no gh. HEARTBEAT_GH (default gh) is the test hook for the binary.
+#
 # The DDL (old target only; guarded by catalog checks, so a repeat takes no exclusive lock) is
 # sent with the first beat of each process and again after a failed beat of that target.
 # SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' to every configured target
@@ -104,6 +113,8 @@ SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
 . "$SHARE/workspace.sh"
 # shellcheck source=mem-pressure.sh
 . "$SHARE/mem-pressure.sh"
+# shellcheck source=github-health.sh
+. "$SHARE/github-health.sh"
 
 HB_DIR="${DEV_HEARTBEAT_DIR:-/tmp}"
 PIDFILE="$HB_DIR/dev-heartbeat.pid"
@@ -174,7 +185,10 @@ BEGIN
     ('mem_used_bytes', 'bigint'), ('mem_limit_bytes', 'bigint'), ('claude_interactive', 'int'),
     ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz'),
     ('config', 'jsonb'), ('mem_max_events', 'bigint'), ('mem_max_rate_per_min', 'real'),
-    ('mem_oom_kills', 'bigint'), ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real')
+    ('mem_oom_kills', 'bigint'), ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real'),
+    ('github_core_remaining', 'int'), ('github_core_limit', 'int'), ('github_core_reset_at', 'timestamptz'),
+    ('github_graphql_remaining', 'int'), ('github_graphql_limit', 'int'),
+    ('github_graphql_reset_at', 'timestamptz'), ('github_errors_1h', 'int'), ('github_at', 'timestamptz')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN
@@ -258,7 +272,10 @@ BEGIN
   END IF;
   FOR c IN SELECT * FROM (VALUES
     ('mem_max_events', 'bigint'), ('mem_max_rate_per_min', 'real'), ('mem_oom_kills', 'bigint'),
-    ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real')
+    ('mem_psi_some_avg10', 'real'), ('mem_psi_full_avg10', 'real'),
+    ('github_core_remaining', 'int'), ('github_core_limit', 'int'), ('github_core_reset_at', 'timestamptz'),
+    ('github_graphql_remaining', 'int'), ('github_graphql_limit', 'int'),
+    ('github_graphql_reset_at', 'timestamptz'), ('github_errors_1h', 'int')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.worker_samples'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN
@@ -319,6 +336,30 @@ SQL
 read -r -d '' CONFIG <<'SQL'
 -- heartbeat config
 UPDATE factory.workers SET config = NULLIF(:'config', '')::jsonb WHERE device = :'device';
+SQL
+
+# The first line marks the github call (the tests key their psql stub on it). The samples row is the
+# newest one of the device within the last minute: the one this beat's stats call inserted.
+read -r -d '' GITHUB <<'SQL'
+-- heartbeat github
+UPDATE factory.workers SET
+  github_core_remaining = NULLIF(:'github_core_remaining', '')::int, github_core_limit = NULLIF(:'github_core_limit', '')::int,
+  github_core_reset_at = NULLIF(:'github_core_reset_at', '')::timestamptz,
+  github_graphql_remaining = NULLIF(:'github_graphql_remaining', '')::int,
+  github_graphql_limit = NULLIF(:'github_graphql_limit', '')::int,
+  github_graphql_reset_at = NULLIF(:'github_graphql_reset_at', '')::timestamptz,
+  github_errors_1h = NULLIF(:'github_errors_1h', '')::int, github_at = now()
+WHERE device = :'device';
+UPDATE factory.worker_samples SET
+  github_core_remaining = NULLIF(:'github_core_remaining', '')::int, github_core_limit = NULLIF(:'github_core_limit', '')::int,
+  github_core_reset_at = NULLIF(:'github_core_reset_at', '')::timestamptz,
+  github_graphql_remaining = NULLIF(:'github_graphql_remaining', '')::int,
+  github_graphql_limit = NULLIF(:'github_graphql_limit', '')::int,
+  github_graphql_reset_at = NULLIF(:'github_graphql_reset_at', '')::timestamptz,
+  github_errors_1h = NULLIF(:'github_errors_1h', '')::int
+WHERE device = :'device' AND sampled_at = (
+  SELECT max(sampled_at) FROM factory.worker_samples
+  WHERE device = :'device' AND sampled_at > now() - interval '1 minute');
 SQL
 
 # The first line marks the stats call (the tests key their psql stub on it).
@@ -572,12 +613,26 @@ config_to() {
   return 0
 }
 
+# github_to LABEL URL: sends the GitHub health (the psql -v arguments in GITHUB_ARGS) to one database,
+# after its config call. A failure is logged, masked, and never fails the beat. Always returns 0.
+github_to() {
+  local label=$1 url=$2 out
+  [ "${#GITHUB_ARGS[@]}" -gt 0 ] || return 0
+  if ! out=$(printf '%s\n' "$GITHUB" | run_psql "$url" "${GITHUB_ARGS[@]}" 2>&1); then
+    printf '%s\n' "$out" | mask_secrets >&2
+    echo "heartbeat-loop: $label github write failed" >&2
+    return 0
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
+  return 0
+}
+
 # beat: one upsert per configured target, the agentsview database first, then the factory
 # database. Returns 0 when every configured target succeeded, 1 when any failed and 2 when
 # neither URL is configured.
 beat() {
   local av_url='' fdb_url='' av_ok=0 fdb_ok=0 snap latest_json versions state_wait state_json state in_flight chat_at sessions device
-  local ok=0 failed=0 repo config
+  local ok=0 failed=0 repo config gh_errors
   agentsview_pg_url > /dev/null 2>&1 && av_ok=1
   factory_db_url writer > /dev/null 2>&1 && fdb_ok=1
   if [ "$av_ok" = 0 ] && [ "$fdb_ok" = 0 ]; then
@@ -616,6 +671,7 @@ beat() {
     -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)")
   STATS_ARGS=()
   CONFIG_ARGS=()
+  GITHUB_ARGS=()
   if [ -z "${HEARTBEAT_STOPPING:-}" ]; then
     machine_stats "$state_json"
     STATS_ARGS=(-v "device=$device" -v "state=$state" -v "cpu_pct=$stats_cpu_pct" -v "cpu_limit_cores=$stats_cores"
@@ -627,6 +683,13 @@ beat() {
       -v "mem_psi_full_avg10=$stats_mem_psi_full")
     config=$(jq -c '.config // empty | select(type == "object")' <<< "$state_json")
     CONFIG_ARGS=(-v "device=$device" -v "config=$config")
+    github_health_read
+    gh_errors=$(jq -r '.github_errors_1h // "" | tostring' <<< "$state_json" 2> /dev/null)
+    case "$gh_errors" in *[!0-9]*) gh_errors='' ;; esac
+    GITHUB_ARGS=(-v "device=$device" -v "github_core_remaining=$gh_core_remaining"
+      -v "github_core_limit=$gh_core_limit" -v "github_core_reset_at=$gh_core_reset_at"
+      -v "github_graphql_remaining=$gh_graphql_remaining" -v "github_graphql_limit=$gh_graphql_limit"
+      -v "github_graphql_reset_at=$gh_graphql_reset_at" -v "github_errors_1h=$gh_errors")
   fi
 
   # the targets are independent: a failure on one never skips or delays the other
@@ -637,6 +700,7 @@ beat() {
       ok=1
       stats_to "agentsview database" "$av_url"
       config_to "agentsview database" "$av_url"
+      github_to "agentsview database" "$av_url"
     else
       DDL_SENT=0
       failed=1
@@ -649,6 +713,7 @@ beat() {
       ok=1
       stats_to "factory database" "$fdb_url"
       config_to "factory database" "$fdb_url"
+      github_to "factory database" "$fdb_url"
     else
       failed=1
     fi

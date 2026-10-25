@@ -192,7 +192,7 @@ test("missing files give idle and no throw", () => {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
   const { out } = run();
-  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, skipped_events: [] });
+  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 }, config: null, github_errors_1h: null, skipped_events: [] });
 });
 
 test("superseded is noise: after merged stays idle, after claimed stays busy", () => {
@@ -587,3 +587,56 @@ test("--source and --repo are both parsed, in either order", () => {
   const b = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "bogus" }, { args: ["--repo=owner/name", "--source=old"] });
   assert.deepEqual(b.out.config, snap);
 });
+
+// github_errors_1h: the loop's GitHub API errors of the last hour (github.json beside settings.json)
+function writeGithub(content, folder = "owner__name") {
+  const d = path.join(tmp, "claude", "factory-loop", folder);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, "github.json"), typeof content === "string" ? content : JSON.stringify(content));
+}
+const minutesAgo = (m) => new Date(NOW - m * 60000).toISOString();
+const ghFile = (over = {}) => ({ v: 1, repo: "owner/name", at: minutesAgo(1), errors: [minutesAgo(5), minutesAgo(30), minutesAgo(59), minutesAgo(61), minutesAgo(180)], ...over });
+const ghRun = () => run({}, { args: ["--repo", "owner/name"] });
+
+test("github_errors_1h counts the errors within the hour", () => {
+  writeGithub(ghFile());
+  const { out, stderr } = ghRun();
+  assert.equal(out.github_errors_1h, 3);
+  assert.equal(stderr, "");
+});
+
+test("github_errors_1h is 0 for a fresh file with no errors, and finds a folder of another case", () => {
+  writeGithub(ghFile({ errors: [] }), "Owner__Name");
+  assert.equal(ghRun().out.github_errors_1h, 0);
+});
+
+test("github_errors_1h ignores entries that are not times", () => {
+  writeGithub(ghFile({ errors: [minutesAgo(2), "soon", 5, null, minutesAgo(-30)] }));
+  assert.equal(ghRun().out.github_errors_1h, 1);
+});
+
+test("github_errors_1h is null with no --repo, and with no file", () => {
+  writeGithub(ghFile());
+  assert.equal(run().out.github_errors_1h, null);
+  fs.rmSync(path.join(tmp, "claude", "factory-loop", "owner__name", "github.json"));
+  const { out, stderr } = ghRun();
+  assert.equal(out.github_errors_1h, null);
+  assert.equal(stderr, "");
+});
+
+for (const [name, content] of [
+  ["malformed JSON", "{not json"],
+  ["a JSON array", "[1,2]"],
+  ["a version other than 1", JSON.stringify(ghFile({ v: 2 }))],
+  ["no errors list", JSON.stringify(ghFile({ errors: "x" }))],
+  ["an at older than 15 minutes", JSON.stringify(ghFile({ at: minutesAgo(16) }))],
+  ["no at", JSON.stringify(ghFile({ at: undefined }))],
+  ["a file over 256 KiB", JSON.stringify(ghFile({ pad: "x".repeat(256 * 1024) }))],
+]) {
+  test(`github_errors_1h is null for ${name}, and the call succeeds`, () => {
+    writeGithub(content);
+    const { out } = ghRun();
+    assert.equal(out.github_errors_1h, null);
+    assert.equal(out.config, null);
+  });
+}
