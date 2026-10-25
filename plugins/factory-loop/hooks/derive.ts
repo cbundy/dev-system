@@ -326,7 +326,7 @@ export function loopNote(entry: LedgerEntry): string {
 // issue as --issue and the data the translator makes of loopNote(entry), with loopData merged on top
 // the way an old line's --data was. Null for a judge, which the event type has no kind for. The
 // run, PR and head are not carried. An agent step's event also has the five token fields: tokens
-// when it ended, null while it runs and when nothing was read.
+// when it ended, null while it runs and when nothing was read. A task or tell has cost_usd only.
 export function loopEntryArgv(entry: LedgerEntry, tokens: TokenFields = NO_TOKENS): string[] | null {
   if (entry.kind === 'judge') return null
   // the translator reads the string `none` as null
@@ -358,6 +358,9 @@ export function loopEntryArgv(entry: LedgerEntry, tokens: TokenFields = NO_TOKEN
   })
   // an agent step's end carries the token totals and model of its transcript (step-tokens.ts)
   if (entry.kind === 'agent-step') Object.assign(data, entry.status === 'running' ? NO_TOKENS : tokens)
+  // an ended task or tell carries only the what-if cost of its time window in the main session
+  // (hooks/wake-cost.ts); null while it runs and where nothing was read
+  else if (entry.kind === 'task' || entry.kind === 'tell') data.cost_usd = entry.status === 'running' ? null : tokens.cost_usd
   const argv = ['callum-flow-event', '--type', 'loop_entry', '--data', JSON.stringify(data)]
   if (entry.issue !== null) argv.push('--issue', String(entry.issue))
   return argv

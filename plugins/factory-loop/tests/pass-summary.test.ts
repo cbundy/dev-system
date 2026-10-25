@@ -9,7 +9,7 @@ import type { Runtime } from '../hooks/observe'
 
 const PATH = '/cfg/projects/-w/s1.jsonl'
 const bytes = (s: string) => new TextEncoder().encode(s).length
-const line = (id: string, n: number) => JSON.stringify({ type: 'assistant', requestId: id, message: { model: 'm', usage: { input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n'
+const line = (id: string, n: number, model = 'm') => JSON.stringify({ type: 'assistant', requestId: id, message: { model, usage: { input_tokens: n, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + '\n'
 
 function setup(withDir: boolean) {
   let file = '\n'
@@ -42,7 +42,20 @@ describe('flushMinute tokens', () => {
     t.append(line('b', 7))
     holdsLock(true)
     await flushMinute(t.$, t.host)
-    expect(t.sent[1]).toMatchObject({ input_tokens: 7, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 })
+    expect(t.sent[1]).toMatchObject({ input_tokens: 7, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: null })
+  })
+
+  test('a priced model line gives the minute its cost; an unpriced one gives null', async () => {
+    const t = setup(true)
+    holdsLock(true)
+    await flushMinute(t.$, t.host)
+    expect(t.sent[0]?.cost_usd).toBeNull()
+    t.append(line('a', 1_000_000, 'claude-opus-5-5'))
+    await flushMinute(t.$, t.host)
+    expect(t.sent[1]?.cost_usd).toBe(5)
+    t.append(line('b', 3, 'm'))
+    await flushMinute(t.$, t.host)
+    expect(t.sent[2]).toMatchObject({ input_tokens: 3, cost_usd: null })
   })
 
   test('a runtime without a config dir sends null fields', async () => {
