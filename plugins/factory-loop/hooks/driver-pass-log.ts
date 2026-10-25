@@ -7,7 +7,7 @@ import { readControl, writeControl } from './control'
 import type { Runtime } from './observe'
 import { roleProblem } from './rails'
 import { CUT_ROOM, byteLength, cutLine, isCutLine, traceName, traceRoom } from './trace'
-import type { Action, Ms, PlanResult, State } from './types'
+import type { Action, Control, Ms, PlanResult, State } from './types'
 import { noteWritten, notingIo } from './v2/store'
 import { append, appendLine, fileIo, killed, v2StoreIo } from './driver-io'
 import { bareState, ensureLedger, hookEnv } from './driver-store'
@@ -103,4 +103,25 @@ export async function clearUpdate($: EngineInterface, rt: Runtime, at: Ms | null
   const cleared = await run.catch(() => false)
   if (cleared) await appendLine($, rt, { control: 'update off', text: `restart:${at} ran: the update is done and the drain ends` })
   return cleared
+}
+
+// failUpdate: the restart for the update at `at` failed (rule R2): control.json without updateDue and with
+// updateFailed, so the update is no longer due and the owner's notice lasts until `update <reason>` or
+// `update off`. Nothing is written when the owner changed updateDue meanwhile. Returns what it wrote.
+export async function failUpdate($: EngineInterface, rt: Runtime, at: Ms | null, failedAt: Ms, summary: string): Promise<Control['updateFailed']> {
+  if (at === null) return null
+  const error = summary.slice(0, 300)
+  const run = S.ops.then(async () => {
+    const fio = notingIo(fileIo($), noteWritten(liveV2, v2StoreIo($), rt))
+    const loaded = await readControl(fio, rt.loopDir)
+    const due = loaded.control.updateDue
+    if (loaded.error !== null || due?.at !== at) return null
+    const updateFailed = { reason: due.reason, at, failedAt, error }
+    await writeControl(fio, rt.loopDir, { ...loaded.control, updateDue: null, updateFailed })
+    return updateFailed
+  })
+  S.ops = run.catch(() => undefined)
+  const failed = await run.catch(() => null)
+  if (failed !== null) await appendLine($, rt, { control: 'update failed', text: `update failed: ${error}; the update is no longer due` })
+  return failed
 }

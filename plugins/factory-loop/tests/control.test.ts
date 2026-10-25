@@ -293,6 +293,7 @@ describe('applyOp', () => {
     serial: false,
     usageOverride: null,
     updateDue: null,
+    updateFailed: null,
     resumed: [{ subject: 'issue:60', at: NOW - HOUR }],
     dropped: [],
     notes: [],
@@ -382,6 +383,13 @@ describe('applyOp', () => {
     expect(applyOp(due.control, op('update'), NOW + MIN).control.updateDue).toEqual({ reason: 'owner', at: NOW + MIN })
     expect(applyOp(due.control, op('update off'), NOW)).toMatchObject({ changed: true, control: { updateDue: null } })
     expect(applyOp(BUSY, op('update off'), NOW)).toMatchObject({ changed: false, text: 'No update is due.' })
+  })
+
+  test('update failure notice: update <reason> and update off clear it; the directive shows it instead of a due update', () => {
+    const failed: Control = { ...BUSY, updateFailed: { reason: 'image', at: NOW - 9 * MIN, failedAt: NOW - 8 * MIN, error: 'no token' } }
+    expect(directives(failed, NOW).filter(d => d.startsWith('update'))).toEqual(['update failed at 02:52 UTC (image): no token - fix it, then /factory update again'])
+    expect(applyOp(failed, op('update off'), NOW)).toMatchObject({ changed: true, text: 'Update failure notice cleared.', control: { updateFailed: null, updateDue: null } })
+    expect(applyOp(failed, op('update x'), NOW)).toMatchObject({ changed: true, control: { updateFailed: null, updateDue: { reason: 'x', at: NOW } } })
   })
 
   test('a note replaces the earlier notes of its scope and leaves the other scopes; off clears the scope', () => {

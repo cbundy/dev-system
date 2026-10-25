@@ -153,6 +153,8 @@ export type Control = {
   usageOverride: { untilPct: number; expiresAt: Ms } | null
   // an update is due (rule H4, D-15): set by the reconciler or `/factory update`
   updateDue: { reason: string; at: Ms } | null
+  // the restart for an update failed (driver-pass-log failUpdate): the update is no longer due, and the owner's notice lasts until `update <reason>` or `update off`
+  updateFailed: { reason: string; at: Ms; failedAt: Ms; error: string } | null
   // a v2 resume carries its note for the issue's next step (v2 SPEC 11, P1)
   resumed: { subject: string; at: Ms; note?: string }[]
   dropped: { issue: number; at: Ms }[]

@@ -403,8 +403,22 @@ describe('person interventions', () => {
     const own = (over: Partial<LedgerEntry>) => entry('restart:1', 'restart-self', { rule: 'R2', ...over })
     expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'done', endedAt: NOW - 9 * MIN })] })).toEqual([])
     expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'lost', endedAt: NOW - 5 * MIN })] })).toEqual([])
-    expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'failed', endedAt: NOW - 9 * MIN })] })).toEqual(['person restart'])
+    expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'failed', endedAt: NOW - 9 * MIN })] })).toEqual(['loop update-failed', 'person restart'])
     expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'done', endedAt: NOW - 3 * 60 * MIN })] })).toEqual(['person restart'])
+  })
+
+  test('update-failed: one loop intervention per failed restart, naming its error, none for a done one', () => {
+    const failed = entry('restart:5', 'restart-self', { rule: 'R2', status: 'failed', endedAt: NOW - MIN, summary: 'dev-restart-self: no token' })
+    const found = ivs({ ledger: [failed, entry('restart:6', 'restart-self', { rule: 'R2', status: 'done', endedAt: NOW - MIN })] }).filter(p => p.event.cause === 'update-failed')
+    expect(found).toHaveLength(1)
+    expect(found[0].event).toMatchObject({ who: 'loop', cause: 'update-failed', fact: 'restart:5', reason: 'dev-restart-self: no token' })
+  })
+
+  test('controlDiff: the loop\'s failure write is no person\'s edit; a hand-set updateFailed is', () => {
+    const text = (o: object) => JSON.stringify(o)
+    const failed = { reason: 'x', at: 1, failedAt: 2, error: 'no token' }
+    expect(controlDiff(text({ updateDue: { reason: 'x', at: 1 } }), text({ updateDue: null, updateFailed: failed }))).toBeNull()
+    expect(controlDiff(text({ updateDue: null }), text({ updateDue: null, updateFailed: failed }))).toEqual({ fields: ['updateFailed'], issues: [] })
   })
 
   test('an intervention is no work a restart would cut: it is written first, and R2 restarts in the same pass', () => {

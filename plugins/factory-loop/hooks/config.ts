@@ -243,6 +243,7 @@ export const EMPTY_CONTROL: Control = {
   serial: false,
   usageOverride: null,
   updateDue: null,
+  updateFailed: null,
   resumed: [],
   dropped: [],
   notes: [],
@@ -504,6 +505,7 @@ export function controlFrom(raw: unknown): Control {
   const items = (v: unknown) => (Array.isArray(v) ? v.map(record).filter(r => r !== null) : [])
   const override = record(o.usageOverride)
   const update = record(o.updateDue)
+  const failed = record(o.updateFailed)
   return {
     paused: issues(o.paused),
     noNewWork: o.noNewWork === true,
@@ -514,6 +516,10 @@ export function controlFrom(raw: unknown): Control {
     usageOverride:
       override !== null && at(override.untilPct) && at(override.expiresAt) ? { untilPct: override.untilPct, expiresAt: override.expiresAt } : null,
     updateDue: update !== null && at(update.at) ? { reason: typeof update.reason === 'string' ? update.reason : '', at: update.at } : null,
+    updateFailed:
+      failed !== null && at(failed.at) && at(failed.failedAt) && typeof failed.reason === 'string' && typeof failed.error === 'string'
+        ? { reason: failed.reason, at: failed.at, failedAt: failed.failedAt, error: failed.error }
+        : null,
     resumed: items(o.resumed).flatMap(r =>
       typeof r.subject === 'string' && at(r.at) ? [typeof r.note === 'string' ? { subject: r.subject, at: r.at, note: r.note } : { subject: r.subject, at: r.at }] : [],
     ),

@@ -572,6 +572,51 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
   })
 
+  test('a restart that fails ends the update, keeps a notice in the directives and the tell, and plans no restart again (rule R2, D-15)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const f = factory({ run: argv => (argv[0] === 'dev-restart-self' ? { exitCode: 1, stderr: 'dev-restart-self: no CODER_SESSION_TOKEN in this workspace' } : undefined) })
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
+    const h = host(on, { config: { ...ACT, windDownMinutes: 0 }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+    expect(h.entry('restart:777')).toMatchObject({ status: 'failed' })
+    const control = JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')
+    expect(control).toMatchObject({ updateDue: null, updateFailed: { reason: 'image', at: 777, error: expect.stringContaining('CODER_SESSION_TOKEN') } })
+    expect(h.lines().some(l => typeof l.text === 'string' && l.text.startsWith('update failed:') && l.text.endsWith('the update is no longer due'))).toBe(true)
+    // the next passes: no restart planned, no update-due skip, the notice is in the status
+    await clock.advance(60_000)
+    await clock.advance(60_000)
+    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
+    expect((h.last().skipped as { why: string }[]).some(k => k.why.includes('update due'))).toBe(false)
+    expect(h.files.get(`${LOOP_DIR}/control.json`)).toContain('updateFailed')
+  })
+
+  test('a failed restart writes nothing when the owner changed the update meanwhile (rule R2)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let files: Map<string, string> | null = null
+    const f = factory({
+      run: argv => {
+        if (argv[0] !== 'dev-restart-self') return undefined
+        // the first restart fails after the owner asked again; the second (restart:888) works
+        if (files?.get(`${LOOP_DIR}/control.json`)?.includes('"at":888')) return { stdout: '' }
+        files?.set(`${LOOP_DIR}/control.json`, JSON.stringify({ updateDue: { reason: 'newer', at: 888 } }))
+        return { exitCode: 1, stderr: 'dev-restart-self: no CODER_SESSION_TOKEN in this workspace' }
+      },
+    })
+    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
+    const h = host(on, { config: { ...ACT, windDownMinutes: 0 }, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
+    files = h.files
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    expect(h.entry('restart:777')).toMatchObject({ status: 'failed' })
+    const control = JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')
+    expect(control.updateFailed ?? null).toBeNull()
+    expect(control.updateDue).toEqual({ reason: 'newer', at: 888 })
+  })
+
   test('R2 with wind-down on: the request is written before the restart, then the loop winds down, starts nothing, and forgets a restart that never came (D-15)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
@@ -1442,6 +1487,53 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.advance(60_000)
     expect(h.prompts.filter(p => p.startsWith('TELL stalled id=w'))).toHaveLength(2)
     expect(h.entry(wake)).toMatchObject({ status: 'running', attempts: 1 })
+  })
+
+  test('a failed restart\'s tell survives dropped submits beside another owner tell, goes out once, and is not planned again (rule R2, D-15)', ENGINE_TEST, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ queue: [470] })
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(CLAIM_KEY, 'claim', { class: 'start', issue: 470, status: 'failed', attempts: 3, startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, summary: 'gh: HTTP 500' }),
+    ])
+    const failed = { reason: 'image', at: 777, failedAt: NOW - MIN, error: 'dev-restart-self: no CODER_SESSION_TOKEN' }
+    let drops = 3
+    let turns = 0
+    const h = host(on, {
+      config: ACT,
+      run,
+      store,
+      files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateFailed: failed }) },
+      submit: text => {
+        if (drops-- > 0) return { drop: 'the session was stopped' }
+        void $.turn.start({ text, turnId: `turn-${++turns}` })
+        return undefined
+      },
+    })
+    const restartTell = 'tell:stalled:restart:777'
+    const restartPrompts = () => h.prompts.filter(p => p.includes('retry: /factory update'))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // three passes drop the one wake they may start: nothing is left open, nothing is spent, and both tells stay owner items
+    for (let pass = 0; pass < 2; pass += 1) await clock.advance(60_000)
+    expect(h.prompts).toHaveLength(3)
+    expect(h.ledger().filter(e => e.kind === 'tell')).toEqual([])
+    expect(restartPrompts()).toHaveLength(0)
+    expect((h.last().counts as { owner: number }).owner).toBe(2)
+    // submit works: one wake a pass, so the claim's tell goes first and the restart notice after it, exactly once
+    for (let pass = 0; pass < 4; pass += 1) {
+      await clock.advance(60_000)
+      if (turns > 0) await $.turn.complete({ turnId: `turn-${turns}`, answer: '[ACTION] Owner: told.', reason: 'answer', durationMs: 900, isAborted: false })
+    }
+    await clock.advance(60_000)
+    expect(restartPrompts()).toHaveLength(1)
+    expect(h.entry(restartTell)).toMatchObject({ status: 'done' })
+    expect(h.prompts).toHaveLength(5)
+    await clock.advance(60_000)
+    expect(restartPrompts()).toHaveLength(1)
+    // told, but both notices still stand until the owner acts
+    expect((h.last().counts as { owner: number }).owner).toBe(2)
   })
 
   test('a busy session never holds a pass: the wake is taken as queued after 5 s, and a later drop asks again', ENGINE_TEST, async ($, on) => {
