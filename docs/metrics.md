@@ -1109,6 +1109,21 @@ GROUP BY 1
 ORDER BY 1;
 ```
 
+### Update refused for missing credentials
+
+`/factory update` is refused when `dev-restart-self --check` finds the workspace cannot restart
+itself (v2 SPEC 13.4.3). Each refusal is an `intervention` with cause `op:update-refused` (in act
+mode); the reason is the event's `detail`.
+
+```sql
+-- refused updates per repo, device and day
+SELECT repo, device, date_trunc('day', ts)::date AS day, count(*) AS refused
+FROM factory.event_log
+WHERE type = 'intervention' AND cause = 'op:update-refused'
+GROUP BY repo, device, day
+ORDER BY repo, device, day;
+```
+
 ### Split trackers closed by the loop
 
 When a split child merges, the loop closes the split's parent (its tracker) once every sub-issue is closed, and

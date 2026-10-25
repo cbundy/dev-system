@@ -1171,6 +1171,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | Cause | When | Issue |
 |---|---|---|
 | `op:<name>` | (`/factory` ops only) every `/factory` op but `status`, `stamp` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `stop-now` and `update`. `ownerOp` (`driver-controls.ts`) logs it after the op lands, when act mode is in force before or after the op, so the op that turns the loop on (`mode act`) and off is logged too | the issues the op names, else none |
+| `op:update-refused` | (`/factory` ops only) an `update <reason>` refused because `dev-restart-self --check` found the workspace cannot restart itself (13.4.3); logged in every mode the loop acts in, with the reason as detail; the op pings no pass | none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
@@ -2868,6 +2869,13 @@ Code's built-in `/loop`): `status`, `pause <N>`, `unpause <N>`, `skip <N>`, `nos
 pings the loop and gets its own decision-log line (`control`). Appendix E gives what v2 makes of `resume`, `drop`,
 `note`, `retry` and `stop-now`.
 
+- `update <reason>` first runs `dev-restart-self --check` (credentials only, no request) with a
+  1000 ms timeout, before control.json is read or written. Exit 1 refuses the op at once with
+  `Not changed: this workspace cannot restart itself: <the check's reason>`, writes nothing and is
+  logged (decision-log line, and an `op:update-refused` intervention in act mode) without pinging a
+  pass. Exit 0 accepts as before. Exit 2 (an image without `--check`), a command that cannot run,
+  a timeout or any other exit accepts as before and appends ` Credentials unchecked: <why>.` to the answer.
+  `update off` and every other op run no check; an agent's `update` is refused before it.
 - `config set <key> <value>` saves one setting in the workspace file and `config unset <key>` removes
   it, so the repo's value or the default applies again. A key is any setting under its file name
   (`passEvery` or `passEveryMs`, `stateTimeout.design` for a map entry) or `poolSize`; `mode`,
