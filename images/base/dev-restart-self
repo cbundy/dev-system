@@ -35,6 +35,13 @@
 #                                           See images/base/README.md, "Restoring Remote Control
 #                                           sessions after a restart", for eligibility and settings.
 #   dev-restart-self --dry-run ...          print each request (method, path, body) and send nothing.
+#                                           Fails like the real run when no token is found.
+#   dev-restart-self --check                answer only "could this workspace restart itself": resolve
+#                                           the workspace id, URL and token as a real run does, send
+#                                           no request and write nothing. Exit 0 = credentials found
+#                                           (prints the token source), 1 = missing (the message the
+#                                           real run would die with), 2 = usage (also what an older
+#                                           image without --check returns). Takes no other flag.
 #
 # Why this exists: `coder restart|stop|update <your own workspace>` stops the workspace first,
 # which kills the session that would start it again, so it stays stopped (testbed builds #6, #8,
@@ -66,6 +73,9 @@ MODE=start
 UPGRADE=0
 DRY=0
 RESUME=0
+CHECK=0
+TOKEN_SOURCE=""
+NFLAGS=0
 WANT_FRESH=0
 PARAMS=""  # one name=value per line
 
@@ -73,7 +83,7 @@ say() { printf 'dev-restart-self: %s\n' "$*" >&2; }
 die() { say "$*"; exit 1; }
 
 usage() {
-  echo "usage: dev-restart-self [--upgrade | --restart [--upgrade] | --resume] [--parameter name=value]... [--fresh] [--dry-run]" >&2
+  echo "usage: dev-restart-self [--upgrade | --restart [--upgrade] | --resume] [--parameter name=value]... [--fresh] [--dry-run] | --check" >&2
   exit 2
 }
 
@@ -87,6 +97,7 @@ add_param() { # name=value
 
 while [ $# -gt 0 ]; do
   case $1 in
+    --check) CHECK=1 ;;
     --upgrade) UPGRADE=1 ;;
     --restart) MODE=restart ;;
     --resume) RESUME=1 ;;
@@ -101,8 +112,10 @@ while [ $# -gt 0 ]; do
     -h | --help) usage ;;
     *) usage ;;
   esac
+  [ "$1" = --check ] || NFLAGS=1
   shift
 done
+[ "$CHECK" = 0 ] || [ "$NFLAGS" = 0 ] || { say "--check takes no other flag."; usage; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -117,10 +130,11 @@ read_first_line() { # file: first line, trimmed; fails if unreadable or empty
 resolve_token() {
   if [ -n "${CODER_SESSION_TOKEN:-}" ]; then
     TOKEN=$CODER_SESSION_TOKEN
+    TOKEN_SOURCE="env"
   elif TOKEN=$(read_first_line "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/coder-session-token"); then
-    :
+    TOKEN_SOURCE="secrets file"
   elif TOKEN=$(read_first_line "$CONFIG_DIR/session"); then
-    :
+    TOKEN_SOURCE="coder config"
   else
     TOKEN=""
   fi
@@ -175,10 +189,9 @@ need_creds() {
   resolve_url
   [ -n "$URL" ] || die "no Coder URL (set CODER_URL, or run 'coder login'): see \"Coder CLI\" in images/base/README.md."
   resolve_token
-  if [ -z "$TOKEN" ] && [ "$DRY" = 0 ]; then
+  if [ -z "$TOKEN" ]; then
     die "no Coder session token (CODER_SESSION_TOKEN, \$DEV_SECRETS_DIR/coder-session-token or $CONFIG_DIR/session): see \"Coder CLI\" in images/base/README.md."
   fi
-  [ -n "$TOKEN" ] || TOKEN="<redacted>"
 }
 
 WS_PATH=/api/v2/workspaces/${CODER_WORKSPACE_ID:-}
@@ -374,6 +387,12 @@ undo() { # reason: a step failed before the stop; put the saved state back
 }
 
 # ---- main ------------------------------------------------------------------
+
+if [ "$CHECK" = 1 ]; then
+  need_creds
+  say "credentials found (token from $TOKEN_SOURCE)"
+  exit 0
+fi
 
 if [ "$RESUME" = 1 ]; then
   do_resume

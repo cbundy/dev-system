@@ -167,3 +167,20 @@ check "dev-doctor fails a heartbeat that is not running when only the factory da
 check "dev-doctor reports no heartbeat failure without a URL" in_image '
   out=$(dev-doctor --warn-only 2>&1); echo "$out"
   echo "$out" | grep -q "INFO worker heartbeat: last beat never" && ! echo "$out" | grep -q "FAIL heartbeat"' --entrypoint ""
+# Coder credentials (#1343): dev-restart-self --check, only inside a Coder workspace.
+check "dev-doctor WARNs, naming coder_login and a fix, in a Coder workspace with no token, and never FAILs on it" in_image '
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "WARN coder credentials: .*no Coder session token" &&
+  echo "$out" | grep -A1 "WARN coder credentials" | grep -q "fix: .*coder_login.*Coder CLI" &&
+  ! echo "$out" | grep -q "FAIL coder credentials"' \
+  -e CODER_WORKSPACE_ID=00000000-0000-0000-0000-000000000001 -e CODER_URL=http://coder.invalid \
+  -e CODER_SESSION_TOKEN= --entrypoint ""
+check "dev-doctor OKs the Coder credentials, naming env, when a token and URL are set, and prints no token" in_image '
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "OK   coder credentials: credentials found (token from env)" &&
+  ! echo "$out" | grep -q "tok-not-printed"' \
+  -e CODER_WORKSPACE_ID=00000000-0000-0000-0000-000000000001 -e CODER_URL=http://coder.invalid \
+  -e CODER_SESSION_TOKEN=tok-not-printed --entrypoint ""
+check "dev-doctor prints no Coder credentials line outside a Coder workspace" in_image '
+  out=$(env -u CODER_WORKSPACE_ID dev-doctor --warn-only 2>&1); echo "$out"
+  ! echo "$out" | grep -q "coder credentials"' --entrypoint ""
