@@ -13,7 +13,7 @@
 # catches a test that scrubs its env and falls back to a hard-coded default
 # (cbundy/dev-system#1056). test_sandbox_check fails the run on such a record.
 #
-# The sandbox stays writable on purpose: callum-flow-event warns and exits 0 when a write fails,
+# The sandbox stays writable on purpose: fabriek-event warns and exits 0 when a write fails,
 # so a read-only stand-in would hide a leak instead of catching it. Nothing assumes /persist.
 
 # _tsb_deny_hosts: the hosts of the real database URLs, from the environment and secret files as

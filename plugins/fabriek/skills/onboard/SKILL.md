@@ -24,7 +24,7 @@ Instructions for an agent. Run them in the target folder, whether it is empty or
 existing repo. Run every step; each one says how to check it worked. Background for any step
 is in [`architecture.md`](https://github.com/cbundy/dev-system/blob/main/docs/architecture.md) and [`../templates/README.md`](https://github.com/cbundy/dev-system/blob/main/templates/README.md).
 
-With the `callum-flow` plugin installed, `/callum-flow:onboard` gives an agent these same
+With the `fabriek` plugin installed, `/fabriek:onboard` gives an agent these same
 instructions as a skill (generated from this page, never edited by hand).
 
 ## Done when
@@ -326,13 +326,13 @@ Decide this for every repo, in exactly one of three cases. The outcome is `uiCap
 
 1. **No UI.** Set `"uiCapture": "none"` and fill the CLAUDE.md placeholder with `n/a - no UI`.
 2. **A UI that boots non-interactively on a port, or a repo that already uses Playwright.**
-   - Add an `e2e:capture` script to `package.json` that wraps `callum-flow-capture` (flags in
-     [callum-flow-capture](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#callum-flow-capture), not copied here). Reuse the
+   - Add an `e2e:capture` script to `package.json` that wraps `fabriek-capture` (flags in
+     [fabriek-capture](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#fabriek-capture), not copied here). Reuse the
      repo's existing Playwright install where there is one.
    - Add Playwright and Chromium to the per-repo image (step 3e; see
-     [For a UI repo: the owner's action](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#callum-flow-capture)).
+     [For a UI repo: the owner's action](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#fabriek-capture)).
    - Write a short doc in the repo, for example `docs/e2e-visual-verification.md`, naming the command,
-     the scenarios with their `--path`, and the evidence route: `callum-flow-evidence-upload` when
+     the scenarios with their `--path`, and the evidence route: `fabriek-evidence-upload` when
      evidence storage is configured; on exit 78 a committed capture linked by a commit-pinned blob URL.
    - Point the CLAUDE.md placeholder at that doc and set `"uiCapture": "npm run e2e:capture --"`.
 3. **A UI that cannot be captured** (needs a login, hardware, a native window, or will not boot
@@ -568,7 +568,7 @@ in the workspace: `touch /persist/claude/factory-loop/OFF`, and delete it to sta
 Label one small, well-described issue `ready` and watch it go from claimed to designed (a brief
 comment on the issue), built, PR opened, CI, reviewed and merged. The labels show where it is,
 `/factory status` shows what the loop is doing, and the `factory-state` skill
-(`/callum-flow:factory-state`) shows the factory as a whole, stuck issues included.
+(`/fabriek:factory-state`) shows the factory as a whole, stuck issues included.
 
 ### Troubleshooting
 
@@ -601,6 +601,6 @@ Report:
 | Run it in Coder | Step 6, if not done: `coder create <name> --template dev-system --parameter repo_url=<https clone url>`, then **Log in** in the dashboard. |
 | Put it on the factory loop | Step 7, if not done: the repo's branch protection and `ready` label, a workspace from the `orchestrator-loop` template ("Create the loop workspace"), **Log in**, `/factory mode act` in its session, and one issue labelled `ready`. |
 | Hand the loop work | Label an issue `ready`. Answer a `factory:parked` issue on the issue, then remove the label. `/factory help` in the loop's session lists the controls. |
-| Enable the workflow plugin | The base image's `dev-init` installs `callum-flow@callum` by default on every container start, on the desktop and in Coder. See [Claude plugins](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#workspace-and-repo) for opt-outs and recovery when an install fails. |
+| Enable the workflow plugin | The base image's `dev-init` installs `fabriek@callum` by default on every container start, on the desktop and in Coder. See [Claude plugins](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#workspace-and-repo) for opt-outs and recovery when an install fails. |
 | Session history (agentsview) | Nothing per repo. The URL is set once per host (`images/base/README.md`, "Central session history"). |
 | Keep in sync later | `npm update @callum/dev-system && npx callum-dev update`, then commit. Optionally add `npx callum-dev check` to the `ci.yml` from step 3f. |

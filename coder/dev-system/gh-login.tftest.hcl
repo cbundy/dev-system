@@ -132,8 +132,8 @@ run "volume_only_defaults" {
     error_message = "DEV_GH_TOKEN_FILE and DEV_GIT_EMAIL must be unset outside token mode"
   }
   assert {
-    condition     = contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067")
-    error_message = "the template's trusted authors must be set unchanged"
+    condition     = contains(docker_container.workspace[0].env, "FABRIEK_TRUSTED_AUTHORS=cbundy:13131067") && contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067")
+    error_message = "the template's trusted authors must be set unchanged under both names"
   }
 }
 
@@ -180,7 +180,7 @@ run "secrets_dir_only" {
     error_message = "DEV_GH_TOKEN_FILE is set only for gh_login=token"
   }
   assert {
-    condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "CALLUM_FLOW_TRUSTED_AUTHORS=")]) == 0
+    condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "FABRIEK_TRUSTED_AUTHORS=") || startswith(e, "CALLUM_FLOW_TRUSTED_AUTHORS=")]) == 0
     error_message = "trusted authors stay unset when both are empty"
   }
 }
@@ -308,8 +308,8 @@ run "extra_trusted_authors_only" {
   }
 
   assert {
-    condition     = contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=someone:12345")
-    error_message = "extras alone must still set CALLUM_FLOW_TRUSTED_AUTHORS"
+    condition     = contains(docker_container.workspace[0].env, "FABRIEK_TRUSTED_AUTHORS=someone:12345") && contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=someone:12345")
+    error_message = "extras alone must still set FABRIEK_TRUSTED_AUTHORS and CALLUM_FLOW_TRUSTED_AUTHORS"
   }
   assert {
     condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "DEV_GIT_EMAIL=")]) == 0
@@ -340,7 +340,7 @@ run "extra_trusted_authors_appended" {
   }
 
   assert {
-    condition     = contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067,someone:12345")
+    condition     = contains(docker_container.workspace[0].env, "FABRIEK_TRUSTED_AUTHORS=cbundy:13131067,someone:12345") && contains(docker_container.workspace[0].env, "CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067,someone:12345")
     error_message = "extras must be appended to the template's list"
   }
 }

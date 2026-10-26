@@ -27,7 +27,7 @@
   If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way
   (a factory loop agent names it in its answer instead, since its change holds only what the brief asks).
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
-  using this repo's e2e visual verification tooling (n/a - no UI), upload each capture with `callum-flow-evidence-upload pr-<N>/<slug> <file>...`
+  using this repo's e2e visual verification tooling (n/a - no UI), upload each capture with `fabriek-evidence-upload pr-<N>/<slug> <file>...`
   and attach the printed URLs to the PR description before the PR is considered ready. Commit an image only when it is a
   durable reference image the repo keeps.
 - Keep PR descriptions brief and concise. They are reviewed by a head of engineering, not an engineer,
@@ -37,7 +37,7 @@
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
   A factory loop agent fixes it only when it blocks the gates, and otherwise names it in its answer's summary.
 - Questions about factory latency, throughput or pipeline cost are answered from factory data via the
-  callum-flow `query-factory-data` skill, not from guesses.
+  fabriek `query-factory-data` skill, not from guesses.
 - When writing to the owner (chat replies, status updates, orchestrator reports, handoffs), lead with what
   needs to happen next and who has to do it. Name each piece of work by what it does, with the issue number at
   most a parenthetical and never the subject of a sentence. Make each issue or PR reference a markdown link to it,
@@ -112,7 +112,7 @@ sandbox and the database tests. `TEST_JOBS` sizes a run.
 
 - `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script
   under `images/base/`, `features/src/callum-tools/`, `features/test/`,
-  `plugins/callum-flow/hooks/`, `coder/` and `scripts/`, runs `node --check` on the
+  `plugins/fabriek/hooks/`, `coder/` and `scripts/`, runs `node --check` on the
   JavaScript under `bin/`, `plugins/` and `scripts/`, and fails if a generated skill is
   out of date (`scripts/build-skills.js --check`) or the factory event docs, version lock and
   shapes are stale or a schema breaks its rules (`scripts/build-event-docs.js --check`; fix with
@@ -192,9 +192,9 @@ names in its answer's evidence the CI workflow that covers the change.
 
 ## Trying skill changes
 
-Sessions in this repo run the *released* callum-flow plugin from the marketplace, not this
-checkout, so editing `plugins/callum-flow/` does not change the running session. In an interactive
-session, try a skill or hook change by starting a session with `claude --plugin-dir plugins/callum-flow`.
+Sessions in this repo run the *released* fabriek plugin from the marketplace, not this
+checkout, so editing `plugins/fabriek/` does not change the running session. In an interactive
+session, try a skill or hook change by starting a session with `claude --plugin-dir plugins/fabriek`.
 A loop agent cannot start one, and checks the change with `npm test`.
 
 There is no app to boot here. Image, devcontainer and feature changes cannot be exercised

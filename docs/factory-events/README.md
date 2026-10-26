@@ -9,7 +9,7 @@ versioned payload, stored in the factory database and read through one view. Des
   ([`envelope.v1.json`](schemas/envelope.v1.json)) and one JSON Schema per event type and version
   (`<type>.v<N>.json`), each with the event's description, every field's description and examples.
   [`REFERENCE.md`](REFERENCE.md) beside this file is generated from them; read that.
-- [`translator.md`](translator.md): how today's `callum-flow-event` lines map onto these, during
+- [`translator.md`](translator.md): how today's `fabriek-event` lines map onto these, during
   the switch only.
 - [`replay.md`](replay.md): the replay of the old history into a throwaway database, its translation
   check and the compare harness every reader issue passes, during the switch only.
@@ -104,15 +104,15 @@ SQL
   and version are known and the required fields are present, ignores fields it does not know,
   gives absent optional fields as null, and upgrades older versions to the current one. On an
   unknown type or version it fails with an error naming both (`unknown factory event:
-  transition v3`), never guessing. The image's readers (`callum-flow-factory-state`,
-  `callum-flow-evaluate`, `heartbeat-state`) instead skip and count such an event and go on (a lagging
+  transition v3`), never guessing. The image's readers (`fabriek-factory-state`,
+  `fabriek-evaluate`, `heartbeat-state`) instead skip and count such an event and go on (a lagging
   image must not go blind); the shared reader and the loop's record rebuild still fail the read. The loop's record rebuild from the new store (`eventsSource` `new`,
   `recordsFromNewRows` in `plugins/factory-loop/hooks/v2/record.ts`) fails its whole read on that
   error, or on a payload the reader refuses (store source not ok, its error names the event_id and
   the source `new`) and never skips the row, since a skipped transition quietly rebuilds an
   older record. Its old-store rebuild (`recordsFromEvents`) still skips a note it cannot parse.
   Shell tools read only envelope fields or the view.
-- **The writer never refuses what a newer caller may know.** `callum-flow-event` (its native mode,
+- **The writer never refuses what a newer caller may know.** `fabriek-event` (its native mode,
   `--type`) ships in the image and its callers in the plugin, and the two roll out separately. So at run time it checks
   the envelope and, for a type and version it knows, that every required field is present with
   its JSON type; it exits 2 only on those. A type or version it does not know is written with a
@@ -154,26 +154,26 @@ SQL
 
 - **A CI release.** A repo that cuts releases in a workflow attaches the `released` event to the GitHub
   Release as the asset `factory-released.json` (the composite action `.github/actions/released-event`); a
-  device's `factory-event-push-loop` collects it with `callum-flow-released --collect` into its own log and
+  device's `factory-event-push-loop` collects it with `fabriek-released --collect` into its own log and
   pushes it. The same release may reach the store from two devices; count it once by `(repo, tag)`.
 - **Local log.** Each device appends one line per event to
-  `/persist/events/factory/<owner>__<repo>.jsonl` (`callum-flow-event --new-path` prints the path; `factory/` is made
+  `/persist/events/factory/<owner>__<repo>.jsonl` (`fabriek-event --new-path` prints the path; `factory/` is made
   0700). The old log `<events dir>/<owner>__<repo>.jsonl` and `factory.events` get no new lines any more
-  (dev-system#1143): there is no dual write. The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
+  (dev-system#1143): there is no dual write. The native mode, `fabriek-event --type <type> --data '<json>' [--type-version N]
   [--issue N] [--repo O/N] [--actor NAME] [--regime R]`, writes a new event straight to that file and nothing to
-  the old log. The image's tools write natively (dev-system#1140): `callum-flow-claim` (`claimed`,
-  `claim_renewed`, `claim_lost`), `callum-flow-sweep` (`closed`, `merged`, `requeued`; its `merged` rows include the merges to the default branch that no event recorded, logged as recovered hand merges, with no issue unless a trusted pull request closes one; `merged` carries GitHub's `merged_at` and a `title`), `callum-flow-merge`
-  (`merged` with the pull request's files, per-file line counts (`file_lines`), additions and deletions, `merged_at`, `test_weakened`), `callum-flow-issue-read` (`untrusted_stripped`), `callum-flow-implementer-route`
+  the old log. The image's tools write natively (dev-system#1140): `fabriek-claim` (`claimed`,
+  `claim_renewed`, `claim_lost`), `fabriek-sweep` (`closed`, `merged`, `requeued`; its `merged` rows include the merges to the default branch that no event recorded, logged as recovered hand merges, with no issue unless a trusted pull request closes one; `merged` carries GitHub's `merged_at` and a `title`), `fabriek-merge`
+  (`merged` with the pull request's files, per-file line counts (`file_lines`), additions and deletions, `merged_at`, `test_weakened`), `fabriek-issue-read` (`untrusted_stripped`), `fabriek-implementer-route`
   (`implementer_routed`) and `usage-check.sh` (`usage`), each with the type and data `translate()` made from the
   old line it wrote before ([translator.md](translator.md) has the mapping; `tests/factory-event-native.test.js`
-  pins them equal). `callum-flow-design-route`, `callum-flow-regate` and `pipeline-watch.sh` were removed (they no longer logged): their
+  pins them equal). `fabriek-design-route`, `fabriek-regate` and `pipeline-watch.sh` were removed (they no longer logged): their
   states (`design_routed`, `superseded`, the watcher's run states and `watcher_error`) have no new type.
   `queue-watch.sh` keeps the old-state call (`ready --if-changed`, which has no native form); it lands only here.
   The factory loop writes natively too (dev-system#1141): its `transition`, `reviewed`, `intervention`, `requeued`,
   `abandoned`, `merged`, `closed` and `finding_handled` events (hooks/v2/events.ts, event-native.ts) carry the data
   `translate()` made from the old lines it wrote before, pinned equal by `tests/factory-loop-v2-events.test.js`; it
   no longer writes `delegated`, `fix_requested` or `merge_ready`.
-  The old-state mode, `callum-flow-event <state> ...`, builds the old-format line as before (same validation and
+  The old-state mode, `fabriek-event <state> ...`, builds the old-format line as before (same validation and
   note checks), translates it ([translator.md](translator.md)) and appends only the new event, then touches `.wake`:
   every old-state call, from any plugin version, lands in this file and never in the old log. A state the translator
   skips writes nothing; a translator miss, or a missing node or translator, writes nothing, warns once and exits 0.
@@ -185,19 +185,19 @@ SQL
   event counts as changed. `--branch` no longer narrows the match (the envelope has no branch). So a re-armed
   `queue-watch.sh` logs nothing for a ready issue already logged with the same title, labels and parent, and logs it again
   when one of them changed. It combines with `--new-only`.
-  `callum-flow-event <state> ... --data '<json object>'` hands the translator extra payload fields that only the new
+  `fabriek-event <state> ... --data '<json object>'` hands the translator extra payload fields that only the new
   event carries: `ready` and `claimed` get the issue's `title`, `labels` and `parent` this way. Not an object: exit 2,
   nothing written. A key the type does not accept is a translator miss (no event, one warning). An older image answers
   `--data` with exit 2.
-  `callum-flow-claim` and `callum-flow-sweep` read both logs under a
-  source switch (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, [replay.md](replay.md#source-switch)): `new` (the default) reads this
+  `fabriek-claim` and `fabriek-sweep` read both logs under a
+  source switch (`FABRIEK_CLAIM_EVENTS_SOURCE`, [replay.md](replay.md#source-switch)): `new` (the default) reads this
   file and `factory.event_log`. `old` and `shadow` read the old log and `factory.events`, which are frozen at the cutover,
   so they are no longer a way back; an invalid value still reads old (changing that is #656).
 - **Shipping.** `factory-event-push-loop` (as the writer role, with `FACTORY_DB_WRITER_URL` or the
   `factory-db-writer-url` secret) keeps its own cursor in `factory/.pushed/` and stores each line's number in the file
   as `device_seq`. Set-aside lines go to `factory/.refused/<file>`. A line the database refuses is set aside with a warning naming it and its
   error, and the cursor moves on: one bad line never holds back the lines after it.
-- **Checking.** `callum-flow-dual-write-check [--repo O/N] [--device D] [--since T]` compares the old table
+- **Checking.** `fabriek-dual-write-check [--repo O/N] [--device D] [--since T]` compares the old table
   (`factory.events`, read with the agentsview URL; it gets no new rows since the cutover, so the check only compares
   the history before it) with `factory.event_store` (read with the reader URL only), read-only.
   Each old row goes through the translator in replay mode and is matched to the new store by `event_id`. For each old
@@ -210,7 +210,7 @@ SQL
   usage error, an unconfigured or unreachable store, or no new rows for the device and no `--since`.
   A `transition` with `via=dual-write` and no old row is not an extra: the backfill writes it to the new log
   only, by design.
-  Events written by the native mode (`callum-flow-event --type`) have no old row and show as extras under their
+  Events written by the native mode (`fabriek-event --type`) have no old row and show as extras under their
   type, and so does every event written after the cutover, so the check proves dual write only for the history before it.
 - **Store.** `factory.event_store`: the envelope fields and `device_seq` as columns, `data` as
   JSON, primary key `event_id`, so a re-push never makes a second row. It accepts any type and
@@ -235,7 +235,7 @@ SQL
 3. Ship the schema in release N and let no producer write it before release N+3 (the three-minor
    reader-skew rule above), so every reader and the image's writer of the last three minors know the
    type first.
-4. Write the event with `callum-flow-event --type <type> --data '<json object>' [--issue N]`. The
+4. Write the event with `fabriek-event --type <type> --data '<json object>' [--issue N]`. The
    writer exits 2 on a missing required field, a wrong JSON type, a missing `--issue` for an
    `x-issue: required` type or a bad option, and writes nothing.
 5. Add a producer fixture to `tests/fixtures/factory-events/tool-calls.json` (the old line and the native call; `tests/factory-event-native.test.js` asserts that `translate()` makes the same type and data from the old line).
@@ -272,7 +272,7 @@ Checks fail whenever code and docs disagree, so nobody has to remember a process
 - **Tests (`npm test`).** Every example validates strictly against its own schema and, through the
   shared reader's upgrade, against the type's current version. Every event fixture of a producer
   (`tests/factory-loop-v2-events.test.js` for the loop, `tests/factory-event-native.test.js` for the native mode, and the shell producers' own tests) goes
-  through the real `callum-flow-event`, the translator during dual write, strict validation and the
+  through the real `fabriek-event`, the translator during dual write, strict validation and the
   shared reader, and must come back equal to what went in. The view's lifted columns must match
   the `x-column` fields.
 

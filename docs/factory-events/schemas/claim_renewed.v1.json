@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "claim_renewed.v1.json",
   "title": "claim_renewed",
-  "description": "A heartbeat extended this device's claim on the issue. Written by callum-flow-claim --heartbeat. Housekeeping: not progress on the issue.",
+  "description": "A heartbeat extended this device's claim on the issue. Written by fabriek-claim --heartbeat. Housekeeping: not progress on the issue.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

@@ -23,7 +23,7 @@ EOT
 otlp_endpoint = "http://192.168.1.10:4318"
 
 # Whose GitHub text the factory trusts (cbundy/dev-system#307), as
-# CALLUM_FLOW_TRUSTED_AUTHORS in every workspace of both templates: login:numeric_id,
+# FABRIEK_TRUSTED_AUTHORS (and CALLUM_FLOW_TRUSTED_AUTHORS) in every workspace of both templates: login:numeric_id,
 # verified with `gh api users/cbundy --jq .id`. The image bakes no list.
 trusted_authors = "cbundy:13131067"
 

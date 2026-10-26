@@ -1,7 +1,7 @@
 # Factory metrics
 
 The factory event log answers the questions below, plus the waste measures at the end. Events are
-written by `callum-flow-event` and shipped by `factory-event-push-loop` into the factory database
+written by `fabriek-event` and shipped by `factory-event-push-loop` into the factory database
 (see [Where events live](factory-events/README.md#where-events-live)). Every saved query here reads
 the view `factory.event_log`, or for the workers `factory.workers_status` and
 `factory.worker_samples`; none reads the old `factory.events` table or the `nomistakes` mirror. The old log and `factory.events` get no
@@ -36,7 +36,7 @@ sub-agents.
 - Reading per regime: `factory.event_log` has a `regime` column, the kind of run that wrote the row
   (`factory_loop_v2`, `testbed` or `manual`; see the
   [Regime rule](factory-events/README.md#reading-events) and the
-  [Regimes](#regimes) subsection of `callum-flow-evaluate`). Null is `unknown`: read it as
+  [Regimes](#regimes) subsection of `fabriek-evaluate`). Null is `unknown`: read it as
   `coalesce(regime, 'unknown')`, and never guess a regime from a device, a workspace name or a path.
   Read any saved query per regime in one of two ways. A filter: add
   `AND coalesce(regime, 'unknown') = '<regime>'` (or `IN (...)` for several) to each read of
@@ -50,7 +50,7 @@ Types these queries read, besides the stages `ready`, `claimed`, `transition` (t
 whose `to_state` is the issue's state: `queued`, `designing`, `building`, `reviewing`, `fixing`,
 `merge-queue`, `parked`, `waiting` or `closed`), `merged`, `abandoned` and `requeued`:
 
-- `closed` is logged by `callum-flow-sweep` (actor `sweep`) for issues closed outside the factory;
+- `closed` is logged by `fabriek-sweep` (actor `sweep`) for issues closed outside the factory;
   the [factory event log reference](../images/base/README.md#factory-event-log) defines which issues
   it checks. Its `reason` is GitHub's close reason verbatim (`completed`, `not_planned` or
   `duplicate`; null when GitHub gives none). It releases a claim like `merged` does, but throughput
@@ -69,16 +69,16 @@ whose `to_state` is the issue's state: `queued`, `designing`, `building`, `revie
 - `loop_entry` and `loop_passes` are the factory loop's own bookkeeping
   ([DECISIONS D-09](factory-loop/DECISIONS.md)): agent starts and ends, judgment wakes and their
   answers, and a pass summary once a minute. They are never a stage and never progress: no query here
-  counts them as an issue event, and `callum-flow-factory-state` and `heartbeat-state` ignore them.
+  counts them as an issue event, and `fabriek-factory-state` and `heartbeat-state` ignore them.
   Only "alive" in the waiting split counts any row of a device, `usage` and these included, since a
   loop that logs is a device at work.
-- `claim_lost` is logged by `callum-flow-claim` on exit 3 (`holder` says who holds the issue, `race`
+- `claim_lost` is logged by `fabriek-claim` on exit 3 (`holder` says who holds the issue, `race`
   whether both devices claimed at once). `claim_renewed` is the lease heartbeat, not progress.
   `test_weakened` is one flagged commit of a merged PR. `implementer_routed` is the model chosen for
   a build and `designer_routed` the model chosen for a design (reason `hash`, `label` or `fallback`).
 
 The four version columns (`base_image`, `dev_image`, `template_version`, `plugin_version`: what
-`dev-version --json` calls the running base image, dev image, Coder template version and callum-flow
+`dev-version --json` calls the running base image, dev image, Coder template version and fabriek
 plugin version) are filled for events written by base image 2.26.0 and later; earlier rows are null.
 To compare releases, filter on them:
 
@@ -818,7 +818,7 @@ ORDER BY seq_at DESC;
 
 ## 4. Merges per device
 
-Merges that closed an issue. A `merged` event with no issue is left out: `callum-flow-sweep` logs a merge
+Merges that closed an issue. A `merged` event with no issue is left out: `fabriek-sweep` logs a merge
 to the default branch that no event recorded with no issue when the pull request's author is not trusted,
 or when it closes none, and a sweep-logged hand merge (`actor = 'sweep'`, `by = 'hand'`, `recovered`) would
 otherwise count as a merge of the factory and of the device that swept (cbundy/dev-system#752).
@@ -847,11 +847,11 @@ ORDER BY week DESC, device, regime;
 
 ## 5b. Tests deleted or weakened by auto-fixes
 
-`callum-flow-merge` logs one `test_weakened` event per commit that `callum-flow-test-weakening`
+`fabriek-merge` logs one `test_weakened` event per commit that `fabriek-test-weakening`
 flagged on a merged PR (a commit that deleted assertions, or added `--warn-only`, `|| true`, a
 skip or `.only`, or commented an assertion out; cbundy/dev-system#314). The event has `commit`,
 `restored` (true when a later commit put the test back), `kinds` and `files`. There is no step.
-`callum-flow-evaluate` reports the same
+`fabriek-evaluate` reports the same
 counts as its `test_weakened` section.
 
 ```sql
@@ -869,14 +869,14 @@ ORDER BY unrestored DESC, commits DESC;
 The two-device trial (cbundy/dev-system#222) asks whether two dispatchers ever hold one issue at
 once. A **double-claim** is two devices with a live `claimed` on one issue and no `ready`,
 `requeued`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
-logged by `callum-flow-claim` on exit 3 (`holder` says who holds the issue): it proves the lanes
+logged by `fabriek-claim` on exit 3 (`holder` says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
 `requeued`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`,
 `claim_renewed` (a heartbeat is not progress), `loop_entry` and `loop_passes` (the factory loop's
 bookkeeping), and `reviewed` and `intervention` (the factory loop v2's review results and step-ins),
-for more than twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
-`callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
-use `callum-flow-factory-state` ([factory-state.md](factory-state.md)): it reads the
+for more than twice the claim lease (2 x 120 minutes by default, `FABRIEK_LEASE_MINUTES`).
+`fabriek-evaluate` applies exactly this test over a window. For the factory's state right now,
+use `fabriek-factory-state` ([factory-state.md](factory-state.md)): it reads the
 per-state thresholds of `factory.stuck_rules` (adjustable per run with `--rule`) and puts GitHub closure first.
 
 ```sql
@@ -1254,8 +1254,8 @@ an event, so each compare counts once per (repo, device, ts). The query reads th
 `factory.event_store`. It takes `-v repo=... -v since=...`. The producers are the factory loop's record rebuild (`reader = 'loop-records'`, `tool = 'factory-loop'`; written under the
 loop setting `eventsSource` `shadow` (opt-in; the default is `new`), once per load and then at most hourly; `differences` counts issues whose
 rebuilt record differs, with both sides cut 600 seconds back, and `diff_keys` holds their issue numbers), the factory loop's facts and ledger rebuild (`reader = 'loop-facts'`, same setting and cadence; `differences` counts the differing keys among the newest `reclaimed` and the newest `ready` per issue, the derived ledger entries and the once keys, with both sides cut 600 seconds back, and `diff_keys` holds them as `reclaimed:#N`, `ready:#N`, `ledger:<key>` and `once:<key>`) and the claim tools'
-held rule (`images/base/claim-events.sh`): `callum-flow-claim` and `callum-flow-sweep` write one
-event per run only when the source is set to `shadow` (`CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
+held rule (`images/base/claim-events.sh`): `fabriek-claim` and `fabriek-sweep` write one
+event per run only when the source is set to `shadow` (`FABRIEK_CLAIM_EVENTS_SOURCE=shadow`; the default is `new`), with
 `reader = 'claim-events'` and `tool` the command. `differences` counts issues whose held decision
 (lifecycle class, latest claim type, claim device) differs, over the last 7 days cut 10 minutes
 before now; the query groups by reader and tool.
@@ -1310,13 +1310,13 @@ A device is alive for 30 minutes after any `event_log` row it logged (`usage`, `
 `requeued`, `merged`, `abandoned` or `closed`.
 
 The pipeline-bound part and the B-or-gate rule that needed it are gone from this query: they read the
-runs of a pipeline source that no longer exists. `callum-flow-evaluate`'s `waiting` section keeps the
+runs of a pipeline source that no longer exists. `fabriek-evaluate`'s `waiting` section keeps the
 B-or-gate call with nothing pipeline-bound (see below).
 
 Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
 its baseline. The `ready` time therefore comes from each issue's GitHub timeline, the last
 `labeled` `ready` event before the claim. Collect them with
-`callum-flow-issue-read --json --timeline <n>` and put them in `ready_times`
+`fabriek-issue-read --json --timeline <n>` and put them in `ready_times`
 below; an issue with no row falls back to its first `ready` event. The SQL needs PostgreSQL 14 or
 later (multiranges). It is the twin of the tool's `waiting` section: the tool also clips the
 "alive" window at the report's end, which the SQL does not. The transitions come within two minutes
@@ -1402,7 +1402,7 @@ ORDER BY repo, issue;
 
 Sum the columns for totals. `sum(dispatcher_bound_other_idle) / sum(dispatcher_bound)` is the share of
 dispatcher-bound time with another device idle. The B-or-gate call is
-`callum-flow-evaluate`'s `waiting` section's `decision`: `B` when more
+`fabriek-evaluate`'s `waiting` section's `decision`: `B` when more
 than 50% of the wait was dispatcher-bound with another device idle and `gate` otherwise.
 
 ## 7a. How waits end
@@ -1541,7 +1541,7 @@ notes (the retry) and in the decision log. The answer script's refusals show onl
 
 ## 8. Implementer model comparison
 
-Sonnet against Opus as the implementer, from the split `callum-flow-implementer-route` makes (see the
+Sonnet against Opus as the implementer, from the split `fabriek-implementer-route` makes (see the
 [factory event log reference](../images/base/README.md#factory-event-log)). Only issues the hash
 routed count: an issue with any `label`, `default` or `fallback` route, or routed to both models (the
 share changed while it was in flight), is left out. Each issue counts from its first
@@ -1568,7 +1568,7 @@ The medians come from (a) in code, not from SQL: the median seconds of `reviewin
 
 The implementer's own token spend is in this database from the loop that writes it on (see
 [Tokens per merged issue](#tokens-per-merged-issue), per issue, model and role); for older issues read it
-from the implementer rows of the `spend` section of `callum-flow-evaluate`, which has one row per role and model. A random split
+from the implementer rows of the `spend` section of `fabriek-evaluate`, which has one row per role and model. A random split
 balances easy and hard issues only over many of them, so size the noise before reading a gap as real:
 run the query with `routed` replaced by a split of past building transitions by issue parity (both
 halves on the same model), and treat a gap no bigger than that one as noise. To narrow to one repo or
@@ -1650,9 +1650,9 @@ ORDER BY model;
 
 ## 8b. Designer model comparison
 
-The design step runs on the model `callum-flow-designer-route` picks and logs as `designer_routed`;
+The design step runs on the model `fabriek-designer-route` picks and logs as `designer_routed`;
 when the route cannot run, the loop logs the same event with reason `fallback` and a null
-`sonnet_pct`. Set the share of issues designed by Sonnet with `"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }`
+`sonnet_pct`. Set the share of issues designed by Sonnet with `"env": { "FABRIEK_DESIGNER_SONNET_PCT": "50" }`
 in the repo's `.claude/settings.json`, and keep it fixed while the comparison runs. Only
 hash-routed issues count: an issue with any other reason, or routed to both models, is left out. A
 timed-out route can leave a tool event and a fallback event for one attempt; the hash-only rule
@@ -1703,7 +1703,7 @@ ORDER BY model;
 
 The factory loop v2's effectiveness, as issue #632 asks for it, from `factory.event_log` alone. Every
 query counts a retried event once (see the reading rules above), and all of them apply to any regime
-that logs these types. `callum-flow-evaluate` reports the same numbers over a window (its
+that logs these types. `fabriek-evaluate` reports the same numbers over a window (its
 `interventions`, `judgement_calls`, `claim_completion` and `rounds` sections). Merges, pull requests
 and merge gaps are section 9c.
 
@@ -1723,7 +1723,7 @@ Fleet-level interventions (no `issue`) attach to no issue. A `ci-rerun` flake ro
 A rescue the loop cannot see is recorded by hand, in the native form, with the regime a person works in:
 
 ```sh
-callum-flow-event --type intervention --issue N --regime manual \
+fabriek-event --type intervention --issue N --regime manual \
   --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'
 ```
 
@@ -2197,9 +2197,9 @@ pull request is open before it merges, how often it is replaced or its head move
 long quiet stretches between merges went. Every query reads `factory.event_log` only, counts a
 retried event once by its type's key (a `transition` by `(issue, life, seq)`, a `reviewed` by
 `(issue, round, patch)`, an `intervention` by `(issue, who, cause, fact)`), and takes
-`-v repo=... -v since=...` (merges at or after `since`; `callum-flow-evaluate` also takes the
+`-v repo=... -v since=...` (merges at or after `since`; `fabriek-evaluate` also takes the
 window's end). Each repeats the same first CTEs (`ev`, `sig`, `mg`), so it runs on its own. They
-need `recovered` as a column: migration 0021 lifts it. `callum-flow-evaluate` reports the same
+need `recovered` as a column: migration 0021 lifts it. `fabriek-evaluate` reports the same
 numbers as its `merges` (with `per_day_by_kind`), `prs`, `gaps`, `size` and `overlap` sections, from the
 new events only. The size and overlap blocks (#8 to #11) read the `merged` event's `files`, `file_lines`,
 `additions` and `deletions` (migration 0028).
@@ -2554,7 +2554,7 @@ ORDER BY g.gap_no;
 ```
 
 **Unrecorded merges the sweep logged** (run only; cbundy/dev-system#752): the merges to the default
-branch that no `merged` event recorded and `callum-flow-sweep` (rule 7) logged afterwards, per repo and
+branch that no `merged` event recorded and `fabriek-sweep` (rule 7) logged afterwards, per repo and
 week, split by whether the sweep tied the merge to an issue. Takes `-v repo=... -v since=...`.
 
 ```sql
@@ -2639,7 +2639,7 @@ ORDER BY repo, day, regime, merged_by, recovered;
 ```
 
 **What is a code file** (used by the size, overlap and hottest-files blocks below, and by
-`callum-flow-evaluate`'s `NON_CODE_RE`, which these blocks repeat literally): a path is not a code file when
+`fabriek-evaluate`'s `NON_CODE_RE`, which these blocks repeat literally): a path is not a code file when
 it ends in `.md`; its base name is `CHANGELOG` (with or without an extension) or `VERSION`; it is under a
 `release-notes/` directory; or its base name is one of `package.json`, `package-lock.json`,
 `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.toml`, `Cargo.lock`, `go.mod`, `go.sum`,
@@ -3037,15 +3037,15 @@ GROUP BY repo, week, train, train_reason
 ORDER BY week DESC, train, train_reason;
 ```
 
-`callum-flow-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
+`fabriek-evaluate` reads `claimed` from its input, so a fleet export cut at `since` can make an issue
 claimed before `since` read unlinked and shorten its overlap window; the saved queries above look at all
 time.
 
 ## 10. Releases
 
 Reads the `released` and `milestone_state` events and loop_entry's `wake` and `decision`. The
-factory loop writes them: rule O4 logs each new release tag through `callum-flow-released`, a device's
-push loop is the second producer (`callum-flow-released --collect` writes the `released` event a repo's CI
+factory loop writes them: rule O4 logs each new release tag through `fabriek-released`, a device's
+push loop is the second producer (`fabriek-released --collect` writes the `released` event a repo's CI
 attached to its GitHub Release), and rule
 O5 logs one `milestone_state` per change of the Next release milestone's reading (docs/factory-loop/v2/SPEC.md
 11). A repo with no Next release milestone logs neither. Count a release once by `(repo, tag)`.
@@ -3873,7 +3873,7 @@ jq -c '.offPass[]? | select(.cmd == "title" and .error != null)' trace-2026-10-2
 
 ## Shadow runs (source switch)
 
-Shadow is opt-in for `callum-flow-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
+Shadow is opt-in for `fabriek-evaluate` and `heartbeat-state` since their default moved to `new` on 2026-10-18 ([replay.md](factory-events/replay.md#defaults-moved-to-new)); set `--source shadow` to record. Records of the source switch's shadow mode ([replay.md](factory-events/replay.md#source-switch)) are
 kept per device in `factory/.shadow/<tool>.jsonl` under the events folder. The exceptions write `shadow_read` events instead and are read by [6b](#6b-reader-shadow-compares): the claim tools, and the factory loop's record rebuild (`eventsSource`, written only when set to `shadow`, as the claim tools' are). Per tool since a given time:
 runs, clean runs (`differences == 0` and no `new_error`), runs with differences, runs with a new error,
 and the most frequent differing paths:
@@ -3890,7 +3890,7 @@ jq -s --arg since 2026-10-18T00:00:00Z '
   })' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/*.jsonl
 ```
 
-For one tool, `callum-flow-evaluate`, the share of runs that agree per day, and the most common
+For one tool, `fabriek-evaluate`, the share of runs that agree per day, and the most common
 differing paths (a run whose new side was skipped or failed has `new_error` set and is not counted as agreeing):
 
 ```sh
@@ -3903,7 +3903,7 @@ jq -s --arg since 2026-10-18T00:00:00Z '
 ```
 
 For `heartbeat-state` (it runs on every beat, so its agreeing runs are sampled: a clean record is written at most once per
-`CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600, while every difference and every failed new read is
+`FABRIEK_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600, while every difference and every failed new read is
 written), per day: records, those with differences, those with a new error, the most common differing paths and the
 slowest new read:
 
@@ -3918,10 +3918,10 @@ jq -s --arg since 2026-10-18T00:00:00Z '
   })' "${CALLUM_EVENTS_DIR:-/persist/events}"/factory/.shadow/heartbeat-state.jsonl
 ```
 
-## Offline computation: `callum-flow-evaluate`
+## Offline computation: `fabriek-evaluate`
 
-`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--events <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/callum-flow-evaluate`)
+`fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
+[--events <file>] [--ready-times <file>] [--regime <value>]` (base image, `images/base/fabriek-evaluate`)
 computes the numbers of queries 1 to 4, 6, 7 and 9 for a time window from an events file (`--events`,
 default the local event log; a `factory.events` export covers every device), plus token spend, waste
 numbers from Claude Code transcripts. It reads no no-mistakes data. It reads the
@@ -3943,7 +3943,7 @@ export is passed (see the skill).
   `pipeline:<step>` rows.
 - `per_device` (query 4, plus claims and `claim_lost` per device) and `claims` (query 6:
   `double_claims`, `claim_lost`, `reclaimed`, `stuck`) read each event's `device`. The stuck test
-  is evaluated at the window's end; its lease comes from `CALLUM_FLOW_LEASE_MINUTES` (default 120).
+  is evaluated at the window's end; its lease comes from `FABRIEK_LEASE_MINUTES` (default 120).
 - `waiting` (query 7) gives each merged issue's split and the totals, `other_idle_pct_of_wait`
   and a `decision`: `B` when more than 50% of the wait was dispatcher-bound with another device
   idle, `gate` otherwise.
@@ -3974,7 +3974,7 @@ export is passed (see the skill).
   read `n/a` when no merge has `files`, and the code-only line stats read `n/a` when none has
   `file_lines`. Evaluate reads `claimed` from its input, so a fleet export cut at `since` can make an
   issue claimed before `since` read unlinked and shorten its overlap window.
-- `--source old|new|shadow` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store
+- `--source old|new|shadow` (else `FABRIEK_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store
   ([source switch](factory-events/replay.md#source-switch)). `old` is the behaviour above. `new` reads the
   new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<name>.jsonl`, or with
   `--new-events <file>` from a file of `factory.event_log` rows (`--events` is ignored under `new`).
@@ -4045,9 +4045,9 @@ from migration 0021. The fleet export is
 
 An image that lags the writers skips an event whose type or version `factory-event-shapes.json` does not
 list as current, and counts it, instead of failing the read. See what was skipped with
-`callum-flow-factory-state --format json | jq .skipped_events` (`derived: true` means the `factory.issue_state` view reads
+`fabriek-factory-state --format json | jq .skipped_events` (`derived: true` means the `factory.issue_state` view reads
 that type, so a state may be stale), and
-`callum-flow-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
+`fabriek-evaluate --source new --format json | jq '.sources[] | select(.kind == "new-events-skipped")'`
 (`path` is `<type> v<N>`, `rows` the count). `heartbeat-state` prints the same as `skipped_events`. The loop's reaction is in "Readers behind the loop".
 
 ### Scope
@@ -4081,7 +4081,7 @@ its `<toplevel>--*` worktree folders, and any `--projects-dir`. It makes no netw
 - **Idle wake**: a non-owner wake with at least one turn and no action call. Action calls are
   `Agent`, `Edit`, `Write`, or a `Bash` call matching `gh (issue|pr) (create|comment|edit|merge|close|ready)`,
   `gh workflow run`, `git (commit|push|rebase)`, `axi (run|respond|abort)` or
-  `callum-flow-(claim|merge|event|fix-linkage)`.
+  `fabriek-(claim|merge|event|fix-linkage)`.
 - **Re-arm**: an idle wake whose only calls relaunch a Monitor or a background `Bash` (calls to
   `ToolSearch` and `TaskStop` alongside are ignored). Counted within idle wakes.
 - **Stale wake**: a notification for a task id that already notified `completed`, or whose text

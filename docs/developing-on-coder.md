@@ -59,7 +59,7 @@ For changes in these areas, the evidence is the PR's CI run, never a local claim
 
 The dev image includes a PostgreSQL 17 server (no system cluster, not started), so the
 metrics SQL in `docs/metrics.md` (checked by `npm test` against a throwaway factory database, in
-`tests/metrics-queries.test.js`) and `callum-flow-factory-state` can be checked against a
+`tests/metrics-queries.test.js`) and `fabriek-factory-state` can be checked against a
 local throwaway server without Docker. Section 9 in image CI is still the gate for the latter.
 
 ```sh

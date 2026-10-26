@@ -15,7 +15,7 @@
     "why_parts": { "type": ["string", "null"], "description": "split: why the boundaries between the parts fall where they do; null otherwise." },
     "why_order": { "type": ["string", "null"], "description": "split: why the blockedBy order is what it is, or that the parts are independent; null otherwise." },
     "child_whys": { "type": ["array", "null"], "items": { "type": "string" }, "description": "split: what makes each new issue a part of its own, in the order of split_into; null otherwise." },
-    "stage": { "type": ["string", "null"], "description": "reconcile and rejected: the v2 state (building, reviewing, merge-queue and so on) callum-flow-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise." },
+    "stage": { "type": ["string", "null"], "description": "reconcile and rejected: the v2 state (building, reviewing, merge-queue and so on) fabriek-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise." },
     "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise.", "x-column": true },
     "branch": { "type": ["string", "null"], "description": "The abandoned work's branch, when known.", "x-column": true },
     "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The abandoned work's pull request, when there is one.", "x-column": true },

@@ -14,7 +14,7 @@ Nothing here runs in CI or in `npm test`. The shell scripts and the JavaScript a
   `.claude/factory-loop.json` (gate commands, K = 2). Its clean state is the tag `drill-base`.
 - **Test loop** in the Coder workspace `dev-system-testbed-loop`. The session runs the branch build
   from a dedicated checkout `/persist/claude/loop/dev-system-v2` (plugins `factory-loop`,
-  `factory-loop-workspace` and `callum-flow` loaded from there with `CLAUDE_CODE_PLUGIN_DIRS`),
+  `factory-loop-workspace` and `fabriek` loaded from there with `CLAUDE_CODE_PLUGIN_DIRS`),
   in the scratch repo's checkout `/workspaces/dev-system-scratch`, with planner v2. Its loop dir is
   `/persist/claude/factory-loop/cbundy__dev-system-scratch` (decision log, companion log), its
   config is `/persist/claude/factory-loop/config.json`, its events go to
@@ -73,7 +73,7 @@ expected events and interventions appear in the events, and no other interventio
 | Outside merge | `drills/outside-push.sh <label>` while a PR is in review, or while the queue head waits on CI. |
 | Conflict pair | Two issues that edit the same lines of the same file. |
 | Parked question | An issue whose body tells the designer to ask the owner a decision; then answer on the issue and remove `factory:parked`. |
-| Ghost | `callum-flow-claim <N>` on the workspace for an issue without `ready`, then add a `factory:*` label by hand. |
+| Ghost | `fabriek-claim <N>` on the workspace for an issue without `ready`, then add a `factory:*` label by hand. |
 | Stop gate | An issue that asks the builder to commit failing tests and end its turn before implementing. |
 | Usage tier | Lower `usageSlowPct`, `usageStopNewPct` and `usageStopAllPct` in the config below current usage during a step, then remove them. |
 | Breaker | Set `reviewerModel` to a model that does not exist, with two issues heading for review. |

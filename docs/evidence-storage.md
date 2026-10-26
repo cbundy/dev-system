@@ -1,7 +1,7 @@
 # Evidence storage
 
 Screenshots, videos and reports for a PR are uploaded to the repo's own private Azure blob container by
-`callum-flow-evidence-upload` (see [its README section](../images/base/README.md#callum-flow-evidence-upload)).
+`fabriek-evidence-upload` (see [its README section](../images/base/README.md#fabriek-evidence-upload)).
 Each repo has one container and one SAS pair, so a credential can never read another repo's evidence. The
 workspace name is part of the blob path (`<owner>/<repo>/<workspace>/<dest>/<file>`), not of the container.
 
@@ -44,5 +44,5 @@ GitHub Actions sets the environment instead: `ARTIFACT_CONTAINER_URL`, `ARTIFACT
 
 ## Checking
 
-`callum-flow-evidence-upload --check` in the checkout validates the setup without uploading; `dev-doctor` runs it
+`fabriek-evidence-upload --check` in the checkout validates the setup without uploading; `dev-doctor` runs it
 and reports OK, a WARN when nothing is configured (exit 78), or a FAIL when the setup is wrong (exit 1).

@@ -122,6 +122,7 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
   assert.ok(allow.includes("Bash(treehouse get *)"));
   assert.ok(allow.includes("Bash(gh pr view *)"));
   assert.ok(allow.includes("Bash(callum-flow-issue-read *)"));
+  assert.ok(allow.includes("Bash(fabriek-issue-read *)"));
 
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
@@ -570,7 +571,7 @@ test("settings.json update with no baseline keeps every key the template does no
   const repo = initRepo(t);
   editSettings(repo, (s) => {
     s.extraKnownMarketplaces.callum.autoUpdate = false;
-    s.enabledPlugins["callum-flow@callum"] = false;
+    s.enabledPlugins["fabriek@callum"] = false;
   });
   fs.rmSync(path.join(repo, ".callum-dev/baseline/.claude/settings.json"));
 
@@ -579,7 +580,45 @@ test("settings.json update with no baseline keeps every key the template does no
 
   const merged = JSON.parse(read(repo, ".claude/settings.json"));
   assert.equal(merged.extraKnownMarketplaces.callum.autoUpdate, false);
-  assert.equal(merged.enabledPlugins["callum-flow@callum"], true, "template-defined key wins");
+  assert.equal(merged.enabledPlugins["fabriek@callum"], true, "template-defined key wins");
+});
+
+// dev-system#1360: the template moved from callum-flow@callum to fabriek@callum. A consumer
+// must end up with fabriek only, never both names enabled, with and without a baseline.
+test("update moves a callum-flow consumer to fabriek only, keeping repo keys and both allow groups", (t) => {
+  const repo = initRepo(t);
+  const oldSettings = (s) => {
+    delete s.enabledPlugins["fabriek@callum"];
+    s.enabledPlugins["callum-flow@callum"] = true;
+    s.enabledPlugins["other@market"] = true;
+    s.permissions.allow = s.permissions.allow.filter((e) => !e.startsWith("Bash(fabriek-"));
+  };
+  editSettings(repo, oldSettings);
+  const baselineFile = path.join(repo, ".callum-dev/baseline/.claude/settings.json");
+  const baseline = JSON.parse(fs.readFileSync(baselineFile, "utf-8"));
+  delete baseline.enabledPlugins["fabriek@callum"];
+  baseline.enabledPlugins["callum-flow@callum"] = true;
+  fs.writeFileSync(baselineFile, JSON.stringify(baseline, null, 2) + "\n");
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.deepEqual(merged.enabledPlugins, { "fabriek@callum": true, "other@market": true });
+  assert.ok(merged.permissions.allow.includes("Bash(fabriek-issue-read *)"));
+  assert.ok(merged.permissions.allow.includes("Bash(callum-flow-issue-read *)"));
+});
+
+test("update with no baseline still leaves only fabriek@callum enabled", (t) => {
+  const repo = initRepo(t);
+  editSettings(repo, (s) => {
+    s.enabledPlugins["callum-flow@callum"] = true;
+  });
+  fs.rmSync(path.join(repo, ".callum-dev/baseline/.claude/settings.json"));
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.deepEqual(merged.enabledPlugins, { "fabriek@callum": true });
 });
 
 // The other half of the union: an entry the template drops (as dev-system#58 dropped

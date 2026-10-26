@@ -24,7 +24,10 @@
   // The GitHub authors the factory trusts (cbundy/dev-system#307), forwarded from the
   // host: export CALLUM_FLOW_TRUSTED_AUTHORS=<login>:<numeric id> (comma-separated for
   // more than one) before starting the container. The image bakes no list, so unset or
-  // malformed, dev-doctor FAILs and callum-flow-issue-read refuses every read.
+  // malformed, dev-doctor FAILs and fabriek-issue-read refuses every read. The image reads
+  // it as FABRIEK_TRUSTED_AUTHORS (filled from this name). The forwarded name stays the old one
+  // until the aliases are removed (cbundy/dev-system#1361): forwarding an unset
+  // FABRIEK_TRUSTED_AUTHORS would give an empty value that wins and fails every read closed.
   "containerEnv": {
     "CALLUM_FLOW_TRUSTED_AUTHORS": "${localEnv:CALLUM_FLOW_TRUSTED_AUTHORS}"
   },

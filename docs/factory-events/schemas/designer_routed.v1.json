@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "designer_routed.v1.json",
   "title": "designer_routed",
-  "description": "The model for the issue's design step was chosen. Written by callum-flow-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.",
+  "description": "The model for the issue's design step was chosen. Written by fabriek-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

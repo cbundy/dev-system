@@ -78,7 +78,7 @@ keeps them out of the shipped plugin.
 
 ### D-09 One new event state, `loop`, for the loop's own transitions (owner call)
 
-- **Decision**: `callum-flow-event` gains one state, `loop`, with `kind=... key=... status=...`
+- **Decision**: `fabriek-event` gains one state, `loop`, with `kind=... key=... status=...`
   in its note. The loop logs it for agent starts and ends, wakes and their answers (with the
   wake's cause), owner notices and rate-cap holds. CLI work already logs its own events and gets
   no `loop` event. The ledger still lives in `$.store`, and a lost store is rebuilt exactly from
@@ -89,7 +89,7 @@ keeps them out of the shipped plugin.
   adjudicator started, and when and why the model was woken, without the loop's local files. The
   state gives start-to-answer timings, a trail of when and why the model was involved, and an
   exact rebuild after a lost store. It only adds to the vocabulary; each reader of the event log
-  (`callum-flow-factory-state`, metrics, the evaluate tool) is checked to ignore it, or use it,
+  (`fabriek-factory-state`, metrics, the evaluate tool) is checked to ignore it, or use it,
   when the state ships.
 
 ### D-10 Observe mode sends side-effect events to a sink
@@ -97,7 +97,7 @@ keeps them out of the shipped plugin.
 - **Decision**: every command run in observe mode gets `CALLUM_EVENTS_DIR=<loop dir>/sink-events`
   (v2 SPEC 13.11.1).
 - **Alternatives**: skip the CLIs that log, or add a no-log flag to each.
-- **Why**: `usage-check.sh`, the `--once` modes and `callum-flow-issue-read` all log as a side
+- **Why**: `usage-check.sh`, the `--once` modes and `fabriek-issue-read` all log as a side
   effect. One environment variable keeps all of them out of the live event log without touching
   their code, and the sink file is itself evidence of what the shadow run read.
 
@@ -163,9 +163,9 @@ still keeps the memory file for lessons and context.
 ### D-19 `blocked_by` comes from the issue's dependency summary
 
 - **Decision**: `issue_dependencies_summary.blocked_by` (open blockers) from
-  `callum-flow-issue-read --json <N>` (v2 SPEC 13.3.1).
+  `fabriek-issue-read --json <N>` (v2 SPEC 13.3.1).
 - **Alternatives**: a new `--blocked-by` mode on the reader, or a field in
-  `callum-flow-factory-state`.
+  `fabriek-factory-state`.
 - **Why**: GitHub already returns the count on the issue object through the sanctioned reader
   (checked on 2026-10-12: #470 shows 1). No CLI change is needed.
 
@@ -224,7 +224,7 @@ the spawn cap is runaway protection again rather than a limit on normal work.
 
 ### D-27 Stuck rules show in the title only
 
-`callum-flow-factory-state`'s S1 to S5 flags add `stuck <n>` to the title but send no notice. The
+`fabriek-factory-state`'s S1 to S5 flags add `stuck <n>` to the title but send no notice. The
 skill does not use them, and notices for them would be new behaviour.
 
 ### D-28 Act mode needs the orchestrator role and no old watcher (owner call)
@@ -293,7 +293,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   only those issues, in that order, and leaves work in flight alone. A tracker or epic in the
   list stands for its open sub-issues, nested ones included, in ascending order; they come from
   the tracker's timeline (`sub_issue_added` and `sub_issue_removed`), which
-  `callum-flow-issue-read --timeline` already returns (owner, 2026-10-13). `noNewWork` still
+  `fabriek-issue-read --timeline` already returns (owner, 2026-10-13). `noNewWork` still
   wins.
 - **Alternatives**: (a) let `priority` issues pass `noNewWork`, so "no new work" plus a priority
   means "only these"; (b) express it with `skip` on every other issue.
@@ -369,13 +369,13 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision**: the workspace file takes `toolsDir` (where the watchers and `usage-check.sh`
   live; default the base image's `/usr/local/share/callum-tools`) and `binDir` (put ahead of
-  `PATH`). A `toolsDir` also sets `CALLUM_FLOW_LINKAGE_BIN=<toolsDir>/check-pr-linkage.sh` for every
-  command, so the merge guard's link check runs the checkout's script. Every command also gets the configured labels as `CALLUM_FLOW_READY_LABEL` and
-  `CALLUM_FLOW_IN_DEV_LABEL` (v2 SPEC 13.4.1).
+  `PATH`). A `toolsDir` also sets `FABRIEK_LINKAGE_BIN=<toolsDir>/check-pr-linkage.sh` for every
+  command, so the merge guard's link check runs the checkout's script. Every command also gets the configured labels as `FABRIEK_READY_LABEL` and
+  `FABRIEK_IN_DEV_LABEL` (v2 SPEC 13.4.1).
 - **Alternatives**: wait for a base image release before any act-mode test; fixed image paths.
 - **Why**: the `--once` modes and the `loop` state ship in the image, and no release carries
   them yet; pointing at a checkout's `features/src/callum-tools` and `images/base` lets the
-  testbed start now. Without the label variables, `callum-flow-claim` and `callum-flow-sweep`
+  testbed start now. Without the label variables, `fabriek-claim` and `fabriek-sweep`
   would use their own defaults rather than the repo's settings.
 
 ### D-43 The safety rails fail safe
@@ -411,7 +411,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 ### D-45 The `--once` mode and the `loop` event, as built
 
 - **Decision**: `queue-watch.sh --once` takes only its own options, exits 1 also when `gh` is
-  missing, and logs no `watcher_error`. `callum-flow-event loop` refuses a note without `kind=`,
+  missing, and logs no `watcher_error`. `fabriek-event loop` refuses a note without `kind=`,
   `key=` and `status=`, `--if-changed` skips `loop` lines, and every event-log reader
   (factory-state, evaluate, heartbeat-state, the sweep) treats `loop` as bookkeeping. Loop notes
   leave out free text (v2 SPEC 13.3.4, 13.7.4).
@@ -458,7 +458,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   `treehouse return` empty stdin, never `--force`, and is done only when the slot reads
   `available`. `milestone-expect` puts its reason on one line. `stop-agent` refuses any agent the
   ledger does not hold running (v2 SPEC 13.6.1).
-- **Alternatives**: rely on `CALLUM_FLOW_REPO`, which `gh` does not read; log the event first;
+- **Alternatives**: rely on `FABRIEK_REPO`, which `gh` does not read; log the event first;
   force the return.
 - **Why**: a write can then reach only the configured repo. With the label off first, the event
   records a release that happened and a retry repeats only the label edit; logged first, a failed
@@ -623,7 +623,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   A companion plugin carries what the loop's agents need from the engine. A root test
   (`tests/factory-loop-agents.test.js`) keeps the definitions and the hooks in step, and
   `agent.offer` hides the definitions from the model (v2 SPEC 13.6.1).
-- **Alternatives**: edit the callum-flow definitions, which changes the released orchestrator's
+- **Alternatives**: edit the fabriek definitions, which changes the released orchestrator's
   agents; register the released plugin's agents at load, but no engine API finds another
   plugin's files; answer in text only.
 - **Why**: the engine refuses any call outside an agent's allowlist, so an agent's definition
@@ -642,7 +642,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   Its agents are stopped and its clean slots returned (v2 SPEC 13.3.3, 13.5.1, 13.13).
 - **Alternatives**: (a) hold every action on an issue whose state is not known, which would hold
   a new device's whole first pass; (b) re-read every closed issue on a slow cadence, to notice a
-  reopen; (c) `callum-flow-factory-state --github on`, which reads GitHub every pass outside the
+  reopen; (c) `fabriek-factory-state --github on`, which reads GitHub every pass outside the
   loop's budget and backoff.
 - **Why**: on run 3's first pass, twelve queue reads took the whole budget, so the closed issues
   were never read before plan drove them. Reading them first only delays the queue's reads, by a
@@ -726,7 +726,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-77 The skills-based orchestrator is retired (owner call)
 
-- **Decision**: the `issue-orchestrator` and `implement-issue` skills, the five `callum-flow`
+- **Decision**: the `issue-orchestrator` and `implement-issue` skills, the five `fabriek`
   agents (designer, explorer, implementer, fixer, adjudicator) and the `orchestrator` Coder
   template are removed. The factory loop is the only orchestrator. The manual path is a person
   working in a worktree, running the canonical commands and opening a plain PR that links its

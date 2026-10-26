@@ -2,7 +2,7 @@
 #
 # Plain-shell test for coder/dev-system/wind-down.sh, the Coder stop script of the loop template.
 # It runs the script against a temp CLAUDE_CONFIG_DIR with fake loop dirs, a fake
-# callum-flow-event that records each --data, a fake heartbeat, and a background fake "loop"
+# fabriek-event that records each --data, a fake heartbeat, and a background fake "loop"
 # that writes the status files each case scripts.
 # shellcheck disable=SC2016,SC2034 # fake_loop bodies are eval'd later; KEYS is used there
 set -eu
@@ -32,7 +32,7 @@ trap cleanup EXIT
 bin=$tmp/bin
 mkdir -p "$bin"
 # Records "<repo><TAB><data>" per call in $EVENTS.
-cat > "$bin/callum-flow-event" <<'EOF2'
+cat > "$bin/fabriek-event" <<'EOF2'
 #!/bin/sh
 repo= data=
 while [ $# -gt 0 ]; do
@@ -48,7 +48,7 @@ cat > "$bin/heartbeat" <<'EOF2'
 #!/bin/sh
 echo "$*" >> "$HEARTBEAT_CALLS"
 EOF2
-chmod +x "$bin/callum-flow-event" "$bin/heartbeat"
+chmod +x "$bin/fabriek-event" "$bin/heartbeat"
 
 # setup <case>: a fresh config dir, workspaces dir and record files; $L is the loop dir of
 # cbundy/demo.
@@ -315,21 +315,34 @@ cut -f1 "$EVENTS" | sort | tr '\n' ' ' | grep -qx 'cbundy/demo cbundy/other ' ||
 kept "$L"
 kept "$L2"
 
-# 11. callum-flow-event missing: a warning, exit 0.
+# 11. Neither fabriek-event nor callum-flow-event on PATH: a warning, exit 0.
 case_name=no-event-cli
 setup no-event-cli
 : > "$CFG/factory-loop/OFF"
-rm "$bin/callum-flow-event"
+mv "$bin/fabriek-event" "$bin/fabriek-event.off"
 run_script WIND_DOWN_CAP_MS=60000 PATH="/usr/bin:/bin"
+mv "$bin/fabriek-event.off" "$bin/fabriek-event"
 [ "$rc" -eq 0 ] || fail "$case_name: exit status $rc"
-case "$err" in *callum-flow-event*) ;; *) fail "$case_name: no warning on stderr: $err" ;; esac
+case "$err" in *fabriek-event*callum-flow-event*) ;; *) fail "$case_name: no warning on stderr: $err" ;; esac
 [ "$(cat "$HEARTBEAT_CALLS")" = --final ] || fail "$case_name: heartbeat not called"
 
-# 12. The payload passes the real callum-flow-event shapes check.
+# 11b. Only the old callum-flow-event exists (an image from before the rename): it is used.
+case_name=old-event-cli
+setup old-event-cli
+: > "$CFG/factory-loop/OFF"
+mv "$bin/fabriek-event" "$bin/callum-flow-event"
+run_script WIND_DOWN_CAP_MS=60000 PATH="$bin:/usr/bin:/bin"
+mv "$bin/callum-flow-event" "$bin/fabriek-event"
+[ "$rc" -eq 0 ] || fail "$case_name: exit status $rc"
+case "$err" in *warning*) fail "$case_name: warning on stderr: $err" ;; esac
+[ "$(cut -f1 "$EVENTS")" = cbundy/demo ] || fail "$case_name: the old command recorded no event: $(cat "$EVENTS")"
+
+# 12. The payload passes the real fabriek-event shapes check.
 case_name=real-event
 setup real-event
 : > "$CFG/factory-loop/OFF"
-ln -s "$REAL_EVENT" "$bin/callum-flow-event"
+rm "$bin/fabriek-event"
+ln -s "$REAL_EVENT" "$bin/fabriek-event"
 events_dir=$case_dir/events-dir
 mkdir -p "$events_dir"
 run_script WIND_DOWN_CAP_MS=60000 CALLUM_EVENTS_DIR="$events_dir" DEV_SYSTEM_SHARE="$ROOT/images/base"

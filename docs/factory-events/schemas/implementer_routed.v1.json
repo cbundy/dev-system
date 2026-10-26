@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "implementer_routed.v1.json",
   "title": "implementer_routed",
-  "description": "The model for the issue's build step was chosen. Written by callum-flow-implementer-route before each build. Issues routed by hash are the fair sample for comparing the models.",
+  "description": "The model for the issue's build step was chosen. Written by fabriek-implementer-route before each build. Issues routed by hash are the fair sample for comparing the models.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

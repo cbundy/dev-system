@@ -28,7 +28,7 @@
   (a factory loop agent names it in its answer instead, since its change holds only what the brief asks).
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
   using this repo's e2e visual verification tooling (<REPLACE: path to your repo's capture doc, kept in step with uiCapture in .claude/factory-loop.json, e.g.
-  `docs/e2e-visual-verification.md`, or n/a - no UI for a repo with no UI>), upload each capture with `callum-flow-evidence-upload pr-<N>/<slug> <file>...`
+  `docs/e2e-visual-verification.md`, or n/a - no UI for a repo with no UI>), upload each capture with `fabriek-evidence-upload pr-<N>/<slug> <file>...`
   and attach the printed URLs to the PR description before the PR is considered ready. Commit an image only when it is a
   durable reference image the repo keeps.
 - Keep PR descriptions brief and concise. They are reviewed by a head of engineering, not an engineer,
@@ -38,7 +38,7 @@
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
   A factory loop agent fixes it only when it blocks the gates, and otherwise names it in its answer's summary.
 - Questions about factory latency, throughput or pipeline cost are answered from factory data via the
-  callum-flow `query-factory-data` skill, not from guesses.
+  fabriek `query-factory-data` skill, not from guesses.
 - When writing to the owner (chat replies, status updates, orchestrator reports, handoffs), lead with what
   needs to happen next and who has to do it. Name each piece of work by what it does, with the issue number at
   most a parenthetical and never the subject of a sentence. Make each issue or PR reference a markdown link to it,

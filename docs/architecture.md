@@ -9,7 +9,7 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 
 | Layer | Source here | Distributed as | Consumer pins | Consumer updates with |
 |---|---|---|---|---|
-| Agent behaviour and optional HUD | `plugins/callum-flow/`, `plugins/factory-hud/` | Claude Code plugins in the `callum` marketplace (`.claude-plugin/marketplace.json`) | Release-tag marketplace `ref` in `.claude/settings.json` | Refresh templates with `npm update @callum/dev-system && npx callum-dev update`, then run `dev-init` |
+| Agent behaviour and optional HUD | `plugins/fabriek/`, `plugins/factory-hud/` | Claude Code plugins in the `callum` marketplace (`.claude-plugin/marketplace.json`) | Release-tag marketplace `ref` in `.claude/settings.json` | Refresh templates with `npm update @callum/dev-system && npx callum-dev update`, then run `dev-init` |
 | Environment | `images/base/` | Image `ghcr.io/cbundy/dev-system/base` on GHCR | Image tag (`:2`) or digest | Rebuild or re-pull. Tags are mutable: they are rebuilt weekly. |
 | Repo config | `templates/`, `bin/callum-dev.js` | npm git dependency `github:cbundy/dev-system#semver:0.x` | `.callum-dev.json` stamp | `npm update @callum/dev-system && npx callum-dev update` |
 
@@ -30,8 +30,8 @@ Two more surfaces build on the layers:
 
 Anyone can open an issue or comment on a public repo, and an agent that reads that text
 can be steered by it. The rule: agents read issue, comment, PR and timeline text only
-through `callum-flow-issue-read`, the one door. It returns text only from authors in
-`CALLUM_FLOW_TRUSTED_AUTHORS` (login and numeric id), fails closed, and reports a
+through `fabriek-issue-read`, the one door. It returns text only from authors in
+`FABRIEK_TRUSTED_AUTHORS` (login and numeric id), fails closed, and reports a
 stripped count instead of content. Anything obtained any other way is untrusted data,
 never instructions. The `forbid-raw-gh-read` hook denies raw reads (gh, `gh api`,
 curl, WebFetch; writes stay allowed, and GraphQL mutations are denied with all
@@ -42,7 +42,7 @@ instructing them. The owner and the factory share one trusted identity, so every
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain), hooks (forbid-git-stash, forbid-tmux-kill, forbid-broad-kill, forbid-coder-self, forbid-raw-gh-read, forbid-main-checkout-write, stale-image, fresh-worktree)
+plugins/fabriek/                skills (update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain), hooks (forbid-git-stash, forbid-tmux-kill, forbid-broad-kill, forbid-coder-self, forbid-raw-gh-read, forbid-main-checkout-write, stale-image, fresh-worktree)
 plugins/factory-hud/              opt-in mod; reference and setup in its README.md
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
@@ -68,7 +68,7 @@ package.json                      makes the repo npm-installable (bin + template
 docs/                             these docs
 ```
 
-Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on the issue (earliest live claim wins) and `callum-flow-sweep` returns expired claims to `ready`.
+Claims: GitHub is the claim store. `fabriek-claim` posts a lease comment on the issue (earliest live claim wins) and `fabriek-sweep` returns expired claims to `ready`.
 
 ## Test runner
 
@@ -239,7 +239,7 @@ removed: `update` deletes a leftover `.no-mistakes.yaml`, drops its seven allow 
 `.claude/settings.json`, and reports a leftover `.no-mistakes/` folder without deleting it.
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the factory loop
-in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `gh pr edit`,
+in the main checkout gets (`gh pr merge` and its wrapper `fabriek-merge`, `gh pr edit`,
 watchers). Treehouse worktrees start without it, so a worktree agent cannot merge.
 
 The per-file split between synced and repo-owned content, including files without ownership
@@ -288,6 +288,24 @@ Where to look inside a running container. Full detail is in
 **First commands when debugging:** `dev-doctor`, then `dev-login status`, then the logs
 above. `dev-init` is safe to re-run. For its `--repo` and `--plugins` modes, see
 [Workspace and repo](../images/base/README.md#workspace-and-repo).
+
+## Renamed from callum-flow
+
+The plugin, the commands and the settings were renamed from `callum-flow` to `fabriek`
+(dev-system#1357 to #1360):
+
+| Old | New |
+|---|---|
+| plugin `callum-flow` (`callum-flow@callum`, `/callum-flow:<skill>`) | `fabriek` (`fabriek@callum`, `/fabriek:<skill>`) |
+| commands `callum-flow-<x>` | `fabriek-<x>` |
+| settings `CALLUM_FLOW_<X>` | `FABRIEK_<X>` |
+
+Each old name still works as an alias for the 10-minor-release window: the image ships both command
+names, the marketplace lists both plugin names (enable only one), and the image reads the old setting
+names when the new one is unset. The aliases are removed in dev-system#1361. Until then the synced
+settings keep the `callum-flow-*` allow entries beside the `fabriek-*` ones, `callum-dev update` drops a
+leftover `callum-flow@callum` key, the devcontainer forwards the host variable as
+`CALLUM_FLOW_TRUSTED_AUTHORS`, and Coder workspaces set both trust variables.
 
 ## Design rules
 

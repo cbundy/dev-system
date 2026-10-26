@@ -9,7 +9,7 @@
   "required": ["reader", "tool", "compared", "differences", "live_differences", "diff_keys", "old_ok", "new_ok", "settle_seconds", "detail"],
   "properties": {
     "reader": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Which reader was compared, an open family such as claim-events.", "x-column": true },
-    "tool": { "type": "string", "minLength": 1, "description": "The command that made the compare, such as callum-flow-sweep.", "x-column": true },
+    "tool": { "type": "string", "minLength": 1, "description": "The command that made the compare, such as fabriek-sweep.", "x-column": true },
     "compared": { "type": "integer", "minimum": 0, "description": "How many keys were compared.", "x-column": true },
     "differences": { "type": "integer", "minimum": 0, "description": "How many keys whose answers differ, with both sides cut at the settle time.", "x-column": true },
     "live_differences": { "type": "integer", "minimum": 0, "description": "How many keys whose answers differ on everything read, push lag included.", "x-column": true },
@@ -22,8 +22,8 @@
     "out_of_scope": { "type": ["integer", "null"], "minimum": 0, "description": "How many events the floor left out of both sides, or null when the reader does not count them." }
   },
   "examples": [
-    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null },
-    { "reader": "claim-events", "tool": "callum-flow-sweep", "compared": 42, "differences": 2, "live_differences": 3, "diff_keys": ["o/r#12", "o/r#15"], "old_ok": true, "new_ok": false, "settle_seconds": 120, "detail": "o/r#12 old: claimed by dev-a, new: ready" },
+    { "reader": "claim-events", "tool": "fabriek-sweep", "compared": 42, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null },
+    { "reader": "claim-events", "tool": "fabriek-sweep", "compared": 42, "differences": 2, "live_differences": 3, "diff_keys": ["o/r#12", "o/r#15"], "old_ok": true, "new_ok": false, "settle_seconds": 120, "detail": "o/r#12 old: claimed by dev-a, new: ready" },
     { "reader": "loop-facts", "tool": "factory-loop", "compared": 191, "differences": 0, "live_differences": 0, "diff_keys": [], "old_ok": true, "new_ok": true, "settle_seconds": 120, "detail": null, "scope_floor": "2026-10-17T13:26:02Z", "out_of_scope": 197 }
   ]
 }

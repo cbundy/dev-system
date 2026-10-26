@@ -12,7 +12,7 @@
     }
   },
   "enabledPlugins": {
-    "callum-flow@callum": true
+    "fabriek@callum": true
   },
   "permissions": {
     "allow": [
@@ -27,6 +27,23 @@
       "Bash(gh pr checks *)",
       "Bash(gh pr list *)",
       "Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)",
+      "Bash(fabriek-event *)",
+      "Bash(fabriek-merge-guard *)",
+      "Bash(fabriek-rollout *)",
+      "Bash(fabriek-claim)",
+      "Bash(fabriek-claim *)",
+      "Bash(fabriek-milestone)",
+      "Bash(fabriek-milestone *)",
+      "Bash(fabriek-implementer-route *)",
+      "Bash(fabriek-designer-route *)",
+      "Bash(fabriek-sweep)",
+      "Bash(fabriek-sweep *)",
+      "Bash(fabriek-evaluate *)",
+      "Bash(fabriek-evidence-upload *)",
+      "Bash(fabriek-capture *)",
+      "Bash(fabriek-factory-state)",
+      "Bash(fabriek-factory-state *)",
+      "Bash(fabriek-issue-read *)",
       "Bash(callum-flow-event *)",
       "Bash(callum-flow-merge-guard *)",
       "Bash(callum-flow-rollout *)",

@@ -4,7 +4,7 @@ Temporary: this mapping and its code are deleted with the old event path
 ([#656](https://github.com/cbundy/dev-system/issues/656)). Nobody maintains it after the switch.
 
 One function turns one line of today's event log into at most one new event. It runs in two
-places: inside `callum-flow-event` for every old-state call, on the line the writer has just built
+places: inside `fabriek-event` for every old-state call, on the line the writer has just built
 (dual write, [#649](https://github.com/cbundy/dev-system/issues/649); since
 [#1143](https://github.com/cbundy/dev-system/issues/1143) the line itself is no longer written, only the
 translated event is), and over the stored history for the
@@ -12,7 +12,7 @@ replay ([#650](https://github.com/cbundy/dev-system/issues/650)). It is
 [`images/base/factory-event-translate.js`](../../images/base/factory-event-translate.js)
 (built in [#648](https://github.com/cbundy/dev-system/issues/648)): plain CommonJS with no
 dependencies, so the image carries it and the replay script requires the same file. Inputs are
-today's line keys (the jq object in `images/base/callum-flow-event`, about lines 229-236); outputs follow [`schemas/`](schemas/) and go to the
+today's line keys (the jq object in `images/base/fabriek-event`, about lines 229-236); outputs follow [`schemas/`](schemas/) and go to the
 new log ([README](README.md#where-events-live)).
 
 Rules:
@@ -62,7 +62,7 @@ ISO 8601 with three millisecond digits.
 
 | Today | New | Mapping |
 |---|---|---|
-| `ready` | `ready` | `{}` in replay. A dual write may add `title`, `labels` and `parent` from `callum-flow-event --data`; replay gives none. |
+| `ready` | `ready` | `{}` in replay. A dual write may add `title`, `labels` and `parent` from `fabriek-event --data`; replay gives none. |
 | `claimed` | `claimed` | `lease: <m>` gives `lease_minutes`. A null note (157 early rows) gives 120, the default when they were written. A dual write may add `title`, `labels`, `parent`, `score` and `factors` from `--data`; replay gives none. |
 | `renewed` | `claim_renewed` | as `claimed` |
 | `claim_lost` | `claim_lost` | `held by <dev> since <at>` gives `holder`, `holder_since` and `race` false. `race lost to <dev>` gives `holder` (null for the text "another device"), `holder_since` null and `race` true. |

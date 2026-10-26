@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "claimed.v1.json",
   "title": "claimed",
-  "description": "This device took the claim on the issue: no other device works on it while the lease holds. Written by callum-flow-claim. The claim ends with merged, closed, abandoned or requeued.",
+  "description": "This device took the claim on the issue: no other device works on it while the lease holds. Written by fabriek-claim. The claim ends with merged, closed, abandoned or requeued.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

@@ -82,7 +82,7 @@ The foundation is the base the loop runs on. Section 13 describes it, and the lo
 - **Act.** The loop's executors live in `hooks/v2/act-*.ts` and join `EXECUTORS` (`act.ts`) through
   `hooks/v2/registry.ts`.
 - **Events.** Every event is built by one module, `hooks/v2/events.ts`, and written through
-  `ctx.event` (`act.ts`). `callum-flow-event` has three states of its own (7.1).
+  `ctx.event` (`act.ts`). `fabriek-event` has three states of its own (7.1).
 - **Wakes.** `tell` and `task release` through `wake.ts`. Triage is a spawned agent, not a wake
   (section 15).
 - **Store.** `records:<repo>` (3.3) and `heads:<repo>` (2.4).
@@ -113,24 +113,24 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 
 | Source | Command | Cadence | Notes |
 |---|---|---|---|
-| `factory` | `callum-flow-factory-state --format json --github off` | every pass | claims, their holders and lapses |
+| `factory` | `fabriek-factory-state --format json --github off` | every pass | claims, their holders and lapses |
 | `facts` | `dev-query --factory` with `NEW_EVENTS_SQL` (`eventsSource` `old`: `dev-query` with `EVENTS_SQL`, 3.3) | every pass | the facts include the three states of the emitter (7.1); which facts are logged is in 7.2 |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | the merge queue's view |
-| `github` | one `callum-flow-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
+| `github` | one `fabriek-issue-read --json --issues N,...` call for the issues due this pass (single `--json N` reads on an image whose reader exits 2 on `--issues`) | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()`; in API-key mode (13.5.2 G3) the session's `cost.usd` and the stored tally instead; on a subscription the cost also feeds the what-if tally, which rides on the `usage` event only | `usageEveryMs` | usage tiers (13.5.2) |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | the slot pool's holders, read without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7). The read also carries the branch's upstream and its ahead and behind counts (null when git prints none) |
-| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag whenever the milestone exists (rule O4; also while a stored record waits on a `tag-contains` condition, even when the milestone does not qualify), and a list of the milestone's closed issues (`--json closedAt`, limit 200) for the oldest `closedAt` (null on a full list of 200 or a failed read; rule O5), both skipped in a GitHub backoff; the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
+| `milestone` | `fabriek-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag whenever the milestone exists (rule O4; also while a stored record waits on a `tag-contains` condition, even when the milestone does not qualify), and a list of the milestone's closed issues (`--json closedAt`, limit 200) for the oldest `closedAt` (null on a full list of 200 or a failed read; rule O5), both skipped in a GitHub backoff; the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>`, `files:<repo>`, `stamps:<repo>` (the intake stamps, `{ v: 1, stamps: { "<issue>": { version, area, needsOwner, touches, at, labels } }, tries?: { "<issue>": { version, outcome, at, reason? } }, owned?: { "<issue>": ["area" \| "needs-decision"] } }`; each entry checked field by field, one that does not read dropped, an absent or malformed key the empty store; written only by the intake run, 13.4.4, as a read-modify-write that keeps keys it does not know) | every pass | the records are in 3.3 |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records; the due records are read up to 4 at once, started in 2.4's order, with results kept in it |
-| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
-| `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `callum-flow-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `fabriek-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records; the due records are read up to 4 at once, started in 2.4's order, with results kept in it |
+| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `fabriek-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
+| `blockers` | only while a starved spell (S1) is `starvedNoticeAfterMs` old: from each queue issue with open blockers, `fabriek-issue-read --json N` for it and for each open blocker of this repo not read yet (its `blocked_by` list), breadth first, at most 40 reads and 8 levels; a blocker of another repo is named, never read | once per spell and 24 h period of it (period `k = floor((spell age - starvedNoticeAfterMs) / 24h)`); none during a GitHub backoff, and it stops at a rate limit | the tree (`V2State.blockers`: per issue its open state, labels, title, open blockers, foreign blockers, and whether its read was refused (exit 3) or failed; a `truncated` flag and an error) that rule S1's starved notice walks for the root blockers. The spell's start is the store's `starved:<repo>`, handed to the plan as `V2State.starvedSince` |
 | `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,headRefOid,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; per listed PR its head commit's time (`gh pr view N --repo R --json headRefOid,commits`, once per head) and its checks (`gh pr checks`, the bucket of each: `fail` or `cancel` is red, `pending` or none reported is pending, else green; with the earliest check start); a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed list read keeps the last reading and shows in `sources`; a failed head or checks read keeps the last reading of the same head, and a new head with none is held as pending, bounded by its window |
 | `train` | only while `mergeTrain` is on and a train is live (a done build with a train commit and no delete): the check runs of the train commit (`gh api repos/R/commits/<sha>/check-runs?per_page=100`, a list shorter than its `total_count` is not read), and, once main's head is not the sha the train was built on, the tree of the head's commit H' and of main's head (`gh api repos/R/commits/<sha> --jq .commit.tree.sha`, once each) | the checks every `prEveryMs`, the trees at once and once; none during a GitHub backoff or after a rate limit met this pass | the merge train (9.8): its CI, and the check that the head's merge left main on H''s tree. A failed read keeps the last reading of the same commit and shows in the reading's source |
 | `main` | act mode only: `gh api repos/R --jq .default_branch` (once per load), `gh api repos/R/commits/<branch> --jq .sha`, `gh api repos/R/commits/<head>/pulls` (only when the head moved), `gh api repos/R/actions/workflows?per_page=100` (the active workflows), for each `gh api repos/R/actions/workflows/<id>/runs?branch=<b>&per_page=10`, then `gh api repos/R/deployments?sha=<head>&per_page=100` (the newest of each environment) and for each `gh api repos/R/deployments/<id>/statuses?per_page=1` | `mainEveryMs`; none during a GitHub backoff or once a rate limit met this pass ends the loop's reads (checked before each call). When skipped or not yet due, the last reading stands | the `main_state` event (7.1, rule M1). Any failed call, or output not understood, fails the whole read: `sources.main` is not ok and the pass carries no reading, so a partial read is never shown as green |
-| `paths` | only while `intakeStamp` is `on`, for each record that is not closed and has a `head`, and only when the default branch is known (`checkout.defaultBranch`): `git fetch` of the base ref, `git fetch origin <head>` when the head is not here (as `callum-flow-patch-id`), then `git diff --name-only --no-renames <merge-base>..<head>`; each path is cut to its first segment, de-duplicated and sorted | once per `<issue> <head>`: a successful read is cached until the head moves; a failed read is null for that record this pass and is tried again on a later pass; nothing is read during a GitHub backoff or once a rate limit ended this pass's reads | the in-flight paths the `overlap` score factor reads (3.5, S1); while `intakeStamp` is `off` no git command runs for it |
-| `flakes` | act mode only: `dev-query --factory --csv -v repo=R -v since=<now - flakeWindowDays>` with the per-flake query of metrics 2d (a gate flake and a CI flake, each once; one row per flake per test with the first row's event id and the test name's hash), then, only when some test has `flakeBugMin` flakes, `callum-flow-issue-read --json --list --label flaky --state open` (the reader lists trusted authors only) for the open flake bugs: number, marker, whether labelled `ready`, the flake ids its body names | `githubEveryMs`, and at once after an action of rule F1 ended; none during a GitHub backoff or after a rate limit | rule F1 (8.5). A missing factory URL (`dev-query` exit 77) is no flakes; any other failure or an unreadable list fails the source, and F1 plans nothing (`V2State.flakes`, `sources.flakes`) |
-| `dualWrite` | act mode only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
+| `paths` | only while `intakeStamp` is `on`, for each record that is not closed and has a `head`, and only when the default branch is known (`checkout.defaultBranch`): `git fetch` of the base ref, `git fetch origin <head>` when the head is not here (as `fabriek-patch-id`), then `git diff --name-only --no-renames <merge-base>..<head>`; each path is cut to its first segment, de-duplicated and sorted | once per `<issue> <head>`: a successful read is cached until the head moves; a failed read is null for that record this pass and is tried again on a later pass; nothing is read during a GitHub backoff or once a rate limit ended this pass's reads | the in-flight paths the `overlap` score factor reads (3.5, S1); while `intakeStamp` is `off` no git command runs for it |
+| `flakes` | act mode only: `dev-query --factory --csv -v repo=R -v since=<now - flakeWindowDays>` with the per-flake query of metrics 2d (a gate flake and a CI flake, each once; one row per flake per test with the first row's event id and the test name's hash), then, only when some test has `flakeBugMin` flakes, `fabriek-issue-read --json --list --label flaky --state open` (the reader lists trusted authors only) for the open flake bugs: number, marker, whether labelled `ready`, the flake ids its body names | `githubEveryMs`, and at once after an action of rule F1 ended; none during a GitHub backoff or after a rate limit | rule F1 (8.5). A missing factory URL (`dev-query` exit 77) is no flakes; any other failure or an unreadable list fails the source, and F1 plans nothing (`V2State.flakes`, `sources.flakes`) |
+| `dualWrite` | act mode only: `fabriek-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -319,12 +319,12 @@ type IssueRecord = {
   step it leaves and its via code from its start, so an entry the reload marks lost still names
   them: the row's events, the park's comment and the breaker read them from there. The next transition of a record waits until its current
   seq's `transition` event is logged, so the trail has no gaps.
-- **A record is made from a done claim.** S1's `claim` action runs `callum-flow-claim`; once its
+- **A record is made from a done claim.** S1's `claim` action runs `fabriek-claim`; once its
   ledger entry is done, the next pass plans row S0, which makes the queued record. A crash in
   between leaves the done entry, so S0 is planned again. A claim that may already hold the issue
   (the claim tool posted, then the adoption's reads failed; or a reload lost it mid-claim) runs
   again under its own key whatever the queue says, since `ready` is gone, and holds its place
-  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim once `claimed` is logged and
+  under the cap until it is done. A retry is safe: `fabriek-claim` keeps its own live claim once `claimed` is logged and
   otherwise makes it fresh.
   A claim never becomes a ghost.
 - **Life.** The start time of the claim action, in base-36 seconds: unique, and needs no counter
@@ -400,7 +400,7 @@ type IssueRecord = {
 - **The one label read.** For a parked record, the `github` source reads the issue directly. A
   read made after the park's `label` action finished (it comes on the next pass, 2.4) that lacks
   `factory:parked` is the unpark signal (4.1). Older reads are ignored. The label list is not used, because it lags behind
-  edits (`images/base/callum-flow-sweep`).
+  edits (`images/base/fabriek-sweep`).
 - **Creation.** Action `label` with op `ensure` once per module load, and again after a label write
   fails with a missing label: `gh label create <name> --repo R --color <c> --description <d>
   --force` for each of the nine (the eight state labels and `factory:rejected`). `--force`
@@ -409,7 +409,7 @@ type IssueRecord = {
   is the claim comment and its `claimed` and `renewed` events; the `factory:*` label shows the
   state. The claim tools change to match (3.6). A closed record's `label` op `clear` removes every
   `factory:*` label, unless another device holds a live claim on the issue: then it removes none,
-  because the winner owns the labels (`images/base/callum-flow-claim`).
+  because the winner owns the labels (`images/base/fabriek-claim`).
 - **The owner's `parked` label.** The owner's own `parked` label
   convention (`skipLabels`, D-17) is unrelated and unchanged.
 
@@ -432,26 +432,26 @@ type IssueRecord = {
 ### 3.6 The claim tools without `In development`
 
 The owner dropped `In development` (section 15). The claim, heartbeat and sweep tools
-(`images/base/callum-flow-claim`, `images/base/callum-flow-sweep`) and the factory-state view
-(`images/base/callum-flow-factory-state`) neither write nor read it:
+(`images/base/fabriek-claim`, `images/base/fabriek-sweep`) and the factory-state view
+(`images/base/fabriek-factory-state`) neither write nor read it:
 
-- **`callum-flow-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
+- **`fabriek-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
   `In development`. A device's own live claim after a restart does the same while this device's
   event log shows it held (its last claim event is `claimed`). Any other own live claim (one
   interrupted before its event, or left behind by `ready`, `reclaimed`, `merged`, `closed` or
   `abandoned`) is deleted and the claim made fresh, so every life starts with one `claimed` event.
-- **`callum-flow-claim --heartbeat`** with no numbers renews this device's live claims on the open
-  issues this device holds, not the label list and not `callum-flow-factory-state` (a `merged` issue
+- **`fabriek-claim --heartbeat`** with no numbers renews this device's live claims on the open
+  issues this device holds, not the label list and not `fabriek-factory-state` (a `merged` issue
   stays in its list with this device as holder). "Holds" is one rule, shared by the heartbeat, the
-  sweep and `callum-flow-claim <N>` (`images/base/claim-events.sh`): this device's event log plus the
+  sweep and `fabriek-claim <N>` (`images/base/claim-events.sh`): this device's event log plus the
   newest claim event per issue in the event store (`factory.events` with the `old` source), ordered by ts; the issue is held when its last
   claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`) is a `claimed` by this
   device. A failed or unconfigured central read falls back to this device's log. The store the rule
-  reads is `CALLUM_FLOW_CLAIM_EVENTS_SOURCE`: `new`, the default (`factory.event_log` through
+  reads is `FABRIEK_CLAIM_EVENTS_SOURCE`: `new`, the default (`factory.event_log` through
   `dev-query --factory` and the new log, where `reclaimed` is `requeued`), or `old` (as above; the way back). H1 passes
   numbers (14.1).
-- **`callum-flow-sweep`.** Its candidates are the issues the event log and factory-state list as
-  live, the list its closed-issue pass already reads (`images/base/callum-flow-sweep`), not the label
+- **`fabriek-sweep`.** Its candidates are the issues the event log and factory-state list as
+  live, the list its closed-issue pass already reads (`images/base/fabriek-sweep`), not the label
   list. Rules: a closed issue logs `closed` when its latest event is not final; an open issue with
   a PR merged on its branch after the newest claim (checked before the lease, whoever holds the
   claim) logs `merged --actor sweep` and the issue is left alone; an open issue whose last claim
@@ -460,12 +460,12 @@ The owner dropped `In development` (section 15). The claim, heartbeat and sweep 
   gets `ready` back, is unassigned, gets a comment and logs `reclaimed`; an open issue with no
   claim comment is left alone. It never touches `factory:*` labels: the loop is their only
   writer, and a record whose claim lapsed is claimed again onto itself (4.1).
-- **`callum-flow-factory-state`.** For an issue whose life has a `transition` event, the label
+- **`fabriek-factory-state`.** For an issue whose life has a `transition` event, the label
   check expects the `factory:*` label of its state. For other issues it checks `ready` only. The
   "GitHub label only" list takes an open issue with a `factory:*` state label (its stage from the
   label) or `ready`, and no events. `factory:rejected` names no stage, and is not flagged on a
   closed record's issue.
-- Neither tool reads `CALLUM_FLOW_IN_DEV_LABEL`.
+- Neither tool reads `FABRIEK_IN_DEV_LABEL`.
 - **`derive.ts`** reads no label: `EVENTS_SQL` and the derivation use events only
   (`EVENTS_SQL` in `derive.ts`), and the records come from events (3.3).
 - **The migration** (6.3) removes `In development` from the issues it touches.
@@ -520,7 +520,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 - **Re-claim.** H1 renews the claim of every record that is not closed. A record whose claim lapsed
   (the `factory` source shows this device's claim lapsed, or a `reclaimed` event was logged, after
   the record's last claim; never the `ready` label list, which lags, 3.4) is claimed again with
-  `callum-flow-claim N`. That keeps the record and its state; exit 3 is `claim-lost`. The re-claim
+  `fabriek-claim N`. That keeps the record and its state; exit 3 is `claim-lost`. The re-claim
   logs the record's current `transition` event again, so readers see the stage at once
   .
 - **Dual write.** While the image writes the new event log (the `dualWrite` source, 2.4; act mode
@@ -530,7 +530,7 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
   per load, and a later transition was written to both logs by the dual-writing image. The event
   keeps the record's own seq, so a rebuild picks the same record from either log. H1 writes the new
   log only: its action carries `target: 'new'` and the event executor adds `--new-only` to
-  `callum-flow-event`, so the old log gets no row (a second row would reach `factory.events` as
+  `fabriek-event`, so the old log gets no row (a second row would reach `factory.events` as
   `via=dual-write` and make the sweep log `closed` again for a closed issue). It runs only on an
   image that offers `--new-only` (the probe above); on an image that dual-writes without it, nothing is
   backfilled, which is better than a duplicate in the old log. No other rule sets a target.
@@ -885,7 +885,7 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   the loop check alike (D-74): the choice is one of the five, the field it needs is present, each
   text is within its limit, and there is no other field. The answer is kept in `answers/`; the
   transition note carries `via=triage:<choice>`.
-- **What it may do.** Read anything: issues and PRs through `callum-flow-issue-read`, the loop
+- **What it may do.** Read anything: issues and PRs through `fabriek-issue-read`, the loop
   dir, the slot, and CI logs with `gh run view --log-failed`. It may not write in the repository,
   push, comment or change labels (the reader role, 10.4).
 
@@ -922,7 +922,7 @@ where S1 claims it as a new life, with two exceptions:
   instead of `ready`, and leaves (6.4).
 
 The owner's first rule, "still labelled `ready` goes back to the queue, otherwise it leaves",
-never put an issue back: claiming removes `ready` (`callum-flow-claim`), so every claimed
+never put an issue back: claiming removes `ready` (`fabriek-claim`), so every claimed
 issue read as not labelled `ready`. The one-shot migration (6.3) requeues nothing: every issue it
 releases leaves (owner, 2026-10-15).
 
@@ -968,7 +968,7 @@ the issues an earlier loop left behind, with that loop's evidence, so the every-
 has to read facts of the earlier loop.
 
 - **Observe by default.** `factory-reconcile --repo R` lists this device's live claims (from
-  `callum-flow-factory-state`) that have no record, and the issues the view shows as live with
+  `fabriek-factory-state`) that have no record, and the issues the view shows as live with
   no live claim and no `ready` label (owner, 2026-10-15): those with no holder at all, in a live
   stage or queued, and those queued after their claim ended or lapsed, whoever made it. No device
   holds them, so nothing else would ever end them (#286, #289, #290, #468 and #469 on dev-system
@@ -1004,10 +1004,10 @@ has to read facts of the earlier loop.
   the label`, approved by issue like the rest (3.6).
 - **When.** Run by the owner, observe first. `--act` fails closed, refusing with exit 1 and
   changing nothing unless `events.ts` writes and reads back the release's and the intervention's
-  note fields and the `callum-flow-event` in use logs an `intervention`.
+  note fields and the `fabriek-event` in use logs an `intervention`.
 - **Nothing is lost.** A slot is returned only once its leftovers are saved or its tree is clean;
   else its issue fails and the slot is left for the owner. Each event is looked for in the log
-  after it is written, since `callum-flow-event` exits 0 when a write fails. One that is not there
+  after it is written, since `fabriek-event` exits 0 when a write fails. One that is not there
   fails its issue (exit 1), and its argv is kept in `<loop dir>/unlogged-events.jsonl` to log
   again.
 
@@ -1066,7 +1066,7 @@ Whatever the view shows when the tool runs, the same rule applies.
 
 ### 7.1 What v2 emits
 
-**The format.** v2 writes its events natively (epic #534; #1141): `callum-flow-event --type <type>
+**The format.** v2 writes its events natively (epic #534; #1141): `fabriek-event --type <type>
 --data <json> [--issue N] [--actor A]`, the type and data the image translator
 (`images/base/factory-event-translate.js`, `docs/factory-events/translator.md`) made from the old
 lines, field for field. `transition`, `reviewed` and `intervention` keep their names; a release is
@@ -1088,13 +1088,13 @@ reconcile and plan replay of old logs (`parseEvent`, the token codec), and the o
   flag is `yes` or `no`.
 - The identifying tokens come first and free text (a reason, a question, a park's parts, notes) last. Nothing is
   clipped: each field is bounded where it is made (the table keeps a question to 2000
-  characters and at most 8 notes of 1000; a reason is one line of 200), and `callum-flow-event`
+  characters and at most 8 notes of 1000; a reason is one line of 200), and `fabriek-event`
   and `factory.events` put no bound on a note. So a note carries every field whole.
   The `loop` note is the exception: it stays within 500 characters (`LOOP_NOTE_MAX`), and a wake's outcome
   ends with `reason=` (one line of at most 200), shortened and then dropped to keep the note within 500
   before the outcome is dropped. The translator maps it to `loop_entry.decision_reason`.
-- `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
-  and `status=` for `loop` (`images/base/callum-flow-event`): `transition` needs `life=`,
+- `fabriek-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
+  and `status=` for `loop` (`images/base/fabriek-event`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
   `who=` and `cause=`.
 - **One seam.** `hooks/v2/events.ts` builds the argv of every event v2 writes (the type and data from
@@ -1102,7 +1102,7 @@ reconcile and plan replay of old logs (`parseEvent`, the token codec), and the o
   only it, so a later format change touches one module.
 
 Three states in the old format's vocabulary, which is closed
-(`images/base/callum-flow-event`; the last addition was `loop`, D-09); their native types are the same names:
+(`images/base/fabriek-event`; the last addition was `loop`, D-09); their native types are the same names:
 
 | State | When | Columns | Note fields |
 |---|---|---|---|
@@ -1111,7 +1111,7 @@ Three states in the old format's vocabulary, which is closed
 | `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person`, `loop` or `judge`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 
 - `main_state` (main_state.v1) is written in the new format alone, for no issue, by
-  `callum-flow-event --type main_state --data <json>`, by rule M1 (14.1) from the `main` source (2.4):
+  `fabriek-event --type main_state --data <json>`, by rule M1 (14.1) from the `main` source (2.4):
   once for each change of the state of the default branch (its head, each workflow's newest completed
   run, each environment's newest deployment), with `changed` naming the first part that differs
   (`first`, `head`, `workflow` or `deploy`). Its key is `main/<last>/<current>` (appendix C). It sets no
@@ -1119,40 +1119,40 @@ Three states in the old format's vocabulary, which is closed
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
 - The companion writes two more types, `prompt_denied` and `prompt_waiting` (10.10), through
-  `callum-flow-event --type` itself, not through `events.ts`: native events (`--data`, `--issue`
-  required). The states stay accepted by `callum-flow-event` for older companions, whose `key=value`
+  `fabriek-event --type` itself, not through `events.ts`: native events (`--data`, `--issue`
+  required). The states stay accepted by `fabriek-event` for older companions, whose `key=value`
   note the translator reads. They set no stage, are not progress for the stuck test and never decide whether an
   issue is final. The loop does not read them: it reads the companion's log (7.2 `prompt-denied`).
 - A retried event can be logged twice (a crash between the CLI's exit and the ledger's save).
   `transition` notes carry `life` and `seq`, and `intervention` notes their fact's key, so
   readers count one per (issue, life, seq) or per key, as they already count identical
-  consecutive rows once (`callum-flow-sweep` header).
+  consecutive rows once (`fabriek-sweep` header).
 
 Reused states, each with the meaning it already has. v2 writes them through `events.ts` too, with
 the note today's queries read:
 
 | State | Logged by | In v2 |
 |---|---|---|
-| `claimed`, `renewed`, `claim_lost` | `callum-flow-claim` | S1 and H1, unchanged |
+| `claimed`, `renewed`, `claim_lost` | `fabriek-claim` | S1 and H1, unchanged |
 | `ready` | `queue-watch.sh --once` | unchanged |
-| `reclaimed`, `closed` | `callum-flow-sweep`; R1 for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, its `outcome` (`requeue`, `leave` or `reject`), `lives` (the released life's number; `none` for the migration's), the stage, what was checked, the open PR |
+| `reclaimed`, `closed` | `fabriek-sweep`; R1 for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, its `outcome` (`requeue`, `leave` or `reject`), `lives` (the released life's number; `none` for the migration's), the stage, what was checked, the open PR |
 | `abandoned` | v2 executors; the migration | drop, split, a triage drop, a release out of the factory or a rejection (with the release fields) |
 | `delegated`, `fix_requested`, `merge_ready` | no longer written (#1141); the `transition` to building (`brief_url`), fixing (`via`) and merge-queue carries each | the metrics read the transitions |
 | `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md`, section 3) |
-| `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
-| `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
-| `designer_routed` | `callum-flow-designer-route` before a design, or the loop itself as reason `fallback` (null `sonnet_pct`) when the route could not run | the designer model comparison in `docs/metrics.md` |
+| `merged` | `fabriek-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
+| `implementer_routed` | `fabriek-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
+| `designer_routed` | `fabriek-designer-route` before a design, or the loop itself as reason `fallback` (null `sonnet_pct`) when the route could not run | the designer model comparison in `docs/metrics.md` |
 | `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
 
 - The Coder stop script (`wind-down.sh`, 10.11) writes the native `wind_down` event, one per loop dir
-  per stop, through `callum-flow-event --type wind_down` (`docs/factory-events/schemas/wind_down.v1.json`);
+  per stop, through `fabriek-event --type wind_down` (`docs/factory-events/schemas/wind_down.v1.json`);
   the loop itself does not write or read it.
 - The loop writes the native `comment_posted` (`docs/factory-events/schemas/comment_posted.v1.json`)
   through `events.ts`, as it does `gate_run` and `shadow_read`: once per park or wait seq, after its
   comment is done with a URL (4.5).
 - The loop writes the native `queue_snapshot` (`docs/factory-events/schemas/queue_snapshot.v1.json`)
   from the pass driver (`hooks/queue-snapshot.ts`), only in act mode with the act lock held and the
-  kill switch off, through `callum-flow-event --type queue_snapshot`. The data is S1's queue view
+  kill switch off, through `fabriek-event --type queue_snapshot`. The data is S1's queue view
   (3.3): every candidate in order with its rank, score, factors, `claimable` and a why-code, the
   free slots and the owner's controls, the first 50 candidates in full and the rest counted by why.
   It is written as `changed` when the view differs (a fingerprint of the candidates' place,
@@ -1196,7 +1196,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `hold:release` | the merge queue's start of a release hold window: a release bump PR's head is inside its window (9.1). `who=loop`, no issue, `pr` the bump PR, `head` its head; the detail names its branch, the head, the state of its checks, the end of its window and the heads held. Fact `hold/release/pr<p>/h<head12>/start` (a start in the old form `hold/release/pr<p>/start`, logged before the window was per head, is still ended once) | none |
 | `hold:release-merged`, `hold:release-closed`, `hold:release-pushed`, `hold:release-failed`, `hold:release-timeout` | the end of that window: the bump PR left the list and was merged or closed (its state read once); a push made a new head (`pushed`, and the new head's window starts); a check on the head failed or was cancelled (`failed`, the detail and `failed_jobs` name them); or its window ran out while the head was still open and its checks not red (`timeout`, which also plans the owner item `release-hold`, appendix D). `who=loop`; `head` the window's head; the detail names the heads whose merge it held. Fact `hold/release/pr<p>/h<head12>/end`. Both are logged once per device, derived from the ledger's start key and GitHub, so a restart between them still logs the end | none |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
-| `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event --type intervention [--issue N] --regime manual --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'` (without `--regime` the row reads `unknown`), which the operator playbook adds to each rescue recipe | the issue, when given |
+| `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `fabriek-event --type intervention [--issue N] --regime manual --data '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"<what was done>"}'` (without `--regime` the row reads `unknown`), which the operator playbook adds to each rescue recipe | the issue, when given |
 
 **By the judge** (`who=judge`). A control op the loop's judge (the main conversation) runs:
 
@@ -1257,7 +1257,7 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   The loop reads those gate lines for `gate_run` events (10.6, `rules-gates.ts`), not as interventions.
   The companion writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
-  `callum-flow-event`.
+  `fabriek-event`.
 
 **Fleet-level interventions** (a mode change, a restart, a capacity change, a breaker trip) name
 no issue. They are attached to no issue: their effect on each issue shows as that issue's own
@@ -1270,14 +1270,14 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
 `loop` and `implementer_routed` notes (for example `substring(e.note FROM 'model=([^ ]+)')`,
 `docs/metrics.md`, section 8), and decodes percent-encoded values.
 
-- **`callum-flow-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes:
+- **`fabriek-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes:
   - A new step between 2 and 3: an issue whose current life has a `transition` event takes its
     `state` from the newest one's `to` (queued, designing, building, reviewing, fixing, merge-queue,
     parked, waiting or closed, with a `why` for closed). The loop reads that `state`
     (hooks/factory-state-map.ts turns a row into it; a row of an older image has only the old `stage`
     word, which maps to a state there). Mirror runs no longer set the state of such an issue. Stuck rules S1 to S5 stay as they are.
   - the label checks without `In development` (3.6).
-- **`callum-flow-evaluate`** (`docs/metrics.md`, "Offline computation"). New sections, each also
+- **`fabriek-evaluate`** (`docs/metrics.md`, "Offline computation"). New sections, each also
   a saved query in `docs/metrics.md`:
   - interventions per merged issue and per day, by `who` and `cause` (#632 metric 1 is
     `who=person`), with the fleet-level ones per day. A merged issue is **untouched** when no
@@ -1333,7 +1333,7 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   ```text
   <summary from the builder's answer>
 
-  Closes #N            ("Refs #N" when callum-flow-rollout says run-it or keep-open)
+  Closes #N            ("Refs #N" when fabriek-rollout says run-it or keep-open)
 
   Design brief: <brief URL>
 
@@ -1392,7 +1392,7 @@ retired, and the reviewer was never an edit of it.
   - the issue and brief URLs, and the PR;
   - the diff to review (`origin/<default>...<head>`, three dots: the PR's own change);
   - the TEST POLICY sentence;
-  - the instruction to run `callum-flow-test-weakening origin/<default>..HEAD` and judge its
+  - the instruction to run `fabriek-test-weakening origin/<default>..HEAD` and judge its
     output;
   - its own earlier rounds and the fixer's dispositions, so it does not repeat itself;
   - the owner's notes.
@@ -1414,7 +1414,7 @@ is a new `Reviewer` implementation and a setting, nothing more.
 
 - **Patch id** of a head: `git diff -U0 --no-color --no-ext-diff $(git merge-base
   origin/<default> <head>) <head> | git patch-id --stable`, first field. A new image script,
-  `callum-flow-patch-id <branch|sha> <base>`, computes it for both the loop and the guard. A head
+  `fabriek-patch-id <branch|sha> <base>`, computes it for both the loop and the guard. A head
   that changes nothing against main (main already has its change) has the zero id: `--stable` adds
   up one hash per file. It goes through review like any other patch.
 - `-U0` leaves context lines out, so a clean `gh pr update-branch`, which only brings in main's
@@ -1587,7 +1587,7 @@ is a new `Reviewer` implementation and a setting, nothing more.
 The designer is a reader: it writes nothing to GitHub.
 
 - **Agent.** `factory-loop:designer-v2` (`agents/designer-v2.md`): the designer method (read
-  the issue with `callum-flow-issue-read`, reproduce a bug first, explore with its own reads, the brief's fixed shape with its `## Rollout` line), with the command rule
+  the issue with `fabriek-issue-read`, reproduce a bug first, explore with its own reads, the brief's fixed shape with its `## Rollout` line), with the command rule
   (10.4) and no GitHub writes. It has no Agent tool: a sub-agent's call always runs in the
   background and a turn end is final (10.8), so an explorer's report would arrive after the
   answer and never be recorded; the definition carries an exploration checklist instead
@@ -1673,12 +1673,12 @@ The designer is a reader: it writes nothing to GitHub.
   names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
 - **A brief's Rollout** (`kind: "brief"`, #987). When the Rollout (`rolloutOf`) is `merge`,
   `bin/factory-answer` reads the job's issue before it records
-  (`hooks/v2/rollout-check.mjs`; `callum-flow-issue-read --json <N>` with `CALLUM_FLOW_REPO` set to the job's
-  repo, limited to 15 s). A body with a `## Run it` heading (the test of `callum-flow-rollout`) refuses the
+  (`hooks/v2/rollout-check.mjs`; `fabriek-issue-read --json <N>` with `FABRIEK_REPO` set to the job's
+  repo, limited to 15 s). A body with a `## Run it` heading (the test of `fabriek-rollout`) refuses the
   answer with that tool's reason, `brief says merge but issue #<N> has a '## Run it' heading`, and the
   remedy: answer `run-it` when the Run it stands, or ask the owner to rename the stale heading. An
   indeterminate read records the brief and names the unchecked Rollout on stderr. The PR-open check
-  (`callum-flow-rollout` in `act-pr.ts`) stays as the backstop.
+  (`fabriek-rollout` in `act-pr.ts`) stays as the backstop.
 - **An upstream request** (`kind: "upstream"`, the designer's choice when the change needs a change in
   another repo of the factory's own, and never a question asking the owner to write the issue). The
   answer is `{ kind: "upstream", upstream: { repo, request, title, body, authority }, reason, brief }`
@@ -1695,14 +1695,14 @@ The designer is a reader: it writes nothing to GitHub.
   a `note` source passes only when the quote appears in one of them (whitespace collapsed, case and
   straight versus curly quotes ignored); the contract does this, so the answer script and the loop's
   turn-end re-check refuse alike. A URL source is read by `bin/factory-answer`
-  (`hooks/v2/upstream-check.mjs`; `callum-flow-issue-read --json --comment <url>`, or `--json <N>` for the
-  body, with `CALLUM_FLOW_REPO` set to the job's repo, each read limited to 15 s): exit 3 (an untrusted
+  (`hooks/v2/upstream-check.mjs`; `fabriek-issue-read --json --comment <url>`, or `--json <N>` for the
+  body, with `FABRIEK_REPO` set to the job's repo, each read limited to 15 s): exit 3 (an untrusted
   author), a comment that is not on this issue, or a text without the quote refuses; a read that decides
   nothing records the answer and names the unchecked authority on stderr. `bin/factory-answer` reports
   "an upstream request to <repo> (<request>)". The step result is not-ok(`upstream`) with the answer as
   data; `designPlan` hands it to `upstreamPlan` (`rules-upstream.ts`), which plans one keyed effect, the
   `upstream` action (key `i<N>/l<L>/s<seq>/upstream`). Its executor (`act-upstream.ts`) lists the target
-  repo's open issues (the reader with `CALLUM_FLOW_REPO` set to the target), finds the issue carrying the
+  repo's open issues (the reader with `FABRIEK_REPO` set to the target), finds the issue carrying the
   marker `<!-- factory-loop:upstream:<own repo>#<N>/l<L>/s<seq> -->`, or creates it with
   `gh issue create --repo <target>`; the body is the designer's text, a line naming the source issue as
   `<own repo>#<N>` (no closing keyword) and the request kind, and the marker. No label is added, and a
@@ -1733,7 +1733,7 @@ The designer is a reader: it writes nothing to GitHub.
   Nothing is posted by the step. An issue the done issue blocks is claimable once its `blockedBy`
   reads 0 (rules-claim.ts); no new mechanism.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
-  `callum-flow-issue-read --json N` shows it closed (for an issue of another repo, run with `CALLUM_FLOW_REPO` set to that repo), a PR condition when `gh pr view N --json
+  `fabriek-issue-read --json N` shows it closed (for an issue of another repo, run with `FABRIEK_REPO` set to that repo), a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
   pass) keeps the condition open and never clears it. A tag condition is read by the compare of
   the commit with the newest release tag of its repo, `gh api repos/R/compare/<tag>...<sha> --jq .status`:
@@ -1815,10 +1815,10 @@ The designer is a reader: it writes nothing to GitHub.
 
 - **When:** the head is not held (9.1) and no release hold is in force (9.1), shows `clean`, every check on its head passed or was skipped (after re-runs,
   8.5), its patch equals `approvedPatch`, and no queue action of the head is running.
-- **Action** `queue-merge`: `callum-flow-merge <p> --patch <approvedPatch> --issue <N>`, keyed
+- **Action** `queue-merge`: `fabriek-merge <p> --patch <approvedPatch> --issue <N>`, keyed
   `i<N>/l<L>/queue/merge/<head7>`. The guard runs inside it, and the merge uses
   `--match-head-commit`, so a push in between makes GitHub refuse
-  (`images/base/callum-flow-merge`). `--issue` is the record's issue: the guard never has
+  (`images/base/fabriek-merge`). `--issue` is the record's issue: the guard never has
   to read it from the branch name. `check-pr-linkage.sh` reads `issue-<N>` from the branch too
   (the number followed by `-` or the end of the name), so the linkage is checked, never skipped, and a skipped check would park a green, approved PR.
   With the merge train on (9.8) the command also carries `--tested-tree <T>` (a merge on a train that
@@ -1842,7 +1842,7 @@ The designer is a reader: it writes nothing to GitHub.
 
 ### 9.4 The guard
 
-`callum-flow-merge-guard` takes `--patch <id>`, which `callum-flow-merge` passes through. With it
+`fabriek-merge-guard` takes `--patch <id>`, which `fabriek-merge` passes through. With it
 the guard checks only facts the loop owns:
 
 | Guard | Check | With `--patch` |
@@ -1860,13 +1860,13 @@ the guard checks only facts the loop owns:
 | test-weakening | advisory WARN lines | printed; not acted on, because the reviewer judges the detector (8.3) |
 
 - **No no-mistakes call.** The guard has no run lookup: `pipeline-watch.sh --resolve` and
-  `no-mistakes axi status` are gone with the old modes (`images/base/callum-flow-merge-guard`).
+  `no-mistakes axi status` are gone with the old modes (`images/base/fabriek-merge-guard`).
 - **Classes.** In `--patch` mode each FAIL line ends with `class=<class>`, one of `behind`,
   `conflict`, `checks`, `patch`, `linkage`, `read` and `policy` (9.3). So the loop never parses
   the reasons' wording. A `read` reason ends with what the read printed on
   stderr, so a GitHub blip in it is tried again like any other (5.1).
 - `--patch` is the guard's only mode: without it, or with `--run` or `--update-behind`, it exits 2
-  with one usage line (`images/base/callum-flow-merge-guard`).
+  with one usage line (`images/base/fabriek-merge-guard`).
 
 ### 9.5 No hold while main is red
 
@@ -1939,10 +1939,10 @@ the head, when what CI passed is still what merging gives. The owner approved it
   train was built on, and its tree equals H''s tree (the `train` source reads both, once each); the
   train's checks are green; N's head is the one the train tested; N's patch is `approvedPatch`; and N's
   own checks are green. Then Q1 is not planned although N's base is behind main, GitHub's `behind`
-  state is accepted, and the merge is `callum-flow-merge ... --tested-tree <T>` (9.3). The guard's
+  state is accepted, and the merge is `fabriek-merge ... --tested-tree <T>` (9.3). The guard's
   `tree` check (9.4) is the final word: it merges N onto main as it is now and compares the tree.
 - **Every invalidation drops the train and N takes today's path** (Q1, its own CI, Q2), each with its
-  reason, which the merge passes as `--train-dropped` and `callum-flow-merge` records on the `merged`
+  reason, which the merge passes as `--train-dropped` and `fabriek-merge` records on the `merged`
   event (`train_reason`): `head-moved` (N, or the head, pushed again, or its branch is gone),
   `outside-merge` (main moved and its tree is not H''s), `conflict` (the build found one), `train-red`
   (red, never-started or failed train CI), `left-queue` (the head left the queue other than by
@@ -2078,9 +2078,9 @@ hooks fire and block for timer-spawned agents (the spike notes):
   - branch creation (`git switch -c|-C`, `git checkout -b|-B`, `git branch <name>`) and
     `git worktree`.
 - **Bash, refused for a reader:** `git commit` and `git push`.
-- **The main checkout.** callum-flow's `forbid-main-checkout-write.sh` already refuses a
+- **The main checkout.** fabriek's `forbid-main-checkout-write.sh` already refuses a
   sub-agent's writes there, Bash included, and it fires for these agents
-  (`plugins/callum-flow/hooks/forbid-main-checkout-write.sh`). The loop relies on it and leaves callum-flow's `hooks.json` alone.
+  (`plugins/fabriek/hooks/forbid-main-checkout-write.sh`). The loop relies on it and leaves fabriek's `hooks.json` alone.
 - **Each refusal** is appended to the companion's log, and the loop logs it as an intervention
   (`guard:*`, 7.2).
 - **Command lines.** The rules apply to every simple command a line runs, through separators,
@@ -2256,7 +2256,7 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
 Nothing in v2 runs or reads in the main checkout, so a dirty main checkout holds no issue. Two
 safeguards remain:
 
-- callum-flow's guard refuses sub-agents' writes there (10.4);
+- fabriek's guard refuses sub-agents' writes there (10.4);
 - **the tripwire.** R1 compares the `checkout` source with the checkout it last settled on: the
   newest read with nothing left untold. A change (new tracked changes, or a moved HEAD) sends
   `tell(checkout)` once, with the paths and the steps that ran in that window. The notice stays
@@ -2357,14 +2357,14 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
   watches, quotes Claude Code's own `reason`, `rule` or `decider` when there is one, names the safe
   rewrite for a Bash `rm` of a glob under a variable (`"${VAR:?}"/*` or the literal path), and ends
   by telling the agent to find another way or, failing that, to end its step saying what it needed.
-- **Each deny** writes one `prompt_denied` event (`callum-flow-event --type prompt_denied --data <json>
+- **Each deny** writes one `prompt_denied` event (`fabriek-event --type prompt_denied --data <json>
   --issue N --repo R`, run in the slot) and one line of `companion.jsonl`, cause `prompt-denied`,
   which is an intervention (7.2). The data holds the schema's fields, null when unknown: `life`,
   `seq`, `step`, `attempt`, `agent_id`, `agent_type`, `tool_name`, `tool_input` (a Bash command,
   else the JSON input, clipped to 2000 characters), `ask_reason`, `slot`, `session`, `transcript`
   (the agent's own: `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`, learned from
   `classic.SubagentStart`), `branch` and `pr`. Writing either never throws out of the hook and never
-  turns the deny back into an ask: an image whose `callum-flow-event` cannot write the event still
+  turns the deny back into an ask: an image whose `fabriek-event` cannot write the event still
   gets the deny and the log line. A hook that fails for a mapped agent after `next` returned `ask` still denies.
 - **`classic.Notification`** with `notification_type` `permission_prompt` or
   `worker_permission_prompt` and an `agent_id` in the map writes one `prompt_waiting` event with the
@@ -2483,7 +2483,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   chooses the commit to tag, then does the Run its of the milestone's run-it issues.
 - **The release log** has two producers, both opt-in with the Next milestone (a repo without one logs
   nothing). O4 logs each new release tag (the newest tag the milestone reads hold) once, through
-  `callum-flow-released <tag> --repo R --source <loop|workflow>`: `loop` when the ledger holds a
+  `fabriek-released <tag> --repo R --source <loop|workflow>`: `loop` when the ledger holds a
   `done`-answered release task keyed on the previous released tag (the tag of the newest done
   `released` entry, else of the newest done/done release task that differs from the new tag), else
   `workflow`. The `released` action is keyed `released:<repo>:<tag>` and held in a GitHub backoff. An
@@ -2521,7 +2521,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 - **One way to resume:** remove `factory:parked`, or `/factory resume N ["note"]` (a
   list of numbers is allowed). Both are the `unpark` event (P1). The note is the op's note or,
   for a label removal, the trusted comments posted after the loop's park comment (read with
-  `callum-flow-issue-read --comments`). So an owner who answers on GitHub and removes the label is
+  `fabriek-issue-read --comments`). So an owner who answers on GitHub and removes the label is
   heard (#591). The daily reminder says that a comment alone does not resume.
 - **Resume** goes through queued, because a slot is needed again, and resets the attempt, triage
   and fix budgets. It resumes the state the issue parked from, with the note for that state's
@@ -2553,7 +2553,7 @@ with no rule of its own. "Environment": a one-time fix outside the loop's rules.
 | 6 | no-mistakes' fix agents in untrusted repo copies (#613) | avoided | no-mistakes is out of the loop's path, and the write guard refuses it (10.4); every agent runs in a loop slot |
 | 7 | no-mistakes 1.84's PR body budget, body compare and self-abort; the `--closes` and `--ignore` adaptations | avoided | The loop writes the PR body through `neutral()` and its linkage (8.1); there are no gate responses |
 | 8 | An inconclusive test gate was answered "fix" twice, then quiet for 80 minutes (#620) | avoided, and generic | No no-mistakes test gate; CI is the authority. The stop gate refuses while the gates fail, within the step's timeout; a gate that cannot run lets CI decide (10.6). A flaky check gets one re-run (8.5) |
-| 9 | Implementers wrote to the main checkout (#624) | generic | Agents start in their slot, the companion confines file writes to it, and callum-flow's guard refuses writes to the main checkout (10.3, 10.4). The tripwire tells the owner of anything that gets past them (10.7). No other issue waits on the main checkout |
+| 9 | Implementers wrote to the main checkout (#624) | generic | Agents start in their slot, the companion confines file writes to it, and fabriek's guard refuses writes to the main checkout (10.3, 10.4). The tripwire tells the owner of anything that gets past them (10.7). No other issue waits on the main checkout |
 | 10 | `maxInFlightIssues` in the workspace file ignored; restart-self with no Coder token (#590); claims swept after 2 h offline (#589); an owner answer on GitHub released no hold (#591); the judge could not finish a release (#592) | mixed | Settings: the workspace file may set every key, and both files are read every pass (section 15). Token: environment; R2 tells the owner when a restart fails: the failure ends the update and the tell lasts until delivered (13.9; #1346). A lapsed claim is claimed again onto the same record (4.1). An owner answer on GitHub plus the label removal resumes with that answer as the note (11). Release: the judge's standing authority (PR #634); releases are out of the merge path |
 | 11 | Usage tier stop-all for 42 and 197 minutes | kept, and generic | The foundation's tiers. A step killed by the window is a free re-run (U1), held until the tier allows it, so it costs the issue nothing. Merges are class `free` and go on in stop-all |
 | 12 | Strict protection put every PR behind on every merge: 27 update-behinds for 4 merges | avoided | Only the head is updated: once per merge, plus once per outside merge during its CI wait (9.2) |
@@ -2683,14 +2683,14 @@ type Usage = {
 
 type IssueView = {
   number: number
-  state: IssueState | null        // callum-flow-factory-state's v2 state; null when the database never saw it
+  state: IssueState | null        // fabriek-factory-state's v2 state; null when the database never saw it
   merged: boolean                 // a closed issue that was merged (merged, merged-by-hand, done)
   stateSince: Ms | null           // state_since of that state
   holder: string | null           // device of the latest claim
   run: string | null
   pr: number | null
   stuck: string | null            // S1..S5 from factory-state, shown in the title only
-  // GitHub, through callum-flow-issue-read --json (null when not read this life)
+  // GitHub, through fabriek-issue-read --json (null when not read this life)
   open: boolean | null
   trusted: boolean | null         // false when the reader refused the author (exit 3)
   labels: string[] | null
@@ -2726,7 +2726,7 @@ type Milestone = { open: number; closed: number; expected: 'patch' | 'minor' | '
 
 #### 13.3.2 Which issues are in `issues`
 
-The union of: every issue `callum-flow-factory-state` lists for the repo; every issue in
+The union of: every issue `fabriek-factory-state` lists for the repo; every issue in
 `queue`; every issue a ledger entry names; every issue `only` names, with the sub-issues a
 tracker among them stands for. GitHub fields are filled for the queue, the issues this device
 holds, every issue in a live stage, the issues of the loop's running work, those of a merged Run
@@ -2743,16 +2743,16 @@ how stale it is. `queue-watch.sh` and `usage-check.sh` run from
 
 | Source | Command | Cadence | Required for |
 |---|---|---|---|
-| `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
+| `factory` | `fabriek-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
 | `facts` | one `dev-query --factory --csv` call over 3 days of events (`NEW_EVENTS_SQL`, 3.3): the latest `delegated` note per live issue, and the v2 states (7.1); from the old log under `eventsSource` `old` (`EVENTS_SQL` in `derive.ts`) | every pass | v2's facts (2.4) |
 | `runs` | not read: the loop reads no pipeline runs, so `runs` is always empty and the source reports `not read` (`runSource: events`, the replay's, marks it from `facts`) | - | nothing |
-| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own. An empty list when the last list was not, while a member of the last list is open, trusted and labelled `readyLabel` by its own `github` read, is a failed source (`the ready list came back empty while #N carry ready by their own reads; the last list stands`): the last list stands and `known` is kept (D-76) | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
-| `github` | one `callum-flow-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues, and last the open issues the read issues block (`blockingList`) (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
+| `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (13.3.4), with `known` kept in the store. Observe mode: `fabriek-issue-read --json --list --label <readyLabel>`, so an observing loop logs no `ready` events of its own. An empty list when the last list was not, while a member of the last list is open, trusted and labelled `readyLabel` by its own `github` read, is a failed source (`the ready list came back empty while #N carry ready by their own reads; the last list stands`): the last list stands and `known` is kept (D-76) | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `S1` |
+| `github` | one `fabriek-issue-read --json --issues <N,...>` call for the issues due this pass (single `--json <N>` reads on an image whose reader exits 2 on `--issues`) (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for the issues a designer works on, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): the records' issues and the issues of the loop's running work, then the queue, and the issues `only` names with their trackers' sub-issues, and last the open issues the read issues block (`blockingList`) (2.4 gives v2's read set and order). An issue known closed is not read again unless the queue, which lists open issues only, names it, or this device holds it (it may have been reopened); a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `S1`; an issue closed on GitHub is finished (13.5.1) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins. In API-key mode neither is read: the session's `cost.usd` is added to the tally (see G3). On a subscription the cost is still folded into the what-if tally every pass (see G3) | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass; in API-key mode the cost every pass and one `usage` event every `usageEveryMs` | rule `G3`; missing or stale is Normal, flagged (stop-new in API-key mode) |
 | `pool` | `treehouse status --json` from the main checkout: the slots and who holds them. It does no reflog or status read of a slot (2.4 `leases`) | every pass | slot capacity (10.1) |
 | `checkout` | `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, then `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no`, from the main checkout (it takes no index lock and ignores untracked files); its `# branch.upstream` and `# branch.ab` headers give the read's upstream and ahead and behind counts, null when absent. A missing origin/HEAD or a failed status is `{ error }`, whose text points at `git remote set-head origin --auto` | `checkoutEveryMs` | the main-checkout tripwire (10.7) |
 | `agents` | `$.agent.list()`, read once per pass, filtered to the ids in the ledger | every pass | lost-agent detection (13.7.5) |
-| `milestone` | `callum-flow-milestone show next` | every `milestoneEveryMs` (10 min) | rules `O3`, `O4`, `O5`; absent means not opted in; while it qualifies, `gh` also reads the last release tag and the oldest merge since it (O3 fields); whenever it exists, `gh release view` reads the newest tag and a list of the milestone's closed issues (`--json closedAt`, limit 200) the oldest `closedAt` (null on a full list of 200 or a failed read), both skipped in a GitHub backoff |
+| `milestone` | `fabriek-milestone show next` | every `milestoneEveryMs` (10 min) | rules `O3`, `O4`, `O5`; absent means not opted in; while it qualifies, `gh` also reads the last release tag and the oldest merge since it (O3 fields); whenever it exists, `gh release view` reads the newest tag and a list of the milestone's closed issues (`--json closedAt`, limit 200) the oldest `closedAt` (null on a full list of 200 or a failed read), both skipped in a GitHub backoff |
 | ledger | act mode: the ledger the module keeps (13.7.1), from `$.store`; when the store holds none, rebuilt from 7 days of events (13.7.5). Observe mode: derived from the device's own events in the `facts` window | every pass | everything |
 | control | `<loop dir>/control.json`, field by field (13.4.3) | every pass | rule `G4` |
 | GitHub backoff | act mode: `$.store` (`backoff:<repo>`) | every pass | 13.10 item 2 |
@@ -2811,7 +2811,7 @@ unlabelled or never read) is accepted at once (D-76).
   is `answerTools`, the switch `answerChannel` replaced, named as replaced and not read. It is
   plain JSON, easy to read and set from a shell, which an observe run uses (DECISIONS D-33). A testbed
   points `toolsDir` at a checkout's `features/src/callum-tools` and `binDir` at its
-  `images/base` (DECISIONS D-42). A `toolsDir` also sets `CALLUM_FLOW_LINKAGE_BIN` to
+  `images/base` (DECISIONS D-42). A `toolsDir` also sets `FABRIEK_LINKAGE_BIN` to
   `<toolsDir>/check-pr-linkage.sh` for every command, so the merge guard's link check runs the
   checkout's script; without `toolsDir` the variable is left unset.
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in appendix A.
@@ -2819,10 +2819,10 @@ unlabelled or never read) is accepted at once (D-76).
   key or a bad value is left out and named in the decision log (`config`).
 - **Control state** in `<loop dir>/control.json` (13.4.3): owner directives that change at runtime.
 
-Every command the loop runs gets `CALLUM_FLOW_REPO`, `CALLUM_FLOW_READY_LABEL` and
-`CALLUM_FLOW_IN_DEV_LABEL` from the settings (`callum-flow-claim` and `callum-flow-sweep` read
+Every command the loop runs gets `FABRIEK_REPO`, `FABRIEK_READY_LABEL` and
+`FABRIEK_IN_DEV_LABEL` from the settings (`fabriek-claim` and `fabriek-sweep` read
 the labels), `FACTORY_REGIME` (the `regime` setting) and, when the session id is not empty, `CLAUDE_SESSION_ID` (the loop's
-session; `callum-flow-event` stamps both on every event), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
+session; `fabriek-event` stamps both on every event), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 
 #### 13.4.2 Settings and defaults
 
@@ -2911,7 +2911,7 @@ pings the loop and gets its own decision-log line (`control`). Appendix E gives 
   `intakeStamp` is `off` and in observe mode, and an agent may call it, as it may `status`. It answers within the
   tool bound (`Stamping #N with <intakeModel>, dry run: its answer follows when the reader ends.`; a second
   `stamp` of an issue still being stamped answers `already stamping #N`), then a background job reads the issue
-  (`callum-flow-issue-read <N> --comments`, trusted authors only) and the repo's top level
+  (`fabriek-issue-read <N> --comments`, trusted authors only) and the repo's top level
   (`git ls-tree --name-only origin/<default branch>`, from the last pass's checkout; left out when unknown) and spawns
   `factory-loop:intake` with both as data in its prompt. The reader (`agents/intake.md`) has the Read tool alone, so it
   cannot write to GitHub or the repo. Its final message is one JSON object, checked by `checkIntake`
@@ -2949,7 +2949,7 @@ While `intakeStamp` is `on`, rule I1 stamps each ready issue once per body versi
 rule plans nothing, so no reader is spawned and no label, comment, event, `stamps:<repo>` write or ledger entry of the
 kind `intake-stamp` happens.
 
-- **The body version** is `body_sha`, which `callum-flow-issue-read --json --issues` adds to each item: the first 16 hex of
+- **The body version** is `body_sha`, which `fabriek-issue-read --json --issues` adds to each item: the first 16 hex of
   the sha256 of the body text (a null body hashes as the empty text). The items still carry no body. The plugin reads it
   into `IssueView.bodyVersion` (null when absent or not 16 hex: an older image, or the per-issue fallback read), and I1
   skips an issue without one (skip `no-body-version`); it never stamps without a version.
@@ -2959,7 +2959,7 @@ kind `intake-stamp` happens.
   (skip `tried`), in ascending issue number, while fewer than 2 `intake/<N>/<version>` entries run (skip `cap`). It plans
   nothing while the records are not read (G2) or GitHub is in backoff. It runs after S1 and the merge queue, claims nothing
   and changes nothing S1 reads except through the score factors a stamp feeds (3.5).
-- **The executor** (`hooks/v2/act-intake.ts`) reads the issue (`callum-flow-issue-read <N> --comments`) and the repo's top level, then
+- **The executor** (`hooks/v2/act-intake.ts`) reads the issue (`fabriek-issue-read <N> --comments`) and the repo's top level, then
   records the try `{ version, outcome: running, at }` BEFORE it spawns `factory-loop:intake` (model `intakeModel`, name
   `intake-<N>-<version>`), so a crash, timeout, failure or drop never respawns the same version; an edited body (a new
   `body_sha`) is eligible exactly once. The entry runs until the reader's turn ends (`driver-between.ts` calls
@@ -3087,13 +3087,13 @@ title adds `held: session stopped since HH:MM` and `/factory status` a line sayi
 
 | Kind | Class | Executor | Timeout | Retries | Outcome recorded |
 |---|---|---|---|---|---|
-| `heartbeat` | free | `callum-flow-claim --heartbeat`, off the pass | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
-| `sweep` | free | `callum-flow-sweep`, off the pass | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
-| `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
-| `rollout` | free | `callum-flow-rollout <N>`, for a merged issue's follow-ups (11) | 60 s | 3 | the rollout: `merge`, `run-it` or `keep-open` |
+| `heartbeat` | free | `fabriek-claim --heartbeat`, off the pass | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
+| `sweep` | free | `fabriek-sweep`, off the pass | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
+| `claim` | start | `fabriek-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
+| `rollout` | free | `fabriek-rollout <N>`, for a merged issue's follow-ups (11) | 60 s | 3 | the rollout: `merge`, `run-it` or `keep-open` |
 | `close-issue` | free | `gh issue close <N> --repo <R> --reason completed` | 60 s | 3 | exit code |
-| `release-parent` | free | `callum-flow-event abandoned --issue <N> --note "split into <list>"` (no label edit; the closed record's `label` op `clear` takes the `factory:*` labels off) | 60 s | 3 | exit codes |
-| `milestone-later` | free | `callum-flow-milestone plan <N> later` | 60 s | 3 | exit code |
+| `release-parent` | free | `fabriek-event abandoned --issue <N> --note "split into <list>"` (no label edit; the closed record's `label` op `clear` takes the `factory:*` labels off) | 60 s | 3 | exit codes |
+| `milestone-later` | free | `fabriek-milestone plan <N> later` | 60 s | 3 | exit code |
 | `restart-self` | free | `dev-restart-self`, only from rule `R2` | 600 s | 1 | the session restarts, and the loop resumes on load (13.7.5); a failure ends the update and leaves `updateFailed` for the owner (13.4.3) |
 | `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', task_id })`, only for an agent the ledger holds on a running entry | 30 s | 1 | stopped, or failed with the reason (13.13) |
 | `task` | drive | `$.prompt.submit` with a `TASK` line | `wakeTimeoutMs.task` | 1 reminder | `done`, `failed`, `hold` |
@@ -3128,7 +3128,7 @@ model's agent listing, except while the loop's own repair message to one is on i
 (13.7.3a). A spawn's name carries the step and the issue, and its description names the issue
 (D-11). A spawn denied, one that throws, or one that starts with no agent id is a failed attempt. An
 agent's turn that ends in `error`, `aborted` or `refusal` is a failed attempt too. Exit 2 is a
-usage error, never retried, for the image's own CLIs (`callum-flow-*`, `dev-restart-self`); `gh`
+usage error, never retried, for the image's own CLIs (`fabriek-*`, `dev-restart-self`); `gh`
 exits 2 when cancelled and `treehouse` 1 on bad usage, so their exit 2 is retried like any failure.
 
 Things no executor can do, by construction: pass `--yes`, run `no-mistakes`, merge without the
@@ -3351,7 +3351,7 @@ Most transitions are already logged by the CLIs the executors call (`claimed`, `
 `renewed`, `reclaimed`, `closed`, `implementer_routed`, `merged` and the queue state through
 `queue-watch.sh --once`). A done close (8.7) also logs `closed` (reason `completed`) itself, as the `close-issue` executor's second step once `gh issue close` has passed, the way a split tracker's close is logged. v2 logs its own states through `hooks/v2/events.ts` (7.1). The
 foundation logs two native events for its own transitions (DECISIONS D-09, dev-system#1142), `loop_entry`
-and `loop_passes`, as `callum-flow-event --type <type> --data <json> [--issue N]`:
+and `loop_passes`, as `fabriek-event --type <type> --data <json> [--issue N]`:
 
 - a `loop_entry` for each agent and wake entry (`agent-step`, `task`, `tell`, owner notices
   included; a `judge` has no event) when it starts and when it ends: an attempt's start and its executor's result are
@@ -3457,7 +3457,7 @@ keeps (FINDINGS check 5). On load:
 If the store itself holds no ledger (a new device, a wiped config), act mode rebuilds it from 7
 days of the event log, the ledger's own life: its own `loop` events give every agent, wake and
 answer, and the CLIs' events give claims. Claims and stages also come from
-`callum-flow-factory-state`. A device's own `merged` event becomes a done `rollout:<issue>` entry
+`fabriek-factory-state`. A device's own `merged` event becomes a done `rollout:<issue>` entry
 for its issue: the device that merged (or noted an owner's hand merge) ran the follow-ups then,
 so the rollout is not read again. The rebuilt ledger becomes the one the module keeps, and the
 decision log names its source (`store`, `events` or `none`). A rebuild that found nothing is not
@@ -3615,7 +3615,7 @@ session the role check refuses sends no rail notice and no pass-error.
    GitHub is held. Once an executor meets a limit, the pass's
    remaining GitHub-writing actions are skipped with no attempt counted. The title shows `gh
    wait`. Observe mode keeps no backoff.
-3. **The database is down.** `callum-flow-factory-state` and `dev-query` fail: the pass is
+3. **The database is down.** `fabriek-factory-state` and `dev-query` fail: the pass is
    blind (rule `G2`). Running agents still report into the ledger, and nothing new is acted on
    until the factory source returns. After `blindNoticeAfterMs`, `tell(blind)`. The same holds when the image's
    report says it skipped events of a type or version its readers cannot read in the derivation (`skipped_events` with
@@ -3626,7 +3626,7 @@ session the role check refuses sends no rail notice and no pass-error.
    stops the agent. An answer for an entry that no longer runs (a stop timed it out, a retry
    replaced it) is logged and dropped. A spawn that does not start within 60 seconds is a failed
    attempt.
-5. **Two devices claim the same issue.** `callum-flow-claim` lets the earliest live claim win;
+5. **Two devices claim the same issue.** `fabriek-claim` lets the earliest live claim win;
    the loser exits 3, and its outcome is `lost`. Rule `S1` skips the issue while the other
    device's claim is live. If another device takes an issue this device was working (a lapsed
    lease, reclaimed), the next observation shows the new holder, and the record closes by the
@@ -3652,7 +3652,7 @@ session the role check refuses sends no rail notice and no pass-error.
 #### 13.11.1 Observe mode writes nothing that matters
 
 In observe mode no executor runs. The adapters still run read-only CLIs, and some of them log
-events as a side effect (`usage-check.sh`, `callum-flow-issue-read`'s `untrusted_stripped`); the queue is read with the plain reader, which
+events as a side effect (`usage-check.sh`, `fabriek-issue-read`'s `untrusted_stripped`); the queue is read with the plain reader, which
 logs no `ready` events. Every command the loop runs, in any mode, gets `FACTORY_REGIME` and `CLAUDE_SESSION_ID` (13.4.1), so the events it logs carry the regime and the loop's session. Every command a pass that does not act runs (observe mode, or act mode
 held back by a rail) gets `CALLUM_EVENTS_DIR=<loop dir>/sink-events`, so those lines land in a
 local file that `event-push-loop` never ships. The hooks between passes (agents' answers, wake
@@ -3745,7 +3745,7 @@ owner once (`TELL breaker kind=ping`, 13.2).
 
 The loop acts only on its configured repo (every `gh` command carries `--repo`, and act mode
 needs the checkout's origin to be that repo, 13.11.2), only on issues and PRs by trusted authors
-(`callum-flow-issue-read` filters them, and the guard's `author` check runs before any merge),
+(`fabriek-issue-read` filters them, and the guard's `author` check runs before any merge),
 and only on branches named `issue-<N>`. It stops only agents it spawned (an agent the ledger
 holds on a running entry), and only the main conversation can answer its wakes or set its
 directives.
@@ -3802,7 +3802,7 @@ One JSON line per pass in the decision log:
  "actions":[{"key":"claim:470:new","kind":"claim","class":"start","rule":"S1","issue":470,"reason":"ready and unblocked"}],
  "skipped":[{"rule":"S1","issue":340,"why":"tracker (has sub-issues)"}],
  "outcomes":[{"key":"claim:470:new","status":"done","ms":8123,"summary":"claimed #470"}],
- "ledgerSource":"store","commands":["callum-flow-factory-state --repo cbundy/dev-system ..."],
+ "ledgerSource":"store","commands":["fabriek-factory-state --repo cbundy/dev-system ..."],
  "title":"🔄 dev-system (Q:3 - D:5 - M:9) · owner 1"}
 ```
 
@@ -3858,7 +3858,7 @@ are ms into the pass):
   store writes after them) and `log` (the decision-log line, a recorded state, the daily prune).
   They follow one another and add up to `ms`.
 - `persistMs`, `eventsMs`, `lockMs`: the pass's time in store writes (the ledger's saves and the
-  other keys), event writes (`callum-flow-event`) and the act lock's writes (its flock wait
+  other keys), event writes (`fabriek-event`) and the act lock's writes (its flock wait
   included), whichever phase they fell in.
 - `observe`: the observe call's wall time split: `ms`; `commandsMs` (the time at least one read -
   a command, a file read or the session usage - was in flight, the union of their intervals, so
@@ -4019,8 +4019,8 @@ Twenty-seven rules, by id.
 | G2 | blind | the `factory` source fails, or its report skipped a derived event | title only; `tell(blind)` after `blindNoticeAfterMs` (foundation); `reader-behind` for non-derived skips |
 | G3 | tier | always | the tier from usage (foundation) |
 | G4 | controls | always | the admission filters: pause, no new work, skip, priority, only, serial, rate caps and the breakers (5.3); a held record's skip line names the filter (foundation) |
-| H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
-| H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
+| H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `fabriek-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
+| H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `fabriek-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
 | R2 | restart | `updateDue` is set, the pass admitted no other action, and no `queue-merge` runs (whatever `windDownMinutes`), and (only with `windDownMinutes` 0) no `queue-update` or release task runs | `restart-self`, last in the pass; with wind-down on it writes the `restart-self` request first and the wind-down finishes queue and release work up to the cap; a failed restart is not retried: it ends the update (`updateDue` cleared, `updateFailed` set) and the owner tell lasts until delivered, or until `update <reason>` or `update off`. Cut agent steps re-run free (5.1). See wind-down (10.11) |
 | S1 | claim | a queue issue passes the claim filters (open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused; claimed in the order of the `only` list or else the `priority` list, then by score, highest first (the claim score, `hooks/v2/score.ts`: the factors `priority-label`, `bug`, `unblocks`, `closes-epic`, `nearly-closes-epic`, `epic-started`, `waiting` and `failed-lives`, weighted by `queueScore`; and, only while `intakeStamp` is `on` and the issue has a stamp, `area-factory`, `needs-owner` and `overlap`, which are null, never a penalty, when the stamp or the facts they read are missing), ties to the oldest claimable time, then the lowest number; the reason names the order, `owner only`, `owner priority` or `score <n>: <factor> <points>, ...`, and every S1 claim carries its `score` and `factors`, which the claim tool records on the `claimed` event; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0. I1 (13.4.4) plans after S1 and changes neither its choice nor its order. The pass also gets a starved verdict (`PlanResult.starved`): true when the queue is not empty, no record is queued or in a slot state, no first claim is in flight, `noNewWork` is off, `only` is empty, the tier is not `stop-new` or `stop-all`, and every queue issue was skipped by a claim filter; null when the queue or github source failed. While it is true and the spell (the store's `starved:<repo>`, set on the first starved pass, kept through unknown passes, removed on the first pass that is not starved) is `starvedNoticeAfterMs` old, `tell(starved)` (an owner item, key `tell:starved:<since>:<k>`) names each root blocker found in the `blockers` tree and why it is not moving; it waits, with the skip `starved since <time>: blockers not read yet`, until that period's tree is read; S1 also records the queue view (`hooks/v2/queue-view.ts`): each candidate of the order with its rank, score, factors and a why-code (`blocked`, `skipped`, `paused`, `outside_only`, `no_slot`, `new_off`, `usage_tier`, `rejected`, `tracker`, `held`, `exhausted`, `untrusted`, `unknown`), finalised in `planV2` after admission (a claim admission or wind-down drops is `no_slot`), which the `queue_snapshot` event carries (7.1) |
@@ -4037,7 +4037,7 @@ Twenty-seven rules, by id.
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour and none running (skip `release review running: ...`), and no `done`-answered release is in progress (`releaseInProgressMs`, skip `release in progress: ...`); also a merged issue (closed record, merge rollout) the milestone lists open again, read after the close | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest cadence`; for the reopened issue `milestone-later` and `tell(reopened)` (fields `issue pr`), once per life |
-| O4 | release logged | the milestone exists and the newest known tag has no done `released:<repo>:<tag>` entry | a free `released` action (`callum-flow-released`), source `loop` or `workflow` (11); held in a GitHub backoff |
+| O4 | release logged | the milestone exists and the newest known tag has no done `released:<repo>:<tag>` entry | a free `released` action (`fabriek-released`), source `loop` or `workflow` (11); held in a GitHub backoff |
 | O5 | milestone state | the milestone exists and its reading differs from the last logged (the newest done `milestone-state/` entry's fingerprint) | a free `event` of `milestone_state`, key `milestone-state/<fingerprint>/<last>` (11) |
 | M1 | main state | the `main` source has a reading this pass whose state differs from the last logged (the newest done `main/` entry's), whatever the store's state | a free `event` of `main_state`, key `main/<last>/<current>`; no hold and no tell (9.5) |
 | N1 | settings changed | an acting pass whose settings snapshot differs, leaf by leaf, from the one the store kept (`settings:<repo>`); none when no valid snapshot was kept | a free `event` of `settings_changed` per changed leaf, key `settings/<key>/<snapshot time, base36>`, `who` from the config ops since (`settings-ops:<repo>`), then the layer; at most 50 per pass, the rest named in a skip line |
@@ -4198,7 +4198,7 @@ The first entries are the owner's own decisions; they are settled.
 
 - **Decision:** on 2026-10-15 the owner withdrew the decision to use issue #534's structured
   event format, and the idea of a new database table: "it's going to be too complex to add". The
-  loop wrote today's format: existing `callum-flow-event` states and fields, with its extra fields as
+  loop wrote today's format: existing `fabriek-event` states and fields, with its extra fields as
   `key=value` tokens in the note, encoded as `loop` notes are. `hooks/v2/events.ts` is the one
   seam, so a later format change touches one module (7.1).
 - **Superseded:** epic #534 supersedes it for the write side (#1141): the loop now writes the new
@@ -4415,10 +4415,10 @@ The first entries are the owner's own decisions; they are settled.
 ### A companion plugin owns the agent's folder, its guard, its timeout and its stop gate
 
 - **Decision:** `factory-loop-workspace` (10.3 to 10.6).
-- **Alternatives:** the loop's own hooks; command hooks in callum-flow; a separate
+- **Alternatives:** the loop's own hooks; command hooks in fabriek; a separate
   `claude -p` process per agent.
 - **Why:** the spikes showed that the loop's own hooks never see agents it starts from its timer,
-  and that a second plugin's hooks do. callum-flow must stay generic (CLAUDE.md, "This repo"). A
+  and that a second plugin's hooks do. fabriek must stay generic (CLAUDE.md, "This repo"). A
   separate process loses the agent id, `turn.complete` and TaskStop.
 
 ### The stop gate refuses while the gates fail
@@ -4702,21 +4702,21 @@ settings file, and they have no effect. `/factory help config` lists them on one
 | `transition` | free | re-checks its trigger, stores the record, pings | 3 |
 | `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force` for the nine; op `clear` (3.4); R1's op `requeue`: `--add-label <ready> --remove-label <the eight>`, and op `reject`: `--add-label factory:rejected --remove-label <the eight>` (6.4) | 3 |
 | `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -`; also R1's rejection comment (6.4) | 3 |
-| `event` | free | `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`, built only by `events.ts` (7.1), for `transition`, `abandoned`, `requeued`, `merged`, `reviewed`, `finding_handled`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
+| `event` | free | `fabriek-event --type <type> --data <json> [--issue N] [--actor A]`, built only by `events.ts` (7.1), for `transition`, `abandoned`, `requeued`, `merged`, `reviewed`, `finding_handled`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child; a not-ready child gets none: plan claims it with a `park` and row S7 parks it (8.7) | 3 |
-| `close-tracker` | free | a merged split child's check (8.7): read the issue (`callum-flow-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
-| `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `callum-flow-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
-| `upstream` | free | a design's upstream request (8.7): `callum-flow-issue-read --json --list --state open` with `CALLUM_FLOW_REPO` set to the target repo (one of `UPSTREAM_REPOS`) for the request's marker, else `gh issue create --repo <target> --title <t> --body-file -`; no label, no other write. The one write to a repo other than the loop's own | 3 |
-| `flake-bug` | free | rule F1 (8.5): `callum-flow-issue-read --json --list --state open` for the bug's marker, else `gh label create flaky --repo R ... --force` and `gh issue create --repo R --title <t> --body-file -`; then `gh issue edit <N> --repo R --add-label flaky --add-label <priorityLabel>`, the sub-issue link under `flakeEpic` (`gh api`, unless the epic holds it), and last `gh issue edit <N> --repo R --add-label <ready>` only when the action says the cap allowed it. The one place the safety tests let the loop add `ready` outside a split child and a requeue | 3 |
-| `intake-stamp` | develop (run), free (settle) | rule I1 (13.4.4): op `run`: `callum-flow-issue-read <N> --comments`, `git ls-tree --name-only origin/<base>`, the try recorded in `stamps:<repo>`, then `$.agent.spawn` of `factory-loop:intake` (`intakeModel`); at the reader's end `callum-flow-issue-read --json <N>`, `gh label create <name> --repo R --color <c> --description <d>` (no `--force`) for a missing `area:<area>` or `needs-decision`, `gh issue edit <N> --repo R --add-label <l,...>` and `--remove-label <l,...>`, and one `intake_stamp` event; op `settle`: TaskStop of the reader, the try recorded failed, one event | run 2 per key (reading fails before the try is recorded; the try is never repeated), settle 3 |
+| `close-tracker` | free | a merged split child's check (8.7): read the issue (`fabriek-issue-read --json N`; open fails, to be retried), find its split parent by the hidden key in its trusted body (none: done, nothing closed), read the parent (closed: done), read the parent's sub-issue states (the `sub_issues` endpoint, `--paginate`, number and state only); when none is open, `gh issue close P --repo R --reason completed --comment <text naming the sub-issues, no closing keyword>`, then the `closed` event for P with note `completed`. Outcome `{parent, closed, open}`; the key's `/up` chain checks the closed tracker's own parent | 3 |
+| `link` | free | a waiting record's issue linked as blocked by an issue it waits on: read the blocker through `fabriek-issue-read --json N` (its REST id, open or closed, issue or PR), read the links already there and add the `blocked_by` link (`gh api` with the dependency endpoint, as `split` does); a closed blocker or a pull request makes no link and ends done | 3 |
+| `upstream` | free | a design's upstream request (8.7): `fabriek-issue-read --json --list --state open` with `FABRIEK_REPO` set to the target repo (one of `UPSTREAM_REPOS`) for the request's marker, else `gh issue create --repo <target> --title <t> --body-file -`; no label, no other write. The one write to a repo other than the loop's own | 3 |
+| `flake-bug` | free | rule F1 (8.5): `fabriek-issue-read --json --list --state open` for the bug's marker, else `gh label create flaky --repo R ... --force` and `gh issue create --repo R --title <t> --body-file -`; then `gh issue edit <N> --repo R --add-label flaky --add-label <priorityLabel>`, the sub-issue link under `flakeEpic` (`gh api`, unless the epic holds it), and last `gh issue edit <N> --repo R --add-label <ready>` only when the action says the cap allowed it. The one place the safety tests let the loop add `ready` outside a split child and a requeue | 3 |
+| `intake-stamp` | develop (run), free (settle) | rule I1 (13.4.4): op `run`: `fabriek-issue-read <N> --comments`, `git ls-tree --name-only origin/<base>`, the try recorded in `stamps:<repo>`, then `$.agent.spawn` of `factory-loop:intake` (`intakeModel`); at the reader's end `fabriek-issue-read --json <N>`, `gh label create <name> --repo R --color <c> --description <d>` (no `--force`) for a missing `area:<area>` or `needs-decision`, `gh issue edit <N> --repo R --add-label <l,...>` and `--remove-label <l,...>`, and one `intake_stamp` event; op `settle`: TaskStop of the reader, the try recorded failed, one event | run 2 per key (reading fails before the try is recorded; the try is never repeated), settle 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through the step spawn (`hooks/v2/steps.ts`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
-| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>`, off the pass; with a live train (9.8) also `--tested-tree <T>`, else after a dropped train `--train-dropped <reason>`. With `--tested-tree`, exit 2 (an image that does not know it), a `GUARD tree FAIL` of class `behind` or `conflict`, or a `BEHIND` refusal after the guard passed are answered (done, not merged) with the drop `refused` or `tree-mismatch` in the outcome, never a failure | 1 per key |
+| `queue-merge` | free | `fabriek-merge <p> --patch <id> --issue <N>`, off the pass; with a live train (9.8) also `--tested-tree <T>`, else after a dropped train `--train-dropped <reason>`. With `--tested-tree`, exit 2 (an image that does not know it), a `GUARD tree FAIL` of class `behind` or `conflict`, or a `BEHIND` refusal after the guard passed are answered (done, not merged) with the drop `refused` or `tree-mismatch` in the outcome, never a failure | 1 per key |
 | `queue-train` | free | rule Q3 (9.8), from the main checkout, no working tree touched. `build`: `git fetch --no-tags origin refs/heads/<branch>` and `git rev-parse FETCH_HEAD` for the head's and the record's branch, `git merge-tree --write-tree H' N`, `git commit-tree <T> -p H' -p N` (fixed identity and date), `git push origin <sha>:refs/heads/factory-train/i<N>-<tree7>`; `delete`: `git push origin --delete refs/heads/factory-train/...`; `sweep`: `git ls-remote --heads origin 'refs/heads/factory-train/*'`, then one delete of those the action does not keep. Only refs under `factory-train/` are ever deleted | build 1 per key, delete 3 per key, sweep 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
-| `released` | free | `callum-flow-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
+| `released` | free | `fabriek-released <tag> --repo R --source loop\|workflow` (5 min) | 3; exit 2 never retried; a missing tool ends done |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | foundation (13.6.1) | foundation (13.6.1); `claim` also lists open PRs for adoption (3.5) | foundation (13.6.1) |
 
 16 kinds of the loop's own, 12 from the foundation. The per-issue rate cap (D-24) counts `agent-step` by step kind. Every `gh`
@@ -4808,5 +4808,5 @@ Notices (TELL kinds), owner items first:
 | `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `config`, `help [config]` | as the foundation (13.4.3) |
 
 Every op but `status`, `stamp` and `help` is logged as a person intervention (7.2). Rescues the loop cannot
-see are recorded by hand with `callum-flow-event intervention` (7.2); there is no `/factory touch`
+see are recorded by hand with `fabriek-event intervention` (7.2); there is no `/factory touch`
 op.
