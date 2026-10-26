@@ -29,7 +29,20 @@ check "dev-doctor WARNs, naming docs/evidence-storage.md, when evidence storage 
   echo "$out" | grep -q "WARN evidence storage is not configured" &&
   echo "$out" | grep -q "fix: see docs/evidence-storage.md" &&
   ! echo "$out" | grep -q "FAIL evidence storage"' --entrypoint ""
-check "dev-doctor FAILs an unset uiCapture, naming uiCapture and the marker, and OKs none" in_image '
+check "dev-doctor strips the fabriek- and the callum-flow- prefix from the evidence upload message" in_image '
+  d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
+  s=$(mktemp -d)
+  run_dd() { (cd "$d" && env PATH=$s:$PATH DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); }
+  for p in fabriek callum-flow; do
+    printf "#!/bin/sh\necho \"$p-evidence-upload: OK container o/r\"\n" > "$s/fabriek-evidence-upload"
+    chmod +x "$s/fabriek-evidence-upload"
+    out=$(run_dd); echo "$out"
+    echo "$out" | grep -q "OK   evidence storage: container o/r" || exit 1
+  done
+  printf "#!/bin/sh\necho \"fabriek-evidence-upload: bad scope\"\nexit 1\n" > "$s/fabriek-evidence-upload"
+  out=$(run_dd); echo "$out"
+  echo "$out" | grep -q "FAIL evidence storage: bad scope"' --entrypoint ""
+check "dev-doctor FAILs an unset uiCapture,naming uiCapture and the marker, and OKs none" in_image '
   d=$(mktemp -d); git init -q "$d"; git -C "$d" remote add origin https://github.com/o/r.git
   mkdir -p "$d/.claude"; echo "{}" > "$d/.claude/factory-loop.json"
   run_dd() { (cd "$d" && env -u ARTIFACT_SAS DEV_WORKSPACE=$d DEV_SECRETS_DIR=$(mktemp -d) DEV_WORKSPACE_SECRETS_DIR=$(mktemp -d) dev-doctor --warn-only 2>&1); }
