@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "test_weakened.v1.json",
   "title": "test_weakened",
-  "description": "A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or || true, or commented an assertion out). Written by callum-flow-merge, one per flagged commit.",
+  "description": "A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or || true, or commented an assertion out). Written by fabriek-merge, one per flagged commit.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

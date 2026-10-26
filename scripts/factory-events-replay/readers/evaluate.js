@@ -1,5 +1,5 @@
 "use strict";
-// The replay reader for callum-flow-evaluate (dev-system#899, part of #534; docs/factory-events/replay.md,
+// The replay reader for fabriek-evaluate (dev-system#899, part of #534; docs/factory-events/replay.md,
 // "What a reader issue passes"). Per repo in the window, old runs the tool's old source over the old
 // rows of factory.events (the JSON-lines export the evaluate-sessions skill takes) and new runs its new
 // source over the factory.event_log rows, so both go through the tool's own `evaluate()`. Only the

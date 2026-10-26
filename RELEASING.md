@@ -67,7 +67,7 @@ How each layer reaches consumers after the tag exists:
 ## Milestones
 
 Milestones record what each release contained. The contract is shared with the base image's
-`callum-flow-milestone` helper:
+`fabriek-milestone` helper:
 
 - The titles are exactly `Next release` and `Later`. A repo opts in by having an open milestone
   titled `Next release`.
@@ -85,7 +85,7 @@ Milestones record what each release contained. The contract is shared with the b
 What a release carried is one rule, in `images/base/release-contents.js`: the first-parent PRs since the
 previous final tag, the issues they close, the issues they link with `Refs` / `Part of`, and the release
 notes' headlines (the bold title leading each bullet). The technical list, the milestone and the
-`released` factory event (`callum-flow-released`) all read it. A milestone holds the PRs and the closed
+`released` factory event (`fabriek-released`) all read it. A milestone holds the PRs and the closed
 issues. A run-it or keep-open issue may sit in `Later` while its PR is in the release; that is not a
 disagreement.
 

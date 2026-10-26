@@ -67,7 +67,7 @@ case "$name" in
     name_format='🏭 {name} loop'
     # factory-loop-workspace is the loop's companion: it starts each agent in its slot and guards it
     # (docs/factory-loop/v2/SPEC.md 10); the loop holds every agent step without it.
-    plugins="callum-flow@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref factory-loop-workspace@callum=cbundy/dev-system#$plugin_ref"
+    plugins="fabriek@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref factory-loop-workspace@callum=cbundy/dev-system#$plugin_ref"
     refs_win=true
     # The loop is wound down for up to 10 minutes on a stop (coder/dev-system/wind-down.sh).
     wind_down_minutes=10

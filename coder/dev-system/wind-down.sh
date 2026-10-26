@@ -45,14 +45,20 @@ wind_down_minutes_of() {
   printf '%s' "${_v:-10}"
 }
 
-# emit <owner/repo> <json>: one event; a missing callum-flow-event only warns.
+# emit <owner/repo> <json>: one event. It uses fabriek-event and falls back to the old
+# callum-flow-event (an image from before the rename; removed with the aliases, dev-system#1361).
+# Neither on PATH only warns.
 emit() {
-  if command -v callum-flow-event >/dev/null 2>&1; then
-    timeout 15 callum-flow-event --type wind_down --repo "$1" --data "$2" \
-      || echo "wind-down: callum-flow-event failed for $1" >&2
+  if command -v fabriek-event >/dev/null 2>&1; then
+    _ev=fabriek-event
+  elif command -v callum-flow-event >/dev/null 2>&1; then
+    _ev=callum-flow-event
   else
-    echo "wind-down: warning: callum-flow-event is not on PATH; no wind_down event for $1" >&2
+    echo "wind-down: warning: neither fabriek-event nor callum-flow-event is on PATH; no wind_down event for $1" >&2
+    return 0
   fi
+  timeout 15 "$_ev" --type wind_down --repo "$1" --data "$2" \
+    || echo "wind-down: $_ev failed for $1" >&2
 }
 
 # wind_one <loop dir name>: the whole wind-down of one loop. Runs in a background subshell.

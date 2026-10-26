@@ -53,14 +53,14 @@ privacy defaults are in
 |---|---|---|
 | `docker_hosts` | one entry, the local socket: `[{"value":"local","name":"Local Docker","url":"unix:///var/run/docker.sock"}]` | Where workspace containers can run: a JSON list of `{"value", "name", "url"}` objects (`url` is the local socket or `ssh://user@host`; `value` is the stable key, `name` the label in the form). The first entry is the default. A string holding JSON, not an HCL list, because `coder templates push` reads `terraform.tfvars` with a parser that accepts only strings, numbers and lists of strings. See [Docker hosts](#docker-hosts). |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
-| `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of every template. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
+| `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `FABRIEK_TRUSTED_AUTHORS` (and the old name `CALLUM_FLOW_TRUSTED_AUTHORS`, with the same value, until the aliases are removed) in every workspace of every template. The image bakes no list, so `fabriek-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
 | `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator-loop`), not in `terraform.tfvars`. |
 | `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator-loop`). |
 | `remote_control_default_skip_permissions` | `false` | Default of the `remote_control_skip_permissions` parameter. Set per template by `push.sh` (`false` for both, for now). |
 | `remote_control_prompt` | empty | `session` mode: the first message of a fresh conversation (`DEV_REMOTE_CONTROL_PROMPT`). Set per template by `push.sh` (`/factory-loop:judge` for `orchestrator-loop`). |
 | `remote_control_resume_prompt` | empty | `session` mode: the message sent when the conversation is resumed (`DEV_REMOTE_CONTROL_RESUME_PROMPT`). Set per template by `push.sh` (for `orchestrator-loop`, a nudge that the loop resumes by itself and the session answers its wakes as the judge). |
 | `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🏭 {name} loop` for `orchestrator-loop`). |
-| `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system`; for `orchestrator-loop`, callum-flow, factory-loop and factory-loop-workspace pinned to the pushing checkout's package version. |
+| `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (fabriek at the image's release). Set per template by `push.sh`: empty for `dev-system`; for `orchestrator-loop`, fabriek, factory-loop and factory-loop-workspace pinned to the pushing checkout's package version. |
 | `default_plugin_refs_win` | `false` | Whether the `default_plugins` refs beat a ref the workspace repo's committed `.claude/settings.json` declares (`DEV_DEFAULT_PLUGIN_REFS_WIN=1`, sent only when true), so the template owns the plugin version, and `dev-doctor` fails (not warns) on a missing default plugin or a marketplace at another ref. Set per template by `push.sh`: `true` for `orchestrator-loop`, `false` for `dev-system`. |
 | `wind_down_minutes` | `0` (off) | A whole number of minutes a workspace stop waits for the [factory loop](../../plugins/factory-loop/README.md) to finish its running steps. Above 0 the template adds a stop script (`wind-down.sh`, a `coder_script` with `run_on_stop`) and gives the container that long plus 60 s of Docker stop grace; 0 adds neither, so the plan is as before. Set per template by `push.sh`: `10` for `orchestrator-loop`, `0` for `dev-system`. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
@@ -111,7 +111,7 @@ other than ghcr.io, also set `registry_auth_address`.
 coder create my-ws --template dev-system   # Enter accepts each default
 ```
 
-The base image's `dev-init` installs `callum-flow` by default on every start, including
+The base image's `dev-init` installs `fabriek` by default on every start, including
 workspaces without a repo. See [Claude plugins](../../images/base/README.md#workspace-and-repo)
 for repo plugins, opt-outs and recovery when an install fails.
 
@@ -128,7 +128,7 @@ for repo plugins, opt-outs and recovery when an install fails.
 | `claude_login` | `private` | yes | Shown with `claude_auth_volume_name` or `workspace_secrets_dir` set. `private`, `shared` (with the volume) or `api-key` (with `workspace_secrets_dir`: the workspace's own Anthropic API key, no Remote Control). See [Sharing one Claude login](#sharing-one-claude-login). |
 | `claude_budget_usd` | `0` | yes | Only with `workspace_secrets_dir` set. Monthly API-key budget in dollars; 0 means none. Passed as `DEV_CLAUDE_BUDGET_USD` only when `claude_login` is `api-key`. The factory loop counts its own spend against it and stops new work as it nears the budget (and at once when there is none). |
 | `claude_budget_reset_day` | `1` | yes | Only with `workspace_secrets_dir` set. The day of the month (1-31) the budget starts again at 00:00 UTC; a day past the month's end means its last day. Passed as `DEV_CLAUDE_BUDGET_RESET_DAY` only when `claude_login` is `api-key`. |
-| `extra_trusted_authors` | empty | yes | Only with `workspace_secrets_dir` set. Comma-separated `login:id` entries appended to the template's `trusted_authors` in `CALLUM_FLOW_TRUSTED_AUTHORS`. Takes effect on the next start. |
+| `extra_trusted_authors` | empty | yes | Only with `workspace_secrets_dir` set. Comma-separated `login:id` entries appended to the template's `trusted_authors` in `FABRIEK_TRUSTED_AUTHORS` (and `CALLUM_FLOW_TRUSTED_AUTHORS`). Takes effect on the next start. |
 | `git_email` | empty | yes | Only with `workspace_secrets_dir` set. Passed as `DEV_GIT_EMAIL` when non-empty. Takes effect on the next start. |
 | `cpus` | 2 | yes | CPU limit (1-16). |
 | `memory_gb` | 8 | yes | Memory limit in GB (1-16). 8 leaves room for an agent, a review run and a Playwright e2e run at once; 4 got the browser and test runners OOM-killed (cbundy/job-search#222). |
@@ -247,7 +247,7 @@ workspace ([First-run logins](#first-run-logins)).
   where it stopped from what it keeps on the workspace's `/persist` volume: its records and its
   ledger of started work in the plugin store (`/persist/claude/plugins/store/`), and its decision
   log, control file and agents' answers in `/persist/claude/factory-loop/<owner>__<repo>/`.
-- **Plugins**: `push.sh` pins `callum-flow`, `factory-loop` and `factory-loop-workspace` to the
+- **Plugins**: `push.sh` pins `fabriek`, `factory-loop` and `factory-loop-workspace` to the
   package version of the checkout it pushes from, so push it from main after a release. The
   template's refs win over a ref the repo's `.claude/settings.json` declares
   (`default_plugin_refs_win`), and `dev-doctor` fails on a missing one. `factory-loop-workspace`

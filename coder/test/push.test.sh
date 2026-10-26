@@ -93,7 +93,7 @@ expect_calls dev-system dev-system /icon/docker.svg \
   wind_down_minutes=0 \
   migrator_secrets_dir=
 
-# 2. orchestrator-loop: the same session, starting the judge skill, with callum-flow, factory-loop
+# 2. orchestrator-loop: the same session, starting the judge skill, with fabriek, factory-loop
 # and its companion factory-loop-workspace all pinned to this checkout's package version.
 ref=v$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$TEMPLATE_DIR/../../package.json")
 [ "$ref" != v ] || fail "cannot read the version in package.json"
@@ -106,7 +106,7 @@ expect_calls orchestrator-loop 'Orchestrator (loop)' /emojis/1f3ed.png \
   remote_control_prompt=/factory-loop:judge \
   'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. The factory loop resumes by itself; answer its wakes as its judge.' \
   'remote_control_name_format=🏭 {name} loop' \
-  "default_plugins=callum-flow@callum=cbundy/dev-system#$ref factory-loop@callum=cbundy/dev-system#$ref factory-loop-workspace@callum=cbundy/dev-system#$ref" \
+  "default_plugins=fabriek@callum=cbundy/dev-system#$ref factory-loop@callum=cbundy/dev-system#$ref factory-loop-workspace@callum=cbundy/dev-system#$ref" \
   default_plugin_refs_win=true \
   wind_down_minutes=10
 

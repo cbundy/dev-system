@@ -60,18 +60,20 @@ Global agent instructions.
   repo's UI capture doc (kept in step with `uiCapture` in `.claude/factory-loop.json`), or
   `n/a - no UI` for a repo with no UI. Onboarding step 3h ([UI capture](../docs/onboarding.md#3h-ui-capture))
   decides it. Fill that in even though the surrounding bullet is synced.
-  The bullet tells agents to upload captures with `callum-flow-evidence-upload` and to commit
+  The bullet tells agents to upload captures with `fabriek-evidence-upload` and to commit
   only durable reference images.
 
 ## `.claude/settings.json` -> `.claude/settings.json`
 
-Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
+Wires up the `callum` plugin marketplace and enables `fabriek` (formerly `callum-flow`; `callum-dev update`
+drops a leftover `callum-flow@callum` key so only one name is enabled), and ships the
 generic `permissions.allow` and `permissions.deny` lists the factory loop and the manual flow need
 (`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
-`callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
-`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, `callum-flow-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), `callum-flow-capture` (starts the app, takes the UI captures with Playwright and uploads them), the read-only
+`fabriek-issue-read` (the one filtered reader of issue, comment and PR text),
+`fabriek-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `fabriek-rollout`, `fabriek-evidence-upload` (uploads UI evidence captures and prints read-signed URLs), `fabriek-capture` (starts the app, takes the UI captures with Playwright and uploads them), the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
-`check-pr-linkage.sh`) - see
+`check-pr-linkage.sh`). The old `callum-flow-*` allow entries stay beside the `fabriek-*` ones until
+the aliases are removed (dev-system#1361), because agents on older images still call them - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
 Claude Code plugin's own `settings.json` only applies its `agent` and
 `subagentStatusLine` keys; every other key, including `permissions`, is dropped at
@@ -94,7 +96,7 @@ The split is by key path, compared against the pristine baseline in
 values are compared whole):
 
 - **Synced, do not hand-edit**: every key the template defines, at any depth
-  (`extraKnownMarketplaces.callum.source`, `enabledPlugins.callum-flow@callum`, the
+  (`extraKnownMarketplaces.callum.source`, `enabledPlugins.fabriek@callum`, the
   synced entries of `permissions.allow`, and anything a future template adds).
   `callum-dev update` sets each one to the new template's value, so a hand edit to a
   synced key is reset, and a key the template drops is dropped from your file too.
@@ -120,8 +122,8 @@ values are compared whole):
   define counts as repo-owned and is kept, and every current `permissions.allow` entry
   is unioned in.
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
-  `gh pr merge`, `callum-flow-merge` (the guarded merge; only
-  `callum-flow-merge-guard` is synced), `gh pr edit` (the linkage repair; only
+  `gh pr merge`, `fabriek-merge` (the guarded merge; only
+  `fabriek-merge-guard` is synced), `gh pr edit` (the linkage repair; only
   the read-only `check-pr-linkage.sh` is synced), and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
   `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
@@ -129,7 +131,7 @@ values are compared whole):
   checkout too, so a `deny` would also block the orchestrator, not just worktree
   sub-agents. Raw reads of issue and PR text are the deliberate exception: they are
   denied everywhere, orchestrator and owner included, because that text may come from
-  an untrusted author and `callum-flow-issue-read` is the one door (dev-system#307; the
+  an untrusted author and `fabriek-issue-read` is the one door (dev-system#307; the
   `forbid-raw-gh-read` plugin hook is the second layer and also covers `gh api`, curl
   and WebFetch). The split that
   keeps a worktree sub-agent from merging is that `settings.local.json` never leaves
@@ -178,7 +180,10 @@ wires it, and it must never be added to `remoteEnv` or `containerEnv` here
   synced lines below it stay untouched).
 - Synced: `containerEnv` - `CALLUM_FLOW_TRUSTED_AUTHORS`, forwarded from the host
   (`${localEnv:CALLUM_FLOW_TRUSTED_AUTHORS}`), the GitHub authors whose text the factory
-  trusts (cbundy/dev-system#307). Export it on the desktop host as `login:numeric_id`
+  trusts (cbundy/dev-system#307). `fabriek-issue-read` reads it as `FABRIEK_TRUSTED_AUTHORS`, which
+  the image fills from this name. The forwarded name is not renamed yet: an unset host
+  `FABRIEK_TRUSTED_AUTHORS` would forward an empty value that wins over the old name and fail every
+  read closed. Export it on the desktop host as `login:numeric_id`
   (comma-separated for several; `gh api users/<login> --jq .id` gives the id) before the
   container starts. The image bakes no list, so unset or malformed `dev-doctor` FAILs. On
   Coder the template sets it instead. It lands in a repo with its next `callum-dev update`.

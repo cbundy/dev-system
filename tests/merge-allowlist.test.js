@@ -20,10 +20,12 @@ for (const rel of [
   test(`${rel} allows the merge guard and linkage check but nothing that can merge or repair`, () => {
     const allow = JSON.parse(fs.readFileSync(path.join(ROOT, rel), "utf-8")).permissions.allow;
     assert.ok(allow.includes("Bash(callum-flow-merge-guard *)"));
+    assert.ok(allow.includes("Bash(fabriek-merge-guard *)"));
     assert.ok(allow.includes("Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)"));
     const merging = [
       "gh pr edit 7 --body x",
-      "callum-flow-merge 7", "callum-flow-merge 7 --method rebase", "gh pr merge 7 --squash"];
+      "callum-flow-merge 7", "callum-flow-merge 7 --method rebase",
+      "fabriek-merge 7", "fabriek-merge 7 --method rebase", "gh pr merge 7 --squash"];
     const allows = (entry, cmd) => {
       const rule = entry.replace(/^Bash\(/, "").replace(/\)$/, "");
       return rule.endsWith(" *") ? cmd.startsWith(rule.slice(0, -1)) : cmd === rule;
@@ -58,6 +60,9 @@ for (const rel of settingsFiles) {
       "Bash(callum-flow-issue-read *)",
       "Bash(callum-flow-evidence-upload *)",
       "Bash(callum-flow-capture *)",
+      "Bash(fabriek-issue-read *)",
+      "Bash(fabriek-evidence-upload *)",
+      "Bash(fabriek-capture *)",
     ]) {
       assert.ok(allow.includes(entry), `allow carries ${entry}`);
     }

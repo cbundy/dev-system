@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "untrusted_stripped.v1.json",
   "title": "untrusted_stripped",
-  "description": "A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. Written by callum-flow-issue-read. A security trail: the dropped text itself is never logged.",
+  "description": "A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. Written by fabriek-issue-read. A security trail: the dropped text itself is never logged.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

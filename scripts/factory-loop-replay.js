@@ -5,8 +5,8 @@
 // It rebuilds the factory's state at past moments and runs plan() on it, then compares what the
 // loop would have done with what the live orchestrator did next. Every source is read-only:
 //
-//   the database   callum-flow-factory-state --at <t> --github off, and the event log (dev-query)
-//   GitHub         each issue's timeline and state through callum-flow-issue-read, replayed to <t>:
+//   the database   fabriek-factory-state --at <t> --github off, and the event log (dev-query)
+//   GitHub         each issue's timeline and state through fabriek-issue-read, replayed to <t>:
 //                  labels (labeled/unlabeled), open blockers (blocked_by_added/removed and each
 //                  blocker's closed_at) and sub-issues (sub_issue_added/removed)
 //   the ledger     derived from the device's own events up to <t> (derive.ts, v2 SPEC 13.7.5)

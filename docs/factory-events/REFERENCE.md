@@ -59,7 +59,7 @@ One factory event: the fields every event has, with its payload in data. One lin
 | `base_image` | string | required | yes |  |  | The base image version running when it was written; null when unknown. |
 | `dev_image` | string | required | yes |  |  | The repo's dev image version running when it was written; null when unknown or none. |
 | `template_version` | string | required | yes |  |  | The Coder template version running when it was written; null when unknown. |
-| `plugin_version` | string | required | yes |  |  | The callum-flow plugin version running when it was written; null when unknown. |
+| `plugin_version` | string | required | yes |  |  | The fabriek plugin version running when it was written; null when unknown. |
 | `regime` | string | optional | yes | one of "factory_loop_v2", "testbed", "manual", null |  | Which kind of run wrote it: factory_loop_v2 is work the v2 factory loop did, testbed is a testbed or experiment run, manual is a person or an interactive session. Optional: absent or null means unknown, never guessed. A reader filters by naming the values it wants. |
 | `data` | object | required | no |  |  | The payload: a flat object whose fields the type's schema describes. |
 
@@ -107,7 +107,7 @@ Example:
 | `base_image` | string | every event | The base image version running when it was written; null when unknown. |
 | `dev_image` | string | every event | The repo's dev image version running when it was written; null when unknown or none. |
 | `template_version` | string | every event | The Coder template version running when it was written; null when unknown. |
-| `plugin_version` | string | every event | The callum-flow plugin version running when it was written; null when unknown. |
+| `plugin_version` | string | every event | The fabriek plugin version running when it was written; null when unknown. |
 | `regime` | string | every event | Which kind of run wrote it: factory_loop_v2 is work the v2 factory loop did, testbed is a testbed or experiment run, manual is a person or an interactive session. Optional: absent or null means unknown, never guessed. A reader filters by naming the values it wants. |
 | `device_seq` | integer | every event | The line number of the event in its device's local log, set by the shipper. |
 | `acting` | integer | `loop_passes` | Of those passes, how many acted (did something rather than finding nothing to do). |
@@ -259,11 +259,11 @@ Example:
 | `title` | string | `claimed`, `merged`, `ready` | The issue's title as the producer read it, clipped to 256 characters; null when it was not read. An issue's newest title is the title of its newest ready or claimed event by ts that has a non-null title. |
 | `to_at` | string | `loop_passes` | The end of that minute, exclusive: one minute after from_at. |
 | `to_state` | enum | `comment_posted`, `transition` | The state that seq entered. |
-| `tool` | string | `shadow_read` | The command that made the compare, such as callum-flow-sweep. |
+| `tool` | string | `shadow_read` | The command that made the compare, such as fabriek-sweep. |
 | `tool_input` | string | `prompt_denied`, `prompt_waiting` | What the tool was asked to do: the Bash command, else the input as JSON, cut at 2000 characters; null when unknown. |
 | `tool_name` | string | `prompt_denied`, `prompt_waiting` | Claude Code's tool the prompt was for, for example Bash; null when unknown. |
 | `touches` | array of string | `intake_stamp` | The top-level paths the stamp says the issue touches. |
-| `train` | enum | `merged` | Whether the merge rode the merge train: rode when callum-flow-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
+| `train` | enum | `merged` | Whether the merge rode the merge train: rode when fabriek-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
 | `train_reason` | enum | `merged` | Why a built train was dropped, set only when train is dropped; null otherwise. |
 | `tree_matched` | boolean | `merged` | When train is rode: whether the merge commit's tree equals tested_tree (false means main landed on a tree CI did not pass). null when there was no train or the merge commit's tree could not be read. |
 | `triages` | integer | `transition` | Loop state, for the record rebuild: triage calls so far in this life. |
@@ -299,7 +299,7 @@ The factory stopped work on the issue and it left the factory without a merge: i
 | `why_parts` | string | optional | yes |  |  | split: why the boundaries between the parts fall where they do; null otherwise. |
 | `why_order` | string | optional | yes |  |  | split: why the blockedBy order is what it is, or that the parts are independent; null otherwise. |
 | `child_whys` | array of string | optional | yes |  |  | split: what makes each new issue a part of its own, in the order of split_into; null otherwise. |
-| `stage` | string | required | yes |  |  | reconcile and rejected: the v2 state (building, reviewing, merge-queue and so on) callum-flow-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
+| `stage` | string | required | yes |  |  | reconcile and rejected: the v2 state (building, reviewing, merge-queue and so on) fabriek-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
 | `lives` | integer | required | yes | minimum 1 | yes | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The abandoned work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The abandoned work's pull request, when there is one. |
@@ -326,7 +326,7 @@ Example:
 
 ## claim_lost
 
-This device tried to claim the issue and another device holds it. Written by callum-flow-claim. Proof that two devices contended for one issue; this device does not work on it.
+This device tried to claim the issue and another device holds it. Written by fabriek-claim. Proof that two devices contended for one issue; this device does not work on it.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -352,7 +352,7 @@ Example:
 
 ## claim_renewed
 
-A heartbeat extended this device's claim on the issue. Written by callum-flow-claim --heartbeat. Housekeeping: not progress on the issue.
+A heartbeat extended this device's claim on the issue. Written by fabriek-claim --heartbeat. Housekeeping: not progress on the issue.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -374,7 +374,7 @@ Example:
 
 ## claimed
 
-This device took the claim on the issue: no other device works on it while the lease holds. Written by callum-flow-claim. The claim ends with merged, closed, abandoned or requeued.
+This device took the claim on the issue: no other device works on it while the lease holds. Written by fabriek-claim. The claim ends with merged, closed, abandoned or requeued.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -401,7 +401,7 @@ Example:
 
 ## closed
 
-GitHub shows the issue closed, outside the factory's own merge. Written by callum-flow-sweep (actor sweep), and by the factory loop when it closes a split's tracker once every sub-issue is closed (reason completed), and when it closes an issue whose work had already merged (a designer's done answer, reason completed). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.
+GitHub shows the issue closed, outside the factory's own merge. Written by fabriek-sweep (actor sweep), and by the factory loop when it closes a split's tracker once every sub-issue is closed (reason completed), and when it closes an issue whose work had already merged (a designer's done answer, reason completed). Ends a claim like merged does, but throughput and lead time count merged only. Two devices may both log it: count one per issue and reason.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -451,7 +451,7 @@ Example:
 
 ## designer_routed
 
-The model for the issue's design step was chosen. Written by callum-flow-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.
+The model for the issue's design step was chosen. Written by fabriek-designer-route before each design. Issues routed by hash are the fair sample for comparing the models.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -556,7 +556,7 @@ Example:
 
 ## implementer_routed
 
-The model for the issue's build step was chosen. Written by callum-flow-implementer-route before each build. Issues routed by hash are the fair sample for comparing the models.
+The model for the issue's build step was chosen. Written by fabriek-implementer-route before each build. Issues routed by hash are the fair sample for comparing the models.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -864,7 +864,7 @@ Example:
 
 ## merged
 
-A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge that no event recorded: one on the issue's branch, or a merged pull request to the default branch that no merged event names by pr (logged as a hand merge, recovered, with the issue only when the pull request's author is trusted and it closes one). Ends the claim; the end point of lead time and throughput. Count one per pr and head. A reader places and ages a merge by coalesce(merged_at, ts), because ts is when the event was written, which for a recovered merge is later than the merge; merged.title is a fallback to the ready/claimed title.
+A pull request for the issue was merged. Written by fabriek-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by fabriek-sweep (actor sweep) when it finds a merge that no event recorded: one on the issue's branch, or a merged pull request to the default branch that no merged event names by pr (logged as a hand merge, recovered, with the issue only when the pull request's author is trusted and it closes one). Ends the claim; the end point of lead time and throughput. Count one per pr and head. A reader places and ages a merge by coalesce(merged_at, ts), because ts is when the event was written, which for a recovered merge is later than the merge; merged.title is a fallback to the ready/claimed title.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)
@@ -884,7 +884,7 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `additions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
 | `deletions` | integer | optional | yes | minimum 0 | yes | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 | `merged_at` | string | optional | yes | format date-time | yes | When GitHub says the pull request merged (its mergedAt, copied as given). null when unknown. |
-| `train` | enum | optional | yes | one of "rode", "dropped", null | yes | Whether the merge rode the merge train: rode when callum-flow-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
+| `train` | enum | optional | yes | one of "rode", "dropped", null | yes | Whether the merge rode the merge train: rode when fabriek-merge was given --tested-tree (CI had passed the tree the merge produced), dropped when it was given --train-dropped (a built train was given up, train_reason says why), null otherwise. |
 | `train_reason` | enum | optional | yes | one of "head-moved", "outside-merge", "conflict", "train-red", "left-queue", "tree-mismatch", "refused", null | yes | Why a built train was dropped, set only when train is dropped; null otherwise. |
 | `tested_tree` | string | optional | yes | pattern `^[0-9a-f]{40}$` | yes | The tree sha CI passed on the train branch, set only when train is rode; null otherwise. |
 | `tree_matched` | boolean | optional | yes |  | yes | When train is rode: whether the merge commit's tree equals tested_tree (false means main landed on a tree CI did not pass). null when there was no train or the merge commit's tree could not be read. |
@@ -1185,7 +1185,7 @@ Example:
 
 ## requeued
 
-The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. Written by callum-flow-sweep when a lease ran out, and by the loop's reconcile or factory-reconcile when it released a claim with no live work behind it and put the issue back in the queue. Ends the claim. A reconcile release that takes the issue out of the factory is abandoned instead.
+The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. Written by fabriek-sweep when a lease ran out, and by the loop's reconcile or factory-reconcile when it released a claim with no live work behind it and put the issue back in the queue. Ends the claim. A reconcile release that takes the issue out of the factory is abandoned instead.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -1196,7 +1196,7 @@ The issue's claim was given back and the issue is in the queue again (ready labe
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `reason` | enum | required | no | one of "lease-expired", "reconcile" | yes | Why: lease-expired (no renewal in time) or reconcile (reconcile found no live work behind the claim and requeued it). |
-| `stage` | string | required | yes |  |  | reconcile: the v2 state (queued, designing, building, reviewing, fixing, parked and so on) callum-flow-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
+| `stage` | string | required | yes |  |  | reconcile: the v2 state (queued, designing, building, reviewing, fixing, parked and so on) fabriek-factory-state showed the issue in; rows written before the tool switch hold the old stage words (implementing, in pipeline, ready to merge); null otherwise. |
 | `lives` | integer | required | yes | minimum 1 | yes | reconcile: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The released work's branch, when known. |
 | `pr` | integer | required | yes | minimum 1 | yes | The released work's open pull request, when there is one. |
@@ -1305,7 +1305,7 @@ One shadow compare made by a reader that has an old/new source switch: the comma
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `reader` | string | required | no | pattern `^[a-z][a-z0-9-]*$` | yes | Which reader was compared, an open family such as claim-events. |
-| `tool` | string | required | no | minLength 1 | yes | The command that made the compare, such as callum-flow-sweep. |
+| `tool` | string | required | no | minLength 1 | yes | The command that made the compare, such as fabriek-sweep. |
 | `compared` | integer | required | no | minimum 0 | yes | How many keys were compared. |
 | `differences` | integer | required | no | minimum 0 | yes | How many keys whose answers differ, with both sides cut at the settle time. |
 | `live_differences` | integer | required | no | minimum 0 | yes | How many keys whose answers differ on everything read, push lag included. |
@@ -1322,7 +1322,7 @@ Example:
 ```json
 {
   "reader": "claim-events",
-  "tool": "callum-flow-sweep",
+  "tool": "fabriek-sweep",
   "compared": 42,
   "differences": 0,
   "live_differences": 0,
@@ -1336,7 +1336,7 @@ Example:
 
 ## test_weakened
 
-A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or || true, or commented an assertion out). Written by callum-flow-merge, one per flagged commit.
+A commit on a merged pull request deleted or weakened a test (removed an assertion, added a skip, .only, --warn-only or || true, or commented an assertion out). Written by fabriek-merge, one per flagged commit.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)
@@ -1453,7 +1453,7 @@ Example:
 
 ## untrusted_stripped
 
-A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. Written by callum-flow-issue-read. A security trail: the dropped text itself is never logged.
+A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. Written by fabriek-issue-read. A security trail: the dropped text itself is never logged.
 
 - Issue field (`x-issue`): required
 - Versions: v1 (current)

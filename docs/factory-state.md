@@ -1,6 +1,6 @@
 # Factory state
 
-`callum-flow-factory-state` (in the base image, read-only) answers "what is the factory doing right
+`fabriek-factory-state` (in the base image, read-only) answers "what is the factory doing right
 now?" in one deterministic report, so no reader has to write its own SQL against raw tables. Read
 naively those tables are wrong: on 2026-10-10 half the issues that looked in progress were closed on
 GitHub. The database decides each issue's state: the tool reads the
@@ -14,7 +14,7 @@ adds a short narrative.
 ## Usage
 
 ```
-callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
+fabriek-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
                           [--rule <state>=<minutes>]... [--github on|off] [--source new]
 ```
 
@@ -26,7 +26,7 @@ Exit 0 ok, 2 bad arguments, 1 when the factory database cannot be read or has no
 shows as `n/a` with the reason.
 
 `--source` is retired: the old store is gone. `--source new`, `--source=new` and
-`CALLUM_FLOW_FACTORY_STATE_SOURCE=new` are accepted silently. The two other names of the former switch
+`FABRIEK_FACTORY_STATE_SOURCE=new` (or the old name `CALLUM_FLOW_FACTORY_STATE_SOURCE=new`, still read as an alias) are accepted silently. The two other names of the former switch
 (`old` and the comparison mode) print one line on stderr saying the old store is retired and the view is read, then
 read the view and exit 0, so a caller written against the switch keeps working; no comparison record is
 written. Any other value is a usage error. See [replay.md](factory-events/replay.md#source-switch).
@@ -185,7 +185,7 @@ when set, `+K more` when `considered` is above the entries shown, `empty` for no
 
 ## GitHub flags
 
-GitHub is read live (through `callum-flow-issue-read`: open or closed, labels, the claim comment), so for a
+GitHub is read live (through `fabriek-issue-read`: open or closed, labels, the claim comment), so for a
 past `--at` its facts are not as of that time; the output says so. `--github off` gives a database-only view.
 
 - A closed issue is final: shown as `closed`, `source` `github`, detail

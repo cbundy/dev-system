@@ -71,8 +71,8 @@ A read tool that moves from the old store to the new one carries a source switch
 `$DEV_SYSTEM_SHARE` (the image copies it to `/usr/local/share/dev-system/`).
 
 The source is chosen by the `--source old|new|shadow` flag (or `--source=X`), else by
-`CALLUM_FLOW_<TOOL>_SOURCE` (the tool name upper-cased, `-` becoming `_`, so `factory-state` reads
-`CALLUM_FLOW_FACTORY_STATE_SOURCE`), else by the tool's own default. Anything else is a usage error
+`FABRIEK_<TOOL>_SOURCE` (the tool name upper-cased, `-` becoming `_`, so `factory-state` reads
+`FABRIEK_FACTORY_STATE_SOURCE`), else by the tool's own default. Anything else is a usage error
 (`resolveSource` throws an Error with `code: "USAGE"`).
 
 - `old`: the tool reads the old store only.
@@ -96,16 +96,16 @@ these records stay on the device. Fields:
 
 A run with differences also prints `<tool>: shadow: N difference(s), first at <path> (see <file>)` on stderr.
 
-The claim tools (`callum-flow-claim`, `callum-flow-sweep`) are the exception
+The claim tools (`fabriek-claim`, `fabriek-sweep`) are the exception
 ([#905](https://github.com/cbundy/dev-system/issues/905)): their rule is a shell file sourced inside the heartbeat
 and the sweep (`images/base/claim-events.sh`), so the switch is shell too. It uses the same names and values
-(`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, `old|new|shadow`, default `new`, `old` the way back; an invalid value warns once and reads old,
+(`FABRIEK_CLAIM_EVENTS_SOURCE`, `old|new|shadow`, default `new`, `old` the way back; an invalid value warns once and reads old,
 because the rule must never fail its callers) and records each shadow compare as a `shadow_read` event
 (`reader` `claim-events`, `tool` the calling command), not as a line in `factory/.shadow/<tool>.jsonl`. The reason is
 that a sourced shell rule cannot call `runShadow`, and the event is a record the metrics query already reads
 ([6b](../metrics.md#6b-reader-shadow-compares)). The compared value per `repo#issue` is what the rule decides on (the
-lifecycle class, the latest claim type and its device); `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) bounds
-both reads and `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) cuts `differences`, while `live_differences`
+lifecycle class, the latest claim type and its device); `FABRIEK_SHADOW_WINDOW_SECONDS` (default 604800) bounds
+both reads and `FABRIEK_SHADOW_SETTLE_SECONDS` (default 600) cuts `differences`, while `live_differences`
 counts the whole window. Both reads leave out the history from before a device's first new-store event (its
 floor, the first row of that device for the repo in `factory.event_log`, read once per compare): the production new
 store holds only dual-written events and is not backfilled (`factory-events-replay.js load` fills a throwaway
@@ -118,7 +118,7 @@ differences left were issues decided by such devices). The event names this devi
 `scope_floor`. Under `new` the claim tools lack that history until the 7-day window passes the floor (for
 cbundy/dev-system, 2026-10-17 13:26 UTC, so until 2026-10-24 13:26 UTC).
 
-`callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898)) left the switch with [#1293](https://github.com/cbundy/dev-system/issues/1293): it reads only the `factory.issue_state_at` view of the factory database, and `--source old` and `--source shadow` only print a warning ([factory-state.md](../factory-state.md#usage)).
+`fabriek-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898)) left the switch with [#1293](https://github.com/cbundy/dev-system/issues/1293): it reads only the `factory.issue_state_at` view of the factory database, and `--source old` and `--source shadow` only print a warning ([factory-state.md](../factory-state.md#usage)).
 
 Tools behind the switch: `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900), default `new`; its replay reader is
 `scripts/factory-events-replay/readers/heartbeat-state.js`; `new` reads this device's local new log under a 500 ms
@@ -153,7 +153,7 @@ Switched readers and their known differences from `old` (dropped before comparin
 
 | Tool | Reader | Known differences |
 |---|---|---|
-| `callum-flow-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; `throughput.by_regime` and `spend.by_regime` (the old source's records carry no regime); the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
+| `fabriek-evaluate` ([#899](https://github.com/cbundy/dev-system/issues/899)) | [`readers/evaluate.js`](../../scripts/factory-events-replay/readers/evaluate.js) | the `sources` block; `waiting` and `adjudicator_agreement`, which read n/a under `new`; `throughput.by_regime` and `spend.by_regime` (the old source's records carry no regime); the per-issue lead-time stages `design`, `implementation`, `pipeline` and `waiting_for_merge`, which time `delegated` and `merge_ready` by the transition's `seq_at` ([metrics.md](../metrics.md#reading-the-new-events)) |
 | the factory loop's record rebuild ([#976](https://github.com/cbundy/dev-system/issues/976)) | [`readers/loop-records.js`](../../scripts/factory-events-replay/readers/loop-records.js) | none known: it runs the plugin's own `record.ts` over both stores, per repo and device |
 | the factory loop's facts and ledger rebuild ([#977](https://github.com/cbundy/dev-system/issues/977)) | [`readers/loop-facts.js`](../../scripts/factory-events-replay/readers/loop-facts.js) | the facts left out under `new` because no v2 path reads them: `briefs` (only `IssueView.delegatedBrief`, which only `state.ts` sets), and `reviewFixes`, `verdicts`, `superseded`, `answered` and `pipeline` (only `runsFromEvents`, whose `state.runs` only the plan replay, `scripts/factory-loop-replay.js`, and the state digest read); the `out`, `decision` columns and the run, PR and head of a `loop_entry`, dropped from the loop-logged ledger entries on both sides (no v2 path reads the outcome of a tell, task or judge entry: the outcomes v2 reads are the claim, adopt and rollout ones of entries it keys itself, which are never logged through `loop`); times are whole seconds on both sides (the old log stores no milliseconds); the history from before a device's first new-store event, which the production new store never held (the shadow drops it from both sides, `scope_floor`; the replay's throwaway database holds the full history, so it needs no floor) |
 | `heartbeat-state` ([#900](https://github.com/cbundy/dev-system/issues/900)) | [`readers/heartbeat-state.js`](../../scripts/factory-events-replay/readers/heartbeat-state.js) | the per-entry `state` (old state names against new types); the v1-only events the new log lacks (`run_started`, `superseded`, `owner_wait`, `briefed`, `design_routed` and the replayed run facts `failed`, `head_mismatch`, `conflict`, `ci_stalled`); history from before the device's dual write; a window that ends in the few seconds between a transition into building, fixing or merge-queue and the v1 line the loop writes after it (`new` derives `delegated`, `fix_requested` and `merge_ready` from the transition) |
@@ -162,7 +162,7 @@ Switched readers and their known differences from `old` (dropped before comparin
 
 Since [#1143](https://github.com/cbundy/dev-system/issues/1143) the old log and `factory.events` get no new rows, so
 the "way back" below is no longer one: `old` and `shadow` (and an invalid value, which still reads old) read a store
-frozen at the cutover. `callum-flow-dual-write-check` only compares the history before it.
+frozen at the cutover. `fabriek-dual-write-check` only compares the history before it.
 
 The default source of these tools moved from `shadow` to `new` on 2026-10-18
 ([#902](https://github.com/cbundy/dev-system/issues/902); the factory loop row under [#978](https://github.com/cbundy/dev-system/issues/978)). The owner decided to skip the shadow runs: the evidence is the
@@ -172,9 +172,9 @@ records ([metrics.md](../metrics.md#shadow-runs-source-switch)).
 
 | Tool | Moved | Evidence | Way back |
 |---|---|---|---|
-| `callum-flow-factory-state` | 2026-10-18; left the switch with #1293 | the tool now reads the `factory.issue_state_at` view only | none: `CALLUM_FLOW_FACTORY_STATE_SOURCE=old` and `shadow` only warn |
-| `callum-flow-evaluate` | 2026-10-18 | the same; evaluate's v1-only metrics read n/a under `new` | `CALLUM_FLOW_EVALUATE_SOURCE=old` |
-| `heartbeat-state` | 2026-10-18 | the same; `new` reads only this device's local new log under a 500 ms deadline, so an issue whose only lifecycle events came before the device's dual write reads idle | `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE=old` |
+| `fabriek-factory-state` | 2026-10-18; left the switch with #1293 | the tool now reads the `factory.issue_state_at` view only | none: `FABRIEK_FACTORY_STATE_SOURCE=old` and `shadow` only warn |
+| `fabriek-evaluate` | 2026-10-18 | the same; evaluate's v1-only metrics read n/a under `new` | `FABRIEK_EVALUATE_SOURCE=old` |
+| `heartbeat-state` | 2026-10-18 | the same; `new` reads only this device's local new log under a 500 ms deadline, so an issue whose only lifecycle events came before the device's dual write reads idle | `FABRIEK_HEARTBEAT_STATE_SOURCE=old` |
 | the factory loop (`eventsSource`: record rebuild, facts, ledger rebuild, once keys) | 2026-10-18 | the owner decided to skip the `loop-facts` shadow run (it had no compare, since v0.59.0 was not yet run by the loop); the `loop-records` compares of query 6b for cbundy/dev-system: 3 compares on 2026-10-18 between 21:42 and 23:42 UTC, 0 differences, 1 live difference (push lag, not counted), no failed reads | `/factory config set eventsSource old` (next pass) |
 | the factory HUD (via factory-state) | 2026-10-18 | it passes no source when `FACTORY_HUD_SOURCE` is unset, so it follows factory-state | none: factory-state warns on `old` and `shadow` and reads the view |
 

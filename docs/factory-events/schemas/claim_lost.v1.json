@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "claim_lost.v1.json",
   "title": "claim_lost",
-  "description": "This device tried to claim the issue and another device holds it. Written by callum-flow-claim. Proof that two devices contended for one issue; this device does not work on it.",
+  "description": "This device tried to claim the issue and another device holds it. Written by fabriek-claim. Proof that two devices contended for one issue; this device does not work on it.",
   "x-issue": "required",
   "type": "object",
   "additionalProperties": false,

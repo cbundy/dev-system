@@ -136,11 +136,11 @@ variable "otlp_endpoint" {
 
 # The authors whose GitHub issue, PR and comment text the factory trusts
 # (cbundy/dev-system#307). The image bakes no list: this variable is the only
-# source, so every workspace gets it from the template, and callum-flow-issue-read
+# source, so every workspace gets it from the template, and fabriek-issue-read
 # and dev-doctor fail closed when it is missing or malformed.
 variable "trusted_authors" {
   default     = ""
-  description = "Comma-separated login:numeric_id entries, e.g. cbundy:13131067 (look the id up with: gh api users/<login> --jq .id). Set as CALLUM_FLOW_TRUSTED_AUTHORS in every workspace. Empty leaves it unset, and dev-doctor reports that as a failure."
+  description = "Comma-separated login:numeric_id entries, e.g. cbundy:13131067 (look the id up with: gh api users/<login> --jq .id). Set as FABRIEK_TRUSTED_AUTHORS (and the old name CALLUM_FLOW_TRUSTED_AUTHORS, until the aliases are removed) in every workspace. Empty leaves it unset, and dev-doctor reports that as a failure."
   type        = string
 
   validation {
@@ -190,11 +190,11 @@ variable "remote_control_resume_prompt" {
 
 # The Claude plugins every workspace of the template gets (DEV_DEFAULT_PLUGINS, the
 # image's plugins.sh format: <plugin>@<marketplace>=<source>#<ref>, whitespace
-# separated). Empty keeps the image's default (callum-flow at the image's release);
+# separated). Empty keeps the image's default (fabriek at the image's release);
 # coder/push.sh sets it for orchestrator-loop, which also needs factory-loop.
 variable "default_plugins" {
   default     = ""
-  description = "The Claude plugins every workspace gets (DEV_DEFAULT_PLUGINS), e.g. 'callum-flow@callum=cbundy/dev-system#v0.37.0 factory-loop@callum=cbundy/dev-system#v0.37.0'. Empty keeps the image's default."
+  description = "The Claude plugins every workspace gets (DEV_DEFAULT_PLUGINS), e.g. 'fabriek@callum=cbundy/dev-system#v0.37.0 factory-loop@callum=cbundy/dev-system#v0.37.0'. Empty keeps the image's default."
   type        = string
 }
 
@@ -549,7 +549,7 @@ data "coder_parameter" "extra_trusted_authors" {
   count        = var.workspace_secrets_dir == "" ? 0 : 1
   name         = "extra_trusted_authors"
   display_name = "Extra trusted authors"
-  description  = "Comma-separated login:numeric_id entries appended to the template's trusted authors in CALLUM_FLOW_TRUSTED_AUTHORS, e.g. someone:12345. Takes effect on the next workspace start."
+  description  = "Comma-separated login:numeric_id entries appended to the template's trusted authors in FABRIEK_TRUSTED_AUTHORS (and CALLUM_FLOW_TRUSTED_AUTHORS), e.g. someone:12345. Takes effect on the next workspace start."
   type         = "string"
   default      = ""
   mutable      = true
@@ -665,6 +665,8 @@ locals {
   # extra_trusted_authors parameter appends to the template's.
   trusted_authors_effective = join(",", compact([var.trusted_authors, try(data.coder_parameter.extra_trusted_authors[0].value, "")]))
   trusted_env = local.trusted_authors_effective == "" ? [] : [
+    "FABRIEK_TRUSTED_AUTHORS=${local.trusted_authors_effective}",
+    # The old name, read as an alias until it is removed (dev-system#1361). Same value.
     "CALLUM_FLOW_TRUSTED_AUTHORS=${local.trusted_authors_effective}",
   ]
 

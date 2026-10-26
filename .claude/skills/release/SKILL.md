@@ -35,7 +35,7 @@ When a person runs this skill with no step given, pick the step yourself in step
   (`gh run list --branch main --workflow ci.yml --limit 1`).
 - Previous tag: the highest `v*` semver tag. List PRs merged since it:
   `git log --first-parent --format=%s <prev>..origin/main`, then
-  `callum-flow-issue-read --pr <N>` for the title and body of each.
+  `fabriek-issue-read --pr <N>` for the title and body of each.
 - Milestone: `node scripts/release-milestone.js --plan X.Y.Z --to origin/main` (read-only; X.Y.Z is
   your chosen version). It lists the `Next release` milestone's items, its expected-bump line,
   the PRs in the git range that are missing from it, and the items in it that are not in the range.

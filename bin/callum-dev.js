@@ -108,6 +108,12 @@ const REMOVED_ALLOW = [
   "Bash(no-mistakes axi logs *)",
 ];
 
+// Plugins the template renamed: old enabledPlugins key -> new key. When the merged result enables
+// the new key, `update` drops the old one, which a repo without a baseline (or with a baseline
+// that lacks it) would otherwise carry as repo-added and leave both names enabled. Remove this
+// rule with the callum-flow aliases (dev-system#1361).
+const RENAMED_PLUGINS = { "callum-flow@callum": "fabriek@callum" };
+
 // The state folder no-mistakes left at the repo root. It is untracked and may hold the tool's
 // old worktrees, so `update` reports it and never deletes it.
 const LEFTOVER_DIRS = [".no-mistakes"];
@@ -336,6 +342,11 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   // `next` is a fresh parse, so it is safe to build the result in place.
   const merged = next;
   carryRepoAddedKeys(merged, current, baseline, []);
+  if (isPlainObject(merged.enabledPlugins)) {
+    for (const [oldKey, newKey] of Object.entries(RENAMED_PLUGINS)) {
+      if (merged.enabledPlugins[newKey] === true) delete merged.enabledPlugins[oldKey];
+    }
+  }
 
   for (const list of MERGED_BY_VALUE) {
     const key = list.split(".")[1];
