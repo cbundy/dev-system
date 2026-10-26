@@ -14,7 +14,6 @@
 // read against a known tag, clears it, and a skipped read leaves it as it was.
 //
 // Pure parsing and one loop of reads; the cache lives in observe.ts's V2Cache.
-import { settingPair } from '../tool-name.mjs'
 import type { Ms } from '../types'
 import { compareArgv, issueReadArgv, prWaitArgv } from './argv'
 import type { SourceCtx } from './observe'
@@ -119,7 +118,7 @@ export async function readWaits(
     const tag = c.kind === 'tag-contains' ? tagOf(ctx, c) : null
     const argv = c.kind === 'issue-closed' ? issueReadArgv(c.issue) : c.kind === 'pr-merged' ? prWaitArgv(ctx.rt.repo, c.pr) : compareArgv(c.repo ?? ctx.rt.repo, tag ?? '', c.sha)
     // an issue of another repo is read through the reader pointed at that repo
-    const env = c.kind === 'issue-closed' && c.repo !== undefined ? { ...ctx.rt.env, ...settingPair('REPO', c.repo) } : undefined
+    const env = c.kind === 'issue-closed' && c.repo !== undefined ? { ...ctx.rt.env, FABRIEK_REPO: c.repo, CALLUM_FLOW_REPO: c.repo } : undefined
     try {
       const r = await ctx.run(argv, undefined, undefined, env)
       const held = r.exitCode === 0 ? heldOf(c, r.stdout) : null
