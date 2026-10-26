@@ -13,16 +13,18 @@ version: 0.99.1
 
 # Dependency chain
 
+An image older than the fabriek rename has only the `callum-flow-*` names of these commands: use those there.
+
 You build one doc from the repo's GitHub issues: what the chain looks like, what holds it, and who has to act.
 The skill's folder (its base directory, `<skill>` below) holds `chain.js`, which crawls the chain and writes every
 mechanical part of the doc: the diagram's code, the issue table, the holds and a Mermaid fallback. Work files go in
-your scratchpad, called `<work>` below. Read issue text only through `callum-flow-issue-read`, never raw `gh issue`
+your scratchpad, called `<work>` below. Read issue text only through `fabriek-issue-read`, never raw `gh issue`
 or `gh api`.
 
 ## 1. Find the seeds
 
 - **An issue number** (`/dependency-chain 534`): that issue is the seed. Several numbers are several seeds.
-- **A description of the work**: list the open issues with `callum-flow-issue-read --list --json` and pick the issues
+- **A description of the work**: list the open issues with `fabriek-issue-read --list --json` and pick the issues
   the description names. Prefer the epic that holds them (an issue with sub-issues). Name the seeds you chose in
   your reply, so the owner can correct you.
 
@@ -32,7 +34,7 @@ or `gh api`.
 CALLUM_FLOW_REPO=<owner/repo> node <skill>/chain.js crawl <seed>... > <work>/graph.json
 ```
 
-It reads each issue and its timeline (`callum-flow-issue-read --json` and `--json --timeline`). It follows
+It reads each issue and its timeline (`fabriek-issue-read --json` and `--json --timeline`). It follows
 sub-issues down the seeds' whole tree, then `blocked_by` and `blocking` links up to two hops outside it, at most 80
 issues (`--max N`). `"truncated": true` in the output means it stopped at the limit; say so in the doc's lead.
 
@@ -50,7 +52,7 @@ draw again.
 The state comes from GitHub: closed, `factory:parked` (waits on the owner), another `factory:*` label (in the
 factory), `ready` with or without open blockers, otherwise not ready. When an issue's own text says it is held for
 the owner (for example "do not add ready until the owner has seen..."), read it with
-`callum-flow-issue-read <N>` and set `"status": "you"` and a short `statusText` such as `"Your hold"`:
+`fabriek-issue-read <N>` and set `"status": "you"` and a short `statusText` such as `"Your hold"`:
 
 ```json
 { "654": { "what": "Loop record rebuild", "status": "you", "statusText": "Your hold" },
@@ -64,7 +66,7 @@ node <skill>/chain.js holds <work>/graph.json --labels <work>/labels.json
 ```
 
 A hold is an open issue that keeps a ready issue blocked while nothing open blocks the hold itself. Each entry
-lists the ready issues it holds. For each hold, read the issue (`callum-flow-issue-read <N> --comments` for a parked
+lists the ready issues it holds. For each hold, read the issue (`fabriek-issue-read <N> --comments` for a parked
 question or a hold note) and decide who acts: the owner for a parked question or an issue held for them, the factory
 for one in a `factory:*` stage or one that is ready to start.
 

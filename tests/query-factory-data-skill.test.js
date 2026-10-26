@@ -8,7 +8,7 @@ const path = require("node:path");
 const { test } = require("node:test");
 
 const ROOT = path.join(__dirname, "..");
-const skill = fs.readFileSync(path.join(ROOT, "plugins", "callum-flow", "skills", "query-factory-data", "SKILL.md"), "utf8");
+const skill = fs.readFileSync(path.join(ROOT, "plugins", "fabriek", "skills", "query-factory-data", "SKILL.md"), "utf8");
 const metrics = fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8");
 
 // GitHub heading slug: lowercase, drop everything but letters, digits, underscores, spaces

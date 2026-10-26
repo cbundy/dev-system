@@ -114,9 +114,11 @@ image_job() {
   fi
 }
 
-# plugin_job: installed callum-flow (per scope) against the image's pin.
+# plugin_job: each default plugin installed (per scope) against the image's pin.
+# A default whose twin (twin_plugin) is the one installed - a repo whose
+# settings still enable the old name - is reported under the twin's id.
 plugin_job() {
-  local id src ref pin installed scope ver ppath orphans live latest="" candidate=""
+  local id src ref pin installed scope ver ppath orphans live latest="" candidate="" twin
   while read -r id src; do
     [ -n "$id" ] || continue
     ref=""
@@ -125,6 +127,11 @@ plugin_job() {
     if dev_system_location "${src%%#*}"; then candidate=$(candidate_plugin_ref) || candidate=""; fi
     pin=$(semver "$ref")
     installed=$(claude_plugin_cli list --json 2>/dev/null) || { line UNKNOWN "$id" "running=? latest=? (claude plugin list failed)"; continue; }
+    if twin=$(twin_plugin "$id") \
+      && ! printf '%s\n' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1 \
+      && printf '%s\n' "$installed" | jq -e --arg id "$twin" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
+      id="$twin"
+    fi
     latest=""
     [ -n "$LOCAL" ] || latest=$(gh api "repos/${src%%#*}/releases/latest" --jq .tag_name 2>/dev/null)
     latest=$(semver "$latest")

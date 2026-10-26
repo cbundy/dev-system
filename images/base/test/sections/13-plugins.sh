@@ -137,28 +137,28 @@ plugin_check "a full dev-init starts the login page before it installs the plugi
 
 # The image's default plugins (DEV_DEFAULT_PLUGINS, #148). The stub tests
 # set the image's value inside the container (docker() empties it).
-DEFAULT_PLUGINS='export DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system;'
-check "the image's default Claude plugins are callum-flow from cbundy/dev-system, and plugins.sh is baked in" bash -c "
-  docker image inspect -f '{{json .Config.Env}}' '$IMAGE' | jq -e 'any(.[]; test(\"^DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system#v[0-9][^ ]*$\"))' &&
+DEFAULT_PLUGINS='export DEV_DEFAULT_PLUGINS=fabriek@callum=cbundy/dev-system;'
+check "the image's default Claude plugins are fabriek from cbundy/dev-system, and plugins.sh is baked in" bash -c "
+  docker image inspect -f '{{json .Config.Env}}' '$IMAGE' | jq -e 'any(.[]; test(\"^DEV_DEFAULT_PLUGINS=fabriek@callum=cbundy/dev-system#v[0-9][^ ]*$\"))' &&
   docker run --rm --entrypoint '' '$IMAGE' test -f /usr/local/share/dev-system/plugins.sh"
 plugin_check "no repo: dev-init installs the default plugin, and dev-doctor finds it" "$DEFAULT_PLUGINS"'
   rm -rf /tmp/ws; out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -i plugin; cat /tmp/plugin-calls
   [ $rc = 0 ] &&
-  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system" "/ install callum-flow@callum")" ] &&
-  echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
-  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"' \
+  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system" "/ install fabriek@callum")" ] &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin fabriek@callum" &&
+  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: fabriek@callum"' \
   -e SETTINGS=
 plugin_check "a repo that is not onboarded gets the default plugin too, next to nothing of its own" "$DEFAULT_PLUGINS"'
   out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
-  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
+  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin fabriek@callum" &&
   [ "$(grep -c " install " /tmp/plugin-calls)" = 1 ]' \
   -e SETTINGS='{"permissions":{"allow":[]}}'
-plugin_check "a repo that enables callum-flow itself: installed once, from the repo's marketplace" "$DEFAULT_PLUGINS"'
+plugin_check "a repo that enables callum-flow (the old name of fabriek) itself: installed once, from the repo's marketplace, and no fabriek next to it" "$DEFAULT_PLUGINS"'
   out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
   [ $rc = 0 ] &&
   [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system#v1" "/ install callum-flow@callum")" ] &&
   echo "$out" | grep -qxF "dev-doctor: OK   Claude plugins enabled in /tmp/ws/.claude/settings.json are installed" &&
-  ! echo "$out" | grep -q "default Claude plugins"' \
+  ! echo "$out" | grep -q "default Claude plugins" && ! grep -q "install fabriek@callum" /tmp/plugin-calls' \
   -e SETTINGS='{"extraKnownMarketplaces":{"callum":{"source":{"source":"github","repo":"cbundy/dev-system","ref":"v1"}}},"enabledPlugins":{"callum-flow@callum":true}}'
 plugin_check "an enabled default without a repo marketplace installs once in every dev-init mode" "$DEFAULT_PLUGINS"'
   for mode in "" --repo --plugins; do
@@ -189,14 +189,17 @@ plugin_check "DEV_DEFAULT_PLUGIN_REFS_WIN=1: a missing default plugin is a FAIL,
   -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}' -e DEV_DEFAULT_PLUGIN_REFS_WIN=1
 # The one real install (the network, GitHub and the real claude CLI, no
 # login): a workspace with every setting at its default and no repo comes up
-# with the callum-flow skills installed and enabled. command docker keeps the
-# image's DEV_DEFAULT_PLUGINS.
-check "a fresh workspace with no repo gets the real callum-flow plugin and its skills" command docker run --rm \
+# with the fabriek skills installed and enabled - under callum-flow@callum while
+# the image's pinned release predates the rename (plugins.sh falls back to the old name),
+# and never both. command docker keeps the image's DEV_DEFAULT_PLUGINS.
+check "a fresh workspace with no repo gets the real fabriek plugin and its skills" command docker run --rm \
   --entrypoint "" "$IMAGE" bash -c '
   out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -i plugin
   list=$(cd / && claude plugin list --json); echo "$list"
-  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
-  echo "$list" | jq -e "any(.[]; .id == \"callum-flow@callum\" and .enabled == true)" >/dev/null &&
-  skills=$(ls "$(echo "$list" | jq -r ".[] | select(.id == \"callum-flow@callum\") | .installPath")/skills") && echo "$skills" &&
+  [ $rc = 0 ] &&
+  [ "$(echo "$list" | jq "[.[] | select(.id == \"fabriek@callum\" or .id == \"callum-flow@callum\")] | length")" = 1 ] &&
+  id=$(echo "$list" | jq -r ".[] | select((.id == \"fabriek@callum\" or .id == \"callum-flow@callum\") and .enabled == true) | .id") && [ -n "$id" ] &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin $id" &&
+  skills=$(ls "$(echo "$list" | jq -r ".[] | select(.id == \"$id\") | .installPath")/skills") && echo "$skills" &&
   for s in onboard update-dev; do echo "$skills" | grep -qxF "$s" || exit 1; done &&
-  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"'
+  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: fabriek@callum"'

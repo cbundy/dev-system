@@ -135,6 +135,20 @@ expect "newer image published" 1 '^dev-version: STALE base-image running=aaaaaaa
 reset; printf '[{"id":"callum-flow@callum","version":"0.1.0","scope":"user"}]' > "$FIX/plugins.json"; run_cmd
 expect "plugin below the pin" 1 '^dev-version: STALE callum-flow@callum\(user\) running=0.1.0 pin=0.2.0'
 
+# The image's default is fabriek@callum (the plugin's new name): a repo that still runs
+# callum-flow@callum is reported as that install, never as "not installed".
+reset; printf '[{"id":"callum-flow@callum","version":"0.2.0","scope":"user"}]' > "$FIX/plugins.json"
+PINNED_PLUGINS="fabriek@callum=cbundy/dev-system#v0.2.0" run_cmd
+expect "fabriek default, callum-flow runs" 0 '^dev-version: OK callum-flow@callum\(user\) running=0.2.0 pin=0.2.0'
+printf '%s\n' "$out" | grep -q 'not installed' && fail "fabriek default, callum-flow runs: reported as not installed. Output:
+$out"
+reset; printf '[{"id":"fabriek@callum","version":"0.2.0","scope":"user"}]' > "$FIX/plugins.json"
+PINNED_PLUGINS="fabriek@callum=cbundy/dev-system#v0.2.0" run_cmd
+expect "fabriek default, fabriek runs" 0 '^dev-version: OK fabriek@callum\(user\) running=0.2.0 pin=0.2.0'
+reset; printf '[]' > "$FIX/plugins.json"
+PINNED_PLUGINS="fabriek@callum=cbundy/dev-system#v0.2.0" run_cmd
+expect "fabriek default, neither runs" 0 '^dev-version: UNKNOWN fabriek@callum running=none pin=0.2.0 .*\(not installed\)'
+
 # A project-scope install whose project path is gone is not judged: no STALE line, one INFO count.
 # One at a live path below the pin still is.
 reset; printf '[{"id":"callum-flow@callum","version":"0.2.0","scope":"user"},{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/gone"},{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/gone2"}]' "$tmp" "$tmp" > "$FIX/plugins.json"; run_cmd

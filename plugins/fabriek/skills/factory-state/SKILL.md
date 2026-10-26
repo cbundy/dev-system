@@ -4,7 +4,7 @@ description: >-
   Say what the agent factory is doing right now: which issues are queued,
   being designed, building, reviewing, fixing, in the merge queue, parked, waiting or
   closed, which are stuck and why, which repos have only partial data, and how
-  that agrees with GitHub. Runs the read-only `callum-flow-factory-state` tool
+  that agrees with GitHub. Runs the read-only `fabriek-factory-state` tool
   and adds a short narrative. Use for "what is the factory doing right now?",
   "what is in flight?", "what is stuck?" or "what needs attention?". For
   historical numbers use query-factory-data, for a windowed report use
@@ -22,8 +22,10 @@ https://github.com/cbundy/dev-system/blob/main/docs/factory-state.md
 
 ## Run
 
+An image older than the fabriek rename has only the `callum-flow-*` names of these commands: use those there.
+
 ```sh
-callum-flow-factory-state --format json
+fabriek-factory-state --format json
 ```
 
 Add `--repo <owner/name>` (repeatable) to narrow it, `--at <ISO time>` to look at a past moment

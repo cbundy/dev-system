@@ -24,7 +24,7 @@ name: CI
 # - `test`: `npm test` (mods on the Claude Code version pinned in
 #   .github/claude-code-version): runs the callum-dev bin end-to-end (init, update
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
-#   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
+#   break the CLI's assumptions fail here, plus plugins/fabriek's hook tests
 #   (dev-system#52), the callum-tools script tests and every mod's validation
 #   and tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1), plus the schema
 #   compatibility test (tests/schema-compat.test.js), which runs the last 10 minor releases'

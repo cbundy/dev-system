@@ -27,9 +27,9 @@ const REGEN_COMMAND = "npm run build:skills";
 // Paths are relative to the repo root.
 const SKILLS = [
   {
-    source: "plugins/callum-flow/skills/onboard/SKILL.src.md",
+    source: "plugins/fabriek/skills/onboard/SKILL.src.md",
     doc: "docs/onboarding.md",
-    output: "plugins/callum-flow/skills/onboard/SKILL.md",
+    output: "plugins/fabriek/skills/onboard/SKILL.md",
   },
 ];
 

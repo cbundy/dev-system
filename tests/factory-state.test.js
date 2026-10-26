@@ -561,21 +561,21 @@ test("CLI: --help prints usage and exits 0", () => {
 
 // ---------------------------------------------------------------- skill, docs, allow list
 
-const SKILL = fs.readFileSync(path.join(ROOT, "plugins", "callum-flow", "skills", "factory-state", "SKILL.md"), "utf8");
+const SKILL = fs.readFileSync(path.join(ROOT, "plugins", "fabriek", "skills", "factory-state", "SKILL.md"), "utf8");
 const frontmatter = (md) => md.match(/^---\n([\s\S]*?)\n---\n/)[1];
 
 test("factory-state skill: frontmatter, runs the tool, never queries tables or writes", () => {
   const fm = frontmatter(SKILL);
   assert.match(fm, /^name: factory-state$/m);
   assert.match(fm, /right now/);
-  assert.match(SKILL, /callum-flow-factory-state/);
+  assert.match(SKILL, /fabriek-factory-state/);
   assert.doesNotMatch(SKILL, /AGENTSVIEW_PG_URL|psql\s+["'$-]|dev-query/);
   assert.doesNotMatch(SKILL, /gh (issue|pr) (edit|comment|close|merge)/);
 });
 
 test("the historical-number and windowed-report skills route 'right now' to factory-state", () => {
   for (const s of ["query-factory-data", "evaluate-sessions"]) {
-    const fm = frontmatter(fs.readFileSync(path.join(ROOT, "plugins", "callum-flow", "skills", s, "SKILL.md"), "utf8"));
+    const fm = frontmatter(fs.readFileSync(path.join(ROOT, "plugins", "fabriek", "skills", s, "SKILL.md"), "utf8"));
     assert.match(fm, /factory-state/, s);
   }
 });

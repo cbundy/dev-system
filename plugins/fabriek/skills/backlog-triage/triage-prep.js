@@ -3,7 +3,7 @@
 // documents. Node built-ins only.
 //
 //   node triage-prep.js prep <list.json> <dir> [--batch N]
-//       <list.json> is `callum-flow-issue-read --list --state open --json` output. Writes
+//       <list.json> is `fabriek-issue-read --list --state open --json` output. Writes
 //       <dir>/batches.json (the triage workflow's `batches` arg: epic trees kept in one batch)
 //       and <dir>/issues.json (number -> title, labels, epic, sub-issue progress).
 //   node triage-prep.js seed <results.json> <dir> --repo R --title T [--lede L] [--direction D]

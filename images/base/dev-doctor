@@ -259,7 +259,35 @@ if command -v claude >/dev/null 2>&1; then
     fi
     level=warn
     [ "${DEV_DEFAULT_PLUGIN_REFS_WIN:-}" != 1 ] || level=fail
+    # One plugin, two names (twin_plugin): both installed, or both enabled in
+    # the repo's settings, run every guard hook twice.
+    enabled=""
+    [ -z "$settings" ] || enabled=$(enabled_plugins "$settings" 2>/dev/null) || enabled=""
+    while read -r id; do
+      [ -n "$id" ] || continue
+      twin=$(twin_plugin "$id") || continue
+      [[ "$id" < "$twin" ]] || continue
+      if grep -qxF -- "$id" <<<"$installed" && grep -qxF -- "$twin" <<<"$installed"; then
+        warn "Claude plugins $id and $twin are both installed: they are one plugin under two names, so each guard hook runs twice" \
+          "run: claude plugin uninstall $twin --scope user (or $id, if the repo's settings enable $twin), then start a new Claude session"
+      fi
+      if grep -qxF -- "$id" <<<"$enabled" && grep -qxF -- "$twin" <<<"$enabled"; then
+        warn "Claude plugins $id and $twin are both enabled in $settings: they are one plugin under two names, so each guard hook runs twice" \
+          "enable only one of them in $settings (fabriek@callum), then run: dev-init --repo"
+      fi
+    done < <(printf '%s\n%s\n' "$installed" "$enabled" | sort -u)
     if [ -n "$defaults" ]; then
+      # A default counts as installed when its twin is: the repo's settings may
+      # still enable the old name, or the marketplace ref in use may predate
+      # the rename so dev-init installed the old name (plugins.sh), and either
+      # way the plugin and its guard hooks are there.
+      while read -r id src; do
+        [ -n "$id" ] || continue
+        grep -qxF -- "$id" <<<"$installed" && continue
+        twin=$(twin_plugin "$id") || continue
+        grep -qxF -- "$twin" <<<"$installed" || continue
+        installed="$installed"$'\n'"$id"
+      done <<<"$defaults"
       if absent=$(not_installed "$defaults" "$installed"); then
         $level "default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: $(printf '%s\n' "$absent" | cut -d' ' -f1 | paste -sd ' ')" \
           "run: dev-init --plugins (or by hand: $(default_plugin_fix "$absent")), then start a new Claude session"

@@ -10,7 +10,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
-const DIR = path.join(__dirname, "..", "plugins", "callum-flow", "skills", "backlog-triage");
+const DIR = path.join(__dirname, "..", "plugins", "fabriek", "skills", "backlog-triage");
 const read = (f) => fs.readFileSync(path.join(DIR, f), "utf8");
 const PREP = path.join(DIR, "triage-prep.js");
 
@@ -51,9 +51,9 @@ test("no em dash in any skill file", () => {
   for (const f of fs.readdirSync(DIR)) assert.doesNotMatch(read(f), /—/, f);
 });
 
-test("the skill reads issues through callum-flow-issue-read and names every file it ships", () => {
+test("the skill reads issues through fabriek-issue-read and names every file it ships", () => {
   const skill = read("SKILL.md");
-  assert.match(skill, /callum-flow-issue-read --list --state open --json/);
+  assert.match(skill, /fabriek-issue-read --list --state open --json/);
   for (const f of fs.readdirSync(DIR).filter((f) => f !== "SKILL.md")) assert.ok(skill.includes(f), `SKILL.md never mentions ${f}`);
 });
 
