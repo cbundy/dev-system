@@ -1,6 +1,6 @@
 # shellcheck shell=sh
-# trusted-authors.sh: the one definition of CALLUM_FLOW_TRUSTED_AUTHORS, sourced
-# by callum-flow-issue-read and dev-doctor (cbundy/dev-system#307).
+# trusted-authors.sh: the one definition of FABRIEK_TRUSTED_AUTHORS, sourced
+# by fabriek-issue-read and dev-doctor (cbundy/dev-system#307).
 #
 # The variable is the ONLY source of the trusted list; the image bakes none. It
 # is comma-separated `login:numeric_id` entries, e.g. cbundy:13131067. Look an id
@@ -46,7 +46,7 @@ trusted_authors_identity_entry() {
 # Call after trusted_authors_check; a malformed identity file adds nothing.
 trusted_authors_effective() {
   _ta_id=$(trusted_authors_identity_entry 2>/dev/null) || _ta_id=""
-  jq -n -r --arg env "${CALLUM_FLOW_TRUSTED_AUTHORS-}" --arg id "$_ta_id" '
+  jq -n -r --arg env "${FABRIEK_TRUSTED_AUTHORS-}" --arg id "$_ta_id" '
     [($env | split(",")[]), $id] | map(select(contains(":")))
     | reduce .[] as $e ({seen: {}, out: []};
         ($e | split(":")) as $p | (($p[0] | ascii_downcase) + ":" + $p[1]) as $k
@@ -62,10 +62,10 @@ trusted_authors_check() {
   _ta_nl=${_ta_nl%_}
   _ta_ok=true
   _ta_entry=$(_ta_entry_re)
-  case "${CALLUM_FLOW_TRUSTED_AUTHORS-}" in *"$_ta_nl"*) _ta_ok=false ;; esac
-  if [ -n "${CALLUM_FLOW_TRUSTED_AUTHORS-}" ] \
-    && { [ "$_ta_ok" = false ] || ! printf '%s\n' "$CALLUM_FLOW_TRUSTED_AUTHORS" | grep -Eq "^${_ta_entry}(,${_ta_entry})*\$"; }; then
-    echo "CALLUM_FLOW_TRUSTED_AUTHORS is malformed (expected $TRUSTED_AUTHORS_FORMAT, no spaces)"
+  case "${FABRIEK_TRUSTED_AUTHORS-}" in *"$_ta_nl"*) _ta_ok=false ;; esac
+  if [ -n "${FABRIEK_TRUSTED_AUTHORS-}" ] \
+    && { [ "$_ta_ok" = false ] || ! printf '%s\n' "$FABRIEK_TRUSTED_AUTHORS" | grep -Eq "^${_ta_entry}(,${_ta_entry})*\$"; }; then
+    echo "FABRIEK_TRUSTED_AUTHORS is malformed (expected $TRUSTED_AUTHORS_FORMAT, no spaces)"
     return 1
   fi
   if ! trusted_authors_identity_entry >/dev/null 2>&1; then
@@ -73,7 +73,7 @@ trusted_authors_check() {
     return 1
   fi
   if [ -z "$(trusted_authors_effective)" ]; then
-    echo "CALLUM_FLOW_TRUSTED_AUTHORS is not set (expected $TRUSTED_AUTHORS_FORMAT)"
+    echo "FABRIEK_TRUSTED_AUTHORS is not set (expected $TRUSTED_AUTHORS_FORMAT)"
     return 1
   fi
   return 0

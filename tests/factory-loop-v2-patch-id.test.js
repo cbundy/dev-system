@@ -1,6 +1,6 @@
 "use strict";
 
-// The factory loop v2's patch identity, images/base/callum-flow-patch-id (docs/factory-loop/v2/SPEC.md
+// The factory loop v2's patch identity, images/base/fabriek-patch-id (docs/factory-loop/v2/SPEC.md
 // 8.4), run for real against a local bare origin: the loop keys a review's approval by it and the
 // merge guard's --patch mode checks it, so a clean merge of main into the PR's branch (what
 // `gh pr update-branch` does) must keep it, even where main changed lines next to the PR's, and any

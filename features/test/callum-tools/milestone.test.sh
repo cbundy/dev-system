@@ -1,13 +1,13 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-milestone (cbundy/dev-system#403). A fake gh
+# Plain-shell tests for fabriek-milestone (cbundy/dev-system#403). A fake gh
 # serves milestones, items and PRs from state files and records every call.
 # Hermetic PATH, no network, no Docker, so `npm test` runs it anywhere.
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-HELPER="$SCRIPT_DIR/../../../images/base/callum-flow-milestone"
+HELPER="$SCRIPT_DIR/../../../images/base/fabriek-milestone"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -74,7 +74,7 @@ pr() {
 }
 h() {
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_SHARE_DIR="$SCRIPT_DIR/../../../images/base" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:1}" "$SH" "$HELPER" "$@" 2> "$tmpdir/err") || rc=$?
+  out=$(PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r FABRIEK_SHARE_DIR="$SCRIPT_DIR/../../../images/base" FABRIEK_TRUSTED_AUTHORS="${TRUSTED-cbundy:1}" "$SH" "$HELPER" "$@" 2> "$tmpdir/err") || rc=$?
   err=$(cat "$tmpdir/err")
 }
 patches() { cat "$st/patches" 2> /dev/null || true; }
@@ -103,7 +103,7 @@ for args in "plan 12 next" "plan 12 later" "show" "show next" "expect minor why"
   eval "h $args"
   [ "$rc" = 0 ] || fail "no-op '$args': exit $rc $err"
   [ -z "$out" ] || fail "no-op '$args' wrote to stdout: $out"
-  [ "$err" = 'callum-flow-milestone: no open "Next release" milestone in o/r - nothing to do' ] || fail "no-op message '$args': $err"
+  [ "$err" = 'fabriek-milestone: no open "Next release" milestone in o/r - nothing to do' ] || fail "no-op message '$args': $err"
   [ ! -e "$st/patches" ] || fail "no-op '$args' wrote"
   grep -q 'pr view' "$st/calls" && fail "no-op '$args' read the PR" || true
 done
@@ -139,7 +139,7 @@ Expected: minor - old reason
 [ "$rc" = 0 ] && [ "$out" = "$want" ] || fail "show both: $rc [$out]"
 printf '%s' "$err" | grep -q '2 item(s) of "Next release" by untrusted authors not shown' || fail "show hidden note: [$err]"
 ! printf '%s' "$out" | grep -q 'IGNORE\|evil' || fail "untrusted title leaked"
-TRUSTED='' h show; [ "$rc" = 1 ] && [ -z "$out" ] && printf '%s' "$err" | grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is' || fail "show without trusted authors must fail closed: $rc [$out] [$err]"
+TRUSTED='' h show; [ "$rc" = 1 ] && [ -z "$out" ] && printf '%s' "$err" | grep -q 'FABRIEK_TRUSTED_AUTHORS is' || fail "show without trusted authors must fail closed: $rc [$out] [$err]"
 h show later; [ "$out" = '== Later
 #4 open issue Later one' ] || fail "show later: [$out]"
 DESC='no expected line here'
@@ -193,7 +193,7 @@ reset; pr 9 main 12; item 9 ""; item 12 "Later"; h tag 9
 PATCH repos/o/r/issues/12 -F milestone=5' ] && printf '%s' "$out" | grep -q '#12 moved from "Later"' || fail "tag later: $rc $(patches)"
 # an item in another milestone is left alone with a warning
 reset; pr 9 main 12; item 9 ""; item 12 "v2 planning"; h tag 9
-[ "$rc" = 0 ] && [ "$(patches)" = 'PATCH repos/o/r/issues/9 -F milestone=5' ] && [ "$err" = 'callum-flow-milestone: warning: #12 is in milestone "v2 planning", not moved' ] || fail "tag other milestone: $rc [$err] $(patches)"
+[ "$rc" = 0 ] && [ "$(patches)" = 'PATCH repos/o/r/issues/9 -F milestone=5' ] && [ "$err" = 'fabriek-milestone: warning: #12 is in milestone "v2 planning", not moved' ] || fail "tag other milestone: $rc [$err] $(patches)"
 # an item already in Next release gets no PATCH, silently
 reset; pr 9 main 12; item 9 "Next release"; item 12 "Next release"; h tag 9
 [ "$rc" = 0 ] && [ -z "$(patches)" ] && [ -z "$out" ] && [ -z "$err" ] || fail "tag already tagged: $rc $out $err $(patches)"
@@ -205,7 +205,7 @@ reset; pr 9 main 12; item 9 ""; item 12 ""
 jq '.closingIssuesReferences = [{number: 12, repository: {name: "repo", owner: {login: "other"}}}, {number: 13, repository: {name: "r", owner: {login: "o"}}}]' "$st/pr-9.json" > "$st/x" && mv "$st/x" "$st/pr-9.json"; item 13 ""
 h tag 9
 [ "$rc" = 0 ] && [ "$(patches)" = 'PATCH repos/o/r/issues/9 -F milestone=5
-PATCH repos/o/r/issues/13 -F milestone=5' ] && [ "$err" = 'callum-flow-milestone: warning: other/repo#12 is in another repository, not moved' ] || fail "tag cross-repo: $rc [$err] $(patches)"
+PATCH repos/o/r/issues/13 -F milestone=5' ] && [ "$err" = 'fabriek-milestone: warning: other/repo#12 is in another repository, not moved' ] || fail "tag cross-repo: $rc [$err] $(patches)"
 # a non-default base changes nothing
 reset; pr 9 epic-x 12; item 9 ""; item 12 ""; h tag 9
 [ "$rc" = 0 ] && [ -z "$(patches)" ] && printf '%s' "$out" | grep -q 'targets epic-x, not main' || fail "tag non-default base: $rc $out $(patches)"

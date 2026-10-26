@@ -24,9 +24,9 @@
 //     is working on it). After merged, abandoned, closed or claim_lost only a
 //     new-life decision (ready, reclaimed, claimed, briefed, design_routed,
 //     implementer_routed, delegated) counts as a later event, as in
-//     callum-flow-factory-state; after any of the idle states the replayed run facts failed,
+//     fabriek-factory-state; after any of the idle states the replayed run facts failed,
 //     head_mismatch, conflict and ci_stalled never count. Noise
-//     states never count for or against busy (callum-flow-issue-read logs
+//     states never count for or against busy (fabriek-issue-read logs
 //     untrusted_stripped on any read; renewed is the claim heartbeat; loop is
 //     the factory loop's bookkeeping, DECISIONS D-09, logged for an issue in
 //     any stage, a queued one included).
@@ -54,7 +54,7 @@
 // never fails the beat.
 //
 // Source switch (cbundy/dev-system#900, docs/factory-events/replay.md): which log decides the
-// in-flight issues. CALLUM_FLOW_HEARTBEAT_STATE_SOURCE or --source, old|new|shadow, default new (old is the way back).
+// in-flight issues. FABRIEK_HEARTBEAT_STATE_SOURCE or --source, old|new|shadow, default new (old is the way back).
 //   old     the old lines in $CALLUM_EVENTS_DIR/*.jsonl, as above.
 //   new     this device's new events in $CALLUM_EVENTS_DIR/factory/*.jsonl (regular files only, so
 //           .shadow/ and .pushed/ are skipped), by the same rule written for the new types: an issue is
@@ -70,15 +70,18 @@
 // An invalid value warns once on stderr and reads old. The new read has its own deadline: when it
 // passes, shadow records new_error and new reads nothing from the events, and the beat goes on.
 //
-// Environment: CALLUM_FLOW_HEARTBEAT_STATE_SOURCE, CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS (500),
-//   CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS (600), HEARTBEAT_TEST_NEW_DELAY_MS (tests),
+// Environment: FABRIEK_HEARTBEAT_STATE_SOURCE, FABRIEK_HEARTBEAT_STATE_NEW_TIMEOUT_MS (500),
+//   FABRIEK_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS (600), HEARTBEAT_TEST_NEW_DELAY_MS (tests),
 //   CALLUM_EVENTS_DIR, CLAUDE_CONFIG_DIR,
 //   DEV_MACHINE_NAME, DEV_CONTEXT_WINDOW_DIR (default /tmp/dev-context-window),
-//   HEARTBEAT_EVALUATE (path of callum-flow-evaluate), HEARTBEAT_NOW_MS (tests).
+//   HEARTBEAT_EVALUATE (path of fabriek-evaluate), HEARTBEAT_NOW_MS (tests).
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.js, beside this tool or in the share dir).
+const { applyFabriekEnv } = require([path.join(__dirname, 'fabriek-env.js'), path.join(process.env.DEV_SYSTEM_SHARE || '/usr/local/share/dev-system', 'fabriek-env.js')].find((p) => fs.existsSync(p)));
+applyFabriekEnv();
 const { resolveSource, runShadow } = require(path.join(__dirname, 'factory-source.js'));
 const { SYNTHESIZED, currentShapes, isCurrent, skippedList, countSkip } = require(path.join(__dirname, 'evaluate-new-events.js'));
 
@@ -235,11 +238,12 @@ function readNewEvents(dir, dev, timeoutMs, current = null, skipped = null) {
 }
 
 function loadClassifyWake() {
-  const candidates = [process.env.HEARTBEAT_EVALUATE, path.join(__dirname, 'callum-flow-evaluate'), '/usr/local/bin/callum-flow-evaluate'].filter(Boolean);
+  const candidates = [process.env.HEARTBEAT_EVALUATE, path.join(__dirname, 'fabriek-evaluate'), '/usr/local/bin/fabriek-evaluate',
+    path.join(__dirname, 'callum-flow-evaluate'), '/usr/local/bin/callum-flow-evaluate'].filter(Boolean);
   for (const c of candidates) {
     try { return require(c).classifyWake; } catch { /* next */ }
   }
-  warn('callum-flow-evaluate not found, chat activity unavailable');
+  warn('fabriek-evaluate not found, chat activity unavailable');
   return null;
 }
 
@@ -451,7 +455,7 @@ async function main() {
   const derivedOld = () => {
     try { return deriveOld(readOldEvents(dir), dev); } catch (e) { warn(`events: ${e.message}`); return empty; }
   };
-  const timeoutMs = intEnv('CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS', 500);
+  const timeoutMs = intEnv('FABRIEK_HEARTBEAT_STATE_NEW_TIMEOUT_MS', 500);
   let skipped = [];
   const derivedNew = () => {
     let current = null;
@@ -477,7 +481,7 @@ async function main() {
       new: () => answerOf(inFlightOf(derivedNew()), chatBusy),
       normalize,
       eventsDir: dir,
-      quietMs: intEnv('CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS', 600) * 1000,
+      quietMs: intEnv('FABRIEK_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS', 600) * 1000,
     });
   }
   const { state, in_flight: inFlight } = answer;

@@ -45,7 +45,7 @@ for _ in $(seq 1 60); do
 done
 # The default-user bootstrap path (cbundy/dev-system#797): no --user, no FACTORY_DB_MIGRATIONS_DIR.
 expected_schema=$(in_image '. /usr/local/share/dev-system/factory-db.sh; factory_db_expected_version' --entrypoint "")
-# The reader role's password lets callum-flow-factory-state (#1293) read this database below.
+# The reader role's password lets fabriek-factory-state (#1293) read this database below.
 FIC_RPW="fic-reader-$RUN_ID"
 check "factory-db-bootstrap runs as the default user against the baked migrations" bash -c '
   out=$(docker run --rm --network "$1" --entrypoint factory-db-bootstrap \
@@ -107,9 +107,9 @@ check "the second container takes over when the first stops" wait_for_session 22
 check "both containers pushed as one machine" bash -c "
   [ \"\$(docker exec '$RUN_ID-pg' psql -U av -d agentsview -tAc 'select count(distinct machine) from agentsview.sessions')\" = 1 ]"
 # The saved queries of docs/metrics.md read the factory database and are checked against a throwaway
-# one by tests/metrics-queries.test.js (#652), not here. callum-flow-evaluate no longer reads
+# one by tests/metrics-queries.test.js (#652), not here. fabriek-evaluate no longer reads
 # no-mistakes data (#1316), so no check here feeds it a mirror or an export.
-# callum-flow-factory-state (#345, #1293) reads the factory database only, as the reader role through
+# fabriek-factory-state (#345, #1293) reads the factory database only, as the reader role through
 # dev-query --factory. Seed factory_image_check (bootstrapped above) with v2 events and run the tool in
 # the image against it with GitHub off: issue 42 merged, 51 building, 52 (repo spelled 'Acme/Widgets')
 # parked, 53 claimed with a live lease and no transition yet.
@@ -130,7 +130,7 @@ FROM (VALUES
 ) AS v(n, ts, type, repo, issue, data);
 SQL
   url="postgres://factory_image_check_reader:$FIC_RPW@$RUN_ID-pg:5432/factory_image_check?sslmode=require"
-  out=$(docker exec -e FACTORY_DB_READER_URL="$url" "$RUN_ID-b" callum-flow-factory-state --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
+  out=$(docker exec -e FACTORY_DB_READER_URL="$url" "$RUN_ID-b" fabriek-factory-state --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
   printf '%s' "$out" | node -e '
     const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
     if (r.repos.length !== 1 || r.repos[0].repo !== "acme/widgets" || r.at_source !== "--at") process.exit(1);
@@ -139,7 +139,7 @@ SQL
     for (const [n, [state, why]] of Object.entries(want)) if (!by[n] || by[n].state !== state || (why !== null && by[n].why !== why) || "stage" in by[n]) process.exit(1);
     if (!r.repos[0].recent.some((i) => i.issue === 42) || by[52].question !== "Which schema?" || by[51].holder !== "nm-metrics") process.exit(1);'
 }
-check "callum-flow-factory-state reads factory.issue_state_at through dev-query --factory and places the issues" factory_state_query
+check "fabriek-factory-state reads factory.issue_state_at through dev-query --factory and places the issues" factory_state_query
 # Event identity survives losing the file (#229). The table starts as the old one (primary
 # key (device, repo, seq)) with three old-format rows; the real event-push-loop (container b)
 # migrates it, then a wiped log (with and without its marker) must still land every event.

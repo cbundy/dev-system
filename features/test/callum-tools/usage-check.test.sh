@@ -46,12 +46,12 @@ printf '\n%s' "$FAKE_CURL_CODE"
 EOF
 chmod +x "$fakebin/curl"
 
-# Stub callum-flow-event: records the arguments of each call, one line per call.
-cat > "$fakebin/callum-flow-event" <<'EOF'
+# Stub fabriek-event: records the arguments of each call, one line per call.
+cat > "$fakebin/fabriek-event" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$FAKE_EVENT_LOG"
 EOF
-chmod +x "$fakebin/callum-flow-event"
+chmod +x "$fakebin/fabriek-event"
 
 home="$tmpdir/home"
 config="$tmpdir/claude"

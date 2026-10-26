@@ -1,7 +1,7 @@
 "use strict";
 
-// callum-flow-capture (cbundy/dev-system#1271): the supervisor is tested with a fake Playwright
-// module in a temp cwd and a fake callum-flow-evidence-upload first on PATH, so no browser is needed.
+// fabriek-capture (cbundy/dev-system#1271): the supervisor is tested with a fake Playwright
+// module in a temp cwd and a fake fabriek-evidence-upload first on PATH, so no browser is needed.
 // Waits are on recorded pids, polled to a bound, never on sleeps.
 
 const { test } = require("node:test");
@@ -11,7 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-const TOOL = path.join(__dirname, "..", "images", "base", "callum-flow-capture");
+const TOOL = path.join(__dirname, "..", "images", "base", "fabriek-capture");
 
 const FAKE_PLAYWRIGHT = `
 const fs = require("fs");
@@ -58,7 +58,7 @@ function setup({ playwright = true, upload = null } = {}) {
     fs.writeFileSync(path.join(dir, "node_modules", "playwright", "index.js"), FAKE_PLAYWRIGHT);
   }
   if (upload) {
-    fs.writeFileSync(path.join(bin, "callum-flow-evidence-upload"), `#!/bin/sh\n${upload}\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "fabriek-evidence-upload"), `#!/bin/sh\n${upload}\n`, { mode: 0o755 });
   }
   // an empty npm root so a global Playwright on the machine cannot be found
   fs.writeFileSync(path.join(bin, "npm"), `#!/bin/sh\necho ${path.join(dir, "no-global")}\n`, { mode: 0o755 });
@@ -145,7 +145,7 @@ test("an app that never listens times out with exit 3 and is stopped", () => {
   const r = run(ctx, ["--start", start, "--timeout", "2", "slow"]);
   assert.equal(r.status, 3);
   assert.ok(Date.now() - t0 < 30000);
-  assert.equal(r.stderr.trim().split("\n").filter((l) => l.startsWith("callum-flow-capture:")).length, 1);
+  assert.equal(r.stderr.trim().split("\n").filter((l) => l.startsWith("fabriek-capture:")).length, 1);
   assert.match(r.stderr, /did not answer/);
   assertGone(pidOf(ctx, "p.pid"));
 });

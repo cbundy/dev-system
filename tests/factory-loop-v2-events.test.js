@@ -2,7 +2,7 @@
 
 // Every event the factory loop v2 writes (docs/factory-loop/v2/SPEC.md 7.1) is built by
 // plugins/factory-loop/hooks/v2/events.ts as a native call, `callum-flow-event --type <type> --data
-// <json>`, and must be one the real images/base/callum-flow-event takes: a refused one is a usage
+// <json>`, and must be one the real images/base/fabriek-event takes: a refused one is a usage
 // error the loop only notes, and its fact is lost. This runs the real CLI into a scratch log with an
 // event of every kind v2 writes and checks the line against what the translator makes of the old
 // format's line for the same event (kept here as a fixture-side helper), so the new store holds what

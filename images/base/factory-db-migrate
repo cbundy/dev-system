@@ -26,7 +26,7 @@
 # observe while the outcome is failed or timed-out (docs/factory-loop/v2/SPEC.md).
 #
 # Each run that found the file also writes one loop_entry (task:migrate:<to_version>, wake
-# migrate) with callum-flow-event. A failed event write is logged and ignored.
+# migrate) with fabriek-event. A failed event write is logged and ignored.
 set -u
 
 SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
@@ -154,7 +154,7 @@ if [ -n "$to" ]; then
     *[:/]*/*) repo=$(printf '%s' "$DEV_REPO_URL" | sed -e 's#/*$##' -e 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p') ;;
   esac
   [ -z "$repo" ] || set -- "$@" --repo "$repo"
-  callum-flow-event "$@" > /dev/null 2>&1 || echo "factory-db-migrate: could not write the loop_entry event" >&2
+  fabriek-event "$@" > /dev/null 2>&1 || echo "factory-db-migrate: could not write the loop_entry event" >&2
 fi
 
 if [ "$strict" = 1 ]; then

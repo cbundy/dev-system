@@ -22,7 +22,7 @@ for i in 1 2; do
   [ "$q" = "queue-changed known=none now=5,6" ] || fail "queue replay: printed '$q'"
 done
 [ "$(ev_count '"type":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
-"$fakebin/callum-flow-event" ready --issue 7
+"$fakebin/fabriek-event" ready --issue 7
 queue_seq 5 5,7
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
 start_bg "$out" "$tmpdir" $qw --stream --known 5
@@ -30,7 +30,7 @@ wait_lines "$out" 1
 wait_events '"issue":7' 2
 stop_bg
 [ "$(grep -c '"issue":7' "$evlog")" = 2 ] || fail "queue joiner: a seen joiner must be logged: $(cat "$evlog")"
-rm "$fakebin/callum-flow-event"
+rm "$fakebin/fabriek-event"
 ok # queue-watch restarts do not replay ready events
 
 echo "ok - $passed replay transition scenarios passed"

@@ -1,7 +1,7 @@
 // The saved queries of docs/metrics.md "9c. Merges, pull requests and gaps" (cbundy/dev-system#749) and
 // the judge-task rows of section 9's judgement-calls query, run as the reader role on a real PostgreSQL
 // database seeded with tests/fixtures/evaluate/v2/new-events.jsonl, and compared with the numbers
-// callum-flow-evaluate reports from the same file. The fixture's story is in tests/evaluate.test.js.
+// fabriek-evaluate reports from the same file. The fixture's story is in tests/evaluate.test.js.
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -48,7 +48,7 @@ const rows = (db, sql) => {
 };
 
 const evaluate = () => {
-  const r = spawnSync("node", [path.join(ROOT, "images", "base", "callum-flow-evaluate"), "--repo", REPO, "--since", SINCE, "--until", UNTIL,
+  const r = spawnSync("node", [path.join(ROOT, "images", "base", "fabriek-evaluate"), "--repo", REPO, "--since", SINCE, "--until", UNTIL,
     "--source", "new", "--new-events", FIXTURE], { encoding: "utf8", env: { ...process.env, NO_MISTAKES_HOME: path.join(ROOT, "no-such-dir") } });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
@@ -56,7 +56,7 @@ const evaluate = () => {
 
 const ms = (t) => new Date(t).getTime();
 
-test("section 9c's queries give the numbers callum-flow-evaluate reports from the same events", opts, (t) => {
+test("section 9c's queries give the numbers fabriek-evaluate reports from the same events", opts, (t) => {
   const db = createDb(t);
   assert.ok(seed(db) > 60);
   const ev = evaluate();
@@ -108,7 +108,7 @@ test("section 9c's queries give the numbers callum-flow-evaluate reports from th
   assert.equal(gaps[1].in_flight.find((i) => i.issue === 36).parked_with_question, false, "its parked hour is outside this gap");
 });
 
-test("section 9's judgement-calls query counts judge tasks as callum-flow-evaluate does", opts, (t) => {
+test("section 9's judgement-calls query counts judge tasks as fabriek-evaluate does", opts, (t) => {
   const db = createDb(t);
   seed(db);
   const ev = evaluate();
@@ -141,19 +141,19 @@ test("the 9c comparison bites: a merge changed in the store only is reported", o
 const SIZE_FIXTURE = path.join(__dirname, "fixtures", "evaluate", "v2", "size-overlap-events.jsonl");
 const SIZE_SINCE = "2026-10-20T00:00:00Z";
 const SIZE_UNTIL = "2026-10-21T00:00:00Z";
-const { NON_CODE_RE } = require(path.join(ROOT, "images", "base", "callum-flow-evaluate"));
+const { NON_CODE_RE } = require(path.join(ROOT, "images", "base", "fabriek-evaluate"));
 const sizeRows = (db, sql) => {
   const text = sql.replaceAll(":'repo'", `'${REPO}'`).replaceAll(":'since'", `'${SIZE_SINCE}'`).trim().replace(/;$/, "");
   return JSON.parse(db.query(`SELECT coalesce(json_agg(q), '[]'::json) FROM (${text}) q`, "reader"));
 };
 const sizeEvaluate = () => {
-  const r = spawnSync("node", [path.join(ROOT, "images", "base", "callum-flow-evaluate"), "--repo", REPO, "--since", SIZE_SINCE, "--until", SIZE_UNTIL,
+  const r = spawnSync("node", [path.join(ROOT, "images", "base", "fabriek-evaluate"), "--repo", REPO, "--since", SIZE_SINCE, "--until", SIZE_UNTIL,
     "--source", "new", "--new-events", SIZE_FIXTURE], { encoding: "utf8", env: { ...process.env, NO_MISTAKES_HOME: path.join(ROOT, "no-such-dir") } });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 };
 
-test("section 9c's size, overlap, hottest files and merges-by-kind blocks give the rows behind callum-flow-evaluate's numbers", opts, (t) => {
+test("section 9c's size, overlap, hottest files and merges-by-kind blocks give the rows behind fabriek-evaluate's numbers", opts, (t) => {
   const db = createDb(t);
   seed(db, SIZE_FIXTURE);
   const ev = sizeEvaluate();
@@ -243,7 +243,7 @@ test("section 9c's merge-train block counts merges by train value and reason, tr
   assert.deepEqual([median(r[2][5]), median([...r[0][5], ...r[1][5]])], [20, 60]);
 });
 
-// The one code-file rule: held once in callum-flow-evaluate, written once in the doc, embedded in each new block.
+// The one code-file rule: held once in fabriek-evaluate, written once in the doc, embedded in each new block.
 const RULE_PATHS = {
   "docs/x.md": false, README: true, CHANGELOG: false, "CHANGELOG.txt": false, "a/CHANGELOG.md": false, "a/VERSION": false, VERSION: false,
   "release-notes/v1.md": false, "x/release-notes/v1.txt": false, "sub/package.json": false, "package-lock.json": false, "yarn.lock": false,

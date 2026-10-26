@@ -1,0 +1,304 @@
+#!/bin/sh
+#
+# fabriek-claim: claim a GitHub issue for this device with a lease, so two
+# orchestrators on different devices never take the same issue
+# (cbundy/dev-system#220). GitHub is the claim store: a claim is one issue
+# comment whose first line is
+#   claimed-by: <device> at <ISO-8601 UTC> lease: <minutes>
+# followed by the hidden marker <!-- callum-flow-claim -->. Scripts find claims (readers also accept
+# <!-- fabriek-claim -->; the writer keeps the old marker for the alias window, so an older reader still sees it)
+# by the marker, never by prose.
+#
+# Usage:
+#   fabriek-claim <issue>
+#   fabriek-claim --heartbeat [<issue>...]
+#
+# claim: exits 3 without writing if another device holds a live claim. Otherwise
+# it posts its claim comment, re-reads the comments through the API and applies
+# the collision rule - the EARLIEST live claim (server created_at, then id)
+# wins, so any interleaving has exactly one winner. The loser deletes only its
+# own comment, leaves labels and assignee alone (the winner owns them) and exits
+# 3. Both exit-3 paths log a `claim_lost` event (its data says who holds it: holder, holder_since, race).
+# The winner removes `ready`, assigns @me and logs a
+# `claimed` event (`fabriek-event --type claimed --data`) with the lease minutes, the issue's title,
+# labels (without `ready`) and parent from the comments read, plus the score and factors of
+# FABRIEK_CLAIM_SCORE when set and valid. It adds no label: the claim is the comment
+# and its events, and the factory loop's `factory:*` labels show the state
+# (docs/factory-loop/v2/SPEC.md 3.6).
+# --heartbeat: edits this device's live claim comment in place (a `renewed:` line,
+# through the comment API, never a new comment). With no issue numbers it renews every
+# live claim this device holds on the open issues it holds. "Holds" is one rule, shared
+# with fabriek-sweep (claim-events.sh): the last claim event (claimed, ready,
+# reclaimed, merged, closed, abandoned) of the issue is a `claimed` by this device, taken
+# from this device's event log (`fabriek-event --path`) plus, when dev-query is
+# configured, the newest claim event per issue in factory.events, so an end another device
+# logged stops the heartbeat and a claim whose push has not arrived yet is still renewed.
+# A failed central read warns and falls back to this device's log. It fails only when this
+# device's log cannot be located. Nothing to renew is still exit 0. Each claim comment
+# actually PATCHed logs one `claim_renewed` event (data `lease_minutes`) - none when the PATCH
+# fails - so the event log, which fabriek-factory-state reads, can see the lease is live.
+#
+# A claim is live while the comment's server updated_at + its own lease is in
+# the future. "Now" is the server's Date header (the device clock only if that
+# is unavailable); ordering uses server created_at only.
+#
+# Exit codes: 0 ok, 1 a gh failure that left nothing half-done, 2 usage error,
+# 3 claim lost or held by another device.
+#
+# Trust (cbundy/dev-system#310): comments and the issue list are read only through
+# fabriek-issue-read, so a `claimed-by:` comment by an untrusted author neither
+# blocks nor wins a claim, and an untrusted issue is refused (claim exits 1 with
+# nothing written; heartbeat skips it). A reader failure is an error, never "no
+# comments".
+#
+# Environment: FABRIEK_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
+# device, else the hostname), FABRIEK_REPO (owner/name, default from gh),
+# FABRIEK_READY_LABEL (default `ready`); FABRIEK_CLAIM_SCORE (optional JSON
+# {"score": <int>, "factors": [{"name": <text>, "points": <int>}, ...]}: the claim rule's score,
+# logged on the claimed event; an invalid value warns and is ignored, never changes the claim); FABRIEK_CLAIM_EVENTS_SOURCE (old, new (the
+# default) or shadow: which event store the held rule reads, claim-events.sh),
+# FABRIEK_SHADOW_WINDOW_SECONDS (default 604800) and FABRIEK_SHADOW_SETTLE_SECONDS
+# (default 600), the shadow compare's window and settle time; for tests FABRIEK_GH_BIN,
+# FABRIEK_EVENT_BIN, FABRIEK_ISSUE_READ_BIN (fabriek-issue-read),
+# FABRIEK_DEV_QUERY_BIN (dev-query), FABRIEK_SHARE_DIR (where claim-events.sh
+# is installed, default /usr/local/share/dev-system).
+# The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.sh; a lone copy of this script without it still runs, on the FABRIEK_ names only).
+case $0 in */*) _fe=${0%/*}/fabriek-env.sh ;; *) _fe=./fabriek-env.sh ;; esac
+[ -r "$_fe" ] || _fe=${FABRIEK_SHARE_DIR:-${CALLUM_FLOW_SHARE_DIR:-${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}}}/fabriek-env.sh
+# shellcheck source=fabriek-env.sh
+[ ! -r "$_fe" ] || . "$_fe"
+unset _fe
+
+set -u
+
+GH=${FABRIEK_GH_BIN:-gh}
+EVENT=${FABRIEK_EVENT_BIN:-fabriek-event}
+READ=${FABRIEK_ISSUE_READ_BIN:-fabriek-issue-read}
+DEVQ=${FABRIEK_DEV_QUERY_BIN:-dev-query}
+SHARE=${FABRIEK_SHARE_DIR:-/usr/local/share/dev-system}
+READY=${FABRIEK_READY_LABEL:-ready}
+LEASE=${FABRIEK_LEASE_MINUTES:-120}
+MARKER='<!-- callum-flow-claim -->'
+
+usage() {
+  [ -z "${1-}" ] || echo "fabriek-claim: $1" >&2
+  echo "usage: fabriek-claim <issue> | fabriek-claim --heartbeat [<issue>...]" >&2
+  exit 2
+}
+err() { echo "fabriek-claim: $*" >&2; }
+# A lost claim leaves a trace: the two-device trial (#222) reports claim_lost
+# events as the proof that the lanes contended.
+# lost HOLDER SINCE RACE: HOLDER and SINCE are empty when unknown (written as null), RACE is true or false.
+lost() {
+  _d=$(jq -nc --arg h "$1" --arg s "$2" --argjson r "$3" \
+    '{holder: (if $h == "" then null else $h end), holder_since: (if $s == "" then null else $s end), race: $r}') || { err "warning: could not log the claim_lost event"; return 0; }
+  "$EVENT" --type claim_lost --issue "$n" --data "$_d" >/dev/null 2>&1 || err "warning: could not log the claim_lost event"
+}
+
+case "$LEASE" in '' | *[!0-9]* | 0) usage "FABRIEK_LEASE_MINUTES must be a positive number" ;; esac
+[ $# -ge 1 ] || usage
+mode=claim
+if [ "$1" = --heartbeat ]; then
+  mode=heartbeat
+  shift
+fi
+for a in "$@"; do
+  case "$a" in '' | *[!0-9]*) usage "issue must be a number, got '$a'" ;; esac
+done
+if [ "$mode" = claim ]; then
+  [ $# -eq 1 ] || usage
+fi
+command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
+# shellcheck source=claim-events.sh
+. "$SHARE/claim-events.sh" 2>/dev/null || { err "cannot read $SHARE/claim-events.sh"; exit 1; }
+CE_TOOL=fabriek-claim
+device=$(ce_device)
+tmp=$(mktemp -d 2>/dev/null) || { err "cannot create a temporary directory"; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+
+repo=${FABRIEK_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
+[ -n "$repo" ] || { err "cannot determine the repo (set FABRIEK_REPO)"; exit 1; }
+export FABRIEK_REPO="$repo"
+
+# Server epoch seconds from the Date header; device clock only as a fallback.
+server_now() {
+  d=$("$GH" api -i rate_limit 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: *//p' | sed -n 1p)
+  n=''
+  [ -z "$d" ] || n=$(date -u -d "$d" +%s 2>/dev/null) || n=''
+  [ -n "$n" ] || n=$(date -u +%s)
+  echo "$n"
+}
+iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+
+# The trusted comments of an issue as one JSON array. Returns the reader's exit
+# code: 3 means the issue itself is untrusted, anything else non-zero is a failure.
+comments() {
+  _cj=$("$READ" --json "$1" --comments) || return $?
+  # the same read also holds the issue's facts: kept for the claimed event (no new API call)
+  printf '%s' "$_cj" | jq -c '.issue // empty' > "$tmp/issue.json" 2>/dev/null || : > "$tmp/issue.json"
+  printf '%s' "$_cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'
+}
+
+# Claim comments of a comments array, oldest first, with parsed fields and the
+# epoch at which each expires. Args: --argjson now.
+# shellcheck disable=SC2016
+CLAIMS_JQ='
+  [ .[] | select((.body // "") | (contains("<!-- callum-flow-claim -->") or contains("<!-- fabriek-claim -->")))
+    | . as $c | ((.body | split("\n"))[0]
+      | capture("^claimed-by: (?<dev>.+) at (?<at>[^ ]+) lease: (?<lease>[0-9]+)")?) as $p
+    | select($p)
+    | {id: $c.id, dev: $p.dev, at: $p.at, lease: ($p.lease | tonumber), created: $c.created_at,
+       updated: $c.updated_at, user: ($c.user.login // ""), body: $c.body,
+       exp: (($c.updated_at | fromdateiso8601) + ($p.lease | tonumber) * 60)} ]
+  | sort_by([.created, .id])'
+
+if [ "$mode" = heartbeat ]; then
+  rc=0
+  issues="$*"
+  listed=
+  if [ -z "$issues" ]; then
+    # the issues this device holds, by the shared rule (claim-events.sh)
+    ce_load "$tmp" "$device" || { err "cannot list this device's live claims (this device's event log cannot be located)"; exit 1; }
+    issues=$(ce_held "$tmp/latest" "$device")
+    listed=1
+  fi
+  now=$(server_now)
+  for n in $issues; do
+    cj=$("$READ" --json "$n" --comments) && crc=0 || crc=$?
+    [ "$crc" -ne 0 ] || cs=$(printf '%s' "$cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end') || crc=1
+    if [ "$crc" -ne 0 ]; then
+      # an untrusted issue is none of our business: nothing to renew
+      [ "$crc" -eq 3 ] || { err "cannot read comments of #$n"; rc=1; }
+      continue
+    fi
+    # the log lags a close: a listed issue GitHub has closed has no claim to keep
+    if [ -n "$listed" ] && [ "$(printf '%s' "$cj" | jq -r '.issue.state // "open" | ascii_downcase')" != open ]; then
+      continue
+    fi
+    mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
+      "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | last // empty')
+    [ -n "$mine" ] || continue
+    id=$(printf '%s' "$mine" | jq -r .id)
+    body=$(printf '%s' "$mine" | jq -r --arg ts "$(iso "$now")" \
+      '[(.body | split("\n") | map(select(startswith("renewed: ") | not)) | join("\n") | rtrimstr("\n")), "renewed: " + $ts] | join("\n")')
+    if "$GH" api -X PATCH "repos/$repo/issues/comments/$id" -f "body=$body" >/dev/null; then
+      # the lease the comment itself carries, so the log matches the claim
+      ll=$(printf '%s' "$mine" | jq -r .lease)
+      "$EVENT" --type claim_renewed --issue "$n" --data "$(jq -nc --argjson l "$ll" '{lease_minutes: $l}')" >/dev/null 2>&1 || err "warning: could not log the renewed event"
+    else
+      err "cannot renew the claim on #$n"
+      rc=1
+    fi
+  done
+  exit "$rc"
+fi
+
+# --- claim --------------------------------------------------------------------
+n=$1
+now=$(server_now)
+
+cs=$(comments "$n") && crc=0 || crc=$?
+if [ "$crc" -eq 3 ]; then
+  err "#$n is not by a trusted author - refusing to claim it"
+  exit 1
+elif [ "$crc" -ne 0 ]; then
+  err "cannot read comments of #$n"
+  exit 1
+fi
+foreign=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
+  "$CLAIMS_JQ"' | map(select(.dev != $dev and .exp > $now)) | first | if . then "\(.dev) since \(.at)" else empty end')
+if [ -n "$foreign" ]; then
+  err "#$n is held by $foreign"
+  lost "${foreign%% since *}" "${foreign##* since }" false
+  exit 3
+fi
+# A live claim of our own is kept (`ready` off, assigned, nothing new posted)
+# only while the shared held rule says so (claim-events.sh): the last claim event, in
+# this device's log and the central one, is a `claimed` by this device (a restarted orchestrator, a retry after the claim was logged). In
+# every other case - an end, `ready`, no event, no log; a claim interrupted
+# before its event, or a comment and lease left behind by a release, a drop, a
+# rejection or a merge - the comment is deleted and the claim made fresh, so a
+# life starts with its own comment, lease and one `claimed` event.
+ownlive=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
+  "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | first | .id // empty')
+
+set_labels() {
+  "$GH" issue edit "$n" --remove-label "$READY" --add-assignee @me >/dev/null
+}
+
+# held_in_log: the shared rule says this device holds #$n: its last claim event, in
+# this device's log and the central one, is a `claimed` by this device (ready, reclaimed,
+# merged, closed and abandoned end it, whatever follows them, and so does one logged by
+# another device).
+held_in_log() {
+  ce_load "$tmp" "$device" || return 1
+  ce_held "$tmp/latest" "$device" "$n"
+}
+
+if [ -n "$ownlive" ] && held_in_log; then
+  set_labels || { err "cannot update the labels of #$n"; exit 1; }
+  exit 0
+fi
+if [ -n "$ownlive" ]; then
+  "$GH" api -X DELETE "repos/$repo/issues/comments/$ownlive" >/dev/null || { err "cannot delete the unheld claim comment on #$n"; exit 1; }
+fi
+
+body="claimed-by: $device at $(iso "$now") lease: $LEASE
+$MARKER"
+posted=$("$GH" api -X POST "repos/$repo/issues/$n/comments" -f "body=$body") || {
+  err "cannot post the claim comment on #$n"
+  exit 1
+}
+mine=$(printf '%s' "$posted" | jq -r '.id // empty')
+[ -n "$mine" ] || { err "claim comment on #$n has no id"; exit 1; }
+
+drop_mine() { "$GH" api -X DELETE "repos/$repo/issues/comments/$mine" >/dev/null 2>&1 || err "could not delete claim comment $mine on #$n"; }
+
+cs=$(comments "$n") || { drop_mine; err "cannot re-read comments of #$n"; exit 1; }
+now=$(server_now)
+winner=$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .id // empty')
+if [ "$winner" != "$mine" ]; then
+  drop_mine
+  err "lost the claim on #$n to another device"
+  lost "$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .dev // empty')" "" true
+  exit 3
+fi
+
+if ! set_labels; then
+  drop_mine
+  err "cannot update the labels of #$n - claim withdrawn"
+  exit 1
+fi
+# The claimed event also carries the issue's title, labels (the ready label the claim just removed
+# left out) and parent, from the comments read above (fabriek-event --data, cbundy/dev-system#870).
+facts=$(jq -c --arg ready "$READY" --arg repo "$repo" '
+  {title: (if (.title | type) == "string" then (.title | explode | [foreach .[] as $c (0; . + (if $c > 65535 then 2 else 1 end); [$c, .])] | map(select(.[1] <= 256) | .[0]) | implode) else null end),
+   labels: (if (.labels | type) == "array" then [.labels[] | .name | strings | select(. != $ready)] else null end),
+   parent: ((first(try ((.parent_issue_url // "") | capture("/repos/(?<r>[^/]+/[^/]+)/issues/(?<p>[0-9]+)$")) catch empty) // null)
+     | if . != null and (.r | ascii_downcase) == ($repo | ascii_downcase) and (.p | tonumber) >= 1 then (.p | tonumber) else null end)}' "$tmp/issue.json" 2>/dev/null) || facts=
+# The claim rule's score (FABRIEK_CLAIM_SCORE), checked here against the shape the translator
+# enforces so a bad value can never turn the claimed event into a translator miss.
+score=
+if [ -n "${FABRIEK_CLAIM_SCORE-}" ]; then
+  score=$(printf '%s' "$FABRIEK_CLAIM_SCORE" | jq -cs '
+    select(length == 1) | .[0] | select(type == "object" and (keys | sort) == ["factors", "score"]
+      and (.score | type) == "number" and (.score | floor) == .score
+      and (.factors | type) == "array"
+      and all(.factors[]; type == "object" and (keys | sort) == ["name", "points"]
+        and (.name | type) == "string" and (.name | length) > 0
+        and (.points | type) == "number" and (.points | floor) == .points))' 2>/dev/null) || score=
+  [ -n "$score" ] || err "warning: FABRIEK_CLAIM_SCORE is not valid - the claim is logged without a score"
+fi
+if [ -n "$score" ]; then
+  [ -n "$facts" ] || facts='{}'
+  facts=$(printf '%s' "$facts" | jq -c --argjson s "$score" '. + $s' 2>/dev/null) || facts=
+fi
+# The claimed event's data: the lease and, when the facts were read, the facts (title, labels, parent
+# and the score and factors).
+[ -n "$facts" ] || facts='{}'
+if ! claimed=$(printf '%s' "$facts" | jq -c --argjson l "$LEASE" '{lease_minutes: $l} + .' 2>/dev/null); then
+  claimed=$(jq -nc --argjson l "$LEASE" '{lease_minutes: $l}')
+fi
+"$EVENT" --type claimed --issue "$n" --data "$claimed" >/dev/null 2>&1 || err "warning: could not log the claimed event"
+exit 0

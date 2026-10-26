@@ -11,11 +11,11 @@ set -eu
 
 # 14. Trust (cbundy/dev-system#310): an issue by an untrusted author never enters
 # the queue, so it never fires queue-changed and no ready event is logged for it.
-cat > "$fakebin/callum-flow-event" <<'EOF'
+cat > "$fakebin/fabriek-event" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$(dirname "$0")/event-calls"
 EOF
-chmod +x "$fakebin/callum-flow-event"
+chmod +x "$fakebin/fabriek-event"
 rm -f "$fakebin/event-calls"
 # only an untrusted issue joins: nothing fires
 queue_seq 305,x400
@@ -43,15 +43,15 @@ echo x >> "$fakebin/sleep-calls"
 exec "$toolbin/sleep" "\$@"
 EOF
 chmod +x "$fakebin/sleep"
-quiet_run "no trusted list" "$fakebin/sleep-calls" 305 CALLUM_FLOW_TRUSTED_AUTHORS=
+quiet_run "no trusted list" "$fakebin/sleep-calls" 305 FABRIEK_TRUSTED_AUTHORS=
 rm "$fakebin/sleep"
 # a missing reader is fatal in stream mode
 st=0
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
-(in_dir "$tmpdir" env CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" $qw --stream) > "$out" 2>/dev/null || st=$?
+(in_dir "$tmpdir" env FABRIEK_ISSUE_READ_BIN="$tmpdir/missing-reader" $qw --stream) > "$out" 2>/dev/null || st=$?
 [ "$st" -ne 0 ] || fail "queue stream without the reader: exited 0"
 expect_lines "$out" "watcher-error $tmpdir/missing-reader not on PATH"
-rm "$fakebin/callum-flow-event"
+rm "$fakebin/fabriek-event"
 ok # untrusted issues never enter the queue
 
 echo "ok - $passed queue-watch trust scenarios passed"

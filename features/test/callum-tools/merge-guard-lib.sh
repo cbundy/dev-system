@@ -10,12 +10,12 @@
 # shellcheck disable=SC2034  # variables and helpers are used by the sourcing suites
 # shellcheck disable=SC2164  # the caller runs under set -e
 ROOT="$SCRIPT_DIR/../../.."
-GUARD="$ROOT/images/base/callum-flow-merge-guard"
-MERGE="$ROOT/images/base/callum-flow-merge"
-MILESTONE_REAL="$ROOT/images/base/callum-flow-milestone"
-EVENT="$ROOT/images/base/callum-flow-event"
-ROLLOUT="$ROOT/images/base/callum-flow-rollout"
-READER="$ROOT/images/base/callum-flow-issue-read"
+GUARD="$ROOT/images/base/fabriek-merge-guard"
+MERGE="$ROOT/images/base/fabriek-merge"
+MILESTONE_REAL="$ROOT/images/base/fabriek-milestone"
+EVENT="$ROOT/images/base/fabriek-event"
+ROLLOUT="$ROOT/images/base/fabriek-rollout"
+READER="$ROOT/images/base/fabriek-issue-read"
 SHARE="$ROOT/images/base"
 
 fail() {
@@ -93,7 +93,7 @@ case "$1 $2" in
         read -r oid < "$d/mergecommit"
         printf '{"mergeCommit":{"oid":"%s"}}\n' "$oid" ;;
       *additions*)
-        # the merged PR's size (callum-flow-merge reads it after the merge): size-fails fails it, size overrides it
+        # the merged PR's size (fabriek-merge reads it after the merge): size-fails fails it, size overrides it
         echo "$*" >> "$d/size-calls"
         [ ! -f "$d/size-fails" ] || exit 1
         if [ -f "$d/size" ]; then slurp "$d/size"; else echo '{"files":[{"path":"a.js","additions":7,"deletions":1},{"path":"b/c.sh","additions":3,"deletions":1},{"path":"","additions":1,"deletions":0},{"path":"d.txt","additions":"x","deletions":0}],"additions":10,"deletions":2,"mergedAt":"2026-10-02T09:00:00Z"}'; fi ;;
@@ -148,7 +148,7 @@ if [ -f "$d/weakening" ]; then while IFS= read -r l || [ -n "$l" ]; do printf '%
 if [ -f "$d/weakening-rc" ]; then read -r rc < "$d/weakening-rc"; exit "$rc"; fi
 exit 0
 STUB
-# callum-flow-milestone (cbundy/dev-system#403): records its calls; milestone-rc sets its exit code
+# fabriek-milestone (cbundy/dev-system#403): records its calls; milestone-rc sets its exit code
 cat > "$tmpdir/milestone" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
@@ -156,9 +156,9 @@ echo "$*" >> "$d/milestone-calls"
 if [ -f "$d/milestone-rc" ]; then read -r rc < "$d/milestone-rc"; exit "$rc"; fi
 exit 0
 STUB
-# the patch id of the PR head (callum-flow-patch-id): the shared-guard cases do not test the patch
+# the patch id of the PR head (fabriek-patch-id): the shared-guard cases do not test the patch
 # guard, so by default the guard runs with --patch STUB_PID against a patch-id stub that prints it.
-# merge-guard-patch.test.sh pins the real callum-flow-patch-id (it sets PID_BIN to it).
+# merge-guard-patch.test.sh pins the real fabriek-patch-id (it sets PID_BIN to it).
 STUB_PID=0123456789abcdef0123456789abcdef0123abcd
 cat > "$tmpdir/patchid" <<STUB
 #!/bin/sh
@@ -195,7 +195,7 @@ issue_brief() {
 }
 
 # the real reader behind the stub gh
-export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_WEAKENING_BIN="$tmpdir/weakening"
+export FABRIEK_ISSUE_READ_BIN="$READER" FABRIEK_SHARE_DIR="$SHARE" FABRIEK_REPO=o/r FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 FABRIEK_EVENT_BIN="$tmpdir/noevent" FABRIEK_WEAKENING_BIN="$tmpdir/weakening"
 
 # with_patch <args...>: the arguments, plus --patch STUB_PID unless they carry one
 with_patch() {
@@ -206,19 +206,19 @@ g() {
   with_patch "$@"
   rc=0
   # shellcheck disable=SC2086 # patch_args is empty or two words
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_PATCH_ID_BIN="$PID_BIN" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" $patch_args 2> "$tmpdir/err") || rc=$?
+  out=$(PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_PATCH_ID_BIN="$PID_BIN" \
+    FABRIEK_LINKAGE_BIN="$tmpdir/linkage" FABRIEK_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
+    FABRIEK_MERGEABLE_TRIES=3 FABRIEK_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" $patch_args 2> "$tmpdir/err") || rc=$?
   ! printf '%s\n' "$out" | grep ' FAIL ' | grep -Ev ' class=(behind|conflict|checks|patch|linkage|read|policy)$' || fail "a FAIL line without its class: $out"
 }
 m() {
   with_patch "$@"
   rc=0
   # shellcheck disable=SC2086 # patch_args is empty or two words
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_PATCH_ID_BIN="$PID_BIN" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_GUARD_BIN="${GUARD_BIN:-$GUARD}" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
-    CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
+  out=$(PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_PATCH_ID_BIN="$PID_BIN" \
+    FABRIEK_LINKAGE_BIN="$tmpdir/linkage" FABRIEK_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" FABRIEK_GUARD_BIN="${GUARD_BIN:-$GUARD}" FABRIEK_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
+    FABRIEK_MERGEABLE_TRIES=3 FABRIEK_MERGEABLE_SLEEP=0 \
+    FABRIEK_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" FABRIEK_REPO=o/r \
     "$SH" "$MERGE" "$@" $patch_args 2> "$tmpdir/err") || rc=$?
 }
 cat > "$tmpdir/event" <<STUB

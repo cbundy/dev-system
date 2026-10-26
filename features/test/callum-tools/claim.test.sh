@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-claim and callum-flow-sweep
+# Plain-shell tests for fabriek-claim and fabriek-sweep
 # (cbundy/dev-system#220). A stub gh backed by JSON fixture files stands in for
 # GitHub and records every mutating call, so nothing here touches the real API.
 # Hermetic PATH, no network, no Docker.
@@ -9,11 +9,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
-CLAIM="$ROOT/images/base/callum-flow-claim"
-SWEEP="$ROOT/images/base/callum-flow-sweep"
-READER="$ROOT/images/base/callum-flow-issue-read"
+CLAIM="$ROOT/images/base/fabriek-claim"
+SWEEP="$ROOT/images/base/fabriek-sweep"
+READER="$ROOT/images/base/fabriek-issue-read"
 SHARE="$ROOT/images/base"
-EVENT="$ROOT/images/base/callum-flow-event"
+EVENT="$ROOT/images/base/fabriek-event"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -135,7 +135,7 @@ case "$1 $2" in
 esac
 STUB
 chmod +x "$tmpdir/gh"
-# stub callum-flow-factory-state: prints $STUB_DIR/fs-json (its --format json report), or fails
+# stub fabriek-factory-state: prints $STUB_DIR/fs-json (its --format json report), or fails
 # without one
 cat > "$tmpdir/factory-state" <<'STUB'
 #!/bin/sh
@@ -180,9 +180,9 @@ issue() {
 }
 
 run() {
-  PATH="$toolbin${EXTRA_PATH:+:$EXTRA_PATH}" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-new}" \
-    CALLUM_FLOW_EVENT_BIN="${CLAIM_EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
-    CALLUM_FLOW_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
+  PATH="$toolbin${EXTRA_PATH:+:$EXTRA_PATH}" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r FABRIEK_CLAIM_EVENTS_SOURCE="${CLAIM_SRC-new}" \
+    FABRIEK_EVENT_BIN="${CLAIM_EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+    FABRIEK_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" FABRIEK_ISSUE_READ_BIN="${READ_BIN:-$READER}" FABRIEK_SHARE_DIR="$SHARE" FABRIEK_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
 }
 rc_of() { set +e; run "$@" >"$tmpdir/out" 2>"$tmpdir/err"; rc=$?; set -e; }
@@ -190,7 +190,7 @@ expect_rc() { [ "$rc" = "$1" ] || fail "$2: exit $rc, wanted $1 (stderr: $(cat "
 calls() { cat "$d/calls"; }
 no_calls() { [ ! -s "$d/calls" ] || fail "$1: unexpected writes: $(calls)"; }
 # events: the new store, where the tools write (--type ... --data); old_events: the old log, which
-# callum-flow-event no longer writes (cbundy/dev-system#1143): only old_seed, a literal old-format line, reaches it
+# fabriek-event no longer writes (cbundy/dev-system#1143): only old_seed, a literal old-format line, reaches it
 events() { cat "$tmpdir/events"/factory/*.jsonl 2>/dev/null || true; }
 old_events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
 no_events() { [ -z "$(events)" ] || fail "$1: unexpected events: $(events)"; [ -z "$(old_events)" ] || fail "$1: unexpected old events: $(old_events)"; }
@@ -232,7 +232,7 @@ for args in "" "abc" "7 8" "--bogus" "--heartbeat x"; do
 done
 rc_of "$SWEEP" x
 expect_rc 2 "sweep usage"
-CALLUM_FLOW_LEASE_MINUTES=zero rc_of "$CLAIM" 7
+FABRIEK_LEASE_MINUTES=zero rc_of "$CLAIM" 7
 expect_rc 2 "bad lease"
 no_calls usage
 
@@ -253,12 +253,12 @@ events | jq -e '.type == "claimed" and .issue == 7 and .device == "devA" and .da
 
 # lease override
 reset
-CALLUM_FLOW_LEASE_MINUTES=30 rc_of "$CLAIM" 7
+FABRIEK_LEASE_MINUTES=30 rc_of "$CLAIM" 7
 expect_rc 0 "lease override"
 jq -e '.[-1].body | startswith("claimed-by: devA at 2026-10-08T12:00:00Z lease: 30\n")' "$d/comments-7.json" >/dev/null || fail "lease override not recorded"
 events | jq -e '.type == "claimed" and .data.lease_minutes == 30' >/dev/null || fail "lease override: claimed note: $(events)"
 
-# the claimed event carries the issue's facts (callum-flow-event --data): the title, the labels
+# the claimed event carries the issue's facts (fabriek-event --data): the title, the labels
 # without the ready label the claim just removed, the parent's number when it is in the same repo
 cat > "$tmpdir/event-rec" <<'STUB'
 #!/bin/sh
@@ -285,7 +285,7 @@ cm 100 devB '2026-10-08T11:59:59Z' '2026-10-08T11:59:59Z' | jq -s '.' > "$d/inje
 CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
 expect_rc 3 "facts, collision loser"
 grep -q -- '--type claimed' "$d/event-calls" 2>/dev/null && fail "facts, collision loser: claimed logged: $(cat "$d/event-calls")"
-# the claim rule's score (CALLUM_FLOW_CLAIM_SCORE) joins the --data object when valid
+# the claim rule's score (FABRIEK_CLAIM_SCORE) joins the --data object when valid
 SCORE='{"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}'
 score_issue() {
   reset
@@ -295,14 +295,14 @@ score_issue() {
   brief | arr > "$d/comments-7.json"
 }
 score_issue
-CALLUM_FLOW_CLAIM_SCORE=$SCORE CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+FABRIEK_CLAIM_SCORE=$SCORE CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
 expect_rc 0 "score"
 [ "$(cat "$d/event-calls")" = '--type claimed --issue 7 --data {"lease_minutes":120,"title":"Facts of seven","labels":["bug","enhancement"],"parent":3,"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "score: claimed call: $(cat "$d/event-calls")"
 [ ! -s "$tmpdir/err" ] || fail "score: stderr: $(cat "$tmpdir/err")"
 # unset and empty give today's call
 for v in unset empty; do
   score_issue
-  if [ "$v" = empty ]; then CALLUM_FLOW_CLAIM_SCORE="" CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+  if [ "$v" = empty ]; then FABRIEK_CLAIM_SCORE="" CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
   else CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7; fi
   expect_rc 0 "score $v"
   [ "$(cat "$d/event-calls")" = '--type claimed --issue 7 --data {"lease_minutes":120,"title":"Facts of seven","labels":["bug","enhancement"],"parent":3}' ] || fail "score $v: $(cat "$d/event-calls")"
@@ -311,33 +311,33 @@ done
 # invalid values: today's call, exit 0, one warning
 for bad in 'not json' '{"score":"3","factors":[]}' '{"score":3,"factors":[{"name":"a"}]}' '{"score":3,"factors":[{"name":"a","points":1,"x":1}]}' '{"score":3,"factors":[],"x":1}' '{"score":1.5,"factors":[]}' '{"score":3,"factors":[{"name":"","points":1}]}' '[1]' '{"score":1,"factors":[]} {"score":2,"factors":[]}' '{"score":1,"factors":[]} 5'; do
   score_issue
-  CALLUM_FLOW_CLAIM_SCORE=$bad CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+  FABRIEK_CLAIM_SCORE=$bad CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
   expect_rc 0 "bad score $bad"
   [ "$(cat "$d/event-calls")" = '--type claimed --issue 7 --data {"lease_minutes":120,"title":"Facts of seven","labels":["bug","enhancement"],"parent":3}' ] || fail "bad score $bad: $(cat "$d/event-calls")"
-  [ "$(cat "$tmpdir/err")" = 'callum-flow-claim: warning: CALLUM_FLOW_CLAIM_SCORE is not valid - the claim is logged without a score' ] || fail "bad score $bad: stderr: $(cat "$tmpdir/err")"
+  [ "$(cat "$tmpdir/err")" = 'fabriek-claim: warning: FABRIEK_CLAIM_SCORE is not valid - the claim is logged without a score' ] || fail "bad score $bad: stderr: $(cat "$tmpdir/err")"
   jq -e '.[-1].body | startswith("claimed-by: devA")' "$d/comments-7.json" >/dev/null || fail "bad score $bad: comment"
 done
 # when the issue facts fail to read, --data carries only score and factors
 score_issue
 printf '#!/bin/sh\n"%s" "$@" | jq -c "del(.issue)"\n' "$READER" > "$tmpdir/reader-noissue"
 chmod +x "$tmpdir/reader-noissue"
-READ_BIN="$tmpdir/reader-noissue" CALLUM_FLOW_CLAIM_SCORE=$SCORE CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+READ_BIN="$tmpdir/reader-noissue" FABRIEK_CLAIM_SCORE=$SCORE CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
 unset READ_BIN
 expect_rc 0 "score, no facts"
 [ "$(cat "$d/event-calls")" = '--type claimed --issue 7 --data {"lease_minutes":120,"score":42,"factors":[{"name":"bug","points":25},{"name":"age","points":17}]}' ] || fail "score, no facts: $(cat "$d/event-calls")"
 # a lost claim logs no claimed event and gives no warning
 score_issue
 cm 100 devB '2026-10-08T11:59:59Z' '2026-10-08T11:59:59Z' | jq -s '.' > "$d/inject-7.json"
-CALLUM_FLOW_CLAIM_SCORE='not json' CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
+FABRIEK_CLAIM_SCORE='not json' CLAIM_EVENT_BIN="$tmpdir/event-rec" rc_of "$CLAIM" 7
 expect_rc 3 "score, collision loser"
 grep -q -- '--type claimed' "$d/event-calls" 2>/dev/null && fail "score, loser: claimed logged"
-grep -q 'CALLUM_FLOW_CLAIM_SCORE' "$tmpdir/err" && fail "score, loser: warned"
-# end to end through the real callum-flow-event (the new store only)
+grep -q 'FABRIEK_CLAIM_SCORE' "$tmpdir/err" && fail "score, loser: warned"
+# end to end through the real fabriek-event (the new store only)
 score_issue
 mkdir -p "$tmpdir/nodebin"
 ln -sf "$(command -v node)" "$tmpdir/nodebin/node"
 rm -rf "$tmpdir/events/factory" "$tmpdir/events/o__r.jsonl" # the seeds above wrote literal old lines; the real writer must add none
-EXTRA_PATH="$tmpdir/nodebin" CALLUM_FLOW_CLAIM_SCORE=$SCORE rc_of "$CLAIM" 7
+EXTRA_PATH="$tmpdir/nodebin" FABRIEK_CLAIM_SCORE=$SCORE rc_of "$CLAIM" 7
 expect_rc 0 "score, real writer"
 events | jq -e 'select(.type == "claimed") | .data.score == 42 and (.data.factors | length) == 2' >/dev/null || fail "score e2e: new log: $(cat "$tmpdir"/events/factory/*.jsonl 2>&1)"
 [ -z "$(old_events)" ] || fail "score e2e: the old log must stay empty: $(old_events)"
@@ -476,9 +476,9 @@ chmod +x "$tmpdir/dev-query"
 
 # no-argument form: the issues this device holds by the one shared rule (claim-events.sh): the
 # last claim event of the issue, in this device's log and the newest central one by ts, is a
-# `claimed` by this device. callum-flow-factory-state is never read.
+# `claimed` by this device. fabriek-factory-state is never read.
 fs_live() { jq -n --argjson i "$1" '{repos: [{repo: "o/r", issues: $i, recent: []}]}' > "$d/fs-json"; }
-hb() { CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" --heartbeat; }
+hb() { FABRIEK_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" --heartbeat; }
 no_renewed() { ! events | jq -e 'select(.type == "claim_renewed")' >/dev/null || fail "$1: renewed logged: $(events)"; }
 # the reported bug: this device claimed #7 and merged it (both in its own log); factory-state would
 # still list it with this device as holder (merged is not final), so it used to renew for ever
@@ -623,10 +623,10 @@ exec "$REAL_EVENT" "$@"
 STUB
 chmod +x "$tmpdir/no-path-event"
 set +e
-PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old REAL_EVENT="$EVENT" \
-  CALLUM_FLOW_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
-  CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
-  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
+PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r FABRIEK_CLAIM_EVENTS_SOURCE=old REAL_EVENT="$EVENT" \
+  FABRIEK_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+  FABRIEK_ISSUE_READ_BIN="$READER" FABRIEK_SHARE_DIR="$SHARE" \
+  FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
 rc=$?
 set -e
 expect_rc 1 "heartbeat list failure"
@@ -697,7 +697,7 @@ calls | grep -qx 'issue edit 7 --add-label ready --remove-assignee cbundy' || fa
 # --- sweep: a closed issue's closure is logged (#342); its labels are left alone ----
 # closed_issue <n> <reason> : a closed issue with GitHub's close reason
 closed_issue() { jq -n --arg r "$2" '{state: "CLOSED", labels: [], state_reason: (if $r == "" then null else $r end)}' > "$d/issue-$1.json"; }
-unset CALLUM_FLOW_DEV_QUERY_BIN 2> /dev/null || true
+unset FABRIEK_DEV_QUERY_BIN CALLUM_FLOW_DEV_QUERY_BIN 2> /dev/null || true
 
 reset
 issue 7 CLOSED 'In development'
@@ -762,7 +762,7 @@ mkdir -p "$tmpdir/nodebin"
 ln -sf "$(command -v node)" "$tmpdir/nodebin/node"
 h1_event() {
   set +e
-  PATH="$toolbin:$tmpdir/nodebin" CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA "$SH" "$EVENT" "$@" >"$tmpdir/out" 2>"$tmpdir/err"
+  PATH="$toolbin:$tmpdir/nodebin" FABRIEK_REPO=o/r CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA "$SH" "$EVENT" "$@" >"$tmpdir/out" 2>"$tmpdir/err"
   rc=$?
   set -e
 }
@@ -883,7 +883,7 @@ rc_of "$SWEEP"
 expect_rc 1 "sweep candidate read failure"
 events | jq -e 'select(.type == "closed" and .issue == 8)' > /dev/null || fail "other candidate not closed after a failure: $(events)"
 
-dq() { CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
+dq() { FABRIEK_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
 # --- sweep: housekeeping events never hide a closed issue (#465) ---------------------
 # delegated, then a recurring untrusted_stripped: the issue is still closed on GitHub
 reset
@@ -1155,7 +1155,7 @@ reset
 seed claimed 7
 echo '2999-01-01T00:00:00Z|7|requeued|devB' > "$d/central-new"
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" 7
+FABRIEK_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" 7
 expect_rc 0 "claim, central end"
 [ "$(calls | grep -v '^issue edit')" = "$(printf 'DELETE 100\nPOST 7')" ] || fail "claim, central end: not a fresh claim: $(calls)"
 # held by the combined rule (nothing later centrally): the live comment is kept
@@ -1163,7 +1163,7 @@ reset
 seed claimed 7
 echo '2000-01-01T00:00:00Z|7|requeued|devB' > "$d/central-new"
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" 7
+FABRIEK_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$CLAIM" 7
 expect_rc 0 "claim, held"
 calls | grep -q 'POST\|DELETE' && fail "claim, held: $(calls)"
 grep -q -- '--factory' "$d/dq-calls-new" || fail "claim, held: no central query"
@@ -1177,7 +1177,7 @@ for f in "$CLAIM" "$SWEEP"; do
     fail "$(basename "$f") repeats a state list from claim-events.sh"
   fi
 done
-! grep -v '^[[:space:]]*#' "$CLAIM" | grep -q 'FSTATE\|FACTORY_STATE_BIN\|factory-state' || fail "callum-flow-claim still reads factory-state"
+! grep -v '^[[:space:]]*#' "$CLAIM" | grep -q 'FSTATE\|FACTORY_STATE_BIN\|factory-state' || fail "fabriek-claim still reads factory-state"
 
 # --- sweep: legacy claim without a comment is untouched --------------------------
 reset
@@ -1402,7 +1402,7 @@ pv() {
   echo "feat/p$pn" > "$d/head-ref-$pn"
 }
 merged_rows() { events | jq -c 'select(.type == "merged")'; }
-sweep7() { CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
+sweep7() { FABRIEK_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
 
 # an unlinked merged PR is logged once: by hand, recovered, actor sweep, no issue; its head is GitHub's headRefOid
 reset
@@ -1496,12 +1496,12 @@ pv 65
 sweep7
 expect_rc 0 "rule 7 settle"
 [ -z "$(merged_rows)" ] || fail "rule 7 logged a merge inside the settle time: $(events)"
-CALLUM_FLOW_SWEEP_MERGE_SETTLE_SECONDS=0 sweep7
+FABRIEK_SWEEP_MERGE_SETTLE_SECONDS=0 sweep7
 [ "$(merged_rows | wc -l)" = 1 ] || fail "rule 7 with no settle time: $(events)"
 reset
 pl 65 main-fix "$H1" 2026-10-07T10:00:00Z
 pv 65
-CALLUM_FLOW_SWEEP_MERGE_WINDOW_SECONDS=86400 sweep7
+FABRIEK_SWEEP_MERGE_WINDOW_SECONDS=86400 sweep7
 grep -q 'merged:>=2026-10-07' "$d/pr-list-args" || fail "rule 7 window env: $(cat "$d/pr-list-args")"
 
 # no central store: nothing is logged, one warning
@@ -1569,5 +1569,46 @@ sweep7
 expect_rc 0 "rule 4 then rule 7"
 [ "$(merged_rows | wc -l)" = 1 ] || fail "rule 4 then rule 7 logged twice: $(events)"
 merged_rows | jq -e '.data.by == "factory" and .issue == 7' > /dev/null || fail "rule 4 then rule 7: $(events)"
+
+# --- the fabriek-claim marker (alias window) ------------------------------------------------------
+# Readers accept <!-- fabriek-claim --> as well as <!-- callum-flow-claim -->; the writer keeps the old one.
+fm() { cm "$@" | sed 's/<!-- callum-flow-claim -->/<!-- fabriek-claim -->/'; }
+reset
+fm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" 7
+expect_rc 3 "fabriek-claim marker: a live foreign claim blocks"
+no_calls "fabriek-claim marker"
+reset
+issue 7 OPEN 'factory:building'
+seed claimed 7
+{ brief; fm 100 devB "$STALE" "$STALE"; } | arr > "$d/comments-7.json"
+rc_of "$SWEEP"
+expect_rc 0 "fabriek-claim marker: sweep reclaims"
+calls | grep -qx 'issue edit 7 --add-label ready --remove-assignee cbundy' || fail "fabriek-claim marker: sweep did not reclaim a stale claim: $(calls)"
+reset
+rc_of "$CLAIM" 7
+expect_rc 0 "claim written"
+jq -e '.[-1].body | endswith("<!-- callum-flow-claim -->") and (contains("fabriek-claim") | not)' "$d/comments-7.json" >/dev/null ||
+  fail "the writer must keep the old marker: $(jq -r '.[-1].body' "$d/comments-7.json")"
+
+# --- the old CALLUM_FLOW_* settings (alias window) ------------------------------------------------
+# Only the old names set (and the old command name): the claim still reads its repo, lease and gh.
+reset
+rc=0
+PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new CALLUM_FLOW_LEASE_MINUTES=45 \
+  CALLUM_FLOW_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA CALLUM_FLOW_FACTORY_STATE_BIN="$tmpdir/no-factory-state" \
+  CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 \
+  "$SH" "$ROOT/images/base/callum-flow-claim" 7 > "$tmpdir/out" 2> "$tmpdir/err" || rc=$?
+expect_rc 0 "claim through the old name and settings"
+jq -e '.[-1].body | startswith("claimed-by: devA at 2026-10-08T12:00:00Z lease: 45\n")' "$d/comments-7.json" >/dev/null || fail "old settings: lease: $(jq -r '.[-1].body' "$d/comments-7.json")"
+# Both set: FABRIEK_* wins.
+reset
+rc=0
+PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r FABRIEK_CLAIM_EVENTS_SOURCE=new FABRIEK_LEASE_MINUTES=30 CALLUM_FLOW_LEASE_MINUTES=45 \
+  FABRIEK_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA FABRIEK_FACTORY_STATE_BIN="$tmpdir/no-factory-state" \
+  FABRIEK_ISSUE_READ_BIN="$READER" FABRIEK_SHARE_DIR="$SHARE" FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 \
+  "$SH" "$CLAIM" 7 > "$tmpdir/out" 2> "$tmpdir/err" || rc=$?
+expect_rc 0 "claim with both settings"
+jq -e '.[-1].body | startswith("claimed-by: devA at 2026-10-08T12:00:00Z lease: 30\n")' "$d/comments-7.json" >/dev/null || fail "FABRIEK_ must win: $(jq -r '.[-1].body' "$d/comments-7.json")"
 
 echo "PASS: claim.test.sh"

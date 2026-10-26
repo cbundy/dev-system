@@ -1,6 +1,6 @@
 # claim-events.sh - the one rule for who holds an issue's claim, sourced (POSIX sh) by
-# callum-flow-claim and callum-flow-sweep. Found through CALLUM_FLOW_SHARE_DIR (default
-# /usr/local/share/dev-system), the way callum-flow-issue-read finds trusted-authors.sh.
+# fabriek-claim and fabriek-sweep. Found through FABRIEK_SHARE_DIR (default
+# /usr/local/share/dev-system), the way fabriek-issue-read finds trusted-authors.sh.
 #
 # The claim events are the states that start or end a claim; no other state counts. The
 # noise states are housekeeping that is no lifecycle event of an issue: the factory loop's
@@ -12,11 +12,11 @@
 # warns and falls back to this device's log; exit 78 (not configured) falls back silently.
 #
 # Source switch (cbundy/dev-system#905, docs/factory-events/replay.md "Source switch"):
-# CALLUM_FLOW_CLAIM_EVENTS_SOURCE picks the store the rule reads.
-#   old     factory.events through dev-query, and this device's old log (callum-flow-event --path).
-#           The way back: CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old.
+# FABRIEK_CLAIM_EVENTS_SOURCE picks the store the rule reads.
+#   old     factory.events through dev-query, and this device's old log (fabriek-event --path).
+#           The way back: FABRIEK_CLAIM_EVENTS_SOURCE=old.
 #   new     (the default, also when unset or empty) factory.event_log through dev-query --factory, and this device's new log
-#           (callum-flow-event --new-path). The new type names are read by name; requeued is
+#           (fabriek-event --new-path). The new type names are read by name; requeued is
 #           mapped back to reclaimed in DIR/latest, so ce_held and the sweep see one vocabulary.
 #   shadow  opt-in, to re-measure: decide on old exactly as `old` does, then read both
 #           sides over a window and write one shadow_read event (reader claim-events, tool
@@ -25,9 +25,9 @@
 # Any other value warns once and uses old: the rule is sourced in the heartbeat and the sweep and
 # must never fail them. The compared value per repo#issue is what the rule decides on: the
 # lifecycle class (closed, abandoned or other), the latest claim type and its device.
-# CALLUM_FLOW_SHADOW_WINDOW_SECONDS (default 604800) is how far back both sides are read (the
+# FABRIEK_SHADOW_WINDOW_SECONDS (default 604800) is how far back both sides are read (the
 # production new store holds only dual-written events); `differences` counts the window cut
-# CALLUM_FLOW_SHADOW_SETTLE_SECONDS (default 600) before now, so push lag is not a difference, and
+# FABRIEK_SHADOW_SETTLE_SECONDS (default 600) before now, so push lag is not a difference, and
 # `live_differences` the whole window. Cuts are at whole seconds on both sides and both local logs.
 # The window also reaches back before the new store's history: it holds only dual-written events and
 # is not backfilled. So the shadow reads each device's first time in factory.event_log for the repo
@@ -36,7 +36,7 @@
 # The shadow_read event names this device's floor as scope_floor (null when it has none). The decision
 # paths (ce_load without shadow, ce_held) do not read floors.
 #
-# The caller sets before calling: DEVQ (the dev-query command), EVENT (callum-flow-event),
+# The caller sets before calling: DEVQ (the dev-query command), EVENT (fabriek-event),
 # repo, CE_TOOL (its name, for warnings).
 
 CE_CLAIM_JQ='"claimed", "ready", "reclaimed", "merged", "closed", "abandoned"'
@@ -58,16 +58,16 @@ ce_device() {
   printf '%s\n' "$_d"
 }
 
-# ce_source: sets CE_SRC to old, new or shadow from CALLUM_FLOW_CLAIM_EVENTS_SOURCE.
+# ce_source: sets CE_SRC to old, new or shadow from FABRIEK_CLAIM_EVENTS_SOURCE.
 ce_source() {
-  case "${CALLUM_FLOW_CLAIM_EVENTS_SOURCE:-}" in
+  case "${FABRIEK_CLAIM_EVENTS_SOURCE:-}" in
     '' | new) CE_SRC=new ;;
     shadow) CE_SRC=shadow ;;
     old) CE_SRC=old ;;
     *)
-      if [ "${CE_WARNED_SRC:-}" != "${CALLUM_FLOW_CLAIM_EVENTS_SOURCE}" ]; then
-        echo "${CE_TOOL:-claim-events}: warning: CALLUM_FLOW_CLAIM_EVENTS_SOURCE='${CALLUM_FLOW_CLAIM_EVENTS_SOURCE}' is not old, new or shadow, reading the old log" >&2
-        CE_WARNED_SRC=${CALLUM_FLOW_CLAIM_EVENTS_SOURCE}
+      if [ "${CE_WARNED_SRC:-}" != "${FABRIEK_CLAIM_EVENTS_SOURCE}" ]; then
+        echo "${CE_TOOL:-claim-events}: warning: FABRIEK_CLAIM_EVENTS_SOURCE='${FABRIEK_CLAIM_EVENTS_SOURCE}' is not old, new or shadow, reading the old log" >&2
+        CE_WARNED_SRC=${FABRIEK_CLAIM_EVENTS_SOURCE}
       fi
       CE_SRC=old
       ;;
@@ -247,8 +247,8 @@ ce_side() {
 # is recorded when dev-query is absent or not configured (exit 78) on either side: there is
 # nothing to compare. A failing write warns once.
 ce_shadow() {
-  _swin=${CALLUM_FLOW_SHADOW_WINDOW_SECONDS:-604800}
-  _sset=${CALLUM_FLOW_SHADOW_SETTLE_SECONDS:-600}
+  _swin=${FABRIEK_SHADOW_WINDOW_SECONDS:-604800}
+  _sset=${FABRIEK_SHADOW_SETTLE_SECONDS:-600}
   case $_swin in '' | *[!0-9]*) _swin=604800 ;; esac
   case $_sset in '' | *[!0-9]*) _sset=600 ;; esac
   _snow=$(date -u +%s) || return 0

@@ -12,7 +12,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { normalize: normalizeReport } = require("../../../images/base/evaluate-new-events.js");
-const tool = require("../../../images/base/callum-flow-evaluate");
+const tool = require("../../../images/base/fabriek-evaluate");
 
 const when = (ctx) => `ts >= '${new Date(ctx.since).toISOString()}'${ctx.until ? ` AND ts < '${new Date(ctx.until).toISOString()}'` : ""}`;
 const lines = (s) => s.split("\n").filter((l) => l !== "");

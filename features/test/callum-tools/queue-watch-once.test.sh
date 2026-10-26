@@ -28,12 +28,12 @@ once_status() {
   # shellcheck disable=SC2086 # $vars are assignments without spaces; $qo is the command and its fixed options
   (in_dir "$tmpdir" timeout 10 env $vars $qo "$@") > "$out" 2> "$out.err" || st=$?
 }
-# A stub callum-flow-event that records each call.
-cat > "$fakebin/callum-flow-event" <<'EOF'
+# A stub fabriek-event that records each call.
+cat > "$fakebin/fabriek-event" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$(dirname "$0")/event-calls"
 EOF
-chmod +x "$fakebin/callum-flow-event"
+chmod +x "$fakebin/fabriek-event"
 calls="$fakebin/event-calls"
 
 # 1. A changed queue: one listing call (no confirming read), the line, and a ready event for each
@@ -80,9 +80,9 @@ once_status --known 305
 if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "reader failure: exit $st, out $(cat "$out")"; fi
 grep -qx "queue-watch.sh: cannot read the queue" "$out.err" || fail "reader failure: $(cat "$out.err")"
 queue_seq 307
-once_status CALLUM_FLOW_TRUSTED_AUTHORS= --known 305
+once_status FABRIEK_TRUSTED_AUTHORS= --known 305
 if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "no trusted list: exit $st, out $(cat "$out")"; fi
-once_status CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader"
+once_status FABRIEK_ISSUE_READ_BIN="$tmpdir/missing-reader"
 if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "missing reader: exit $st, out $(cat "$out")"; fi
 grep -qx "queue-watch.sh: $tmpdir/missing-reader not on PATH" "$out.err" || fail "missing reader: $(cat "$out.err")"
 mv "$fakebin/gh" "$fakebin/gh.off"
@@ -93,7 +93,7 @@ grep -qx "queue-watch.sh: gh not on PATH" "$out.err" || fail "no gh: $(cat "$out
 # a reader reply of another shape (no issues list) is a failed read too
 printf '%s\n' '#!/bin/sh' 'echo "{\"issues\": \"not a list\", \"stripped\": 0}"' > "$tmpdir/odd-reader"
 chmod +x "$tmpdir/odd-reader"
-once_status CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/odd-reader" --known 305
+once_status FABRIEK_ISSUE_READ_BIN="$tmpdir/odd-reader" --known 305
 if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "odd reply: exit $st, out $(cat "$out")"; fi
 grep -qx "queue-watch.sh: cannot read the queue" "$out.err" || fail "odd reply: $(cat "$out.err")"
 [ ! -s "$calls" ] || fail "a failed --once logged: $(cat "$calls")"
@@ -122,8 +122,8 @@ done
 ok # repeated --once reads do not replay ready events
 
 # 5b. The facts: a parent in another repo is null; a writer that exits 2 on --data (an older
-# callum-flow-event) is called again without it.
-cat > "$fakebin/callum-flow-event" <<'STUB'
+# fabriek-event) is called again without it.
+cat > "$fakebin/fabriek-event" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$(dirname "$0")/event-calls"
 STUB
@@ -131,7 +131,7 @@ queue_seq 8
 : > "$calls"
 res=$(once --known none) || fail "cross-repo parent: did not exit 0"
 expect_lines "$calls" 'ready --issue 8 --if-changed --data {"title":"title 8","labels":["ready","bug"],"parent":null} --actor watcher'
-cat > "$fakebin/callum-flow-event" <<'STUB'
+cat > "$fakebin/fabriek-event" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$(dirname "$0")/event-calls"
 case "$*" in *--data*) exit 2 ;; esac
@@ -161,7 +161,7 @@ for opt in --stream "--interval 1"; do
   grep -q "^queue-watch.sh: --once takes no option except --repo, --label and --known" "$out.err" ||
     fail "--once $opt: $(cat "$out.err")"
 done
-rm "$fakebin/callum-flow-event"
+rm "$fakebin/fabriek-event"
 ok # conflicting options are usage errors
 
 echo "ok - $passed queue-watch --once scenarios passed"

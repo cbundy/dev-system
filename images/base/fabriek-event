@@ -1,0 +1,430 @@
+#!/bin/sh
+#
+# fabriek-event: record one factory lifecycle transition as a new-format event in
+# <events dir>/factory/<owner>__<repo>.jsonl (cbundy/dev-system#218, #1143). The log is the factory's
+# state: factory-event-push-loop ships it to the central PostgreSQL, docs/metrics.md has the queries.
+# The old log <events dir>/<owner>__<repo>.jsonl and factory.events get no new lines from this tool
+# any more; the options that named them stay accepted for older callers (removing them is #656).
+#
+# Usage: fabriek-event <state> [--issue N] [--run ID] [--branch B]
+#          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
+#          [--if-changed] [--new-only] [--data JSON]
+#        fabriek-event --path [--repo O/N]
+#        fabriek-event --new-path [--repo O/N]
+#        fabriek-event --new-only --new-path [--repo O/N]
+#        fabriek-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N]
+#          [--actor NAME] [--regime R]
+#
+# Native mode (cbundy/dev-system#792): --type writes one new-format event (envelope v1,
+# docs/factory-events/README.md) straight from its type and payload to <events dir>/factory/<file>
+# only, never to the old log, then touches <events dir>/.wake. factory-event-write.js (found as the
+# translator is) builds the envelope and checks the payload against factory-event-shapes.json: for a
+# known type and version every required field must be present and every field the schema has must
+# carry its JSON type, and a type with x-issue required needs --issue. Enum values, bounds and extra
+# fields are not checked at run time. A type or version not in the shapes is written with one
+# warning. type_version is --type-version, else the type's current version, else 1. Exit 2 and
+# nothing written on: --data missing, not JSON or not an object; --issue or --type-version not a
+# positive integer; --type not matching ^[a-z][a-z_]*$; an unknown option; a refused payload. A
+# missing node, writer or log that cannot be written warns and exits 0. CALLUM_EVENT_SHAPES
+# overrides the shapes file (tests).
+#
+# --regime R (else FACTORY_REGIME; the flag wins, an empty value counts as unset) is the envelope's
+# regime: factory_loop_v2, testbed or manual (docs/factory-events/README.md, "Reading events"). Unset
+# is null, never guessed. A value outside the shapes' enum is written as given with one warning. The
+# old-state mode takes no flag but passes FACTORY_REGIME to the translator the same way.
+#
+# Old-state mode (<state> ...): builds the old-format line as before (same validation, same note
+# checks), translates it with factory-event-translate.js (found next to this script, else in
+# ${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}) and appends only the new event as one JSON line
+# to <events dir>/factory/<same file name> (made 0700), then touches <events dir>/.wake. The old
+# line itself is never written anywhere, so a call from any older plugin lands in the new store. The
+# clock is read once, with milliseconds. session_id of the new event is CLAUDE_SESSION_ID, else
+# CLAUDE_CODE_SESSION_ID, or null (never the transcript guess). A state the translator skips by name
+# writes nothing and exits 0. A miss, a missing node or translator, or a crashing translator writes
+# nothing, prints one `fabriek-event: warning:` line and still exits 0.
+#
+# --new-path prints the absolute path of the new log like --path, and writes nothing. An older
+# image answers it with a usage error (exit 2): that is the capability probe.
+#
+# --new-only (cbundy/dev-system#825) is a no-op, kept for older callers: it is what the old-state
+# mode does now. `--new-only --new-path` still prints the new path with exit 0 (the probe).
+#
+# --data JSON (cbundy/dev-system#870) in the old-state mode hands the translator extra payload fields
+# that only the new event carries (ready and claimed: title, labels, parent). JSON that is not an
+# object exits 2 with nothing written. A key the translated type does not accept, or a value of the
+# wrong shape, is a translator miss: no event is written, one warning, exit 0. An older writer
+# answers --data with a usage error (exit 2), which callers use to retry without it.
+#
+# --if-changed (cbundy/dev-system#344) translates first, then writes nothing, and exits 0, when the
+# newest event in the new log for the same issue has the same type and data as the translated one.
+# `loop_entry` and `loop_passes` events are skipped when finding it: the factory loop's bookkeeping
+# is no transition of the issue, so it never makes a repeat new. The watchers use it for a
+# transition they did not see happen (a restart's first sight of a run), so a re-armed watcher never
+# re-logs old events: queue-watch's first sight of an already-logged ready issue with the same title,
+# labels and parent writes nothing, and one whose title, labels or parent changed is logged again.
+# --branch no longer narrows the match (the envelope has no branch). A missing or unreadable new
+# log, or no earlier event for the issue, counts as changed. Without the flag every call writes. It
+# combines with --new-only (both now mean the new log).
+#
+# --path prints the absolute path of the old log, named and placed as an older write would, and
+# writes nothing (fabriek-sweep reads the log through it). The old log gets no new lines.
+#
+# States (closed vocabulary): ready claimed briefed delegated run_started
+#   parked verdict fix_requested failed merge_ready head_mismatch conflict
+#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop
+#   transition reviewed intervention prompt_denied prompt_waiting
+#   (`superseded`: a run or branch was replaced for the same issue, --run names the old run; it does not end the issue)
+#   (`rebased_behind`: see the lifecycle semantics in docs/metrics.md)
+#   (`renewed`: a claim heartbeat extended the lease; housekeeping, never a stage)
+#   (`implementer_routed`: fabriek-implementer-route picked the implementer's model; the note
+#   is `model=.. reason=.. bucket=.. pct=..`)
+#   (`usage`: a reading of the usage windows; a spend reading on an API key has the note
+#   `auth=api-key spend_usd=N budget_usd=N|none budget_resets_at=ISO|none source=spend`; a
+#   subscription or unavailable reading may also carry `auth=subscription|api-key`)
+#   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
+#   reason - completed, not_planned or duplicate)
+#   (`loop`: the factory loop's own bookkeeping (docs/factory-loop/DECISIONS.md D-09): agent
+#   starts and ends, wakes and their answers, owner notices and rate-cap holds. The note must
+#   carry `kind=.. key=.. status=..` (more fields may follow); never a stage, never progress)
+#   The factory loop v2's three (docs/factory-loop/v2/SPEC.md 7.1). Their fields are `key=value`
+#   tokens in the note, encoded as `loop` notes are (a value holds no space; `none` when missing):
+#   (`transition`: an issue's factory state changed; the note must carry life=, seq=, from= and
+#   to= (the new state), and carries every field of the loop's record; a stage)
+#   (`reviewed`: one review result; the note must carry verdict= (approve, changes or unknown) and
+#   round=; never a stage, never progress)
+#   (`intervention`: someone had to step in that the plan did not foresee; the note must carry
+#   who= (person, loop or judge) and cause=, and may carry reason=, life= and fact=; --issue is optional
+#   (a fleet-level one names none); never a stage, never progress. A rescue the loop cannot see
+#   is recorded by hand: fabriek-event intervention --issue N --note
+#   'who=person cause=rescue reason=what%20was%20done')
+#   (`prompt_denied`: the factory loop's companion refused a loop agent's tool call, because the
+#   engine would have asked a person nobody watches; `prompt_waiting`: a loop agent is waiting on
+#   such a prompt now. --issue is required; never a stage, never progress, never final. The
+#   current companion writes the native types (--type, --data); the states are kept for older
+#   companions and the history, with a `key=value` note of tokens (life, seq, step, attempt,
+#   agent, agent_type, tool, input, why, slot, session, transcript), none required)
+#
+# Exit codes:
+#   0  the line was written, or writing failed (a warning on stderr: the
+#      caller is never failed by logging)
+#   2  usage error (native mode: see above): unknown state, missing or non-numeric --issue, a loop,
+#      transition, reviewed or intervention note without its required tokens
+#      (nothing written). --issue may be left out for watcher_error, usage, loop
+#      and intervention, and is taken from an issue-<N> branch name when
+#      --branch has one.
+#
+# No network, one O_APPEND write of a single short line (atomic between concurrent writers). The
+# old-state line is built with one jq call and handed to the translator, not written. Fills ts, repo, device (DEV_MACHINE_NAME, else
+# the hostname), session_id (CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, else the newest transcript of
+# the working directory's Claude project, else null), actor
+# (--actor, FABRIEK_ACTOR, else "agent"), v (2), the running versions
+# base_image, dev_image, template_version and plugin_version (read from the
+# snapshot dev-init keeps at ${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}, the
+# same local data `dev-version --local` reads; null when it is missing or
+# unreadable - cbundy/dev-system#316) and event_id (a UUID made
+# locally from the kernel, so an event keeps a unique identity even if the file
+# is lost and restarts at line 1; omitted with a warning if the kernel source is
+# unreadable - cbundy/dev-system#229).
+#
+# After the append it touches <events dir>/.wake so factory-event-push-loop pushes the
+# event within seconds instead of at its next interval (failure ignored; still
+# no network here).
+#
+# Environment: CALLUM_EVENTS_DIR (default /persist/events), DEV_VERSIONS_FILE,
+# FABRIEK_REPO, CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID
+# (owner/name, default from the origin remote), CALLUM_EVENT_UUID_SOURCE (test
+# override of /proc/sys/kernel/random/uuid).
+# The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.sh; a lone copy of this script without it still runs, on the FABRIEK_ names only).
+case $0 in */*) _fe=${0%/*}/fabriek-env.sh ;; *) _fe=./fabriek-env.sh ;; esac
+[ -r "$_fe" ] || _fe=${FABRIEK_SHARE_DIR:-${CALLUM_FLOW_SHARE_DIR:-${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}}}/fabriek-env.sh
+# shellcheck source=fabriek-env.sh
+[ ! -r "$_fe" ] || . "$_fe"
+unset _fe
+
+set -u
+
+# The Claude session: CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID (Claude Code sets it), else empty.
+env_session=${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}
+
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention prompt_denied prompt_waiting"
+
+usage() {
+  [ -z "${1-}" ] || echo "fabriek-event: $1" >&2
+  echo "usage: fabriek-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed] [--new-only] [--data JSON]" >&2
+  echo "       fabriek-event --path [--repo O/N]" >&2
+  echo "       fabriek-event --new-path [--repo O/N]" >&2
+  echo "       fabriek-event --new-only --new-path [--repo O/N]" >&2
+  echo "       fabriek-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME] [--regime R]" >&2
+  echo "states: $STATES" >&2
+  exit 2
+}
+
+# native_usage: a one-line usage error for the --type mode.
+native_usage() {
+  echo "fabriek-event: $1" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+
+# repo_file: derive the repo (when not given) and the log file name from it.
+repo_file() {
+  if [ -z "$repo" ]; then
+    url=$(git config --get remote.origin.url 2>/dev/null) || url=
+    repo=$(printf '%s' "$url" | sed 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p')
+    [ -n "$repo" ] || repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+  fi
+  file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
+}
+
+warn() { echo "fabriek-event: warning: $*" >&2; }
+
+# read_device: sets $device (DEV_MACHINE_NAME, else the hostname, else /etc/hostname, else unknown).
+read_device() {
+  device=${DEV_MACHINE_NAME:-}
+  [ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
+  [ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+}
+
+# read_event_id: sets $event_id to a lower-case UUID from the kernel (or CALLUM_EVENT_UUID_SOURCE), else empty.
+read_event_id() {
+  event_id=$({ tr 'A-F' 'a-f' < "${CALLUM_EVENT_UUID_SOURCE:-/proc/sys/kernel/random/uuid}"; } 2>/dev/null) || event_id=
+  case "$event_id" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) event_id= ;;
+  esac
+}
+
+# read_snap: sets $snap to the dev-init version snapshot (empty when unreadable).
+read_snap() {
+  snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
+}
+
+if [ "$1" = --new-only ] && [ "${2-}" = --new-path ]; then
+  shift
+fi
+if [ "$1" = --path ] || [ "$1" = --new-path ]; then
+  mode=$1
+  shift
+  repo=${FABRIEK_REPO-}
+  while [ $# -gt 0 ]; do
+    if [ "$1" != --repo ] || [ $# -lt 2 ]; then usage "$mode takes only --repo O/N"; fi
+    repo=$2
+    shift 2
+  done
+  repo_file
+  dir=${CALLUM_EVENTS_DIR:-/persist/events}
+  case "$dir" in /*) ;; *) dir=$(pwd)/$dir ;; esac
+  if [ "$mode" = --new-path ]; then dir=$dir/factory; fi
+  printf '%s/%s\n' "$dir" "$file"
+  exit 0
+fi
+if [ "$1" = --type ]; then
+  n_type='' n_ver='' n_data='' n_issue='' n_repo=${FABRIEK_REPO-} n_actor=${FABRIEK_ACTOR:-agent}
+  n_has_ver='' n_has_data='' n_has_issue='' n_regime=${FACTORY_REGIME-}
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || native_usage "$1 needs a value"
+    case "$1" in
+      --type) n_type=$2 ;;
+      --type-version) n_ver=$2 n_has_ver=1 ;;
+      --data) n_data=$2 n_has_data=1 ;;
+      --issue) n_issue=$2 n_has_issue=1 ;;
+      --repo) n_repo=$2 ;;
+      --actor) n_actor=$2 ;;
+      --regime) n_regime=$2 ;;
+      *) native_usage "unknown option '$1'" ;;
+    esac
+    shift 2
+  done
+  [ -n "$n_has_data" ] || native_usage "--data is required"
+  repo=$n_repo
+  repo_file
+  dir=${CALLUM_EVENTS_DIR:-/persist/events}
+  command -v node >/dev/null 2>&1 || { warn "node not found - event not recorded"; exit 0; }
+  wr_js=$(dirname "$0")/factory-event-write.js
+  [ -r "$wr_js" ] || wr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-write.js
+  [ -r "$wr_js" ] || { warn "factory-event-write.js not found - event not recorded"; exit 0; }
+  read_device
+  read_event_id
+  read_snap
+  set -- --type "$n_type" --data "$n_data" --repo "$repo" --device "$device" --actor "$n_actor" --event-id "$event_id" --snapshot "$snap"
+  [ -z "$n_has_ver" ] || set -- "$@" --type-version "$n_ver"
+  [ -z "$n_has_issue" ] || set -- "$@" --issue "$n_issue"
+  [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "$n_regime" ] || set -- "$@" --regime "$n_regime"
+  wr_rc=0
+  new=$(node "$wr_js" "$@") || wr_rc=$?
+  [ "$wr_rc" -ne 2 ] || exit 2
+  if [ "$wr_rc" -ne 0 ] || [ -z "$new" ]; then warn "event writer failed (exit $wr_rc) - event not recorded"; exit 0; fi
+  if [ ! -d "$dir/factory" ]; then
+    mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
+  fi
+  if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then
+    touch "$dir/.wake" 2>/dev/null || :
+  else
+    warn "cannot write $dir/factory/$file - event not recorded"
+  fi
+  exit 0
+fi
+state=$1
+shift
+case " $STATES " in *" $state "*) ;; *) usage "unknown state '$state'" ;; esac
+
+issue='' run='' branch='' pr='' head='' note=''
+actor=${FABRIEK_ACTOR:-agent}
+repo=${FABRIEK_REPO-}
+if_changed=
+extra=
+while [ $# -gt 0 ]; do
+  if [ "$1" = --new-only ]; then
+    shift
+    continue
+  fi
+  if [ "$1" = --if-changed ]; then
+    if_changed=1
+    shift
+    continue
+  fi
+  [ $# -ge 2 ] || usage "$1 needs a value"
+  case "$1" in
+    --issue) issue=$2 ;;
+    --run) run=$2 ;;
+    --branch) branch=$2 ;;
+    --pr) pr=$2 ;;
+    --head) head=$2 ;;
+    --note) note=$2 ;;
+    --actor) actor=$2 ;;
+    --repo) repo=$2 ;;
+    --data) extra=$2 ;;
+    *) usage "unknown option '$1'" ;;
+  esac
+  shift 2
+done
+
+if [ -z "$issue" ]; then
+  case "$branch" in
+    *issue-[0-9]*) issue=$(printf '%s' "$branch" | sed -n 's/.*issue-\([0-9][0-9]*\).*/\1/p') ;;
+  esac
+fi
+case "$state" in
+  watcher_error | usage | loop | intervention) ;;
+  *) [ -n "$issue" ] || usage "--issue is required for $state" ;;
+esac
+[ "$state" != superseded ] || [ -n "$run" ] || usage "--run is required for superseded (the run being replaced)"
+# needs KEYS...: the note carries each `key=value` token with a value (a loop note is the record a
+# lost store is rebuilt from, v2 SPEC 13.7.5; a transition note the record v2 rebuilds, v2 SPEC 3.3)
+needs() {
+  for k in "$@"; do
+    case " $note " in
+      *" $k= "*) bad_note "$@" ;;
+      *" $k="*) ;;
+      *) bad_note "$@" ;;
+    esac
+  done
+}
+bad_note() {
+  list=
+  for k in "$@"; do list="$list${list:+, }$k="; done
+  usage "--note for $state needs $(printf '%s' "$list" | sed 's/, \([^,]*\)$/ and \1/') with values"
+}
+case "$state" in
+  loop) needs kind key status ;;
+  transition) needs life seq from to ;;
+  reviewed) needs verdict round ;;
+  intervention)
+    needs who cause
+    case " $note " in
+      *" who=person "* | *" who=loop "* | *" who=judge "*) ;;
+      *) usage "--note for intervention needs who=person, who=loop or who=judge" ;;
+    esac
+    ;;
+esac
+case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
+case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
+
+command -v jq >/dev/null 2>&1 || { warn "jq not found - event not recorded"; exit 0; }
+if [ -n "$extra" ]; then
+  [ "$(printf '%s' "$extra" | jq -r 'type' 2>/dev/null)" = object ] || usage "--data must be a JSON object"
+fi
+
+repo_file
+
+read_device
+
+session=$env_session
+if [ -z "$session" ]; then
+  pdir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')
+  if [ -d "$pdir" ]; then
+    newest=$(find "$pdir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %f\n' 2>/dev/null | sort -rn | sed -n 1p | cut -d' ' -f2-)
+    [ -z "$newest" ] || session=${newest%.jsonl}
+  fi
+fi
+
+read_event_id
+[ -n "$event_id" ] || warn "no event_id available - event recorded without one"
+
+read_snap
+
+ts_ms=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+ts=${ts_ms%.*}Z
+line=$(jq -nc --arg snap "$snap" \
+  --arg ts "$ts" --arg repo "$repo" --arg device "$device" \
+  --arg session "$session" --arg actor "$actor" --arg state "$state" --arg issue "$issue" \
+  --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" --arg event_id "$event_id" '
+  def s: if . == "" then null else . end;
+  def n: if . == "" then null else tonumber end;
+  (try ($snap | fromjson) catch null) as $s
+  | def sv($k): try ($s[$k] | if type == "string" then . else null end) catch null;
+  {v: 2, ts: $ts, repo: $repo, device: $device, session_id: ($session | s), actor: $actor,
+   state: $state, issue: ($issue | n), run_id: ($run | s), branch: ($branch | s),
+   pr: ($pr | n), head: ($head | s), note: ($note | s), event_id: ($event_id | s),
+   base_image: sv("base_image"), dev_image: sv("dev_image"),
+   template_version: sv("template_version"), plugin_version: sv("plugin_version")}') || { warn "could not build the event"; exit 0; }
+
+dir=${CALLUM_EVENTS_DIR:-/persist/events}
+# translate: translate $line into $new (the event for the new log). Empty $new means nothing to
+# write: a state the translator skips by name, or a warning already given. Never fails the caller.
+translate() {
+  new=''
+  command -v node >/dev/null 2>&1 || { warn "node not found - event not recorded"; return 0; }
+  tr_js=$(dirname "$0")/factory-event-translate.js
+  [ -r "$tr_js" ] || tr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-translate.js
+  [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - event not recorded"; return 0; }
+  set -- --quiet --ts "$ts_ms"
+  [ -z "$env_session" ] || set -- "$@" --session-id "$env_session"
+  [ -z "${FACTORY_REGIME-}" ] || set -- "$@" --regime "$FACTORY_REGIME"
+  [ -z "$extra" ] || set -- "$@" --data "$extra"
+  tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - event not recorded"; return 0; }
+  tr_rc=0
+  new=$(printf '%s\n' "$line" | node "$tr_js" "$@" 2>"$tr_err") || tr_rc=$?
+  tr_msg=$(sed -n 's/^.*miss: //p' "$tr_err" | sed -n 1p)
+  tr_all=$(sed -n 1p "$tr_err")
+  rm -f "$tr_err"
+  if [ "$tr_rc" -ne 0 ]; then
+    new=''
+    if [ -n "$tr_msg" ]; then warn "$tr_msg - event not recorded"; else warn "translator failed (exit $tr_rc)${tr_all:+: $tr_all} - event not recorded"; fi
+  fi
+  return 0
+}
+translate
+[ -n "$new" ] || exit 0
+# --if-changed: nothing to write when the subject's newest event in the new log (loop_entry and
+# loop_passes skipped) has the same type and data. A missing or unreadable log counts as changed.
+if [ -n "$if_changed" ] && [ -r "$dir/factory/$file" ]; then
+  same=$(jq -Rn --argjson new "$new" '
+    [inputs | fromjson? | select(type == "object")
+     | select(.type != "loop_entry" and .type != "loop_passes")
+     | select(.issue == $new.issue)]
+    | last
+    | . != null and .type == $new.type and .data == $new.data' "$dir/factory/$file" 2>/dev/null) || same=
+  [ "$same" != true ] || exit 0
+fi
+if [ ! -d "$dir/factory" ]; then
+  mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
+fi
+if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then
+  touch "$dir/.wake" 2>/dev/null || :
+else
+  warn "cannot write $dir/factory/$file - event not recorded"
+fi
+exit 0

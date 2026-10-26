@@ -6,7 +6,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
-EVENT="$ROOT/images/base/callum-flow-event"
+EVENT="$ROOT/images/base/fabriek-event"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -31,7 +31,7 @@ under_npm_test=${TEST_RESULTS_DIR:+1}
   test_sandbox_check 2> /dev/null || fail "check should pass on an empty sandbox"
 
   # A real event write with no events dir of its own lands in the sandbox, and the check names it.
-  env -u CALLUM_FLOW_EVENT_BIN "$EVENT" ready --issue 1 --repo o/r > /dev/null 2>&1 || fail "event write should succeed"
+  env -u FABRIEK_EVENT_BIN -u CALLUM_FLOW_EVENT_BIN "$EVENT" ready --issue 1 --repo o/r > /dev/null 2>&1 || fail "event write should succeed"
   [ -f "$CALLUM_EVENTS_DIR/factory/o__r.jsonl" ] || fail "event should land in the sandbox: $(ls -A "$CALLUM_EVENTS_DIR")"
   err=$(test_sandbox_check 2>&1) && fail "check should fail with a stray file"
   case "$err" in *"FAIL test isolation: $CALLUM_EVENTS_DIR/factory/o__r.jsonl"*) ;; *) fail "check should name the file: $err" ;; esac

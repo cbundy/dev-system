@@ -43,7 +43,7 @@
 # the fallback rather than the primary source.
 #
 # A check (not --record) also writes the reading to the factory event log as a native `usage`
-# event: `callum-flow-event --type usage --actor watcher --data <json>`, best effort. --to-data reads
+# event: `fabriek-event --type usage --actor watcher --data <json>`, best effort. --to-data reads
 # a line like the one above (or the unavailable, auth and spend forms) on stdin and prints that
 # data object, one line of JSON; the event write and the tests use it.
 #
@@ -88,7 +88,7 @@ def line($src): . as $u
     + " source=\($src)";
 '
 
-# The reading's line as the `usage` event's data object (callum-flow-event --type usage --data): the
+# The reading's line as the `usage` event's data object (fabriek-event --type usage --data): the
 # unavailable reading with its reasons, the plan reading (five_hour, seven_day) and, when the line
 # carries them, the auth and spend fields. --to-data prints it for a line on stdin.
 # shellcheck disable=SC2016 # jq program text, not shell expansions
@@ -226,9 +226,9 @@ else
 fi
 printf '%s\n' "$line"
 # The factory event log (cbundy/dev-system#218), best effort: the reading as a native `usage` event
-# (callum-flow-event --type usage --data). Only a check is recorded, not --record, which runs on every
+# (fabriek-event --type usage --data). Only a check is recorded, not --record, which runs on every
 # status line refresh.
-if command -v callum-flow-event >/dev/null 2>&1; then
+if command -v fabriek-event >/dev/null 2>&1; then
   data=$(printf '%s' "$line" | jq -Rc "$TO_DATA_JQ" 2>/dev/null) || data=
   # A subscription login's reading names it and carries the loop's what-if total (check mode only: --to-data
   # stays a pure translation of the printed line).
@@ -237,5 +237,5 @@ if command -v callum-flow-event >/dev/null 2>&1; then
       --arg usd "${CALLUM_USAGE_SPEND_USD-}" --arg at "${CALLUM_USAGE_SPEND_RESETS_AT-}" \
       --arg why "${CALLUM_USAGE_SPEND_REASON-}" "$SUBSCRIPTION_JQ" 2>/dev/null) || data=
   fi
-  [ -z "$data" ] || callum-flow-event --type usage --actor watcher --data "$data" >/dev/null 2>&1 || :
+  [ -z "$data" ] || fabriek-event --type usage --actor watcher --data "$data" >/dev/null 2>&1 || :
 fi

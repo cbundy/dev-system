@@ -323,7 +323,8 @@ if [ -n "$JSON" ]; then
       --arg rt "$runtime" --arg ws "${DEV_CODER_WORKSPACE:-}" '
       def e: if . == "" then null else . end;
       {device: ($device | e), base_image: ($base | e), dev_image: ($dev | e), template_version: ($tpl | e),
-       plugin_version: ([.components[] | select((.name | startswith("callum-flow@")) and (.name | endswith("(user)"))) | .running][0]),
+       plugin_version: ([.components[] | select((.name | startswith("fabriek@")) and (.name | endswith("(user)"))) | .running][0]
+         // [.components[] | select((.name | startswith("callum-flow@")) and (.name | endswith("(user)"))) | .running][0]),
        role: ($role | e), ring: ($ring | e), runtime: ($rt | e), coder_workspace: ($ws | e)} + .' \
       "$OUT/doc.json" > "$OUT/snapshot.json" || exit 2
     dest_dir=$(dirname -- "$SNAPSHOT")

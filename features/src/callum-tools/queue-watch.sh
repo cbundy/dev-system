@@ -45,23 +45,23 @@
 # background: its exit is the wake, so re-arm with the line's `now=` before
 # handling the event. Never bundle arming it with a call that may be refused
 # (a merge, an edit, a push) - a refusal blocks the whole call.
-# The queue is listed through callum-flow-issue-read (cbundy/dev-system#310), so
+# The queue is listed through fabriek-issue-read (cbundy/dev-system#310), so
 # an issue by an untrusted author never enters `known`/`now` and never logs a
 # `ready` event. A reader failure is a failed poll, never an empty queue.
 # Event log (cbundy/dev-system#344): each issue that joins the queue logs a
 # `ready` event. An issue already queued at the first successful poll but
 # missing from --known (a re-armed watcher with a stale baseline) is a first
 # sight: it is printed in queue-changed as always but logged with
-# callum-flow-event --if-changed, so it adds nothing when the log already ends
+# fabriek-event --if-changed, so it adds nothing when the log already ends
 # with that event. An issue that joins after the first poll is always logged.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 #
-# This watcher keeps the old-state form (`callum-flow-event ready --if-changed`), because --if-changed has
+# This watcher keeps the old-state form (`fabriek-event ready --if-changed`), because --if-changed has
 # no native form (--type ... --data). Since cbundy/dev-system#1143 that call lands only in the new store:
 # it is translated, compared with the issue's newest event there, and written when the title, labels
 # or parent differ from it (or nothing is logged yet). Its behavior here is unchanged.
 #
-# Each `ready` event also carries the issue's title, labels and parent (callum-flow-event --data,
+# Each `ready` event also carries the issue's title, labels and parent (fabriek-event --data,
 # cbundy/dev-system#870), read from the same listing; a writer without --data (exit 2) is called again
 # without it.
 #
@@ -85,20 +85,20 @@ stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 once=
 reported=
-READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
+READ=${FABRIEK_ISSUE_READ_BIN:-${CALLUM_FLOW_ISSUE_READ_BIN:-fabriek-issue-read}}
 
-# record_event <state> [callum-flow-event options]: appends the transition to
-# the factory event log (cbundy/dev-system#218) when callum-flow-event is
+# record_event <state> [fabriek-event options]: appends the transition to
+# the factory event log (cbundy/dev-system#218) when fabriek-event is
 # installed. Best effort: it never changes this script's output or status.
 record_event() {
   event_rc=0
-  command -v callum-flow-event >/dev/null 2>&1 || return 0
-  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || event_rc=$?
+  command -v fabriek-event >/dev/null 2>&1 || return 0
+  fabriek-event "$@" --actor watcher >/dev/null 2>&1 || event_rc=$?
 }
 
 # record_ready <issue> [--if-changed]: logs the issue's `ready` event with the facts the listing
 # that found it carries (title clipped to 256 characters, label names, the parent's number when the
-# parent is in --repo, else null) as callum-flow-event --data (cbundy/dev-system#870). A writer
+# parent is in --repo, else null) as fabriek-event --data (cbundy/dev-system#870). A writer
 # that does not know --data answers exit 2: the event is then logged again without it, so a ready
 # event is never lost to the new option.
 record_ready() {
@@ -221,7 +221,7 @@ fi
 # reader failure or an unexpected reply: a failed poll, never an empty queue. Not run in a
 # subshell, so both stay set.
 read_queue() {
-  listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
+  listed=$(FABRIEK_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
     current=$(printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null)
 }
 

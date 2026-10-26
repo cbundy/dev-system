@@ -1,0 +1,207 @@
+#!/bin/bash
+#
+# fabriek-dual-write-check: read-only comparison of the old event table (factory.events, read
+# with the agentsview URL) and the new event store (factory.event_store, read with the factory
+# reader URL only) for one device (cbundy/dev-system#743, part of #649).
+#
+# Each old row's raw line goes through the translator in replay mode. The translator turns one old
+# line into at most one new event and keeps the line's event_id, so the check matches by event_id,
+# per old state: old lines, skipped (by skip name), expected new events, found, missing (the old
+# event_ids not in the new store) and misses (translator misses, with their reason). New events in
+# the window with no old row are extras, counted per type, except a type the translator never makes
+# (its TRANSLATED_TYPES): that is new-only, counted per type, reported and never failing the check. Both sides cut at date_trunc('second',
+# SINCE) because old ts is to the second and the new ts carries milliseconds.
+#
+# Usage: fabriek-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]
+#   --device defaults to fabriek-event's rule (DEV_MACHINE_NAME, hostname, /etc/hostname);
+#   --repo defaults to every repo; --since defaults to the device's earliest ts in event_store.
+# New-only types (the new store's types outside the translator's mapping) are reported, never fail the check.
+# Exit: 0 only when missing, misses and extras are all zero; 1 when any is not; 2 on a usage
+#   error, an unconfigured or unreachable store, or no new rows for the device and no --since.
+# A transition with via=dual-write and no old row is not an extra: the factory loop's backfill (H1)
+# writes it with fabriek-event --new-only, to the new log only, so the old log never holds it.
+# An event written natively (fabriek-event --type) has no old row, so it shows as an extra under
+# its type: the check proves dual write only on a device where no producer writes natively yet.
+# Writes nothing: every psql run is read-only, bounded by timeout (DUAL_WRITE_CHECK_TIMEOUT seconds,
+# default 60) and masked.
+set -u
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+share=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}
+if [ -r "$here/factory-db.sh" ]; then
+  # shellcheck source=factory-db.sh
+  . "$here/factory-db.sh"
+else
+  # shellcheck source=factory-db.sh
+  . "$share/factory-db.sh"
+fi
+
+TIMEOUT=${DUAL_WRITE_CHECK_TIMEOUT:-60}
+case "$TIMEOUT" in '' | *[!0-9]* | 0) TIMEOUT=60 ;; esac
+
+die() {
+  echo "fabriek-dual-write-check: $*" | mask_secrets >&2
+  exit 2
+}
+
+usage() {
+  echo "usage: fabriek-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]" >&2
+  exit 2
+}
+
+repo='' device='' since=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo | --device | --since)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then usage; fi
+      case "$1" in --repo) repo=$2 ;; --device) device=$2 ;; --since) since=$2 ;; esac
+      shift 2
+      ;;
+    -h | --help) usage ;;
+    *) usage ;;
+  esac
+done
+case "$repo" in '' | */*) ;; *) die "--repo must be OWNER/NAME" ;; esac
+
+if [ -z "$device" ]; then
+  device=${DEV_MACHINE_NAME:-}
+  [ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
+  [ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=
+  [ -n "$device" ] || die "cannot tell this device's name: pass --device"
+fi
+
+command -v psql >/dev/null 2>&1 || die "psql is not installed"
+command -v node >/dev/null 2>&1 || die "node is not installed"
+tr_js=$here/factory-event-translate.js
+[ -r "$tr_js" ] || tr_js=$share/factory-event-translate.js
+[ -r "$tr_js" ] || die "factory-event-translate.js not found"
+
+old_url=$(agentsview_pg_url) || die "no readable agentsview PostgreSQL URL (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file))"
+new_url=$(factory_db_url reader) || die "no readable factory reader URL (FACTORY_DB_READER_URL or $(factory_db_url_file reader))"
+
+tmp=$(mktemp -d) || die "cannot make a temporary directory"
+trap 'rm -rf "$tmp"' EXIT
+
+# psql_read URL SQL: one bounded, read-only, masked run; the output on stdout, status returned. On
+# failure the first masked error line is printed to stderr.
+psql_read() {
+  local url=$1 sql=$2 rc=0
+  # shellcheck disable=SC2031
+  printf '%s\n' "$sql" | (
+    export -f run_psql
+    export CHK_URL=$url DEV_PG_FORCE_OPTIONS='-c default_transaction_read_only=on' PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}"
+    # shellcheck disable=SC2016
+    timeout "$TIMEOUT" bash -c 'run_psql "$CHK_URL" -At -v "dev=$CHK_DEV" -v "repo=$CHK_REPO" -v "since=$CHK_SINCE"' 2> "$tmp/err"
+  ) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -ne 124 ] || echo "timed out after ${TIMEOUT}s" >> "$tmp/err"
+    { grep -m1 -i 'error\|timed out\|fatal' "$tmp/err" || sed -n 1p "$tmp/err"; } 2>/dev/null | mask_secrets >&2
+  fi
+  return "$rc"
+}
+export CHK_DEV=$device CHK_REPO=$repo CHK_SINCE=$since
+
+repo_new=''
+[ -z "$repo" ] || repo_new="AND repo = :'repo'"
+
+if [ -z "$since" ]; then
+  since=$(psql_read "$new_url" "SELECT to_char(date_trunc('second', min(ts)) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM factory.event_store WHERE device = :'dev' $repo_new;") \
+    || die "cannot read factory.event_store with the reader URL"
+  [ -n "$since" ] || die "no new events for device $device${repo:+ in $repo} in factory.event_store: nothing to check (pass --since to check from a time)"
+  export CHK_SINCE=$since
+fi
+
+new_sql="SELECT event_id || E'\\t' || type || E'\\t' || coalesce((data::jsonb)->>'via', '') FROM factory.event_store WHERE device = :'dev' $repo_new AND ts >= date_trunc('second', :'since'::timestamptz) ORDER BY ts, device_seq;"
+old_sql="SELECT raw::text FROM factory.events WHERE device = :'dev' $repo_new AND ts >= date_trunc('second', :'since'::timestamptz) ORDER BY ts, seq;"
+
+psql_read "$new_url" "$new_sql" > "$tmp/new.tsv" || die "cannot read factory.event_store with the reader URL"
+psql_read "$old_url" "$old_sql" > "$tmp/old.jsonl" || die "cannot read factory.events with the agentsview URL"
+
+read -r -d '' JS <<'NODE'
+const fs = require("node:fs");
+const [trJs, oldFile, newFile, device, repo, since] = process.argv.slice(1);
+const { translate, TRANSLATED_TYPES } = require(trJs);
+const lines = fs.readFileSync(oldFile, "utf8").split("\n").filter((l) => l.trim() !== "");
+const newRows = fs.readFileSync(newFile, "utf8").split("\n").filter((l) => l !== "").map((l) => l.split("\t"));
+const newIds = new Map(newRows.map(([id, type]) => [id, type]));
+const newVia = new Map(newRows.map(([id, , via]) => [id, via ?? ""]));
+const states = new Map();
+const st = (s) => {
+  if (!states.has(s)) states.set(s, { old: 0, skipped: new Map(), expected: 0, found: 0, missing: [], misses: [] });
+  return states.get(s);
+};
+const oldIds = new Set();
+const expectedIds = new Set();
+for (const text of lines) {
+  let line = null;
+  try {
+    line = JSON.parse(text);
+  } catch {
+    /* a miss below */
+  }
+  const state = line !== null && typeof line === "object" && typeof line.state === "string" ? line.state : "?";
+  const s = st(state);
+  s.old += 1;
+  if (line !== null && typeof line === "object" && typeof line.event_id === "string") oldIds.add(line.event_id.toLowerCase());
+  const r = translate(text);
+  if (r.skip !== undefined) s.skipped.set(r.skip, (s.skipped.get(r.skip) ?? 0) + 1);
+  else if (r.miss !== undefined) s.misses.push(r.miss);
+  else {
+    const id = r.event.event_id;
+    expectedIds.add(id);
+    s.expected += 1;
+    if (newIds.has(id)) s.found += 1;
+    else s.missing.push(id);
+  }
+}
+const extras = new Map();
+const newOnly = new Map();
+for (const [id, type] of newIds) {
+  if (oldIds.has(id)) continue;
+  // H1's backfill (fabriek-event --new-only) writes a transition with via=dual-write to the new log only, by design
+  if (type === "transition" && newVia.get(id) === "dual-write") continue;
+  if (!TRANSLATED_TYPES.includes(type)) {
+    newOnly.set(type, (newOnly.get(type) ?? 0) + 1);
+    continue;
+  }
+  if (!extras.has(type)) extras.set(type, []);
+  extras.get(type).push(id);
+}
+const out = [];
+out.push(`dual-write check: device=${device} repo=${repo === "" ? "(all)" : repo} since=${since}`);
+out.push(`old lines ${lines.length}, new events ${newIds.size}`);
+let missing = 0;
+let misses = 0;
+for (const state of [...states.keys()].sort()) {
+  const s = states.get(state);
+  const skipped = [...s.skipped.values()].reduce((a, b) => a + b, 0);
+  missing += s.missing.length;
+  misses += s.misses.length;
+  out.push(`${state}: old=${s.old} skipped=${skipped} expected=${s.expected} found=${s.found} missing=${s.missing.length} misses=${s.misses.length}`);
+  for (const [name, n] of [...s.skipped].sort()) out.push(`  skipped ${name}=${n}`);
+  for (const id of s.missing) out.push(`  missing ${state} ${id}`);
+  for (const m of s.misses) out.push(`  miss ${m}`);
+}
+let extra = 0;
+for (const type of [...extras.keys()].sort()) {
+  const ids = extras.get(type);
+  extra += ids.length;
+  out.push(`extra ${type}: ${ids.length}`);
+  for (const id of ids) out.push(`  extra ${type} ${id}`);
+}
+let newOnlyTotal = 0;
+for (const type of [...newOnly.keys()].sort()) {
+  newOnlyTotal += newOnly.get(type);
+  out.push(`new-only ${type}: ${newOnly.get(type)}`);
+}
+const ok = missing === 0 && misses === 0 && extra === 0;
+out.push(`${ok ? "OK" : "DIFFERENT"}: missing=${missing} misses=${misses} extras=${extra} new-only=${newOnlyTotal}`);
+process.stdout.write(`${out.join("\n")}\n`);
+process.exitCode = ok ? 0 : 1;
+NODE
+
+rc=0
+node -e "$JS" "$tr_js" "$tmp/old.jsonl" "$tmp/new.tsv" "$device" "$repo" "$since" 2>&1 | mask_secrets
+rc=${PIPESTATUS[0]}
+[ "$rc" -le 1 ] || rc=2
+exit "$rc"

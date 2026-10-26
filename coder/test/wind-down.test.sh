@@ -10,7 +10,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 SCRIPT=$ROOT/coder/dev-system/wind-down.sh
-REAL_EVENT=$ROOT/images/base/callum-flow-event
+REAL_EVENT=$ROOT/images/base/fabriek-event
 
 fail() {
   echo "FAIL: $*" >&2

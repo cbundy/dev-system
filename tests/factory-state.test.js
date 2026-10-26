@@ -1,4 +1,4 @@
-// Tests for images/base/callum-flow-factory-state (cbundy/dev-system#345, #1293): the tool reads the
+// Tests for images/base/fabriek-factory-state (cbundy/dev-system#345, #1293): the tool reads the
 // factory.issue_state_at view through `dev-query --factory`, so every test here runs it against a
 // throwaway PostgreSQL database (tests/lib/factory-db.js) loaded from event rows as the writer role.
 // tests/fixtures/factory-state/*.input.json are those rows (with the GitHub answers and the reviewed
@@ -16,7 +16,7 @@ const { after, before, test } = require("node:test");
 
 const ROOT = path.join(__dirname, "..");
 const BASE = path.join(ROOT, "images", "base");
-const SCRIPT = path.join(BASE, "callum-flow-factory-state");
+const SCRIPT = path.join(BASE, "fabriek-factory-state");
 const FIX = path.join(__dirname, "fixtures", "factory-state");
 const MIGRATIONS = path.join(BASE, "factory-db", "migrations");
 const mod = require(SCRIPT);
@@ -43,7 +43,7 @@ before(() => {
   fs.writeFileSync(issueRead, `#!/usr/bin/env node
 const fs = require("fs");
 const a = process.argv.slice(2);
-const gh = JSON.parse(fs.readFileSync(process.env.FS_FIXTURE, "utf8")).github[process.env.CALLUM_FLOW_REPO];
+const gh = JSON.parse(fs.readFileSync(process.env.FS_FIXTURE, "utf8")).github[process.env.FABRIEK_REPO];
 if (!gh) process.exit(1);
 const lab = (ls) => ls.map((name) => ({ name }));
 if (a.includes("--list")) {
@@ -95,8 +95,8 @@ function cli(db, args, env = {}, fixture = "github") {
   const r = spawnSync(process.execPath, [SCRIPT, ...args], {
     encoding: "utf8",
     env: {
-      PATH: process.env.PATH, CALLUM_FLOW_DEV_QUERY_BIN: devQuery, REAL_DEV_QUERY: path.join(BASE, "dev-query"), DEV_SYSTEM_SHARE: BASE,
-      FACTORY_DB_READER_URL: db.readerUrl, CALLUM_FLOW_ISSUE_READ_BIN: issueRead, FS_FIXTURE: path.join(FIX, `${fixture}.input.json`), FS_LOG: log, ...env,
+      PATH: process.env.PATH, FABRIEK_DEV_QUERY_BIN: devQuery, REAL_DEV_QUERY: path.join(BASE, "dev-query"), DEV_SYSTEM_SHARE: BASE,
+      FACTORY_DB_READER_URL: db.readerUrl, FABRIEK_ISSUE_READ_BIN: issueRead, FS_FIXTURE: path.join(FIX, `${fixture}.input.json`), FS_LOG: log, ...env,
     },
   });
   return { ...r, calls: fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) };
@@ -188,7 +188,7 @@ test("issues sort by the state order, then the issue number", opts, (t) => {
 
 test("no stage translation is left in the tool or its readers", () => {
   const files = ["plugins/factory-loop/hooks/factory-state-map.ts", "plugins/factory-loop/hooks/parse.ts", "plugins/factory-hud/hooks/format.ts",
-    "plugins/factory-loop/bin/factory-reconcile", "images/base/callum-flow-factory-state"];
+    "plugins/factory-loop/bin/factory-reconcile", "images/base/fabriek-factory-state"];
   for (const rel of files) {
     const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
     for (const gone of ["STAGE_STATE", "entered_at", "'in pipeline'", "i.v2", "?? i.v2", "ACTIVE_STAGES", "V2_STAGE", "minutes_in_stage"]) assert.ok(!src.includes(gone), `${rel}: ${gone}`);
@@ -312,7 +312,7 @@ test("--rule: S5, S6, an unknown name and a bad number exit 2", opts, (t) => {
   for (const rule of ["S5=1", "S6=1", "bogus=5", "building=0", "building=x", "building", "S1"]) {
     const r = cli(db, [...AT, "--rule", rule]);
     assert.equal(r.status, 2, rule);
-    assert.match(r.stderr, /usage: callum-flow-factory-state/);
+    assert.match(r.stderr, /usage: fabriek-factory-state/);
   }
 });
 
@@ -462,9 +462,9 @@ test("source: new is the default and silent; old and shadow warn once and read t
     assert.equal(r.stderr, "");
     assert.deepEqual(JSON.parse(r.stdout), base);
   }
-  assert.equal(cli(db, AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "new" }).stderr, "");
+  assert.equal(cli(db, AT, { FABRIEK_FACTORY_STATE_SOURCE: "new" }).stderr, "");
   const eventsDir = path.join(tmp, "events");
-  for (const [args, env] of [[[...AT, "--source", "old"], {}], [[...AT, "--source=shadow"], {}], [AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "shadow" }]]) {
+  for (const [args, env] of [[[...AT, "--source", "old"], {}], [[...AT, "--source=shadow"], {}], [AT, { FABRIEK_FACTORY_STATE_SOURCE: "shadow" }]]) {
     const r = cli(db, args, { CALLUM_EVENTS_DIR: eventsDir, ...env });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stderr.trim().split("\n").length, 1, r.stderr);
@@ -474,10 +474,10 @@ test("source: new is the default and silent; old and shadow warn once and read t
     assert.equal(r.calls.every((c) => c.factory), true);
   }
   assert.equal(fs.existsSync(eventsDir), false, "no shadow record is written");
-  for (const [args, env] of [[[...AT, "--source", "bad"], {}], [AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "nope" }], [[...AT, "--source"], {}]]) {
+  for (const [args, env] of [[[...AT, "--source", "bad"], {}], [AT, { FABRIEK_FACTORY_STATE_SOURCE: "nope" }], [[...AT, "--source"], {}]]) {
     const r = cli(db, args, env);
     assert.equal(r.status, 2, r.stderr);
-    assert.match(r.stderr, /usage: callum-flow-factory-state/);
+    assert.match(r.stderr, /usage: fabriek-factory-state/);
   }
 });
 
@@ -539,7 +539,7 @@ test("CLI: bad arguments exit 2", () => {
     ["--rule", "S1"], ["--rule", "S9=5"], ["--rule", "S1=x"], ["--rule", "S5=5"], ["--rule", "S6=5"], ["--github", "maybe"], ["--source", "xml"]]) {
     const r = cli(db, args);
     assert.equal(r.status, 2, args.join(" "));
-    assert.match(r.stderr, /usage: callum-flow-factory-state/);
+    assert.match(r.stderr, /usage: fabriek-factory-state/);
   }
 });
 
@@ -549,13 +549,13 @@ test("CLI: a failing dev-query exits 1, and a missing one too", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /cannot read the factory database through dev-query --factory \(exit 3\)/);
   assert.equal(r.stdout, "");
-  assert.equal(cli(db, ["--at", "2026-10-10T12:00:00Z"], { CALLUM_FLOW_DEV_QUERY_BIN: path.join(tmp, "absent") }).status, 1);
+  assert.equal(cli(db, ["--at", "2026-10-10T12:00:00Z"], { FABRIEK_DEV_QUERY_BIN: path.join(tmp, "absent") }).status, 1);
 });
 
 test("CLI: --help prints usage and exits 0", () => {
   const r = cli({ readerUrl: "postgres://unused" }, ["--help"]);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^usage: callum-flow-factory-state/);
+  assert.match(r.stdout, /^usage: fabriek-factory-state/);
   assert.match(r.stdout, /--rule <state>=<minutes>/);
 });
 

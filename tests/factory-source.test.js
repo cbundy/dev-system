@@ -28,7 +28,7 @@ const records = (dir, tool) => {
 const usage = (re) => (e) => e.code === "USAGE" && re.test(e.message);
 
 test("resolveSource: flag beats env, env beats fallback", () => {
-  const env = { CALLUM_FLOW_FACTORY_STATE_SOURCE: "new" };
+  const env = { FABRIEK_FACTORY_STATE_SOURCE: "new" };
   assert.deepEqual(resolveSource("factory-state", ["--source", "shadow", "x"], env, "old"), { source: "shadow", argv: ["x"] });
   assert.deepEqual(resolveSource("factory-state", ["a"], env, "old"), { source: "new", argv: ["a"] });
   assert.deepEqual(resolveSource("factory-state", ["a"], {}, "old"), { source: "old", argv: ["a"] });
@@ -42,7 +42,7 @@ test("resolveSource: --source=x and --source x are stripped", () => {
 test("resolveSource: bad flag, bad env and missing value throw USAGE with the allowed values", () => {
   assert.throws(() => resolveSource("t", ["--source", "x"], {}, "old"), usage(/--source flag.*old, new, shadow/));
   assert.throws(() => resolveSource("t", ["--source=x"], {}, "old"), usage(/old, new, shadow/));
-  assert.throws(() => resolveSource("t", [], { CALLUM_FLOW_T_SOURCE: "bogus" }, "old"), usage(/CALLUM_FLOW_T_SOURCE.*old, new, shadow/));
+  assert.throws(() => resolveSource("t", [], { FABRIEK_T_SOURCE: "bogus" }, "old"), usage(/FABRIEK_T_SOURCE.*old, new, shadow/));
   assert.throws(() => resolveSource("t", ["--source"], {}, "old"), usage(/needs a value.*old, new, shadow/));
 });
 

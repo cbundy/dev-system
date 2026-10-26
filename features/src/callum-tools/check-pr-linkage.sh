@@ -36,16 +36,16 @@
 #
 # Trust (cbundy/dev-system#310): a PR opened by an untrusted author is refused before
 # its body is read or printed - one line on stderr, nothing on stdout, exit 1. The
-# author comes from callum-flow-issue-read, which also fails closed when it cannot
+# author comes from fabriek-issue-read, which also fails closed when it cannot
 # tell.
 #
-# Env (for tests): CHECK_PR_LINKAGE_GH_BIN (gh), CALLUM_FLOW_ISSUE_READ_BIN
-# (callum-flow-issue-read).
+# Env (for tests): CHECK_PR_LINKAGE_GH_BIN (gh), FABRIEK_ISSUE_READ_BIN (else CALLUM_FLOW_ISSUE_READ_BIN)
+# (fabriek-issue-read).
 
 set -euo pipefail
 
 GH_BIN="${CHECK_PR_LINKAGE_GH_BIN:-gh}"
-READ_BIN="${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}"
+READ_BIN="${FABRIEK_ISSUE_READ_BIN:-${CALLUM_FLOW_ISSUE_READ_BIN:-fabriek-issue-read}}"
 
 usage() {
   echo "Usage: $(basename "$0") <pr-number> [--expect closing|refs] [--print-fix]" >&2

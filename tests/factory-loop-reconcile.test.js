@@ -23,7 +23,7 @@ const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..");
 const SCRIPT = path.join(ROOT, "plugins", "factory-loop", "bin", "factory-reconcile");
-const EVENT = path.join(ROOT, "images", "base", "callum-flow-event");
+const EVENT = path.join(ROOT, "images", "base", "fabriek-event");
 const REPO = "acme/widgets";
 const DEVICE = "dev-loop";
 const AT = Date.parse("2026-10-15T12:00:00.000Z");
@@ -545,7 +545,7 @@ test("the pure helpers: issue branches by the repo's convention, spans as people
 });
 
 // The migration writes its events through hooks/v2/events.ts (v2 SPEC 6.4, 7.1). Here the tool runs as
-// the owner will run it, with the real events.ts and the branch's images/base/callum-flow-event: each
+// the owner will run it, with the real events.ts and the branch's images/base/fabriek-event: each
 // release sees its own native write in the new log and logs it once, the old log is not written, and
 // every line passes the strict schemas and reads back as the release's fields.
 test("the migration's events pass the real callum-flow-event: one native line each in the new log, none in the old, read back as the release's fields", async () => {

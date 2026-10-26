@@ -1,8 +1,8 @@
 #!/bin/sh
 #
 # Plain-shell tests for the factory event log (cbundy/dev-system#218):
-# callum-flow-event, event-push-loop (stub psql, no database) and the
-# watchers' calls to it (stub callum-flow-event). Hermetic PATH, no network,
+# fabriek-event, event-push-loop (stub psql, no database) and the
+# watchers' calls to it (stub fabriek-event). Hermetic PATH, no network,
 # no Docker, so `npm test` runs it anywhere.
 set -eu
 
@@ -11,7 +11,7 @@ unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
-EVENT="$ROOT/images/base/callum-flow-event"
+EVENT="$ROOT/images/base/fabriek-event"
 PUSH="$ROOT/images/base/event-push-loop"
 SRC="$ROOT/features/src/callum-tools"
 
@@ -34,10 +34,10 @@ SH=$(command -v sh)
 BASH=$(command -v bash)
 
 events="$tmpdir/events"
-ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="${EV_VERSIONS:-$tmpdir/no-versions.json}" "$SH" "$EVENT" "$@"; }
+ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" FABRIEK_REPO=o/r DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="${EV_VERSIONS:-$tmpdir/no-versions.json}" "$SH" "$EVENT" "$@"; }
 log="$events/o__r.jsonl"
 
-# --- callum-flow-event ------------------------------------------------------
+# --- fabriek-event ------------------------------------------------------
 # The old-state mode writes only the new event (cbundy/dev-system#1143): every call is checked
 # against <events dir>/factory/<file>, and the old log <events dir>/<file> must never appear.
 log="$events/factory/o__r.jsonl"
@@ -158,8 +158,8 @@ done
 before=$(find "$events" -type f | sort | tr '\n' ' ')
 [ "$(ev --path)" = "$oldlog" ] || fail "--path should print the old log: $(ev --path)"
 [ "$(ev --path --repo acme/widgets)" = "$events/acme__widgets.jsonl" ] || fail "--path --repo wrong: $(ev --path --repo acme/widgets)"
-[ "$(PATH="$toolbin" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=acme/widgets "$SH" "$EVENT" --path)" = "$events/acme__widgets.jsonl" ] || fail "--path should honour CALLUM_FLOW_REPO"
-[ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --path)" = "/persist/events/o__r.jsonl" ] || fail "--path default dir"
+[ "$(PATH="$toolbin" CALLUM_EVENTS_DIR="$events" FABRIEK_REPO=acme/widgets "$SH" "$EVENT" --path)" = "$events/acme__widgets.jsonl" ] || fail "--path should honour FABRIEK_REPO"
+[ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" FABRIEK_REPO=o/r "$SH" "$EVENT" --path)" = "/persist/events/o__r.jsonl" ] || fail "--path default dir"
 ev closed --issue 31 --repo acme/widgets --note completed
 [ ! -e "$events/acme__widgets.jsonl" ] || fail "a write must not reach the old log --path names"
 [ "$(tail -n 1 "$events/factory/acme__widgets.jsonl" | jq -r .type)" = closed ] || fail "closed write should land in the new log"
@@ -173,8 +173,8 @@ ev --path --bogus 2> /dev/null || rc=$?
 before=$(find "$events" | sort | tr '\n' ' ')
 [ "$(ev --new-path)" = "$events/factory/o__r.jsonl" ] || fail "--new-path should print the new log: $(ev --new-path)"
 [ "$(ev --new-path --repo a/b)" = "$events/factory/a__b.jsonl" ] || fail "--new-path --repo wrong"
-[ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --new-path)" = "/persist/events/factory/o__r.jsonl" ] || fail "--new-path default dir"
-[ "$(cd "$tmpdir" && PATH="$toolbin" CALLUM_EVENTS_DIR=rel CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --new-path)" = "$tmpdir/rel/factory/o__r.jsonl" ] || fail "--new-path relative dir"
+[ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" FABRIEK_REPO=o/r "$SH" "$EVENT" --new-path)" = "/persist/events/factory/o__r.jsonl" ] || fail "--new-path default dir"
+[ "$(cd "$tmpdir" && PATH="$toolbin" CALLUM_EVENTS_DIR=rel FABRIEK_REPO=o/r "$SH" "$EVENT" --new-path)" = "$tmpdir/rel/factory/o__r.jsonl" ] || fail "--new-path relative dir"
 [ "$(find "$events" | sort | tr '\n' ' ')" = "$before" ] || fail "--new-path must not write"
 [ ! -e "$tmpdir/rel" ] || fail "--new-path must not create the dir"
 rc=0
@@ -185,7 +185,7 @@ ev --new-path --bogus 2> /dev/null || rc=$?
 dw() { # dw DIR ARGS...: run the writer into DIR, hermetic, stderr to $tmpdir/dw.err
   d=$1
   shift
-  PATH="$toolbin" CLAUDE_CONFIG_DIR="${DW_CLAUDE:-$tmpdir/no-claude}" CALLUM_EVENTS_DIR="$d" CALLUM_FLOW_REPO=cbundy/dev-system DEV_MACHINE_NAME=dev-box \
+  PATH="$toolbin" CLAUDE_CONFIG_DIR="${DW_CLAUDE:-$tmpdir/no-claude}" CALLUM_EVENTS_DIR="$d" FABRIEK_REPO=cbundy/dev-system DEV_MACHINE_NAME=dev-box \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" DEV_SYSTEM_SHARE="${DW_SHARE:-/nonexistent}" "$SH" "${DW_EVENT:-$EVENT}" "$@" 2> "$tmpdir/dw.err"
 }
 only_new() { # DIR: the dir holds the new log and .wake, nothing else
@@ -238,31 +238,31 @@ dw "$d5" transition --issue 7 --note 'life=a seq=1 from=bogus to=building' || rc
 [ "$rc" = 0 ] || fail "a miss must exit 0"
 [ -z "$(find "$d5" -type f 2> /dev/null)" ] || fail "a miss writes nothing"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a miss warns once: $(cat "$tmpdir/dw.err")"
-case "$(cat "$tmpdir/dw.err")" in "callum-flow-event: warning: transition: "*) ;; *) fail "miss warning should name the state: $(cat "$tmpdir/dw.err")" ;; esac
+case "$(cat "$tmpdir/dw.err")" in "fabriek-event: warning: transition: "*) ;; *) fail "miss warning should name the state: $(cat "$tmpdir/dw.err")" ;; esac
 
 # no translator, no node, a crashing translator: one warning each, nothing written, exit 0
 mkdir -p "$tmpdir/copy"
-cp "$EVENT" "$tmpdir/copy/callum-flow-event"
+cp "$EVENT" "$tmpdir/copy/fabriek-event"
 d6="$tmpdir/dw6"
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d6" claimed --issue 7 --note 'lease: 120' || fail "missing translator must exit 0"
+DW_EVENT="$tmpdir/copy/fabriek-event" dw "$d6" claimed --issue 7 --note 'lease: 120' || fail "missing translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "missing translator warns once: $(cat "$tmpdir/dw.err")"
 [ -z "$(find "$d6" -type f 2> /dev/null)" ] || fail "missing translator: nothing written"
 printf 'process.exit(3);\n' > "$tmpdir/copy/factory-event-translate.js"
 d7="$tmpdir/dw7"
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d7" claimed --issue 7 --note 'lease: 120' || fail "crashing translator must exit 0"
+DW_EVENT="$tmpdir/copy/fabriek-event" dw "$d7" claimed --issue 7 --note 'lease: 120' || fail "crashing translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "crashing translator warns once: $(cat "$tmpdir/dw.err")"
 [ -z "$(find "$d7" -type f 2> /dev/null)" ] || fail "crashing translator: nothing written"
 mkdir -p "$tmpdir/share"
 cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/share/"
 d8="$tmpdir/dw8"
 rm -f "$tmpdir/copy/factory-event-translate.js"
-DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7 --note 'lease: 120'
+DW_EVENT="$tmpdir/copy/fabriek-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7 --note 'lease: 120'
 [ "$(wc -l < "$d8/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "DEV_SYSTEM_SHARE lookup should find the translator"
 nonode="$tmpdir/nonode"
 mkdir -p "$nonode"
 for t in "$toolbin"/*; do [ "$(basename "$t")" = node ] || ln -s "$(readlink "$t")" "$nonode/$(basename "$t")"; done
 d9="$tmpdir/dw9"
-PATH="$nonode" CALLUM_EVENTS_DIR="$d9" CALLUM_FLOW_REPO=cbundy/dev-system DEV_VERSIONS_FILE="$tmpdir/no-versions.json" "$SH" "$EVENT" claimed --issue 7 2> "$tmpdir/dw.err" || fail "no node must exit 0"
+PATH="$nonode" CALLUM_EVENTS_DIR="$d9" FABRIEK_REPO=cbundy/dev-system DEV_VERSIONS_FILE="$tmpdir/no-versions.json" "$SH" "$EVENT" claimed --issue 7 2> "$tmpdir/dw.err" || fail "no node must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "no node warns once: $(cat "$tmpdir/dw.err")"
 [ -z "$(find "$d9" -type f 2> /dev/null)" ] || fail "no node: nothing written"
 
@@ -342,7 +342,7 @@ dw "$dn3" transition --issue 2 --note 'life=a seq=1 from=bogus to=building' --ne
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a --new-only miss warns once: $(cat "$tmpdir/dw.err")"
 # no translator: nothing written, one warning, exit 0
 dn4="$tmpdir/dwn4"
-DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$dn4" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "--new-only without a translator must exit 0"
+DW_EVENT="$tmpdir/copy/fabriek-event" dw "$dn4" transition --issue 1 --branch issue-1 --note "$NOTE" --new-only || fail "--new-only without a translator must exit 0"
 [ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "--new-only without a translator warns once"
 [ ! -e "$dn4" ] || [ -z "$(find "$dn4" -type f)" ] || fail "--new-only without a translator wrote something"
 # the capability probe
@@ -378,7 +378,7 @@ CLAUDE_SESSION_ID=sess-1 CLAUDE_CODE_SESSION_ID=sess-c ev ready --issue 3
 mkdir -p "$tmpdir/ro"
 chmod 0500 "$tmpdir/ro"
 if [ "$(id -u)" != 0 ]; then
-  out=$(PATH="$toolbin" CALLUM_EVENTS_DIR="$tmpdir/ro/sub" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" ready --issue 1 2>&1) || fail "write error must exit 0"
+  out=$(PATH="$toolbin" CALLUM_EVENTS_DIR="$tmpdir/ro/sub" FABRIEK_REPO=o/r "$SH" "$EVENT" ready --issue 1 2>&1) || fail "write error must exit 0"
   case "$out" in *warning*) ;; *) fail "write error should warn: $out" ;; esac
 fi
 chmod 0700 "$tmpdir/ro"
@@ -392,7 +392,7 @@ git -C "$tmpdir/repo" remote add origin git@github.com:acme/widgets.git
 
 # --if-changed (cbundy/dev-system#344, #1143): skip an event that repeats the issue's newest one
 ic="$tmpdir/ic"
-icev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
+icev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" FABRIEK_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
 iclog="$ic/factory/o__r.jsonl"
 iclines() { if [ -f "$iclog" ]; then wc -l < "$iclog" | tr -d ' '; else echo 0; fi; }
 F1='{"title":"A","labels":["ready"],"parent":null}'
@@ -631,8 +631,8 @@ kill "$loop_pid" 2> /dev/null || :
 wait "$loop_pid" 2> /dev/null || :
 trap 'rm -rf "$tmpdir"' EXIT
 
-# --- the watchers call callum-flow-event ------------------------------------
-cat > "$fakebin/callum-flow-event" <<'STUB'
+# --- the watchers call fabriek-event ------------------------------------
+cat > "$fakebin/fabriek-event" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >> "$(dirname "$0")/event-calls"
 exit 3
@@ -644,17 +644,17 @@ cat > "$fakebin/gh" <<'STUB'
 [ "$1 $2" = "api --paginate" ] || exit 1
 echo '[{"number":4,"title":"a","user":{"login":"cbundy","id":13131067}},{"number":9,"title":"b","user":{"login":"cbundy","id":13131067}}]'
 STUB
-chmod +x "$fakebin/callum-flow-event" "$fakebin/gh"
+chmod +x "$fakebin/fabriek-event" "$fakebin/gh"
 : > "$fakebin/event-calls"
-out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
-  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
+out=$(PATH="$fakebin:$toolbin" FABRIEK_ISSUE_READ_BIN="$ROOT/images/base/fabriek-issue-read" FABRIEK_SHARE_DIR="$ROOT/images/base" \
+  FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
 [ "$(cat "$fakebin/event-calls")" = 'ready --issue 9 --if-changed --data {"title":"b","labels":null,"parent":null} --actor watcher' ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
 
 # queue-watch --once (factory loop, v2 SPEC 13.3.4): one read, the same first-sight call
 : > "$fakebin/event-calls"
-out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
-  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --once --known 4 2> /dev/null) || fail "queue-watch --once should exit 0 (a failing event call must not matter)"
+out=$(PATH="$fakebin:$toolbin" FABRIEK_ISSUE_READ_BIN="$ROOT/images/base/fabriek-issue-read" FABRIEK_SHARE_DIR="$ROOT/images/base" \
+  FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --once --known 4 2> /dev/null) || fail "queue-watch --once should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue known=4 now=4,9" ] || fail "queue-watch --once stdout: $out"
 [ "$(cat "$fakebin/event-calls")" = 'ready --issue 9 --if-changed --data {"title":"b","labels":null,"parent":null} --actor watcher' ] || fail "queue-watch --once should record the new issue as a first sight: $(cat "$fakebin/event-calls")"
 

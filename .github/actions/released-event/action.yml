@@ -19,4 +19,4 @@ runs:
       env:
         TAG: ${{ inputs.tag }}
         SOURCE: ${{ inputs.source }}
-      run: node "$GITHUB_ACTION_PATH/../../../images/base/callum-flow-released" "$TAG" --repo "$GITHUB_REPOSITORY" --source "$SOURCE" --attach
+      run: node "$GITHUB_ACTION_PATH/../../../images/base/fabriek-released" "$TAG" --repo "$GITHUB_REPOSITORY" --source "$SOURCE" --attach

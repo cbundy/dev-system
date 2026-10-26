@@ -106,7 +106,7 @@ environment variable set in the image.
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
-| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
+| `/persist/events` | fabriek-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
 The same list is published as the image label
@@ -667,7 +667,7 @@ on every failure:
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
   version is behind (the loop migrates at its next start, or run `factory-db-migrate --strict` / `factory-db-bootstrap --migrate` with the migrator URL; no admin URL) or ahead of the image's; otherwise `OK` with the database,
   role and version. See [docs/factory-db.md](../../docs/factory-db.md);
-- evidence storage, from `callum-flow-evidence-upload --check` in the workspace checkout: `OK` with the
+- evidence storage, from `fabriek-evidence-upload --check` in the workspace checkout: `OK` with the
   credential source and container; a `WARN` naming docs/evidence-storage.md when the repo has none; a
   `FAIL` with the tool's message when the setup breaks the per-repo boundary (account SAS, wrong scope,
   a missing file). One `INFO` line when there is no checkout with an origin remote;
@@ -1520,9 +1520,30 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 3. The old volumes are left in place. Delete them by hand once you no longer need them:
    `docker volume rm dev-system-claude dev-system-codex dev-system-no-mistakes dev-system-agentsview`.
 
+## Factory commands: fabriek-* names and the callum-flow-* aliases
+
+Every factory command is installed under its fabriek name: `fabriek-capture`, `fabriek-claim`,
+`fabriek-designer-route`, `fabriek-dual-write-check`, `fabriek-evaluate`, `fabriek-event`,
+`fabriek-evidence-upload`, `fabriek-factory-state`, `fabriek-implementer-route`, `fabriek-issue-read`,
+`fabriek-merge`, `fabriek-merge-guard`, `fabriek-milestone`, `fabriek-patch-id`, `fabriek-released`,
+`fabriek-rollout`, `fabriek-sweep` and `fabriek-test-weakening`. Each old `callum-flow-<x>` name stays as an
+alias for the next 10 minor releases: a few lines of `sh` that run the `fabriek-<x>` beside them, with the
+same arguments, exit code, output and error text, so older loops and consumers keep working. Usage text and
+error prefixes name the fabriek command. The alias-removal change deletes the aliases.
+
+Settings follow the same window. Every command and helper reads `FABRIEK_<X>` first and falls back to the
+old `CALLUM_FLOW_<X>`; `FABRIEK_<X>` wins when both are set (an empty `FABRIEK_<X>` counts as set). The
+fallback is one helper, `fabriek-env.sh` for shell and `fabriek-env.js` for node, found beside the command
+or in `FABRIEK_SHARE_DIR` (else `CALLUM_FLOW_SHARE_DIR`, else `/usr/local/share/dev-system`).
+`FABRIEK_TRUSTED_AUTHORS` is the setting `CALLUM_FLOW_TRUSTED_AUTHORS` was; templates and the Coder template
+still provide the old name, which keeps working. The claim comment's hidden marker stays
+`<!-- callum-flow-claim -->` (`fabriek-claim` writes it); the claim readers in `fabriek-claim` and
+`fabriek-sweep` accept `<!-- fabriek-claim -->` too. `dev-version` takes `plugin_version` from a `fabriek@...`
+plugin, else from `callum-flow@...`.
+
 ## Factory event log
 
-`callum-flow-event <state> --issue N ...` records one event per lifecycle transition
+`fabriek-event <state> --issue N ...` records one event per lifecycle transition
 (`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
 transition reviewed intervention prompt_denied prompt_waiting`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
@@ -1537,34 +1558,34 @@ the factory loop companion's (a loop agent's call refused, or waiting, on a prom
 `--issue` required, never a stage, progress or final. The current companion writes the native types
 (`--type`, `--data`); the states are kept for older companions and the history, with a `key=value`
 note and no token required. A rescue the loop cannot see is
-recorded by hand: `callum-flow-event --type intervention --issue N --regime manual --data
+recorded by hand: `fabriek-event --type intervention --issue N --regime manual --data
 '{"who":"person","cause":"rescue","life":null,"fact":null,"pr":null,"detail":"what was done"}'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
-`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary)).
+`loop` and v2 semantics; `fabriek-event` with no arguments lists the vocabulary)).
 It builds the old-format line, translates it and appends only the new event to
 `/persist/events/factory/<owner>__<repo>.jsonl`. The old log `/persist/events/<owner>__<repo>.jsonl` and
 `factory.events` get no new lines (#1143). It needs no network and never fails its caller: a state the
 translator skips writes nothing, and a miss, a missing `node` or translator, or a crashing translator writes
-nothing and prints one `callum-flow-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `usage-check.sh`)
+nothing and prints one `fabriek-event: warning:` line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it (`queue-watch.sh` still uses the old-state form with `--if-changed`, which has no native form; the other tools below write natively); the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed queue watcher's first sight of a queued issue (one it did not see change) is logged with
 `--if-changed`, which translates first and skips an event with the same `type` and `data` as the issue's newest one in the
 new log (`loop_entry` and `loop_passes` skipped; `--branch` does not narrow it), so a restart never replays old events and a
 ready issue whose title, labels or parent changed is logged again; transitions a watcher observes are always logged.
-`callum-flow-event --path [--repo O/N]` prints the old log's path (kept for older callers; it gets no new lines) and writes nothing; `--new-path` prints
+`fabriek-event --path [--repo O/N]` prints the old log's path (kept for older callers; it gets no new lines) and writes nothing; `--new-path` prints
 the new log's path (an older image answers it with exit 2, which makes it the capability probe). The translator is
 found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
 `--type` takes `--regime R` (else `FACTORY_REGIME`; the flag wins and an empty value counts as unset): the envelope's `regime`
 (`factory_loop_v2`, `testbed` or `manual`; null when unset, never guessed). A value outside that list is written as given with
-one `callum-flow-event: warning: unknown regime` line. The old-state form takes no flag but passes `FACTORY_REGIME` on.
+one `fabriek-event: warning: unknown regime` line. The old-state form takes no flag but passes `FACTORY_REGIME` on.
 `--new-only` is a no-op kept for older callers (the old-state mode writes the new log only), allowed with `--if-changed`; `--new-only --new-path` is the capability probe (an older image exits 2). Removing `--new-only` and `--path` is #656.
-`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (nothing written, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `callum-flow-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
+`--data '<json object>'` (old-state mode, also with `--new-only` and `--if-changed`) merges extra fields into the new event's payload: `ready` and `claimed` take the issue's `title` (at most 256 characters), `labels` and `parent` (the parent's number when it is in the same repo, else null). It exits 2 with nothing written when the value is not a JSON object, and a key the translated type does not accept is a translator miss (nothing written, one warning, exit 0). An older image answers `--data` with exit 2; `queue-watch.sh` then logs the event again without it. `fabriek-claim` writes `claimed` natively, with its facts in `--data` and no retry. Read an issue's newest title from the newest `ready` or `claimed` event with a non-null `title`.
 
 Every event also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
 `${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`; they are null when the snapshot is missing or unreadable, and the
 event's old-format line `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `factory-event-push-loop`.
 
-`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
+`fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--ready-times <file>]
 [--source old|new|shadow] [--new-events <file>] [--regime <value>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
@@ -1580,7 +1601,7 @@ so it is in the synced allow list. Inputs: Claude transcripts under
 A missing source
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
-`--source` (else `CALLUM_FLOW_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store, as in
+`--source` (else `FABRIEK_EVALUATE_SOURCE`, else `new`; `old` is the way back) picks the event store, as in
 [`docs/factory-events/replay.md`](../../docs/factory-events/replay.md#source-switch): `old` reads the old log
 (`--events`); `new` reads the new events, from `${CALLUM_EVENTS_DIR:-/persist/events}/factory/<owner>__<repo>.jsonl` or,
 with `--new-events`, a file of `factory.event_log` rows; `shadow` prints the `old` report and appends how the `new` one
@@ -1588,32 +1609,32 @@ differed to `factory/.shadow/evaluate.jsonl` (skipped when `--events` is given w
 `factory-source.js` and `evaluate-new-events.js` beside itself, else under `$DEV_SYSTEM_SHARE`. Metrics that need a
 v1-only event read `n/a` under `new` ([`docs/metrics.md`](../../docs/metrics.md#reading-the-new-events)).
 
-`callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule <state>=<minutes>]... [--github on|off]`
+`fabriek-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule <state>=<minutes>]... [--github on|off]`
 answers "what is the factory doing right now?": per repo, each live issue with its state (queued, designing,
 building, reviewing, fixing, merge-queue, parked, waiting, closed), time in
 state, holder device, PR, stuck flag, the claim's lease (`until`, `lapsed`) and the transition's step, attempt and
 life; the stuck items with the state that tripped; and the event counts per repo and device. It is read-only. It
 reads only the factory database, through `dev-query --factory`: the `factory.issue_state_at` view function and
 `factory.stuck_rules` (migration 0033), the per-repo counts and the queue snapshot from `factory.event_log`.
-It reads GitHub (open or closed, labels, claim comment) through `callum-flow-issue-read`, so a past `--at` is
+It reads GitHub (open or closed, labels, claim comment) through `fabriek-issue-read`, so a past `--at` is
 exact for the database but not for GitHub; `--github off` skips it. The states, stuck rules (the per-state
 thresholds of the view, `--rule` to override) and flags are defined in
 [`docs/factory-state.md`](../../docs/factory-state.md). An unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad
 arguments, 1 when the factory database cannot be read or has no migration 0033. The `factory-state` skill runs it
 and adds a short narrative. It is in the synced allow list.
 
-`callum-flow-merge-guard <pr> --patch <id>` checks a PR is safe to merge (author, rollout, linkage, CI checks,
+`fabriek-merge-guard <pr> --patch <id>` checks a PR is safe to merge (author, rollout, linkage, CI checks,
 patch, base, mergeable) and prints `GUARD <name> FAIL <reason> class=<class>` per failed guard. Checking is read-only;
 the command is in the synced allow list. `--patch` is its only mode: without it, or with `--run` or `--update-behind`, it exits 2 with one usage line.
-The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. `callum-flow-merge <pr> --patch <id>` runs it, squash-merges with
+The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `fabriek-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. `fabriek-merge <pr> --patch <id>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged` with the PR's size (`files`, `file_lines`, `additions`, `deletions` from `gh pr view <pr> --json files,additions,deletions,mergedAt`, read after the merge; null with a warning when the read fails) and `merged_at` (GitHub's `mergedAt`; null when missing) and `title: null`; it is allowed only in the main
-checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
-unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
-seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
+checkout's `settings.local.json`. `--method` or `FABRIEK_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
+unknown mergeability `FABRIEK_MERGEABLE_TRIES` times (default 5), `FABRIEK_MERGEABLE_SLEEP`
+seconds apart (default 2). If `gh pr merge` refuses, `fabriek-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
 
 `--patch` is the factory loop's mode (v2,
-[`docs/factory-loop/v2/SPEC.md`](../../docs/factory-loop/v2/SPEC.md) 9.4), and `callum-flow-merge <pr> --patch <id>`
+[`docs/factory-loop/v2/SPEC.md`](../../docs/factory-loop/v2/SPEC.md) 9.4), and `fabriek-merge <pr> --patch <id>`
 passes it through. It checks only facts the loop owns, with a `patch` guard that the PR head's patch id is
 `<id>`, the one the loop's reviewer approved. Every FAIL line ends with ` class=<class>`, so the loop
 acts on the class and never on the reason's words: `behind` (the loop updates the head), `conflict`
@@ -1628,13 +1649,13 @@ a branch with no issue). The loop also passes
 and passes only when `git merge-tree --write-tree origin/<base> <head>` gives exactly `<sha>`, the tree CI passed on a
 train branch. A conflict or another tree prints `GUARD tree FAIL <reason> class=behind`, a failed fetch or read
 `class=read`. With the option a `BEHIND` merge state is no FAIL (the tree guard stands in for it); draft, conflicting,
-blocked and every other guard are unchanged. `callum-flow-merge` passes `--tested-tree` to the guard and takes
+blocked and every other guard are unchanged. `fabriek-merge` passes `--tested-tree` to the guard and takes
 `--train-dropped <reason>` (`head-moved`, `outside-merge`, `conflict`, `train-red`, `left-queue`, `tree-mismatch` or
 `refused`), which it keeps from the guard; the two are exclusive. The `merged` event then carries `train` (`rode`,
 `dropped` or null), `train_reason`, `tested_tree` and `tree_matched` (whether the merge commit's tree, read with
 `gh pr view <pr> --json mergeCommit` and git, equals the tested tree; null with a warning when it does not read).
 
-`callum-flow-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
+`fabriek-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
 `git diff -U0 <merge base of origin/<base> and the head> <head> | git patch-id --stable`, with no
 colour, external diff, textconv or rename detection, and full object ids. With no context lines, a
 clean merge of the base into the head (`gh pr update-branch`) keeps it, and any change to the PR's own
@@ -1642,31 +1663,31 @@ lines changes it. It fetches `origin/<base>` and the head (a branch from origin,
 the remote-tracking refs and never touches a working tree or HEAD. A head that changes nothing against
 the base (main already has its change) has the zero id (`--stable` adds up one hash per file). Exit 1
 when it cannot be computed (a fetch failed, no merge base), 2 on bad usage. The loop's `prs` source and
-the guard's `patch` check both run it (override: `CALLUM_FLOW_PATCH_ID_BIN`).
+the guard's `patch` check both run it (override: `FABRIEK_PATCH_ID_BIN`).
 
-The guard also runs `callum-flow-test-weakening --base origin/<pr base> --head <pr head>`, which
+The guard also runs `fabriek-test-weakening --base origin/<pr base> --head <pr head>`, which
 scans every non-merge commit of the PR for removed assertions, added `--warn-only` / `|| true` /
 skip / `.only` tokens and commented-out assertions in test files (judged per file; moved lines do
 not count). Each commit it cannot see restored prints an advisory `GUARD test-weakening WARN <sha7>
 files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
 orchestrator sends each one to the adjudicator before merging. After a successful merge
-`callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
-(`callum-flow-event --type test_weakened --data`; `docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
+`fabriek-merge` logs one `test_weakened` event per flagged commit, restored ones included
+(`fabriek-event --type test_weakened --data`; `docs/metrics.md`). Override the detector with `FABRIEK_WEAKENING_BIN`; `FABRIEK_TEST_PATHS`
 adds an ERE of extra test paths.
-After the merge and the `merged` event (`callum-flow-event --type merged --data`; it needs an issue, so with none known the merge still succeeds, a warning says so and no `merged` event is written), `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
-(override: `CALLUM_FLOW_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
-because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
+After the merge and the `merged` event (`fabriek-event --type merged --data`; it needs an issue, so with none known the merge still succeeds, a warning says so and no `merged` event is written), `fabriek-merge` runs `fabriek-milestone tag <pr>`
+(override: `FABRIEK_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
+because the merge has already happened; a missed item can be moved by hand with `fabriek-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
-`callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
+`fabriek-milestone` manages release milestone metadata; `fabriek-merge` handles merge-time tagging.
 
-`callum-flow-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]` and
-`callum-flow-released --collect [--repo O/N]...` write the `released`
+`fabriek-released <tag> [--repo O/N] [--source loop|workflow|manual] [--dry-run | --attach]` and
+`fabriek-released --collect [--repo O/N]...` write the `released`
 factory event for one release tag. It reads GitHub only through `gh api` (the tag's commit, the `v*` tags,
 the compare with the previous final tag, each PR's body and closing issues, and the GitHub Release for the
 headlines; no Release gives empty headlines), builds the payload with `release-contents.js` (the one rule
 for what a release carried, shipped in `/usr/local/share/dev-system/`) and writes it with
-`callum-flow-event --type released` (override: `CALLUM_FLOW_EVENT_BIN`). A tag whose `released` event is
+`fabriek-event --type released` (override: `FABRIEK_EVENT_BIN`). A tag whose `released` event is
 already in the factory log is skipped on stderr with its event id (exit 0). `--dry-run` prints the payload
 and writes nothing. Exit 0 written or skipped, 1 a GitHub read or the event tool failed (nothing written),
 2 usage error. The factory loop calls it on each new release tag of a repo with a Next release milestone
@@ -1693,19 +1714,19 @@ every subcommand then does nothing and exits 0. `plan <issue|pr> next|later` mov
 the `Expected:` line, `expect patch|minor|major "<reason>"` sets that line, and `tag <pr>` is the merge-time
 rule: the PR and every issue it closes (not keep-open ones) move to Next release when they have no
 milestone or are in Later; an item in another milestone is left alone with a warning, and a PR not based
-on the default branch is not tagged. It writes issue metadata, so, like `callum-flow-claim`, it is in the
+on the default branch is not tagged. It writes issue metadata, so, like `fabriek-claim`, it is in the
 synced allow list.
 
-`callum-flow-rollout <issue>` prints `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`: the
+`fabriek-rollout <issue>` prints `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`: the
 `## Rollout` value of the issue's latest `## Design brief` comment, else (no brief, or an empty
 Rollout) `run-it` if the issue body has a `## Run it` heading and `merge` otherwise. A brief that
 says `merge` over a body with a `## Run it` heading prints `ROLLOUT conflict ...` and exits 1
 (exit 2 on bad arguments). It only reads, so it is in the synced allow list.
 
 Trusted authors (cbundy/dev-system#307). Issue, PR and comment text can be written by anyone, so
-`callum-flow-issue-read` is the filtered way to read it. An item is trusted only when its
+`fabriek-issue-read` is the filtered way to read it. An item is trusted only when its
 `user.login` (case-insensitive) and numeric `user.id` both match an entry of
-`CALLUM_FLOW_TRUSTED_AUTHORS`, comma-separated `login:numeric_id` entries such as
+`FABRIEK_TRUSTED_AUTHORS`, comma-separated `login:numeric_id` entries such as
 `cbundy:13131067` (`gh api users/<login> --jq .id`); the display name is never consulted. The
 image bakes no list: the variable is the only source. The Coder template sets it from its
 `trusted_authors` variable, the base-image devcontainer template forwards it from the host, and
@@ -1718,16 +1739,16 @@ labels, title?}` with the title kept only for a trusted author, an untrusted one
 `stripped`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
 (conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
 stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
-(non-zero, nothing on stdout) and logs an `untrusted_stripped` event (`callum-flow-event --type untrusted_stripped --data`: source, refused, count, pr) with the count, never the
+(non-zero, nothing on stdout) and logs an `untrusted_stripped` event (`fabriek-event --type untrusted_stripped --data`: source, refused, count, pr) with the count, never the
 content. A stripped dependency node is counted but writes no event, as the type has no source for it. The factory scripts that read issue, PR or comment content go through it and so only
 see trusted content (cbundy/dev-system#310; the agent and skill prose follows in #311, the deny
-hook in #312): `callum-flow-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
-a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author` guard fails a PR
+hook in #312): `fabriek-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
+a brief by anyone else is never seen), `fabriek-merge-guard` (a new `author` guard fails a PR
 not opened by a trusted author and reads nothing further from it), `check-pr-linkage.sh` (an untrusted PR is refused with one line, never parsed),
-`callum-flow-claim` and `callum-flow-sweep` (only trusted `claimed-by:` comments count; claim
+`fabriek-claim` and `fabriek-sweep` (only trusted `claimed-by:` comments count; claim
 refuses an untrusted issue, sweep skips it; an untrusted cross-referenced PR or
 actor never counts as a merge) and `queue-watch.sh` (an untrusted `ready` issue never enters
-the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
+the queue). Each resolves the reader as `FABRIEK_ISSUE_READ_BIN` (tests) and fails closed on
 a reader failure: it never treats it as "no comments". Write calls are unchanged.
 
 Token mode (cbundy/dev-system#728). When `DEV_GH_TOKEN_FILE` is set and non-empty in the
@@ -1742,26 +1763,26 @@ is `<id>+<login>@users.noreply.github.com` unless `DEV_GIT_EMAIL` is set; the na
 the login. `git config --global user.name` and `user.email` are set from it. If the file is
 missing, empty, unreadable or rejected, `dev-init` logs one line naming the path and the cause
 (never the token), deletes any identity file, leaves gh with no account and carries on. In token
-mode the effective trusted list is the `CALLUM_FLOW_TRUSTED_AUTHORS` entries plus `<login>:<id>`
+mode the effective trusted list is the `FABRIEK_TRUSTED_AUTHORS` entries plus `<login>:<id>`
 from the identity file (deduplicated; a stale identity file is ignored outside token mode), so
-`callum-flow-issue-read` and `callum-flow-milestone` trust the token account, and an empty variable
+`fabriek-issue-read` and `fabriek-milestone` trust the token account, and an empty variable
 with an identity entry is enough. `dev-doctor` prints the effective list and FAILs, with a fix,
 when the token file or identity file is missing, gh's active login is not the identity's, the
 token account is not trusted, or a `GIT_AUTHOR_*` / `GIT_COMMITTER_*` name or email variable
 overrides the identity. Without `DEV_GH_TOKEN_FILE` nothing changes.
 
-`callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
+`fabriek-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
-and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since` and `race`), then removes `ready`, assigns the issue and logs `claimed` with `lease_minutes`, the issue's title, labels and parent and, when `CALLUM_FLOW_CLAIM_SCORE` is set and valid, the score and factors (all through `callum-flow-event --type claimed --data`).
+and exits 3; every exit 3 logs a `claim_lost` event with `holder`, `holder_since` and `race`), then removes `ready`, assigns the issue and logs `claimed` with `lease_minutes`, the issue's title, labels and parent and, when `FABRIEK_CLAIM_SCORE` is set and valid, the score and factors (all through `fabriek-event --type claimed --data`).
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `claim_renewed` event (`lease_minutes`) per comment it actually extended;
-with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `CALLUM_FLOW_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `callum-flow-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#states) uses the `renewed` events.
-`callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `fabriek-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in the event store (with the `old` source, `factory.events`). An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. `FABRIEK_CLAIM_EVENTS_SOURCE` picks the store the rule reads: `new`, the default (`factory.event_log` through `dev-query --factory`, plus the new log from `fabriek-event --new-path`; the new `requeued` is the old `reclaimed`), `old` (`factory.events` and the old log, both frozen at the cutover in #1143, so no longer a way back) or `shadow` (also frozen on its old side). `shadow` decides on old exactly as `old` does, then reads both sides over the last `FABRIEK_SHADOW_WINDOW_SECONDS` (default 604800) and writes one `shadow_read` event (reader `claim-events`, tool the calling command) counting the issues whose decision differs: `differences` with both sides cut `FABRIEK_SHADOW_SETTLE_SECONDS` (default 600) before now, `live_differences` without the cut. Both sides leave out the events of a device older than its first row in the new store (the floor, read once from `factory.event_log`; the new store holds only dual-written events), and the event names this device's floor as `scope_floor`. A value other than these three warns once and reads old (still, until #656); a failing new read or event write never changes a decision or an exit code. It never reads `fabriek-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#states) uses the `renewed` events.
+`fabriek-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
-whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed`, `intervention`, `prompt_denied` or `prompt_waiting`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
+whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed`, `intervention`, `prompt_denied` or `prompt_waiting`) is not `closed` or `abandoned`, plus every issue `fabriek-factory-state` still lists as live (so one known only from a mirror run); a failed
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim
@@ -1773,46 +1794,46 @@ made outside the factory: the sweep logs a `merged` event (pr, head when known, 
 expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `requeued` event (reason `lease-expired`). The sweep never touches
 any other label: the factory loop is the only writer of its `factory:*` labels. Rules 1-6 have no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Rule 7 is bounded: a PR merged into the default branch
-inside the last `CALLUM_FLOW_SWEEP_MERGE_WINDOW_SECONDS` (default 604800) and at least `CALLUM_FLOW_SWEEP_MERGE_SETTLE_SECONDS` ago (default 3600, so another
+inside the last `FABRIEK_SWEEP_MERGE_WINDOW_SECONDS` (default 604800) and at least `FABRIEK_SWEEP_MERGE_SETTLE_SECONDS` ago (default 3600, so another
 device's `merged` event has time to arrive) that no `merged` event names by PR (central `factory.event_log` plus this device's new log) gets a `merged` event
 as actor `sweep`, by hand and recovered, with the issue only when a trusted author wrote the lowest in-repo issue the PR closes, and with `merged_at` (GitHub's merge time, since the event's `ts` is the sweep's) and `title` (the closed issue's, else the PR's, from a trusted author only; the same two fields on a merge on the issue's branch). It needs the central store (without it
 the sweep warns once and logs nothing), skips on a read failure with exit 1, and sees merged PRs only: a direct push to the default branch is out of scope. A
 latest event of `superseded` (an old-log state; nothing writes it any more) is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
-120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
+120 minutes unless `FABRIEK_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
 
-`callum-flow-implementer-route <issue>` prints the model the factory loop's builder runs on for that
+`fabriek-implementer-route <issue>` prints the model the factory loop's builder runs on for that
 issue, `sonnet` (its frontmatter model) or `opus`, so the two can be compared on real numbers (#506). The factory loop
 passes it as the model of its builder for the issue. A trusted `model:<alias>` label wins (the owner's pick,
-left out of the comparison), else `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` (default `0`, a number from 0 to 100; anything else
+left out of the comparison), else `FABRIEK_IMPLEMENTER_OPUS_PCT` (default `0`, a number from 0 to 100; anything else
 exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of `implementer:<owner/repo>#<issue>`, repo
 lower-cased, mod 100). The `implementer:` salt keeps it independent of the designer split, and the hash means a
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
 pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
-`implementer_routed` event (`callum-flow-event --type implementer_routed --data` with `model`, `reason` (`label`, `default`, `hash` or `fallback`), `bucket` and `opus_pct`), and it is in the synced
-allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
+`implementer_routed` event (`fabriek-event --type implementer_routed --data` with `model`, `reason` (`label`, `default`, `hash` or `fallback`), `bucket` and `opus_pct`), and it is in the synced
+allow list. To run the comparison, add `"env": { "FABRIEK_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
 `.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
 share), keep the share fixed while it runs, and read the result with the
 [implementer model comparison](../../docs/metrics.md#8-implementer-model-comparison) query.
 
-With exactly one argument, `-h` or `--help` prints `usage: callum-flow-implementer-route <issue>` on stdout,
-writes nothing to stderr, exits 0 and logs no event, even when `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` is invalid.
+With exactly one argument, `-h` or `--help` prints `usage: fabriek-implementer-route <issue>` on stdout,
+writes nothing to stderr, exits 0 and logs no event, even when `FABRIEK_IMPLEMENTER_OPUS_PCT` is invalid.
 Help is handled before percentage validation. Usage errors (a missing, empty or nonnumeric issue, an invalid
 percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
 
-`callum-flow-designer-route <issue>` prints the model the designer sub-agent runs on for that issue, `opus` (its frontmatter
+`fabriek-designer-route <issue>` prints the model the designer sub-agent runs on for that issue, `opus` (its frontmatter
 model, the control) or `sonnet` (the treatment), so the two can be compared on real numbers (#1040). A trusted `model:<alias>` label wins (the owner's pick, left out of the comparison), else
-`CALLUM_FLOW_DESIGNER_SONNET_PCT` (default `0`, a number from 0 to 100; anything else exits 2) sends that percentage of issues
+`FABRIEK_DESIGNER_SONNET_PCT` (default `0`, a number from 0 to 100; anything else exits 2) sends that percentage of issues
 to `sonnet` by a stable hash (`cksum` of `designer:<owner/repo>#<issue>`, repo lower-cased, mod 100). An unknown repo or
 unreadable labels print `opus` with a warning. Each decision logs a `designer_routed` event (`model`, `reason`
 label|default|hash|fallback, `bucket`, `sonnet_pct`), and the tool is in the synced allow list. Set the share by adding
-`"env": { "CALLUM_FLOW_DESIGNER_SONNET_PCT": "50" }` to the repo's `.claude/settings.json` (the template defines no `env`, so
+`"env": { "FABRIEK_DESIGNER_SONNET_PCT": "50" }` to the repo's `.claude/settings.json` (the template defines no `env`, so
 `callum-dev update` keeps it). With exactly one argument, `-h` or `--help` prints the usage line on stdout and exits 0 with no
 event, even when the percentage is invalid; usage errors print to stderr, exit 2 and log no event.
 
-`event-push-loop` shipped the lines of the old log to `factory.events` in the agentsview PostgreSQL. `callum-flow-event`
+`event-push-loop` shipped the lines of the old log to `factory.events` in the agentsview PostgreSQL. `fabriek-event`
 writes no old lines any more (#1143) and `dev-init` no longer starts it; it stays installed and runnable by hand
 for the history (removing it is #656). It used
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
@@ -1849,11 +1870,11 @@ starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/
 `dev-doctor` reports its counts and fails when it is not running. It is the only event push loop `dev-init` starts.
 At the start of a pass, at most every `DEV_FACTORY_RELEASE_COLLECT_INTERVAL` seconds (default 900; 0 turns it off;
 stamp: `factory/.released-collect`), it runs the release collector (`FACTORY_RELEASE_COLLECT_BIN`, default
-`callum-flow-released --collect`) bounded by `FACTORY_RELEASE_COLLECT_TIMEOUT` seconds (default 120), so what it
+`fabriek-released --collect`) bounded by `FACTORY_RELEASE_COLLECT_TIMEOUT` seconds (default 120), so what it
 writes is pushed in the same pass. Its output goes to the log, masked; a missing tool, a timeout or a failure is one
 warning line and never stops the push.
 
-`callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
+`fabriek-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
 held. `factory.events` gets no new rows since the cutover (#1143), so it only compares the history before it (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
 URL and `factory.event_store` with the factory reader URL only, in read-only transactions bounded by timeout, passes
 each old row through the translator and matches by `event_id`. Per old state it prints old lines, skipped, expected,
@@ -1917,7 +1938,7 @@ count `github_errors_1h` is `heartbeat-state --repo`'s reading of `github.json` 
 the GitHub API errors the loop's own commands (observe and act) met in the last hour. It counts a command that
 exits non-zero with a rate limit, HTTP 5xx, 429 or 401, Bad credentials, or a connection or TLS failure to
 api.github.com in its stderr; a 404 or 422 is not counted. Agents' own gh calls (a builder pushing,
-`callum-flow-issue-read`) are not counted. Every value is NULL where it cannot be known: gh missing, not logged
+`fabriek-issue-read`) are not counted. Every value is NULL where it cannot be known: gh missing, not logged
 in, offline or timing out, a reply that is not the expected JSON, no loop running on this device (`github.json`
 missing, invalid or its `at` over 15 minutes old), or an older image. A failure (for example a database not yet
 at migration 0035) is logged, masked, as `heartbeat-loop: <target> github write failed`; it never changes the exit
@@ -1967,11 +1988,11 @@ or the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
 `DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without either plugin and
 for sub-agents. A session is live while it is listed in a row that is not `stale`; the stopped beat lists none.
 `state` is `busy` when this device has an issue in flight, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`
-and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
+and the transcripts, using `classifyWake` of `fabriek-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
-run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `CALLUM_FLOW_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `CALLUM_FLOW_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
+run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `FABRIEK_HEARTBEAT_STATE_SOURCE` (or `--source`) picks the log that decides this: `old` (the lines above), `new` (this device's local new log, `$CALLUM_EVENTS_DIR/factory/*.jsonl`, by the same rule over the new types: lifecycle `ready`, `claimed`, `requeued`, `claim_lost`, `closed`, `abandoned`, `merged`, `implementer_routed` and `finding_handled`; an issue is idle after `merged`, `abandoned`, `claim_lost`, `closed`, `ready` or `requeued`, and after the first four only `ready`, `requeued`, `claimed` or `implementer_routed` reopens it) or `shadow` (opt-in; the default is `new`, and `old` is the way back), which prints old's answer and records how new differs in `factory/.shadow/heartbeat-state.jsonl` (every difference or error, an agreeing run once per `FABRIEK_HEARTBEAT_STATE_SHADOW_QUIET_SECONDS`, default 600). The new read stops after `FABRIEK_HEARTBEAT_STATE_NEW_TIMEOUT_MS` (default 500) and the beat goes on with old's answer (`shadow`) or the chat alone (`new`). An invalid value warns on stderr and reads `old`. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
 `latest_lookup_failing` (the background lookup has failed for over an hour), and
@@ -2091,16 +2112,16 @@ The SQL comes from `-c` or from stdin, not both. Accepted flags: `-A`, `-t` (or 
 | 78 | no URL configured (no secret file and no `AGENTSVIEW_PG_URL`); with `--factory`, no `factory-db-reader-url` and no `FACTORY_DB_READER_URL` |
 | 1, 2, 3 | `psql`'s own status (SQL error, connection failure, ...), passed through |
 
-## callum-flow-evidence-upload
+## fabriek-evidence-upload
 
-`callum-flow-evidence-upload` uploads evidence files (screenshots, videos, reports) to the repo's
+`fabriek-evidence-upload` uploads evidence files (screenshots, videos, reports) to the repo's
 own private Azure blob container and prints one read-signed URL per file. Fleet setup:
 [docs/evidence-storage.md](../../docs/evidence-storage.md).
 
 ```sh
-callum-flow-evidence-upload [--repo owner/name] [--check|--dry-run] <dest> <file>...
-callum-flow-evidence-upload pr-12/screens shot.png demo.webm   # one URL per file, in input order
-callum-flow-evidence-upload --check                            # validate credentials, upload nothing
+fabriek-evidence-upload [--repo owner/name] [--check|--dry-run] <dest> <file>...
+fabriek-evidence-upload pr-12/screens shot.png demo.webm   # one URL per file, in input order
+fabriek-evidence-upload --check                            # validate credentials, upload nothing
 ```
 
 - **Blob path.** `<owner>/<repo>/<workspace>/<dest>/<basename>` in the repo's container. The repo is
@@ -2127,17 +2148,17 @@ callum-flow-evidence-upload --check                            # validate creden
 | 2 | bad usage, a bad `<dest>` (empty, leading `/`, a `..` segment, whitespace), or a missing or unreadable file; nothing is uploaded |
 | 78 | no credentials for the repo; fall back to a committed capture |
 
-## callum-flow-capture
+## fabriek-capture
 
-`callum-flow-capture` starts a UI app, takes a desktop and a narrow full-page screenshot (and optionally a
+`fabriek-capture` starts a UI app, takes a desktop and a narrow full-page screenshot (and optionally a
 short video) with headless Chromium through Playwright, stops the app, and uploads the captures through
-[`callum-flow-evidence-upload`](#callum-flow-evidence-upload). It is repo-agnostic: the repo says how to
+[`fabriek-evidence-upload`](#fabriek-evidence-upload). It is repo-agnostic: the repo says how to
 start its app. It starts what it needs and stops it before it exits, on every exit path (success, failure,
 SIGINT, SIGTERM): the app's whole process group gets SIGTERM, then SIGKILL after a short grace, and the
 browser is closed.
 
 ```sh
-callum-flow-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out DIR] [--dest pr-<N>/<slug>] <scenario>
+fabriek-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out DIR] [--dest pr-<N>/<slug>] <scenario>
 ```
 
 - **App.** `<cmd>` runs with `sh -c` in its own process group on a free port, exported as `PORT`; `{port}` in
@@ -2146,7 +2167,7 @@ callum-flow-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out D
 - **Captures.** `<scenario>` matches `[a-z0-9][a-z0-9-]*`. It writes `<scenario>-desktop.png` (1440x900) and
   `<scenario>-narrow.png` (390x844), both full-page, and with `--video` also `<scenario>.webm`. A navigation
   status of 400 or more or an uncaught page error fails the capture.
-- **Output.** To `--out`, default `${TMPDIR:-/tmp}/callum-flow-capture/<scenario>-<timestamp>`. With `--dest`,
+- **Output.** To `--out`, default `${TMPDIR:-/tmp}/fabriek-capture/<scenario>-<timestamp>`. With `--dest`,
   the files are uploaded and one URL per file is printed on stdout; without it the local file paths are
   printed and nothing is uploaded. When the upload exits 78 (no evidence storage) the tool exits 78, keeps the
   files and names the folder on stderr, so the caller can commit a copy and use a commit-pinned blob URL.
@@ -2167,7 +2188,7 @@ Consumer wiring, a `package.json` script that the agents run as `npm run e2e:cap
 (add `--path` per scenario):
 
 ```json
-"e2e:capture": "callum-flow-capture --start 'npm run dev -- --port {port}' --dest pr-$PR"
+"e2e:capture": "fabriek-capture --start 'npm run dev -- --port {port}' --dest pr-$PR"
 ```
 
 ### For a UI repo: the owner's action

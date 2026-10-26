@@ -197,26 +197,44 @@ COPY --chmod=0755 \
   images/base/dev-query \
   images/base/dev-login \
   images/base/dev-claude-api-key \
+  images/base/fabriek-event \
   images/base/callum-flow-event \
+  images/base/fabriek-dual-write-check \
   images/base/callum-flow-dual-write-check \
+  images/base/fabriek-merge-guard \
   images/base/callum-flow-merge-guard \
+  images/base/fabriek-patch-id \
   images/base/callum-flow-patch-id \
+  images/base/fabriek-test-weakening \
   images/base/callum-flow-test-weakening \
+  images/base/fabriek-rollout \
   images/base/callum-flow-rollout \
+  images/base/fabriek-merge \
   images/base/callum-flow-merge \
+  images/base/fabriek-claim \
   images/base/callum-flow-claim \
+  images/base/fabriek-milestone \
   images/base/callum-flow-milestone \
+  images/base/fabriek-released \
   images/base/callum-flow-released \
+  images/base/fabriek-implementer-route \
   images/base/callum-flow-implementer-route \
+  images/base/fabriek-designer-route \
   images/base/callum-flow-designer-route \
+  images/base/fabriek-issue-read \
   images/base/callum-flow-issue-read \
+  images/base/fabriek-sweep \
   images/base/callum-flow-sweep \
+  images/base/fabriek-evaluate \
   images/base/callum-flow-evaluate \
+  images/base/fabriek-factory-state \
   images/base/callum-flow-factory-state \
   images/base/factory-db-bootstrap \
   images/base/factory-db-migrate \
   images/base/systemctl \
+  images/base/fabriek-evidence-upload \
   images/base/callum-flow-evidence-upload \
+  images/base/fabriek-capture \
   images/base/callum-flow-capture \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
@@ -224,8 +242,9 @@ COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop i
 COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-system/factory-db/migrations/
 # COPY --chmod gives the directories it creates the files' mode, so node could not traverse them (cbundy/dev-system#797).
 RUN chmod 0755 /usr/local/share/dev-system/factory-db /usr/local/share/dev-system/factory-db/migrations
-# The claim rule callum-flow-claim and callum-flow-sweep share (cbundy/dev-system#660).
-COPY --chmod=0644 images/base/claim-events.sh /usr/local/share/dev-system/
+# The claim rule fabriek-claim and fabriek-sweep share (cbundy/dev-system#660), and fabriek-env.sh / fabriek-env.js,
+# the FABRIEK_ settings' fallback to the old CALLUM_FLOW_ names every factory command loads.
+COPY --chmod=0644 images/base/claim-events.sh images/base/fabriek-env.sh images/base/fabriek-env.js /usr/local/share/dev-system/
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/claude-config.sh images/base/agentsview.sh images/base/factory-db.sh images/base/mem-pressure.sh images/base/github-health.sh \
   images/base/factory-event-translate.js images/base/factory-source.js images/base/evaluate-new-events.js images/base/factory-event-write.js images/base/release-contents.js images/base/factory-event-shapes.json images/base/telemetry.sh images/base/codex-otel.sh \
   images/base/gh.sh images/base/claude-auth.sh images/base/exec-hint.sh images/base/plugins.sh images/base/persist.sh images/base/trusted-authors.sh \

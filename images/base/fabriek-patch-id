@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# fabriek-patch-id: the patch identity of a head against the base branch (factory loop v2,
+# docs/factory-loop/v2/SPEC.md 8.4). The factory loop keys a review's approval by it, and
+# fabriek-merge-guard --patch checks it before a merge, so both compute it here, the same way.
+# It only reads: it fetches into the remote-tracking refs and never touches a working tree or HEAD.
+#
+# Usage: fabriek-patch-id <branch|sha> <base>
+#   <branch|sha>  the head: a full commit sha (fetched from origin by its id when it is not here),
+#                 or a branch name on origin (fetched to refs/remotes/origin/<branch>)
+#   <base>        the base branch on origin, as `main` or `origin/main` (fetched first)
+#
+# The id is the first field of
+#   git diff -U0 <merge-base of origin/<base> and the head> <head> | git patch-id --stable
+# with no context lines, so a clean merge of the base into the head (`gh pr update-branch`, which
+# only brings in the base's changes around the PR's lines) keeps it, while any change to the PR's
+# own lines changes it. The diff is pinned so no git setting changes the id: no colour, no external
+# diff or textconv driver, no rename detection, and full object ids (a binary change is identified
+# by its blobs, whose abbreviation would otherwise grow with the repo). --stable adds up one hash
+# per changed file, so a head that changes nothing against the base (main already has its change)
+# has the zero id, which git patch-id leaves unprinted.
+#
+# Output: the id (40 hex characters) on one line.
+# Exit codes: 0 printed; 1 it cannot be computed (a fetch failed, the head is not on origin, or no
+# merge base), with the reason on stderr; 2 usage.
+set -u
+
+ME=fabriek-patch-id
+
+usage() {
+  [ -z "${1-}" ] || echo "$ME: $1" >&2
+  echo "usage: $ME <branch|sha> <base>" >&2
+  exit 2
+}
+die() {
+  echo "$ME: $*" >&2
+  exit 1
+}
+
+case "${1-}" in -h | --help) usage ;; esac
+[ $# -eq 2 ] || usage "expected <branch|sha> <base>"
+ref=$1 base=${2#origin/}
+case "$ref" in '' | -*) usage "bad head '$ref'" ;; esac
+case "$base" in '' | -*) usage "bad base '$2'" ;; esac
+git check-ref-format --branch "$base" > /dev/null 2>&1 || usage "bad base '$2'"
+
+git fetch --quiet origin "+refs/heads/$base:refs/remotes/origin/$base" 2> /dev/null || die "cannot fetch origin/$base"
+
+if printf '%s\n' "$ref" | grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}'; then
+  head=$ref
+  git cat-file -e "$head^{commit}" 2> /dev/null || git fetch --quiet origin "$head" 2> /dev/null || true
+  git cat-file -e "$head^{commit}" 2> /dev/null || die "head $head is not available from origin"
+else
+  git check-ref-format --branch "$ref" > /dev/null 2>&1 || usage "bad head '$ref'"
+  git fetch --quiet origin "+refs/heads/$ref:refs/remotes/origin/$ref" 2> /dev/null || die "cannot fetch origin/$ref"
+  head=refs/remotes/origin/$ref
+fi
+
+mb=$(git merge-base "refs/remotes/origin/$base" "$head" 2> /dev/null) || die "no merge base between origin/$base and $ref"
+diff=$(git diff -U0 --no-color --no-ext-diff --no-textconv --no-renames --full-index "$mb" "$head") || die "cannot diff $ref against origin/$base"
+[ -n "$diff" ] || { printf '%040d\n' 0; exit 0; }
+id=$(printf '%s\n' "$diff" | git patch-id --stable | cut -d' ' -f1)
+printf '%s\n' "$id" | grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' || die "cannot compute the patch id of $ref"
+printf '%s\n' "$id"

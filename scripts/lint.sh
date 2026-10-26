@@ -10,7 +10,7 @@
 # is on PATH - it is in the base image and on CI's runners. Without it, the check falls
 # back to a syntax-only `sh -n` / `bash -n` and says so; CI still runs shellcheck.
 # JavaScript gets `node --check`, ES modules (.mjs) included, and so do extensionless files with
-# a node shebang under the directories above (images/base/callum-flow-evaluate,
+# a node shebang under the directories above (images/base/fabriek-evaluate,
 # plugins/factory-loop/bin/factory-answer).
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when the

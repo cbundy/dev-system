@@ -1,0 +1,256 @@
+#!/bin/sh
+#
+# fabriek-milestone: put issues and PRs into the release milestones and
+# read them back, so no skill has to remember to tag one (cbundy/dev-system#403,
+# part of #402).
+#
+# THE MILESTONE CONTRACT (written once, here; RELEASING.md and the release
+# workflow's reconcile step (#404) take it as given and must not redefine it):
+#   - The two milestones are titled exactly `Next release` and `Later`.
+#   - Lookup is by exact title among OPEN milestones only
+#     (`gh api repos/<repo>/milestones`, which lists open ones by default).
+#   - The expected version bump is one line of its own in the Next release
+#     description: `Expected: <patch|minor|major> - <reason>`.
+#   - A repo with no open `Next release` milestone has not opted in: every
+#     subcommand is then a no-op (message on stderr, exit 0, nothing written).
+#
+# Usage:
+#   fabriek-milestone plan <issue|pr> next|later
+#   fabriek-milestone show [next|later]
+#   fabriek-milestone expect patch|minor|major "<reason>"
+#   fabriek-milestone tag <pr>
+#   fabriek-milestone -h | --help
+#
+# plan: sets the milestone of an issue or PR (one REST call serves both) and
+# prints what moved. `later` needs an open `Later` milestone; this helper never
+# creates milestones.
+# show: for each milestone (default both) a header, then one line per item,
+# open and closed, PRs included: `#<n> <open|closed> <issue|pr> <title>`. Next
+# release also prints its `Expected:` line, or `Expected: (not set)`.
+# expect: replaces the `Expected:` line in the Next release description, or
+# appends one. Every other byte of the description is left as it was.
+# tag: the merge-time rule, and the one place it lives (fabriek-merge calls
+# it after a successful merge). The PR and every issue it closes
+# (closingIssuesReferences) move to Next release when they have no milestone or
+# are in Later. An item already in Next release is left alone silently; one in
+# any other milestone is left alone with a warning. Keep-open issues are not
+# closed by the PR, so only the PR is tagged. A PR whose base is not the repo's
+# default branch changes nothing: such a merge does not ship in the next release.
+#
+# Output: progress and notes on stdout, warnings and the no-op message on stderr.
+# Exit codes: 0 done or no-op, 1 a GitHub error (or `later` with no open Later),
+# 2 usage error.
+#
+# show lists only items whose author is trusted (FABRIEK_TRUSTED_AUTHORS, the
+# same list fabriek-issue-read enforces): a title is text an untrusted user
+# wrote, so it never reaches the agent; the count of hidden items goes to stderr.
+# tag moves only items of the PR's own repo: a closing reference into another
+# repository is left alone with a warning (milestone numbers are per repo).
+#
+# Environment: FABRIEK_REPO (owner/name, default from gh),
+# FABRIEK_TRUSTED_AUTHORS (show); for tests FABRIEK_GH_BIN and
+# FABRIEK_SHARE_DIR.
+# The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.sh; a lone copy of this script without it still runs, on the FABRIEK_ names only).
+case $0 in */*) _fe=${0%/*}/fabriek-env.sh ;; *) _fe=./fabriek-env.sh ;; esac
+[ -r "$_fe" ] || _fe=${FABRIEK_SHARE_DIR:-${CALLUM_FLOW_SHARE_DIR:-${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}}}/fabriek-env.sh
+# shellcheck source=fabriek-env.sh
+[ ! -r "$_fe" ] || . "$_fe"
+unset _fe
+
+set -u
+
+GH=${FABRIEK_GH_BIN:-gh}
+NEXT='Next release'
+LATER='Later'
+
+err() { echo "fabriek-milestone: $*" >&2; }
+usage() {
+  [ -z "${1-}" ] || err "$1"
+  cat >&2 << 'USAGE'
+usage: fabriek-milestone plan <issue|pr> next|later
+       fabriek-milestone show [next|later]
+       fabriek-milestone expect patch|minor|major "<reason>"
+       fabriek-milestone tag <pr>
+USAGE
+  exit 2
+}
+isnum() { case "$1" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+case "$cmd" in
+  -h | --help)
+    sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' | sed '1d'
+    exit 0
+    ;;
+  plan)
+    [ $# -eq 2 ] || usage "plan needs <issue> next|later"
+    isnum "$1" || usage "<issue> must be a number, got '$1'"
+    case "$2" in next | later) ;; *) usage "plan target must be next or later, got '$2'" ;; esac
+    ;;
+  show)
+    [ $# -le 1 ] || usage "show takes at most one of next|later"
+    case "${1-next}" in next | later) ;; *) usage "show target must be next or later, got '$1'" ;; esac
+    ;;
+  expect)
+    [ $# -eq 2 ] || usage 'expect needs patch|minor|major "<reason>"'
+    case "$1" in patch | minor | major) ;; *) usage "bump must be patch, minor or major, got '$1'" ;; esac
+    case "$2" in *'
+'*) usage "the reason must be one line" ;; esac
+    [ -n "$(printf '%s' "$2" | tr -d ' \t\r')" ] || usage "the reason must not be empty"
+    ;;
+  tag)
+    [ $# -eq 1 ] || usage "tag needs <pr>"
+    isnum "$1" || usage "<pr> must be a number, got '$1'"
+    ;;
+  *) usage "unknown subcommand '$cmd'" ;;
+esac
+command -v jq > /dev/null 2>&1 || { err "jq not found"; exit 1; }
+
+repo=${FABRIEK_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2> /dev/null) || repo=
+[ -n "$repo" ] || { err "cannot determine the repo (set FABRIEK_REPO)"; exit 1; }
+
+# Open milestones as one JSON array (paginated output is several arrays).
+# list <path>: every page of an API list as one JSON array; fails if gh does
+list() {
+  _raw=$("$GH" api --paginate "$1" 2> /dev/null) || return 1
+  printf '%s' "$_raw" | jq -s 'add // []' 2> /dev/null
+}
+if ! ms=$(list "repos/$repo/milestones?state=open&per_page=100") || [ -z "$ms" ]; then
+  err "cannot list the milestones of $repo"
+  exit 1
+fi
+# field <title> <jq field>: the field of the open milestone with that exact title
+field() { printf '%s' "$ms" | jq -r --arg t "$1" --arg f "$2" '[.[] | select(.title == $t)][0] | .[$f] // empty'; }
+next_n=$(field "$NEXT" number)
+if [ -z "$next_n" ]; then
+  err "no open \"$NEXT\" milestone in $repo - nothing to do"
+  exit 0
+fi
+later_n=$(field "$LATER" number)
+
+# set_milestone <n> <milestone-number>: issues and PRs share this endpoint
+set_milestone() { "$GH" api -X PATCH "repos/$repo/issues/$1" -F "milestone=$2" > /dev/null; }
+# label <title>: how a milestone shows in a message
+label() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf '(no milestone)'; fi; }
+# item <n>: "<milestone title>" or empty for none; fails if the item cannot be read
+item_title() {
+  _j=$("$GH" api "repos/$repo/issues/$1" 2> /dev/null) || return 1
+  printf '%s' "$_j" | jq -r '.milestone.title // empty' 2> /dev/null || return 1
+}
+
+# jq: an item is trusted when its user's login (case-insensitive) and id both match
+# one entry of $T; a missing user is untrusted.
+# shellcheck disable=SC2016
+TRUST='def is_trusted: (.user // null) as $u | ($u | type) == "object" and any($T[]; .login == (($u.login // "") | ascii_downcase) and .id == $u.id); '
+
+case "$cmd" in
+  plan)
+    n=$1
+    if [ "$2" = next ]; then want=$NEXT wn=$next_n; else want=$LATER wn=$later_n; fi
+    if [ -z "$wn" ]; then
+      err "no open \"$want\" milestone in $repo - create it first (this helper never creates milestones)"
+      exit 1
+    fi
+    from=$(item_title "$n") || { err "cannot read #$n"; exit 1; }
+    if [ "$from" = "$want" ]; then
+      echo "#$n is already in \"$want\""
+      exit 0
+    fi
+    set_milestone "$n" "$wn" || { err "cannot move #$n to \"$want\""; exit 1; }
+    echo "#$n moved from $(label "$from") to \"$want\""
+    ;;
+
+  show)
+    SHARE=${FABRIEK_SHARE_DIR:-/usr/local/share/dev-system}
+    # shellcheck source=trusted-authors.sh
+    . "$SHARE/trusted-authors.sh" 2> /dev/null || { err "cannot read $SHARE/trusted-authors.sh"; exit 1; }
+    msg=$(trusted_authors_check) || { err "$msg - refusing to list items"; exit 1; }
+    trusted=$(trusted_authors_json) || { err "cannot parse FABRIEK_TRUSTED_AUTHORS"; exit 1; }
+    rc=0
+    for which in $( [ $# -eq 1 ] && echo "$1" || echo "next later" ); do
+      if [ "$which" = next ]; then t=$NEXT mn=$next_n; else t=$LATER mn=$later_n; fi
+      if [ -z "$mn" ]; then
+        echo "== $t (no open milestone)"
+        continue
+      fi
+      echo "== $t"
+      if [ "$which" = next ]; then
+        printf '%s' "$ms" | jq -r --arg t "$t" '[.[] | select(.title == $t)][0].description // ""
+          | split("\n") | map(rtrimstr("\r") | select(startswith("Expected: "))) | (.[0] // "Expected: (not set)")'
+      fi
+      items=$(list "repos/$repo/issues?milestone=$mn&state=all&per_page=100") ||
+        { err "cannot list the items of \"$t\""; rc=1; continue; }
+      hidden=$(printf '%s' "$items" | jq --argjson T "$trusted" "$TRUST"'[.[] | select(is_trusted | not)] | length' 2> /dev/null) || hidden=
+      [ -z "$hidden" ] || [ "$hidden" = 0 ] || err "$hidden item(s) of \"$t\" by untrusted authors not shown"
+      printf '%s' "$items" | jq -r --argjson T "$trusted" "$TRUST"'.[] | select(is_trusted) | "#\(.number) \(.state) \(if .pull_request then "pr" else "issue" end) \(.title)"' ||
+        { err "cannot read the items of \"$t\""; rc=1; }
+    done
+    exit "$rc"
+    ;;
+
+  expect)
+    line="Expected: $1 - $(printf '%s' "$2" | sed 's/^[ \t]*//; s/[ \t\r]*$//')"
+    body=$(printf '%s' "$ms" | jq --arg t "$NEXT" --arg line "$line" '
+      [.[] | select(.title == $t)][0].description // "" | . as $d
+      | ($d | split("\n")) as $ls
+      | ([$ls | to_entries[] | select(.value | startswith("Expected: ")) | .key] | .[0]) as $i
+      | if $i == null then
+          {description: (if $d == "" then $line elif ($d | endswith("\n")) then $d + $line else $d + "\n" + $line end)}
+        else
+          {description: ([$ls | to_entries[]
+            | select(.key == $i or (.value | startswith("Expected: ") | not))
+            | if .key == $i then ($line + (if (.value | endswith("\r")) then "\r" else "" end)) else .value end]
+            | join("\n"))}
+        end') || { err "cannot build the description"; exit 1; }
+    printf '%s' "$body" | "$GH" api -X PATCH "repos/$repo/milestones/$next_n" --input - > /dev/null ||
+      { err "cannot update the \"$NEXT\" description"; exit 1; }
+    echo "$line"
+    ;;
+
+  tag)
+    pr=$1
+    info=$("$GH" pr view "$pr" --repo "$repo" --json baseRefName,closingIssuesReferences 2> /dev/null) ||
+      { err "cannot read PR #$pr"; exit 1; }
+    base=$(printf '%s' "$info" | jq -r '.baseRefName // empty')
+    def=$("$GH" repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name 2> /dev/null) || def=
+    if [ -z "$base" ] || [ -z "$def" ]; then
+      err "cannot tell PR #$pr's base or the default branch"
+      exit 1
+    fi
+    if [ "$base" != "$def" ]; then
+      echo "PR #$pr targets $base, not $def - it does not ship in \"$NEXT\", nothing tagged"
+      exit 0
+    fi
+    refs=$(printf '%s' "$info" | jq -r --arg r "$repo" '.closingIssuesReferences[]? |
+      "\(if .repository then "\(.repository.owner.login)/\(.repository.name)" else $r end)#\(.number)"') ||
+      { err "cannot read the issues PR #$pr closes"; exit 1; }
+    items=$pr
+    for ref in $refs; do
+      if [ "${ref%#*}" = "$repo" ]; then
+        items="$items ${ref#*#}"
+      else
+        err "warning: $ref is in another repository, not moved"
+      fi
+    done
+    rc=0
+    for n in $items; do
+      from=$(item_title "$n") || { err "cannot read #$n"; rc=1; continue; }
+      case "$from" in
+        "$NEXT") ;;
+        '' | "$LATER")
+          if set_milestone "$n" "$next_n"; then
+            echo "#$n moved from $(label "$from") to \"$NEXT\""
+          else
+            err "cannot move #$n to \"$NEXT\""
+            rc=1
+          fi
+          ;;
+        *) err "warning: #$n is in milestone \"$from\", not moved" ;;
+      esac
+    done
+    exit "$rc"
+    ;;
+esac

@@ -27,7 +27,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SRC="$SCRIPT_DIR/../../src/callum-tools"
 QUEUE_WATCH="$SRC/queue-watch.sh"
 SHARE="$SCRIPT_DIR/../../../images/base"
-READER="$SHARE/callum-flow-issue-read"
+READER="$SHARE/fabriek-issue-read"
 
 passed=0
 fail() {
@@ -64,10 +64,10 @@ in_dir() {
   shift
   PATH="$fakebin:$toolbin"
   # queue-watch lists through the real trusted-author reader (cbundy/dev-system#310)
-  CALLUM_FLOW_ISSUE_READ_BIN="$READER"
-  CALLUM_FLOW_SHARE_DIR="$SHARE"
-  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067
-  export PATH CALLUM_FLOW_ISSUE_READ_BIN CALLUM_FLOW_SHARE_DIR CALLUM_FLOW_TRUSTED_AUTHORS
+  FABRIEK_ISSUE_READ_BIN="$READER"
+  FABRIEK_SHARE_DIR="$SHARE"
+  FABRIEK_TRUSTED_AUTHORS=cbundy:13131067
+  export PATH FABRIEK_ISSUE_READ_BIN FABRIEK_SHARE_DIR FABRIEK_TRUSTED_AUTHORS
   exec "$@"
 }
 
@@ -160,7 +160,7 @@ d=$(dirname "$0")
 [ ! -e "$d/gh-fail" ] || exit 1
 case "$1 $2" in
   "api --paginate")
-    # queue-watch lists through callum-flow-issue-read, which asks for the REST
+    # queue-watch lists through fabriek-issue-read, which asks for the REST
     # issue list: pop the first line of queue-seq.txt (the last one repeats);
     # a FAIL line is a failed call. Each issue is titled "title N", labelled ready and bug, and has a
     # same-repo parent N+1000 when N mod 3 is 1, a parent in another repo when it is 2, none when 0. Numbers are comma separated; an x prefix
@@ -220,7 +220,7 @@ quiet_run() {
   stop_bg
 }
 
-# real_event_log: the real callum-flow-event writes a real new-format log (evlog) under a
+# real_event_log: the real fabriek-event writes a real new-format log (evlog) under a
 # private directory; the watchers print as always (cbundy/dev-system#344). It never writes the old
 # log (oldevlog; cbundy/dev-system#1143).
 real_event_log() {
@@ -232,11 +232,11 @@ real_event_log() {
   done
   evlog="$evdir/factory/o__r.jsonl"
   oldevlog="$evdir/o__r.jsonl"
-  cat > "$fakebin/callum-flow-event" <<EOF
+  cat > "$fakebin/fabriek-event" <<EOF
 #!/bin/sh
-PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s DEV_SYSTEM_SHARE="$SHARE" exec "$SHARE/callum-flow-event" "\$@"
+PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" FABRIEK_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s DEV_SYSTEM_SHARE="$SHARE" exec "$SHARE/fabriek-event" "\$@"
 EOF
-  chmod +x "$fakebin/callum-flow-event"
+  chmod +x "$fakebin/fabriek-event"
 }
 # no_event_log <what>: the real event log (real_event_log) holds nothing, old or new
 no_event_log() {

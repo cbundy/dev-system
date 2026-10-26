@@ -12,7 +12,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/../../src/callum-tools/check-pr-linkage.sh"
 SHARE="$SCRIPT_DIR/../../../images/base"
-READER="$SHARE/callum-flow-issue-read"
+READER="$SHARE/fabriek-issue-read"
 # the stub gh's `pr view` program, shared with the other linkage suite
 export PR_VIEW_JQ="$SCRIPT_DIR/linkage-pr-view.jq"
 
@@ -55,7 +55,7 @@ cat > "$tmpdir/bin/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
 if [ "$1" = api ]; then
-  # the PR as REST returns it, for callum-flow-issue-read; the author is a knob
+  # the PR as REST returns it, for fabriek-issue-read; the author is a knob
   [ "$2" = repos/o/r/pulls/7 ] || { echo "no fixture for $2" >&2; exit 1; }
   echo "$2" >> "$d/api-calls"
   a='{"login":"cbundy","id":13131067}'
@@ -82,8 +82,8 @@ STUB
 chmod +x "$tmpdir/bin/gh"
 
 # the real reader behind the stub gh
-export CALLUM_FLOW_GH_BIN="$tmpdir/bin/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_ISSUE_READ_BIN="$READER" \
-  CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent"
+export FABRIEK_GH_BIN="$tmpdir/bin/gh" FABRIEK_REPO=o/r FABRIEK_ISSUE_READ_BIN="$READER" \
+  FABRIEK_SHARE_DIR="$SHARE" FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 FABRIEK_EVENT_BIN="$tmpdir/noevent"
 
 # stub_knobs: apply the author and api_fail knobs to the stub's state
 stub_knobs() {
@@ -285,8 +285,8 @@ run_case "right login, wrong id is refused" $H main "Closes #12" "" "Closes #12"
 unset pr_author
 api_fail=1 run_case "reader failure fails closed" $H main "Closes #12" "" "Closes #12"
 grep -q "cannot verify the author" "$tmpdir/stderr" || fail "reader failure reason: $(cat "$tmpdir/stderr")"
-CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" run_case "missing reader fails closed" $H main "Closes #12" "" "Closes #12"
+FABRIEK_ISSUE_READ_BIN="$tmpdir/missing-reader" run_case "missing reader fails closed" $H main "Closes #12" "" "Closes #12"
 unset api_fail
-export CALLUM_FLOW_ISSUE_READ_BIN="$READER"
+export FABRIEK_ISSUE_READ_BIN="$READER"
 run_case "trusted author still passes" $H main "Closes #12" "MATCH #7" "Closes #12"
 echo "check-pr-linkage: $passed passed"

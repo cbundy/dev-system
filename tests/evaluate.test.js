@@ -1,4 +1,4 @@
-// Tests for images/base/callum-flow-evaluate (cbundy/dev-system#258). The script runs as a
+// Tests for images/base/fabriek-evaluate (cbundy/dev-system#258). The script runs as a
 // subprocess against the synthetic fixtures in tests/fixtures/evaluate/. Every expected number below is
 // worked out by hand from those fixtures; see docs/metrics.md for the definitions.
 "use strict";
@@ -10,7 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { before, test } = require("node:test");
 
-const SCRIPT = path.join(__dirname, "..", "images", "base", "callum-flow-evaluate");
+const SCRIPT = path.join(__dirname, "..", "images", "base", "fabriek-evaluate");
 const FIX = path.join(__dirname, "fixtures", "evaluate");
 const mod = require(SCRIPT);
 
@@ -45,7 +45,7 @@ function run(args, env = {}) {
       HOME: tmp,
       CLAUDE_CONFIG_DIR: claudeDir,
       CALLUM_EVENTS_DIR: path.join(FIX, "events"),
-      CALLUM_FLOW_EVALUATE_SOURCE: "old", // an explicit shadow would write into the fixture's events folder
+      FABRIEK_EVALUATE_SOURCE: "old", // an explicit shadow would write into the fixture's events folder
       ...env,
     },
   });
@@ -226,7 +226,7 @@ test("missing sources give n/a with a reason and exit 0", () => {
   assert.equal(noEvents.waste.wake_turns, 7);
   // no git checkout and no --projects-dir: no transcripts, unless named
   const outside = spawnSync(process.execPath, [SCRIPT, ...WINDOW, "--format", "json"], {
-    cwd: tmp, encoding: "utf8", env: { PATH: process.env.PATH, HOME: tmp, CLAUDE_CONFIG_DIR: claudeDir, CALLUM_EVENTS_DIR: path.join(FIX, "events"), CALLUM_FLOW_EVALUATE_SOURCE: "old", GIT_CEILING_DIRECTORIES: tmp },
+    cwd: tmp, encoding: "utf8", env: { PATH: process.env.PATH, HOME: tmp, CLAUDE_CONFIG_DIR: claudeDir, CALLUM_EVENTS_DIR: path.join(FIX, "events"), FABRIEK_EVALUATE_SOURCE: "old", GIT_CEILING_DIRECTORIES: tmp },
   });
   assert.equal(JSON.parse(outside.stdout).window.sessions, 0);
   const named = json([...WINDOW, "--projects-dir", path.join(claudeDir, "projects", mod.mungePath(checkout))]);
@@ -350,9 +350,9 @@ test("two devices: a `loop` event is bookkeeping, not progress, so #6 stays stuc
   assert.deepEqual(c.stuck.issues, [{ issue: 6, devices: ["A"], last_event_at: "2026-10-09T03:30:00.000Z", last_state: "delegated", silent_seconds: 30600 }]);
 });
 
-test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () => {
+test("two devices: the stuck threshold follows FABRIEK_LEASE_MINUTES", () => {
   // a 10 minute lease makes everything silent for over 20 minutes stuck: #3 (59m) and #4 (35m) join #6
-  const c = json(TWO_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "10" }).claims;
+  const c = json(TWO_WINDOW, { FABRIEK_LEASE_MINUTES: "10" }).claims;
   assert.deepEqual(c.stuck.issues.map((i) => i.issue), [3, 4, 6]);
 });
 
@@ -532,7 +532,7 @@ test("v2 lead time: with no run, the pipeline stage starts at the first transiti
   assert.deepEqual(stages(rows[10]), ["transition", 1200, 2400, 720, 480]);
   assert.deepEqual(stages(rows[11]), ["transition", 600, 8400, 2460, 540]);
   // reviewed and intervention events are no progress: #13 is silent since its last transition
-  const s = json(V2_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "30" }).claims.stuck.issues.find((i) => i.issue === 13);
+  const s = json(V2_WINDOW, { FABRIEK_LEASE_MINUTES: "30" }).claims.stuck.issues.find((i) => i.issue === 13);
   assert.equal(s.last_state, "transition");
 });
 
@@ -624,7 +624,7 @@ const sectionsFrom = (r) => {
 test("source switch: --source old and no flag (env old) print byte-identical json and markdown", () => {
   for (const fmt of ["json", "markdown"]) {
     const a = run([...WINDOW, "--format", fmt]);
-    const b = run([...WINDOW, "--format", fmt, "--source", "old"], { CALLUM_FLOW_EVALUATE_SOURCE: "" });
+    const b = run([...WINDOW, "--format", fmt, "--source", "old"], { FABRIEK_EVALUATE_SOURCE: "" });
     assert.equal(a.status, 0, a.err);
     assert.equal(b.out, a.out, fmt);
   }
@@ -637,10 +637,10 @@ test("source switch: a bad value exits 2 with the usage text; the flag wins over
     assert.match(r.err, /invalid source 'bogus'/);
     assert.match(r.err, /--source old\|new\|shadow/);
   }
-  const bad = run(WINDOW, { CALLUM_FLOW_EVALUATE_SOURCE: "nope" });
+  const bad = run(WINDOW, { FABRIEK_EVALUATE_SOURCE: "nope" });
   assert.equal(bad.status, 2);
-  assert.match(bad.err, /CALLUM_FLOW_EVALUATE_SOURCE/);
-  const r = json([...WINDOW, "--source", "old"], { CALLUM_FLOW_EVALUATE_SOURCE: "new" });
+  assert.match(bad.err, /FABRIEK_EVALUATE_SOURCE/);
+  const r = json([...WINDOW, "--source", "old"], { FABRIEK_EVALUATE_SOURCE: "new" });
   assert.ok(r.sources.some((s) => s.kind === "events"), "old won");
   assert.ok(!r.sources.some((s) => s.kind === "events-new"));
   assert.match(run(["--help"]).out, /--source old\|new\|shadow\] \[--new-events <file>\]/);
@@ -836,14 +836,14 @@ test("default source is new: unset or empty reads the new log, writes no shadow 
     const base = { CALLUM_EVENTS_DIR: evDir, DEV_MACHINE_NAME: "m" };
     const kinds = (r) => r.sources.map((s) => s.kind);
     for (const v of [undefined, ""]) {
-      const env = { ...base, ...(v === undefined ? { CALLUM_FLOW_EVALUATE_SOURCE: undefined } : { CALLUM_FLOW_EVALUATE_SOURCE: v }) };
+      const env = { ...base, ...(v === undefined ? { FABRIEK_EVALUATE_SOURCE: undefined } : { FABRIEK_EVALUATE_SOURCE: v }) };
       const r = json([...NEW_WINDOW], env);
       assert.ok(r.sources.some((s) => s.kind === "source" && s.path === "new"), `variable ${JSON.stringify(v)} reads new`);
       assert.ok(kinds(r).includes("new-events-n/a"));
     }
     assert.equal(fs.existsSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl")), false, "no shadow record");
-    const viaFlag = json([...NEW_WINDOW, "--source", "old"], { ...base, CALLUM_FLOW_EVALUATE_SOURCE: "" });
-    const viaVar = json([...NEW_WINDOW], { ...base, CALLUM_FLOW_EVALUATE_SOURCE: "old" });
+    const viaFlag = json([...NEW_WINDOW, "--source", "old"], { ...base, FABRIEK_EVALUATE_SOURCE: "" });
+    const viaVar = json([...NEW_WINDOW], { ...base, FABRIEK_EVALUATE_SOURCE: "old" });
     for (const r of [viaFlag, viaVar]) {
       assert.ok(!kinds(r).includes("new-events-n/a") && !r.sources.some((s) => s.kind === "source" && s.path === "new"), "old report");
     }
@@ -861,9 +861,9 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
     fs.mkdirSync(path.join(evDir, "factory"), { recursive: true });
     fs.copyFileSync(f.local, path.join(evDir, "factory", "acme__widgets.jsonl"));
     fs.copyFileSync(f.old, path.join(evDir, "acme__widgets.jsonl"));
-    const env = { CALLUM_EVENTS_DIR: evDir, CALLUM_FLOW_EVALUATE_SOURCE: "shadow", DEV_MACHINE_NAME: "m" };
+    const env = { CALLUM_EVENTS_DIR: evDir, FABRIEK_EVALUATE_SOURCE: "shadow", DEV_MACHINE_NAME: "m" };
     const record = () => fs.readFileSync(path.join(evDir, "factory", ".shadow", "evaluate.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    const oldOut = run([...NEW_WINDOW], { ...env, CALLUM_FLOW_EVALUATE_SOURCE: "old" });
+    const oldOut = run([...NEW_WINDOW], { ...env, FABRIEK_EVALUATE_SOURCE: "old" });
     const shadow = run([...NEW_WINDOW], env); // shadow is opt-in
     assert.equal(shadow.status, 0, shadow.err);
     assert.equal(shadow.out, oldOut.out);
@@ -903,7 +903,7 @@ test("shadow: prints the old report, records one agreeing run; a broken or skipp
     // --source new with a directory for --new-events: the tool's input error, exit 1
     const dirNew = run([...NEW_WINDOW, "--source", "new", "--new-events", dir], env);
     assert.equal(dirNew.status, 1);
-    assert.match(dirNew.err, /callum-flow-evaluate: cannot read .*EISDIR/);
+    assert.match(dirNew.err, /fabriek-evaluate: cannot read .*EISDIR/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

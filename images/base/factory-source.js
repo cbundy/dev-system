@@ -6,6 +6,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { applyFabriekEnv } = require(path.join(__dirname, "fabriek-env.js"));
 
 const SOURCES = ["old", "new", "shadow"];
 
@@ -24,7 +25,7 @@ function check(value, from) {
 }
 
 // resolveSource(tool, argv, env, fallback): { source, argv } with --source X / --source=X removed.
-// Precedence: the flag, CALLUM_FLOW_<TOOL>_SOURCE, then fallback.
+// Precedence: the flag, FABRIEK_<TOOL>_SOURCE (else CALLUM_FLOW_<TOOL>_SOURCE), then fallback.
 function resolveSource(tool, argv, env, fallback) {
   const rest = [];
   let flag = null;
@@ -37,9 +38,9 @@ function resolveSource(tool, argv, env, fallback) {
       flag = a.slice("--source=".length);
     } else rest.push(a);
   }
-  const envName = `CALLUM_FLOW_${tool.toUpperCase().replace(/-/g, "_")}_SOURCE`;
+  const envName = `FABRIEK_${tool.toUpperCase().replace(/-/g, "_")}_SOURCE`;
   if (flag !== null) return { source: check(flag, "the --source flag"), argv: rest };
-  const ev = env[envName];
+  const ev = applyFabriekEnv({ ...env })[envName];
   if (ev !== undefined && ev !== "") return { source: check(ev, `${envName}`), argv: rest };
   return { source: fallback, argv: rest };
 }

@@ -1,8 +1,8 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-merge-guard --patch, the factory loop's mode and the guard's only
-# one (docs/factory-loop/v2/SPEC.md 9.4), and callum-flow-merge passing it through. The guard checks
-# only facts the loop owns: a patch guard against the real callum-flow-patch-id, and every
+# Plain-shell tests for fabriek-merge-guard --patch, the factory loop's mode and the guard's only
+# one (docs/factory-loop/v2/SPEC.md 9.4), and fabriek-merge passing it through. The guard checks
+# only facts the loop owns: a patch guard against the real fabriek-patch-id, and every
 # FAIL line ends with its class. The shared stubs and real local origin live in merge-guard-lib.sh;
 # the shared guards are in merge-guard.test.sh and merge.test.sh.
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
@@ -11,11 +11,11 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/merge-guard-lib.sh"
 
-PATCH_ID="$ROOT/images/base/callum-flow-patch-id"
+PATCH_ID="$ROOT/images/base/fabriek-patch-id"
 OTHER=0123456789abcdef0123456789abcdef01234567
 CLASSES='behind|conflict|checks|patch|linkage|read|policy'
 
-# this suite pins the real callum-flow-patch-id, in the guard and behind callum-flow-merge
+# this suite pins the real fabriek-patch-id, in the guard and behind fabriek-merge
 PID_BIN=$PATCH_ID
 
 # patch_setup: the PR's branch is one real change on main, pushed and clean; PH is its head and
@@ -38,10 +38,10 @@ patch_setup() {
 # line it prints is kept in $tmpdir/all-fails. LINKAGE_BIN, when set, replaces the linkage stub.
 gp() {
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" \
-    CALLUM_FLOW_LINKAGE_BIN="${LINKAGE_BIN:-$tmpdir/linkage}" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/gh-linkage" \
-    CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+  out=$(PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh" \
+    FABRIEK_LINKAGE_BIN="${LINKAGE_BIN:-$tmpdir/linkage}" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/gh-linkage" \
+    FABRIEK_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" \
+    FABRIEK_MERGEABLE_TRIES=3 FABRIEK_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
   printf '%s\n' "$out" | grep ' FAIL ' >> "$tmpdir/all-fails" || true
 }
 : > "$tmpdir/all-fails"
@@ -73,8 +73,8 @@ git -C "$work" rev-parse HEAD > "$st/prhead"
 gp 7 --patch "$PID"; expect_pass "a merge of main keeps the approved patch"
 # a patch id that cannot be computed is a fact not read
 patch_setup
-printf '#!/bin/sh\necho "callum-flow-patch-id: cannot fetch origin/main" >&2\nexit 1\n' > "$tmpdir/nopatch"; chmod +x "$tmpdir/nopatch"
-CALLUM_FLOW_PATCH_ID_BIN="$tmpdir/nopatch" gp 7 --patch "$PID"; expect_class "patch id not computed" patch read "patch id of $PH not computed: callum-flow-patch-id: cannot fetch origin/main"
+printf '#!/bin/sh\necho "fabriek-patch-id: cannot fetch origin/main" >&2\nexit 1\n' > "$tmpdir/nopatch"; chmod +x "$tmpdir/nopatch"
+FABRIEK_PATCH_ID_BIN="$tmpdir/nopatch" gp 7 --patch "$PID"; expect_class "patch id not computed" patch read "patch id of $PH not computed: fabriek-patch-id: cannot fetch origin/main"
 
 # --- no head guard --------------------------------------------------------------------------
 patch_setup; git -C "$work" commit -q --allow-empty -m "a slot ahead"; gp 7 --patch "$PID"; expect_pass "a worktree ahead of the head is not checked"
@@ -103,7 +103,7 @@ patch_setup; echo garbage > "$st/runs"; gp 7 --patch "$PID"; expect_class "runs 
 # a read that failed names gh's error, so the loop can tell a GitHub blip (v2 SPEC 5.1)
 patch_setup; echo 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$st/checks-err"; gp 7 --patch "$PID"; expect_class "checks blip" checks read "cannot read checks: HTTP 502: Bad Gateway"
 patch_setup; echo '{"login":"mallory","id":999}' > "$st/pauthor"; gp 7 --patch "$PID"; expect_class "untrusted" author policy "not opened by a trusted author"
-patch_setup; CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" gp 7 --patch "$PID"; expect_class "author unverified" author read "cannot verify the author"
+patch_setup; FABRIEK_ISSUE_READ_BIN="$tmpdir/missing-reader" gp 7 --patch "$PID"; expect_class "author unverified" author read "cannot verify the author"
 patch_setup; echo 'MISMATCH #7 issue=#12 expect=closing' > "$st/linkage"; echo 1 > "$st/linkage-rc"; gp 7 --patch "$PID"; expect_class "linkage" linkage linkage "MISMATCH #7"
 patch_setup; : > "$st/linkage"; echo 1 > "$st/linkage-rc"; gp 7 --patch "$PID"; expect_class "linkage unread" linkage read "no output"
 patch_setup; ROLLOUT_BIN=/bin/false; gp 7 --patch "$PID"; expect_class "rollout not derived" rollout read "cannot derive the Rollout"
@@ -186,7 +186,7 @@ patch_setup; T=$(tree_of); echo BLOCKED > "$st/mss"; gp 7 --patch "$PID" --teste
 # a fetch that fails is a fact not read (the patch id is stubbed: it fetches too)
 printf '#!/bin/sh\necho "%s"\n' "$PID" > "$tmpdir/fixedpatch"; chmod +x "$tmpdir/fixedpatch"
 patch_setup; T=$(tree_of); git -C "$work" remote set-url origin "$tmpdir/no-such-origin.git"
-CALLUM_FLOW_PATCH_ID_BIN="$tmpdir/fixedpatch" gp 7 --patch "$PID" --tested-tree "$T"
+FABRIEK_PATCH_ID_BIN="$tmpdir/fixedpatch" gp 7 --patch "$PID" --tested-tree "$T"
 git -C "$work" remote set-url origin "$origin"
 expect_class "fetch fails" tree read "cannot fetch origin/main: "
 # --emit-verified is unchanged by the option
@@ -213,7 +213,7 @@ for args in "7 --patch" "7 --patch xyz" "7 --patch $PID --run RUN1" "7 --patch $
 done
 passed=$((passed + 1))
 
-# --- callum-flow-merge passes --patch to its guard --------------------------------------------
+# --- fabriek-merge passes --patch to its guard --------------------------------------------
 patch_setup; m 7 --patch "$PID"
 [ "$rc" = 0 ] || fail "merge with the approved patch: rc=$rc out=$out err=$(cat "$tmpdir/err")"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $PH" ] || fail "merge call: $(cat "$st/gh-calls")"
@@ -224,7 +224,7 @@ patch_setup; m 7 --patch "$OTHER"
 printf '%s\n' "$out" | grep -q "^GUARD patch FAIL .* class=patch\$" || fail "the guard's FAIL line reaches the caller: $out"
 passed=$((passed + 1))
 
-# --- callum-flow-merge: --tested-tree and --train-dropped, and the merged event's train fields ---
+# --- fabriek-merge: --tested-tree and --train-dropped, and the merged event's train fields ---
 # a guard that records its arguments and then runs the real one
 cat > "$tmpdir/guard-spy" <<STUB
 #!/bin/sh

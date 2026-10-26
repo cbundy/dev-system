@@ -128,12 +128,12 @@ test("coverage: the corpus produces every current type, and every writer state i
   for (const e of expected) assert.ok(TRANSLATED_TYPES.includes(e.type), `${e.type} is produced but not in TRANSLATED_TYPES`);
   const states = writerStates();
   assert.ok(states.length > 20);
-  for (const s of states) assert.ok(MAPPED_STATES.includes(s) || SKIPPED_STATES.includes(s), `callum-flow-event writes ${s}, which the translator neither maps nor skips`);
+  for (const s of states) assert.ok(MAPPED_STATES.includes(s) || SKIPPED_STATES.includes(s), `fabriek-event writes ${s}, which the translator neither maps nor skips`);
   for (const s of [...MAPPED_STATES, ...SKIPPED_STATES]) assert.ok(states.includes(s) || s === "renewed" || s === "reclaimed", `${s} is not a writer state`);
 });
 
 function writerStates() {
-  const writer = fs.readFileSync(path.join(ROOT, "images", "base", "callum-flow-event"), "utf8");
+  const writer = fs.readFileSync(path.join(ROOT, "images", "base", "fabriek-event"), "utf8");
   return /^STATES="([^"]+)"/m.exec(writer)[1].split(" ");
 }
 
