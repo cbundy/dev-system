@@ -199,7 +199,7 @@ check "a fresh workspace with no repo gets the real fabriek plugin and its skill
   [ $rc = 0 ] &&
   [ "$(echo "$list" | jq "[.[] | select(.id == \"fabriek@callum\" or .id == \"callum-flow@callum\")] | length")" = 1 ] &&
   id=$(echo "$list" | jq -r ".[] | select((.id == \"fabriek@callum\" or .id == \"callum-flow@callum\") and .enabled == true) | .id") && [ -n "$id" ] &&
-  echo "$out" | grep -qxF "dev-init: installed Claude plugin $id" &&
+  echo "$out" | grep -qE "^dev-init: installed Claude plugin $id( \(|$)" &&
   skills=$(ls "$(echo "$list" | jq -r ".[] | select(.id == \"$id\") | .installPath")/skills") && echo "$skills" &&
   for s in onboard update-dev; do echo "$skills" | grep -qxF "$s" || exit 1; done &&
   echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: fabriek@callum"'
