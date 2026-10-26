@@ -221,7 +221,7 @@ export async function observe(
 
   // factory: required; a failure makes the pass blind (rule G2)
   try {
-    const r = await run(['callum-flow-factory-state', '--repo', rt.repo, '--format', 'json', '--github', 'off'], undefined, 90_000)
+    const r = await run(['fabriek-factory-state', '--repo', rt.repo, '--format', 'json', '--github', 'off'], undefined, 90_000)
     const parsed = r.exitCode === 0 ? parseFactoryState(r.stdout, rt.repo) : null
     // a derivation that left out events the loop reads is blind (G2), and never cached
     const behind = parsed === null ? null : derivedSkipError(parsed.skipped)
@@ -294,7 +294,7 @@ export async function observe(
       const known = stored?.queueKnown != null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
       const argv = once
         ? [tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known]
-        : ['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel]
+        : ['fabriek-issue-read', '--json', '--list', '--label', cfg.readyLabel]
       const q = await readQueue({ argv, once, cache, now, readyLabel: cfg.readyLabel, run: a => run(a), fail })
       queueKnown = q.known
       mark('queue', q.source.ok, q.source.at, q.source.error)
@@ -381,7 +381,7 @@ export async function observe(
         break
       }
       try {
-        const r = await run(['callum-flow-issue-read', '--json', '--timeline', String(n)])
+        const r = await run(['fabriek-issue-read', '--json', '--timeline', String(n)])
         const subs = r.exitCode === 0 ? parseSubIssues(r.stdout, rt.repo) : null
         if (subs === null) githubOk = false
         else cache.timelines.set(n, { at: now, value: subs })
@@ -408,7 +408,7 @@ export async function observe(
     if (cache.usageEvent === undefined || now - cache.usageEvent >= cfg.usageEveryMs) {
       cache.usageEvent = now
       try {
-        await run(['callum-flow-event', '--type', 'usage', '--actor', 'watcher', '--data', JSON.stringify(spendEventData(usage))], undefined, 30_000)
+        await run(['fabriek-event', '--type', 'usage', '--actor', 'watcher', '--data', JSON.stringify(spendEventData(usage))], undefined, 30_000)
       } catch {
         // best effort, as usage-check.sh's own event write
       }

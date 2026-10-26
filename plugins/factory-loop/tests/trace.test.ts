@@ -58,7 +58,7 @@ function world(issues: Rec[] = [], repoFile: () => string | undefined = () => un
       return body === undefined ? { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/main'" } : { stdout: body }
     }
     switch (cmd) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc(issues) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -66,7 +66,7 @@ function world(issues: Rec[] = [], repoFile: () => string | undefined = () => un
         return { stdout: `queue known=${args[args.indexOf('--known') + 1] ?? 'none'} now=470\n` }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         if (args.includes('--comments')) return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
         if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [{ number: 470 }], stripped: 0 }) }
         if (args.join(' ') === '--json 470') {
@@ -160,12 +160,12 @@ describe('trace on', () => {
 
     // every command of the pass, each with the source it read, its time, exit and bytes
     expect(commandsOf(t1)[0]).toMatchObject({ phase: 'setup', cmd: 'agent.list' })
-    const factory = commandsOf(t1).find(c => c.cmd.startsWith('callum-flow-factory-state'))
+    const factory = commandsOf(t1).find(c => c.cmd.startsWith('fabriek-factory-state'))
     expect(factory).toMatchObject({ phase: 'observe', source: 'factory', exit: 0, bytes: factoryDoc([]).length })
     expect(factory?.t).toBeGreaterThanOrEqual(0)
     const sourceOf = (r: Rec, start: string) => commandsOf(r).find(c => c.cmd.startsWith(start))?.source
-    expect(sourceOf(t1, 'callum-flow-issue-read --json --list')).toBe('queue')
-    expect(sourceOf(t1, 'callum-flow-issue-read --json --issues 470')).toBe('github')
+    expect(sourceOf(t1, 'fabriek-issue-read --json --list')).toBe('queue')
+    expect(sourceOf(t1, 'fabriek-issue-read --json --issues 470')).toBe('github')
     expect(sourceOf(t1, `${TOOLS}/usage-check.sh`)).toBe('usage')
     expect(sourceOf(t1, 'git ')).toBe('checkout')
     // what came from the observe cache: the queue, GitHub and usage are read on their cadences
@@ -281,7 +281,7 @@ describe('act mode, traced', () => {
     }
     // the rails took the act lock; the claim ran in the act phase
     expect(commandsOf(t).find(c => c.cmd === 'act lock')).toMatchObject({ phase: 'rails', exit: 0 })
-    expect(commandsOf(t).find(c => c.cmd.endsWith('callum-flow-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
+    expect(commandsOf(t).find(c => c.cmd.endsWith('fabriek-claim 470'))).toMatchObject({ phase: 'act', exit: 0 })
     expect(t.lockMs as number).toBeGreaterThanOrEqual(0)
     expect(t.persistMs as number).toBeGreaterThanOrEqual(0)
   })
@@ -510,12 +510,12 @@ describe('the tracer', () => {
       agents: async () => [],
     }
     const traced = tracedIo(tr, io)
-    await traced.run(['callum-flow-factory-state', '--repo', 'a/b'], { cwd: '/w', env: {}, timeoutMs: 1 })
+    await traced.run(['fabriek-factory-state', '--repo', 'a/b'], { cwd: '/w', env: {}, timeoutMs: 1 })
     await traced.run(['git', 'status'], { cwd: '/w', env: {}, timeoutMs: 1 })
     await expect(traced.run(['treehouse', 'status', '--json'], { cwd: '/w', env: {}, timeoutMs: 1 })).rejects.toThrow('timed out')
     await traced.readFile('/x/control.json')
     expect(tr.commands).toEqual([
-      { phase: 'observe', source: 'factory', cmd: 'callum-flow-factory-state --repo a/b', t: 0, ms: 5, exit: 0, bytes: 6 },
+      { phase: 'observe', source: 'factory', cmd: 'fabriek-factory-state --repo a/b', t: 0, ms: 5, exit: 0, bytes: 6 },
       { phase: 'observe', source: 'checkout', cmd: 'git status', t: 5, ms: 5, exit: 1, bytes: 6 },
       { phase: 'observe', source: 'pool', cmd: 'treehouse status --json', t: 10, ms: 5, exit: null, error: 'timed out' },
       { phase: 'observe', cmd: 'fs.read /x/control.json', t: 15, ms: 0, bytes: 3 },
@@ -541,19 +541,22 @@ describe('the tracer', () => {
       readFile: async () => null,
       writeFile: async () => undefined,
     })
-    await io.run(['callum-flow-event', 'loop', '--note', 'x'], { cwd: '/w', env: {}, timeoutMs: 1 })
-    await io.run(['callum-flow-claim', '470'], { cwd: '/w', env: {}, timeoutMs: 1 })
+    await io.run(['fabriek-event', 'loop', '--note', 'x'], { cwd: '/w', env: {}, timeoutMs: 1 })
+    await io.run(['fabriek-claim', '470'], { cwd: '/w', env: {}, timeoutMs: 1 })
+    // the old name of the event writer counts as well (#1359)
+    await io.run(['callum-flow-event', 'loop', '--note', 'y'], { cwd: '/w', env: {}, timeoutMs: 1 })
     await io.spawnAgent({ subagentType: 'callum-flow:designer', prompt: 'p', description: 'Design #470', name: 'designer-470' })
     await io.submit('JUDGE report id=w1 repo=a/b\ncontext')
     await lockTimed(tr, async () => {
       t += 7
       return { exitCode: 0, stdout: '', stderr: '' }
     })
-    expect(tr.eventsMs).toBe(4)
+    expect(tr.eventsMs).toBe(8)
     expect(tr.lockMs).toBe(7)
     expect(tr.commands.map(c => [c.cmd, c.ms, c.exit ?? null, c.error ?? null])).toEqual([
-      ['callum-flow-event loop --note x', 4, 0, null],
-      ['callum-flow-claim 470', 4, 0, null],
+      ['fabriek-event loop --note x', 4, 0, null],
+      ['fabriek-claim 470', 4, 0, null],
+      ['callum-flow-event loop --note y', 4, 0, null],
       ['agent.spawn designer-470', 0, null, 'no agents here'],
       ['prompt.submit JUDGE report id=w1 repo=a/b', 0, null, null],
       ['act lock', 7, 0, null],
@@ -564,19 +567,24 @@ describe('the tracer', () => {
 
   test('sourceOf names the source each observe command reads', () => {
     const cases: [string[], string | undefined][] = [
-      [['callum-flow-factory-state', '--repo', 'a/b'], 'factory'],
+      [['fabriek-factory-state', '--repo', 'a/b'], 'factory'],
       [['dev-query', '--csv'], 'facts'],
       [['/tools/pipeline-watch.sh', '--once'], 'runs'],
       [['/tools/queue-watch.sh', '--once'], 'queue'],
-      [['callum-flow-issue-read', '--json', '--list', '--label', 'ready'], 'queue'],
-      [['callum-flow-issue-read', '--json', '470', '--comments'], 'github'],
-      [['callum-flow-issue-read', '--json', '--issues', '470,471'], 'github'],
+      [['fabriek-issue-read', '--json', '--list', '--label', 'ready'], 'queue'],
+      [['fabriek-issue-read', '--json', '470', '--comments'], 'github'],
+      [['fabriek-issue-read', '--json', '--issues', '470,471'], 'github'],
       [['/tools/usage-check.sh'], 'usage'],
       [['treehouse', 'status', '--json'], 'pool'],
       [['git', 'symbolic-ref'], 'checkout'],
       [['git', '-C', '/t/1', '--no-optional-locks', 'status'], 'pool'],
+      [['fabriek-milestone', 'show', 'next'], 'milestone'],
+      [['fabriek-claim', '470'], undefined],
+      // the old names are the same commands (#1359)
+      [['callum-flow-factory-state', '--repo', 'a/b'], 'factory'],
+      [['callum-flow-issue-read', '--json', '--list', '--label', 'ready'], 'queue'],
+      [['callum-flow-issue-read', '--json', '470', '--comments'], 'github'],
       [['callum-flow-milestone', 'show', 'next'], 'milestone'],
-      [['callum-flow-claim', '470'], undefined],
     ]
     for (const [argv, source] of cases) expect(sourceOf(argv)).toBe(source)
   })

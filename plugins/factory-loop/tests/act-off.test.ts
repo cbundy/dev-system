@@ -53,7 +53,7 @@ function world(opts: { off: boolean; exit?: number; stderr?: string; answer?: (a
     run: async (argv): Promise<RunResult> => {
       argvs.push([...argv])
       const own = opts.answer?.(argv)
-      if (wait && argv[0] !== 'callum-flow-issue-read') await gate
+      if (wait && argv[0] !== 'fabriek-issue-read') await gate
       if (own !== undefined) return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...own } as RunResult
       return { exitCode: opts.exit ?? 0, stdout: '', stderr: opts.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } as RunResult
     },
@@ -148,18 +148,18 @@ describe('an off-pass action', () => {
     })
   }
 
-  // a state with v2 records, so the heartbeat executor really runs `callum-flow-claim --heartbeat`
+  // a state with v2 records, so the heartbeat executor really runs `fabriek-claim --heartbeat`
   const withRecords = (): State => ({ ...state(), v2: emptyV2State(NOW, [140, 141].map(n => madeRecord({ issue: n, life: 'l', branch: `issue-${n}`, pr: null, others: [] }, NOW))) })
 
   test('a heartbeat with records to renew runs its command off the pass: the entry stays running for 14 s, the completion records what the inline run records', async () => {
     const inline = world({ off: false })
     await actOne(inline.env, withRecords(), heartbeat)
-    expect(inline.argvs).toEqual([['callum-flow-claim', '--heartbeat', '140', '141']])
+    expect(inline.argvs).toEqual([['fabriek-claim', '--heartbeat', '140', '141']])
     const w = world({ off: true })
     const { outcome } = await actOne(w.env, withRecords(), heartbeat)
     // started without awaiting: the command is out, the entry saved running, nothing finished
     expect(outcome).toMatchObject({ key: 'heartbeat:0', kind: 'heartbeat', status: 'running', off: true, ms: 0 })
-    expect(w.argvs).toEqual([['callum-flow-claim', '--heartbeat', '140', '141']])
+    expect(w.argvs).toEqual([['fabriek-claim', '--heartbeat', '140', '141']])
     expect(w.live.ledger).toMatchObject([{ key: 'heartbeat:0', status: 'running', attempts: 1 }])
     w.clock.now = NOW + 14_000
     await settle()
@@ -215,11 +215,11 @@ describe('an off-pass queue-merge', () => {
   const pull = (merged: boolean) => JSON.stringify({ pr: { state: merged ? 'closed' : 'open', merged, head: { sha: 'a'.repeat(40) }, user: { login: 'cbundy' }, mergeable_state: 'clean', base: { ref: 'main', sha: 'd'.repeat(40) }, labels: [] }, stripped: 0 })
   const cases: [string, (argv: readonly string[]) => Partial<RunResult> | undefined][] = [
     ['exit 0', () => undefined],
-    ['a classed refusal', argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: 'GUARD checks FAIL ci=pending class=checks\n' } : undefined)],
-    ['exit 2', argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 2, stderr: 'usage' } : undefined)],
-    ['an unclassed failure, PR merged', argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : { stdout: pull(true) })],
-    ['an unclassed failure, PR open', argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : { stdout: pull(false) })],
-    ['a rate limit', argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: RATE } : undefined)],
+    ['a classed refusal', argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: 'GUARD checks FAIL ci=pending class=checks\n' } : undefined)],
+    ['exit 2', argv => (argv[0] === 'fabriek-merge' ? { exitCode: 2, stderr: 'usage' } : undefined)],
+    ['an unclassed failure, PR merged', argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : { stdout: pull(true) })],
+    ['an unclassed failure, PR open', argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : { stdout: pull(false) })],
+    ['a rate limit', argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: RATE } : undefined)],
   ]
   for (const [name, answer] of cases) {
     test(`${name}: runs off the pass, and the completion records what the inline run records`, async () => {

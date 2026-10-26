@@ -183,7 +183,7 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
     const run = (argv: string[], s: Seen) => {
       const line = argv.join(' ')
       switch (argv[0]) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: factoryDoc([{ issue: N, state: 'reviewing', state_since: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -193,13 +193,13 @@ describe('the flake row in the pass driver (v2 SPEC 8.5)', () => {
           return { stdout: USAGE }
         case 'treehouse':
           return { stdout: JSON.stringify([slot]) }
-        case 'callum-flow-rollout':
+        case 'fabriek-rollout':
           return { stdout: 'ROLLOUT merge source=issue\n' }
-        case 'callum-flow-patch-id':
+        case 'fabriek-patch-id':
           return { stdout: `${PATCH}\n` }
-        case 'callum-flow-issue-read': {
+        case 'fabriek-issue-read': {
           const pull = { pr: { number: pr, state: 'open', merged: false, head: { sha: world.head, ref: r.branch, repo: { full_name: REPO } }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean', body: '' }, stripped: 0 }
-          return { stdout: JSON.stringify(line === `callum-flow-issue-read --json --pr ${pr}` ? pull : { issues: [], stripped: 0 }) }
+          return { stdout: JSON.stringify(line === `fabriek-issue-read --json --pr ${pr}` ? pull : { issues: [], stripped: 0 }) }
         }
       }
       if (line === ARGV.runViewLogFailedArgv(REPO, RUN).join(' ')) return { stdout: SAMPLE }

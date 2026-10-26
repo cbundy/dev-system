@@ -298,7 +298,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const runs: string[][] = []
     const run = async (argv: string[]) => {
       runs.push(argv)
-      if (argv[0] === 'callum-flow-issue-read') return { exitCode: 0, stdout: JSON.stringify({ comments: [{ body: 'use the old one', created_at: new Date(NOW - MIN).toISOString() }] }), stderr: '' }
+      if (argv[0] === 'fabriek-issue-read') return { exitCode: 0, stdout: JSON.stringify({ comments: [{ body: 'use the old one', created_at: new Date(NOW - MIN).toISOString() }] }), stderr: '' }
       return { exitCode: 0, stdout: '', stderr: '' }
     }
     const rt: Runtime = {
@@ -325,7 +325,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     expect(r.v2).toMatchObject({ records: [parked], recordsFrom: 'store', leases: [{ path: '/s/1', issue: 80, life: LIFE }], reads: { 80: { at: NOW - 5 * MIN, open: true, labels: ['bug'] } } })
     expect(r.v2.comments).toEqual({ 80: [{ body: 'use the old one', at: NOW - MIN, url: null }] })
     expect(r.v2.sources).toMatchObject({ store: { ok: true }, leases: { ok: true }, comments: { ok: true }, prs: { ok: true } })
-    expect(runs).toEqual([['callum-flow-issue-read', '--json', '80', '--comments']])
+    expect(runs).toEqual([['fabriek-issue-read', '--json', '80', '--comments']])
     // read once per issue read: the next pass takes them from memory
     await observeV2(input)
     expect(runs).toHaveLength(1)
@@ -347,13 +347,13 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const run = async (argv: string[]) => {
       // the dual-write probe is not a GitHub read (v2-dual-write.test.ts), so this order leaves it out
       // nor is the default branch's state, read in act mode on its own cadence (v2-main.test.ts)
-      if (argv[0] !== 'callum-flow-event' && !(argv[0] === 'gh' && argv[1] === 'api')) log.push(argv.join(' '))
+      if (argv[0] !== 'fabriek-event' && !(argv[0] === 'gh' && argv[1] === 'api')) log.push(argv.join(' '))
       return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: '' }
     }
     const readers: V2Readers = {
       prs: async ctx => {
         budgets.push(ctx.prBudget)
-        if (ctx.prBudget > 0) await ctx.run(['callum-flow-issue-read', '--json', '--pr', '900'])
+        if (ctx.prBudget > 0) await ctx.run(['fabriek-issue-read', '--json', '--pr', '900'])
         return { read: { prs: [] }, source: { ok: true, at: NOW }, heads: ctx.heads }
       },
       interventions: async () => ({ read: { companion: [], controlDigest: null, configDigest: null }, source: { ok: true, at: NOW } }),
@@ -370,7 +370,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const input = { io, rt: rt(3), cache: busy.v2, run, state: state(), stored: { records: [parked, head], heads: null, error: null }, poolJson: null, github: busy.github, backoff: false, limited: () => false, readers }
     const r = await observeV2(input)
     expect(budgets).toEqual([3])
-    expect(log).toEqual(['callum-flow-issue-read --json --pr 900', 'callum-flow-issue-read --json 80 --comments'])
+    expect(log).toEqual(['fabriek-issue-read --json --pr 900', 'fabriek-issue-read --json 80 --comments'])
     expect(r.v2.sources).toMatchObject({ prs: { ok: true }, comments: { ok: true }, interventions: { ok: true } })
     // with no cap on K, the pool bounds the PR reads
     await observeV2({ ...input, rt: rt(null), cache: cacheOf().v2 })
@@ -412,11 +412,11 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
 describe('the event seam (v2 SPEC 7.1; its format is tested in v2-events.test.ts)', () => {
   test('an event is a native call: its type and data, and its issue', () => {
     const transition = eventArgv({ state: 'transition', record: record(), row: 'T5', from: 'building', via: 'ok' })
-    expect(transition.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'transition', '--data'])
+    expect(transition.slice(0, 4)).toEqual(['fabriek-event', '--type', 'transition', '--data'])
     expect(transition.slice(5)).toEqual(['--issue', '571'])
     expect(JSON.parse(transition[4] ?? '')).toMatchObject({ table_row: 'T5', from_state: 'building', to_state: 'reviewing', branch: 'issue-571', pr: 621, head: 'abc1234' })
     expect(eventArgv({ state: 'intervention', who: 'loop', cause: 'triage', reason: 'second unknown', issue: 571, life: LIFE, pr: null, fact: 'i571/lss1x2k/s7/t' })).toEqual([
-      'callum-flow-event', '--type', 'intervention', '--data', JSON.stringify({ who: 'loop', cause: 'triage', life: LIFE, fact: 'i571/lss1x2k/s7/t', pr: null, detail: 'second unknown', flaky: null, failed_tests: null, failed_jobs: null, head: null }), '--issue', '571',
+      'fabriek-event', '--type', 'intervention', '--data', JSON.stringify({ who: 'loop', cause: 'triage', life: LIFE, fact: 'i571/lss1x2k/s7/t', pr: null, detail: 'second unknown', flaky: null, failed_tests: null, failed_jobs: null, head: null }), '--issue', '571',
     ])
   })
 })

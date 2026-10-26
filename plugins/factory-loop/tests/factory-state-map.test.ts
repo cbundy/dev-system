@@ -1,4 +1,4 @@
-// hooks/factory-state-map.ts: the one place a callum-flow-factory-state row becomes a v2 state.
+// hooks/factory-state-map.ts: the one place a fabriek-factory-state row becomes a v2 state.
 import { describe, expect, test } from 'claude-code/testing'
 import { LIVE_STATES, stateOfRow } from '../hooks/factory-state-map'
 import { ISSUE_STATES } from '../hooks/v2/types'

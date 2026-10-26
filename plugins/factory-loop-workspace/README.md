@@ -44,11 +44,12 @@ loop gives every agent step. Every other agent is left alone.
   `rerun: true`. Any other such attempt gets one `gate-cut` line saying why and runs nothing.
   The loop treats a re-run's pass or unknown as a settling line, and a re-run's fail as the end of
   the hold (the step ends lost and runs again free).
-- `callum-flow-event --type prompt_denied` (one per refused prompt) and `--type prompt_waiting` (one
+- `fabriek-event --type prompt_denied` (one per refused prompt) and `--type prompt_waiting` (one
   per prompt a mapped agent waits on), native events with `--data` (`life`, `seq`, `step`, `attempt`,
   `agent_id`, `agent_type`, `tool_name`, `tool_input`, `ask_reason` for a denial, `slot`, `session`,
-  `transcript`, `branch`, `pr`; null when unknown) and `--issue`. An image whose `callum-flow-event`
-  cannot write them still gets the deny and its `companion.jsonl` line. There is no `prompt_answered`: no hook shows the answer.
+  `transcript`, `branch`, `pr`; null when unknown) and `--issue`. An image whose `fabriek-event`
+  cannot write them still gets the deny and its `companion.jsonl` line. An image that predates the fabriek names has no
+  `fabriek-event`: the companion then runs `callum-flow-event` (`hooks/tool-name.ts`, until the aliases go). There is no `prompt_answered`: no hook shows the answer.
 - `factory-gate.json` in the slot's git dir: the last gate result (pass, fail or unknown) with the
   slot's HEAD and `waitMs`.
 - `${DEV_CONTEXT_WINDOW_DIR:-/tmp/dev-context-window}/<session>`: the session's context window size

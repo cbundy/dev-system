@@ -321,7 +321,7 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     const unread = { status: 'failed' as const, failClass: 'read' as const, lines: ['GUARD author FAIL cannot verify the author of PR #612 (reader exit 1) class=read'] }
     expect(transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', unread)])), 12)).toMatchObject({ row: 'U2', event: 'unknown', next: { state: 'merge-queue', step: 'queue', attempt: 2 } })
     // a CLI failure, or a refusal GitHub gave no reason for, is unknown too
-    expect(transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', { status: 'failed', failClass: null, lines: ['callum-flow-merge: GitHub refused the merge'] })])), 12)).toMatchObject({ row: 'U2' })
+    expect(transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', { status: 'failed', failClass: null, lines: ['fabriek-merge: GitHub refused the merge'] })])), 12)).toMatchObject({ row: 'U2' })
   })
 
   test('behind and checks are no transition: the head is read afresh, and updated or merged again under a key of its own, at most MERGE_TRIES times', () => {
@@ -553,7 +553,7 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     // as does a GitHub backoff on a failed read
     expect(transitionOf(plan({ ...failing(NOW - 3 * HOUR), githubBackoffUntil: NOW + 5 * MIN }), 27)).toBeUndefined()
     // an untrusted author is a fact: policy parks it with the reason (T15), at once
-    const untrusted = plan(failing(NOW - 5 * MIN, { unread: [{ pr: 627, issue: 27, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true, since: NOW }] }))
+    const untrusted = plan(failing(NOW - 5 * MIN, { unread: [{ pr: 627, issue: 27, why: 'not by a trusted author (fabriek-issue-read exit 3)', untrusted: true, since: NOW }] }))
     expect(transitionOf(untrusted, 27)).toMatchObject({ row: 'T15', next: { state: 'parked', resumeTo: 'merge-queue', question: expect.stringContaining('not opened by a trusted author') } })
   })
 
@@ -807,12 +807,12 @@ const pullJson = (over: Record<string, unknown> = {}) => JSON.stringify({ pr: { 
 const r60 = rec(60)
 const UPDATE: Action = { kind: 'queue-update', key: updateKey(r60, MAIN), class: 'free', rule: 'Q1', reason: 'x', issue: 60, pr: 660, base: MAIN, head: HEAD, maxAttempts: 1 }
 const MERGE: Action = { kind: 'queue-merge', key: mergeKey(r60, HEAD, 1), class: 'free', rule: 'Q2', reason: 'x', issue: 60, pr: 660, head: HEAD, patch: PATCH, maxAttempts: 1 }
-const reads = (argvs: string[][]) => argvs.filter(a => a[0] === 'callum-flow-issue-read').length
+const reads = (argvs: string[][]) => argvs.filter(a => a[0] === 'fabriek-issue-read').length
 
 describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
   test('queue-update: gh pr update-branch on the head\'s PR alone, then the PR read until its head moves; the new head is the outcome\'s', async () => {
     let n = 0
-    const w = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: ++n < 3 ? HEAD : HEAD2 } }) } : {}), 1000)
+    const w = actWorld(argv => (argv[0] === 'fabriek-issue-read' ? { stdout: pullJson({ head: { sha: ++n < 3 ? HEAD : HEAD2 } }) } : {}), 1000)
     expect(await w.run(UPDATE)).toEqual({ status: 'done', outcome: { kind: 'queue', op: 'update', merged: false, head: HEAD2, failClass: null, lines: [] }, summary: `PR #660 updated onto ${MAIN.slice(0, 7)}: aaaaaaa -> bbbbbbb` })
     expect(w.argvs[0]).toEqual(['gh', 'pr', 'update-branch', '660', '--repo', REPO])
     expect(w.argvs.filter(a => a[0] === 'sleep')).toEqual([['sleep', '2'], ['sleep', '2']])
@@ -822,44 +822,44 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
   test('queue-update: a conflict is answered (done) with its class; a head that never moves fails with none, within 30 s and a bounded number of reads; up to date is done at the head it reads back; any other failure is the CLI\'s', async () => {
     const conflict = actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'X Cannot update PR branch due to conflicts' } : {}))
     expect(await conflict.run(UPDATE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'update', head: null, failClass: 'conflict', lines: ['X Cannot update PR branch due to conflicts'] } })
-    const still = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}), 3000)
+    const still = actWorld(argv => (argv[0] === 'fabriek-issue-read' ? { stdout: pullJson() } : {}), 3000)
     expect(await still.run(UPDATE)).toMatchObject({ status: 'failed', outcome: { failClass: null, head: null }, summary: expect.stringContaining('its head did not move from aaaaaaa in 30 s') })
     expect(reads(still.argvs)).toBeLessThanOrEqual(11)
     // a clock that never moves still stops reading
-    const frozen = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}), 0)
+    const frozen = actWorld(argv => (argv[0] === 'fabriek-issue-read' ? { stdout: pullJson() } : {}), 0)
     expect(await frozen.run(UPDATE)).toMatchObject({ status: 'failed' })
     expect(reads(frozen.argvs)).toBe(16)
-    const current = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
+    const current = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'fabriek-issue-read' ? { stdout: pullJson() } : {}))
     expect(await current.run(UPDATE)).toMatchObject({ status: 'done', outcome: { head: HEAD, failClass: null } })
     expect(reads(current.argvs)).toBe(1)
     // a head not read back is no answer: the update may have moved it
-    const unread = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'callum-flow-issue-read' ? { exitCode: 1, stderr: 'HTTP 404: Not Found' } : {}))
+    const unread = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'fabriek-issue-read' ? { exitCode: 1, stderr: 'HTTP 404: Not Found' } : {}))
     expect(await unread.run(UPDATE)).toMatchObject({ status: 'failed', outcome: { head: null, failClass: null, lines: ['the PR read exited 1: HTTP 404: Not Found'] } })
     const limited = actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'HTTP 403: API rate limit exceeded' } : {}))
     expect(await limited.run(UPDATE)).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
   })
 
-  test('queue-merge: callum-flow-merge with the approved patch and the record\'s issue; merged is done; a refusal is answered (done, not merged) with the guard\'s FAIL lines and the class that decides', async () => {
+  test('queue-merge: fabriek-merge with the approved patch and the record\'s issue; merged is done; a refusal is answered (done, not merged) with the guard\'s FAIL lines and the class that decides', async () => {
     const ok = actWorld(() => ({}))
     expect(await ok.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: true, head: HEAD, failClass: null } })
     // the record's issue goes to the guard: the loop's branch issue-<N> carries no slug, and the
     // guard never has to read the issue from a branch name (factory drill 1, run 2)
-    expect(ok.argvs).toEqual([['callum-flow-merge', '660', '--patch', PATCH, '--issue', '60']])
+    expect(ok.argvs).toEqual([['fabriek-merge', '660', '--patch', PATCH, '--issue', '60']])
     const lines = ['GUARD checks FAIL ci=pending class=checks', 'GUARD mergeable FAIL behind main class=behind', 'GUARD author FAIL PR #660 was not opened by a trusted author class=policy']
-    const refused = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `GUARD test-weakening WARN abc1234 step=x\n${lines.join('\n')}\n` } : {}))
+    const refused = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: `GUARD test-weakening WARN abc1234 step=x\n${lines.join('\n')}\n` } : {}))
     expect(await refused.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: false, head: HEAD, failClass: 'policy', lines } })
     // the refusal's lines are read, never the PR: nothing merged
     expect(reads(refused.argvs)).toBe(0)
   })
 
   test('queue-merge: a refusal after the guard passed names its merge state; one with no reason, or a merge cut off, is read back from the PR; exit 2 is a usage error', async () => {
-    const behind = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'callum-flow-merge: GitHub refused: merge state BEHIND (branch rule) - see the guard\'s mergeable action' } : {}))
+    const behind = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'fabriek-merge: GitHub refused: merge state BEHIND (branch rule) - see the guard\'s mergeable action' } : {}))
     expect(await behind.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: false, failClass: 'behind' } })
-    const mergedAnyway = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ state: 'closed', merged: true }) } : {}))
+    const mergedAnyway = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'fabriek-issue-read' ? { stdout: pullJson({ state: 'closed', merged: true }) } : {}))
     expect(await mergedAnyway.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true, head: HEAD } })
-    const notMerged = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
+    const notMerged = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'fabriek-issue-read' ? { stdout: pullJson() } : {}))
     expect(await notMerged.run(MERGE)).toMatchObject({ status: 'failed', outcome: { failClass: null, merged: false, lines: ['GitHub refused the merge'] } })
-    const usage = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 2, stderr: 'callum-flow-merge-guard: unknown option \'--patch\'' } : {}))
+    const usage = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 2, stderr: 'fabriek-merge-guard: unknown option \'--patch\'' } : {}))
     expect(await usage.run(MERGE)).toMatchObject({ status: 'failed', noRetry: true })
   })
 
@@ -867,7 +867,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     const GRAPHQL = 'GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.'
     const updateArgv = ['gh', 'pr', 'update-branch', '660', '--repo', REPO]
     let blips = 1
-    const w = actWorld(argv => (argv[2] === 'update-branch' && blips-- > 0 ? { exitCode: 1, stderr: GRAPHQL } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}))
+    const w = actWorld(argv => (argv[2] === 'update-branch' && blips-- > 0 ? { exitCode: 1, stderr: GRAPHQL } : argv[0] === 'fabriek-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}))
     const out = await w.run(UPDATE)
     // the plan reads the attempt as the drill's next pass did: a failed one is U2, unknown (cli)
     const tried = entry(UPDATE.key, 'queue-update', { issue: 60, pr: 660, head: HEAD, status: out.status === 'running' ? 'failed' : out.status, outcome: 'outcome' in out ? out.outcome : undefined, summary: out.summary, startedAt: NOW - MIN, endedAt: NOW - MIN + 30_000 })
@@ -877,9 +877,9 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(w.argvs.slice(0, 3)).toEqual([updateArgv, ['sleep', '5'], updateArgv])
     // the merge too: a blip GitHub did not act on is tried again, and merges
     let mergeBlips = 1
-    const merge = actWorld(argv => (argv[0] === 'callum-flow-merge' && mergeBlips-- > 0 ? { exitCode: 1, stderr: 'gh pr merge: HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
+    const merge = actWorld(argv => (argv[0] === 'fabriek-merge' && mergeBlips-- > 0 ? { exitCode: 1, stderr: 'gh pr merge: HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : argv[0] === 'fabriek-issue-read' ? { stdout: pullJson() } : {}))
     expect(await merge.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true } })
-    expect(merge.argvs.filter(a => a[0] === 'callum-flow-merge')).toHaveLength(2)
+    expect(merge.argvs.filter(a => a[0] === 'fabriek-merge')).toHaveLength(2)
   })
 
   test('an update GitHub made before its blip is found on the next try as up to date; the head it reads back is the loop\'s, never a person\'s push (review R2-F4)', async () => {
@@ -887,7 +887,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     let tries = 0
     const w = actWorld(argv => {
       if (argv[2] === 'update-branch') return ++tries === 1 ? { exitCode: 1, stderr: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : { stderr: '✓ PR branch already up-to-date' }
-      return argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}
+      return argv[0] === 'fabriek-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}
     })
     const out = await w.run(UPDATE)
     expect(out).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'update', head: HEAD2, failClass: null } })
@@ -904,13 +904,13 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
   test('a guard that could not read a fact for a GitHub blip names gh\'s error, so the merge runs again inside its attempt (review R2-F4)', async () => {
     let refusals = 1
     const fail = 'GUARD checks FAIL cannot read checks: HTTP 502: Bad Gateway (https://api.github.com/graphql) class=read'
-    const w = actWorld(argv => (argv[0] === 'callum-flow-merge' && refusals-- > 0 ? { exitCode: 1, stdout: `${fail}\n` } : {}))
+    const w = actWorld(argv => (argv[0] === 'fabriek-merge' && refusals-- > 0 ? { exitCode: 1, stdout: `${fail}\n` } : {}))
     expect(await w.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true, head: HEAD } })
-    expect(w.argvs.filter(a => a[0] === 'callum-flow-merge')).toHaveLength(2)
+    expect(w.argvs.filter(a => a[0] === 'fabriek-merge')).toHaveLength(2)
     // a read refusal is no answer about the PR: a failed try, its lines kept, nothing read back
-    const unread = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: 'GUARD author FAIL cannot verify the author of PR #660 (reader exit 1) class=read\n' } : {}))
+    const unread = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: 'GUARD author FAIL cannot verify the author of PR #660 (reader exit 1) class=read\n' } : {}))
     expect(await unread.run(MERGE)).toMatchObject({ status: 'failed', outcome: { merged: false, failClass: 'read', lines: ['GUARD author FAIL cannot verify the author of PR #660 (reader exit 1) class=read'] } })
-    expect({ merges: unread.argvs.filter(a => a[0] === 'callum-flow-merge').length, reads: reads(unread.argvs) }).toEqual({ merges: 1, reads: 0 })
+    expect({ merges: unread.argvs.filter(a => a[0] === 'fabriek-merge').length, reads: reads(unread.argvs) }).toEqual({ merges: 1, reads: 0 })
   })
 
   test('only a GitHub blip runs again, at most twice; credentials, a 404, a validation error, a rate limit (its backoff holds GitHub) and a refusal end the attempt at once', async () => {
@@ -929,7 +929,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     const warns = Array.from({ length: 25 }, (_, i) => `GUARD test-weakening WARN abc${i} step=x`)
     const long = `GUARD checks FAIL ${Array.from({ length: 80 }, (_, i) => `check-${i}=fail`).join(' ')} class=checks`
     const late = 'GUARD patch FAIL head x has patch y, not the approved z class=patch'
-    const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `${warns.join('\n')}\n${long}\n${late}\n` } : {}))
+    const w = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: `${warns.join('\n')}\n${long}\n${late}\n` } : {}))
     const out = await w.run(MERGE)
     expect(out).toMatchObject({ status: 'done', outcome: { merged: false, failClass: 'patch' } })
     const kept = out.status === 'done' && out.outcome?.kind === 'queue' ? out.outcome.lines : []
@@ -945,7 +945,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     const answers: LedgerEntry[] = []
     const cases = ['GUARD linkage FAIL MISMATCH class=linkage', 'GUARD linkage FAIL MISMATCH class=linkage', 'GUARD mergeable FAIL behind main class=behind']
     for (const [i, line] of cases.entries()) {
-      const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `${line}\n` } : {}))
+      const w = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: `${line}\n` } : {}))
       const out = await w.run(MERGE)
       expect(out.status).toBe('done')
       answers.push(entry(`${MERGE.key}/${i}`, 'queue-merge', { issue: 60 + i, status: 'done', startedAt: NOW - (5 - i) * MIN, endedAt: NOW - (4 - i) * MIN, outcome: out.status === 'done' ? out.outcome : undefined }))
@@ -977,7 +977,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
 
   test('property 8 for the executors: no argv rebases, force-pushes or closes a PR, and every gh call names the repo', async () => {
     const all: string[][] = []
-    for (const reply of [() => ({}), (a: string[]) => (a[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {})]) {
+    for (const reply of [() => ({}), (a: string[]) => (a[0] === 'fabriek-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {})]) {
       for (const action of [UPDATE, MERGE]) {
         const w = actWorld(reply, 1000)
         await w.run(action)
@@ -1025,10 +1025,10 @@ function prReply(heads: Record<string, string>, extra: (argv: string[]) => Reply
   return (argv: string[]): Reply => {
     const own = extra(argv)
     if (own !== undefined) return own
-    if (argv[0] === 'callum-flow-issue-read') return { stdout: pullJson({ head: { sha: heads[argv[3] ?? ''] ?? HEAD }, mergeable_state: 'unknown' }) }
+    if (argv[0] === 'fabriek-issue-read') return { stdout: pullJson({ head: { sha: heads[argv[3] ?? ''] ?? HEAD }, mergeable_state: 'unknown' }) }
     if (argv[0] === 'gh' && argv[2] === 'checks') return { exitCode: 8, stdout: CHECKS_JSON }
     if (argv[0] === 'gh' && argv[1] === 'api') return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
-    if (argv[0] === 'callum-flow-patch-id') return { stdout: `${PATCH}\n` }
+    if (argv[0] === 'fabriek-patch-id') return { stdout: `${PATCH}\n` }
     if (argv[0] === 'git') return { stdout: `${MAIN}\trefs/heads/main\n` }
     return {}
   }
@@ -1048,9 +1048,9 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const r = await readPrs(ctx)
     expect(r.source).toEqual({ ok: true, at: NOW })
     expect(r.read.prs.map(v => v.pr)).toEqual([671, 670, 674])
-    expect(argvs.filter(a => a[0] === 'callum-flow-issue-read')).toEqual([671, 670, 674].map(n => ['callum-flow-issue-read', '--json', '--pr', String(n)]))
+    expect(argvs.filter(a => a[0] === 'fabriek-issue-read')).toEqual([671, 670, 674].map(n => ['fabriek-issue-read', '--json', '--pr', String(n)]))
     expect(argvs).toContainEqual(['gh', 'pr', 'checks', '671', '--repo', REPO, '--json', 'name,state,bucket,startedAt,completedAt,link'])
-    expect(argvs).toContainEqual(['callum-flow-patch-id', sha('2'), 'main'])
+    expect(argvs).toContainEqual(['fabriek-patch-id', sha('2'), 'main'])
     expect(argvs.filter(a => a[0] === 'git')).toEqual([['git', 'ls-remote', 'origin', 'refs/heads/main']])
     expect(r.read.main).toEqual({ branch: 'main', sha: MAIN })
     expect(r.read.prs[0]).toEqual({
@@ -1081,7 +1081,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
   describe('concurrent reads', () => {
     const several = (n: number) => Array.from({ length: n }, (_, i) => rec(80 + i, { state: 'reviewing', step: 'review', seqAt: NOW - (60 - i) * MIN }))
     const flush = () => new Promise<void>(r => setTimeout(r, 0))
-    // held: each callum-flow-issue-read reply waits on its own deferred, in the order the reads started
+    // held: each fabriek-issue-read reply waits on its own deferred, in the order the reads started
     function held(records: IssueRecord[], over: Partial<SourceCtx> = {}) {
       const base = sourceCtx(records, prReply({}), over)
       const waiting = new Map<number, () => void>()
@@ -1092,7 +1092,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
       const ctx: SourceCtx = {
         ...base.ctx,
         run: async (argv, init, ms) => {
-          if (argv[0] !== 'callum-flow-issue-read') return inner(argv, init, ms)
+          if (argv[0] !== 'fabriek-issue-read') return inner(argv, init, ms)
           const pr = Number(argv[3])
           started.push(pr)
           flying++
@@ -1126,13 +1126,13 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
 
     test('replies resolved in reverse order still give prs and unread in 2.4\'s order, and the same as one at a time', async () => {
       const records = several(4)
-      const reply = prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '682' ? { exitCode: 1, stderr: 'boom' } : undefined))
+      const reply = prReply({}, a => (a[0] === 'fabriek-issue-read' && a[3] === '682' ? { exitCode: 1, stderr: 'boom' } : undefined))
       const inner = sourceCtx(records, reply, { prBudget: 4 })
       const waiting = new Map<number, () => void>()
       const racing: SourceCtx = {
         ...inner.ctx,
         run: async (argv, init, ms) => {
-          if (argv[0] === 'callum-flow-issue-read') await new Promise<void>(release => waiting.set(Number(argv[3]), release))
+          if (argv[0] === 'fabriek-issue-read') await new Promise<void>(release => waiting.set(Number(argv[3]), release))
           return inner.ctx.run(argv, init, ms)
         },
       }
@@ -1171,7 +1171,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
       const ctx: SourceCtx = {
         ...base.ctx,
         run: async (argv, init, ms) => {
-          if (argv[0] === 'callum-flow-issue-read' && argv[3] === '681') throw new Error('spawn failed')
+          if (argv[0] === 'fabriek-issue-read' && argv[3] === '681') throw new Error('spawn failed')
           return base.ctx.run(argv, init, ms)
         },
       }
@@ -1189,34 +1189,34 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     await readPrs(first.ctx)
     const kept = sourceCtx([r], prReply(head), { heads: { [sha('4')]: { pr: 675, at: NOW - MIN } } })
     expect((await readPrs(kept.ctx)).read.prs[0]?.patch).toBe(PATCH)
-    expect(kept.argvs.filter(a => a[0] === 'callum-flow-patch-id')).toEqual([])
+    expect(kept.argvs.filter(a => a[0] === 'fabriek-patch-id')).toEqual([])
     // drill run 3 (R3-F3): one PR's patch id failed the whole source, so no record's PR counted as read
     const other = rec(76, { state: 'reviewing', step: 'review' })
-    const moved = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'callum-flow-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'callum-flow-patch-id: no merge base between origin/main and x' } : undefined)))
+    const moved = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'fabriek-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'fabriek-patch-id: no merge base between origin/main and x' } : undefined)))
     const out = await readPrs(moved.ctx)
     expect(out.source).toEqual({ ok: true, at: NOW })
     expect(out.read.prs.map(v => [v.pr, v.patch])).toEqual([[676, PATCH]])
-    const why = 'the patch id of 5555555 did not compute: callum-flow-patch-id: no merge base between origin/main and x'
+    const why = 'the patch id of 5555555 did not compute: fabriek-patch-id: no merge base between origin/main and x'
     expect(out.read.unread).toEqual([{ pr: 675, issue: 75, why, untrusted: false, since: NOW }])
     // a read that keeps failing keeps the start of its run (the last pass's unread), which the
     // rules' bound counts from; one that read again, or another life's PR, starts afresh
-    const again = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'callum-flow-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'x' } : undefined)), {
+    const again = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'fabriek-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'x' } : undefined)), {
       unread: [{ pr: 675, issue: 75, why, untrusted: false, since: NOW - 7 * MIN }, { pr: 676, issue: 76, why, untrusted: false, since: NOW - 7 * MIN }],
     })
     const next = await readPrs(again.ctx)
     expect(next.read.unread?.map(u => [u.pr, u.since])).toEqual([[675, NOW - 7 * MIN]])
-    const other75 = sourceCtx([r], prReply({ '675': sha('5') }, a => (a[0] === 'callum-flow-patch-id' ? { exitCode: 1, stderr: 'x' } : undefined)), { unread: [{ pr: 675, issue: 74, why, untrusted: false, since: NOW - 7 * MIN }] })
+    const other75 = sourceCtx([r], prReply({ '675': sha('5') }, a => (a[0] === 'fabriek-patch-id' ? { exitCode: 1, stderr: 'x' } : undefined)), { unread: [{ pr: 675, issue: 74, why, untrusted: false, since: NOW - 7 * MIN }] })
     expect((await readPrs(other75.ctx)).read.unread?.map(u => [u.pr, u.since])).toEqual([[675, NOW]])
   })
 
   test('a closed or merged PR is read without its checks; heads go when their PR closes or their record does', async () => {
     const r = rec(76)
-    const merged = sourceCtx([r], prReply({}, a => (a[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ state: 'closed', merged: true, closed_at: '2026-10-13T02:59:00Z' }) } : undefined)), {
+    const merged = sourceCtx([r], prReply({}, a => (a[0] === 'fabriek-issue-read' ? { stdout: pullJson({ state: 'closed', merged: true, closed_at: '2026-10-13T02:59:00Z' }) } : undefined)), {
       heads: { [HEAD]: { pr: 676, at: NOW - HOUR }, [HEAD2]: { pr: 999, at: NOW - HOUR } },
     })
     const out = await readPrs(merged.ctx)
     expect(out.read.prs[0]).toMatchObject({ state: 'merged', mergedHead: HEAD, closedAt: '2026-10-13T02:59:00Z', checks: [], patch: null })
-    expect(merged.argvs.map(a => a[0])).toEqual(['callum-flow-issue-read'])
+    expect(merged.argvs.map(a => a[0])).toEqual(['fabriek-issue-read'])
     // the merged PR's head goes; one no record names stays
     expect(out.heads).toEqual({ [HEAD2]: { pr: 999, at: NOW - HOUR } })
     expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [r], [], NOW, [])).toEqual({ [HEAD]: { pr: 676, at: 1 } })
@@ -1233,10 +1233,10 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const limited = sourceCtx(records, prReply({}), { limited: () => true })
     expect((await readPrs(limited.ctx)).read.prs).toEqual([])
     expect(limited.argvs).toEqual([])
-    const bad = sourceCtx(records, prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '678' ? { exitCode: 3 } : undefined)))
+    const bad = sourceCtx(records, prReply({}, a => (a[0] === 'fabriek-issue-read' && a[3] === '678' ? { exitCode: 3 } : undefined)))
     const out = await readPrs(bad.ctx)
     expect(out.read.prs.map(v => v.pr)).toEqual([677])
-    expect(out.read.unread).toEqual([{ pr: 678, issue: 78, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true, since: NOW }])
+    expect(out.read.unread).toEqual([{ pr: 678, issue: 78, why: 'not by a trusted author (fabriek-issue-read exit 3)', untrusted: true, since: NOW }])
     expect(out.source).toEqual({ ok: true, at: NOW })
     // no record in reviewing or the queue: nothing to read, and nothing wrong
     expect((await readPrs(sourceCtx([rec(79, { state: 'fixing', step: 'fix' })], prReply({})).ctx)).source).toEqual({ ok: true, at: NOW })
@@ -1251,7 +1251,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const out = await readPrs(ctx)
     expect(out.source).toEqual({ ok: true, at: NOW })
     expect(out.read.prs.map(v => [v.pr, v.issue, v.head])).toEqual([[680, 80, sha('6')]])
-    expect(argvs.filter(a => a[0] === 'callum-flow-issue-read')).toEqual([['callum-flow-issue-read', '--json', '--pr', '680']])
+    expect(argvs.filter(a => a[0] === 'fabriek-issue-read')).toEqual([['fabriek-issue-read', '--json', '--pr', '680']])
     expect(out.heads).toEqual({ [sha('6')]: { pr: 680, at: NOW } })
     // dropped before reviewing ended, the record never named the PR: its head still goes
     expect(headsOf(out.heads, [{ ...r, state: 'closed' }], [], NOW, [opened])).toEqual({})
@@ -1268,7 +1268,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     let checkout: State['checkout'] = baseState().checkout
     const pass = async (s: number, r: IssueRecord, ledger: LedgerEntry[] = []) => {
       const run = async (argv: string[]) => {
-        if (argv[0] === 'callum-flow-issue-read') reads.push(s)
+        if (argv[0] === 'fabriek-issue-read') reads.push(s)
         if (argv[0] === 'git') mains.push(s)
         if (argv[0] === 'git') return { exitCode: 0, stdout: `${main}\trefs/heads/main\n`, stderr: '' }
         if (failing && argv[0] === 'gh') return { exitCode: 1, stdout: '', stderr: 'HTTP 502' }

@@ -1,7 +1,7 @@
 // The executors that spend no tokens (act-cli.ts) against a fake ExecCtx: each kind's argv,
 // cwd, timeout and stdin, and its outcome for success, each documented failure and a GitHub
-// rate limit. Exit codes and output lines are the real CLIs' (images/base/callum-flow-claim,
-// callum-flow-sweep, callum-flow-milestone, callum-flow-event, dev-restart-self; gh 2.102;
+// rate limit. Exit codes and output lines are the real CLIs' (images/base/fabriek-claim,
+// fabriek-sweep, fabriek-milestone, fabriek-event, dev-restart-self; gh 2.102;
 // treehouse status --json as it printed on 2026-10-13).
 import { describe, expect, test } from 'claude-code/testing'
 
@@ -130,12 +130,12 @@ describe('stepsOf: the argv templates (v2 SPEC 13.6.1)', () => {
   }
 
   test('each kind runs exactly its catalogue row, gh always with --repo', () => {
-    expect(argv(A.heartbeat())).toEqual([['callum-flow-claim', '--heartbeat']])
-    expect(argv(A.sweep())).toEqual([['callum-flow-sweep']])
-    expect(argv(A.claim())).toEqual([['callum-flow-claim', '470']])
+    expect(argv(A.heartbeat())).toEqual([['fabriek-claim', '--heartbeat']])
+    expect(argv(A.sweep())).toEqual([['fabriek-sweep']])
+    expect(argv(A.claim())).toEqual([['fabriek-claim', '470']])
     expect(argv(A.close())).toEqual([['gh', 'issue', 'close', '470', '--repo', REPO, '--reason', 'completed']])
     expect(argv(A.releaseParent())).toEqual([['event:abandoned']])
-    expect(argv(A.later())).toEqual([['callum-flow-milestone', 'plan', '470', 'later']])
+    expect(argv(A.later())).toEqual([['fabriek-milestone', 'plan', '470', 'later']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
     expect(argv(A.restart('R2'))).toEqual([['dev-restart-self']])
     expect(argv({ ...A.restart('R2'), windDownAt: null } as Action)).toEqual([['dev-restart-self']])
@@ -194,21 +194,21 @@ describe('heartbeat and sweep', () => {
   })
 
   test('exit 1 (a gh failure) is failed with its stderr, retried by the rule', async () => {
-    const { result } = await exec(A.heartbeat(), [{ exitCode: 1, stderr: 'callum-flow-claim: cannot renew the claim on #470\n' }])
+    const { result } = await exec(A.heartbeat(), [{ exitCode: 1, stderr: 'fabriek-claim: cannot renew the claim on #470\n' }])
     expect(result).toEqual({
       status: 'failed',
-      outcome: { kind: 'cli', exit: 1, detail: 'callum-flow-claim: cannot renew the claim on #470' },
-      summary: 'callum-flow-claim --heartbeat: exit 1: callum-flow-claim: cannot renew the claim on #470',
+      outcome: { kind: 'cli', exit: 1, detail: 'fabriek-claim: cannot renew the claim on #470' },
+      summary: 'fabriek-claim --heartbeat: exit 1: fabriek-claim: cannot renew the claim on #470',
     })
   })
 
   test('exit 2 is a usage error: never retried', async () => {
-    const { result } = await exec(A.sweep(), [{ exitCode: 2, stderr: 'callum-flow-sweep: takes no arguments\nusage: callum-flow-sweep\n' }])
+    const { result } = await exec(A.sweep(), [{ exitCode: 2, stderr: 'fabriek-sweep: takes no arguments\nusage: fabriek-sweep\n' }])
     expect(result).toMatchObject({ status: 'failed', noRetry: true, outcome: { kind: 'cli', exit: 2 } })
   })
 
   test('a GitHub rate limit in stderr is flagged for the backoff', async () => {
-    const { result } = await exec(A.sweep(), [{ exitCode: 1, stderr: `${RATE}\ncallum-flow-sweep: cannot list In development issues\n` }])
+    const { result } = await exec(A.sweep(), [{ exitCode: 1, stderr: `${RATE}\nfabriek-sweep: cannot list In development issues\n` }])
     expect(result).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
     expect('noRetry' in result).toBe(false)
   })
@@ -217,30 +217,30 @@ describe('heartbeat and sweep', () => {
 describe('claim', () => {
   test('exit 0: claimed', async () => {
     const { result, calls } = await exec(A.claim())
-    expect(calls.map(c => c.argv)).toEqual([['callum-flow-claim', '470']])
+    expect(calls.map(c => c.argv)).toEqual([['fabriek-claim', '470']])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'claim', result: 'claimed' }, summary: 'claimed #470' })
   })
 
   test('exit 3: lost to a live claim, a done outcome plan reads (rule D1)', async () => {
-    const stderr = 'callum-flow-claim: #470 is held by coder-plant-console-orchestrator since 2026-10-13T02:00:00Z\n'
+    const stderr = 'fabriek-claim: #470 is held by coder-plant-console-orchestrator since 2026-10-13T02:00:00Z\n'
     const { result } = await exec(A.claim(), [{ exitCode: 3, stderr }])
     expect(result).toEqual({
       status: 'done',
       outcome: { kind: 'claim', result: 'lost' },
-      summary: 'lost #470: callum-flow-claim: #470 is held by coder-plant-console-orchestrator since 2026-10-13T02:00:00Z',
+      summary: 'lost #470: fabriek-claim: #470 is held by coder-plant-console-orchestrator since 2026-10-13T02:00:00Z',
     })
   })
 
   test('exit 1 (an untrusted author, a gh failure): failed with the detail', async () => {
-    const { result } = await exec(A.claim(), [{ exitCode: 1, stderr: 'callum-flow-claim: #470 is not by a trusted author - refusing to claim it\n' }])
+    const { result } = await exec(A.claim(), [{ exitCode: 1, stderr: 'fabriek-claim: #470 is not by a trusted author - refusing to claim it\n' }])
     expect(result).toMatchObject({
       status: 'failed',
-      outcome: { kind: 'cli', exit: 1, detail: 'callum-flow-claim: #470 is not by a trusted author - refusing to claim it' },
+      outcome: { kind: 'cli', exit: 1, detail: 'fabriek-claim: #470 is not by a trusted author - refusing to claim it' },
     })
   })
 
   test('exit 2: usage, never retried; a rate limit is flagged', async () => {
-    expect((await exec(A.claim(), [{ exitCode: 2, stderr: 'usage: callum-flow-claim <issue>' }])).result).toMatchObject({ status: 'failed', noRetry: true })
+    expect((await exec(A.claim(), [{ exitCode: 2, stderr: 'usage: fabriek-claim <issue>' }])).result).toMatchObject({ status: 'failed', noRetry: true })
     expect((await exec(A.claim(), [{ exitCode: 1, stderr: RATE }])).result).toMatchObject({ status: 'failed', rateLimited: true })
   })
 
@@ -276,7 +276,7 @@ describe('a done close: close-issue logs closed, delete-branch is leased (8.7)',
     expect(failed.events).toEqual([])
     expect(failed.result).toMatchObject({ status: 'failed' })
     // an event that did not log is the close's failure to retry, the close being idempotent
-    const unlogged = await exec(A.closeDone(), [], { event: async () => { throw new Error('callum-flow-event closed: exit 1') } })
+    const unlogged = await exec(A.closeDone(), [], { event: async () => { throw new Error('fabriek-event closed: exit 1') } })
     expect(unlogged.result).toMatchObject({ status: 'failed' })
   })
 
@@ -348,13 +348,13 @@ describe('release-parent: only the abandoned event, no label edit (#1353)', () =
   })
 
   test('a failed event is failed; its usage exit is never retried', async () => {
-    const usage = Object.assign(new Error('callum-flow-event: unknown type'), { exitCode: 2 })
+    const usage = Object.assign(new Error('fabriek-event: unknown type'), { exitCode: 2 })
     const { result, calls } = await exec(A.releaseParent(), [], { event: async () => Promise.reject(usage) })
     expect(calls).toHaveLength(0)
     expect(result).toEqual({
       status: 'failed',
-      outcome: { kind: 'cli', exit: 2, detail: 'callum-flow-event: unknown type' },
-      summary: 'event abandoned: callum-flow-event: unknown type',
+      outcome: { kind: 'cli', exit: 2, detail: 'fabriek-event: unknown type' },
+      summary: 'event abandoned: fabriek-event: unknown type',
       noRetry: true,
     })
     const other = await exec(A.releaseParent(), [], { event: async () => Promise.reject(new Error('cannot start')) })
@@ -367,12 +367,12 @@ describe('the milestone', () => {
   test('milestone-later: what moved, or the no-op note of a repo not opted in', async () => {
     const moved = await exec(A.later(), [{ stdout: '#470 moved from (no milestone) to "Later"\n' }])
     expect(moved.result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: '#470 moved from (no milestone) to "Later"' })
-    const noop = await exec(A.later(), [{ stderr: 'callum-flow-milestone: no open "Next release" milestone in cbundy/dev-system - nothing to do\n' }])
-    expect(noop.result).toMatchObject({ status: 'done', summary: 'callum-flow-milestone: no open "Next release" milestone in cbundy/dev-system - nothing to do' })
+    const noop = await exec(A.later(), [{ stderr: 'fabriek-milestone: no open "Next release" milestone in cbundy/dev-system - nothing to do\n' }])
+    expect(noop.result).toMatchObject({ status: 'done', summary: 'fabriek-milestone: no open "Next release" milestone in cbundy/dev-system - nothing to do' })
   })
 
   test('milestone-later: exit 1 with no Later milestone is failed', async () => {
-    const stderr = 'callum-flow-milestone: no open "Later" milestone in cbundy/dev-system - create it first (this helper never creates milestones)'
+    const stderr = 'fabriek-milestone: no open "Later" milestone in cbundy/dev-system - create it first (this helper never creates milestones)'
     expect((await exec(A.later(), [{ exitCode: 1, stderr }])).result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1, detail: stderr } })
   })
 })
@@ -420,11 +420,11 @@ describe('restart-self', () => {
 
 describe('a command that never exits', () => {
   test('a timeout or a command that cannot start is failed with no exit code', async () => {
-    const { result } = await exec(A.sweep(), [new Error('callum-flow-sweep: timed out after 300000 ms')])
+    const { result } = await exec(A.sweep(), [new Error('fabriek-sweep: timed out after 300000 ms')])
     expect(result).toEqual({
       status: 'failed',
-      outcome: { kind: 'cli', exit: NO_EXIT, detail: 'callum-flow-sweep: timed out after 300000 ms' },
-      summary: 'callum-flow-sweep: callum-flow-sweep: timed out after 300000 ms',
+      outcome: { kind: 'cli', exit: NO_EXIT, detail: 'fabriek-sweep: timed out after 300000 ms' },
+      summary: 'fabriek-sweep: fabriek-sweep: timed out after 300000 ms',
     })
   })
 })
@@ -503,19 +503,19 @@ describe('guards and pure readers', () => {
   })
 
   test('usageError: exit 2 for the image\'s CLIs only', () => {
-    expect(usageError(['callum-flow-claim', '1'], 2)).toBe(true)
+    expect(usageError(['fabriek-claim', '1'], 2)).toBe(true)
     expect(usageError(['dev-restart-self'], 2)).toBe(true)
     expect(usageError(['gh', 'pr', 'close', '1'], 2)).toBe(false)
     expect(usageError(['treehouse', 'return', '/x'], 2)).toBe(false)
-    expect(usageError(['callum-flow-claim', '1'], 1)).toBe(false)
+    expect(usageError(['fabriek-claim', '1'], 1)).toBe(false)
   })
 
   test('commandFailure keeps the first 2 000 characters of stderr, else stdout', () => {
     const long = 'x'.repeat(2500)
-    const r = commandFailure(['callum-flow-sweep'], { exitCode: 1, stdout: 'out', stderr: long })
+    const r = commandFailure(['fabriek-sweep'], { exitCode: 1, stdout: 'out', stderr: long })
     expect(r.status === 'failed' && r.outcome?.kind === 'cli' ? r.outcome.detail?.length : null).toBe(2000)
     expect(r.summary.length).toBeLessThanOrEqual(200)
-    expect(commandFailure(['callum-flow-sweep'], { exitCode: 1, stdout: 'only stdout', stderr: '' })).toMatchObject({ outcome: { detail: 'only stdout' } })
+    expect(commandFailure(['fabriek-sweep'], { exitCode: 1, stdout: 'only stdout', stderr: '' })).toMatchObject({ outcome: { detail: 'only stdout' } })
   })
 
   test('eventFailure reads an exit code off the error when it has one', () => {

@@ -334,7 +334,7 @@ describe('a pass in the test host', () => {
   const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
   const quiet = (argv: string[], s: { stdin?: string }) => {
     switch (argv[0]) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc([]) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -342,7 +342,7 @@ describe('a pass in the test host', () => {
         return { stdout: 'queue known=none now=none\n' }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth' }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         return { stdout: '[]' }

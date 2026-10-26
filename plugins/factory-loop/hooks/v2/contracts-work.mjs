@@ -39,7 +39,7 @@
 //   event schema, the event writer or a factory-database reader and why the last 10 minor
 //   versions keep working, or "none - no schema, event or reader change").
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
-//   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
+//   keep-open, read as fabriek-rollout reads it, so the merge guard can derive its linkage.
 //   A keep-open whose reason says the issue is part of something larger is refused: a split child
 //   is done when its PR merges. A split's children are 2 to 10, each key unique, each body with a
 //   valid `## Rollout`. A blockedBy entry is a sibling key or "#<N>",
@@ -171,7 +171,7 @@ function checked(problems, outcome) {
 
 // --- design-v2 (8.7) --------------------------------------------------------------------------------
 
-// rolloutOf: the first word of a brief's `## Rollout` section, as callum-flow-rollout reads it: the
+// rolloutOf: the first word of a brief's `## Rollout` section, as fabriek-rollout reads it: the
 // first non-empty line under the first heading `## Rollout` outside fenced code, up to the next
 // heading, lower case, leading non-letters dropped. null when the brief has no such section or
 // line.

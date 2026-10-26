@@ -1,5 +1,5 @@
 // The native call of every event v2 writes (docs/factory-loop/v2/SPEC.md 7.1): the type, the data
-// and the issue of `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`, one
+// and the issue of `fabriek-event --type <type> --data <json> [--issue N] [--actor A]`, one
 // builder per V2Event kind. The data is exactly what the translator (images/base/
 // factory-event-translate.js) makes from the line the loop used to write in the old format: the
 // same keys, values and nulls, and an optional key left out where the translator leaves it out.

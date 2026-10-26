@@ -6,6 +6,7 @@ import type { AgentSpawnArgs, EngineInterface } from 'claude-code'
 import { gateLimits, jsonObject } from './config'
 import { DEFAULT_POOL_SIZE, RUNTIME_KEYS } from './config-keys'
 import type { ViewInputs } from './config-view'
+import { settingPair, withFallback } from './tool-name.mjs'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
 import type { FileIo } from './control'
 import type { ActIo } from './exec'
@@ -48,8 +49,8 @@ export async function configDir($: EngineInterface) {
 
 // runtime: the settings one pass runs with (v2 SPEC 13.4.1): plugin options, then the workspace
 // file ${CLAUDE_CONFIG_DIR}/factory-loop/config.json, then the repo's .claude/factory-loop.json.
-// env is every command's base environment: the repo, the configured labels (callum-flow-claim
-// and callum-flow-sweep read them), the regime and the loop's session id (callum-flow-event stamps them on every event), binDir ahead of PATH when the workspace file names one (a
+// env is every command's base environment: the repo, the configured labels (fabriek-claim
+// and fabriek-sweep read them), the regime and the loop's session id (fabriek-event stamps them on every event), binDir ahead of PATH when the workspace file names one (a
 // testbed runs the branch's own CLIs), CALLUM_FLOW_LINKAGE_BIN=<toolsDir>/check-pr-linkage.sh when the workspace file names a toolsDir (the merge guard's link check then runs the checkout's script), and the event sink when the mode is not act.
 export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const dir = await configDir($)
@@ -82,15 +83,15 @@ export async function runtime($: EngineInterface): Promise<Runtime & ViewInputs>
     ? { budgetUsd: (await $.env.get('DEV_CLAUDE_BUDGET_USD')) || '', resetDay: (await $.env.get('DEV_CLAUDE_BUDGET_RESET_DAY')) || '' }
     : undefined
   const env: Record<string, string> = {
-    CALLUM_FLOW_REPO: repo,
+    ...settingPair('REPO', repo),
     FACTORY_REGIME: config.regime,
-    CALLUM_FLOW_READY_LABEL: config.readyLabel,
-    CALLUM_FLOW_IN_DEV_LABEL: config.inDevLabel,
+    ...settingPair('READY_LABEL', config.readyLabel),
+    ...settingPair('IN_DEV_LABEL', config.inDevLabel),
   }
   const binDir = str(file.binDir)
   if (binDir !== '') env.PATH = `${binDir}:${(await $.env.get('PATH')) || '/usr/local/bin:/usr/bin:/bin'}`
   const toolsDir = str(file.toolsDir)
-  if (toolsDir !== '') env.CALLUM_FLOW_LINKAGE_BIN = `${toolsDir.replace(/(.)\/$/, '$1')}/check-pr-linkage.sh`
+  if (toolsDir !== '') Object.assign(env, settingPair('LINKAGE_BIN', `${toolsDir.replace(/(.)\/$/, '$1')}/check-pr-linkage.sh`))
   if (session !== '') env.CLAUDE_SESSION_ID = session
   if (sink !== null) env.CALLUM_EVENTS_DIR = sink
   return {
@@ -156,12 +157,17 @@ export function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+// runner: $.process.run with the fabriek names' fallback to the old ones (tool-name.mjs, #1359).
+function runner($: EngineInterface): EngineInterface['process']['run'] {
+  return withFallback((argv: string[], init: Parameters<EngineInterface['process']['run']>[1]) => $.process.run(argv, init)) as EngineInterface['process']['run']
+}
+
 // io: the engine calls observe makes, as closures over $ (the validator keeps $ in this file).
 // The agent list is read once per pass, before observe (listAgents).
 export function io($: EngineInterface, agents: AgentRow[]): Io {
   return {
     now: () => $.clock.now(),
-    run: async (argv, init) => noteRun(await $.process.run(argv, init), await $.clock.now()),
+    run: async (argv, init) => noteRun(await runner($)(argv, init), await $.clock.now()),
     readFile: path => text($, path),
     sessionLimits: async () => (await $.session.usage()).rateLimits,
     sessionCost: async () => (await $.session.usage()).cost?.usd ?? null,
@@ -183,7 +189,7 @@ export async function githubHealth($: EngineInterface, loopDir: string, repo: st
 export function actIo($: EngineInterface): ActIo {
   return {
     now: () => $.clock.now(),
-    run: async (argv, init) => noteRun(await $.process.run(argv, init), await $.clock.now()),
+    run: async (argv, init) => noteRun(await runner($)(argv, init), await $.clock.now()),
     spawnAgent: async input => {
       // an agent step starts in its slot: the companion reads the slot line (v2 SPEC 10.3)
       const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: withSlotLine(input.prompt, input.cwd), description: input.description }

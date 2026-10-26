@@ -54,7 +54,7 @@
 // still fetches is killed, never orphaned to finish a second lease later).
 //
 // Exit codes: 0 done, 1 failed (worth a retry), 2 usage, 3 refused. Environment for tests:
-// CALLUM_FLOW_TREEHOUSE_BIN, CALLUM_FLOW_GIT_BIN, FACTORY_SLOT_KILL_GRACE_MS.
+// FABRIEK_TREEHOUSE_BIN, FABRIEK_GIT_BIN (or the old CALLUM_FLOW_ names), FACTORY_SLOT_KILL_GRACE_MS.
 'use strict'
 
 const { spawnSync } = require('node:child_process')
@@ -90,7 +90,7 @@ const usage = (message) => new Failed(`${message}\n${USAGE}`, 2)
 // --- commands -----------------------------------------------------------------------------------------
 
 function bins(env) {
-  return { treehouse: env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse', git: env.CALLUM_FLOW_GIT_BIN || 'git' }
+  return { treehouse: env.FABRIEK_TREEHOUSE_BIN || env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse', git: env.FABRIEK_GIT_BIN || env.CALLUM_FLOW_GIT_BIN || 'git' }
 }
 
 // run: one command, stdin closed (an empty one, so no prompt waits), never through a shell, within

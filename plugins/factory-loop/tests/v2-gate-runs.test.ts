@@ -76,7 +76,7 @@ describe('one gate line, one gate_run', () => {
       data: { life: LIFE, seq: 7, head: HEAD, result: 'pass', wait_ms: 7_000, run_ms: 12_000, concurrency: 1, queued_behind: 1, started_at: new Date(NOW - 10 * MIN).toISOString() },
     })
     expect(eventArgv((a as EventAction).event)).toEqual([
-      'callum-flow-event',
+      'fabriek-event',
       '--type',
       'gate_run',
       '--data',
@@ -335,7 +335,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
   const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
   const quiet = (argv: string[], s: { stdin?: string }) => {
     switch (argv[0]) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc([]) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -343,7 +343,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
         return { stdout: 'queue known=none now=none\n' }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth' }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         return { stdout: '[]' }
@@ -351,7 +351,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     return undefined
   }
 
-  test('the argv the pass ran is callum-flow-event --type gate_run --data .. --issue N, and a second pass runs none', ENGINE_TEST, async ($, on) => {
+  test('the argv the pass ran is fabriek-event --type gate_run --data .. --issue N, and a second pass runs none', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work' },
@@ -365,7 +365,7 @@ describe('a pass reads companion.jsonl and writes the gate_run once', () => {
     const writes = () => h.events().filter(e => e[1] === '--type' && e[2] === 'gate_run')
     expect(writes()).toHaveLength(2)
     const argv = writes().find(e => (JSON.parse(e[4] ?? '{}') as { queued_behind: number }).queued_behind === 1) as string[]
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'gate_run', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'gate_run', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', String(N)])
     expect(JSON.parse(argv[4] as string)).toEqual({ life: LIFE, seq: 7, head: HEAD, result: 'pass', wait_ms: 7_000, run_ms: 12_000, concurrency: 1, queued_behind: 1, started_at: new Date(NOW - 20 * MIN).toISOString() })
     await clock.advance(60_000)

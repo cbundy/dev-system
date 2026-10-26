@@ -57,9 +57,9 @@ export function prCommentArgv(repo: string, pr: number): string[] {
 }
 
 // The trusted comments of an issue or a PR, through the reader (CLAUDE.md: GitHub text is read with
-// callum-flow-issue-read only).
+// fabriek-issue-read only).
 export function commentsReadArgv(on: 'issue' | 'pr', n: number): string[] {
-  return on === 'issue' ? ['callum-flow-issue-read', '--json', String(n), '--comments'] : ['callum-flow-issue-read', '--json', '--pr', String(n), '--comments']
+  return on === 'issue' ? ['fabriek-issue-read', '--json', String(n), '--comments'] : ['fabriek-issue-read', '--json', '--pr', String(n), '--comments']
 }
 
 // --- the PR (3.5, 8.1) --------------------------------------------------------------------------------
@@ -115,12 +115,12 @@ export function compareArgv(repo: string, tag: string, sha: string): string[] {
 
 // A PR's state, merge, closedAt, head, mergeable state and author, through the reader.
 export function prReadArgv(pr: number): string[] {
-  return ['callum-flow-issue-read', '--json', '--pr', String(pr)]
+  return ['fabriek-issue-read', '--json', '--pr', String(pr)]
 }
 
 // The issue's Rollout (merge, run-it or keep-open), which the PR body's linkage follows (8.1).
 export function rolloutArgv(issue: number): string[] {
-  return ['callum-flow-rollout', String(issue)]
+  return ['fabriek-rollout', String(issue)]
 }
 
 // --- a split's children (8.7) -------------------------------------------------------------------------
@@ -153,12 +153,12 @@ export function flakeLabelsArgv(repo: string, issue: number, flaky: string, prio
 // The open issues by trusted authors, whole, through the reader: a child made before a retry is
 // found again by the hidden key in its body.
 export function openIssuesArgv(): string[] {
-  return ['callum-flow-issue-read', '--json', '--list', '--state', 'open']
+  return ['fabriek-issue-read', '--json', '--list', '--state', 'open']
 }
 
 // One issue, through the reader: its REST id, which the sub-issue and dependency links take.
 export function issueReadArgv(issue: number): string[] {
-  return ['callum-flow-issue-read', '--json', String(issue)]
+  return ['fabriek-issue-read', '--json', String(issue)]
 }
 
 // The ids of the parent's sub-issues, so a link made before a retry is not made twice.
@@ -261,7 +261,7 @@ export function updateBranchArgv(repo: string, pr: number): string[] {
 // The merge, through the guard, on the approved patch only. The record's issue goes with it, so
 // the guard never reads the issue from the branch name (9.3).
 export function queueMergeArgv(pr: number, patch: string, issue: number, train: { testedTree?: string; trainDropped?: string } = {}): string[] {
-  return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue), ...(train.testedTree === undefined ? [] : ['--tested-tree', train.testedTree]), ...(train.trainDropped === undefined ? [] : ['--train-dropped', train.trainDropped])]
+  return ['fabriek-merge', String(pr), '--patch', patch, '--issue', String(issue), ...(train.testedTree === undefined ? [] : ['--tested-tree', train.testedTree]), ...(train.trainDropped === undefined ? [] : ['--train-dropped', train.trainDropped])]
 }
 
 // --- the merge train (9.8, act-train.ts): git from the main checkout, touching no working tree ---------
@@ -349,7 +349,7 @@ export function prMergedAtOf(stdout: string): string | null {
 
 // A head's patch id against the base (8.4).
 export function patchIdArgv(ref: string, base: string): string[] {
-  return ['callum-flow-patch-id', ref, base]
+  return ['fabriek-patch-id', ref, base]
 }
 
 // The pause between two reads of a PR whose update GitHub applies in the background (9.2): the
@@ -418,20 +418,20 @@ export function diffNamesArgv(mergeBase: string, head: string): string[] {
 
 // The model the builder runs on; the tool logs `implementer_routed` itself.
 export function implementerRouteArgv(issue: number): string[] {
-  return ['callum-flow-implementer-route', String(issue)]
+  return ['fabriek-implementer-route', String(issue)]
 }
 
 // --- the designer's model (7.1) ---------------------------------------------------------------------
 
 // The model the designer runs on; the tool logs `designer_routed` itself.
 export function designerRouteArgv(issue: number): string[] {
-  return ['callum-flow-designer-route', String(issue)]
+  return ['fabriek-designer-route', String(issue)]
 }
 
 // The loop's own `designer_routed`, written when the route could not run.
 export function designerFallbackArgv(issue: number, model: string): string[] {
   return [
-    'callum-flow-event',
+    'fabriek-event',
     '--type',
     'designer_routed',
     '--issue',
@@ -443,16 +443,19 @@ export function designerFallbackArgv(issue: number, model: string): string[] {
 
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------
 
-// A claim with a score (S1) runs under `env CALLUM_FLOW_CLAIM_SCORE=<JSON>`, which the claim tool
+// A claim with a score (S1) runs under `env FABRIEK_CLAIM_SCORE=<JSON> CALLUM_FLOW_CLAIM_SCORE=<JSON>` (the old name for an older image), which the claim tool
 // records on the claimed event; the others run the tool alone.
 export function claimArgv(issue: number, score?: ScoreResult): string[] {
-  if (score !== undefined) return ['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify({ score: score.score, factors: score.factors })}`, 'callum-flow-claim', String(issue)]
-  return ['callum-flow-claim', String(issue)]
+  if (score !== undefined) {
+    const json = JSON.stringify({ score: score.score, factors: score.factors })
+    return ['env', `FABRIEK_CLAIM_SCORE=${json}`, `CALLUM_FLOW_CLAIM_SCORE=${json}`, 'fabriek-claim', String(issue)]
+  }
+  return ['fabriek-claim', String(issue)]
 }
 
 // The records' claims renewed, by number (H1).
 export function heartbeatArgv(issues: readonly number[]): string[] {
-  return ['callum-flow-claim', '--heartbeat', ...issues.map(String)]
+  return ['fabriek-claim', '--heartbeat', ...issues.map(String)]
 }
 
 // --- slots (10.1, 10.2, 10.8) -----------------------------------------------------------------------------------

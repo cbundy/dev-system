@@ -42,7 +42,7 @@ export function childBody(body: string, parent: number, key: string): string {
   return `${neutralBody(body)}\n\nPart of #${parent}, split by the factory loop.\n\n${hiddenKey(key)}\n`
 }
 
-// foundChild: the open issue whose body carries the key, from `callum-flow-issue-read --json --list`:
+// foundChild: the open issue whose body carries the key, from `fabriek-issue-read --json --list`:
 // its number and REST id; null when none does; undefined when the list is not in its shape.
 export function foundChild(json: string, key: string): { number: number; id: number } | null | undefined {
   let doc: unknown
@@ -61,7 +61,7 @@ export function foundChild(json: string, key: string): { number: number; id: num
   return null
 }
 
-// issueId: the REST id of `callum-flow-issue-read --json <n>`, or null.
+// issueId: the REST id of `fabriek-issue-read --json <n>`, or null.
 export function issueId(json: string): number | null {
   try {
     const issue = (JSON.parse(json) as { issue?: { id?: unknown } }).issue
@@ -71,7 +71,7 @@ export function issueId(json: string): number | null {
   }
 }
 
-// blockerOf: what `callum-flow-issue-read --json <n>` says of an issue: its REST id, whether it is
+// blockerOf: what `fabriek-issue-read --json <n>` says of an issue: its REST id, whether it is
 // open, and whether it is a pull request; null when it is not in that shape.
 export function blockerOf(json: string): { id: number; open: boolean; pr: boolean } | null {
   try {

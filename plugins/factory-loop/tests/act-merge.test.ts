@@ -1,5 +1,5 @@
 // The rollout executor (act-merge.ts) against a fake ExecCtx: its argv, timeout and stdin, the
-// reader of callum-flow-rollout's lines (images/base/callum-flow-rollout and its tests under
+// reader of fabriek-rollout's lines (images/base/fabriek-rollout and its tests under
 // features/test/callum-tools/) and each outcome the rule reads next.
 import { describe, expect, test } from 'claude-code/testing'
 
@@ -110,10 +110,10 @@ describe('parsers, against the CLIs\' own lines (v2 SPEC 13.6.1)', () => {
 })
 
 describe('rollout (rule M7 for a hand merge, D-29)', () => {
-  test('the rollout as callum-flow-rollout says it; no close_issue for a hand merge', async () => {
+  test('the rollout as fabriek-rollout says it; no close_issue for a hand merge', async () => {
     for (const value of ['merge', 'run-it', 'keep-open'] as const) {
       const { result, calls } = await exec(A.rollout(), [{ stdout: `ROLLOUT ${value} source=brief\n` }])
-      expect(calls).toEqual([{ argv: ['callum-flow-rollout', '50'], init: { timeoutMs: 60_000 } }])
+      expect(calls).toEqual([{ argv: ['fabriek-rollout', '50'], init: { timeoutMs: 60_000 } }])
       expect(result).toEqual({ status: 'done', outcome: { kind: 'rollout', rollout: value, closeIssue: null }, summary: `ROLLOUT ${value} source=brief` })
     }
   })
@@ -121,11 +121,11 @@ describe('rollout (rule M7 for a hand merge, D-29)', () => {
   test('conflict, invalid or unreadable: failed with the line, so the owner hears once retries run out', async () => {
     const conflict = "ROLLOUT conflict brief says merge but issue #50 has a '## Run it' heading"
     const { result } = await exec(A.rollout(), [{ exitCode: 1, stdout: `${conflict}\n` }])
-    expect(result).toEqual({ status: 'failed', outcome: { kind: 'cli', exit: 1, detail: conflict }, summary: `callum-flow-rollout: exit 1: ${conflict}` })
-    const unreadable = (await exec(A.rollout(), [{ exitCode: 1, stdout: 'ROLLOUT unreadable cannot read issue #50\n', stderr: 'callum-flow-rollout: cannot read issue #50\n' }])).result
-    expect(unreadable).toMatchObject({ status: 'failed', summary: 'callum-flow-rollout: exit 1: ROLLOUT unreadable cannot read issue #50' })
+    expect(result).toEqual({ status: 'failed', outcome: { kind: 'cli', exit: 1, detail: conflict }, summary: `fabriek-rollout: exit 1: ${conflict}` })
+    const unreadable = (await exec(A.rollout(), [{ exitCode: 1, stdout: 'ROLLOUT unreadable cannot read issue #50\n', stderr: 'fabriek-rollout: cannot read issue #50\n' }])).result
+    expect(unreadable).toMatchObject({ status: 'failed', summary: 'fabriek-rollout: exit 1: ROLLOUT unreadable cannot read issue #50' })
     expect((await exec(A.rollout(), [{ stdout: 'something else' }])).result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 0 } })
-    expect((await exec(A.rollout(), [{ exitCode: 2, stderr: 'usage: callum-flow-rollout <issue>' }])).result).toMatchObject({ noRetry: true })
+    expect((await exec(A.rollout(), [{ exitCode: 2, stderr: 'usage: fabriek-rollout <issue>' }])).result).toMatchObject({ noRetry: true })
   })
 
   test('no issue: refused without running anything', async () => {
@@ -146,9 +146,12 @@ describe('every executor', () => {
 
   test('failure: exit 2 is a usage error only for the image\'s own CLIs', () => {
     const r = (exitCode: number, stderr = ''): RunResult => ({ exitCode, stdout: '', stderr })
-    expect(failure(['callum-flow-rollout', '550'], r(2))).toMatchObject({ noRetry: true })
+    expect(failure(['fabriek-rollout', '550'], r(2))).toMatchObject({ noRetry: true })
+    // the old name is the same command (#1359)
+    expect(failure(['callum-flow-merge', '550'], r(2))).toMatchObject({ noRetry: true })
+    expect(failure(['fabriek-merge', '550'], r(2))).toMatchObject({ noRetry: true })
     expect('noRetry' in failure(['git', 'switch', 'x'], r(2))).toBe(false)
     expect('noRetry' in failure(['treehouse', 'get'], r(2))).toBe(false)
-    expect(failure(['callum-flow-rollout', '550'], r(1, RATE))).toMatchObject({ rateLimited: true })
+    expect(failure(['fabriek-rollout', '550'], r(1, RATE))).toMatchObject({ rateLimited: true })
   })
 })

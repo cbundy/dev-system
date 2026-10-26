@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { CommandRunInput, On, SessionStartInput } from 'claude-code'
 
 import { counts, dueAlerts, hudSource, repoSlug, statusText, versionsText } from '../hooks/format'
+import { resetFallbacks } from '../hooks/tool-name'
 
 const FACTORY = JSON.stringify({
   repos: [
@@ -128,7 +129,8 @@ describe('format', () => {
 })
 
 // world: the engine beneath the plugin, answered from fixtures; returns what was drawn.
-function world(on: On, factory: string | null = FACTORY) {
+function world(on: On, factory: string | null = FACTORY, image: 'new' | 'old' = 'new') {
+  resetFallbacks() // what a run learned about the image's tools is per process; a test starts fresh
   const clock = mock.clock(on, { now: NOW })
   const drawn = {
     status: [] as (string | undefined)[],
@@ -139,8 +141,8 @@ function world(on: On, factory: string | null = FACTORY) {
     writes: [] as string[],
     clock,
   }
-  const ran = (stdout: string, exitCode = 0) => ({
-    value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  const ran = (stdout: string, exitCode = 0, stderr = '') => ({
+    value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -176,6 +178,8 @@ function world(on: On, factory: string | null = FACTORY) {
     drawn.runs.push(e.argv.join(' '))
     drawn.envs.push(e.init?.env)
     if (e.argv[0] === 'git') return ran('git@github.com:cbundy/dev-system.git\n')
+    // an image that predates the fabriek names has only the callum-flow alias (#1359)
+    if (image === 'old' && e.argv[0] === 'fabriek-factory-state') return ran('', 127, 'sh: fabriek-factory-state: not found')
     return factory === null ? ran('', 1) : ran(factory)
   })
   return drawn
@@ -187,7 +191,7 @@ describe('in a session', () => {
     const drawn = world(on)
     await $.session.start(START)
     await drawn.clock.settle()
-    expect(drawn.runs).toContain('callum-flow-factory-state --repo cbundy/dev-system --github off --format json')
+    expect(drawn.runs).toContain('fabriek-factory-state --repo cbundy/dev-system --github off --format json')
     expect(drawn.status.at(-1)).toBe(
       '20:41  ctx 20%  5h 30%  | 6 live: design 2 dev 1 pipe 2 merge 1 | queued 2  | cc 2.1.296 flow 0.27.0 img 2.27.0',
     )
@@ -274,7 +278,7 @@ describe('in a session', () => {
     expect(drawn.writes).toEqual(['/w/s1 200000\n', '/w/s1 1000000\n'])
   })
 
-  const STATE = 'callum-flow-factory-state --repo cbundy/dev-system --github off --format json'
+  const STATE = 'fabriek-factory-state --repo cbundy/dev-system --github off --format json'
 
   test('FACTORY_HUD_SOURCE reaches only the factory-state runs', async ($, on) => {
     mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC', FACTORY_HUD_SOURCE: 'new' })
@@ -284,9 +288,20 @@ describe('in a session', () => {
     await drawn.clock.advance(60_000)
     const state = drawn.runs.flatMap((run, i) => (run === STATE ? [drawn.envs[i]] : []))
     expect(state.length).toBeGreaterThanOrEqual(2)
-    for (const env of state) expect(env).toEqual({ CALLUM_FLOW_FACTORY_STATE_SOURCE: 'new' })
+    for (const env of state) expect(env).toEqual({ FABRIEK_FACTORY_STATE_SOURCE: 'new', CALLUM_FLOW_FACTORY_STATE_SOURCE: 'new' })
     expect(drawn.envs[drawn.runs.indexOf('git remote get-url origin')]).toBeUndefined()
     expect(drawn.logs).toEqual([])
+  })
+
+  test('an image with only callum-flow-factory-state still shows the counts, by the old name, and the source under both names', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC', FACTORY_HUD_SOURCE: 'new' })
+    const drawn = world(on, FACTORY, 'old')
+    await $.session.start(START)
+    await drawn.clock.settle()
+    expect(drawn.runs).toContain(STATE.replace('fabriek-', 'callum-flow-'))
+    expect(drawn.status.at(-1)).toContain('6 live')
+    const old = drawn.runs.flatMap((run, i) => (run === STATE.replace('fabriek-', 'callum-flow-') ? [drawn.envs[i]] : []))
+    for (const env of old) expect(env).toEqual({ FABRIEK_FACTORY_STATE_SOURCE: 'new', CALLUM_FLOW_FACTORY_STATE_SOURCE: 'new' })
   })
 
   test('an unset FACTORY_HUD_SOURCE passes no env and logs nothing', async ($, on) => {

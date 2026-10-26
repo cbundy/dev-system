@@ -60,8 +60,8 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
   }
 }
 
-// the interventions the loop logged: native calls of callum-flow-event (--type intervention --data <json> [--issue N])
-const interventions = (h: { seen: { argv: string[] }[] }) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === 'intervention')
+// the interventions the loop logged: native calls of fabriek-event (--type intervention --data <json> [--issue N])
+const interventions = (h: { seen: { argv: string[] }[] }) => h.seen.filter(s => s.argv[0] === 'fabriek-event' && s.argv[1] === '--type' && s.argv[2] === 'intervention')
 const ivData = (s: { argv: string[] }) => JSON.parse(s.argv[4] ?? '{}') as { who: string; cause: string; life: string | null; fact: string }
 const ivFields = (s: { argv: string[] }): (string | null)[] => [s.argv[5] === '--issue' ? (s.argv[6] ?? null) : null, ivData(s).who, ivData(s).cause]
 
@@ -441,7 +441,7 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
       expect(argvs).toEqual([['gh', 'pr', 'list', '--repo', REPO, '--head', 'issue-470', '--state', 'all', '--json', 'number,state,headRefOid']])
       argvs.length = 0
       expect(await dispatch(ctxOf(env, s, start([], sweep, NOW).entry), sweep)).toMatchObject({ status: 'done' })
-      expect(argvs).toEqual([['callum-flow-sweep']])
+      expect(argvs).toEqual([['fabriek-sweep']])
     }
   })
 
@@ -450,7 +450,7 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
       const { env, argvs } = envOf()
       env.io.run = async argv => {
         argvs.push([...argv])
-        return argv.includes('callum-flow-claim') ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
+        return argv.includes('fabriek-claim') ? { exitCode: 1, stdout: '', stderr: 'API rate limit exceeded' } : { exitCode: 0, stdout: '', stderr: '' }
       }
       return { env, argvs }
     }
@@ -475,7 +475,7 @@ function world(over: { queue?: number[]; issues?: Record<string, unknown>[]; run
     if (own !== undefined) return own
     const [cmd, ...args] = argv
     switch (cmd) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc(over.issues ?? []) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -483,7 +483,7 @@ function world(over: { queue?: number[]; issues?: Record<string, unknown>[]; run
         return { stdout: `queue known=none now=${(over.queue ?? []).join(',') || 'none'}\n` }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         if (args.includes('--list')) return { stdout: JSON.stringify({ issues: (over.queue ?? []).map(number => ({ number })), stripped: 0 }) }
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
@@ -517,7 +517,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const clock = mock.clock(on, { now: NOW })
     const parked = record({ issue: 80, state: 'parked', step: null, since: NOW - HOUR, question: 'which API?' })
     const issue80 = { issue: { number: 80, title: 'x', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
-    const reads = (argv: string[]) => (argv.join(' ') === 'callum-flow-issue-read --json 80' ? { stdout: JSON.stringify(issue80) } : undefined)
+    const reads = (argv: string[]) => (argv.join(' ') === 'fabriek-issue-read --json 80' ? { stdout: JSON.stringify(issue80) } : undefined)
     const queue = Array.from({ length: 14 }, (_, i) => 100 + i)
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work' },
@@ -526,14 +526,14 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
     await $.session.start(START)
     await clock.advance(6_000)
-    const issueReads = h.commands().filter(c => c.argv[0] === 'callum-flow-issue-read' && c.argv.includes('--issues'))
+    const issueReads = h.commands().filter(c => c.argv[0] === 'fabriek-issue-read' && c.argv.includes('--issues'))
     // one batched call for the pass's 12 due issues (the cap), the parked record's issue first
     expect(issueReads).toHaveLength(1)
     const asked = (issueReads[0]?.argv[3] ?? '').split(',')
     expect(asked).toHaveLength(12)
     expect(asked[0]).toBe('80')
     // and its comments still came after the 12
-    expect(h.commands().filter(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80 --comments')).toHaveLength(1)
+    expect(h.commands().filter(c => c.argv.join(' ') === 'fabriek-issue-read --json 80 --comments')).toHaveLength(1)
   })
 
   test('act mode with planner v2 reads its records from the store, counts them, and keeps the store\'s records as they are', ENGINE_TEST, async ($, on) => {
@@ -561,7 +561,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label ship')).toBe(true)
+    expect(h.seen.some(s => s.argv.join(' ') === 'fabriek-issue-read --json --list --label ship')).toBe(true)
     expect(h.last().config).toBeUndefined()
   })
 
@@ -580,7 +580,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
       const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ readyLabel: 'from-tree' }) }, run })
       await $.session.start(START)
       await clock.advance(6_000)
-      expect(h.seen.some(s => s.argv.join(' ') === `callum-flow-issue-read --json --list --label ${label}`)).toBe(true)
+      expect(h.seen.some(s => s.argv.join(' ') === `fabriek-issue-read --json --list --label ${label}`)).toBe(true)
       expect(h.last().config).toEqual(problems)
     })
   }
@@ -597,7 +597,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({}) }, run })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label from-main')).toBe(true)
+    expect(h.seen.some(s => s.argv.join(' ') === 'fabriek-issue-read --json --list --label from-main')).toBe(true)
   })
 
   test('repoLoaded: the repo settings are origin\'s (#794)', async () => {
@@ -709,8 +709,8 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const pr900 = () => ({ pr: { state: closedAt === null ? 'open' : 'closed', merged: false, merged_at: null, closed_at: closedAt, head: { sha: head }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean' }, stripped: 0 })
     const reads = (argv: string[]) => {
       const line = argv.join(' ')
-      if (line === 'callum-flow-issue-read --json 470') return { stdout: JSON.stringify(issue470()) }
-      if (line === 'callum-flow-issue-read --json --pr 900') return { stdout: JSON.stringify(pr900()) }
+      if (line === 'fabriek-issue-read --json 470') return { stdout: JSON.stringify(issue470()) }
+      if (line === 'fabriek-issue-read --json --pr 900') return { stdout: JSON.stringify(pr900()) }
       return undefined
     }
     const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work' }, store: { [`records:${REPO}`]: recordsToStore([mq], NOW - MIN) }, run: world({ run: reads }) })

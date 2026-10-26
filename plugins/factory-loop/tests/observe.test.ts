@@ -1,7 +1,7 @@
 // The observe half's pure pieces against canned command output: the parsers (parse.ts), the
 // event derivation (derive.ts) and the state assembly (state.ts). Shapes are copied from real
-// output of callum-flow-factory-state, callum-flow-issue-read, usage-check.sh, treehouse,
-// callum-flow-milestone and dev-query on 2026-10-12.
+// output of fabriek-factory-state, fabriek-issue-read, usage-check.sh, treehouse,
+// fabriek-milestone and dev-query on 2026-10-12.
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
@@ -328,7 +328,7 @@ describe('parse', () => {
   })
 
   test('a tracker timeline: its open sub-issues on this repo, ascending, replayed in order (D-35)', () => {
-    // the shape of `callum-flow-issue-read --json --timeline 472` on 2026-10-13, trimmed
+    // the shape of `fabriek-issue-read --json --timeline 472` on 2026-10-13, trimmed
     const added = (n: number, at: string, st = 'open', repo = REPO) => ({
       event: 'sub_issue_added',
       created_at: at,
@@ -407,7 +407,7 @@ describe('parse', () => {
       const calls: string[][] = []
       const run = async (argv: string[]) => {
         calls.push(argv)
-        const key = argv[0] === 'callum-flow-milestone' ? 'ms' : argv[1] === 'release' ? 'view' : argv[1] === 'api' ? 'api' : 'list'
+        const key = argv[0] === 'fabriek-milestone' ? 'ms' : argv[1] === 'release' ? 'view' : argv[1] === 'api' ? 'api' : 'list'
         const r = replies[key]
         return typeof r === 'function' ? r() : r ?? fail()
       }
@@ -466,7 +466,7 @@ describe('parse', () => {
       }
       const unopted = setup({ ...all, ms: ok('') })
       await readMilestone({}, o(unopted.run, 5000))
-      expect(unopted.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+      expect(unopted.calls.map((c) => c[0])).toEqual(['fabriek-milestone'])
       const cache: MilestoneCache = {}
       await readMilestone(cache, o(setup({ ...all, ms: fail() }).run, 5000))
       expect(cache.milestone).toBeUndefined()
@@ -479,13 +479,13 @@ describe('parse', () => {
         const cache: MilestoneCache = {}
         const { calls, run } = setup({ ...all, ms: ok(OPEN) })
         await readMilestone(cache, wanted(run, 5000))
-        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh issue list', 'gh release view'])
+        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['fabriek-milestone show next', 'gh issue list', 'gh release view'])
         expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
         expect(cache.release).toBeUndefined()
         const none: MilestoneCache = {}
         const quiet = setup({ ...all, ms: ok('') })
         await readMilestone(none, o(quiet.run, 5000))
-        expect(quiet.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+        expect(quiet.calls.map((c) => c[0])).toEqual(['fabriek-milestone'])
         expect(none.tag).toBeUndefined()
       })
 
@@ -527,7 +527,7 @@ describe('parse', () => {
         const run = async (argv: string[]) => {
           calls.push(argv)
           // no milestone, so the loop's own tag is read for no one
-          if (argv[0] === 'callum-flow-milestone') return ok('')
+          if (argv[0] === 'fabriek-milestone') return ok('')
           const repo = argv[argv.indexOf('--repo') + 1]
           return repo === 'o/none' ? fail('release not found') : repo === 'o/down' ? fail() : ok(`{"tagName":"tag-of-${repo}"}`)
         }
@@ -616,7 +616,7 @@ describe('parse', () => {
         const cache: MilestoneCache = { tag: { at: 1, value: 'v0.47.0' }, closed: { at: 1, value: '2026-01-01T00:00:00.000Z' } }
         const { calls, run } = setup(withClosed)
         await readMilestone(cache, { ...o(run, 5000), backoff: true })
-        expect(calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+        expect(calls.map((c) => c[0])).toEqual(['fabriek-milestone'])
         expect(cache.tag?.value).toBe('v0.47.0')
         expect(cache.closed?.value).toBe('2026-01-01T00:00:00.000Z')
       })
@@ -923,7 +923,7 @@ describe('control (v2 SPEC 13.4.3)', () => {
 })
 
 describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
-  // the event callum-flow-event would log for an entry: its columns and the note
+  // the event fabriek-event would log for an entry: its columns and the note
   const logged = (e: LedgerEntry, ts = NOW): FactoryEvent => ({
     ts,
     state: 'loop',
@@ -1031,7 +1031,7 @@ describe('the loop event (v2 SPEC 13.7.4, 13.7.5, D-09)', () => {
   test('the native call that logs an entry carries its issue and the translator-named data', () => {
     const e = entry('task:sequence:550:head50', 'task', { ...base, class: 'drive', wake: 'sequence', startedAt: 1_000, endedAt: 2_000 })
     const argv = loopEntryArgv(e) as string[]
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_entry', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'loop_entry', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', '50'])
     expect(JSON.parse(argv[4] as string)).toMatchObject({ kind: 'task', key: e.key, status: e.status, class: 'drive', wake: 'sequence', started_at: '1970-01-01T00:00:01.000Z', ended_at: '1970-01-01T00:00:02.000Z', agent_id: null })
     const noIssue = loopEntryArgv(entry('tell:blind:0', 'tell', { wake: 'blind' })) as string[]
@@ -1162,7 +1162,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const answer = (argv: string[], stdin?: string): Reply => {
       const [cmd, ...args] = argv
       switch (cmd) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: factoryJson(world.factory) }
         case 'dev-query':
           // the facts' read of the new store (v2/sources-facts.ts); no factory URL when the test gives none
@@ -1174,7 +1174,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
           return world.pipeline
         case `${TOOLS}/queue-watch.sh`:
           return world.queue
-        case 'callum-flow-issue-read': {
+        case 'fabriek-issue-read': {
           const key = args.join(' ')
           if (world.issues[key] !== undefined) return world.issues[key]
           if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [{ number: 114 }, { number: 470 }], stripped: 0 }) }
@@ -1293,7 +1293,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
   describe('API-key mode', () => {
     const apiKey = { budgetUsd: '100', resetDay: '1' }
     const keyRt = (over: Partial<Runtime> = {}) => runtime({ apiKey, workspace: { session: 's1', process: 'p1' }, ...over })
-    const events = (h: { calls: Call[] }) => h.calls.filter(c => c.argv[0] === 'callum-flow-event' && c.argv[2] === 'usage')
+    const events = (h: { calls: Call[] }) => h.calls.filter(c => c.argv[0] === 'fabriek-event' && c.argv[2] === 'usage')
 
     test('usage-check.sh is not run, the session rate limits are ignored, and the reading is spend', async () => {
       const h = host({ cost: 91, limits: [{ kind: 'five_hour', percentUsed: 99 }] })
@@ -1309,7 +1309,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
       await h.pass(keyRt(), stored())
       const [first, ...rest] = events(h)
       expect(rest).toEqual([])
-      expect(first?.argv.slice(0, 5)).toEqual(['callum-flow-event', '--type', 'usage', '--actor', 'watcher'])
+      expect(first?.argv.slice(0, 5)).toEqual(['fabriek-event', '--type', 'usage', '--actor', 'watcher'])
       expect(first?.argv[5]).toBe('--data')
       const data = JSON.parse(first?.argv[6] ?? '{}')
       expect(data).toMatchObject({ available: true, source: 'spend', auth: 'api-key', spend_usd: 42.5, budget_usd: 100, reasons: [] })
@@ -1373,7 +1373,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(next.state.repo).toBe(other)
     expect(next.state.queue).toEqual([4, 5])
     expect(h.commands()).toContain(`${TOOLS}/queue-watch.sh --once --repo ${other} --label ready --known none`)
-    expect(h.commands().filter(c => /callum-flow-issue-read --json (114|470)$/.test(c))).toEqual([])
+    expect(h.commands().filter(c => /fabriek-issue-read --json (114|470)$/.test(c))).toEqual([])
     expect(h.cache.repo).toBe(other)
   })
 
@@ -1415,7 +1415,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // observe mode keeps the plain reader, so the shadow logs no ready events of its own
     const o = host()
     const shadow = await o.pass(runtime({ mode: 'observe', runSource: 'events' }))
-    expect(o.commands()).toContain('callum-flow-issue-read --json --list --label ready')
+    expect(o.commands()).toContain('fabriek-issue-read --json --list --label ready')
     expect(o.commands().some(c => c.includes('queue-watch'))).toBe(false)
     expect([shadow.state.queue, shadow.queueKnown]).toEqual([[114, 470], null])
   })
@@ -1655,7 +1655,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(first.state.githubBackoffUntil).toBeNull()
     const until = NOW + 12 * MIN
     const held = await h.pass(runtime(), stored({ githubBackoffUntil: until }), NOW + 3 * MIN)
-    expect(h.commands().filter(c => c.includes('queue-watch') || c.startsWith('callum-flow-issue-read'))).toEqual([])
+    expect(h.commands().filter(c => c.includes('queue-watch') || c.startsWith('fabriek-issue-read'))).toEqual([])
     const waiting = `GitHub rate limit: waiting until ${iso(until)}`
     expect([held.state.sources.queue, held.state.sources.github]).toEqual([
       { ok: false, at: NOW, error: waiting },
@@ -1679,7 +1679,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const obs = await h.pass(runtime(), stored())
     expect(obs.rateLimited).toBe(true)
     // 45, this device's, is read first (#556); the one batched call hits the limit; no single read follows
-    expect(h.commands().filter(c => c.startsWith('callum-flow-issue-read'))).toEqual(['callum-flow-issue-read --json --issues 45,114,470'])
+    expect(h.commands().filter(c => c.startsWith('fabriek-issue-read'))).toEqual(['fabriek-issue-read --json --issues 45,114,470'])
     expect(obs.state.sources.github).toEqual({ ok: false, at: NOW, error: 'GitHub rate limit' })
     expect(obs.state.githubBackoffUntil).toBe(NOW + GITHUB_BACKOFF_MS)
 
@@ -1723,8 +1723,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
   // the issues one pass read, in order: the numbers of its batched call (#922), or the single reads
   const issueReads = (h: ReturnType<typeof host>) =>
     h.commands().flatMap(c => {
-      if (c.startsWith('callum-flow-issue-read --json --issues ')) return c.slice('callum-flow-issue-read --json --issues '.length).split(',')
-      return c.startsWith('callum-flow-issue-read --json ') && !c.includes('--list') ? [c.slice('callum-flow-issue-read --json '.length)] : []
+      if (c.startsWith('fabriek-issue-read --json --issues ')) return c.slice('fabriek-issue-read --json --issues '.length).split(',')
+      return c.startsWith('fabriek-issue-read --json ') && !c.includes('--list') ? [c.slice('fabriek-issue-read --json '.length)] : []
     })
 
   test('the first pass reads the issues the loop would act on before the queue, so a closed one is never driven (testbed run 3, #556)', async () => {
@@ -1768,7 +1768,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(first.state.issues.find(i => i.number === 77)?.open).toBe(false)
 
     // 45's next read fails: it stays open as last read, never unknown or closed
-    h.world.issues['--json 45'] = { exitCode: 1, stderr: 'callum-flow-issue-read: cannot read issue #45' }
+    h.world.issues['--json 45'] = { exitCode: 1, stderr: 'fabriek-issue-read: cannot read issue #45' }
     const later = await h.pass(runtime(), kept, NOW + 6 * MIN)
     expect(issueReads(h)).toEqual(['45', '114', '470'])
     expect(later.state.issues.find(i => i.number === 45)?.open).toBe(true)
@@ -1787,7 +1787,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const issues = Object.fromEntries(queue.map(n => [`--json ${n}`, { stdout: ISSUE(n) }]))
     const h = host({ queue: { stdout: `queue known=none now=${queue.join(',')}\n` }, issues })
     const obs = await h.pass(runtime(), stored({ queueKnown: null }))
-    const calls = h.commands().filter(c => c.startsWith('callum-flow-issue-read') && !c.includes('--list'))
+    const calls = h.commands().filter(c => c.startsWith('fabriek-issue-read') && !c.includes('--list'))
     expect(calls.filter(c => c.includes('--issues'))).toHaveLength(1)
     expect(calls.filter(c => !c.includes('--issues') && !c.includes('--timeline') && !c.includes('--comments'))).toEqual([])
     expect(issueReads(h).length).toBeLessThanOrEqual(12)
@@ -1848,7 +1848,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     expect(good.state.issues.find(i => i.number === 114)?.open).toBe(true)
 
     // the whole call fails: the values stay, github is not ok
-    h.world.batch = { exitCode: 1, stderr: 'callum-flow-issue-read: boom' }
+    h.world.batch = { exitCode: 1, stderr: 'fabriek-issue-read: boom' }
     const failed = await h.pass(runtime(), stored(), NOW + 6 * MIN)
     expect(failed.state.sources.github.ok).toBe(false)
     expect(failed.state.issues.find(i => i.number === 114)?.open).toBe(true)
@@ -1856,8 +1856,8 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     // an older reader exits 2 on --issues: single reads in the same pass
     h.world.batch = { exitCode: 2, stderr: 'usage' }
     const old = await h.pass(runtime(), stored(), NOW + 12 * MIN)
-    const after = h.commands().filter(c => c.startsWith('callum-flow-issue-read --json '))
-    expect(after).toContain('callum-flow-issue-read --json 114')
+    const after = h.commands().filter(c => c.startsWith('fabriek-issue-read --json '))
+    expect(after).toContain('fabriek-issue-read --json 114')
     expect(old.state.sources.github.ok).toBe(true)
 
     // a refused number is cached as untrusted
@@ -1914,7 +1914,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const report = (skipped: unknown[]) => factoryJson([fsIssue(45, 'parked')], [], { skipped_events: skipped })
     const ioOf = (stdout: string): Io => ({
       now: async () => NOW,
-      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      run: async argv => (argv[0] === 'fabriek-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
       readFile: async () => null,
       sessionLimits: async () => [],
       agents: async () => [],
@@ -1935,7 +1935,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
   test('a factory report whose repo differs only in case still makes the source ok (the Vost failure)', async () => {
     const ioOf = (stdout: string): Io => ({
       now: async () => NOW,
-      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      run: async argv => (argv[0] === 'fabriek-factory-state' ? { exitCode: 0, stdout, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
       readFile: async () => null,
       sessionLimits: async () => [],
       agents: async () => [],
@@ -1957,7 +1957,7 @@ describe('observe for act mode (v2 SPEC 13.3.3, 13.3.4, 13.7.5, 13.10 item 2)', 
     const spawned = entry('i45/l1/s2/review/a1', 'agent-step', { step: 'review', class: 'drive', status: 'running', endedAt: null, agentId: 'a1' })
     const io: Io = {
       now: async () => NOW,
-      run: async argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 0, stdout: factoryJson([]), stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
+      run: async argv => (argv[0] === 'fabriek-factory-state' ? { exitCode: 0, stdout: factoryJson([]), stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }),
       readFile: async () => null,
       sessionLimits: async () => [],
       agents: async () => agents,

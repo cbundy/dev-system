@@ -91,13 +91,13 @@ echo "unexpected: $*" >&2
 exit 1
 `;
 
-// A stub `callum-flow-issue-read` beside it: the issue's body is STUB_BODY (default: no Run it heading),
+// A stub `fabriek-issue-read` beside it: the issue's body is STUB_BODY (default: no Run it heading),
 // STUB_READ=fail exits 1, STUB_READ=junk prints no JSON, STUB_READ=untrusted exits 3 and STUB_READ=hang never answers; --comment serves STUB_COMMENT on issue STUB_COMMENT_ISSUE; each call's argv and CALLUM_FLOW_REPO go to
 // STUB_READ_LOG. With --comments it also serves STUB_BRIEF as a design brief comment (the parity test).
 const READ_STUB = `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.appendFileSync(process.env.STUB_READ_LOG, process.argv.slice(2).join(" ") + " repo=" + process.env.CALLUM_FLOW_REPO + "\\n");
-if (process.env.STUB_READ === "fail") { console.error("callum-flow-issue-read: cannot read"); process.exit(1); }
+if (process.env.STUB_READ === "fail") { console.error("fabriek-issue-read: cannot read"); process.exit(1); }
 if (process.env.STUB_READ === "junk") { console.log("not json"); process.exit(0); }
 if (process.env.STUB_READ === "untrusted") process.exit(3);
 if (process.env.STUB_READ === "hang") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
@@ -120,7 +120,7 @@ before(async () => {
   stubDir = path.join(scratch, "stub-bin");
   fs.mkdirSync(stubDir);
   fs.writeFileSync(path.join(stubDir, "gh"), GH_STUB, { mode: 0o755 });
-  fs.writeFileSync(path.join(stubDir, "callum-flow-issue-read"), READ_STUB, { mode: 0o755 });
+  fs.writeFileSync(path.join(stubDir, "fabriek-issue-read"), READ_STUB, { mode: 0o755 });
   ghLog = path.join(scratch, "gh.log");
   readLog = path.join(scratch, "read.log");
   answers = path.join(cfg, "factory-loop", REPO_DIR, "answers");
@@ -677,7 +677,7 @@ function answerBrief(rollout, env = {}) {
   return { ...r, file, reads: readCalls() };
 }
 
-test("a merge brief over a stale Run it heading is refused with callum-flow-rollout's reason; nothing is written (#467)", () => {
+test("a merge brief over a stale Run it heading is refused with fabriek-rollout's reason; nothing is written (#467)", () => {
   const r = answerBrief("merge - the Run it moved to #832", { STUB_BODY: STALE_BODY });
   assert.equal(r.code, 1, r.out);
   const problems = problemsOf(r.err);
@@ -727,8 +727,33 @@ test("an issue read that decides nothing records the merge brief and names the u
   assert.equal(fs.existsSync(file), true);
 });
 
+// #1359: the same read on an image that has only the old command names, and the settings under both names.
+test("the Rollout read falls back to callum-flow-issue-read on an image without the fabriek name, and passes the repo under both setting names", () => {
+  const old = path.join(scratch, "old-image");
+  fs.mkdirSync(old, { recursive: true });
+  const node = path.join(old, "node");
+  if (!fs.existsSync(node)) fs.symlinkSync(process.execPath, node);
+  const log = path.join(scratch, "old-image.log");
+  fs.writeFileSync(
+    path.join(old, "callum-flow-issue-read"),
+    `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(log)}, "fabriek=" + process.env.FABRIEK_REPO + " old=" + process.env.CALLUM_FLOW_REPO + "\\n");\nconsole.log(JSON.stringify({ issue: { body: ${JSON.stringify(STALE_BODY)} } }));\n`,
+    { mode: 0o755 },
+  );
+  const { file } = issue(ROLLOUT_JOB);
+  const r = spawnSync(SCRIPT, ["--to", file], {
+    input: JSON.stringify({ kind: "brief", brief: briefOf("merge - the Run it moved to #832") }),
+    encoding: "utf8",
+    env: { PATH: old, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
+    timeout: 30_000,
+  });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /issue #467 has a '## Run it' heading/);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(log, "utf8"), "fabriek=cbundy/dev-system old=cbundy/dev-system\n");
+});
+
 // An upstream request's owner authority, when it cites a comment or the issue itself, is read through
-// callum-flow-issue-read (hooks/v2/upstream-check.mjs).
+// fabriek-issue-read (hooks/v2/upstream-check.mjs).
 const UP_JOB = { contract: "design-v2", purpose: null, repo: "cbundy/consumer", issue: 470, branch: null, data: { ownerNotes: [] } };
 const UP_COMMENT = "https://github.com/cbundy/consumer/issues/470#issuecomment-4242";
 const UP_ISSUE = "https://github.com/cbundy/consumer/issues/470";
@@ -808,7 +833,7 @@ test("question, wait, done and split answers, and a review job make no issue rea
   assert.deepEqual(readCalls(), []);
 });
 
-test("hasRunItHeading and callum-flow-rollout agree on the same bodies", async () => {
+test("hasRunItHeading and fabriek-rollout agree on the same bodies", async () => {
   const { hasRunItHeading, conflictReason } = await import(pathToFileURL(path.join(PLUGIN, "hooks", "v2", "rollout-check.mjs")).href);
   const bodies = [
     STALE_BODY,
@@ -823,11 +848,11 @@ test("hasRunItHeading and callum-flow-rollout agree on the same bodies", async (
     "  ## Run it\nx\n",
     "## Run it\n",
   ];
-  const rollout = path.join(__dirname, "..", "images", "base", "callum-flow-rollout");
+  const rollout = path.join(__dirname, "..", "images", "base", "fabriek-rollout");
   for (const body of bodies) {
     const r = spawnSync(rollout, ["5"], {
       encoding: "utf8",
-      env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "callum-flow-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: body, STUB_BRIEF: briefOf("merge - plain") },
+      env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "fabriek-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: body, STUB_BRIEF: briefOf("merge - plain") },
       timeout: 30_000,
     });
     const conflict = hasRunItHeading(body);
@@ -837,15 +862,15 @@ test("hasRunItHeading and callum-flow-rollout agree on the same bodies", async (
   }
 });
 
-test("callum-flow-rollout reads a summary-plus-Details brief as it reads the same brief without the details lines", () => {
-  const rollout = path.join(__dirname, "..", "images", "base", "callum-flow-rollout");
+test("fabriek-rollout reads a summary-plus-Details brief as it reads the same brief without the details lines", () => {
+  const rollout = path.join(__dirname, "..", "images", "base", "fabriek-rollout");
   const nested = (value) => `## Design brief (designer, 2026-10-24)\n\nPlain summary.\n\n<details><summary>Exploration</summary>\n\nRead things.\n\n</details>\n\n## Acceptance criteria\nOne line.\n\n<details><summary>Details</summary>\n\n- a\n\n</details>\n\n## Rollout\n${value}\n\n## Open decisions\nnone\n`;
   const strip = (b) => b.split("\n").filter((l) => !/^(<details>|<\/details>|<summary>)/.test(l)).join("\n");
   for (const value of ["merge - plain", "run-it - has a Run it", "keep-open - research"]) {
     const outs = [nested(value), strip(nested(value))].map((brief) => {
       const r = spawnSync(rollout, ["5"], {
         encoding: "utf8",
-        env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "callum-flow-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: "Do it.\n", STUB_BRIEF: brief },
+        env: { PATH: process.env.PATH, CALLUM_FLOW_ISSUE_READ_BIN: path.join(stubDir, "fabriek-issue-read"), STUB_READ_LOG: readLog, STUB_BODY: "Do it.\n", STUB_BRIEF: brief },
         timeout: 30_000,
       });
       return { status: r.status, stdout: r.stdout };

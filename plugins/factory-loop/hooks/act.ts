@@ -28,7 +28,7 @@ import { expireWakes, wakeExecutors } from './wake'
 import { readWakeCost } from './wake-cost'
 
 const SUMMARY_MAX = 200
-// callum-flow-event is one jq call and one append; a minute is ample
+// fabriek-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
 
 // Every kind's executor (v2 SPEC 13.6.1): the shared kinds', and v2's for its new kinds (v2/registry.ts).
@@ -70,19 +70,19 @@ export function commandOf(io: ActIo, rt: Runtime, log: string[]): ExecCtx['cmd']
   }
 }
 
-// eventArgv: `callum-flow-event --type <type> --data <json> --issue N`.
+// eventArgv: `fabriek-event --type <type> --data <json> --issue N`.
 export function eventArgv(type: string, data: Record<string, unknown>, at: { issue: number }): string[] {
-  return ['callum-flow-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(at.issue)]
+  return ['fabriek-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(at.issue)]
 }
 
-// eventOf: ExecCtx.event. callum-flow-event exits non-zero only on a usage error (2); the error
+// eventOf: ExecCtx.event. fabriek-event exits non-zero only on a usage error (2); the error
 // carries the exit as `exitCode`, which the executors read to never retry it.
 export function eventOf(cmd: ExecCtx['cmd']): ExecCtx['event'] {
   return async (type, data, at) => {
     const r = await cmd(eventArgv(type, data, at), { timeoutMs: EVENT_TIMEOUT_MS })
     if (r.exitCode === 0) return
     const why = r.stderr.trim().split('\n').pop() ?? ''
-    throw Object.assign(new Error(`callum-flow-event ${type}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
+    throw Object.assign(new Error(`fabriek-event ${type}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
   }
 }
 

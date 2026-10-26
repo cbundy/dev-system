@@ -361,7 +361,7 @@ export function loopEntryArgv(entry: LedgerEntry, tokens: TokenFields = NO_TOKEN
   // an ended task or tell carries only the what-if cost of its time window in the main session
   // (hooks/wake-cost.ts); null while it runs and where nothing was read
   else if (entry.kind === 'task' || entry.kind === 'tell') data.cost_usd = entry.status === 'running' ? null : tokens.cost_usd
-  const argv = ['callum-flow-event', '--type', 'loop_entry', '--data', JSON.stringify(data)]
+  const argv = ['fabriek-event', '--type', 'loop_entry', '--data', JSON.stringify(data)]
   if (entry.issue !== null) argv.push('--issue', String(entry.issue))
   return argv
 }

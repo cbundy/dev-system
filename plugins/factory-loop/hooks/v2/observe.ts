@@ -447,7 +447,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
       continue
     }
     try {
-      const c = await run(['callum-flow-issue-read', '--json', String(r.issue), '--comments'])
+      const c = await run(['fabriek-issue-read', '--json', String(r.issue), '--comments'])
       const parsed = c.exitCode === 0 ? commentsOf(c.stdout) : null
       if (parsed === null) commentsOk = false
       else {
@@ -538,7 +538,7 @@ async function readWindDown(io: Io, rt: Runtime, now: Ms): Promise<WindDownRead>
   return { request, stopNow: (await text(paths.stopNow)) !== null, previous: previousOf(await text(paths.status)) }
 }
 
-// commentsOf: the trusted comments of `callum-flow-issue-read --json N --comments`, oldest first;
+// commentsOf: the trusted comments of `fabriek-issue-read --json N --comments`, oldest first;
 // null when it does not read.
 export function commentsOf(json: string): IssueComment[] | null {
   try {

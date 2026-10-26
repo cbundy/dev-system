@@ -1,7 +1,7 @@
 "use strict";
 
 // Every event the factory loop v2 writes (docs/factory-loop/v2/SPEC.md 7.1) is built by
-// plugins/factory-loop/hooks/v2/events.ts as a native call, `callum-flow-event --type <type> --data
+// plugins/factory-loop/hooks/v2/events.ts as a native call, `fabriek-event --type <type> --data
 // <json>`, and must be one the real images/base/fabriek-event takes: a refused one is a usage
 // error the loop only notes, and its fact is lost. This runs the real CLI into a scratch log with an
 // event of every kind v2 writes and checks the line against what the translator makes of the old
@@ -30,7 +30,7 @@ register(
 const ROOT = path.join(__dirname, "..");
 const EVENTS = path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "events.ts");
 const NATIVE = path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "event-native.ts");
-const EVENT = path.join(ROOT, "images", "base", "callum-flow-event");
+const EVENT = path.join(ROOT, "images", "base", "fabriek-event");
 const NOW = Date.UTC(2026, 9, 15, 9, 30);
 const HEAD = "0821e6a3c0f4b1d2e5a6978877665544332211ff";
 
@@ -58,9 +58,9 @@ const linesOf = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").s
 const newLog = (d) => path.join(d, "factory", "cbundy__dev-system.jsonl");
 const oldLog = (d) => path.join(d, "cbundy__dev-system.jsonl");
 
-// log: the argv run by the real callum-flow-event, into the scratch dir; the new log's line written.
+// log: the argv run by the real fabriek-event, into the scratch dir; the new log's line written.
 function log(argv, d = dir) {
-  assert.equal(argv[0], "callum-flow-event");
+  assert.equal(argv[0], "fabriek-event");
   const before = linesOf(newLog(d)).length;
   const r = spawnSync("sh", [EVENT, ...argv.slice(1)], { encoding: "utf8", env: ENV(d) });
   assert.equal(r.status, 0, `${argv.slice(0, 5).join(" ")} was refused: ${r.stderr}`);
@@ -75,7 +75,7 @@ function log(argv, d = dir) {
 // the old line it makes is the data the new store held.
 function oldArgv(e) {
   const c = ev.eventColumns(e);
-  const argv = ["callum-flow-event", e.state];
+  const argv = ["fabriek-event", e.state];
   if (c.issue !== null) argv.push("--issue", String(c.issue));
   if (c.branch !== null) argv.push("--branch", c.branch);
   if (c.pr !== null) argv.push("--pr", String(c.pr));
@@ -85,7 +85,7 @@ function oldArgv(e) {
   return argv;
 }
 
-// oldLineOf: the line the old writer built from an old argv (callum-flow-event writes it to no log any
+// oldLineOf: the line the old writer built from an old argv (fabriek-event writes it to no log any
 // more, cbundy/dev-system#1143, but still builds it for the translator): its columns, as the writer filled them.
 function oldLineOf(argv) {
   const opt = (flag) => {
@@ -208,7 +208,7 @@ test("every event v2 builds is the translator's event for its old line, and one 
       const want = old.translated.event;
       // the old line carries no size: the executor reads it (cbundy/dev-system#752), null here
       if (want.type === "merged") want.data = { ...want.data, files: null, file_lines: null, additions: null, deletions: null, merged_at: null, title: null };
-      assert.deepEqual(argv.slice(0, 5), ["callum-flow-event", "--type", want.type, "--data", argv[4]], e.state);
+      assert.deepEqual(argv.slice(0, 5), ["fabriek-event", "--type", want.type, "--data", argv[4]], e.state);
       assert.deepEqual(JSON.parse(argv[4]), want.data, `${e.state}: the data is the translator's`);
       const got = log(argv, nativeDir);
       assert.equal(linesOf(oldLog(nativeDir)).length, 0, `${e.state} wrote the old log`);
@@ -235,7 +235,7 @@ test("every event v2 builds is the translator's event for its old line, and one 
 test("no argv the loop builds names an old state or carries a note, a column flag or --new-only", () => {
   for (const e of events()) {
     const argv = ev.eventArgv(e);
-    assert.deepEqual(argv.slice(0, 2), ["callum-flow-event", "--type"], e.state);
+    assert.deepEqual(argv.slice(0, 2), ["fabriek-event", "--type"], e.state);
     for (const flag of ["--note", "--branch", "--pr", "--head", "--new-only", "--run"]) assert.ok(!argv.includes(flag), `${e.state} carries ${flag}`);
     assert.ok(!["delegated", "fix_requested", "merge_ready", "reclaimed", "verdict"].includes(argv[2]), `${e.state} names the old state ${argv[2]}`);
     assert.deepEqual(argv.filter((a) => a.startsWith("--")), ["--type", "--data", ...(argv.includes("--issue") ? ["--issue"] : []), ...(argv.includes("--actor") ? ["--actor"] : [])]);
@@ -287,19 +287,19 @@ test("a v2 split's abandoned goes through the real writer: the new log carries t
   const old = translate(JSON.stringify({ event_id: "11111111-1111-4111-8111-111111111111", ts: "2026-10-15T09:30:00.000Z", state: "abandoned", issue: 600, branch: null, pr: null, head: null, run_id: null, note, actor: "agent", repo: "cbundy/dev-system", device: "box" }), { ts: "2026-10-15T09:30:00.000Z", sessionId: "s" });
   assert.equal(old.skip, undefined, old.miss);
   assert.deepEqual(data, old.event.data);
-  const got = log(["callum-flow-event", "--type", "abandoned", "--data", JSON.stringify(data), "--issue", "600"]);
+  const got = log(["fabriek-event", "--type", "abandoned", "--data", JSON.stringify(data), "--issue", "600"]);
   const read = reader.readEvent(got);
   assert.deepEqual(read.data.split_into, [601, 602]);
   assert.deepEqual([read.data.why_split, read.data.why_count, read.data.why_parts, read.data.why_order], [reasons.why_split, reasons.why_count, reasons.why_parts, reasons.why_order]);
   assert.deepEqual(read.data.child_whys, childWhys);
   // without reasons only the children are named, and the new fields read as null
-  const bare = log(["callum-flow-event", "--type", "abandoned", "--data", JSON.stringify(native.splitAbandonedData([604, 605], null, null)), "--issue", "603"]);
+  const bare = log(["fabriek-event", "--type", "abandoned", "--data", JSON.stringify(native.splitAbandonedData([604, 605], null, null)), "--issue", "603"]);
   const bareRead = reader.readEvent(bare);
   assert.deepEqual([bareRead.data.split_into, bareRead.data.why_split, bareRead.data.child_whys, bareRead.data.detail], [[604, 605], null, null, "split into 604,605"]);
 });
 
 test("the loop's closed events go through the real writer: reason completed, for the issue", () => {
-  const got = log(["callum-flow-event", "--type", "closed", "--data", JSON.stringify(native.closedData("completed")), "--issue", "571"]);
+  const got = log(["fabriek-event", "--type", "closed", "--data", JSON.stringify(native.closedData("completed")), "--issue", "571"]);
   assert.deepEqual(reader.validateStrict("closed", 1, got.data), []);
   assert.deepEqual([got.type, got.issue, got.data], ["closed", 571, { reason: "completed" }]);
 });
@@ -328,7 +328,7 @@ test("a via=dual-write transition goes through the real writer, carrying the sam
   assert.deepEqual([read.data.via, read.data.life, read.data.seq], ["dual-write", "ss1x2k", 7]);
 });
 
-// A gate_run is written in the new format alone (rules-gates.ts): the real callum-flow-event takes
+// A gate_run is written in the new format alone (rules-gates.ts): the real fabriek-event takes
 // the argv events.ts builds in native mode, warns of nothing, and writes a line the shared reader and
 // the strict schema accept, with the issue, the payload and no old-format line.
 for (const [name, extra] of [
@@ -342,7 +342,7 @@ for (const [name, extra] of [
     const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
     const argv = ev.eventArgv(e);
-    assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
+    assert.deepEqual(argv.slice(0, 4), ["fabriek-event", "--type", "gate_run", "--data"]);
     const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
       encoding: "utf8",
       env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
@@ -372,7 +372,7 @@ test("a comment_posted goes through the real writer's native mode: exit 0, no wa
   const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
   const argv = ev.eventArgv(e);
-  assert.deepEqual(argv, ["callum-flow-event", "--type", "comment_posted", "--data", JSON.stringify(data), "--issue", "571"]);
+  assert.deepEqual(argv, ["fabriek-event", "--type", "comment_posted", "--data", JSON.stringify(data), "--issue", "571"]);
   const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
     encoding: "utf8",
     env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
@@ -400,7 +400,7 @@ test("a queue_snapshot goes through the real writer's native mode: no issue, no 
     const view = { rows: rows(n), considered: n, free_slots: n === 0 ? null : 2, priority: [3], only: [], serial: false, noNewWork: false };
     const data = snap.snapshotData(view, NOW, reason, folded);
     const argv = snap.snapshotArgv(data);
-    assert.deepEqual(argv, ["callum-flow-event", "--type", "queue_snapshot", "--data", JSON.stringify(data)]);
+    assert.deepEqual(argv, ["fabriek-event", "--type", "queue_snapshot", "--data", JSON.stringify(data)]);
     const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
     const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
@@ -431,7 +431,7 @@ test("a milestone_state goes through the real writer's native mode: no issue, no
   ];
   for (const data of readings) {
     const argv = ev.eventArgv({ state: "milestone_state", data });
-    assert.deepEqual(argv, ["callum-flow-event", "--type", "milestone_state", "--data", JSON.stringify(data)]);
+    assert.deepEqual(argv, ["fabriek-event", "--type", "milestone_state", "--data", JSON.stringify(data)]);
     const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
     const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
@@ -488,7 +488,7 @@ test("a shadow_read goes through the real writer's native mode: no issue, no war
   const found = { reader: "loop-records", tool: "factory-loop", compared: 42, differences: 2, live_differences: 3, diff_keys: ["12", "15"], old_ok: true, new_ok: false, settle_seconds: 600, detail: "#12 round: old 0, new 4" };
   for (const data of [compared, found]) {
     const argv = ev.eventArgv({ state: "shadow_read", data });
-    assert.deepEqual(argv, ["callum-flow-event", "--type", "shadow_read", "--data", JSON.stringify(data)]);
+    assert.deepEqual(argv, ["fabriek-event", "--type", "shadow_read", "--data", JSON.stringify(data)]);
     const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
     const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
     const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
@@ -541,7 +541,7 @@ test("the operator's hand-recorded rescue, as the playbook writes it in the old 
 });
 
 // The dual-write check (docs/factory-events/translator.md): every line of the corpus rebuilt as
-// callum-flow-event arguments and run through the real writer makes no miss, and the new events per
+// fabriek-event arguments and run through the real writer makes no miss, and the new events per
 // type are the mapped old lines minus the named skips.
 test("the corpus through the real writer: zero misses, and the events are the corpus's", () => {
   const corpus = path.join(ROOT, "tests", "fixtures", "factory-events");

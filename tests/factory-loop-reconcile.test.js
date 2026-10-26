@@ -1,8 +1,8 @@
 "use strict";
 
 // The factory loop v2's one-shot reconcile migration, plugins/factory-loop/bin/factory-reconcile
-// (docs/factory-loop/v2/SPEC.md 6.3, 6.4), over a fixture factory: stub callum-flow-factory-state,
-// dev-query, gh, callum-flow-issue-read and treehouse binaries answer from the fixtures below and
+// (docs/factory-loop/v2/SPEC.md 6.3, 6.4), over a fixture factory: stub fabriek-factory-state,
+// dev-query, gh, fabriek-issue-read and treehouse binaries answer from the fixtures below and
 // record every call, and the pool's slots are real git repositories, whose HEAD and tree times the
 // tool reads. Observe changes nothing; --act re-checks each named issue and does what its proposal
 // now says, in the release's order (labels, the slot, the closing event, the intervention), and
@@ -11,7 +11,7 @@
 // also lists the issues that show as active with no live claim and no ready label (no holder, or
 // queued after a claim lapsed), and releases a live issue only when it is named. The tool runs
 // through a runner, with the real hooks/v2/events.ts (the loop's events are native calls of
-// callum-flow-event: a type and its data), and a stub callum-flow-event that writes its lines to
+// fabriek-event: a type and its data), and a stub fabriek-event that writes its lines to
 // the new log as the real one does. Plugin tests cannot run a command, so this lives here.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
@@ -137,7 +137,7 @@ function fixtures() {
   return {
     slots,
     answers: {
-      "callum-flow-factory-state": [{ match: ".", stdout: factory }],
+      "fabriek-factory-state": [{ match: ".", stdout: factory }],
       "dev-query": [
         { match: "factory\\.events", stdout: claims },
       ],
@@ -152,7 +152,7 @@ function fixtures() {
         { match: "^pr checks 113 ", stderr: "no checks reported on the 'fix/issue-13-z' branch\n", code: 1 },
         { match: "^issue edit ", stdout: "" },
       ],
-      "callum-flow-issue-read": [
+      "fabriek-issue-read": [
         { match: "^--json --list --label In development --state all$", stdout: { issues: [ghIssue(10, ["In development"]).issue, ghIssue(12, ["In development"]).issue, ghIssue(20, ["bug", "In development"]).issue, ghIssue(21, ["In development"], "closed").issue], stripped: 0 } },
         { match: "^--json --pr 111 --comments$", stdout: { pr: { number: 111 }, comments: [], review_comments: [], reviews: [{ id: 1, submitted_at: iso(AT - 5 * HOUR) }], stripped: 0 } },
         // a PR on #11's branch by an untrusted author: not the loop's, never read
@@ -185,12 +185,12 @@ const FAKE = `"use strict";
 const fs = require("node:fs");
 const [, , name, ...argv] = process.argv;
 const dir = process.env.FAKE_DIR;
-const keep = ["CALLUM_FLOW_REPO", "CALLUM_FLOW_ACTOR", "CALLUM_EVENTS_DIR"];
+const keep = ["CALLUM_FLOW_REPO", "FABRIEK_REPO", "CALLUM_FLOW_ACTOR", "FABRIEK_ACTOR", "CALLUM_EVENTS_DIR"];
 fs.appendFileSync(dir + "/calls.jsonl", JSON.stringify({ name, argv, cwd: process.cwd(), env: Object.fromEntries(keep.map((k) => [k, process.env[k] ?? null])) }) + "\\n");
 const rules = JSON.parse(fs.readFileSync(dir + "/answers.json", "utf8"))[name] || [];
 const line = argv.join(" ");
 const rule = rules.find((r) => new RegExp(r.match).test(line));
-if (name === "callum-flow-event") {
+if (name === "fabriek-event") {
   // as the real one: --new-only --new-path names the new log; a native write appends one line, and
   // exits 0 even when it fails (a rule's drop); a usage error exits 2 and writes nothing
   const flag = (f) => (argv.indexOf(f) === -1 ? null : argv[argv.indexOf(f) + 1]);
@@ -198,7 +198,7 @@ if (name === "callum-flow-event") {
   const log = process.env.CALLUM_EVENTS_DIR + "/factory/" + repo.replace("/", "__") + ".jsonl";
   if (argv.includes("--new-path")) { process.stdout.write(log + "\\n"); process.exit(0); }
   if (rule && rule.code) { process.stderr.write(rule.stderr || ""); process.exit(rule.code); }
-  if (rule && rule.drop) { process.stderr.write("callum-flow-event: warning: cannot write " + log + " - event not recorded\\n"); process.exit(0); }
+  if (rule && rule.drop) { process.stderr.write("fabriek-event: warning: cannot write " + log + " - event not recorded\\n"); process.exit(0); }
   const num = (v) => (v === null ? null : Number(v));
   const e = { type: flag("--type"), repo, actor: flag("--actor") || process.env.CALLUM_FLOW_ACTOR || "agent", issue: num(flag("--issue")), data: JSON.parse(flag("--data")) };
   fs.mkdirSync(process.env.CALLUM_EVENTS_DIR + "/factory", { recursive: true });
@@ -239,7 +239,7 @@ function world(answers, { machine = DEVICE } = {}) {
   fs.writeFileSync(path.join(dir, "runner.js"), RUNNER(SCRIPT));
   fs.writeFileSync(path.join(dir, "answers.json"), JSON.stringify(answers));
   fs.mkdirSync(path.join(dir, "bin"));
-  for (const name of ["callum-flow-factory-state", "dev-query", "gh", "callum-flow-issue-read", "callum-flow-event", "treehouse"]) {
+  for (const name of ["fabriek-factory-state", "dev-query", "gh", "fabriek-issue-read", "fabriek-event", "treehouse"]) {
     const bin = path.join(dir, "bin", name);
     fs.writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${path.join(dir, "fake.js")}" ${name} "$@"\n`);
     fs.chmodSync(bin, 0o755);
@@ -254,11 +254,11 @@ function world(answers, { machine = DEVICE } = {}) {
     DEV_MACHINE_NAME: machine,
     CLAUDE_CONFIG_DIR: cfg,
     CALLUM_EVENTS_DIR: events,
-    CALLUM_FLOW_FACTORY_STATE_BIN: path.join(dir, "bin", "callum-flow-factory-state"),
+    CALLUM_FLOW_FACTORY_STATE_BIN: path.join(dir, "bin", "fabriek-factory-state"),
     CALLUM_FLOW_DEV_QUERY_BIN: path.join(dir, "bin", "dev-query"),
     CALLUM_FLOW_GH_BIN: path.join(dir, "bin", "gh"),
-    CALLUM_FLOW_ISSUE_READ_BIN: path.join(dir, "bin", "callum-flow-issue-read"),
-    CALLUM_FLOW_EVENT_BIN: path.join(dir, "bin", "callum-flow-event"),
+    CALLUM_FLOW_ISSUE_READ_BIN: path.join(dir, "bin", "fabriek-issue-read"),
+    FABRIEK_EVENT_BIN: path.join(dir, "bin", "fabriek-event"),
     CALLUM_FLOW_TREEHOUSE_BIN: path.join(dir, "bin", "treehouse"),
   };
   const loopDir = path.join(cfg, "factory-loop", "acme__widgets");
@@ -278,10 +278,10 @@ function world(answers, { machine = DEVICE } = {}) {
 }
 
 // probe: the readiness check's event to a scratch log, or a read of the log's path: no write
-const probe = (c) => c.name === "callum-flow-event" && (c.argv.includes("--new-path") || /factory-reconcile-probe-/.test(c.env.CALLUM_EVENTS_DIR || ""));
-const writes = (calls) => calls.filter((c) => (c.name === "gh" && c.argv[0] === "issue") || (c.name === "treehouse" && c.argv[0] === "return") || (c.name === "callum-flow-event" && !probe(c)));
+const probe = (c) => c.name === "fabriek-event" && (c.argv.includes("--new-path") || /factory-reconcile-probe-/.test(c.env.CALLUM_EVENTS_DIR || ""));
+const writes = (calls) => calls.filter((c) => (c.name === "gh" && c.argv[0] === "issue") || (c.name === "treehouse" && c.argv[0] === "return") || (c.name === "fabriek-event" && !probe(c)));
 // names: a write that names this issue: its label edit, or an event about it
-const names = (c, n) => (c.name === "gh" && c.argv[0] === "issue" && c.argv[2] === String(n)) || (c.name === "callum-flow-event" && c.argv[c.argv.indexOf("--issue") + 1] === String(n));
+const names = (c, n) => (c.name === "gh" && c.argv[0] === "issue" && c.argv[2] === String(n)) || (c.name === "fabriek-event" && c.argv[c.argv.indexOf("--issue") + 1] === String(n));
 const line = (out, issue) => out.split("\n").find((l) => l.startsWith(`- #${issue}:`) || l.startsWith(`- #${issue} (`)) || "";
 const slotLine = (out, name) => out.split("\n").find((l) => l.startsWith(`- slot ${name} `)) || "";
 
@@ -291,6 +291,37 @@ before(() => {
   fx = fixtures();
 });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+// #1359: the tools by their fabriek names, the old callum-flow names on an older image, and the bin overrides
+// under both setting names.
+test("an image with only the callum-flow command names still reads: each fabriek-* program that is not found runs as its old name", () => {
+  const w = world(fx.answers);
+  const old = path.join(w.dir, "old-bin");
+  fs.mkdirSync(old);
+  for (const tool of ["factory-state", "issue-read", "event"]) {
+    const bin = path.join(old, `callum-flow-${tool}`);
+    fs.writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${path.join(w.dir, "fake.js")}" fabriek-${tool} "$@"\n`);
+    fs.chmodSync(bin, 0o755);
+  }
+  const noBins = { FABRIEK_FACTORY_STATE_BIN: "", CALLUM_FLOW_FACTORY_STATE_BIN: "", FABRIEK_ISSUE_READ_BIN: "", CALLUM_FLOW_ISSUE_READ_BIN: "", FABRIEK_EVENT_BIN: "", CALLUM_FLOW_EVENT_BIN: "", PATH: `${old}:${path.dirname(process.execPath)}:${process.env.PATH}` };
+  const out = w.run([], noBins);
+  assert.equal(out.status, 0, out.stderr);
+  assert.ok(w.calls().some((c) => c.name === "fabriek-factory-state"), "the report was read through the old name");
+  // and without any of them, the read fails and says which tool
+  const none = world(fx.answers).run([], { ...noBins, PATH: path.dirname(process.execPath) });
+  assert.notEqual(none.status, 0);
+});
+
+test("FABRIEK_<X>_BIN wins over CALLUM_FLOW_<X>_BIN, which still works alone", () => {
+  const w = world(fx.answers);
+  const good = path.join(w.dir, "bin", "fabriek-factory-state");
+  const wins = w.run([], { FABRIEK_FACTORY_STATE_BIN: good, CALLUM_FLOW_FACTORY_STATE_BIN: "/nonexistent/factory-state" });
+  assert.equal(wins.status, 0, wins.stderr);
+  const alone = w.run([], { FABRIEK_FACTORY_STATE_BIN: "", CALLUM_FLOW_FACTORY_STATE_BIN: good });
+  assert.equal(alone.status, 0, alone.stderr);
+  const broken = w.run([], { FABRIEK_FACTORY_STATE_BIN: "/nonexistent/factory-state", CALLUM_FLOW_FACTORY_STATE_BIN: good });
+  assert.notEqual(broken.status, 0, "the old name is not consulted when the new one is set");
+});
 
 test("a row with a life is a record: orphanOf reads `life`, so #43 queued is never looked at", () => {
   const out = world(fx.answers).run([]);
@@ -323,7 +354,7 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.match(out, /^## Live in the factory with no live claim and no ready label$/m);
   assert.match(line(out, 20), /^- #20: queued for 1h00m with no live claim; checked within 2h00m: no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no live claim and nothing is requeued\)\. Labels: bug, In development\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 43), "", "a v2 record queued for its slot is live work");
-  assert.ok(!w.calls().some((c) => c.name === "callum-flow-issue-read" && c.argv.join(" ") === "--json 43"), "nothing of it is read");
+  assert.ok(!w.calls().some((c) => c.name === "fabriek-issue-read" && c.argv.join(" ") === "--json 43"), "nothing of it is read");
   assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 41), "", "an issue in the queue (ready) is no ghost");
   assert.match(line(out, 42), /reviewing for 1h00m with no holder; .*PR #142: head pushed 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
@@ -347,7 +378,7 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.equal(report, `${out}\n`);
   // every GitHub read of text went through the trusted reader; every gh call names the repo
   for (const c of w.calls().filter((x) => x.name === "gh" && x.argv[0] !== "api")) assert.ok(c.argv.includes("--repo"), c.argv.join(" "));
-  for (const c of w.calls().filter((x) => x.name === "callum-flow-issue-read")) assert.equal(c.env.CALLUM_FLOW_REPO, REPO);
+  for (const c of w.calls().filter((x) => x.name === "fabriek-issue-read")) { assert.equal(c.env.CALLUM_FLOW_REPO, REPO); assert.equal(c.env.FABRIEK_REPO, REPO); }
 });
 
 test("--act re-checks each named issue and releases it in order: labels off, its slot freed (processes killed, leftovers saved, returned on its lease), its closing event, then the intervention; every release leaves, and a live issue named is released too", async () => {
@@ -372,13 +403,13 @@ test("--act re-checks each named issue and releases it in order: labels off, its
     [
       ["gh", "issue", "edit"],
       ["treehouse", "return", slot1],
-      ["callum-flow-event", "--type", "abandoned"],
-      ["callum-flow-event", "--type", "intervention"],
+      ["fabriek-event", "--type", "abandoned"],
+      ["fabriek-event", "--type", "intervention"],
     ],
   );
   assert.deepEqual(ten[0].argv, ["issue", "edit", "10", "--repo", REPO, "--remove-label", "In development,factory:designing"]);
   assert.deepEqual(ten[1].argv, ["return", slot1, "--if-lease-id", "L1", "--force"]);
-  for (const c of ten.slice(2)) assert.deepEqual(c.env, { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_ACTOR: "factory-reconcile", CALLUM_EVENTS_DIR: w.events });
+  for (const c of ten.slice(2)) assert.deepEqual(c.env, { CALLUM_FLOW_REPO: REPO, FABRIEK_REPO: REPO, CALLUM_FLOW_ACTOR: "factory-reconcile", FABRIEK_ACTOR: "factory-reconcile", CALLUM_EVENTS_DIR: w.events });
   // the leftovers: the tracked change and the untracked file, as one patch
   const leftovers = fs.readdirSync(path.join(w.loopDir, "leftovers"));
   assert.equal(leftovers.length, 1);
@@ -387,7 +418,7 @@ test("--act re-checks each named issue and releases it in order: labels off, its
   assert.match(patch, /\+two/);
   assert.match(patch, /new file mode 100644[\s\S]*\+left behind/);
   // #11: labelled ready, and it leaves all the same (nothing is requeued), with its branch and PR
-  const eleven = calls.filter((c) => c.name === "callum-flow-event" && names(c, 11));
+  const eleven = calls.filter((c) => c.name === "fabriek-event" && names(c, 11));
   assert.deepEqual(eleven.map((c) => c.argv[1]), ["abandoned", "intervention"]);
   assert.deepEqual([JSON.parse(eleven[0].argv[3]).branch, JSON.parse(eleven[0].argv[3]).pr], ["feat/issue-11-y", 111]);
   assert.ok(!w.calls().some((c) => c.name === "gh" && c.argv.includes("--add-label")), "no label is ever added");
@@ -442,8 +473,8 @@ test("--act all acts on every proposal but a live claim, and leaves a busy slot 
 test("--act fails closed: with an events.ts that does not build a release's fields, or an event CLI that does not log an intervention, it refuses before anything is done", () => {
   const cases = [
     [{ FAKE_HOOKS: "wrong" }, fx.answers, /--act refused, nothing done: hooks\/v2\/events\.ts does not build a release's fields \(reason, stage, what was checked, PR\)\. The act run comes after U4 lands on feat\/factory-loop-v2/],
-    [{}, { ...fx.answers, "callum-flow-event": [{ match: "^--type intervention ", code: 2, stderr: "callum-flow-event: unknown type 'intervention'\n" }] }, /--act refused, nothing done: the callum-flow-event in use does not log an intervention: callum-flow-event: unknown type 'intervention'\..*CALLUM_FLOW_EVENT_BIN/],
-    [{}, { ...fx.answers, "callum-flow-event": [{ match: "^--type intervention ", drop: true }] }, /--act refused, nothing done: the callum-flow-event in use does not log an intervention: not in the log/],
+    [{}, { ...fx.answers, "fabriek-event": [{ match: "^--type intervention ", code: 2, stderr: "fabriek-event: unknown type 'intervention'\n" }] }, /--act refused, nothing done: the fabriek-event in use does not log an intervention: fabriek-event: unknown type 'intervention'\..*FABRIEK_EVENT_BIN/],
+    [{}, { ...fx.answers, "fabriek-event": [{ match: "^--type intervention ", drop: true }] }, /--act refused, nothing done: the fabriek-event in use does not log an intervention: not in the log/],
   ];
   for (const [env, answers, refusal] of cases) {
     const w = world(answers);
@@ -452,7 +483,7 @@ test("--act fails closed: with an events.ts that does not build a release's fiel
     assert.match(r.stderr, refusal);
     assert.equal(r.stdout, "");
     assert.deepEqual(writes(w.calls()), []);
-    assert.ok(!w.calls().some((c) => c.name !== "callum-flow-event"), "nothing is read either");
+    assert.ok(!w.calls().some((c) => c.name !== "fabriek-event"), "nothing is read either");
     assert.deepEqual(w.logged(), []);
   }
   // observe still runs
@@ -469,25 +500,25 @@ test("a slot whose leftovers could not be saved is not returned while its tree h
   assert.equal(r.status, 1, r.stderr + r.stdout);
   assert.match(r.stdout, /^- #10: FAILED: leftovers not saved: fatal: unable to index file; slot 1 not returned, left for the owner \(done before it: removed In development, factory:designing\)\.$/m);
   assert.ok(!w.calls().some((c) => c.name === "treehouse" && c.argv[0] === "return" && c.argv.includes(fx.slots[0].path)), "slot 1 is left");
-  assert.ok(!writes(w.calls()).some((c) => c.name === "callum-flow-event" && names(c, 10)), "no event for a release that did not happen");
+  assert.ok(!writes(w.calls()).some((c) => c.name === "fabriek-event" && names(c, 10)), "no event for a release that did not happen");
   assert.ok(fs.readFileSync(path.join(fx.slots[0].path, "new.txt"), "utf8").includes("left behind"), "the slot's work is still there");
   assert.match(r.stdout, /^- #30: slot 3 returned, its HEAD was [0-9a-f]{8}, nothing to save, the tree was clean \(fatal: unable to index file\)\.$/m);
 });
 
 test("an event the CLI did not write fails its issue with exit 1, and is kept to log again with the intervention it goes with", () => {
-  const w = world({ ...fx.answers, "callum-flow-event": [{ match: "^--type abandoned .* --issue 10$", drop: true }, { match: "^--type intervention .* --issue 11$", drop: true }] });
+  const w = world({ ...fx.answers, "fabriek-event": [{ match: "^--type abandoned .* --issue 10$", drop: true }, { match: "^--type intervention .* --issue 11$", drop: true }] });
   const r = w.run(["--act", "10", "11"]);
   assert.equal(r.status, 1, r.stderr + r.stdout);
   const kept = path.join(w.loopDir, "unlogged-events.jsonl");
-  assert.match(r.stdout, new RegExp(`^- #10: FAILED: abandoned not logged: not in the log \\(callum-flow-event: warning: cannot write [^)]*\\); kept in ${kept} to log again \\(done before it: .*slot 1 returned.*\\)\\.$`, "m"));
+  assert.match(r.stdout, new RegExp(`^- #10: FAILED: abandoned not logged: not in the log \\(fabriek-event: warning: cannot write [^)]*\\); kept in ${kept} to log again \\(done before it: .*slot 1 returned.*\\)\\.$`, "m"));
   assert.match(r.stdout, new RegExp(`^- #11: FAILED: the intervention not logged: not in the log .*; kept in ${kept} to log again \\(done before it: removed In development; logged abandoned\\)\\.$`, "m"));
   // #10's intervention is not logged before its event; both are kept, then #11's intervention
-  assert.ok(!w.calls().some((c) => c.name === "callum-flow-event" && !probe(c) && c.argv[1] === "intervention" && names(c, 10)));
+  assert.ok(!w.calls().some((c) => c.name === "fabriek-event" && !probe(c) && c.argv[1] === "intervention" && names(c, 10)));
   const lines = fs.readFileSync(kept, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.deepEqual(lines.map((l) => [l.repo, l.actor, l.argv[0], l.argv[2], l.argv[6]]), [
-    [REPO, "factory-reconcile", "callum-flow-event", "abandoned", "10"],
-    [REPO, "factory-reconcile", "callum-flow-event", "intervention", "10"],
-    [REPO, "factory-reconcile", "callum-flow-event", "intervention", "11"],
+    [REPO, "factory-reconcile", "fabriek-event", "abandoned", "10"],
+    [REPO, "factory-reconcile", "fabriek-event", "intervention", "10"],
+    [REPO, "factory-reconcile", "fabriek-event", "intervention", "11"],
   ]);
   assert.deepEqual(w.logged().map((e) => [e.type, e.issue]), [["abandoned", 11]]);
   // kept as the native argv, to log again as it is
@@ -501,7 +532,7 @@ test("a write that fails stops that issue's release before its event; the others
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^- #10: FAILED: labels not removed: HTTP 502\.$/m);
   assert.match(r.stdout, /^- #11: removed In development; logged abandoned; logged the intervention\.$/m);
-  assert.ok(!w.calls().some((c) => names(c, 10) && c.name === "callum-flow-event"), "no event for a release that did not happen");
+  assert.ok(!w.calls().some((c) => names(c, 10) && c.name === "fabriek-event"), "no event for a release that did not happen");
   assert.ok(!w.calls().some((c) => c.name === "treehouse" && c.argv[0] === "return" && c.argv.includes(fx.slots[0].path)));
 });
 
@@ -514,7 +545,7 @@ test("run on another machine, it reads and frees no slot: that pool is not this 
   assert.match(r.stdout, /--act 17 20 21`/);
   for (const n of [10, 11, 14]) assert.match(line(r.stdout, n), /Proposal: not fully checked \(slots not read\): check again later\./);
   assert.ok(!w.calls().some((c) => c.name === "treehouse"));
-  assert.ok(!w.calls().some((c) => c.name === "callum-flow-event" && !probe(c)));
+  assert.ok(!w.calls().some((c) => c.name === "fabriek-event" && !probe(c)));
   assert.match(r.stdout, /^- #17: removed In development\.$/m);
 });
 
@@ -527,10 +558,10 @@ test("usage errors exit 2; a factory that cannot be read exits 1 and changes not
   }
   const bare = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", env: w.env });
   assert.equal(bare.status, 2);
-  const down = world({ ...fx.answers, "callum-flow-factory-state": [{ match: ".", stderr: "cannot read the fleet database\n", code: 1 }] });
+  const down = world({ ...fx.answers, "fabriek-factory-state": [{ match: ".", stderr: "cannot read the fleet database\n", code: 1 }] });
   const r = down.run(["--act", "all"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /callum-flow-factory-state: cannot read the fleet database/);
+  assert.match(r.stderr, /fabriek-factory-state: cannot read the fleet database/);
   assert.deepEqual(writes(down.calls()), []);
 });
 
@@ -548,7 +579,7 @@ test("the pure helpers: issue branches by the repo's convention, spans as people
 // the owner will run it, with the real events.ts and the branch's images/base/fabriek-event: each
 // release sees its own native write in the new log and logs it once, the old log is not written, and
 // every line passes the strict schemas and reads back as the release's fields.
-test("the migration's events pass the real callum-flow-event: one native line each in the new log, none in the old, read back as the release's fields", async () => {
+test("the migration's events pass the real fabriek-event: one native line each in the new log, none in the old, read back as the release's fields", async () => {
   const { register } = require("node:module");
   register(
     "data:text/javascript," +
@@ -561,7 +592,7 @@ test("the migration's events pass the real callum-flow-event: one native line ea
   );
   const reader = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "event-reader.ts"));
   const w = world(fx.answers);
-  const r = w.run(["--act", "10", "11"], { CALLUM_FLOW_EVENT_BIN: EVENT, DEV_VERSIONS_FILE: path.join(w.dir, "none.json") });
+  const r = w.run(["--act", "10", "11"], { FABRIEK_EVENT_BIN: EVENT, DEV_VERSIONS_FILE: path.join(w.dir, "none.json") });
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /^- #10: .*logged abandoned; logged the intervention\.$/m);
   assert.ok(!fs.existsSync(path.join(w.events, "acme__widgets.jsonl")), "the old log is not written");

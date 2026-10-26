@@ -711,7 +711,7 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
     const r = rec(631)
     const e = reviewedEvent({ issue: 631, branch: 'issue-631', pr: PR, head: HEAD, round: 1, patch: PATCH, reviewer: 'adjudicator', answer: '/cfg/answers/a b.json' }, reviewData(r, 'changes'))
     const argv = eventArgv(e)
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'reviewed', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'reviewed', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', '631'])
     expect(JSON.parse(argv[4] ?? '')).toEqual({ branch: 'issue-631', pr: PR, head: HEAD, verdict: 'changes', round: 1, patch: PATCH, errors: 1, warnings: 1, infos: 0, reviewer: 'adjudicator', answer_path: '/cfg/answers/a b.json' })
     // the capture policy the review ran under is written only when the record carries it
@@ -1118,7 +1118,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     const run = (argv: string[], s: Seen) => {
       const line = argv.join(' ')
       switch (argv[0]) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: factoryDoc([{ issue: n, state: 'reviewing', state_since: iso(NOW - MIN), holder: DEVICE, pr: null, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -1128,12 +1128,12 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
           return { stdout: USAGE }
         case 'treehouse':
           return { stdout: JSON.stringify([slot]) }
-        case 'callum-flow-rollout':
+        case 'fabriek-rollout':
           return { stdout: `ROLLOUT merge source=issue\n` }
-        case 'callum-flow-patch-id':
+        case 'fabriek-patch-id':
           return { stdout: `${PATCH}\n` }
-        case 'callum-flow-issue-read':
-          if (line === `callum-flow-issue-read --json --pr ${pr}`) return opened ? { stdout: JSON.stringify(pull) } : { exitCode: 1, stderr: 'HTTP 404: Not Found' }
+        case 'fabriek-issue-read':
+          if (line === `fabriek-issue-read --json --pr ${pr}`) return opened ? { stdout: JSON.stringify(pull) } : { exitCode: 1, stderr: 'HTTP 404: Not Found' }
           return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       }
       if (line === ARGV.branchPrsArgv(REPO, `issue-${n}`).join(' ')) return { stdout: opened ? JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: HEAD }]) : '[]' }
@@ -1168,7 +1168,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     const before = h.seen.length
     await pass(60_000)
     const ran = h.seen.slice(before).map(c => c.argv.join(' '))
-    expect(ran).toContain(`callum-flow-issue-read --json --pr ${pr}`)
+    expect(ran).toContain(`fabriek-issue-read --json --pr ${pr}`)
     expect(ran).toContain(ARGV.prChecksArgv(REPO, pr).join(' '))
     expect(ran).toContain(ARGV.patchIdArgv(HEAD, 'main').join(' '))
     const line = h.last()
@@ -1191,11 +1191,11 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     const t5 = (r: IssueRecord) => entry(transitionKey(r), 'transition', { issue: r.issue, rule: 'S3', startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'transition', row: 'T5', event: 'ok', cause: null, from: 'building', to: 'reviewing', step: 'build', stored: true, via: 'build' } })
     const slot = (r: IssueRecord, name: string) => ({ name, path: `/slots/${name}`, status: 'leased', branch: r.branch, lease_id: `L${name}`, lease_holder: `factory-loop:${r.issue}:${life}`, leased_at: iso(NOW - HOUR), processes: [] })
     const pull = (n: number) => ({ pr: { number: prOf(n), state: 'open', merged: false, head: { sha: headOf(n), ref: `issue-${n}`, repo: { full_name: REPO } }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean', body: '' }, stripped: 0 })
-    const empty = `callum-flow-patch-id: ${HEAD} changes nothing against origin/main`
+    const empty = `fabriek-patch-id: ${HEAD} changes nothing against origin/main`
     const run = (argv: string[], s: Seen) => {
       const line = argv.join(' ')
       switch (argv[0]) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: factoryDoc(recs.map(r => ({ issue: r.issue, state: 'reviewing', state_since: iso(NOW - MIN), holder: DEVICE, pr: r.pr, stuck: null, github: null }))) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -1205,12 +1205,12 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
           return { stdout: USAGE }
         case 'treehouse':
           return { stdout: JSON.stringify([slot(failing, '1'), slot(other, '2')]) }
-        case 'callum-flow-rollout':
+        case 'fabriek-rollout':
           return { stdout: 'ROLLOUT merge source=issue\n' }
-        case 'callum-flow-patch-id':
+        case 'fabriek-patch-id':
           return argv[1] === HEAD ? { exitCode: 1, stderr: empty } : { stdout: `${PATCH2}\n` }
-        case 'callum-flow-issue-read': {
-          const r = recs.find(x => line === `callum-flow-issue-read --json --pr ${x.pr}`)
+        case 'fabriek-issue-read': {
+          const r = recs.find(x => line === `fabriek-issue-read --json --pr ${x.pr}`)
           return { stdout: JSON.stringify(r === undefined ? { issues: [], stripped: 0 } : pull(r.issue)) }
         }
       }
@@ -1264,7 +1264,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     const run = (argv: string[], s: Seen) => {
       const line = argv.join(' ')
       switch (argv[0]) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: factoryDoc([{ issue: n, state: 'reviewing', state_since: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
         case 'dev-query':
           return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -1274,12 +1274,12 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
           return { stdout: USAGE }
         case 'treehouse':
           return { stdout: JSON.stringify([slot]) }
-        case 'callum-flow-rollout':
+        case 'fabriek-rollout':
           return { stdout: 'ROLLOUT merge source=issue\n' }
-        case 'callum-flow-patch-id':
+        case 'fabriek-patch-id':
           return { stdout: `${PATCH}\n` }
-        case 'callum-flow-issue-read':
-          return { stdout: JSON.stringify(line === `callum-flow-issue-read --json --pr ${pr}` ? pull : { issues: [], stripped: 0 }) }
+        case 'fabriek-issue-read':
+          return { stdout: JSON.stringify(line === `fabriek-issue-read --json --pr ${pr}` ? pull : { issues: [], stripped: 0 }) }
       }
       if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: HEAD }]) }
       if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return checks

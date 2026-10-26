@@ -106,7 +106,7 @@ describe('closeMinute', () => {
   test('the summary is a native loop_passes call with the translator\'s field names, and no ledger entry', () => {
     const summary = closeMinute(new Map(), M, SET)
     const argv = passesEventArgv(summary)
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'loop_passes', '--data'])
     expect(argv).toHaveLength(5)
     const data = JSON.parse(argv[4] as string)
     expect(Object.keys(data).sort()).toEqual(['acting', 'acting_mean_ms', 'cache_creation_tokens', 'cache_read_tokens', 'cost_usd', 'errors', 'from_at', 'idle_mean_ms', 'input_tokens', 'max_ms', 'mean_ms', 'mode', 'observe_commands_mean_ms', 'observe_in_process_max_ms', 'observe_in_process_mean_ms', 'observe_mean_ms', 'output_tokens', 'p50_ms', 'p90_ms', 'pass_every_ms', 'passes', 'planner', 'to_at', 'usage_tier', 'usage_tier_overridden'])

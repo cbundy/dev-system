@@ -21,7 +21,7 @@ export type Readout = {
   versions: string
 }
 
-// The v2 states callum-flow-factory-state reports (docs/factory-state.md) that count as live (waiting stays out).
+// The v2 states fabriek-factory-state reports (docs/factory-state.md) that count as live (waiting stays out).
 const LIVE = ['designing', 'building', 'reviewing', 'fixing', 'parked', 'merge-queue']
 const STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting', 'closed']
 

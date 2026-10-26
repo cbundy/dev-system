@@ -199,7 +199,7 @@ async function settle(ctx: ExecCtx, action: IntakeAction): Promise<Exec> {
 // labelsOf: the issue's labels now, through the reader; null when they cannot be read.
 async function labelsOf(ctx: ExecCtx, issue: number): Promise<string[] | null> {
   try {
-    const r = await ctx.cmd(['callum-flow-issue-read', '--json', String(issue)], { timeoutMs: GH_MS })
+    const r = await ctx.cmd(['fabriek-issue-read', '--json', String(issue)], { timeoutMs: GH_MS })
     return r.exitCode === 0 ? (parseIssueRead(r.stdout)?.labels ?? null) : null
   } catch {
     return null

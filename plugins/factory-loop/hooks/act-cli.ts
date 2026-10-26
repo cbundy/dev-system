@@ -56,12 +56,12 @@ export function stepsOf(action: Action, repo: string, loopDir: string): Step[] |
   const noIssue = `${action.kind} names no issue`
   switch (action.kind) {
     case 'heartbeat':
-      return [{ argv: ['callum-flow-claim', '--heartbeat'], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
+      return [{ argv: ['fabriek-claim', '--heartbeat'], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
     case 'sweep':
-      return [{ argv: ['callum-flow-sweep'], timeoutMs: CLI_TIMEOUT_MS.sweep }]
+      return [{ argv: ['fabriek-sweep'], timeoutMs: CLI_TIMEOUT_MS.sweep }]
     case 'claim':
       // exit 3: another device's live claim won, an answer (v2 SPEC 13.10 item 5)
-      return n === null ? noIssue : [{ argv: ['callum-flow-claim', n], timeoutMs: CLI_TIMEOUT_MS.claim, ok: [0, 3] }]
+      return n === null ? noIssue : [{ argv: ['fabriek-claim', n], timeoutMs: CLI_TIMEOUT_MS.claim, ok: [0, 3] }]
     case 'close-issue':
       // a done close (logClosed) also logs the `closed` event, the way the tracker's close does
       return n === null
@@ -75,7 +75,7 @@ export function stepsOf(action: Action, repo: string, loopDir: string): Step[] |
       // is an answer, not a failure
       return [{ argv: ['git', 'push', `--force-with-lease=refs/heads/${action.branch}:${action.sha}`, 'origin', `:refs/heads/${action.branch}`], timeoutMs: CLI_TIMEOUT_MS['delete-branch'], ok: [0, 1] }]
     case 'milestone-later':
-      return n === null ? noIssue : [{ argv: ['callum-flow-milestone', 'plan', n, 'later'], timeoutMs: CLI_TIMEOUT_MS['milestone-later'] }]
+      return n === null ? noIssue : [{ argv: ['fabriek-milestone', 'plan', n, 'later'], timeoutMs: CLI_TIMEOUT_MS['milestone-later'] }]
     case 'release-parent':
       // the parent is now a tracker. No label comes off: the claim has had no label since v2 SPEC 3.6,
       // and the closed record's label clear takes the factory:* labels off (#1353).
@@ -123,7 +123,7 @@ export function commandFailure(argv: readonly string[], r: RunResult): Exec {
   return exec
 }
 
-// eventFailure: ctx.event threw. callum-flow-event exits non-zero only on a usage error (exit
+// eventFailure: ctx.event threw. fabriek-event exits non-zero only on a usage error (exit
 // 2; a failed write still exits 0), so an error carrying exitCode 2 is never retried.
 export function eventFailure(state: string, err: unknown): Exec {
   const code = typeof err === 'object' && err !== null ? (err as { exitCode?: unknown }).exitCode : undefined

@@ -161,6 +161,18 @@ const alive = (pid) => {
 };
 const settle = () => new Promise((r) => setTimeout(r, 300));
 
+// #1359: the treehouse program is named by FABRIEK_TREEHOUSE_BIN first, then the old CALLUM_FLOW_ name
+test("lease: FABRIEK_TREEHOUSE_BIN wins over CALLUM_FLOW_TREEHOUSE_BIN, which still works alone", () => {
+  const w = world();
+  const good = path.join(w.dir, "treehouse");
+  const fabriek = w.runWith({ FABRIEK_TREEHOUSE_BIN: good, CALLUM_FLOW_TREEHOUSE_BIN: "/nonexistent/treehouse" }, "lease", "5", LIFE);
+  assert.equal(fabriek.status, 0, fabriek.stderr);
+  const broken = w.runWith({ FABRIEK_TREEHOUSE_BIN: "/nonexistent/treehouse", CALLUM_FLOW_TREEHOUSE_BIN: good }, "lease", "6", LIFE);
+  assert.notEqual(broken.status, 0, "the old name is not consulted when the new one is set");
+  const old = w.runWith({ CALLUM_FLOW_TREEHOUSE_BIN: good }, "lease", "7", LIFE);
+  assert.equal(old.status, 0, old.stderr);
+});
+
 test("lease: one slot leased for the life's holder from origin's default branch; a retry keeps it and leases no second slot", () => {
   const w = world();
   const first = leased(w);

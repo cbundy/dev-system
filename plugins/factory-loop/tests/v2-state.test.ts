@@ -697,7 +697,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const r = rec(79, { state: 'closed', step: null, why: 'merged', pr: 779, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
     const closed = transitioned(r, 'T13', 'merge-queue', 'merged')
     const at = (stateSince: number | null, extra: LedgerEntry[] = []) => withLedger(world([r], { issues: stateSince === null ? [] : [issue(79, { state: 'closed', merged: true, stateSince })] }), [closed, ...extra])
-    // the close: callum-flow-merge logged merged before it
+    // the close: fabriek-merge logged merged before it
     expect(kinds(plan(at(NOW - 2 * MIN)), 79)).toEqual(['event transition', 'label clear', 'rollout'])
     // the entry actions done; then the sweep's `closed` (the view's stage time moves past the close),
     // then the view's 24 h window drops the issue: nothing more
@@ -1150,14 +1150,14 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
   test('the link executor: a blocked_by link from the waiting issue to the open blocker, once; a closed blocker and a pull request are skipped; a failed read is a failed attempt', async () => {
     const link: Action = { kind: 'link', key: entryKey(w, 'link/57'), class: 'free', rule: 'S3', reason: 'x', issue: 130, blocker: 57 }
     const read = (state: string, pull = false, held: string = '') => (argv: string[]): Reply => {
-      if (argv[0] === 'callum-flow-issue-read') return { stdout: JSON.stringify({ issue: { number: 57, id: 9057, state, ...(pull ? { pull_request: {} } : {}) } }) }
+      if (argv[0] === 'fabriek-issue-read') return { stdout: JSON.stringify({ issue: { number: 57, id: 9057, state, ...(pull ? { pull_request: {} } : {}) } }) }
       if (argv.includes('--paginate')) return { stdout: held }
       return {}
     }
     const open = actWorld([w], read('open'))
     expect(await open.run(link)).toMatchObject({ status: 'done', summary: 'linked #130 as blocked by #57' })
     expect(open.argvs).toEqual([
-      ['callum-flow-issue-read', '--json', '57'],
+      ['fabriek-issue-read', '--json', '57'],
       ['gh', 'api', `repos/${REPO}/issues/130/dependencies/blocked_by`, '--paginate', '--jq', '.[].id'],
       ['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/130/dependencies/blocked_by`, '-F', 'issue_id=9057'],
     ])
@@ -1595,16 +1595,16 @@ describe('the record\'s executors (act-state.ts)', () => {
 
   test('comment: found by its hidden key, never posted twice; posted with its key and no closing keyword; a read that does not parse is a failed attempt', async () => {
     const action: Action = { kind: 'comment', key: 'i503/lx/s4/comment', class: 'free', rule: 'S3', reason: 'x', issue: 503, on: 'issue', number: 503, body: 'Fixes #12 needs an answer' }
-    const found = actWorld([], argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: JSON.stringify({ comments: [{ body: `x\n${hiddenKey(action.key)}`, html_url: 'https://github.com/o/r/issues/503#issuecomment-9' }], stripped: 0 }) } : {}))
+    const found = actWorld([], argv => (argv[0] === 'fabriek-issue-read' ? { stdout: JSON.stringify({ comments: [{ body: `x\n${hiddenKey(action.key)}`, html_url: 'https://github.com/o/r/issues/503#issuecomment-9' }], stripped: 0 }) } : {}))
     expect(await found.run(action)).toMatchObject({ status: 'done', outcome: { detail: 'https://github.com/o/r/issues/503#issuecomment-9' } })
-    expect(found.argvs).toEqual([['callum-flow-issue-read', '--json', '503', '--comments']])
-    const fresh = actWorld([], argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: JSON.stringify({ comments: [], stripped: 0 }) } : { stdout: 'https://github.com/o/r/issues/503#issuecomment-10\n' }))
+    expect(found.argvs).toEqual([['fabriek-issue-read', '--json', '503', '--comments']])
+    const fresh = actWorld([], argv => (argv[0] === 'fabriek-issue-read' ? { stdout: JSON.stringify({ comments: [], stripped: 0 }) } : { stdout: 'https://github.com/o/r/issues/503#issuecomment-10\n' }))
     expect(await fresh.run(action)).toMatchObject({ status: 'done', outcome: { detail: 'https://github.com/o/r/issues/503#issuecomment-10' } })
     expect(fresh.argvs[1]).toEqual(['gh', 'issue', 'comment', '503', '--repo', REPO, '--body-file', '-'])
     expect(fresh.stdins[1]).toBe(commentBody(action.body, action.key))
     expect(fresh.stdins[1]).toContain('Fixing #12')
     expect(fresh.stdins[1]).toContain(hiddenKey(action.key))
-    const pr = actWorld([], argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: '{"pr": {}, "stripped": 0}' } : {}))
+    const pr = actWorld([], argv => (argv[0] === 'fabriek-issue-read' ? { stdout: '{"pr": {}, "stripped": 0}' } : {}))
     expect(await pr.run({ ...action, on: 'pr', number: 603 })).toMatchObject({ status: 'failed', summary: 'the comments of PR #603 did not read' })
     expect(postedUrl('not json', 'k')).toBeUndefined()
     expect(postedUrl('{"comments": []}', 'k')).toBeNull()
@@ -1616,7 +1616,7 @@ describe('the record\'s executors (act-state.ts)', () => {
     const w = actWorld([])
     expect(await w.run(action)).toMatchObject({ status: 'done', summary: 'logged transition' })
     expect(w.argvs).toEqual([eventArgv(e)])
-    const usage = actWorld([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown type' }))
+    const usage = actWorld([], () => ({ exitCode: 2, stderr: 'fabriek-event: unknown type' }))
     expect(await usage.run(action)).toMatchObject({ status: 'failed', noRetry: true })
     // a fixer's disposition is logged as the fixer's (v2 SPEC 7.1): the actor events.ts names
     const verdict = { state: 'verdict' as const, issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed the off-by-one' }
@@ -1655,15 +1655,15 @@ describe('the record\'s executors (act-state.ts)', () => {
     // no pr: no size read; another event: no extra command
     const nopr = actWorld([])
     expect(await nopr.run({ ...action, event: { ...merged, pr: null } })).toMatchObject({ status: 'done', summary: 'logged merged' })
-    expect(nopr.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
+    expect(nopr.argvs.map(a => a[0])).toEqual(['fabriek-event'])
     const verdict = actWorld([])
     await verdict.run({ ...action, event: { state: 'verdict', issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed' } })
-    expect(verdict.argvs.map(a => a[0])).toEqual(['callum-flow-event'])
+    expect(verdict.argvs.map(a => a[0])).toEqual(['fabriek-event'])
   })
 
   test('claim under planner v2: exit 3 is lost; a first claim adopts the newest open PR by a trusted author on a branch of the issue, the others named; a re-claim adopts nothing', async () => {
     const claim: Action = { kind: 'claim', key: claimKey(130, LIFE), class: 'start', rule: 'S1', reason: 'x', issue: 130 }
-    const lost = actWorld([], () => ({ exitCode: 3, stderr: 'callum-flow-claim: #130 is held by other since x' }))
+    const lost = actWorld([], () => ({ exitCode: 3, stderr: 'fabriek-claim: #130 is held by other since x' }))
     expect(await lost.run(claim)).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'lost' } })
     const list = [
       { number: 631, headRefName: 'issue-130' },
@@ -1673,31 +1673,32 @@ describe('the record\'s executors (act-state.ts)', () => {
     ]
     const w = actWorld([], argv => {
       if (argv[0] === 'gh') return { stdout: JSON.stringify(list) }
-      if (argv[0] === 'callum-flow-issue-read') return argv[3] === '660' ? { exitCode: 3 } : { stdout: '{"pr": {}}' }
+      if (argv[0] === 'fabriek-issue-read') return argv[3] === '660' ? { exitCode: 3 } : { stdout: '{"pr": {}}' }
       return {}
     })
     expect(await w.run(claim)).toMatchObject({ status: 'done', outcome: { kind: 'adopt', branch: 'feat/issue-130-fast', pr: 640, others: [660, 631] } })
     // gh lists 30 by default: the limit keeps the issue's PR on the list however many are open
-    expect(w.argvs).toEqual([['callum-flow-claim', '130'], ['gh', 'pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '1000', '--json', 'number,headRefName'], ['callum-flow-issue-read', '--json', '--pr', '660'], ['callum-flow-issue-read', '--json', '--pr', '640']])
+    expect(w.argvs).toEqual([['fabriek-claim', '130'], ['gh', 'pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '1000', '--json', 'number,headRefName'], ['fabriek-issue-read', '--json', '--pr', '660'], ['fabriek-issue-read', '--json', '--pr', '640']])
     const none = actWorld([], argv => (argv[0] === 'gh' ? { stdout: '[]' } : {}))
     expect(await none.run(claim)).toMatchObject({ outcome: { kind: 'adopt', branch: 'issue-130', pr: null, others: [] } })
     // the claim posted, then the PRs did not read: the attempt fails, and says the claim is held
     const unread = actWorld([], argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'HTTP 502' } : {}))
     expect(await unread.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'claim', result: 'claimed' }, summary: expect.stringContaining('claimed #130, but the PRs to adopt did not read') })
-    const badRead = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify(list) } : argv[0] === 'callum-flow-issue-read' ? { exitCode: 1 } : {}))
+    const badRead = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify(list) } : argv[0] === 'fabriek-issue-read' ? { exitCode: 1 } : {}))
     expect(await badRead.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'claim', result: 'claimed' } })
     // the claim tool itself failed: nothing is held
-    const refused = actWorld([], argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1 } : {}))
+    const refused = actWorld([], argv => (argv[0] === 'fabriek-claim' ? { exitCode: 1 } : {}))
     expect(await refused.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
     const again = actWorld([])
     expect(await again.run({ ...claim, rule: 'H1' })).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'claimed' } })
-    expect(again.argvs).toEqual([['callum-flow-claim', '130']])
+    expect(again.argvs).toEqual([['fabriek-claim', '130']])
     // a scored claim (S1) runs under env CALLUM_FLOW_CLAIM_SCORE, which the claim tool records on the claimed event
     const score = { score: 55, factors: [{ name: 'priority-label', points: 30 }, { name: 'bug', points: 25 }] }
     const scored = actWorld([], argv => (argv[0] === 'gh' ? { stdout: '[]' } : {}))
     expect(await scored.run({ ...claim, score })).toMatchObject({ status: 'done', outcome: { kind: 'adopt' } })
-    expect(scored.argvs[0]).toEqual(['env', `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify(score)}`, 'callum-flow-claim', '130'])
-    expect(JSON.parse((scored.argvs[0]?.[1] ?? '').slice('CALLUM_FLOW_CLAIM_SCORE='.length))).toEqual(score)
+    // under both names, since an older image's claim reads only the old one (#1359)
+    expect(scored.argvs[0]).toEqual(['env', `FABRIEK_CLAIM_SCORE=${JSON.stringify(score)}`, `CALLUM_FLOW_CLAIM_SCORE=${JSON.stringify(score)}`, 'fabriek-claim', '130'])
+    expect(JSON.parse((scored.argvs[0]?.[1] ?? '').slice('FABRIEK_CLAIM_SCORE='.length))).toEqual(score)
     expect(issueBranch('feat/issue-130', 130)).toBe(true)
     expect(issueBranch('issue-1300', 130)).toBe(false)
     expect(openPrsOf('nope', 130)).toBeNull()
@@ -1708,7 +1709,7 @@ describe('the record\'s executors (act-state.ts)', () => {
     const records = [rec(141), rec(140, { state: 'parked', step: null, question: 'q' }), rec(142, { state: 'closed', step: null, why: 'merged' })]
     const w = actWorld(records)
     expect(await w.run(beat, world(records))).toMatchObject({ status: 'done', summary: 'leases renewed: #140 #141' })
-    expect(w.argvs).toEqual([['callum-flow-claim', '--heartbeat', '140', '141']])
+    expect(w.argvs).toEqual([['fabriek-claim', '--heartbeat', '140', '141']])
     const idle = actWorld([])
     expect(await idle.run(beat, world([]))).toMatchObject({ status: 'done', summary: 'no record to renew' })
     expect(idle.argvs).toEqual([])

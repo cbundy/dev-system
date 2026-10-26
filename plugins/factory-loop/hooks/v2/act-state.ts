@@ -160,7 +160,7 @@ export function commentBody(body: string, key: string): string {
   return `${neutralBody(body)}\n\n${hiddenKey(key)}\n`
 }
 
-// postedUrl: the URL of a trusted comment that carries the key, from `callum-flow-issue-read --json
+// postedUrl: the URL of a trusted comment that carries the key, from `fabriek-issue-read --json
 // ... --comments`; '' when one carries it with no URL; null when none does; undefined when the read
 // is not in its shape.
 export function postedUrl(json: string, key: string): string | null | undefined {
@@ -219,7 +219,7 @@ const event: Executor = async (ctx, action) => {
   const ran = await run(ctx, argv, EVENT_MS)
   if (!ran.ok) return ran.exec
   if (ran.r.exitCode === 0) return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `logged ${action.event.state}${unread}` }
-  // callum-flow-event exits non-zero only on a usage error (2), a loop bug never retried
+  // fabriek-event exits non-zero only on a usage error (2), a loop bug never retried
   return commandFailure(argv, ran.r)
 }
 
@@ -256,8 +256,8 @@ function held(n: number, exec: Exec): Exec {
   return { ...exec, outcome: { kind: 'claim', result: 'claimed' }, summary: clip(`claimed #${n}, but the PRs to adopt did not read: ${exec.summary}`) }
 }
 
-// claim: `callum-flow-claim N` (exit 3: another device holds it). A first claim (S1) then adopts
-// the newest open PR by a trusted author on a branch of the issue (callum-flow-issue-read refuses
+// claim: `fabriek-claim N` (exit 3: another device holds it). A first claim (S1) then adopts
+// the newest open PR by a trusted author on a branch of the issue (fabriek-issue-read refuses
 // an untrusted one with exit 3); the others are named and left alone. A re-claim (H1) adopts
 // nothing: its record keeps its branch and PR.
 const claim: Executor = async (ctx, action) => {

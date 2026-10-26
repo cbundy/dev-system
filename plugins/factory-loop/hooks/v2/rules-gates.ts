@@ -2,7 +2,7 @@
 // the companion logged, `gate-pass`, `gate-fail` and `gate-unknown` alike, so the metrics can say how
 // long gates wait for a turn and how long they run (docs/metrics.md "Gate waits"). The companion
 // writes no event itself; the loop reads its gate lines (sources-interventions.ts gateLines) and
-// writes the event through `callum-flow-event --type gate_run --data <json> --issue N`. Free, and
+// writes the event through `fabriek-event --type gate_run --data <json> --issue N`. Free, and
 // keyed i<N>/l<life>/s<seq>/gate/<started_at ms, base 36>, so each run is written once however often
 // its line is read and the loop reloads. A wiped store can write a run still in the window again:
 // the schema counts one per (issue, life, seq, started_at).
@@ -134,7 +134,7 @@ export function flakeOf(line: GateLine, startedMs: number, lines: readonly GateL
 }
 
 // gateRunRules: one free `event` action per gate run the ledger has not written. One that used up
-// its attempts (callum-flow-event refused its payload: a loop bug) is told in its skip line, and the
+// its attempts (fabriek-event refused its payload: a loop bug) is told in its skip line, and the
 // executor breaker catches a run of them.
 export function gateRunRules(ctx: V2Ctx): void {
   const lines = ctx.v2.interventions.gates ?? []

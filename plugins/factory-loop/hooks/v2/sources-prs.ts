@@ -1,12 +1,12 @@
 // The `prs` source (docs/factory-loop/v2/SPEC.md 2.4): for each record in reviewing or the merge
 // queue whose life has a PR (rules-review.ts lifePr: the record's, else the one the life's done
 // ensure named, 8.1, so a PR the ensure just opened is read on the next pass), the PR
-// (callum-flow-issue-read --json --pr <n>: state, merged, merged head, closedAt, head,
+// (fabriek-issue-read --json --pr <n>: state, merged, merged head, closedAt, head,
 // mergeable_state, author, base commit), its check runs (gh pr checks <n> --repo R --json
 // name,state,bucket,startedAt,completedAt,link, the run id from the link) plus its workflow runs
 // (gh api repos/R/actions/runs?head_sha=H, the latest per workflow and event, a synthetic check
 // for a run no visible check shows: one with no job yet is in no `gh pr checks` view) and, when the head moved,
-// its patch id (8.4: callum-flow-patch-id <head> <default branch>, kept per head, so it is computed
+// its patch id (8.4: fabriek-patch-id <head> <default branch>, kept per head, so it is computed
 // once); main's head on origin when a merge-queue PR is open, for Q1 (9.2); and the time
 // observe first saw each head (heads:<repo>), whose entries go when their PR closes or its record
 // does. Reads start in 2.4's order, up to 4 at once (PR_READ_CONCURRENCY), their results kept in it too: the queue's
@@ -61,7 +61,7 @@ export type PrView = {
 }
 
 // A PR whose read was tried this pass and failed: why, whether the reader refused it because its
-// author is not trusted (callum-flow-issue-read exit 3), and since when its reads have failed: the
+// author is not trusted (fabriek-issue-read exit 3), and since when its reads have failed: the
 // first of the passes in a row that tried it and failed (ctx.unread, the last pass's), which the
 // rules' bound on its wait counts from, so one failed read holds and only one that keeps failing
 // ends the step.
@@ -81,7 +81,7 @@ const PATCH_MS = 120_000
 
 // --- parsing what the CLIs print ----------------------------------------------------------------------
 
-// The REST pull object as callum-flow-issue-read --json --pr prints it ({ pr, stripped }), read
+// The REST pull object as fabriek-issue-read --json --pr prints it ({ pr, stripped }), read
 // for what the loop needs; null when it does not read.
 export type Pull = { state: PrView['state']; head: string | null; mergedHead: string | null; closedAt: string | null; mergeable: string | null; author: string | null; base: string | null; baseSha: string | null; labels: string[] | null }
 
@@ -444,8 +444,8 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
 async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultBranch: string | null): Promise<PrView | { why: string; untrusted: boolean }> {
   const failed = (why: string, untrusted = false) => ({ why, untrusted })
   const read = await ctx.run(prReadArgv(r.pr), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
-  if (read.exitCode === 3) return failed('not by a trusted author (callum-flow-issue-read exit 3)', true)
-  if (read.exitCode !== 0) return failed(`callum-flow-issue-read exit ${read.exitCode}: ${lastLine(read)}`)
+  if (read.exitCode === 3) return failed('not by a trusted author (fabriek-issue-read exit 3)', true)
+  if (read.exitCode !== 0) return failed(`fabriek-issue-read exit ${read.exitCode}: ${lastLine(read)}`)
   const pull = pullOf(read.stdout)
   if (pull === null) return failed('the PR read does not parse')
   let checks: CheckRun[] = []

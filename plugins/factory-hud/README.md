@@ -9,7 +9,7 @@ A Claude Code mod that keeps a one-line readout on screen:
 - the time (in the workspace's `TZ`), the context window fill, and the plan's 5-hour and
   7-day usage when Claude Code supplies those figures;
 - for an orchestrator, the factory's counts for the session's repo, by
-  [`callum-flow-factory-state`](../../docs/factory-state.md) state: `live` is every active
+  [`fabriek-factory-state`](../../docs/factory-state.md) state: `live` is every active
   state (designing, building, reviewing, fixing, parked, merge-queue), `design` designing,
   `dev` building, `pipe` reviewing, fixing plus parked, `merge` merge-queue, `queued` queued. Refreshed every minute; counts at least five minutes old show their age;
 - the versions of Claude Code, callum-flow and the base image.
@@ -66,8 +66,8 @@ it too. (`/plugin` does not work inside the desktop app.)
   `orchestrator`), `on` or `off`. Change it in `/config`, or from the phone with
   `/config factory-hud.factory=on`.
 - `FACTORY_HUD_SOURCE` picks the store the counts read: `old`, `new` or `shadow`. The HUD
-  reads it once at session start and sets `CALLUM_FLOW_FACTORY_STATE_SOURCE` to it for each
-  `callum-flow-factory-state` run. Unset or empty leaves factory-state's own default
+  reads it once at session start and sets `FABRIEK_FACTORY_STATE_SOURCE` (and the old `CALLUM_FLOW_FACTORY_STATE_SOURCE`, which an older image reads) to it for each
+  `fabriek-factory-state` run. Unset or empty leaves factory-state's own default
   (`new`); `FACTORY_HUD_SOURCE=old` switches back. Any other value is ignored, with one log line at session start.
 - Uninstall with `claude plugin uninstall factory-hud@callum`.
 
@@ -75,9 +75,9 @@ it too. (`/plugin` does not work inside the desktop app.)
 
 - The context and usage figures come from Claude Code itself (`$.session.usage()`, then the
   `session.measure` event each time they move), so they cost nothing.
-- The counts come from `callum-flow-factory-state --repo <owner/name> --github off --format json`,
+- The counts come from `fabriek-factory-state --repo <owner/name> --github off --format json`,
   using the session repo's GitHub `origin`, run once a minute in the background, so the line
-  never waits on the database. The store it reads follows `FACTORY_HUD_SOURCE`. A failed read keeps the last counts.
+  never waits on the database. The store it reads follows `FACTORY_HUD_SOURCE`. A failed read keeps the last counts. On an image that predates the fabriek names the HUD runs `callum-flow-factory-state` instead (`hooks/tool-name.ts`).
 - The versions come from `dev-version`'s snapshot (`DEV_VERSIONS_FILE`, default
   `/tmp/dev-versions.json`); outside a dev-system image it shows Claude Code's alone.
 

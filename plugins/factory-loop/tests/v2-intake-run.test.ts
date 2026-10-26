@@ -298,7 +298,7 @@ function world(over: { cfg?: Partial<Config>; store?: unknown; labels?: string[]
   }
   const reply = (argv: string[]): Partial<RunResult> => {
     const [cmd, ...args] = argv
-    if (cmd === 'callum-flow-issue-read') {
+    if (cmd === 'fabriek-issue-read') {
       if (args.includes('--comments')) return w.failures.read ? { exitCode: 1, stderr: 'boom' } : { stdout: `issue: #${args[0]}\nstate: open\ntitle: T\nbody:\nDo the thing\nstripped: 0\n` }
       if (w.failures.labelsRead) return { exitCode: 1, stderr: 'nope' }
       return { stdout: JSON.stringify({ issue: { state: 'open', title: 'T', labels: w.labels.current.map(name => ({ name })) }, stripped: 0 }) }
@@ -368,7 +368,7 @@ describe('the run: the try first, then the reader', () => {
     const e = runEntry(3, V1, { agentId: undefined })
     const r = await intakeExecutor(w.ctx(null, e), runAction(3, V1))
     expect(r).toMatchObject({ status: 'running', agentId: 'a3' })
-    expect(w.argvs.slice(0, 2)).toEqual([['callum-flow-issue-read', '3', '--comments'], ['git', 'ls-tree', '--name-only', 'origin/main']])
+    expect(w.argvs.slice(0, 2)).toEqual([['fabriek-issue-read', '3', '--comments'], ['git', 'ls-tree', '--name-only', 'origin/main']])
     expect(w.spawns).toHaveLength(1)
     expect(w.spawns[0]).toMatchObject({ subagentType: INTAKE_AGENT, model: 'haiku', name: `intake-3-${V1}` })
     expect(w.spawns[0]?.prompt).toContain('Do the thing')
@@ -624,7 +624,7 @@ describe('the turn that ends a run (act-between.ts intakeAnswered)', () => {
     expect(env.live.ledger[0]).toMatchObject({ status: 'done', endedAt: NOW })
     expect(storeOf(w).stamps['3']).toMatchObject({ version: V1, area: 'factory' })
     // the executor's own event, through the event tool
-    const events = w.argvs.filter(a => a[0] === 'callum-flow-event')
+    const events = w.argvs.filter(a => a[0] === 'fabriek-event')
     expect(events).toHaveLength(1)
     expect(events[0]).toEqual(expect.arrayContaining(['--type', 'intake_stamp', '--issue', '3']))
     // a second turn of the same agent is not ours any more
@@ -637,7 +637,7 @@ describe('the turn that ends a run (act-between.ts intakeAnswered)', () => {
     const env = envOf(w, [runEntry(3, V1), step])
     expect(await intakeAnswered(env, baseState(), { agentId: 'zzz', answer: ANSWER, reason: 'answer' })).toBeNull()
     expect(await intakeAnswered(env, baseState(), { agentId: 'b1', answer: ANSWER, reason: 'answer' })).toBeNull()
-    expect(w.argvs.filter(a => a[0] === 'callum-flow-event')).toEqual([])
+    expect(w.argvs.filter(a => a[0] === 'fabriek-event')).toEqual([])
     expect(env.live.ledger.map(e => e.status)).toEqual(['running', 'running'])
   })
 })

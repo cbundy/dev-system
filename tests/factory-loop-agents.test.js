@@ -283,3 +283,20 @@ test("the designer, builder and reviewer hold a flake bug to a reproduction unde
   assert.match(reviewer, /reproduction under load and the stress run of consecutive passes are requirements like the acceptance criteria/);
   assert.match(reviewer, /a retry, skip or unexplained timeout raise, is an error finding/);
 });
+
+// What agents are told to run keeps the callum-flow names for now (#1359): consumer repos allow only
+// `Bash(callum-flow-*)` until the template change (#1360) reaches them, so a prompt naming fabriek-issue-read
+// would hit a permission prompt there. The move belongs with the alias removal (#1361). If this fails
+// because the text moved early, put the names back; if #1361 moves them, update this test with it.
+test("agent-facing text still names the callum-flow commands", () => {
+  for (const file of ["agents/builder.md", "agents/fixer.md", "agents/reviewer.md", "agents/triage.md", "agents/designer-v2.md", "skills/judge/SKILL.md"]) {
+    const text = read(`plugins/factory-loop/${file}`);
+    assert.match(text, /callum-flow-issue-read/, file);
+    assert.doesNotMatch(text, /fabriek-issue-read/, file);
+  }
+  for (const file of ["prompts-work.ts", "prompts-review.ts", "prompts-triage.ts"]) {
+    const text = read(`${HOOKS}/v2/${file}`);
+    assert.match(text, /callum-flow-issue-read/, file);
+    assert.doesNotMatch(text, /fabriek-(issue-read|test-weakening|evidence-upload)/, file);
+  }
+});

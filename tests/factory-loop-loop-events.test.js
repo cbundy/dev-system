@@ -1,7 +1,7 @@
 "use strict";
 
 // Every native event the factory loop builds for its own record (docs/factory-loop/v2/SPEC.md 13.7.4,
-// DECISIONS D-09) must be one callum-flow-event takes: a loop_entry for an entry of every logged kind
+// DECISIONS D-09) must be one fabriek-event takes: a loop_entry for an entry of every logged kind
 // (ledger.ts loopEvent, derive.ts loopEntryArgv) and a loop_passes for the minute's pass summary
 // (passes.ts passesEventArgv). One refused is a usage error the loop only notes. This runs the real
 // images/base/fabriek-event into a scratch CALLUM_EVENTS_DIR, and holds each line's data to what
@@ -29,7 +29,7 @@ register(
 
 const ROOT = path.join(__dirname, "..");
 const HOOKS = path.join(ROOT, "plugins", "factory-loop", "hooks");
-const EVENT = path.join(ROOT, "images", "base", "callum-flow-event");
+const EVENT = path.join(ROOT, "images", "base", "fabriek-event");
 const NOW = Date.UTC(2026, 9, 13, 3, 0);
 const BRIEF = "https://github.com/cbundy/dev-system/issues/470#issuecomment-9001";
 const RUN = "01K7S1AAAAAAAAAAAAAAAAAAAA";
@@ -51,9 +51,9 @@ after(() => {
   if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// log: the argv run by the real callum-flow-event, into the scratch log only.
+// log: the argv run by the real fabriek-event, into the scratch log only.
 function log(argv) {
-  assert.equal(argv[0], "callum-flow-event");
+  assert.equal(argv[0], "fabriek-event");
   return spawnSync("sh", [EVENT, ...argv.slice(1)], {
     encoding: "utf8",
     env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
@@ -96,7 +96,7 @@ test("every logged entry kind is one native loop_entry the real writer takes, wi
       continue;
     }
     assert.ok(Array.isArray(argv), `${e.key} logs an event`);
-    assert.deepEqual(argv.slice(0, 4).filter((_, i) => i !== 3), ["callum-flow-event", "--type", "loop_entry"]);
+    assert.deepEqual(argv.slice(0, 4).filter((_, i) => i !== 3), ["fabriek-event", "--type", "loop_entry"]);
     for (const flag of ["--note", "--run", "--pr", "--head"]) assert.ok(!argv.includes(flag), `${e.key} carries ${flag}`);
     const before = newLines().length;
     const r = log(argv);
@@ -178,7 +178,7 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
   passes.notePass(book, NOW + 5_000, 60, false, true);
   for (const summary of [passes.closeMinute(book, NOW, settings), passes.closeMinute(book, NOW + 60_000, settings)]) {
     const argv = passes.passesEventArgv(summary);
-    assert.deepEqual(argv.slice(0, 3), ["callum-flow-event", "--type", "loop_passes"]);
+    assert.deepEqual(argv.slice(0, 3), ["fabriek-event", "--type", "loop_passes"]);
     assert.equal(argv.length, 5);
     const before = newLines().length;
     const r = log(argv);
@@ -200,12 +200,12 @@ test("the minute's pass summary is a native loop_passes the real writer takes, w
   assert.ok(!fs.existsSync(oldLogPath()), "nothing goes to the old log");
 });
 
-test("no hooks file builds a `callum-flow-event loop` argv", () => {
+test("no hooks file builds a `fabriek-event loop` argv", () => {
   const hits = [];
   const walk = (d) => {
     for (const f of fs.readdirSync(d, { withFileTypes: true })) {
       if (f.isDirectory()) walk(path.join(d, f.name));
-      else if (f.name.endsWith(".ts") && /'callum-flow-event',\s*'loop'|\['loop'/.test(fs.readFileSync(path.join(d, f.name), "utf8"))) hits.push(path.join(d, f.name));
+      else if (f.name.endsWith(".ts") && /'fabriek-event',\s*'loop'|\['loop'/.test(fs.readFileSync(path.join(d, f.name), "utf8"))) hits.push(path.join(d, f.name));
     }
   };
   walk(HOOKS);

@@ -15,7 +15,7 @@ import { eventArgv, intervention } from './events'
 import type { InterventionEvent, V2Event } from './events'
 import { factKey } from './keys'
 
-// callum-flow-event is one jq call and one append; a minute is ample (act.ts EVENT_TIMEOUT_MS)
+// fabriek-event is one jq call and one append; a minute is ample (act.ts EVENT_TIMEOUT_MS)
 const EVENT_TIMEOUT_MS = 60_000
 
 // What an op that landed was: its canonical text (control.ts formatOp), its name and the issues
@@ -36,15 +36,15 @@ export function opInterventions(op: OpLanded): InterventionEvent[] {
   return issues.map(issue => intervention(op.by, cause, factKey(cause, issue === null ? 'fleet' : `i${issue}`, at), op.text, { issue, life: null, pr: null }))
 }
 
-// logEvent: one v2 event through callum-flow-event, as events.ts builds it (its actor included,
+// logEvent: one v2 event through fabriek-event, as events.ts builds it (its actor included,
 // which ExecCtx.event cannot pass). Like ExecCtx.event (act.ts eventOf), a refusal throws with the
-// exit as `exitCode`: callum-flow-event exits non-zero only on a usage error (2), a loop bug that is
+// exit as `exitCode`: fabriek-event exits non-zero only on a usage error (2), a loop bug that is
 // never retried.
 export async function logEvent(cmd: ExecCtx['cmd'], e: V2Event): Promise<void> {
   const r = await cmd(eventArgv(e), { timeoutMs: EVENT_TIMEOUT_MS })
   if (r.exitCode === 0) return
   const why = r.stderr.trim().split('\n').pop() ?? ''
-  throw Object.assign(new Error(`callum-flow-event ${e.state}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
+  throw Object.assign(new Error(`fabriek-event ${e.state}: exit ${r.exitCode}${why === '' ? '' : `: ${why}`}`), { exitCode: r.exitCode })
 }
 
 // logOwnerOp: the op's interventions, logged; notes on what failed, for the decision log.

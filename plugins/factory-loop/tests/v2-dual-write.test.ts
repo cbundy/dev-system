@@ -122,7 +122,7 @@ describe('observeV2 dual write (2.4)', () => {
     const reads: string[] = []
     const run = async (argv: string[]) => {
       runs.push(argv)
-      if (argv[0] === 'callum-flow-event') {
+      if (argv[0] === 'fabriek-event') {
         if (probe instanceof Error) throw probe
         return { ...probe, stderr: '' }
       }
@@ -133,12 +133,12 @@ describe('observeV2 dual write (2.4)', () => {
     const pass = (rt: Runtime) => observeV2({ io, rt, cache: cache.v2, run, state: baseState(), stored: { records: [], heads: null, error: null }, poolJson: null, github: cache.github, backoff: false, limited: () => false, readers })
     return { runs, reads, pass, cache }
   }
-  const probes = (runs: string[][]) => runs.filter(a => a[0] === 'callum-flow-event')
+  const probes = (runs: string[][]) => runs.filter(a => a[0] === 'fabriek-event')
 
   test('act mode: the probe runs once, the log is read once, and seen holds only the matching transition', async () => {
     const h = harness({ exitCode: 0, stdout: `${NEW_LOG}\n` })
     const r = await h.pass(runtime('act'))
-    expect(probes(h.runs)).toEqual([['callum-flow-event', '--new-only', '--new-path', '--repo', REPO]])
+    expect(probes(h.runs)).toEqual([['fabriek-event', '--new-only', '--new-path', '--repo', REPO]])
     expect(r.v2.dualWrite).toEqual({ readAt: NOW, seen: new Set([`7:${LIFE}:3`]) })
     expect(r.v2.sources.dualWrite.ok).toBe(true)
     await h.pass(runtime('act'))

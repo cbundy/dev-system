@@ -6,7 +6,7 @@
 //   (the step's not-ok). A head that did not move, or any other failure, fails with no class
 //   (unknown). An update GitHub finds needless (already up to date) reads the PR's head back and
 //   is done at it: an earlier try of the attempt may have made it (5.1).
-// - `queue-merge` runs `callum-flow-merge <p> --patch <approved patch> --issue <N>`: the guard
+// - `queue-merge` runs `fabriek-merge <p> --patch <approved patch> --issue <N>`: the guard
 //   inside it checks only the loop's facts, the record's issue among them (never read from the
 //   branch name), and the merge matches the head the guard verified. Merged is done. A
 //   refusal with a class is the guard's answer, so it is done too, not merged, with the guard's
@@ -100,7 +100,7 @@ export function failClassOf(lines: readonly string[]): GuardClass | null {
   return CLASS_ORDER.find(c => found.has(c)) ?? null
 }
 
-// refusalClass: what callum-flow-merge says of a merge GitHub refused after the guard passed: the
+// refusalClass: what fabriek-merge says of a merge GitHub refused after the guard passed: the
 // merge state it read back (BEHIND goes back to Q1, DIRTY to a fixer); null for any other.
 export function refusalClass(stderr: string): GuardClass | null {
   const state = /merge state ([A-Z_]+)/.exec(stderr)?.[1]

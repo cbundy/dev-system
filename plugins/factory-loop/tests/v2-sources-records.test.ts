@@ -95,7 +95,7 @@ describe('eventsSource shadow (v2 SPEC 3.3)', () => {
     })
     expect(validateStrict('shadow_read', 1, ev?.event.state === 'shadow_read' ? ev.event.data : null)).toEqual([])
     expect(tells(actions)).toEqual([])
-    expect(ev?.event.state === 'shadow_read' && eventArgv(ev.event).slice(0, 4)).toEqual(['callum-flow-event', '--type', 'shadow_read', '--data'])
+    expect(ev?.event.state === 'shadow_read' && eventArgv(ev.event).slice(0, 4)).toEqual(['fabriek-event', '--type', 'shadow_read', '--data'])
     expect(ev?.event.state === 'shadow_read' && eventArgv(ev.event)).not.toContain('--issue')
   })
 

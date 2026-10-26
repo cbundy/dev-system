@@ -130,7 +130,7 @@ describe('the notice, the prompt and the reads', () => {
 
   test('readIssue and topLevelListing report what the commands gave', async () => {
     const ok = async (argv: string[]) => ({ exitCode: 0, stdout: argv.join(' ') + '\n', stderr: '' })
-    expect(await readIssue(ok, 12)).toEqual({ ok: true, text: 'callum-flow-issue-read 12 --comments\n' })
+    expect(await readIssue(ok, 12)).toEqual({ ok: true, text: 'fabriek-issue-read 12 --comments\n' })
     expect(await topLevelListing(ok, 'main')).toEqual(['git ls-tree --name-only origin/main'])
     const bad = async () => ({ exitCode: 2, stdout: '', stderr: 'boom' })
     expect(await readIssue(bad, 12)).toMatchObject({ ok: false, why: expect.stringContaining('boom') })
@@ -189,7 +189,7 @@ function world(on: Parameters<typeof host>[0], over: { config?: Record<string, u
   const h = host(on, {
     config: { repo: REPO, runSource: 'events', shadowDevice: 'dev', checkout: '/work', ...over.config },
     run: argv => {
-      if (argv[0] === 'callum-flow-issue-read' && argv[1] === '12' && argv[2] === '--comments') return over.read ?? { stdout: ISSUE }
+      if (argv[0] === 'fabriek-issue-read' && argv[1] === '12' && argv[2] === '--comments') return over.read ?? { stdout: ISSUE }
       if (argv[0] === 'git' && argv[1] === 'ls-tree') return { stdout: 'docs\nplugins\nREADME.md\n' }
       return undefined
     },
@@ -237,7 +237,7 @@ describe('/factory stamp <N> in the engine test host', () => {
       expect(h.prompts.slice(prompts)).toEqual([expect.stringContaining('failed: the reader could not start (test host)')])
 
       // only the two reads ran: no gh, no event; the store (ledger, records, stamps) is as it was
-      expect(extra(h, before).filter(c => !c.startsWith('callum-flow-event --new-only'))).toEqual(['callum-flow-issue-read 12 --comments', 'git ls-tree --name-only origin/main'])
+      expect(extra(h, before).filter(c => !c.startsWith('fabriek-event --new-only'))).toEqual(['fabriek-issue-read 12 --comments', 'git ls-tree --name-only origin/main'])
       expect(h.events().filter(e => e.includes('--type'))).toEqual([])
       expect(snapshot(h)).toBe(stored)
       expect(h.stops).toEqual([])
@@ -339,7 +339,7 @@ function fake(over: { read?: { exitCode: number; stdout: string; stderr: string 
           logged.push(init?.stdin ?? '')
           return { exitCode: 0, stdout: '', stderr: '' }
         }
-        if (argv[0] === 'callum-flow-issue-read') return over.read ?? { exitCode: 0, stdout: ISSUE, stderr: '' }
+        if (argv[0] === 'fabriek-issue-read') return over.read ?? { exitCode: 0, stdout: ISSUE, stderr: '' }
         return { exitCode: 0, stdout: 'docs\nplugins\n', stderr: '' }
       },
     },

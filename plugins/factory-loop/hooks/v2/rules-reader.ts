@@ -1,4 +1,4 @@
-// Readers behind the loop (docs/factory-loop/v2/SPEC.md 13.9.2, G2): the image's callum-flow-factory-state
+// Readers behind the loop (docs/factory-loop/v2/SPEC.md 13.9.2, G2): the image's fabriek-factory-state
 // skipped events of a type or version it cannot read, none of them in the derivation behind the
 // report (observe.ts makes the pass blind for those). The owner item `reader-behind` goes out once
 // per set of skipped types (key tell:reader-behind:<types>), and again when the set changes. Pure.

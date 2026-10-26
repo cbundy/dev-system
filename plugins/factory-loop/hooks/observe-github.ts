@@ -1,5 +1,5 @@
 // The GitHub source of one observe pass: the facts of the issues due this pass, read with ONE
-// `callum-flow-issue-read --json --issues <N,...>` call (cbundy/dev-system#922) instead of one
+// `fabriek-issue-read --json --issues <N,...>` call (cbundy/dev-system#922) instead of one
 // call per issue (each costing 2-3 API calls). A reader that does not know `--issues` (an image
 // older than this plugin) exits 2: the pass then falls back to one single read per issue. A
 // designing issue of this device also gets its `--comments` read, for its design brief.
@@ -10,7 +10,7 @@ type Timed<T> = { at: number; value: T }
 type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 type Opts = { repo: string; cache: Map<number, Timed<GithubIssue>>; now: number; designing: Set<number>; limited: () => boolean }
 
-const READER = 'callum-flow-issue-read'
+const READER = 'fabriek-issue-read'
 
 // readIssues: reads the due issues into opts.cache; false when any read failed or a rate limit
 // ended the pass's reads. A failed read keeps the last value (and its old time).

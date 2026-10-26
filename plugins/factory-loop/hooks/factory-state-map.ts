@@ -1,4 +1,4 @@
-// The one place the plugin turns a callum-flow-factory-state issue row into a v2 state. Pure: no I/O,
+// The one place the plugin turns a fabriek-factory-state issue row into a v2 state. Pure: no I/O,
 // types only are imported, so parse.ts, the reconcile tool (plain Node) and the tests share it.
 // plugins/factory-hud/hooks/format.ts carries a small copy of the same rule (a separate mod with no
 // factory-loop import): change both together.

@@ -197,7 +197,7 @@ export type Outcome =
   | { kind: 'designer'; unparsed: true }
   | { kind: 'adjudicator'; verdicts: string[]; action: AdjudicatorAction; report: MergeReport | null }
   | { kind: 'handoff'; notGated: boolean; run: string | null; head: string | null; newBranch: string | null }
-  // callum-flow-rollout for a merge the loop did not make (a hand merge, rule M7, D-29)
+  // fabriek-rollout for a merge the loop did not make (a hand merge, rule M7, D-29)
   | { kind: 'rollout'; rollout: Rollout | null; closeIssue: number | null }
   | {
       kind: 'wake'
@@ -255,7 +255,7 @@ export type LedgerEntry = {
   session?: string
   // the executor's last few words, for the decision log
   summary?: string
-  // the wake's loop_entry payload fields (Action.loopData), written by `callum-flow-event loop --data`
+  // the wake's loop_entry payload fields (Action.loopData), written by `fabriek-event loop --data`
   loopData?: LoopData
   // a v2 agent step's kind, which the per-issue rate cap counts by (D-24; v2 appendix B)
   step?: AgentStep

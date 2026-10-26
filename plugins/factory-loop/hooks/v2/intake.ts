@@ -23,10 +23,10 @@ export function startingText(issue: number, model: string): string {
   return `Stamping #${issue} with ${model}, dry run: its answer follows when the reader ends.`
 }
 
-// readIssue: the issue and its comments by trusted authors only (callum-flow-issue-read drops the rest).
+// readIssue: the issue and its comments by trusted authors only (fabriek-issue-read drops the rest).
 export async function readIssue(run: Run, issue: number): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
   try {
-    const r = await run(['callum-flow-issue-read', String(issue), '--comments'])
+    const r = await run(['fabriek-issue-read', String(issue), '--comments'])
     if (r.exitCode !== 0) return { ok: false, why: `the issue could not be read (exit ${r.exitCode}: ${(r.stderr.trim() || r.stdout.trim()).slice(0, 200)})` }
     return r.stdout.trim() === '' ? { ok: false, why: 'the issue read was empty' } : { ok: true, text: r.stdout }
   } catch (err) {

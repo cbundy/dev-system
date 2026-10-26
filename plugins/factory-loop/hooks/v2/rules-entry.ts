@@ -88,7 +88,7 @@ function mergedLogged(ctx: V2Ctx, r: IssueRecord): boolean {
 }
 
 // heldByOther: another device holds a live claim on the issue: its labels are the winner's, so a
-// close clears none of them (3.4, callum-flow-claim).
+// close clears none of them (3.4, fabriek-claim).
 function heldByOther(ctx: V2Ctx, r: IssueRecord): boolean {
   const holder = ctx.state.issues.find(i => i.number === r.issue)?.holder ?? null
   return holder !== null && holder !== ctx.state.device

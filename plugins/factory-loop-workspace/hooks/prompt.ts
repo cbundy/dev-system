@@ -1,6 +1,6 @@
 // Prompts nobody answers (docs/factory-loop/v2/SPEC.md 10.10), pure: the reason a refused call is
 // given, and the data of the native `prompt_denied` and `prompt_waiting` events (written with
-// `callum-flow-event --type`, docs/factory-events/schemas), so the rules test covers them without
+// `fabriek-event --type`, docs/factory-events/schemas), so the rules test covers them without
 // the engine.
 import { oneLine } from './gate'
 

@@ -900,7 +900,7 @@ function driverWorld(ghostIssue: number) {
   return (argv: string[], s: Seen) => {
     const [cmd, ...args] = argv
     switch (cmd) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc([{ issue: ghostIssue, state: 'building', state_since: iso(NOW - 3 * HOUR), holder: DEVICE, pr: null, stuck: null, github: null }], [], NOW) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -908,7 +908,7 @@ function driverWorld(ghostIssue: number) {
         return { stdout: 'queue known=none now=none\n' }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
         return args.join(' ') === `--json ${ghostIssue}` ? { stdout: JSON.stringify(issueJson) } : { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
@@ -932,7 +932,7 @@ describe('R1 in the driver', () => {
     expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
     expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in building for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
     const ran = h.commands().map(c => c.argv.join(' '))
-    expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
+    expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('fabriek-event'))).toEqual([])
     expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])
     expect(h.store.get(`ledger:${REPO}`)).toBeUndefined()
   })

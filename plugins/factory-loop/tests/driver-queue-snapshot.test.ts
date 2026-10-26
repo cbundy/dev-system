@@ -9,7 +9,7 @@ import { NO_EVENTS, QUIET_BEATS, REPO, TOOLS, ENGINE_TEST, factoryDoc, host } fr
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 const quiet = (argv: string[], s: { stdin?: string }) => {
   switch (argv[0]) {
-    case 'callum-flow-factory-state':
+    case 'fabriek-factory-state':
       return { stdout: factoryDoc([]) }
     case 'dev-query':
       return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -17,14 +17,14 @@ const quiet = (argv: string[], s: { stdin?: string }) => {
       return { stdout: 'queue known=none now=none\n' }
     case `${TOOLS}/usage-check.sh`:
       return { stdout: 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth' }
-    case 'callum-flow-issue-read':
+    case 'fabriek-issue-read':
       return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
     case 'treehouse':
       return { stdout: '[]' }
   }
   return undefined
 }
-const isSnapshot = (argv: string[]) => argv[0] === 'callum-flow-event' && argv[1] === '--type' && argv[2] === 'queue_snapshot'
+const isSnapshot = (argv: string[]) => argv[0] === 'fabriek-event' && argv[1] === '--type' && argv[2] === 'queue_snapshot'
 const problemsOf = (h: ReturnType<typeof host>) => h.passes().map(p => (p.problems as string[] | undefined) ?? [])
 
 describe('a pass writes the queue snapshot', () => {

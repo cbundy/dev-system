@@ -18,7 +18,7 @@ const ev = { state: 'transition' as const, record, row: 'H1', from: null, via: '
 describe('eventArgv has no target', () => {
   test('a transition is a native call with its issue and no --new-only, --note or column flag', () => {
     const argv = eventArgv(ev)
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'transition', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'transition', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', '7'])
     for (const flag of ['--new-only', '--note', '--branch', '--pr', '--head']) expect(argv).not.toContain(flag)
     expect(eventArgv.length).toBe(1)
@@ -33,7 +33,7 @@ describe('the event executor', () => {
     const r = await executors.event?.(ok, act)
     expect(r?.status).toBe('done')
     expect(seen).toEqual([eventArgv(ev)])
-    const refused = { cmd: async () => ({ exitCode: 2, stdout: '', stderr: 'callum-flow-event: unknown type' }) } as unknown as ExecCtx
+    const refused = { cmd: async () => ({ exitCode: 2, stdout: '', stderr: 'fabriek-event: unknown type' }) } as unknown as ExecCtx
     expect(await executors.event?.(refused, act)).toMatchObject({ status: 'failed', noRetry: true })
   })
 })

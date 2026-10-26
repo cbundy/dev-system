@@ -12,6 +12,7 @@ import type { Engine } from 'claude-code/testing'
 import { loopNote } from '../hooks/derive'
 import { pruneArgvs } from '../hooks/exec'
 import { resetGithubHealth } from '../hooks/github-health'
+import { resetFallbacks } from '../hooks/tool-name.mjs'
 import { CLI_TIMEOUT_MS } from '../hooks/act-cli'
 import { OFF_PASS_MARGIN_MS } from '../hooks/act-off'
 import type { LedgerEntry } from '../hooks/types'
@@ -59,7 +60,7 @@ const EVENTS = [
   `${iso(NOW - 300_000)},closed,3,,,,,completed,sweep,${DEVICE}`,
 ].join('\n')
 // The commands an observe pass may run: reads only.
-const READS = ['callum-flow-factory-state', 'dev-query', 'callum-flow-issue-read', `${TOOLS}/usage-check.sh`, 'callum-flow-milestone', 'git', 'stat']
+const READS = ['fabriek-factory-state', 'dev-query', 'fabriek-issue-read', `${TOOLS}/usage-check.sh`, 'fabriek-milestone', 'git', 'stat']
 
 function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = {}, config: Record<string, unknown> = {}, originFile?: () => string | undefined) {
   return host(on, {
@@ -72,11 +73,11 @@ function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = 
         return body === undefined ? { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/main'" } : { stdout: body }
       }
       switch (argv[0]) {
-        case 'callum-flow-factory-state':
+        case 'fabriek-factory-state':
           return { stdout: FACTORY }
         case 'dev-query':
           return { stdout: EVENTS }
-        case 'callum-flow-issue-read':
+        case 'fabriek-issue-read':
           return { stdout: reads[argv.slice(1).join(' ')] ?? JSON.stringify({ issues: [], stripped: 0 }) }
         case `${TOOLS}/usage-check.sh`:
           return { stdout: USAGE }
@@ -107,10 +108,24 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
 
     // nothing but reads ran, and every one of them wrote its events to the sink
     expect(h.commands().filter(s => !snapshotWrite(s) && !READS.includes(s.argv[0] ?? '')).map(s => s.argv.join(' '))).toEqual([])
-    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === SINK && s.env.CALLUM_FLOW_REPO === REPO && s.env.FABRIEK_REPO === REPO)).toBe(true)
     // the state was recorded for the replay tools
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
   })
+
+  // #1359: the experiment shares are read from FABRIEK_<X> first, then the old CALLUM_FLOW_<X>
+  for (const [name, env, want] of [
+    ['the fabriek names win over the old ones', { FABRIEK_IMPLEMENTER_OPUS_PCT: '25', CALLUM_FLOW_IMPLEMENTER_OPUS_PCT: '75', FABRIEK_DESIGN_SESSION_PCT: '10', CALLUM_FLOW_DESIGN_SESSION_PCT: '90' }, { implementerOpusPct: 25, designSessionPct: 10 }],
+    ['the old names stand in alone', { CALLUM_FLOW_IMPLEMENTER_OPUS_PCT: '75', CALLUM_FLOW_DESIGN_SESSION_PCT: '90' }, { implementerOpusPct: 75, designSessionPct: 90 }],
+  ] as const) {
+    test(`the experiment shares in settings.json: ${name}`, ENGINE_TEST, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const h = host(on, { config: { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work' }, env: { DEV_MACHINE_NAME: 'coder-spike', ...env } })
+      await $.session.start(START)
+      await clock.advance(6_000)
+      expect(JSON.parse(h.files.get(`${LOOP_DIR}/settings.json`) ?? '{}')).toMatchObject({ derived: { experiment: want } })
+    })
+  }
 
   test('every pass leaves the settings in force in settings.json; a failed write is a problem line, not a failed pass', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -157,10 +172,10 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ readyLabel: 'go', queueEvery: '10m', colour: 'blue' }))
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label go')).toBe(true)
+    expect(h.seen.some(s => s.argv.join(' ') === 'fabriek-issue-read --json --list --label go')).toBe(true)
     expect(h.last().config).toEqual(['colour: unknown setting'])
     // the configured labels reach the CLIs through the environment
-    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env).toMatchObject({ CALLUM_FLOW_READY_LABEL: 'go', CALLUM_FLOW_IN_DEV_LABEL: 'in development' })
+    expect(h.commands().find(s => s.argv[0] === 'fabriek-factory-state')?.env).toMatchObject({ CALLUM_FLOW_READY_LABEL: 'go', CALLUM_FLOW_IN_DEV_LABEL: 'in development' })
     // the queue is read every 10 minutes now, so the next pass does not read it again
     const before = h.seen.filter(s => s.argv.includes('--list')).length
     await clock.advance(60_000)
@@ -172,7 +187,7 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     const h = shadow(on)
     await $.session.start(START)
     await clock.advance(6_000)
-    const own = h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state')
+    const own = h.commands().filter(s => s.argv[0] === 'fabriek-factory-state')
     expect(own.length).toBeGreaterThan(0)
     expect(own.every(s => s.env.FACTORY_REGIME === 'factory_loop_v2' && s.env.CLAUDE_SESSION_ID === SESSION && s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
   })
@@ -209,7 +224,7 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     h.files.set(`${LOOP_DIR}/control.json`, JSON.stringify({ only: [40] }))
     await $.session.start(START)
     await clock.advance(6_000)
-    const read = () => h.seen.filter(s => s.argv[0] === 'callum-flow-issue-read').map(s => s.argv.slice(1).join(' '))
+    const read = () => h.seen.filter(s => s.argv[0] === 'fabriek-issue-read').map(s => s.argv.slice(1).join(' '))
     expect(read().some(r => /^--json --issues .*\b40\b/.test(r))).toBe(true)
     expect(read()).toContain('--json --timeline 40')
     await clock.advance(60_000)
@@ -221,8 +236,8 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     const h = shadow(on, {}, { binDir: '/work/images/base', toolsDir: '/work/features/src/callum-tools' })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env.PATH).toStartWith('/work/images/base:')
-    expect(h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')?.env.CALLUM_FLOW_LINKAGE_BIN).toBe('/work/features/src/callum-tools/check-pr-linkage.sh')
+    expect(h.commands().find(s => s.argv[0] === 'fabriek-factory-state')?.env.PATH).toStartWith('/work/images/base:')
+    expect(h.commands().find(s => s.argv[0] === 'fabriek-factory-state')?.env.CALLUM_FLOW_LINKAGE_BIN).toBe('/work/features/src/callum-tools/check-pr-linkage.sh')
     expect(h.seen.some(s => s.argv[0] === '/work/features/src/callum-tools/usage-check.sh')).toBe(true)
   })
 
@@ -231,7 +246,7 @@ describe('observe mode (v2 SPEC 13.11.1)', () => {
     const h = shadow(on)
     await $.session.start(START)
     await clock.advance(6_000)
-    const state = h.commands().find(s => s.argv[0] === 'callum-flow-factory-state')
+    const state = h.commands().find(s => s.argv[0] === 'fabriek-factory-state')
     expect(state).toBeDefined()
     expect(state?.env).not.toHaveProperty('CALLUM_FLOW_LINKAGE_BIN')
   })
@@ -318,7 +333,7 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
     if (own !== undefined) return own
     const [cmd, ...args] = argv
     switch (cmd) {
-      case 'callum-flow-factory-state': {
+      case 'fabriek-factory-state': {
         const i = w.issue
         const row = i === null ? null : { issue: 470, state: i.state, state_since: iso(i.since), holder: DEVICE, pr: i.pr ?? null, stuck: null, github: null }
         return { stdout: factoryDoc(row === null ? [] : [row]) }
@@ -329,7 +344,7 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
         return { stdout: `queue known=${args[args.indexOf('--known') + 1] ?? 'none'} now=${w.queue.join(',') || 'none'}\n` }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         if (args.includes('--comments')) return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
         // observe mode reads the queue itself; act mode through queue-watch.sh --once
         if (args.includes('--list')) return { stdout: JSON.stringify({ issues: w.queue.map(number => ({ number })), stripped: 0 }) }
@@ -340,11 +355,11 @@ function factory(over: { queue?: number[]; issue?: Issue | null; beats?: string;
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         return { stdout: '[]' }
-      case 'callum-flow-implementer-route':
+      case 'fabriek-implementer-route':
         return { stdout: 'sonnet\n' }
-      case 'callum-flow-designer-route':
+      case 'fabriek-designer-route':
         return { stdout: 'opus\n' }
-      case 'callum-flow-milestone':
+      case 'fabriek-milestone':
         // a closed item in the Next release milestone: the hourly release review is due (rule O3)
         return w.release ? { stdout: 'Next release (v1.0.0)\nExpected: patch\n#469 closed  Done\n' } : undefined
       case 'gh':
@@ -381,17 +396,46 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       // the sweep runs off the pass (act-off.ts): the pass line says it is running, its completion lands after
       { key: 'sweep:0', status: 'running', ms: 0, summary: 'running off the pass' },
     ])
-    expect(line.commands).toContain('env CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} callum-flow-claim 470')
+    expect(line.commands).toContain('env FABRIEK_CLAIM_SCORE={"score":0,"factors":[]} CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} fabriek-claim 470')
     expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adopt', branch: 'issue-470' } })
     expect(JSON.parse(h.files.get(LOCK) ?? '{}')).toMatchObject({ session: SESSION, expiresAt: NOW + 5_000 + 15 * MIN })
     expect(h.store.get(`queue-known:${REPO}`)).toEqual([470])
     // act mode's commands write real events: no sink
     // (the reads of the repo's settings from origin run before the environment is built, and carry none)
-    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
+    expect(h.commands().filter(s => !settingsRead(s) && !snapshotWrite(s)).every(s => s.env.CALLUM_EVENTS_DIR === undefined && s.env.CALLUM_FLOW_REPO === REPO && s.env.FABRIEK_REPO === REPO)).toBe(true)
     expect(h.titles).toEqual(['🔄 dev-system (Q:1 - D:0 - M:0)'])
     // no full states in act mode
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(false)
   })
+
+  // #1359: the loop runs the fabriek names, and on an image that predates them each program it needs is
+  // tried once, then run as its callum-flow name; the trace and the pass line keep the argv requested.
+  for (const tools of ['new', 'old', 'both'] as const) {
+    test(`an image with ${tools === 'new' ? 'only the fabriek' : tools === 'old' ? 'only the callum-flow' : 'both'} command names: the pass claims through ${tools === 'old' ? 'the old names' : 'the fabriek names'}`, ENGINE_TEST, async ($, on) => {
+      resetFallbacks()
+      const clock = mock.clock(on, { now: NOW })
+      const { run } = factory({ queue: [470] })
+      const h = host(on, { config: ACT, run, tools })
+      await $.session.start(START)
+      await clock.advance(6_000)
+
+      const line = h.last()
+      expect(line.outcomes?.[0]).toEqual({ key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED })
+      expect(line.commands).toContain('env FABRIEK_CLAIM_SCORE={"score":0,"factors":[]} CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]} fabriek-claim 470')
+      const programs = h.commands().map(c => c.argv[c.argv[0] === 'env' ? c.argv.findIndex((w, i) => i > 0 && !w.includes('=')) : 0] ?? '')
+      const tried = (prefix: string, name: string) => programs.filter(p => p === `${prefix}${name}`).length
+      if (tools === 'old') {
+        // the fabriek name is tried once (then remembered as missing), the old name does the work
+        expect(tried('fabriek-', 'claim')).toBe(1)
+        expect(tried('callum-flow-', 'claim')).toBe(1)
+        expect(h.last().problems?.filter(p => p.startsWith('fabriek-claim is not on this image'))).toHaveLength(1)
+      } else {
+        expect(programs.filter(p => p.startsWith('callum-flow-'))).toEqual([])
+        expect(tried('fabriek-', 'claim')).toBe(1)
+        expect(JSON.stringify(h.last().problems ?? [])).not.toContain('is not on this image')
+      }
+    })
+  }
 
   const rails: { name: string; files?: Record<string, string>; env?: Record<string, string>; beats?: string; run?: (argv: string[]) => { exitCode?: number; stdout?: string } | undefined; reason: string; tell: string | null; lockless?: boolean }[] = [
     { name: "another session's act lock", files: { [LOCK]: lease('session-other', NOW + 10 * MIN) }, reason: 'act lock: session session-other holds it', tell: null },
@@ -430,8 +474,8 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       expect((line.rails as string[]).join(' | ')).toContain(r.reason)
       // it planned the claim and ran nothing but reads, their events to the sink
       expect((line.actions as { key: string }[]).map(a => a.key)).toContain(CLAIM_KEY)
-      expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
-      expect(h.commands().filter(s => s.argv[0] === 'callum-flow-factory-state').every(s => s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
+      expect(h.commands().some(s => s.argv.includes('fabriek-claim') || s.argv[0] === 'fabriek-sweep')).toBe(false)
+      expect(h.commands().filter(s => s.argv[0] === 'fabriek-factory-state').every(s => s.env.CALLUM_EVENTS_DIR === SINK)).toBe(true)
       expect(h.titles.at(-1)).toContain('· observe')
       // a session a rail refuses never takes the act lock
       if (r.lockless === true) expect(h.files.has(LOCK)).toBe(false)
@@ -495,7 +539,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv.includes('callum-flow-claim')) h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+        if (argv.includes('fabriek-claim')) h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
         return undefined
       },
     })
@@ -508,7 +552,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       ['sweep:0', 'skipped', 'kill switch'],
     ])
     // the sweep never ran nor entered the ledger, and the title says off at once
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep')).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'fabriek-sweep')).toBe(false)
     expect(h.ledger().map(e => e.key)).toEqual([CLAIM_KEY])
     expect(h.titles.at(-1)).toBe('🔄 dev-system · off')
   })
@@ -568,7 +612,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ updateDue: { at: 777 } })
     expect(h.last()).toMatchObject({ executed: false })
     expect((h.last().rails as string[]).join(' ')).toContain('restart: dev-restart-self asked for a new workspace')
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
   })
 
@@ -639,17 +683,17 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
     expect(h.titles.at(-1)).toContain('winding down')
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/wind-down.status.json`) ?? '{}')).toMatchObject({ cap_ms: 10 * MIN, running: { steps: [] } })
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
     // the stop script removed the request: still nothing starts, and no status file is written for it
     h.files.delete(`${LOOP_DIR}/wind-down.request`)
     h.files.delete(`${LOOP_DIR}/wind-down.status.json`)
     await clock.advance(60_000)
     expect(h.files.has(`${LOOP_DIR}/wind-down.status.json`)).toBe(false)
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     // the restart never came: past the cap and the margin the loop plans normally again
     await clock.advance(16 * MIN)
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(true)
     expect(h.events().filter(e => e.some(n => n.includes('wind-down-stale'))).length).toBeGreaterThan(0)
   })
 
@@ -666,13 +710,13 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
 
   test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (v2 SPEC 13.10 item 2)', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('fabriek-claim') ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
     const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.store.get(`backoff:${REPO}`)).toBe(NOW + 5_000 + 15 * MIN)
     // two minutes on the queue would be read again, but GitHub waits
-    const reads = () => h.commands().filter(s => s.argv[0] === `${TOOLS}/queue-watch.sh` || s.argv[0] === 'callum-flow-issue-read').length
+    const reads = () => h.commands().filter(s => s.argv[0] === `${TOOLS}/queue-watch.sh` || s.argv[0] === 'fabriek-issue-read').length
     const before = reads()
     await clock.advance(2 * MIN)
     expect(reads()).toBe(before)
@@ -687,7 +731,7 @@ describe('act mode: the pass (v2 SPEC 13.2, 13.7, 13.12)', () => {
       queue: [470],
       run: argv => {
         if (queueDown && argv[0] === `${TOOLS}/queue-watch.sh`) return { exitCode: 1, stderr: 'boom' }
-        if (argv[0] !== 'callum-flow-issue-read' || argv.slice(1).join(' ') !== '--json 470') return undefined
+        if (argv[0] !== 'fabriek-issue-read' || argv.slice(1).join(' ') !== '--json 470') return undefined
         const issue = { number: 470, title: 'The loop acts', state: 'open', labels: [{ name: 'ready' }], issue_dependencies_summary: { blocked_by: blocked }, sub_issues_summary: { total: 0 } }
         return { stdout: JSON.stringify({ issue, blocked_by: [], blocking: [], stripped: 0 }) }
       },
@@ -807,7 +851,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       const { run } = factory({
         queue: [470],
         run: argv => {
-          if (argv.includes('callum-flow-claim') && h !== undefined) {
+          if (argv.includes('fabriek-claim') && h !== undefined) {
             h.files.set(LOCK, otherLease(expiresAt))
             atLoss = JSON.stringify(h.store.get(ledgerKey))
           }
@@ -822,7 +866,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
         { key: CLAIM_KEY, status: 'done', ms: 0, summary: CLAIMED },
         { key: 'sweep:0', status: 'skipped', ms: 0, summary: "held: the act lock is no longer this session's" },
       ])
-      expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep')).toBe(false)
+      expect(h.commands().some(s => s.argv[0] === 'fabriek-sweep')).toBe(false)
       // the store keeps what it held when the lock was lost: the claim running, as the next holder will find it
       expect(JSON.stringify(h.store.get(ledgerKey))).toBe(atLoss)
       expect(h.entry(CLAIM_KEY)).toMatchObject({ status: 'running' })
@@ -876,7 +920,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     // the queue is read again two minutes after its last read
     await clock.advance(3 * MIN)
     expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'store' })
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     expect(h.last().skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
 
@@ -910,7 +954,7 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     expect(line).toMatchObject({ mode: 'act', executed: false })
     expect(line.rails as string[]).toContain('ledger: not loaded, so nothing is acted on this pass')
     expect((line.problems as string[]).join(' ')).toContain('ledger: the store could not be read')
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim') || s.argv[0] === 'callum-flow-sweep')).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim') || s.argv[0] === 'fabriek-sweep')).toBe(false)
     expect(h.spawns).toEqual([])
     expect(h.store.has(ledgerKey)).toBe(false)
   })
@@ -927,14 +971,14 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
     ])
-    expect(h.commands().some(s => s.argv[0] === 'callum-flow-sweep' || s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv[0] === 'fabriek-sweep' || s.argv.includes('fabriek-claim'))).toBe(false)
     expect((line.problems as string[]).join(' ')).toContain('ledger: not saved, so nothing starts until a save succeeds')
     expect((line.problems as string[]).join(' ')).toContain(`store: ${ledgerKey} could not be written`)
     expect(h.titles.at(-1)).toEndWith(' · error')
     // the store takes it again: the loop acts, and the title clears
     h.failSet = () => false
     await clock.advance(60_000)
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(true)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(true)
     // the error title started the throttle window: the plan title returns once titleEveryMs has passed
     await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).not.toContain('error')
@@ -947,8 +991,8 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv[0] === 'callum-flow-sweep') seen.sweep = h?.entry('sweep:0')?.status
-        if (argv.includes('callum-flow-claim')) seen.claim = h?.entry(CLAIM_KEY)?.status
+        if (argv[0] === 'fabriek-sweep') seen.sweep = h?.entry('sweep:0')?.status
+        if (argv.includes('fabriek-claim')) seen.claim = h?.entry(CLAIM_KEY)?.status
         return undefined
       },
     })
@@ -964,13 +1008,13 @@ describe('act mode: the one writer, and reads that fail (v2 SPEC 13.3.3, 13.7.5,
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('fabriek-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
     // the claim is still running 14 minutes on: the lease runs well past now
     await clock.advance(14 * MIN)
-    expect(h.commands().filter(s => s.argv.includes('callum-flow-claim'))).toHaveLength(1)
+    expect(h.commands().filter(s => s.argv.includes('fabriek-claim'))).toHaveLength(1)
     expect(JSON.parse(h.files.get(LOCK) ?? '{}').expiresAt).toBeGreaterThan(clock.now() + 10 * MIN)
     release()
     await clock.settle()
@@ -983,7 +1027,7 @@ describe('act mode: a lease taken over during a long step', () => {
     const clock = mock.clock(on, { now: NOW })
     let release: () => void = () => undefined
     const slow = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ queue: [470], run: argv => (argv.includes('callum-flow-claim') ? slow : undefined) })
+    const { run } = factory({ queue: [470], run: argv => (argv.includes('fabriek-claim') ? slow : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1172,7 +1216,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     expect(h.entry(RELEASE_KEY)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
     // the turns' loop event (the wake's end; its turn taking its id and its reminder change nothing
     // an event says) is a real one in act mode: none goes to the sink (v2 SPEC 13.7.4, D-09)
-    const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
+    const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'fabriek-event')
     expect(hooked.length).toBeGreaterThan(0)
     expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
     await clock.advance(5_000)
@@ -1282,7 +1326,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     const f = factory({
       run: argv => {
         if (argv.join(' ') === 'git remote get-url origin') return { stdout: `https://github.com/${origin}.git\n` }
-        if (argv[0] === 'callum-flow-factory-state' && argv.includes(other)) return { stdout: JSON.stringify({ at: iso(NOW), repos: [{ repo: other, issues: [], recent: [] }] }) }
+        if (argv[0] === 'fabriek-factory-state' && argv.includes(other)) return { stdout: JSON.stringify({ at: iso(NOW), repos: [{ repo: other, issues: [], recent: [] }] }) }
         return undefined
       },
     })
@@ -1301,7 +1345,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     f.w.queue = [470]
     await clock.advance(3 * MIN)
     expect(h.files.has(`${CFG_DIR}/factory-loop/cbundy__other/act.lock`)).toBe(true)
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     const lines = (h.files.get(`${CFG_DIR}/factory-loop/cbundy__other/decisions-${iso(NOW).slice(0, 10)}.jsonl`) ?? '').split('\n').filter(l => l !== '')
     expect(JSON.parse(lines.at(-1) ?? '{}').skipped).toContainEqual({ rule: 'S1', issue: 470, why: `exhausted: ${CLAIM_KEY}` })
   })
@@ -1332,7 +1376,7 @@ describe('act mode: between passes (v2 SPEC 13.2, 13.8.2, 13.10 item 4)', () => 
     const held = (argv: string[]) => argv[2] === 'loop_entry' && argv[4]?.includes(`"key":"${first}"`) === true && argv[4].includes('"status":"done"')
     let release: () => void = () => undefined
     const holding = new Promise<Answer>(resolve => (release = () => resolve({})))
-    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-event' && held(argv) ? holding : undefined) })
+    const { run } = factory({ run: argv => (argv[0] === 'fabriek-event' && held(argv) ? holding : undefined) })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(first, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
@@ -1388,12 +1432,12 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     const { run } = factory({
       queue: [470],
       run: argv => {
-        if (argv[0] === 'callum-flow-factory-state') {
+        if (argv[0] === 'fabriek-factory-state') {
           return { stdout: factoryDoc([{ issue: 471, state: 'parked', state_since: iso(NOW - 10 * MIN), holder: OTHER, pr: 571, stuck: null, github: null }]) }
         }
         if (argv[0] === `${TOOLS}/pipeline-watch.sh`) return { stdout: `parked issue-471-other 01K7S1AAAAAAAAAAAAAAAAAAAA step=review pr=571 head=${head}\n` }
         // a live issue is read whoever holds it (#556): it is still open
-        if (argv.join(' ') === 'callum-flow-issue-read --json 471') {
+        if (argv.join(' ') === 'fabriek-issue-read --json 471') {
           const issue = { number: 471, title: 'Other work', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }
           return { stdout: JSON.stringify({ issue, stripped: 0 }) }
         }
@@ -1408,7 +1452,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     // the other device's parked run is not this loop's to drive; the claim is this device's own
     expect((line.actions as { key: string }[]).map(a => a.key)).toEqual([CLAIM_KEY, 'sweep:0'])
     expect(h.spawns).toEqual([])
-    expect(h.commands().find(s => s.argv.includes('callum-flow-claim'))?.argv).toEqual(['env', 'CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]}', 'callum-flow-claim', '470'])
+    expect(h.commands().find(s => s.argv.includes('fabriek-claim'))?.argv).toEqual(['env', 'FABRIEK_CLAIM_SCORE={"score":0,"factors":[]}', 'CALLUM_FLOW_CLAIM_SCORE={"score":0,"factors":[]}', 'fabriek-claim', '470'])
   })
 
   test('a judge past its timeout is held in the pass, logged, and the notice it held back goes out (v2 SPEC 13.8.2, 13.10 item 8)', ENGINE_TEST, async ($, on) => {
@@ -1473,7 +1517,7 @@ describe('act mode: engine calls, timeouts and what may run (v2 SPEC 13.4.2, 13.
     await clock.advance(6_000)
     expect(h.last()).toMatchObject({ tier: 'stop-all' })
     expect(h.last().skipped).toContainEqual(expect.objectContaining({ issue: 470, why: expect.stringContaining('tier stop-all') }))
-    expect(h.commands().some(s => s.argv.includes('callum-flow-claim'))).toBe(false)
+    expect(h.commands().some(s => s.argv.includes('fabriek-claim'))).toBe(false)
     expect(h.entry(CLAIM_KEY)).toBeUndefined()
   })
 
@@ -1719,7 +1763,7 @@ describe('act mode: the owner\'s controls (v2 SPEC 13.4.3, D-38)', () => {
     const clock = mock.clock(on, { now: NOW })
     // every read of the factory state fails, alternately like a GitHub outage and like a 404 (which does not count)
     let n = 0
-    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-factory-state' ? { exitCode: 1, stderr: ++n % 2 === 0 ? 'gh: Not Found (HTTP 404)' : 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : undefined) })
+    const { run } = factory({ run: argv => (argv[0] === 'fabriek-factory-state' ? { exitCode: 1, stderr: ++n % 2 === 0 ? 'gh: Not Found (HTTP 404)' : 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : undefined) })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -1844,10 +1888,10 @@ describe('commands that run off the pass (act-off.ts, v2 SPEC 13.2, 13.7.5)', ()
   function slowSweep(over: { exitCode?: number; stderr?: string } = {}) {
     let release: () => void = () => undefined
     const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: over.exitCode ?? 0, stderr: over.stderr ?? '' })))
-    const { run } = factory({ run: argv => (argv[0] === 'callum-flow-sweep' ? gate : undefined) })
+    const { run } = factory({ run: argv => (argv[0] === 'fabriek-sweep' ? gate : undefined) })
     return { run, release: () => release() }
   }
-  const sweeps = (h: Host) => h.commands().filter(s => s.argv[0] === 'callum-flow-sweep').length
+  const sweeps = (h: Host) => h.commands().filter(s => s.argv[0] === 'fabriek-sweep').length
 
   test('a sweep that takes 40 s never holds a pass: the line is written with its entry running, and the completion lands between passes, logged and pinging a pass', ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
@@ -1876,7 +1920,7 @@ describe('commands that run off the pass (act-off.ts, v2 SPEC 13.2, 13.7.5)', ()
   })
 
   // a heartbeat held until the test releases it, over a record the store holds (so it runs
-  // `callum-flow-claim --heartbeat`); every such command seen is counted
+  // `fabriek-claim --heartbeat`); every such command seen is counted
   function slowBeat() {
     let release: () => void = () => undefined
     const gate = new Promise<Answer>(resolve => (release = () => resolve({ exitCode: 0, stderr: '' })))
@@ -1975,7 +2019,7 @@ describe('the pass summary event (#680)', () => {
     const events = passesEvents(h)
     // the minutes that ended: the first at NOW + 1 min, none from the one still open
     expect(events).toHaveLength(5)
-    expect(h.events().filter(e => e[2] === 'loop_passes')[0]?.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_passes', '--data'])
+    expect(h.events().filter(e => e[2] === 'loop_passes')[0]?.slice(0, 4)).toEqual(['fabriek-event', '--type', 'loop_passes', '--data'])
     const lines = h.passes()
     expect(lines.length).toBeGreaterThan(10)
     events.forEach((e, i) => {
@@ -2017,7 +2061,7 @@ describe('the pass summary event (#680)', () => {
     let hang = false
     const { run } = factory({
       run: argv => {
-        if (hang && argv[0] === 'callum-flow-factory-state') return gate.then(() => ({ stdout: factoryDoc([]) }))
+        if (hang && argv[0] === 'fabriek-factory-state') return gate.then(() => ({ stdout: factoryDoc([]) }))
         return undefined
       },
     })
@@ -2096,7 +2140,7 @@ describe('API-key mode: the spend tally', () => {
     await clock.advance(6_000)
     expect(h.store.get(KEY)).toEqual(tally)
     expect(h.last()).toMatchObject({ mode: 'observe', tier: 'normal' })
-    const event = h.commands().find(s => s.argv[0] === 'callum-flow-event' && s.argv[2] === 'usage')
+    const event = h.commands().find(s => s.argv[0] === 'fabriek-event' && s.argv[2] === 'usage')
     expect(event?.env.CALLUM_EVENTS_DIR).toBe(SINK)
     expect(JSON.parse(event?.argv[6] ?? '{}')).toMatchObject({ source: 'spend', spend_usd: 42, budget_usd: 100 })
   })

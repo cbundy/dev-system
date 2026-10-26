@@ -1,10 +1,10 @@
 // The event seam (docs/factory-loop/v2/SPEC.md 7.1, property 18 of 17.1): every event v2 writes is
-// built by hooks/v2/events.ts as a native call of callum-flow-event (its type and data), and the
+// built by hooks/v2/events.ts as a native call of fabriek-event (its type and data), and the
 // old format's note, which the readers of the old source still parse, parses back to the same
 // fields, whole. Properties over generated events, not exact notes: the one exact note is the
 // format's own example. oldArgv below is the fixture-side builder of the old line the loop wrote
 // before it went native. tests/factory-loop-v2-events.test.js holds the native data to the
-// translator's and runs the argvs through the real callum-flow-event.
+// translator's and runs the argvs through the real fabriek-event.
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
@@ -128,7 +128,7 @@ function rowOf(argv: string[]): EventRow {
 // actor and the note (kept builders, for the readers of the old source).
 function oldArgv(e: V2Event): string[] {
   const c = eventColumns(e)
-  const argv = ['callum-flow-event', e.state]
+  const argv = ['fabriek-event', e.state]
   if (c.issue !== null) argv.push('--issue', String(c.issue))
   if (c.branch !== null) argv.push('--branch', c.branch)
   if (c.pr !== null) argv.push('--pr', String(c.pr))
@@ -462,7 +462,7 @@ describe('the parser', () => {
   })
 })
 
-// --- the native call (v2 SPEC 7.1): the type and data callum-flow-event takes ---------------------------
+// --- the native call (v2 SPEC 7.1): the type and data fabriek-event takes ---------------------------
 
 describe('eventArgv: the native call of every event', () => {
   const data = (argv: string[]) => JSON.parse(argv[4] as string) as Record<string, unknown>
@@ -471,7 +471,7 @@ describe('eventArgv: the native call of every event', () => {
     const g = rng(7)
     const t = transition(g, true)
     const argv = eventArgv(t)
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'transition', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'transition', '--data'])
     expect(argv.slice(5)).toEqual(['--issue', String(t.record.issue)])
     for (const flag of ['--note', '--branch', '--pr', '--head', '--new-only']) expect(argv).not.toContain(flag)
     expect(eventArgv.length).toBe(1)
@@ -489,7 +489,7 @@ describe('eventArgv: the native call of every event', () => {
 
   test('a fixer\'s verdict is a finding_handled for the fixer; a bad verdict note is no event', () => {
     const argv = eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: 9, head: 'abc1234', note: 'WRONG: r1-1 the test covers it' })
-    expect(argv).toEqual(['callum-flow-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: 'issue-5', pr: 9, head: 'abc1234', finding: 'r1-1', outcome: 'declined', detail: 'the test covers it' }), '--issue', '5', '--actor', 'fixer'])
+    expect(argv).toEqual(['fabriek-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: 'issue-5', pr: 9, head: 'abc1234', finding: 'r1-1', outcome: 'declined', detail: 'the test covers it' }), '--issue', '5', '--actor', 'fixer'])
     expect(data(eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: null, head: null, note: 'CORRECT: r2-3: fixed' }))).toMatchObject({ finding: 'r2-3', outcome: 'fixed', detail: 'fixed', pr: null, head: null })
     expect(() => eventArgv({ state: 'verdict', issue: 5, branch: 'issue-5', pr: null, head: null, note: 'maybe' })).toThrow(/neither CORRECT nor WRONG/)
   })
@@ -540,7 +540,7 @@ describe('eventArgv: the native call of every event', () => {
       const e: ReleaseEvent = { state: outcome === 'requeue' ? 'reclaimed' : 'abandoned', issue: 7, branch: 'issue-7', pr: 31, stage: 'in pipeline', checked: 'no run', reason: 'reconcile', outcome, lives }
       return eventArgv(e)
     }
-    expect(release('requeue', 2).slice(0, 3)).toEqual(['callum-flow-event', '--type', 'requeued'])
+    expect(release('requeue', 2).slice(0, 3)).toEqual(['fabriek-event', '--type', 'requeued'])
     expect(data(release('requeue', 2))).toEqual({ reason: 'reconcile', stage: 'in pipeline', lives: 2, branch: 'issue-7', pr: 31, detail: 'no run' })
     expect(data(release('leave', null))).toMatchObject({ reason: 'reconcile', lives: null, split_into: [], child_whys: null, detail: 'no run' })
     expect(data(release('reject', 3))).toMatchObject({ reason: 'rejected', lives: 3 })
@@ -557,7 +557,7 @@ describe('eventArgv: the native call of every event', () => {
   test('a fleet-level intervention names no issue; the new-format events keep their argv', () => {
     const iv = intervention('person', 'op:mode', 'op/fleet/mode', 'mode act', { issue: null, life: null, pr: null })
     expect(eventArgv(iv)).not.toContain('--issue')
-    expect(eventArgv({ state: 'comment_posted', issue: 5, data: { life: 'x', seq: 1, to_state: 'parked', comment_url: 'https://x/1' } })).toEqual(['callum-flow-event', '--type', 'comment_posted', '--data', '{"life":"x","seq":1,"to_state":"parked","comment_url":"https://x/1"}', '--issue', '5'])
+    expect(eventArgv({ state: 'comment_posted', issue: 5, data: { life: 'x', seq: 1, to_state: 'parked', comment_url: 'https://x/1' } })).toEqual(['fabriek-event', '--type', 'comment_posted', '--data', '{"life":"x","seq":1,"to_state":"parked","comment_url":"https://x/1"}', '--issue', '5'])
   })
 
   test('the states the loop no longer writes build no event', () => {

@@ -40,8 +40,8 @@ import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marke
 import { PROMPT_NOTIFICATIONS, inputOf, promptData, promptReason, transcriptOf, whyOf } from './prompt'
 import type { Decided, PromptFields } from './prompt'
 import { withScratch } from './scratch'
-import { WRAPPER, agentWaitMs, gatePrelude, runSlotted, slotCommand, slotDir } from './slots'
-import type { SlotState } from './slots'
+import { WRAPPER, agentWaitMs, gatePrelude, runSlotted, slotCommand, slotDir, type SlotState } from './slots'
+import { withFallback } from './tool-name'
 import { createTurns } from './turns'
 import type { Turn } from './turns'
 
@@ -86,7 +86,7 @@ function failedReason(err: unknown): string {
 // --- small helpers over $ ---------------------------------------------------------------------------
 
 async function run($: EngineInterface, argv: string[], opts: { cwd?: string; stdin?: string; timeoutMs?: number } = {}) {
-  return $.process.run(argv, { timeoutMs: QUICK_MS, ...opts })
+  return withFallback((a: string[], o: typeof opts) => $.process.run(a, { timeoutMs: QUICK_MS, ...o }))(argv, opts)
 }
 
 async function readText($: EngineInterface, path: string): Promise<string | null> {
@@ -272,11 +272,11 @@ function transcriptSeen(agentId: string, a: WorkspaceAgent): string | null {
   return a.transcript ?? transcripts.get(agentId) ?? null
 }
 
-// eventLine: one native factory event through `callum-flow-event --type`, in the issue's repository.
+// eventLine: one native factory event through `fabriek-event --type`, in the issue's repository.
 // A failure (an image that cannot write it, a missing command) is swallowed: the caller has already
 // done what it must.
 async function eventLine($: EngineInterface, a: WorkspaceAgent, type: 'prompt_denied' | 'prompt_waiting', data: Record<string, unknown>): Promise<void> {
-  const argv = ['callum-flow-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(a.issue), '--repo', a.repo]
+  const argv = ['fabriek-event', '--type', type, '--data', JSON.stringify(data), '--issue', String(a.issue), '--repo', a.repo]
   await run($, argv, { cwd: a.slot }).catch(() => undefined)
 }
 

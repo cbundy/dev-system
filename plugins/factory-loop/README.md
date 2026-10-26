@@ -143,6 +143,20 @@ timer-spawn probe (`docs/factory-loop/probes/timer-spawn-probe`) on each Claude 
 once its timer-spawned agent reaches the tool, set `answerChannel` to `tool` and retire the
 script. `answerTools`, the setting it replaced, is no longer read.
 
+## Command names
+
+The loop runs the image's commands by their `fabriek-*` names (`fabriek-claim`, `fabriek-event`,
+`fabriek-issue-read` and the rest) and passes each setting under both names (`FABRIEK_REPO` and the
+old `CALLUM_FLOW_REPO`), since an older image reads only the old one. On an image that predates the
+rename a `fabriek-*` program is not found; the loop then runs the same argv once with `callum-flow-`
+in its place and remembers, per process, which tools are missing (`hooks/tool-name.mjs`, shared by the
+hooks and `bin/factory-answer`, `bin/factory-reconcile` and `bin/factory-slot`). Any other failure is the
+command's own answer and is never retried. The first fallback for each tool is a line in the pass's
+decision log (`problems`); the trace keeps the argv requested. The settings the loop itself reads
+(`IMPLEMENTER_OPUS_PCT`, `DESIGN_SESSION_PCT`, the `*_BIN` overrides) take `FABRIEK_<X>` first, then
+`CALLUM_FLOW_<X>`. What agents are told to run (`agents/*.md`, `skills/judge/SKILL.md`, the prompts)
+keeps the `callum-flow-*` names until the alias removal, because consumer repos allow only those.
+
 ## Pinned Claude Code version
 
 Proven on **Claude Code 2.1.296**, the version the

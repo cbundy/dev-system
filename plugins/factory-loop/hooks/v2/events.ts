@@ -1,9 +1,9 @@
 // The one seam for every event v2 writes (docs/factory-loop/v2/SPEC.md 7.1): the native call of
-// `callum-flow-event` (event-native.ts builds the type and data), and, for the readers that still
+// `fabriek-event` (event-native.ts builds the type and data), and, for the readers that still
 // need them, the old format's note and its parser. The `event` executor (act-state.ts), the owner
 // ops' interventions (act-events.ts) and factory-reconcile build their argv here alone.
 //
-// Since epic #534 v2 writes the new format natively: `callum-flow-event --type <type> --data <json>
+// Since epic #534 v2 writes the new format natively: `fabriek-event --type <type> --data <json>
 // [--issue N] [--actor A]`, the data the translator (images/base/factory-event-translate.js) made
 // from the old lines. Nothing is written as a note any more. The note builders and the token codec
 // stay for what still reads the old format: the `old` source (parseEvent), the reconcile and plan
@@ -234,11 +234,11 @@ export function eventNote(e: V2Event): string {
   }
 }
 
-// eventArgv: `callum-flow-event --type <type> --data <json>` for this event, with its issue and,
+// eventArgv: `fabriek-event --type <type> --data <json>` for this event, with its issue and,
 // when it has its own, its actor (a fixer's disposition).
 export function eventArgv(e: V2Event): string[] {
   const n = nativeOf(e)
-  const argv = ['callum-flow-event', '--type', n.type, '--data', JSON.stringify(n.data)]
+  const argv = ['fabriek-event', '--type', n.type, '--data', JSON.stringify(n.data)]
   if (n.issue !== null) argv.push('--issue', String(n.issue))
   if (n.actor !== null) argv.push('--actor', n.actor)
   return argv

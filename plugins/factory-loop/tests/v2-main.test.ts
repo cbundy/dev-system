@@ -386,7 +386,7 @@ describe('rule M1 (rules-main.ts)', () => {
       expect(validateStrict('main_state', 1, data(a))).toEqual([])
       if (a?.event === undefined) throw new Error('no event')
       const argv = eventArgv(a.event)
-      expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'main_state', '--data'])
+      expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'main_state', '--data'])
       expect(argv).not.toContain('--issue')
       expect(JSON.parse(argv[4] ?? '')).toEqual(data(a))
     }

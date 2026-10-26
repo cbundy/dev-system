@@ -1,6 +1,6 @@
 // The `blockers` source (docs/factory-loop/v2/SPEC.md 2.4): why a starved queue is stuck. While the
 // queue has been starved for starvedNoticeAfterMs (V2State.starvedSince), the open `blocked by` links
-// of the queue's blocked issues are walked with the single-issue reader (`callum-flow-issue-read
+// of the queue's blocked issues are walked with the single-issue reader (`fabriek-issue-read
 // --json N`, whose `blocked_by` lists each blocker): breadth first, this repo's open blockers only,
 // at most MAX_READS reads and MAX_DEPTH levels. It runs once per (spell, 24 h period of it), reads
 // nothing during a GitHub backoff and stops at a rate limit. A read that is refused (exit 3, an

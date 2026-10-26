@@ -2,7 +2,7 @@
 // step agent's own transcript on disk when its ledger entry ends, so the `loop_entry` event carries
 // what the step cost. One response is streamed as several transcript lines with the same
 // `requestId`, so usage is taken once per request, the last line's winning (the rule
-// callum-flow-evaluate uses, docs/metrics.md "Token and wake definitions"). The totals add every
+// fabriek-evaluate uses, docs/metrics.md "Token and wake definitions"). The totals add every
 // agent nested under the step agent (its `.meta.json` names its `parentAgentId`); the model is the
 // step agent's own. Reading never throws: a failure is a reason, and the fields stay null.
 import type { ActIo, RunInit, RunResult } from '../exec'

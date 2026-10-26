@@ -856,7 +856,7 @@ describe('the owner\'s files in the pass driver', () => {
   const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
   const quiet = (argv: string[], s: { stdin?: string }) => {
     switch (argv[0]) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc([]) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -864,7 +864,7 @@ describe('the owner\'s files in the pass driver', () => {
         return { stdout: 'queue known=none now=none\n' }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read':
+      case 'fabriek-issue-read':
         return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         return { stdout: '[]' }
@@ -1041,26 +1041,26 @@ describe('the owner\'s files in the pass driver', () => {
 // --- the op's events -------------------------------------------------------------------------------------
 
 describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
-  test('one callum-flow-event per issue, with the acting runtime\'s environment; a failed write is a note, not a throw', async () => {
+  test('one fabriek-event per issue, with the acting runtime\'s environment; a failed write is a note, not a throw', async () => {
     const runs: { argv: string[]; env: Record<string, string> }[] = []
     let exit = 0
     const io = {
       run: async (argv: string[], init: { env: Record<string, string> }) => {
         runs.push({ argv, env: init.env })
-        return { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'callum-flow-event: bad data' }
+        return { exitCode: exit, stdout: '', stderr: exit === 0 ? '' : 'fabriek-event: bad data' }
       },
     }
     const rt = { cwd: '/work', env: { CALLUM_FLOW_REPO: REPO } } as unknown as Runtime
     const commands: string[] = []
     const env = { io: io as never, rt, commands }
     expect(await logOwnerOp(env, { text: 'drop 571', name: 'drop', issues: [571], at: NOW, by: 'person' })).toEqual([])
-    expect(runs.map(r => [...r.argv.slice(0, 3), ...r.argv.slice(5)])).toEqual([['callum-flow-event', '--type', 'intervention', '--issue', '571']])
+    expect(runs.map(r => [...r.argv.slice(0, 3), ...r.argv.slice(5)])).toEqual([['fabriek-event', '--type', 'intervention', '--issue', '571']])
     expect(JSON.parse(runs[0]?.argv[4] ?? '')).toEqual({ who: 'person', cause: 'op:drop', life: null, fact: `op:drop/i571/${NOW.toString(36)}`, pr: null, detail: 'drop 571', flaky: null, failed_tests: null, failed_jobs: null, head: null })
     expect(runs[0]?.env).toEqual({ CALLUM_FLOW_REPO: REPO })
     expect(commands.length).toBe(1)
     exit = 2
     const notes = await logOwnerOp(env, { text: 'mode act', name: 'mode', issues: [], at: NOW, by: 'person' })
-    expect(notes).toEqual(['intervention op:mode not logged: callum-flow-event intervention: exit 2: callum-flow-event: bad data'])
+    expect(notes).toEqual(['intervention op:mode not logged: fabriek-event intervention: exit 2: fabriek-event: bad data'])
     // the shared writer throws as ExecCtx.event does, with the exit, so an executor never retries a usage error
     const cmd = (argv: string[]) => io.run(argv, { env: {} })
     let thrown: unknown = null
@@ -1068,7 +1068,7 @@ describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
       thrown = e
     })
     expect((thrown as { exitCode?: number }).exitCode).toBe(2)
-    expect(runs.at(-1)?.argv).toEqual(['callum-flow-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: null, pr: 9, head: null, finding: 'r1-2', outcome: 'declined', detail: 'not a bug' }), '--issue', '5', '--actor', 'fixer'])
+    expect(runs.at(-1)?.argv).toEqual(['fabriek-event', '--type', 'finding_handled', '--data', JSON.stringify({ branch: null, pr: 9, head: null, finding: 'r1-2', outcome: 'declined', detail: 'not a bug' }), '--issue', '5', '--actor', 'fixer'])
   })
 })
 
