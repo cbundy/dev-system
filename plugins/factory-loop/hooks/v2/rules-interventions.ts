@@ -499,7 +499,7 @@ export function interventionsOf(ctx: V2Ctx): Planned[] {
 }
 
 // interventionRules: one `event` action per intervention the ledger has not logged, marked logged
-// when the event log holds it (logOnce). One that used up its attempts (callum-flow-event refused its
+// when the event log holds it (logOnce). One that used up its attempts (fabriek-event refused its
 // note: a loop bug) holds no record and is no owner item: its skip line says so, and the executor
 // breaker catches a run of them.
 export function interventionRules(ctx: V2Ctx): void {

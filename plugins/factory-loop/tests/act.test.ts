@@ -143,9 +143,9 @@ describe('the dispatcher (v2 SPEC 13.6.1)', () => {
     expect(f.env.commands).toEqual(['treehouse return /slot', 'git switch b'])
   })
 
-  test('an event is callum-flow-event with its type, data and issue; a failure throws with its exit code', async () => {
-    expect(eventArgv('closed', { reason: 'completed' }, { issue: 470 })).toEqual(['callum-flow-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '470'])
-    const f = fake([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown type' }))
+  test('an event is fabriek-event with its type, data and issue; a failure throws with its exit code', async () => {
+    expect(eventArgv('closed', { reason: 'completed' }, { issue: 470 })).toEqual(['fabriek-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '470'])
+    const f = fake([], () => ({ exitCode: 2, stderr: 'fabriek-event: unknown type' }))
     const event = eventOf(commandOf(f.env.io, f.env.rt, f.env.commands))
     const err = await event('nope', {}, { issue: 1 }).then(() => null, (e: unknown) => e as Error & { exitCode?: number })
     expect(err?.exitCode).toBe(2)
@@ -161,7 +161,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     const report = await runActions(f.env, state(), [{ ...claim, park }])
     expect(report.outcomes).toEqual([expect.objectContaining({ kind: 'claim', status: 'done', summary: 'claimed #470 to park it on its open decision' })])
     expect(f.env.live.ledger).toMatchObject([{ status: 'done', outcome: { kind: 'claim', result: 'claimed', park } }])
-    const lost = fake([], () => ({ exitCode: 3, stderr: 'callum-flow-claim: held by another device' }))
+    const lost = fake([], () => ({ exitCode: 3, stderr: 'fabriek-claim: held by another device' }))
     await runActions(lost.env, state(), [{ ...claim, park }])
     const outcome = lost.env.live.ledger[0]?.outcome
     expect(outcome).toEqual({ kind: 'claim', result: 'lost' })
@@ -173,7 +173,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     expect(report.outcomes).toEqual([{ key: 'claim:470:new', kind: 'claim', status: 'done', ms: 0, summary: 'claimed #470 again', at: NOW }])
     expect(f.env.live.ledger).toMatchObject([{ key: 'claim:470:new', status: 'done', attempts: 1, outcome: { kind: 'claim', result: 'claimed' } }])
     // saved running before the claim ran, then done
-    expect(f.order).toEqual(['save', 'callum-flow-claim', 'save'])
+    expect(f.order).toEqual(['save', 'fabriek-claim', 'save'])
     expect(f.saves.map(l => l.map(e => e.status))).toEqual([['running'], ['done']])
   })
 
@@ -191,7 +191,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
   })
 
   test('a GitHub rate limit holds the pass\'s later GitHub writes, not its agents (v2 SPEC 13.10 item 2)', async () => {
-    const f = fake([], argv => (argv.includes('callum-flow-claim') ? { exitCode: 1, stderr: RATE } : {}))
+    const f = fake([], argv => (argv.includes('fabriek-claim') ? { exitCode: 1, stderr: RATE } : {}))
     const report = await runActions(f.env, state(), [claim, closer, judge])
     expect(report.rateLimited).toBe(true)
     expect(report.outcomes.map(o => [o.key, o.status])).toEqual([
@@ -215,7 +215,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
       ['claim:470:new', 'done'],
       ['close:470', 'skipped'],
     ])
-    expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
+    expect(f.calls.map(c => c.argv[0])).toEqual(['fabriek-claim'])
   })
 
   test('the kill switch set mid-pass skips every action not yet started; the running one finishes (v2 SPEC 13.11.3)', async () => {
@@ -223,7 +223,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     let checks = 0
     // the switch is created while the claim runs
     const f = fake([], argv => {
-      if (argv.includes('callum-flow-claim')) off = true
+      if (argv.includes('fabriek-claim')) off = true
       return {}
     })
     f.env.killed = async () => {
@@ -241,7 +241,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     expect(report.killed).toBe(true)
     // one check per action until the switch is seen, then the pass ends
     expect(checks).toBe(2)
-    expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
+    expect(f.calls.map(c => c.argv[0])).toEqual(['fabriek-claim'])
     expect(f.env.live.ledger.map(e => [e.key, e.status])).toEqual([['claim:470:new', 'done']])
   })
 
@@ -299,7 +299,7 @@ describe('runActions: the ledger around each executor (v2 SPEC 13.7)', () => {
     const replaced = { ...entry(claim.key, 'claim', { class: 'start', issue: 470, status: 'running', attempts: 2, startedAt: NOW + 1, endedAt: null }) }
     f = fake([], argv => {
       // a later attempt took the key meanwhile
-      if (argv.includes('callum-flow-claim')) f.env.live.ledger = [replaced]
+      if (argv.includes('fabriek-claim')) f.env.live.ledger = [replaced]
       return {}
     })
     await runActions(f.env, state(), [claim])
@@ -464,7 +464,7 @@ describe('an agent step\'s tokens in its loop event (#657)', () => {
   const step = (status: LedgerEntry['status'], over: Partial<LedgerEntry> = {}) =>
     entry('i9/ltn0brb/review/abc/r1/a1', 'agent-step', { status, issue: 9, step: 'review', agentId: 'ag1', session: 'session-1', endedAt: status === 'running' ? null : NOW, ...over })
   const transcript = JSON.stringify({ type: 'assistant', requestId: 'r', message: { model: 'claude-opus-5-5', usage: { input_tokens: 4, output_tokens: 5, cache_read_input_tokens: 6, cache_creation_input_tokens: 7 } } })
-  const dataOf = (f: Fake) => f.calls.filter(c => c.argv[0] === 'callum-flow-event').map(c => JSON.parse(c.argv[4] ?? '{}') as Record<string, unknown>)
+  const dataOf = (f: Fake) => f.calls.filter(c => c.argv[0] === 'fabriek-event').map(c => JSON.parse(c.argv[4] ?? '{}') as Record<string, unknown>)
   const withTokens = (ledger: LedgerEntry[], files: Record<string, string> = {}) => {
     const f = fake(ledger, () => ({}), { readFile: async p => files[p] ?? null })
     f.env.rt = { ...f.env.rt, configDir: '/cfg', sessionCwd: '/work' }

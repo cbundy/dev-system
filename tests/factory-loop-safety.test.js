@@ -210,9 +210,9 @@ const files = [...sources(""), ...sources("v2"), SCRIPT];
 
 test("the literal scanner reads the hooks' commands and skips comments and regular expressions", () => {
   const cli = literals(fs.readFileSync(path.join(HOOKS, "act-cli.ts"), "utf8")).map((l) => l.text);
-  assert.ok(cli.includes("callum-flow-claim") && cli.includes("--heartbeat") && cli.includes("callum-flow-milestone"));
+  assert.ok(cli.includes("fabriek-claim") && cli.includes("--heartbeat") && cli.includes("fabriek-milestone"));
   const merge = literals(fs.readFileSync(path.join(HOOKS, "act-merge.ts"), "utf8")).map((l) => l.text);
-  assert.ok(merge.includes("callum-flow-rollout"), "act-merge.ts: callum-flow-rollout");
+  assert.ok(merge.includes("fabriek-rollout"), "act-merge.ts: fabriek-rollout");
   const rails = literals(fs.readFileSync(path.join(HOOKS, "rails.ts"), "utf8")).map((l) => l.text);
   assert.ok(rails.includes(PROBE), "rails.ts: the liveness probe");
   // a regular expression full of quotes and slashes is not read as strings
@@ -303,14 +303,16 @@ test("the answer script's only writes are its own temp file and the rename over 
   // it runs no command, bar one: a design wait's read-only `gh` lookups (hooks/v2/wait-check.mjs, #980),
   // by execFile with an argv and no shell
   assert.doesNotMatch(src, /\bspawn\w*\(|\bexec(Sync)?\(|\bexecFileSync\(|\bfork\(|shell:/);
-  // (the one runner takes its command from readOnGitHub's calls below: gh, or callum-flow-issue-read)
+  // (the one runner takes its command from readOnGitHub's calls below: gh, or fabriek-issue-read)
   assert.deepEqual([...src.matchAll(/\bexecFile\(([^,]*),/g)].map((m) => m[1]), ["command"]);
-  assert.ok(src.includes("async function readOnGitHub(mods, self, file, command = 'gh', env = {})"));
-  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')(?:, ('[^']+'))?/g)].map((m) => [m[1], m[2] ?? "'gh'"]), [["'wait-check.mjs'", "'gh'"], ["'done-check.mjs'", "'gh'"], ["'rollout-check.mjs'", "'callum-flow-issue-read'"], ["'upstream-check.mjs'", "'callum-flow-issue-read'"]]);
+  assert.ok(src.includes("async function readOnGitHub(mods, self, file, command = 'gh', settings = {})"));
+  assert.deepEqual([...src.matchAll(/readOnGitHub\(mods, self, ('[^']+')(?:, ('[^']+'))?/g)].map((m) => [m[1], m[2] ?? "'gh'"]), [["'wait-check.mjs'", "'gh'"], ["'done-check.mjs'", "'gh'"], ["'rollout-check.mjs'", "'fabriek-issue-read'"], ["'upstream-check.mjs'", "'fabriek-issue-read'"]]);
   // the modules it loads: node's own, and the contract and the wait check beside the hooks
   const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]).sort();
   assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'", "'node:child_process'", "'node:url'"].sort());
-  assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 2);
+  // and the contract, the check module and tool-name.mjs (the fabriek names' fallback, #1359), each by file URL
+  assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 3);
+  assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'tool-name.mjs')).href)"));
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
   // the one loader of the read-only checks takes its file from the calls above: a wait's, a done close's, a Rollout's and an upstream request's
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'v2', file)).href)"));

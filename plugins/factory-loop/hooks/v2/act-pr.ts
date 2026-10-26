@@ -8,10 +8,10 @@
 //   PR, then to a new one, so a PR that cannot be reopened never stalls the record. A re-run finds
 //   the PR it made, so it never makes a second (totality/T-04).
 // - op body: the loop's body written again, after a linkage FAIL at the merge (9.3).
-// The body follows the issue's Rollout (`callum-flow-rollout`): `Closes #N` for merge, `Refs #N`
+// The body follows the issue's Rollout (`fabriek-rollout`): `Closes #N` for merge, `Refs #N`
 // for run-it and keep-open. Every free-text part goes through neutral() (prompts.ts), which caps it
 // and rewrites closing keywords (D-56), so only the loop's own line links an issue. A PR is used
-// only when it is by a trusted author (callum-flow-issue-read refuses another with exit 3) and its
+// only when it is by a trusted author (fabriek-issue-read refuses another with exit 3) and its
 // head is the record's branch in this repo. Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
 import type { Exec, ExecCtx, Executor, RunResult } from '../exec'
@@ -82,7 +82,7 @@ function workIn(a: PrAction, body: string, n: number): { summary: string; eviden
 
 const same = (a: string, b: string) => a.replace(/\r\n?/g, '\n').trim() === b.replace(/\r\n?/g, '\n').trim()
 
-// rolloutLinkage: the linkage line `callum-flow-rollout`'s answer asks for, or null when it gave no
+// rolloutLinkage: the linkage line `fabriek-rollout`'s answer asks for, or null when it gave no
 // Rollout.
 export function rolloutLinkage(stdout: string): Linkage | null {
   const line = stdout.split('\n').find(l => l.startsWith('ROLLOUT ')) ?? ''
@@ -116,7 +116,7 @@ export function listedPrs(json: string): Listed[] | null {
 
 export type PrRead = { open: boolean; merged: boolean; body: string; ref: string | null; repo: string | null }
 
-// prRead: the REST pull of `callum-flow-issue-read --json --pr <n>`, or null when not in its shape.
+// prRead: the REST pull of `fabriek-issue-read --json --pr <n>`, or null when not in its shape.
 export function prRead(json: string): PrRead | null {
   let doc: unknown
   try {
@@ -167,7 +167,7 @@ async function linkageOf(ctx: ExecCtx, issue: number): Promise<{ linkage: Linkag
   const ran = await run(ctx, argv)
   if (!ran.ok) return { exec: ran.exec }
   const linkage = ran.r.exitCode === 0 ? rolloutLinkage(ran.r.stdout) : null
-  if (linkage === null) return { exec: ran.r.exitCode === 0 ? failed(`callum-flow-rollout ${issue} gave no Rollout`, ran.r.stdout) : commandFailure(argv, ran.r) }
+  if (linkage === null) return { exec: ran.r.exitCode === 0 ? failed(`fabriek-rollout ${issue} gave no Rollout`, ran.r.stdout) : commandFailure(argv, ran.r) }
   return { linkage }
 }
 

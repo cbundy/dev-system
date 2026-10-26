@@ -72,7 +72,7 @@ function mayHold(e: LedgerEntry): boolean {
 
 // heldClaims: per issue with no record that is not closed, its newest first claim when that one
 // may hold the claim (mayHold). S1 finishes each whatever the queue says, so a v2 claim never
-// becomes a ghost (3.3, totality/T-14): a retry is safe, because callum-flow-claim keeps its own
+// becomes a ghost (3.3, totality/T-14): a retry is safe, because fabriek-claim keeps its own
 // live claim without posting again.
 function heldClaims(ctx: V2Ctx): LedgerEntry[] {
   const latest = new Map<number, LedgerEntry>()
@@ -423,7 +423,7 @@ function reclaim(ctx: V2Ctx, r: IssueRecord): void {
   want(ctx, { kind: 'claim', key: reclaimKey(r, lifeOf(state.now)), class: 'free', rule: 'H1', reason, issue: r.issue })
 }
 
-// heartbeatRules (H1): `callum-flow-claim --heartbeat <N...>` for the records that are not closed
+// heartbeatRules (H1): `fabriek-claim --heartbeat <N...>` for the records that are not closed
 // when a lease is due (each was last renewed by the later of its claim and the last heartbeat) or
 // on the first pass after a load; then each one's re-claim when it lapsed.
 export function heartbeatRules(ctx: V2Ctx): void {

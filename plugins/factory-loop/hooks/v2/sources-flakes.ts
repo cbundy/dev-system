@@ -79,7 +79,7 @@ export function flakesFromRows(rows: readonly Record<string, string>[]): Flake[]
   return out
 }
 
-// bugsFromJson: the open flake bugs of `callum-flow-issue-read --json --list --label flaky`; null
+// bugsFromJson: the open flake bugs of `fabriek-issue-read --json --list --label flaky`; null
 // when the output is not that list. An issue with no marker is kept with a null hash (it is
 // labelled flaky by someone else and counts against nothing).
 export function bugsFromJson(json: string): FlakeBug[] | null {
@@ -120,7 +120,7 @@ export async function readFlakes(ctx: SourceCtx, min: number): Promise<{ source:
   for (const f of flakes) per.set(f.hash, (per.get(f.hash) ?? 0) + 1)
   if (![...per.values()].some(n => n >= min)) return { source: { ok: true, at: now }, read: { flakes, bugs: [] } }
   try {
-    const r = await ctx.run(['callum-flow-issue-read', '--json', '--list', '--label', FLAKY_LABEL, '--state', 'open'])
+    const r = await ctx.run(['fabriek-issue-read', '--json', '--list', '--label', FLAKY_LABEL, '--state', 'open'])
     const bugs = r.exitCode === 0 ? bugsFromJson(r.stdout) : null
     if (bugs === null) return failedRead(`the flake bugs read failed: exit ${r.exitCode}`)
     return { source: { ok: true, at: now }, read: { flakes, bugs } }

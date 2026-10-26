@@ -107,7 +107,7 @@ describe('the payload', () => {
   })
   test('the argv is the native write', () => {
     const data = snapshotData(view(), T0, 'changed', 1)
-    expect(snapshotArgv(data)).toEqual(['callum-flow-event', '--type', 'queue_snapshot', '--data', JSON.stringify(data)])
+    expect(snapshotArgv(data)).toEqual(['fabriek-event', '--type', 'queue_snapshot', '--data', JSON.stringify(data)])
   })
   test('a score the rule did not read is null, with null factors', () => {
     const data = snapshotData(view([row(1, 1, { score: null, factors: null, claimable: false, why: 'unknown' })]), T0, 'changed', 1)

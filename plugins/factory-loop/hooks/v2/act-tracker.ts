@@ -24,7 +24,7 @@ const SUMMARY_MAX = 200
 // and the child's key.
 const CHILD_KEY = /<!-- factory-loop:i(\d+)\/l[0-9a-z]+\/s\d+\/child\/[a-z0-9-]+ -->/
 
-// splitParentOf: the parent named by the hidden key of the body of `callum-flow-issue-read --json <n>`;
+// splitParentOf: the parent named by the hidden key of the body of `fabriek-issue-read --json <n>`;
 // null when the body has none; undefined when the read is not in its shape.
 export function splitParentOf(json: string): number | null | undefined {
   try {

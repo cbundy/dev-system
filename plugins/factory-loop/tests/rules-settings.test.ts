@@ -139,7 +139,7 @@ describe('the event', () => {
     const before = snap(runtime())
     const events = plan(snap(runtime({}, { maxInFlightIssues: 5 })), before)
     const argv = eventArgv(events[0]?.event as never)
-    expect(argv.slice(0, 3)).toEqual(['callum-flow-event', '--type', 'settings_changed'])
+    expect(argv.slice(0, 3)).toEqual(['fabriek-event', '--type', 'settings_changed'])
     const data = JSON.parse(argv[4] ?? '{}') as unknown
     expect(validateStrict('settings_changed', 1, data)).toEqual([])
     const derived = plan({ ...snap(runtime()), derived: { ...before.derived, cpus: 3 } }, before)

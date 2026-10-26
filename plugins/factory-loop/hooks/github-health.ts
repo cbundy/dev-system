@@ -1,7 +1,7 @@
 // github.json (cbundy/dev-system#1305): the GitHub API errors this loop hit in the last hour, for the
 // heartbeat (images/base/heartbeat-loop, which writes the count to factory.workers.github_errors_1h).
 // driver-io's io() and actIo() hand every in-process command's result to noteRun; an acting pass
-// writes the list beside settings.json. Agents' own gh calls (a builder pushing, callum-flow-issue-read)
+// writes the list beside settings.json. Agents' own gh calls (a builder pushing, fabriek-issue-read)
 // never pass through here and are not counted.
 import { rateLimited } from './exec'
 import type { RunResult } from './exec'

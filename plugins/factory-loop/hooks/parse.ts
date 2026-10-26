@@ -11,7 +11,7 @@ export function isoMs(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms
 }
 
-// --- callum-flow-factory-state --format json ------------------------------------------------
+// --- fabriek-factory-state --format json ------------------------------------------------
 
 export type FactoryIssue = {
   number: number
@@ -54,7 +54,7 @@ export function derivedSkipError(skipped: SkippedEvent[]): string | null {
 }
 
 // sameRepo: two owner/name strings are the same repo whatever their casing (GitHub names are case-insensitive,
-// and callum-flow-factory-state lower-cases the repos it reports).
+// and fabriek-factory-state lower-cases the repos it reports).
 export function sameRepo(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase()
 }
@@ -165,7 +165,7 @@ export function parseCsv(text: string): Record<string, string>[] {
     .map(r => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ''])))
 }
 
-// --- callum-flow-issue-read --json <N> ------------------------------------------------------
+// --- fabriek-issue-read --json <N> ------------------------------------------------------
 
 export type IssueFacts = {
   open: boolean
@@ -228,7 +228,7 @@ export function parseIssueRead(json: string): IssueFacts | null {
   }
 }
 
-// parseIssuesRead: callum-flow-issue-read --json --issues <N,...>: each trusted issue's facts (the
+// parseIssuesRead: fabriek-issue-read --json --issues <N,...>: each trusted issue's facts (the
 // same mapping as parseIssueRead), the numbers refused as untrusted, the numbers GitHub does not know.
 export type IssuesRead = { facts: Map<number, IssueFacts>; refused: number[]; missing: number[] }
 
@@ -252,7 +252,7 @@ export function parseIssuesRead(json: string, repo?: string): IssuesRead | null 
 }
 
 // parseBrief: the newest '## Design brief' comment among an issue's trusted comments
-// (callum-flow-issue-read --json <N> --comments), by its heading only.
+// (fabriek-issue-read --json <N> --comments), by its heading only.
 export function parseBrief(json: string): { url: string; at: number } | null {
   try {
     const comments = JSON.parse(json)?.comments
@@ -272,7 +272,7 @@ export function parseBrief(json: string): { url: string; at: number } | null {
 }
 
 // parseSubIssues: a tracker's open sub-issues on this repo, ascending, from its timeline
-// (`callum-flow-issue-read --json --timeline <N>`: {events, stripped}), by replaying its
+// (`fabriek-issue-read --json --timeline <N>`: {events, stripped}), by replaying its
 // sub_issue_added and sub_issue_removed events in order, as the replay harness does (D-35).
 // Each event carries the sub-issue as GitHub returns it now, so its state is current. Only
 // trusted actors' events reach here: the reader drops the rest.
@@ -301,7 +301,7 @@ export function parseSubIssues(json: string, repo: string): number[] | null {
   }
 }
 
-// parseQueue: the open issue numbers of `callum-flow-issue-read --json --list --label <L>`.
+// parseQueue: the open issue numbers of `fabriek-issue-read --json --list --label <L>`.
 export function parseQueue(json: string): number[] | null {
   try {
     const issues = JSON.parse(json)?.issues
@@ -423,7 +423,7 @@ export function parseCheckout(originHead: string, status: string): Checkout | nu
   return branch === undefined ? null : { branch, head, defaultBranch, dirty, upstream, ahead, behind }
 }
 
-// --- callum-flow-milestone show next -----------------------------------------------------------
+// --- fabriek-milestone show next -----------------------------------------------------------
 
 // parseMilestone: counts of the Next release milestone's open and closed items, and its
 // Expected bump; null when the repo has not opted in (the command prints nothing for it).

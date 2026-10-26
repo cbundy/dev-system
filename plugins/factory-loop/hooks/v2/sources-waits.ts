@@ -1,6 +1,6 @@
 // The `waits` source (docs/factory-loop/v2/SPEC.md 2.4, 4.4): for each condition a waiting record
 // waits on, whether it holds, read from GitHub with no model call: an issue's state from
-// `callum-flow-issue-read --json N`, a PR's from `gh pr view N --json state,mergedAt`. Each pass
+// `fabriek-issue-read --json N`, a PR's from `gh pr view N --json state,mergedAt`. Each pass
 // reads the conditions that are not known to hold and are due on the GitHub cadence (githubEveryMs),
 // the oldest-checked first, for at most ctx.prBudget reads (none during a GitHub backoff) and none
 // after a rate limit met this pass. A condition read as held stays held while a record waits on
@@ -118,7 +118,7 @@ export async function readWaits(
     const tag = c.kind === 'tag-contains' ? tagOf(ctx, c) : null
     const argv = c.kind === 'issue-closed' ? issueReadArgv(c.issue) : c.kind === 'pr-merged' ? prWaitArgv(ctx.rt.repo, c.pr) : compareArgv(c.repo ?? ctx.rt.repo, tag ?? '', c.sha)
     // an issue of another repo is read through the reader pointed at that repo
-    const env = c.kind === 'issue-closed' && c.repo !== undefined ? { ...ctx.rt.env, CALLUM_FLOW_REPO: c.repo } : undefined
+    const env = c.kind === 'issue-closed' && c.repo !== undefined ? { ...ctx.rt.env, FABRIEK_REPO: c.repo, CALLUM_FLOW_REPO: c.repo } : undefined
     try {
       const r = await ctx.run(argv, undefined, undefined, env)
       const held = r.exitCode === 0 ? heldOf(c, r.stdout) : null

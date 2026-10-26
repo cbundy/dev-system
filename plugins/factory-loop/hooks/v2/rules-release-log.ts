@@ -2,7 +2,7 @@
 // `released` and `milestone_state` events (docs/metrics.md section 10) their producers. Both opt in
 // with the Next release milestone, as O3 does: a repo without one logs nothing. Pure.
 //
-// O4 logs each new release tag once, through `callum-flow-released` (act-release-log.ts), saying whether
+// O4 logs each new release tag once, through `fabriek-released` (act-release-log.ts), saying whether
 // the loop's own release task made the release or a workflow did. The tag is the newest one the
 // milestone reads hold (V2State.tag); the ledger's `released:<repo>:<tag>` entry makes it once.
 //

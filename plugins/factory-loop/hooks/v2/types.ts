@@ -366,7 +366,7 @@ export type V2Action =
   | (ActionBase & { kind: 'close-tracker' })
   // F1: one bug for a flaky test, found again by its hidden marker or filed; ready: the cap allowed `ready` (rules-flake-bugs.ts)
   | (ActionBase & { kind: 'flake-bug'; bug: FlakeBugSpec })
-  // O4: log a release tag (callum-flow-released); source: the loop's own release task made it, or the workflow
+  // O4: log a release tag (fabriek-released); source: the loop's own release task made it, or the workflow
   | (ActionBase & { kind: 'released'; tag: string; source: 'loop' | 'workflow' })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
@@ -379,7 +379,7 @@ export type V2Action =
   | (ActionBase & { kind: 'ci-rerun'; pr: number; runId: string; round: number })
   // base: main's head at plan time (the key's); head: the PR's head as observe read it
   | (ActionBase & { kind: 'queue-update'; pr: number; base: string; head: string })
-  // testedTree: the tree the train's CI passed (callum-flow-merge --tested-tree); trainDropped: why the record's train was dropped (--train-dropped); at most one
+  // testedTree: the tree the train's CI passed (fabriek-merge --tested-tree); trainDropped: why the record's train was dropped (--train-dropped); at most one
   | (ActionBase & { kind: 'queue-merge'; issue: number; pr: number; head: string; patch: string; testedTree?: string; trainDropped?: TrainDrop })
   | TrainAction
   | (ActionBase & { kind: 'slot'; op: SlotOp; life: string; path: string | null; lease: string | null; branch: string | null; marker: StepMarker | null; keepScratch: boolean })
@@ -470,7 +470,7 @@ export type WaitRead = { at: Ms; held: boolean; tag?: string }
 // A condition the loop cannot read, since when: its read failed, or (tag-contains) its repo has no release tag.
 export type WaitUnread = { since: Ms; why: 'read-failed' | 'no-release' }
 
-// A trusted comment on an issue (callum-flow-issue-read --comments), for a resume's note (11).
+// A trusted comment on an issue (fabriek-issue-read --comments), for a resume's note (11).
 export type IssueComment = { body: string; at: Ms; url: string | null }
 
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).

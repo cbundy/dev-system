@@ -129,7 +129,7 @@ export function closeMinute(book: PassBook, minuteStartMs: number, settings: Pas
 const opt = (v: number | null) => (v === null ? 'none' : String(v))
 
 // passesNote: `kind=passes key=passes:<from> status=done ...` (key= and status= are what
-// callum-flow-event requires of every loop note). No value holds a space.
+// fabriek-event requires of every loop note). No value holds a space.
 export function passesNote(s: PassSummary): string {
   return [
     'kind=passes',
@@ -189,5 +189,5 @@ export function passesEventArgv(s: PassSummary): string[] {
     usage_tier: s.usageTier,
     usage_tier_overridden: s.usageTierOverridden,
   }
-  return ['callum-flow-event', '--type', 'loop_passes', '--data', JSON.stringify(data)]
+  return ['fabriek-event', '--type', 'loop_passes', '--data', JSON.stringify(data)]
 }

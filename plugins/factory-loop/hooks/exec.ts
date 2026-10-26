@@ -57,7 +57,7 @@ export type ExecCtx = {
   // runs a command from the main checkout (or init.cwd) with the repo and mode environment;
   // never through a shell unless the argv itself is `sh -c` for a detached launch
   cmd: (argv: string[], init: RunInit) => Promise<RunResult>
-  // logs one factory event through callum-flow-event: its type, its data and its issue (v2 SPEC 13.7.4)
+  // logs one factory event through fabriek-event: its type, its data and its issue (v2 SPEC 13.7.4)
   event: (type: string, data: Record<string, unknown>, at: { issue: number }) => Promise<void>
   // a fresh wake id, unique across restarts (v2 SPEC 13.8.1 `id=`)
   wakeId: () => string

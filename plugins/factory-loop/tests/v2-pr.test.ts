@@ -44,8 +44,8 @@ const json = (v: unknown) => ({ stdout: JSON.stringify(v) })
 function answer(g: Gh, argv: string[], stdin: string | undefined): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...a] = argv
   const write = () => g.writes.push([...argv])
-  if (cmd === 'callum-flow-rollout') return { stdout: `${g.rollout}\n`, exitCode: g.rollout.startsWith('ROLLOUT merge') || g.rollout.startsWith('ROLLOUT run-it') || g.rollout.startsWith('ROLLOUT keep-open') ? 0 : 1 }
-  if (cmd === 'callum-flow-issue-read') {
+  if (cmd === 'fabriek-rollout') return { stdout: `${g.rollout}\n`, exitCode: g.rollout.startsWith('ROLLOUT merge') || g.rollout.startsWith('ROLLOUT run-it') || g.rollout.startsWith('ROLLOUT keep-open') ? 0 : 1 }
+  if (cmd === 'fabriek-issue-read') {
     if (a.includes('--pr')) {
       const pr = g.prs.find(p => p.number === Number(a[a.indexOf('--pr') + 1]))
       if (pr === undefined) return { exitCode: 1, stderr: 'cannot read PR' }
@@ -202,7 +202,7 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     const g = gh()
     const w = act(g)
     expect(await w.run(ensure())).toEqual({ status: 'done', outcome: { kind: 'pr', pr: 500, created: true, reopened: false }, summary: 'opened PR #500 for #300 on issue-300 (Closes #300)' })
-    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-rollout', 'gh pr create'])
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'fabriek-rollout', 'gh pr create'])
     expect(w.argvs[2]).toEqual(['gh', 'pr', 'create', '--repo', REPO, '--base', 'main', '--head', 'issue-300', '--title', 'Add the thing', '--body-file', '-'])
     expect(g.prs[0]?.body).toBe(prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Closes', brief: BRIEF, evidence: 'npm test: 3 pass' }))
     const again = act(g)
@@ -251,7 +251,7 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     const closed = gh({ prs: [{ number: 621, state: 'CLOSED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x' }] })
     const w = act(closed)
     expect(await w.run(ensure({ pr: 621 }))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr: 621, created: false, reopened: true } })
-    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr reopen', 'gh pr edit'])
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'fabriek-issue-read', 'fabriek-rollout', 'gh pr reopen', 'gh pr edit'])
     const merged = gh({ prs: [{ number: 621, state: 'MERGED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x' }] })
     expect(await act(merged).run(ensure())).toMatchObject({ status: 'done', outcome: { kind: 'pr', created: true } })
   })
@@ -265,7 +265,7 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     })
     const w = act(g)
     expect(await w.run(ensure({ pr: 621 }))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr: 640, created: false, reopened: false } })
-    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr edit'])
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'fabriek-issue-read', 'fabriek-rollout', 'gh pr edit'])
     expect(g.prs.map(p => [p.number, p.state])).toEqual([[621, 'CLOSED'], [640, 'OPEN']])
     // the order: open first, the named one first within each state, then newest first
     const listed = [{ pr: 9, state: 'CLOSED' as const }, { pr: 5, state: 'CLOSED' as const }, { pr: 7, state: 'OPEN' as const }, { pr: 3, state: 'OPEN' as const }, { pr: 8, state: 'MERGED' as const }]
@@ -281,11 +281,11 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
       outcome: { kind: 'pr', pr: 501, created: true, reopened: false },
       summary: 'opened PR #501 for #300 on issue-300 (Closes #300); #621 not reopened: GraphQL: Could not open the pull request. (reopenPullRequest)',
     })
-    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr reopen', 'gh pr create'])
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'fabriek-issue-read', 'fabriek-rollout', 'gh pr reopen', 'gh pr create'])
     // run again with the record's old PR named: the new open one is used, nothing written
     const again = act(g)
     expect(await again.run(ensure({ pr: 621 }))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr: 501, created: false, reopened: false } })
-    expect(verbs(again.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout'])
+    expect(verbs(again.argvs)).toEqual(['gh pr list', 'fabriek-issue-read', 'fabriek-rollout'])
     // a reopen that failed because GitHub or the network was down is tried again, never passed over
     expect(refusedReopen({ exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway' })).toBeNull()
     expect(refusedReopen({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })).toBeNull()

@@ -21,7 +21,7 @@ export const JOBS = Object.freeze({
 function upstreamOf(over) {
   return {
     kind: 'upstream',
-    upstream: { repo: REPO, request: 'bug', title: 'The reader drops a quote', body: 'callum-flow-issue-read drops the quote in a comment body.\n\nSteps: ...', ...over },
+    upstream: { repo: REPO, request: 'bug', title: 'The reader drops a quote', body: 'fabriek-issue-read drops the quote in a comment body.\n\nSteps: ...', ...over },
     reason: 'Waits on the reader fix',
     brief: null,
   }
@@ -110,7 +110,7 @@ export const CASES = Object.freeze([
   {
     name: 'a v2 upstream bug request on a confident bug authority',
     job: 'designUpstream',
-    input: upstreamOf({ authority: { kind: 'bug', blocking: 'every design of a consumer stalls on it; the workaround is to hand-edit the job file', confidence: 'reproduced: callum-flow-issue-read exits 1 (images/base/callum-flow-issue-read:157)' } }),
+    input: upstreamOf({ authority: { kind: 'bug', blocking: 'every design of a consumer stalls on it; the workaround is to hand-edit the job file', confidence: 'reproduced: fabriek-issue-read exits 1 (images/base/fabriek-issue-read:157)' } }),
     problems: [],
   },
   {

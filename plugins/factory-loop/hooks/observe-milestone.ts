@@ -101,7 +101,7 @@ export async function readMilestone(
   // nothing printed means the repo has not opted in
   if (cache.milestone === undefined || o.now - cache.milestone.at >= o.every) {
     try {
-      const r = await o.run(['callum-flow-milestone', 'show', 'next'])
+      const r = await o.run(['fabriek-milestone', 'show', 'next'])
       if (r.exitCode === 0) cache.milestone = { at: o.now, value: parseMilestone(r.stdout) }
     } catch {
       // leave the last reading

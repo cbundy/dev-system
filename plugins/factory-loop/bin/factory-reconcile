@@ -9,7 +9,7 @@
 //   factory-reconcile --repo <owner/name> ... --act <N>... | --act all
 //
 // Observe (the default) changes nothing. It lists this device's live claims (from
-// callum-flow-factory-state) that have no v2 record, and the issues the factory shows as live with
+// fabriek-factory-state) that have no v2 record, and the issues the factory shows as live with
 // no live claim and no `ready` label: those with no holder at all, in a live state or queued, and
 // those queued after their claim ended or lapsed, whatever device made it (but a v2 record's
 // queued state, which is live work). These are ghosts no device holds, which nothing else would
@@ -39,13 +39,13 @@
 //
 // --act fails closed. Before anything is done it checks that every event it would write is one the
 // factory's readers count: hooks/v2/events.ts must write the release's and the intervention's
-// fields as note tokens and read them back, and the callum-flow-event in use must log an
+// fields as note tokens and read them back, and the fabriek-event in use must log an
 // `intervention` (tried against a scratch log). Both come with build unit U4, so the act run comes
 // after U4 lands on feat/factory-loop-v2: run this tool from that branch, with
-// CALLUM_FLOW_EVENT_BIN set to its images/base/callum-flow-event until the base image ships it.
+// FABRIEK_EVENT_BIN set to its images/base/fabriek-event until the base image ships it.
 // Until then --act refuses with exit 1 and changes nothing. A slot is returned only once its
 // leftovers are saved or its tree is clean. Each event is checked in the log after it is written
-// (callum-flow-event exits 0 when its write fails); one that is not there fails its issue, and its
+// (fabriek-event exits 0 when its write fails); one that is not there fails its issue, and its
 // argv, with the intervention's, is kept in <loop dir>/unlogged-events.jsonl to log again.
 //
 // Slots are read and freed only on the device whose claims these are (the pool is that machine's):
@@ -54,9 +54,10 @@
 //
 // Exit codes: 0 ok (observe, or every approved action done), 1 a required read or an approved
 // action failed or --act was refused, 2 usage. Environment: DEV_MACHINE_NAME (the device),
-// CLAUDE_CONFIG_DIR (the loop dir), CALLUM_FLOW_EVENT_BIN (the event CLI); for tests
-// CALLUM_FLOW_FACTORY_STATE_BIN, CALLUM_FLOW_DEV_QUERY_BIN, CALLUM_FLOW_GH_BIN,
-// CALLUM_FLOW_ISSUE_READ_BIN, CALLUM_FLOW_TREEHOUSE_BIN and CALLUM_FLOW_GIT_BIN.
+// CLAUDE_CONFIG_DIR (the loop dir), FABRIEK_EVENT_BIN (the event CLI); for tests
+// FABRIEK_FACTORY_STATE_BIN, FABRIEK_DEV_QUERY_BIN, FABRIEK_GH_BIN, FABRIEK_ISSUE_READ_BIN,
+// FABRIEK_TREEHOUSE_BIN and FABRIEK_GIT_BIN. Each also reads the old CALLUM_FLOW_<X>_BIN name,
+// FABRIEK_ first; a fabriek-* command the image lacks runs as its callum-flow-* name.
 'use strict'
 
 const { spawnSync } = require('node:child_process')
@@ -74,7 +75,7 @@ const USAGE = `usage: ${ME} --repo <owner/name> [--device <name>] [--checkout <d
   proposal, and changes nothing. Every release leaves the factory: nothing is requeued.
   --act <N>... | all   do what each named issue's proposal says now (all: every proposal but live;
                        a live issue named is released all the same); refused until
-                       hooks/v2/events.ts and callum-flow-event carry v2's events (U4)
+                       hooks/v2/events.ts and fabriek-event carry v2's events (U4)
   --device <name>      the device whose claims to reconcile (default DEV_MACHINE_NAME, else the hostname)
   --checkout <dir>     the repo's main checkout: its pool and settings (default the current directory)
   --loop-dir <dir>     where the report and leftovers go (default <CLAUDE_CONFIG_DIR>/factory-loop/<owner>__<repo>)`
@@ -145,14 +146,14 @@ const RESOLVE = `export async function resolve(specifier, context, next) {
 let hooks = null
 
 // loadHooks: release.ts (what a release removes and logs), factory-state-map.ts (the v2 state of a
-// factory-state row), events.ts (every v2 event's argv), keys.ts (the release's keys), config.ts (the settings) and contract.mjs (the loop dir).
+// factory-state row), events.ts (every v2 event's argv), keys.ts (the release's keys), config.ts (the settings) and contract.mjs (the loop dir) and tool-name.mjs (the fabriek names' fallback).
 async function loadHooks() {
   if (hooks !== null) return hooks
   register(`data:text/javascript,${encodeURIComponent(RESOLVE)}`)
   const dir = path.join(__dirname, '..', 'hooks')
   const load = (f) => import(pathToFileURL(path.join(dir, f)).href)
-  const [release, stateMap, events, keys, config, contract] = await Promise.all([load('v2/release.ts'), load('factory-state-map.ts'), load('v2/events.ts'), load('v2/keys.ts'), load('config.ts'), load('contract.mjs')])
-  hooks = { release, stateMap, events, keys, config, contract }
+  const [release, stateMap, events, keys, config, contract, names] = await Promise.all([load('v2/release.ts'), load('factory-state-map.ts'), load('v2/events.ts'), load('v2/keys.ts'), load('config.ts'), load('contract.mjs'), load('tool-name.mjs')])
+  hooks = { release, stateMap, events, keys, config, contract, names }
   return hooks
 }
 
@@ -430,18 +431,20 @@ FROM (SELECT issue, state, max(ts) AS ts FROM factory.events
       GROUP BY issue, state) x;`
 
 // io: the commands it runs, by name, through one runner a test can replace.
-function realIo(env) {
+function realIo(env, names) {
+  // a setting's FABRIEK_<X> first, then the old CALLUM_FLOW_<X> (an older image's name)
+  const setting = (name) => env[`FABRIEK_${name}`] || env[`CALLUM_FLOW_${name}`]
   const bins = {
-    factoryState: env.CALLUM_FLOW_FACTORY_STATE_BIN || 'callum-flow-factory-state',
-    devQuery: env.CALLUM_FLOW_DEV_QUERY_BIN || 'dev-query',
-    gh: env.CALLUM_FLOW_GH_BIN || 'gh',
-    issueRead: env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read',
-    event: env.CALLUM_FLOW_EVENT_BIN || 'callum-flow-event',
-    treehouse: env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse',
-    git: env.CALLUM_FLOW_GIT_BIN || 'git',
+    factoryState: setting('FACTORY_STATE_BIN') || 'fabriek-factory-state',
+    devQuery: setting('DEV_QUERY_BIN') || 'dev-query',
+    gh: setting('GH_BIN') || 'gh',
+    issueRead: setting('ISSUE_READ_BIN') || 'fabriek-issue-read',
+    event: setting('EVENT_BIN') || 'fabriek-event',
+    treehouse: setting('TREEHOUSE_BIN') || 'treehouse',
+    git: setting('GIT_BIN') || 'git',
   }
   const run = (name, args, opts = {}) => {
-    const r = spawnSync(bins[name], args, {
+    const r = spawnOnce([bins[name], ...args], {
       encoding: 'utf8',
       cwd: opts.cwd,
       env: { ...env, ...(opts.env || {}) },
@@ -449,9 +452,14 @@ function realIo(env) {
       maxBuffer: 256 * 1024 * 1024,
       timeout: opts.timeoutMs ?? 120_000,
     })
-    const stderr = r.error ? String(r.error.message || r.error) : r.stderr || ''
-    return { code: r.status === null ? 1 : r.status, stdout: r.stdout || '', stderr }
+    return { code: r.exitCode, stdout: r.stdout, stderr: r.stderr }
   }
+  // a fabriek-* program an image lacks runs once more as its callum-flow-* name (tool-name.mjs, #1359)
+  const spawnOnce = names.withFallbackSync(([program, ...args], init) => {
+    const r = spawnSync(program, args, init)
+    const missing = r.error && r.error.code === 'ENOENT'
+    return { exitCode: missing ? 127 : r.status === null ? 1 : r.status, stdout: r.stdout || '', stderr: r.error ? String(r.error.message || r.error) : r.stderr || '' }
+  })
   return { run }
 }
 
@@ -483,12 +491,12 @@ function readJson(r, what) {
 function gather(o, io, settings) {
   const { repo, device } = o
   // the factory: required
-  const fs1 = readJson(io.run('factoryState', ['--repo', repo, '--format', 'json', '--github', 'off'], { timeoutMs: 180_000 }), 'callum-flow-factory-state')
+  const fs1 = readJson(io.run('factoryState', ['--repo', repo, '--format', 'json', '--github', 'off'], { timeoutMs: 180_000 }), 'fabriek-factory-state')
   if (!fs1.ok) throw new ReadError(fs1.error)
   const doc = fs1.value
   const at = ms(doc.at)
   const entry = Array.isArray(doc.repos) ? doc.repos.find((r) => String(r.repo).toLowerCase() === repo.toLowerCase()) : undefined
-  if (at === null) throw new ReadError('callum-flow-factory-state: no time in its report')
+  if (at === null) throw new ReadError('fabriek-factory-state: no time in its report')
   // each row carries its v2 state in `state` (stateOfRow); a row with none is left out. A recent row is ended, whatever its state says.
   const withState = (list, ended) => (Array.isArray(list) ? list : []).flatMap((r) => {
     const s = settings.stateOfRow({ ...r, ended })
@@ -507,18 +515,18 @@ function gather(o, io, settings) {
   const candidates = factory.issues
     .filter((i) => (i.holder === device && settings.liveStates.includes(i.state)) || ((i.life ?? null) === null && (i.state === 'queued' || (!i.holder && settings.liveStates.includes(i.state)))))
     .map((i) => i.issue)
-  const readEnv = { env: { CALLUM_FLOW_REPO: repo } }
+  const readEnv = { env: hooks.names.settingPair('REPO', repo) }
   // the candidates' labels and state, through the trusted reader
   const issues = new Map()
   for (const n of candidates) {
     const r = io.run('issueRead', ['--json', String(n)], readEnv)
     if (r.code === 3) issues.set(n, { ok: false, error: 'an untrusted author' })
     else {
-      const j = readJson(r, 'callum-flow-issue-read')
+      const j = readJson(r, 'fabriek-issue-read')
       issues.set(n, j.ok && j.value.issue ? { ok: true, state: j.value.issue.state, labels: labelNames(j.value.issue.labels) } : { ok: false, error: j.ok ? 'no issue in the answer' : j.error })
     }
   }
-  const inDevRead = readJson(io.run('issueRead', ['--json', '--list', '--label', settings.inDevLabel, '--state', 'all'], readEnv), 'callum-flow-issue-read --list')
+  const inDevRead = readJson(io.run('issueRead', ['--json', '--list', '--label', settings.inDevLabel, '--state', 'all'], readEnv), 'fabriek-issue-read --list')
   const inDev = inDevRead.ok && Array.isArray(inDevRead.value.issues) ? { ok: true, list: inDevRead.value.issues } : { ok: false, error: inDevRead.ok ? 'no issues in the answer' : inDevRead.error }
 
   // the open PRs, once; then the facts of each PR a candidate has
@@ -681,13 +689,13 @@ function argvRow(argv) {
   return { type: flag('--type'), issue: num(flag('--issue')), data: data === null ? null : JSON.parse(data) }
 }
 
-// logEvent: one event through callum-flow-event (events.ts built its argv); null when its line is
-// in the new log, else why not. callum-flow-event exits 0 when its write fails (it never fails its
+// logEvent: one event through fabriek-event (events.ts built its argv); null when its line is
+// in the new log, else why not. fabriek-event exits 0 when its write fails (it never fails its
 // caller), so the log is read: its path (--new-only --new-path), its size before, and a line after
 // that with the event's type, issue and data. env: more environment for the CLI (the readiness
 // check's scratch log).
 function logEvent(ctx, repo, argv, env = {}) {
-  const opts = { env: { CALLUM_FLOW_REPO: repo, CALLUM_FLOW_ACTOR: ACTOR, ...env } }
+  const opts = { env: { ...hooks.names.settingPair('REPO', repo), ...hooks.names.settingPair('ACTOR', ACTOR), ...env } }
   const where = ctx.io.run('event', ['--new-only', '--new-path', '--repo', repo], opts)
   const file = where.stdout.trim()
   if (where.code !== 0 || !path.isAbsolute(file)) return `the event log's path not read: ${why(where)}`
@@ -743,7 +751,7 @@ function keepUnlogged(ctx, repo, argvs) {
 // actReady: null when --act may run, else why not. Every event it writes must be one the
 // factory's readers count (6.4, 7.1, 7.2): hooks/v2/events.ts builds a release's and an
 // intervention's native data (type and fields, as the translator makes them), and the
-// callum-flow-event in use logs an `intervention`, tried against a scratch log so nothing reaches
+// fabriek-event in use logs an `intervention`, tried against a scratch log so nothing reaches
 // the real one.
 function actReady(h, io, repo, at) {
   if (typeof h.events.eventArgv !== 'function') return 'hooks/v2/events.ts has no event argv builder'
@@ -771,7 +779,7 @@ function actReady(h, io, repo, at) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-probe-`))
   try {
     const why = logEvent({ io }, repo, h.events.eventArgv(iv), { CALLUM_EVENTS_DIR: scratch })
-    return why === null ? null : `the callum-flow-event in use does not log an intervention: ${why}`
+    return why === null ? null : `the fabriek-event in use does not log an intervention: ${why}`
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
@@ -907,13 +915,13 @@ async function main(argv, env = process.env, deps = {}) {
   const configDir = (env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude')).replace(/\/+$/, '')
   const checkout = path.resolve(o.checkout || process.cwd())
   const loopDir = o.loopDir || h.contract.loopDirOf(configDir, o.repo)
-  const io = deps.io || realIo(env)
+  const io = deps.io || realIo(env, h.names)
   if (o.act !== null) {
     const refused = actReady(h, io, o.repo, Date.now())
     if (refused !== null) {
       throw new ReadError(
         `--act refused, nothing done: ${refused}. The act run comes after U4 lands on feat/factory-loop-v2: ` +
-          'run this tool from that branch, with CALLUM_FLOW_EVENT_BIN set to its images/base/callum-flow-event until the base image ships it.',
+          'run this tool from that branch, with FABRIEK_EVENT_BIN set to its images/base/fabriek-event until the base image ships it.',
       )
     }
   }

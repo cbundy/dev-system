@@ -64,7 +64,7 @@ function world(github: Github, extra: (argv: string[], s: Seen) => { exitCode?: 
     // the companion's slot tool prepares the slot at origin's head
     if (cmd?.endsWith('/factory-slot') && args.includes('prepare')) return { stdout: 'PREPARED head=9e01b77c0ffee000000000000000000000000001\n' }
     switch (cmd) {
-      case 'callum-flow-factory-state':
+      case 'fabriek-factory-state':
         return { stdout: factoryDoc([]) }
       case 'dev-query':
         return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
@@ -72,7 +72,7 @@ function world(github: Github, extra: (argv: string[], s: Seen) => { exitCode?: 
         return { stdout: 'queue known=none now=none\n' }
       case `${TOOLS}/usage-check.sh`:
         return { stdout: USAGE }
-      case 'callum-flow-issue-read': {
+      case 'fabriek-issue-read': {
         if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
         const n = Number(args[1])
         if (n === 57) return { stdout: JSON.stringify({ issue: { number: 57, id: 9057, state: github.issue57, labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }) }
@@ -99,7 +99,7 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
       name: 'an issue closing',
       conditions: [{ kind: 'issue-closed', issue: 57 }],
       later: { issue57: 'closed', pr812: 'OPEN' },
-      read: 'callum-flow-issue-read --json 57',
+      read: 'fabriek-issue-read --json 57',
       cleared: 'The loop resumed this: #57 closed; every condition holds.',
     },
     {
@@ -216,7 +216,7 @@ describe('a designer that asks with options, end to end (#856)', () => {
             posted.push({ body: seen.stdin ?? '', at: Date.now() })
             return { stdout: `https://github.com/${REPO}/issues/470#issuecomment-1\n` }
           }
-          if (a[0] === 'callum-flow-issue-read' && a[1] === '--json' && a[2] === '470') {
+          if (a[0] === 'fabriek-issue-read' && a[1] === '--json' && a[2] === '470') {
             const comments = posted.map((c, i) => ({ body: c.body, created_at: new Date(c.at).toISOString(), html_url: `https://github.com/${REPO}/issues/470#issuecomment-${i + 1}` }))
             if (a.includes('--comments')) return { stdout: JSON.stringify({ comments, stripped: 0 }) }
             return { stdout: JSON.stringify({ issue: { number: 470, id: 9470, state: 'open', labels, issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }) }
@@ -304,9 +304,9 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     const ft: WaitCondition = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
     expect([waitKey(issue(57)), waitKey(fi), waitKey(pr(8)), waitKey({ kind: 'tag-contains', sha: '35bb655' }), waitKey(ft)]).toEqual(['issue:57', 'issue:o/n#57', 'pr:8', 'tag:35bb655', 'tag:o/n@35bb655'])
     // no tag of o/n is known: its two conditions are not read; the own issue is
-    const c = ctx([waiting(1, [ft, issue(57)])], { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
+    const c = ctx([waiting(1, [ft, issue(57)])], { 'fabriek-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
     const out = await readWaits(c.c, {}, EVERY)
-    expect(c.ran).toEqual(['callum-flow-issue-read --json 57'])
+    expect(c.ran).toEqual(['fabriek-issue-read --json 57'])
     expect(out).toEqual({ waits: { 'issue:57': { at: NOW, held: true } }, failed: [], unread: { 'tag:o/n@35bb655': { since: NOW, why: 'no-release' } } })
     expect(c.envs).toEqual([undefined])
   })
@@ -341,10 +341,10 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
 
     test('a foreign issue is read through the reader with CALLUM_FLOW_REPO set; closed holds, open and no state stay open', async () => {
       const fi: WaitCondition = { kind: 'issue-closed', issue: 57, repo: 'o/n' }
-      const read = 'callum-flow-issue-read --json 57'
+      const read = 'fabriek-issue-read --json 57'
       const closed = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'closed') }, { rt: { repo: REPO, env: { A: '1' } } } as unknown as Partial<SourceCtx>)
       expect(await readWaits(closed.c, {}, EVERY)).toEqual({ waits: { 'issue:o/n#57': { at: NOW, held: true } }, failed: [], unread: {} })
-      expect(closed.envs).toEqual([{ A: '1', CALLUM_FLOW_REPO: 'o/n' }])
+      expect(closed.envs).toEqual([{ A: '1', FABRIEK_REPO: 'o/n', CALLUM_FLOW_REPO: 'o/n' }])
       const open = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'open') })
       expect((await readWaits(open.c, {}, EVERY)).waits['issue:o/n#57']?.held).toBe(false)
       const nostate = ctx([waiting(1, [fi])], { [read]: JSON.stringify({ issue: {}, stripped: 0 }) })
@@ -354,9 +354,9 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
 
   test('each distinct condition of the waiting records is read once with no model call; other states\' records are not read; a read that shows it held is kept and not read again', async () => {
     const records = [waiting(1, [issue(57), pr(812)]), waiting(2, [issue(57)]), designing({ issue: 3, wait: null })]
-    const first = ctx(records, { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed'), [PR(812)]: JSON.stringify({ state: 'OPEN', mergedAt: null }) })
+    const first = ctx(records, { 'fabriek-issue-read --json 57': ISSUE(57, 'closed'), [PR(812)]: JSON.stringify({ state: 'OPEN', mergedAt: null }) })
     const a = await readWaits(first.c, {}, EVERY)
-    expect(first.ran.sort()).toEqual(['callum-flow-issue-read --json 57', PR(812)].sort())
+    expect(first.ran.sort()).toEqual(['fabriek-issue-read --json 57', PR(812)].sort())
     expect(a).toEqual({ waits: { 'issue:57': { at: NOW, held: true }, 'pr:812': { at: NOW, held: false } }, failed: [], unread: {} })
     // later: the held one is kept; the open one is read once its period passes, not before
     const soon = ctx(records, { [PR(812)]: JSON.stringify({ state: 'MERGED', mergedAt: null }) }, { now: NOW + MIN })
@@ -372,12 +372,12 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
   test('a failed read keeps the condition open: the old read stays, the condition is named failed, and the others are still read', async () => {
     const records = [waiting(1, [issue(57), issue(58)])]
     const kept: Record<string, WaitRead> = { 'issue:57': { at: NOW - 10 * MIN, held: false } }
-    const c = ctx(records, { 'callum-flow-issue-read --json 58': ISSUE(58, 'closed') })
+    const c = ctx(records, { 'fabriek-issue-read --json 58': ISSUE(58, 'closed') })
     const out = await readWaits(c.c, kept, EVERY)
     expect(out.failed).toEqual(['issue:57'])
     expect(out.waits).toEqual({ 'issue:57': { at: NOW - 10 * MIN, held: false }, 'issue:58': { at: NOW, held: true } })
     // a reader that exits 0 with something that is not an issue is a failed read too
-    const odd = ctx(records, { 'callum-flow-issue-read --json 57': '{"issue": {}}', 'callum-flow-issue-read --json 58': '<html>' })
+    const odd = ctx(records, { 'fabriek-issue-read --json 57': '{"issue": {}}', 'fabriek-issue-read --json 58': '<html>' })
     expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:57', 'issue:58'], unread: { 'issue:57': { since: NOW, why: 'read-failed' }, 'issue:58': { since: NOW, why: 'read-failed' } } })
     // a command that throws is a failed read
     const throwing = ctx(records, {})
@@ -389,7 +389,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
 
   describe('the unread time of a condition', () => {
     const records = [waiting(1, [issue(57)])]
-    const READ = 'callum-flow-issue-read --json 57'
+    const READ = 'fabriek-issue-read --json 57'
 
     test('a failing read starts it, a second failing pass keeps the first since; a read that says anything clears it', async () => {
       const first = await readWaits(ctx(records, {}).c, {}, EVERY)
@@ -440,11 +440,11 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
   test('the reads have a budget, oldest-checked first; none during a GitHub backoff (budget 0), and none after a rate limit met this pass', async () => {
     const records = [waiting(1, [issue(61), issue(62), issue(63)])]
     const kept: Record<string, WaitRead> = { 'issue:61': { at: NOW - 3 * HOUR, held: false }, 'issue:63': { at: NOW - 6 * HOUR, held: false } }
-    const answers = Object.fromEntries([61, 62, 63].map(n => [`callum-flow-issue-read --json ${n}`, ISSUE(n, 'open')]))
+    const answers = Object.fromEntries([61, 62, 63].map(n => [`fabriek-issue-read --json ${n}`, ISSUE(n, 'open')]))
     const two = ctx(records, answers, { prBudget: 2 })
     await readWaits(two.c, kept, EVERY)
     // never-read 62 first, then the oldest read, 63; 61 waits for the next pass
-    expect(two.ran).toEqual(['callum-flow-issue-read --json 62', 'callum-flow-issue-read --json 63'])
+    expect(two.ran).toEqual(['fabriek-issue-read --json 62', 'fabriek-issue-read --json 63'])
     const backoff = ctx(records, answers, { prBudget: 0 })
     expect((await readWaits(backoff.c, kept, EVERY)).waits).toEqual(kept)
     expect(backoff.ran).toEqual([])

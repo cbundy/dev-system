@@ -177,7 +177,7 @@ function unread(env: StepEnv, facts: HeadFacts, pr: number): StepRead {
   const prs = ctx.v2.prs
   const failed = prs.unread?.find(u => u.pr === pr && u.issue === r.issue)
   if (failed?.untrusted === true) {
-    const text = `PR #${pr} was not opened by a trusted author: the reader refused it (callum-flow-issue-read exit 3)`
+    const text = `PR #${pr} was not opened by a trusted author: the reader refused it (fabriek-issue-read exit 3)`
     return result({ kind: 'not-ok', reason: 'policy', data: { pr, text } }, fact(`queue-untrusted:${pr}:s${r.seq}`))
   }
   if (failed !== undefined) return wait(env, facts, undefined, `merge queue: PR #${pr} did not read: ${failed.why}`, failed.since)
@@ -247,7 +247,7 @@ function update(env: StepEnv, facts: HeadFacts, view: PrView, head: string): Ste
   return planned(env, g, key, `the update of PR #${view.pr}`)
 }
 
-// merge: Q2 (9.3): `callum-flow-merge <p> --patch <approvedPatch>`, the guard inside it, keyed by
+// merge: Q2 (9.3): `fabriek-merge <p> --patch <approvedPatch>`, the guard inside it, keyed by
 // the head and the try.
 function merge(env: StepEnv, view: PrView, head: string, tries: readonly LedgerEntry[], train: TrainState): StepRead {
   const { ctx, r } = env

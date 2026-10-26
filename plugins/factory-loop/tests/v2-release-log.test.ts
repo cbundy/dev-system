@@ -1,5 +1,5 @@
 // The release log (docs/factory-loop/v2/SPEC.md 11, 14.1: O4, O5): rule O4 logs each new release tag
-// through callum-flow-released, rule O5 logs one milestone_state per change of the milestone's reading.
+// through fabriek-released, rule O5 logs one milestone_state per change of the milestone's reading.
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { ExecCtx } from '../hooks/exec'
@@ -84,7 +84,7 @@ describe('the released executor', () => {
 
   test('the argv is exact and the timeout five minutes; exit 0 is done', async () => {
     const { r, seen } = await run(exit(0))
-    expect(seen).toEqual([{ argv: ['callum-flow-released', 'v1.2.0', '--repo', 'o/n', '--source', 'loop'], timeoutMs: 300_000 }])
+    expect(seen).toEqual([{ argv: ['fabriek-released', 'v1.2.0', '--repo', 'o/n', '--source', 'loop'], timeoutMs: 300_000 }])
     expect(RELEASED_TIMEOUT_MS).toBe(300_000)
     expect(r?.status).toBe('done')
   })
@@ -98,11 +98,11 @@ describe('the released executor', () => {
 
   test('a tool missing from the image (a spawn error naming ENOENT or not found, or exit 127) ends done with a summary', async () => {
     for (const cmd of [
-      async () => { throw new Error('spawn callum-flow-released ENOENT') },
-      async () => { throw new Error('callum-flow-released: command not found') },
-      exit(127, 'sh: callum-flow-released: not found'),
+      async () => { throw new Error('spawn fabriek-released ENOENT') },
+      async () => { throw new Error('fabriek-released: command not found') },
+      exit(127, 'sh: fabriek-released: not found'),
     ] as ExecCtx['cmd'][]) {
-      expect((await run(cmd)).r).toMatchObject({ status: 'done', summary: 'callum-flow-released is not on this image' })
+      expect((await run(cmd)).r).toMatchObject({ status: 'done', summary: 'fabriek-released is not on this image' })
     }
   })
 
@@ -123,7 +123,7 @@ describe('O5: log the milestone\'s state on each change', () => {
     expect(validateStrict('milestone_state', 1, data(a))).toEqual([])
     if (a?.event === undefined) throw new Error('no event')
     const argv = eventArgv(a.event)
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'milestone_state', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'milestone_state', '--data'])
     expect(argv).not.toContain('--issue')
   })
 

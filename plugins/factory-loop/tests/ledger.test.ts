@@ -449,7 +449,7 @@ describe("the loop's own events (D-09, v2 SPEC 13.7.4)", () => {
   test('wake entries log a native loop_entry event at their start and end; the old-source note rebuilds them', () => {
     let ledger = started([tell], NOW - 5 * MIN)
     const startEvent = loopEvent(only(ledger, tell.key)) as string[]
-    expect(startEvent.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'loop_entry', '--data'])
+    expect(startEvent.slice(0, 4)).toEqual(['fabriek-event', '--type', 'loop_entry', '--data'])
     expect(startEvent.slice(5)).toEqual(['--issue', '50'])
     expect(JSON.parse(startEvent[4] as string)).toMatchObject({ kind: 'tell', key: tell.key, status: 'running', attempts: 1, class: 'owner', rule: 'O2', ended_at: null })
     ledger = finish(ledger, tell.key, { status: 'running', summary: 'submitted' }, NOW - 5 * MIN)

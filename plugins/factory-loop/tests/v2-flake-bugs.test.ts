@@ -191,11 +191,11 @@ const idOfIssue = (n: number) => 7_000 + n
 
 function answer(g: Gh, argv: string[], stdin?: string): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...a] = argv
-  if (cmd === 'callum-flow-event') {
+  if (cmd === 'fabriek-event') {
     g.events.push([...argv])
     return {}
   }
-  if (cmd === 'callum-flow-issue-read') {
+  if (cmd === 'fabriek-issue-read') {
     g.reads.push([...argv])
     if (a.includes('--list')) return { stdout: JSON.stringify({ issues: g.issues.filter(i => i.open).map(i => ({ number: i.number, id: idOfIssue(i.number), body: i.body, labels: i.labels.map(name => ({ name })) })), stripped: 0 }) }
     const i = g.issues.find(x => x.number === Number(a[1]))
@@ -297,7 +297,7 @@ describe('the flake-bug executor', () => {
   test('the open issues are read through the reader alone, which lists trusted authors only: an untrusted issue with the marker is never found, counted or commented on', async () => {
     const g = world()
     await act(g)(planned())
-    expect(g.reads.filter(r => r.includes('--list'))).toEqual([['callum-flow-issue-read', '--json', '--list', '--state', 'open']])
+    expect(g.reads.filter(r => r.includes('--list'))).toEqual([['fabriek-issue-read', '--json', '--list', '--state', 'open']])
     // no `gh` command lists or reads issue text
     expect(g.writes.filter(w => w[1] === 'issue' && ['list', 'view'].includes(w[2] ?? ''))).toEqual([])
   })
@@ -367,7 +367,7 @@ describe('the flakes source', () => {
     }
     const r = await readFlakes(sourceCtx(run), 2)
     expect(calls[0]).toEqual({ argv: ['dev-query', '--factory', '--csv', '-v', `repo=${REPO}`, '-v', `since=${new Date(NOW - 7 * DAY).toISOString()}`], stdin: FLAKES_SQL })
-    expect(calls[1]?.argv).toEqual(['callum-flow-issue-read', '--json', '--list', '--label', 'flaky', '--state', 'open'])
+    expect(calls[1]?.argv).toEqual(['fabriek-issue-read', '--json', '--list', '--label', 'flaky', '--state', 'open'])
     expect(r.source.ok).toBe(true)
     expect(r.read?.flakes.map(f => f.id)).toEqual([id(1), id(2)])
     expect(r.read?.bugs).toEqual([{ number: 900, hash: HASH_A, ready: true, known: [id(1)] }])

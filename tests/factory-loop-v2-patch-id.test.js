@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const SCRIPT = path.join(__dirname, "..", "images", "base", "callum-flow-patch-id");
+const SCRIPT = path.join(__dirname, "..", "images", "base", "fabriek-patch-id");
 
 let root;
 

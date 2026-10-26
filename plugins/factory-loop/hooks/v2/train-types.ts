@@ -4,7 +4,7 @@
 import type { ActionBase, Ms, Source } from '../types'
 import type { CheckRun } from './sources-prs'
 
-// Why a train is dropped (9.8): the reasons callum-flow-merge records on the `merged` event
+// Why a train is dropped (9.8): the reasons fabriek-merge records on the `merged` event
 // (`--train-dropped`, `train_reason`), in this order.
 export const TRAIN_DROPS = ['head-moved', 'outside-merge', 'conflict', 'train-red', 'left-queue', 'tree-mismatch', 'refused'] as const
 export type TrainDrop = (typeof TRAIN_DROPS)[number]

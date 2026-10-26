@@ -84,7 +84,7 @@ const FALLBACK = 'This issue was split from #300 and carries an open owner decis
 const REASONS = { why_split: 'It spans the loop and the image', why_count: 'Two: one per side', why_parts: 'The image ships on its own', why_order: 'The image waits on the loop' }
 
 describe('the design-v2 contract (8.7)', () => {
-  test('a brief with its heading and a Rollout callum-flow-rollout reads is taken whole; a question and a split too', () => {
+  test('a brief with its heading and a Rollout fabriek-rollout reads is taken whole; a question and a split too', () => {
     expect(check('design-v2', { kind: 'brief', brief: BRIEF })).toEqual({ ok: true, outcome: { kind: 'brief', brief: BRIEF.trim(), question: null, reasons: null, children: [] } })
     expect(check('design-v2', { kind: 'question', question: 'Which API?', brief: null })).toEqual({ ok: true, outcome: { kind: 'question', brief: null, question: 'Which API?', reasons: null, children: [] } })
     const children = [
@@ -297,7 +297,7 @@ describe('the design-v2 contract (8.7)', () => {
     ])
   })
 
-  test('rolloutOf reads the Rollout as callum-flow-rollout does: the first line under its heading, outside fenced code', () => {
+  test('rolloutOf reads the Rollout as fabriek-rollout does: the first line under its heading, outside fenced code', () => {
     expect(rolloutOf('## Rollout\n\n**Run-it** - the epic says so\n')).toBe('run-it')
     expect(rolloutOf('```\n## Rollout\nmerge\n```\n## rollout\nkeep-open - x')).toBe('keep-open')
     expect(rolloutOf('## Rollout\n## Next\nmerge')).toBeNull()
@@ -709,7 +709,7 @@ const resultOf = (exec: { outcome?: unknown }): StepResult => (exec.outcome as {
 // answered head an ancestor of it or not.
 function origin(branch: string, head: string | null, beyond = 2, ancestor = true): (argv: string[]) => Reply {
   return argv => {
-    if (argv[0] === 'callum-flow-implementer-route' || argv[0] === 'callum-flow-designer-route') return { stdout: 'opus\n' }
+    if (argv[0] === 'fabriek-implementer-route' || argv[0] === 'fabriek-designer-route') return { stdout: 'opus\n' }
     if (argv[1] === 'ls-remote') return { stdout: head === null ? '' : `${head}\trefs/heads/${branch}\n` }
     if (argv[1] === 'rev-list') return { stdout: `${beyond}\n` }
     if (argv[1] === 'merge-base') return { exitCode: ancestor ? 0 : 1 }
@@ -725,7 +725,7 @@ describe('the build step (4.2, 7.1, 10.8)', () => {
     const h = harness(r, origin('issue-300', SHA('a')))
     const { exec } = await h.spawn('build')
     expect(exec).toMatchObject({ status: 'running', agentId: 'agent-1' })
-    expect(h.runs[0]?.argv).toEqual(['callum-flow-implementer-route', '300'])
+    expect(h.runs[0]?.argv).toEqual(['fabriek-implementer-route', '300'])
     expect(h.spawns).toHaveLength(1)
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:builder', model: 'opus', name: 'build-300-s3-a1' })
     expect(h.spawns[0]?.prompt.split('\n')[0]).toBe(`factory-slot: ${SLOT(300)}`)
@@ -739,7 +739,7 @@ describe('the build step (4.2, 7.1, 10.8)', () => {
   test('a route that fails or prints no model refuses the attempt, never retried, and spawns nothing', async () => {
     for (const reply of [{ exitCode: 2, stderr: 'usage' }, { stdout: 'sonnet\nopus\n' }]) {
       const h = harness(r, () => reply)
-      expect((await h.spawn('build')).exec).toMatchObject({ status: 'failed', noRetry: true, summary: expect.stringContaining('refused: callum-flow-implementer-route 300') })
+      expect((await h.spawn('build')).exec).toMatchObject({ status: 'failed', noRetry: true, summary: expect.stringContaining('refused: fabriek-implementer-route 300') })
       expect(h.spawns).toEqual([])
     }
     expect(routedModel('opus\n')).toBe('opus')
@@ -943,7 +943,7 @@ describe('the design step (8.7)', () => {
     const h = harness(r, () => ({}), [], { issues: [issue(320, { labels: ['model:sonnet', 'ready'] })] })
     await h.spawn('design')
     // the route printed nothing: the label's model, and the fallback event written
-    expect(h.runs.map(x => x.argv[0])).toEqual(['callum-flow-designer-route', 'callum-flow-event'])
+    expect(h.runs.map(x => x.argv[0])).toEqual(['fabriek-designer-route', 'fabriek-event'])
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:designer-v2', model: 'sonnet' })
     expect(h.spawns[0]?.prompt).not.toContain('callum-flow:explorer')
     expect(h.spawns[0]?.prompt).toContain('explore with your own reads')
@@ -964,13 +964,13 @@ describe('the design step (8.7)', () => {
 
   describe('the designer\'s route', () => {
     const r = rec(330, { state: 'designing', step: 'design' })
-    const FALLBACK = (model: string) => ['callum-flow-event', '--type', 'designer_routed', '--issue', '330', '--data', JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null })]
+    const FALLBACK = (model: string) => ['fabriek-event', '--type', 'designer_routed', '--issue', '330', '--data', JSON.stringify({ model, reason: 'fallback', bucket: null, sonnet_pct: null })]
 
     test('the routed alias is the designer\'s model and no fallback is written', async () => {
       for (const alias of ['opus', 'sonnet']) {
-        const h = harness(r, argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: `${alias}\n` } : {}))
+        const h = harness(r, argv => (argv[0] === 'fabriek-designer-route' ? { stdout: `${alias}\n` } : {}))
         await h.spawn('design')
-        expect(h.runs[0]?.argv).toEqual(['callum-flow-designer-route', '330'])
+        expect(h.runs[0]?.argv).toEqual(['fabriek-designer-route', '330'])
         expect(h.runs).toHaveLength(1)
         expect(h.spawns[0]).toMatchObject({ model: alias })
       }
@@ -978,29 +978,29 @@ describe('the design step (8.7)', () => {
 
     test('a route that fails, throws or prints no alias falls back to the label or the agent, writing one fallback event', async () => {
       const failures: Array<(argv: string[]) => Reply> = [
-        argv => (argv[0] === 'callum-flow-designer-route' ? { exitCode: 2, stderr: 'usage' } : {}),
+        argv => (argv[0] === 'fabriek-designer-route' ? { exitCode: 2, stderr: 'usage' } : {}),
         argv => {
-          if (argv[0] === 'callum-flow-designer-route') throw new Error('spawn ENOENT')
+          if (argv[0] === 'fabriek-designer-route') throw new Error('spawn ENOENT')
           return {}
         },
-        argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: 'sonnet\nopus\n' } : {}),
-        argv => (argv[0] === 'callum-flow-designer-route' ? { stdout: 'bad alias!\n' } : {}),
+        argv => (argv[0] === 'fabriek-designer-route' ? { stdout: 'sonnet\nopus\n' } : {}),
+        argv => (argv[0] === 'fabriek-designer-route' ? { stdout: 'bad alias!\n' } : {}),
       ]
       for (const reply of failures) {
         const labelled = harness(r, reply, [], { issues: [issue(330, { labels: ['model:sonnet', 'ready'] })] })
         await labelled.spawn('design')
         expect(labelled.spawns[0]?.model).toBe('sonnet')
-        expect(labelled.runs.filter(x => x.argv[0] === 'callum-flow-event').map(x => x.argv)).toEqual([FALLBACK('sonnet')])
+        expect(labelled.runs.filter(x => x.argv[0] === 'fabriek-event').map(x => x.argv)).toEqual([FALLBACK('sonnet')])
         const plain = harness(r, reply)
         await plain.spawn('design')
         expect(plain.spawns[0]?.model ?? null).toBeNull()
-        expect(plain.runs.filter(x => x.argv[0] === 'callum-flow-event').map(x => x.argv)).toEqual([FALLBACK('opus')])
+        expect(plain.runs.filter(x => x.argv[0] === 'fabriek-event').map(x => x.argv)).toEqual([FALLBACK('opus')])
       }
     })
 
     test('a fallback event write that exits 1 or throws still spawns the designer', async () => {
       for (const ev of [() => ({ exitCode: 1 }), () => { throw new Error('boom') }] as Array<() => Reply>) {
-        const h = harness(r, argv => (argv[0] === 'callum-flow-designer-route' ? { exitCode: 2 } : argv[0] === 'callum-flow-event' ? ev() : {}))
+        const h = harness(r, argv => (argv[0] === 'fabriek-designer-route' ? { exitCode: 2 } : argv[0] === 'fabriek-event' ? ev() : {}))
         await h.spawn('design')
         expect(h.spawns).toHaveLength(1)
         expect(h.spawns[0]?.model ?? null).toBeNull()
@@ -1036,7 +1036,7 @@ describe('the design step (8.7)', () => {
       reason: 'done',
       data: { kind: 'done', evidence: { pr: 812 }, checked: MERGE, mergeCommit: MERGE, prHead: PR_HEAD, branch: { sha: SHA('c'), beyond: 0 }, text: `done: PR #812 (merge ${MERGE.slice(0, 7)})` },
     })
-    expect(runs.filter(x => x.argv[0] !== 'callum-flow-designer-route' && x.argv[0] !== 'callum-flow-event').map(x => x.argv.slice(0, 2).join(' '))).toEqual(['git fetch', 'gh pr', 'git merge-base', 'git ls-remote', 'git rev-list'])
+    expect(runs.filter(x => x.argv[0] !== 'fabriek-designer-route' && x.argv[0] !== 'fabriek-event').map(x => x.argv.slice(0, 2).join(' '))).toEqual(['git fetch', 'gh pr', 'git merge-base', 'git ls-remote', 'git rev-list'])
     expect(runs.find(x => x.argv[1] === 'merge-base')?.argv).toEqual(['git', 'merge-base', '--is-ancestor', MERGE, 'origin/main'])
     expect(runs.find(x => x.argv[0] === 'gh')?.argv).toContain('--repo')
     expect(runs.filter(x => x.argv[0] === 'git' || x.argv[0] === 'gh').every(x => x.cwd === SLOT(321))).toBe(true)

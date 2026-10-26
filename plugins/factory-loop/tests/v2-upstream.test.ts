@@ -25,7 +25,7 @@ type Gh = { issues: Issue[]; writes: { argv: string[]; stdin: string | undefined
 
 function answer(g: Gh, argv: string[], init: { env: Record<string, string>; stdin?: string }): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...a] = argv
-  if (cmd === 'callum-flow-issue-read' && a.includes('--list')) {
+  if (cmd === 'fabriek-issue-read' && a.includes('--list')) {
     g.reads.push({ argv: [...argv], repo: init.env.CALLUM_FLOW_REPO })
     return { stdout: JSON.stringify({ issues: g.issues.map(i => ({ number: i.number, id: 9_000 + i.number, body: i.body })), stripped: 0 }) }
   }
@@ -70,7 +70,7 @@ function act(g: Gh) {
       target: TARGET,
       request: 'bug',
       title: 'The reader drops a quote',
-      body: 'callum-flow-issue-read drops the quote.\n\nFixes #9 by hand.',
+      body: 'fabriek-issue-read drops the quote.\n\nFixes #9 by hand.',
       marker: upstreamMarker(OWN, REF),
       authority: { kind: 'owner', source: 'note' },
       fields: { repo: TARGET, request: 'bug', authority: 'owner', source: 'note' },
@@ -88,7 +88,7 @@ describe('the upstream executor (8.7)', () => {
     const run = act(g)
     const exec = await run()
     expect(exec).toMatchObject({ status: 'done', outcome: { kind: 'upstream', repo: TARGET, issue: 1301, made: true } })
-    expect(g.reads).toEqual([{ argv: ['callum-flow-issue-read', '--json', '--list', '--state', 'open'], repo: TARGET }])
+    expect(g.reads).toEqual([{ argv: ['fabriek-issue-read', '--json', '--list', '--state', 'open'], repo: TARGET }])
     expect(g.writes).toHaveLength(1)
     const w = g.writes[0]!
     expect(w.argv).toEqual(['gh', 'issue', 'create', '--repo', TARGET, '--title', 'The reader drops a quote', '--body-file', '-'])

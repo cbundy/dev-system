@@ -19,7 +19,7 @@ import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, eventRow, state as baseSt
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
 const SHA = '201fcea210d88b17ef51cda1b1036347ba0f50a0'
-// One old log line (the keys of images/base/callum-flow-event's jq object) with the new event the
+// One old log line (the keys of images/base/fabriek-event's jq object) with the new event the
 // translator (images/base/factory-event-translate.js, docs/factory-events/translator.md) makes of it,
 // its type and payload written out as a fixture pair.
 type Line = { old: Record<string, string | number | null>; type: string; data: Record<string, unknown>; ts: number; issue: number | null; actor: string; device: string }
@@ -293,7 +293,7 @@ describe('the facts shadow in the planner (rules-shadow.ts)', () => {
     expect(ev?.key).toBe(`facts-shadow:${NOW}`)
     expect(ev?.rule).toBe('H1')
     expect(ev?.event.state === 'shadow_read' ? ev.event.data.reader : null).toBe('loop-facts')
-    expect(ev?.event.state === 'shadow_read' && eventArgv(ev.event).slice(0, 4)).toEqual(['callum-flow-event', '--type', 'shadow_read', '--data'])
+    expect(ev?.event.state === 'shadow_read' && eventArgv(ev.event).slice(0, 4)).toEqual(['fabriek-event', '--type', 'shadow_read', '--data'])
     expect(tells(actions)).toEqual([])
   })
 

@@ -7,6 +7,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { LOCK_CAS_SCRIPT } from '../hooks/rails'
+import { resetFallbacks } from '../hooks/tool-name.mjs'
 import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { DEVICE, NOW } from './fixtures'
 
@@ -36,20 +37,20 @@ function origin(argv: readonly string[]): Reply | undefined {
   return argv.join(' ') === 'git remote get-url origin' ? { stdout: `https://github.com/${REPO}.git\n` } : undefined
 }
 
-// issuesRead: `callum-flow-issue-read --json --issues <N,...>` answered from the same test's
+// issuesRead: `fabriek-issue-read --json --issues <N,...>` answered from the same test's
 // single-read replies (`--json <N>`), as the real reader composes them: an issue the single read
 // answered becomes an item, exit 3 a refused number, any other failure a missing one; a reply that is no issue a missing one; a rate limit
 // fails the whole call. Undefined for any other command. (observe reads its due issues this way, #922.)
 type SingleRun = (argv: string[]) => Reply | undefined | Promise<Reply | undefined>
 export function issuesRead(argv: readonly string[], single: SingleRun): Promise<Reply> | undefined {
   const at = argv.indexOf('--issues')
-  if (argv[0] !== 'callum-flow-issue-read' || at < 0) return undefined
+  if (argv[0] !== 'fabriek-issue-read' || at < 0) return undefined
   return (async () => {
     const issues: unknown[] = []
     const refused: number[] = []
     const missing: number[] = []
     for (const n of (argv[at + 1] ?? '').split(',').map(Number)) {
-      const r = (await single(['callum-flow-issue-read', '--json', String(n)])) ?? {}
+      const r = (await single(['fabriek-issue-read', '--json', String(n)])) ?? {}
       if (r.exitCode === 3) refused.push(n)
       else if ((r.exitCode ?? 0) !== 0 && /rate.?limit/i.test(r.stderr ?? '')) return { exitCode: 1, stderr: r.stderr }
       else if ((r.exitCode ?? 0) !== 0) missing.push(n)
@@ -116,6 +117,10 @@ export type HostOptions = {
   // the test's engine: with it, $.session.send resumes an agent as the engine does, only as a type
   // the agent.offer hooks offer (a hook's own $ cannot ask them)
   engine?: Engine
+  // the commands the image has (#1359): 'new' (default) only the fabriek-* names, 'old' only the callum-flow-* aliases
+  // of an image that predates the rename, 'both' either. A program the image lacks exits 127 "not found", as the
+  // shell would; an old name is answered as its fabriek name, so the test's `run` stays written once.
+  tools?: 'new' | 'old' | 'both'
 }
 
 export type Host = ReturnType<typeof host>
@@ -124,6 +129,7 @@ export type Host = ReturnType<typeof host>
 type Stored = { key: string; status: string; attempts: number; agentId?: string; outcome?: { kind: string }; summary?: string; reminded?: boolean; turnId?: string }
 
 export function host(on: On, opts: HostOptions = {}) {
+  resetFallbacks() // what a pass learned about the image's tools is per process; a test starts fresh
   // an empty value leaves the variable unset
   const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', ...opts.env }).filter(([, v]) => v !== '')
   mock.env(on, Object.fromEntries(env))
@@ -203,12 +209,12 @@ export function host(on: On, opts: HostOptions = {}) {
       )
     },
     events(): string[][] {
-      return seen.filter(s => s.argv[0] === 'callum-flow-event').map(s => s.argv)
+      return seen.filter(s => s.argv[0] === 'fabriek-event').map(s => s.argv)
     },
-    // the native events logged of one type: `callum-flow-event --type <type> --data <json> [--issue N] [--actor A]`
+    // the native events logged of one type: `fabriek-event --type <type> --data <json> [--issue N] [--actor A]`
     native(type: string): { issue: number | null; actor: string | null; data: Record<string, unknown> }[] {
       return seen
-        .filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === '--type' && s.argv[2] === type)
+        .filter(s => s.argv[0] === 'fabriek-event' && s.argv[1] === '--type' && s.argv[2] === type)
         .map(s => {
           const at = (flag: string) => s.argv[s.argv.indexOf(flag) + 1]
           return { issue: s.argv.includes('--issue') ? Number(at('--issue')) : null, actor: s.argv.includes('--actor') ? (at('--actor') ?? null) : null, data: JSON.parse(at('--data') ?? '{}') as Record<string, unknown> }
@@ -277,8 +283,18 @@ export function host(on: On, opts: HostOptions = {}) {
     if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('memory.max')) {
       return { value: { exitCode: 0, stdout: `${JSON.stringify({ max: '68719476736\n', info: '' })}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    const s: Seen = { argv, env: { ...(e.init?.env ?? {}) }, stdin: e.init?.stdin, cwd: e.init?.cwd }
+    const s: Seen = { argv: [...argv], env: { ...(e.init?.env ?? {}) }, stdin: e.init?.stdin, cwd: e.init?.cwd }
     seen.push(s)
+    // the image's tools: the program is the first word, or the first after `env` and its NAME=value words
+    const at = argv[0] === 'env' ? argv.findIndex((w, i) => i > 0 && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) : 0
+    const program = argv[at] ?? ''
+    const tools = opts.tools ?? 'new'
+    if ((program.startsWith('fabriek-') && tools === 'old') || (program.startsWith('callum-flow-') && tools === 'new')) {
+      return { value: { exitCode: 127, stdout: '', stderr: `sh: ${program}: not found\n`, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (program.startsWith('callum-flow-')) {
+      argv[at] = `fabriek-${program.slice('callum-flow-'.length)}`
+    }
     const done = (r: Reply) => ({
       value: { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false },
     })
@@ -389,7 +405,7 @@ export async function agentDone(
   if (a !== undefined) a.status = 'completed'
 }
 
-// The factory-state report for one repo (callum-flow-factory-state --format json): the rows as given.
+// The factory-state report for one repo (fabriek-factory-state --format json): the rows as given.
 export function factoryDoc(issues: Record<string, unknown>[], recent: Record<string, unknown>[] = [], at = NOW): string {
   return JSON.stringify({ at: iso(at), repos: [{ repo: REPO, issues, recent }] })
 }

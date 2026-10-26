@@ -2,13 +2,13 @@
 // (docs/factory-loop/v2/SPEC.md 4.2, 5.1, 7.1, 8.7, 9.7, 10.8): their prompts (prompts-work.ts),
 // their contracts (contracts-work.mjs: design-v2, build, fix) and what an answer means.
 //
-// - design: runs on the model `callum-flow-designer-route` picks (which logs `designer_routed`),
+// - design: runs on the model `fabriek-designer-route` picks (which logs `designer_routed`),
 //   falling back to the issue's model label or the agent's model when the route fails (the loop
 //   then logs `designer_routed` with reason fallback). A brief is ok, a question or a split is
 //   not-ok; the plan side (rules-work.ts) posts the
 //   brief and makes the split's children before the result counts. A reader: nothing is read on
 //   origin.
-// - build: the builder runs on the model `callum-flow-implementer-route` picks, which also logs
+// - build: the builder runs on the model `fabriek-implementer-route` picks, which also logs
 //   `implementer_routed` (7.1). `cannot` is not-ok at once. `built` is ok only when origin's
 //   branch, read directly (`git ls-remote`), has commits beyond the base and holds the answered
 //   head (it is the head or an ancestor of it); no branch, or none beyond the base, is not-ok
@@ -48,7 +48,7 @@ const MODEL = /^[A-Za-z0-9._-]+$/
 
 // --- models ---------------------------------------------------------------------------------------
 
-// routedModel: callum-flow-implementer-route prints exactly one line, the model alias; anything
+// routedModel: fabriek-implementer-route prints exactly one line, the model alias; anything
 // else is null.
 export function routedModel(stdout: string): string | null {
   const lines = stdout
@@ -415,7 +415,7 @@ const design: StepModule = {
     if (typeof r === 'string') return r
     // a reader applies no leftovers patch: it changes nothing in its slot
     const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
-    const routedTo = await runRoute(ctx, ARGV.designerRouteArgv(r.issue), 'callum-flow-designer-route ' + r.issue)
+    const routedTo = await runRoute(ctx, ARGV.designerRouteArgv(r.issue), 'fabriek-designer-route ' + r.issue)
     // the owner notes of the step, which an upstream answer's `note` authority is checked against (upstream-answer.mjs)
     const data = { ownerNotes: action.notes.filter(n => n.startsWith(OWNER_PREFIX)).map(n => n.slice(OWNER_PREFIX.length)) }
     if (typeof routedTo === 'string' && routedTo.startsWith('ok:')) return { prompt, model: routedTo.slice(3), data }
@@ -447,7 +447,7 @@ async function runRoute(ctx: ExecCtx, argv: string[], name: string): Promise<str
 // The builder's model: the route's answer (an issue's model label first, then the comparison's
 // split); the route logs implementer_routed (7.1). A route that fails is the attempt's failure.
 async function routed(ctx: ExecCtx, issue: number): Promise<string> {
-  const r = await runRoute(ctx, ARGV.implementerRouteArgv(issue), `callum-flow-implementer-route ${issue}`)
+  const r = await runRoute(ctx, ARGV.implementerRouteArgv(issue), `fabriek-implementer-route ${issue}`)
   if (!r.startsWith('ok:')) throw new Error(r)
   return r.slice(3)
 }

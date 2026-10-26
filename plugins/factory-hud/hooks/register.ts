@@ -6,6 +6,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { counts, dueAlerts, hudSource, repoSlug, statusText, versionsText } from './format'
 import type { Readout } from './format'
+import { withFallback } from './tool-name'
 
 // Hidden in this conversation (/hud): kept across a reload, not into a new conversation.
 const isHidden = atom({ plugin: 'factory-hud', key: 'isHidden' } as const, false)
@@ -38,7 +39,7 @@ async function alert($: EngineInterface) {
 // output: a command's stdout, or undefined when it cannot run or fails.
 async function output($: EngineInterface, argv: string[], cwd: string, env?: Record<string, string>) {
   try {
-    const { exitCode, stdout } = await $.process.run(argv, { cwd, timeoutMs: 30_000, ...(env ? { env } : {}) })
+    const { exitCode, stdout } = await withFallback((a: string[], o: { cwd: string; timeoutMs: number; env?: Record<string, string> }) => $.process.run(a, o))(argv, { cwd, timeoutMs: 30_000, ...(env ? { env } : {}) })
     return exitCode === 0 ? stdout : undefined
   } catch {
     return undefined
@@ -49,9 +50,9 @@ async function refreshFactory($: EngineInterface, cwd: string) {
   if (!hud.repo) return
   const json = await output(
     $,
-    ['callum-flow-factory-state', '--repo', hud.repo, '--github', 'off', '--format', 'json'],
+    ['fabriek-factory-state', '--repo', hud.repo, '--github', 'off', '--format', 'json'],
     cwd,
-    hud.source ? { CALLUM_FLOW_FACTORY_STATE_SOURCE: hud.source } : undefined,
+    hud.source ? { FABRIEK_FACTORY_STATE_SOURCE: hud.source, CALLUM_FLOW_FACTORY_STATE_SOURCE: hud.source } : undefined,
   )
   // A failed read keeps the last counts, which then show their age.
   const next = json === undefined ? undefined : counts(json, await $.clock.now())

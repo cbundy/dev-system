@@ -213,7 +213,7 @@ describe('the merge train, happy path (v2 SPEC 9.8)', () => {
     expect(merges(p)[0]).toMatchObject({ issue: 2, pr: 602, head: NH, patch: PATCH, testedTree: TREE_T })
     expect(merges(p)[0]?.trainDropped).toBeUndefined()
     expect(merges(p)[0]?.key).toBe(mergeKey(N, NH, 1))
-    expect(ARGV.queueMergeArgv(602, PATCH, 2, { testedTree: TREE_T })).toEqual(['callum-flow-merge', '602', '--patch', PATCH, '--issue', '2', '--tested-tree', TREE_T])
+    expect(ARGV.queueMergeArgv(602, PATCH, 2, { testedTree: TREE_T })).toEqual(['fabriek-merge', '602', '--patch', PATCH, '--issue', '2', '--tested-tree', TREE_T])
     expect(deletes(plan(afterMerge()))).toEqual([])
   })
 
@@ -324,7 +324,7 @@ describe('every invalidation drops the train (v2 SPEC 9.8)', () => {
       expect(merges(later)).toHaveLength(1)
       expect(merges(later)[0]).toMatchObject({ issue: 2, trainDropped: end })
       expect(merges(later)[0]?.testedTree).toBeUndefined()
-      expect(ARGV.queueMergeArgv(602, PATCH, 2, { trainDropped: end })).toEqual(['callum-flow-merge', '602', '--patch', PATCH, '--issue', '2', '--train-dropped', end])
+      expect(ARGV.queueMergeArgv(602, PATCH, 2, { trainDropped: end })).toEqual(['fabriek-merge', '602', '--patch', PATCH, '--issue', '2', '--train-dropped', end])
     })
   }
 
@@ -533,42 +533,42 @@ const MERGE_TRAIN: Action = { kind: 'queue-merge', key: mergeKey(N, NH, 1), clas
 const MERGE_PLAIN: Action = { ...MERGE_TRAIN, key: mergeKey(N, NH, 2), testedTree: undefined, trainDropped: 'train-red' } as Action
 
 describe('the merge on a train (act-queue.ts)', () => {
-  test('callum-flow-merge gets --tested-tree for a train merge and --train-dropped for one that says why it has none', async () => {
+  test('fabriek-merge gets --tested-tree for a train merge and --train-dropped for one that says why it has none', async () => {
     const a = actWorld(() => ({}))
     expect(await a.run(MERGE_TRAIN)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: true, head: NH } })
-    expect(a.argvs()).toEqual([['callum-flow-merge', '602', '--patch', PATCH, '--issue', '2', '--tested-tree', TREE_T]])
+    expect(a.argvs()).toEqual([['fabriek-merge', '602', '--patch', PATCH, '--issue', '2', '--tested-tree', TREE_T]])
     const b = actWorld(() => ({}))
     await b.run(MERGE_PLAIN)
-    expect(b.argvs()).toEqual([['callum-flow-merge', '602', '--patch', PATCH, '--issue', '2', '--train-dropped', 'train-red']])
+    expect(b.argvs()).toEqual([['fabriek-merge', '602', '--patch', PATCH, '--issue', '2', '--train-dropped', 'train-red']])
   })
 
   test('exit 2 on a train merge (an image that does not know --tested-tree) is the drop refused: answered, never a fault, never retried as unknown', async () => {
-    const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 2, stderr: 'usage: callum-flow-merge-guard: unknown option --tested-tree' } : {}))
+    const w = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 2, stderr: 'usage: fabriek-merge-guard: unknown option --tested-tree' } : {}))
     const out = await w.run(MERGE_TRAIN)
     expect(out).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: false, head: NH, failClass: null, drop: 'refused' } })
     expect(out).not.toHaveProperty('noRetry')
     // the same exit 2 without a tested tree is still the loop's bug, never retried
-    const plain = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 2, stderr: 'usage' } : {}))
+    const plain = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 2, stderr: 'usage' } : {}))
     expect(await plain.run({ ...MERGE_TRAIN, testedTree: undefined } as Action)).toMatchObject({ status: 'failed', noRetry: true })
   })
 
   test('a GUARD tree FAIL (another tree, or a conflict with main) is the drop tree-mismatch, whatever else the guard said; a tree check that could not read is no drop', async () => {
     for (const cls of ['behind', 'conflict']) {
       const line = `GUARD tree FAIL merging ${NH} onto origin/main gives tree x, not the tested ${TREE_T} class=${cls}`
-      const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `${line}\nGUARD checks FAIL ci=pending class=checks\n` } : {}))
+      const w = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: `${line}\nGUARD checks FAIL ci=pending class=checks\n` } : {}))
       const out = await w.run(MERGE_TRAIN)
       expect(out).toMatchObject({ status: 'done', outcome: { merged: false, failClass: null, drop: 'tree-mismatch', lines: [line, 'GUARD checks FAIL ci=pending class=checks'] } })
       // the PR is not read back for a refusal the guard answered
-      expect(w.argvs().filter(a => a[0] === 'callum-flow-issue-read')).toEqual([])
+      expect(w.argvs().filter(a => a[0] === 'fabriek-issue-read')).toEqual([])
     }
-    const unread = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: 'GUARD tree FAIL cannot fetch origin/main class=read\n' } : {}))
+    const unread = actWorld(argv => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stdout: 'GUARD tree FAIL cannot fetch origin/main class=read\n' } : {}))
     const out = await unread.run(MERGE_TRAIN)
     expect(out).toMatchObject({ status: 'failed', outcome: { failClass: 'read' } })
     expect(out.status === 'failed' && out.outcome?.kind === 'queue' ? out.outcome.drop : 'none').toBeUndefined()
   })
 
   test('a BEHIND refusal after the guard passed (strict protection still on) is the drop refused; without a tested tree it is the class behind, as before', async () => {
-    const reply = (argv: string[]): Reply => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'callum-flow-merge: GitHub refused: merge state BEHIND (branch rule)' } : {})
+    const reply = (argv: string[]): Reply => (argv[0] === 'fabriek-merge' ? { exitCode: 1, stderr: 'fabriek-merge: GitHub refused: merge state BEHIND (branch rule)' } : {})
     expect(await actWorld(reply).run(MERGE_TRAIN)).toMatchObject({ status: 'done', outcome: { merged: false, failClass: null, drop: 'refused' } })
     const plain = await actWorld(reply).run({ ...MERGE_TRAIN, testedTree: undefined } as Action)
     expect(plain).toMatchObject({ status: 'done', outcome: { merged: false, failClass: 'behind' } })

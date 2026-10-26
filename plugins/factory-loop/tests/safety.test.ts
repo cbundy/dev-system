@@ -2,7 +2,7 @@
 // purpose and every respond shape runs through act.ts's dispatcher with a recording fake ActIo
 // whose commands answer as the real CLIs do, so each executor takes its whole path; the rails'
 // and an act-mode observe pass's commands join them. Not one argv may pass --yes, run
-// `no-mistakes rerun` or `abort`, merge but through callum-flow-merge (which runs the guard),
+// `no-mistakes rerun` or `abort`, merge but through fabriek-merge (which runs the guard),
 // edit a PR body, add a label (the readyLabel least of all), run a `coder` command or kill a
 // process by name; and stop-agent stops only an agent the ledger holds running. The root node test
 // tests/factory-loop-safety.test.js scans the hooks' string literals for the same, as a second
@@ -91,24 +91,24 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       if (args[0] === 'commit-tree') return { stdout: `${TRAIN_SHA}\n` }
       if (args[0] === 'ls-remote') return { stdout: `${TRAIN_SHA}\trefs/heads/factory-train/i471-1234567\n${TRAIN_SHA}\trefs/heads/factory-train/i472-7654321\n` }
       return {}
-    case 'callum-flow-rollout':
+    case 'fabriek-rollout':
       return { stdout: 'ROLLOUT run-it source=brief\n' }
-    case 'callum-flow-released':
+    case 'fabriek-released':
       return { stdout: 'released v1.2.0\n' }
-    case 'callum-flow-implementer-route':
+    case 'fabriek-implementer-route':
       return { stdout: 'sonnet\n' }
-    case 'callum-flow-designer-route':
+    case 'fabriek-designer-route':
       return { stdout: 'opus\n' }
     case 'treehouse':
       if (args[0] === 'get') return { stdout: `${LEASED}\n` }
       if (args[0] === 'status') return { stdout: JSON.stringify([{ path: SLOT, branch: 'issue-470-x', status: 'available', processes: [] }]) }
       return {}
-    case 'callum-flow-claim':
+    case 'fabriek-claim':
       return {}
     // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor);
     // a PR alone, its head moved by the update (v2's queue-update); the open issues, none of them a
     // split's child yet; one issue, with its REST id and state (v2's split and link)
-    case 'callum-flow-issue-read':
+    case 'fabriek-issue-read':
       if (args.includes('--pr') && !args.includes('--comments')) return { stdout: JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: 'def5678' }, user: { login: 'cbundy' } }, stripped: 0 }) }
       if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
       // #470 is merged and closed, a child of split parent #469 (v2's close-tracker)
@@ -775,7 +775,7 @@ describe('the argv safety net (v2 SPEC 13.6.1)', () => {
       run: async argv => {
         seen.push([...argv])
         const out =
-          argv[0] === 'callum-flow-factory-state'
+          argv[0] === 'fabriek-factory-state'
             ? factoryDoc([])
             : argv[0] === 'dev-query'
               ? NO_EVENTS

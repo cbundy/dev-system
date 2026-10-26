@@ -29,11 +29,11 @@ const childOf = (parent: number, key: string, over: Partial<Issue> & { number: n
 
 function answer(g: Gh, argv: string[]): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...a] = argv
-  if (cmd === 'callum-flow-event') {
+  if (cmd === 'fabriek-event') {
     g.events.push([...argv])
     return {}
   }
-  if (cmd === 'callum-flow-issue-read') {
+  if (cmd === 'fabriek-issue-read') {
     const i = g.issues.find(x => x.number === Number(a[1]))
     return i === undefined ? { exitCode: 1, stderr: 'cannot read issue' } : { stdout: JSON.stringify({ issue: { number: i.number, id: 9_000 + i.number, state: i.state, body: i.body, ...(i.pr === true ? { pull_request: { url: 'x' } } : {}) }, stripped: 0 }) }
   }
@@ -105,7 +105,7 @@ describe('the close-tracker executor (#946)', () => {
     const last = await run(190)
     expect(last).toMatchObject({ status: 'done', outcome: { kind: 'close-tracker', parent: 139, closed: true, open: [] }, summary: 'closing #139: #189 #190 #191 done' })
     expect(g.writes).toEqual([['gh', 'issue', 'close', '139', '--repo', REPO, '--reason', 'completed', '--comment', trackerComment([189, 190, 191])]])
-    expect(g.events).toEqual([['callum-flow-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '139']])
+    expect(g.events).toEqual([['fabriek-event', '--type', 'closed', '--data', '{"reason":"completed"}', '--issue', '139']])
     expect(g.issues.find(i => i.number === 139)?.reason).toBe('completed')
     // run again (a retry, a second device): the tracker is closed, nothing is written twice
     expect(await run(190)).toMatchObject({ status: 'done', outcome: { parent: 139, closed: false, open: [] }, summary: '#139 is already closed' })

@@ -5,6 +5,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { AgentSpawnInput, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { INPUT_CLIP } from '../hooks/prompt'
+import { resetFallbacks } from '../hooks/tool-name'
 
 const CONFIG = '/c'
 const MAIN = '/w/dev-system'
@@ -46,7 +47,7 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; status?: string | 'fail'; heads?: string[]; hold?: (n: number, command: string) => Promise<void> | undefined; slotAnswers?: ('slot' | 'busy')[] } = {}) {
+function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; oldImage?: boolean; status?: string | 'fail'; heads?: string[]; hold?: (n: number, command: string) => Promise<void> | undefined; slotAnswers?: ('slot' | 'busy')[] } = {}) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node', ...opts.env })
   const w = {
@@ -62,7 +63,7 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
     gateRuns: [] as { command: string; cwd?: string; timeoutMs?: number }[],
     // every `exec 2>&1` text the gate ran, wrapper and all
     wrapperRuns: [] as string[],
-    // callum-flow-event's argv, and the engine's own answer to a tool.check: allow, as for a loop
+    // fabriek-event's argv, and the engine's own answer to a tool.check: allow, as for a loop
     // agent that runs unattended. Since Claude Code 2.1.308 the kit's $.tool.call raises tool.check
     // first, as the engine does, so a default of ask would turn every call into the guard's deny.
     events: [] as string[][],
@@ -79,7 +80,8 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
   const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT], ['/proc/4242/stat', PROC_STAT]])
   w.files = files
   const gates = [...(opts.gates ?? [])]
-  const ran = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  resetFallbacks() // what a run learned about the image's tools is per process; a test starts fresh
+  const ran = (stdout: string, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('env.set', (_$, e) => {
     w.envSet.push([e.name, e.value])
@@ -128,7 +130,9 @@ function world(on: On, opts: { env?: Record<string, string>; marker?: unknown; h
       await new Promise<void>(resolve => setTimeout(resolve, 200))
       return ran('')
     }
-    if (cmd === 'callum-flow-event') {
+    // an image that predates the fabriek names has only the callum-flow alias (#1359)
+    if (cmd === 'fabriek-event' && opts.oldImage === true) return ran('', 127, 'sh: fabriek-event: not found')
+    if (cmd === 'fabriek-event' || (cmd === 'callum-flow-event' && opts.oldImage === true)) {
       w.events.push(e.argv)
       return ran('', opts.eventExit ?? 0)
     }
@@ -944,7 +948,7 @@ describe('prompts nobody answers', () => {
     expect(reason).toContain('end your step saying what you needed')
     expect(w.events).toHaveLength(1)
     const argv = w.events[0] as string[]
-    expect(argv.slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_denied', '--data'])
+    expect(argv.slice(0, 4)).toEqual(['fabriek-event', '--type', 'prompt_denied', '--data'])
     expect(argv.slice(4 + 1)).toEqual(['--issue', '571', '--repo', argv[argv.indexOf('--repo') + 1]])
     expect(argv).not.toContain('--note')
     expect(argv).not.toContain('--pr')
@@ -1023,12 +1027,21 @@ describe('prompts nobody answers', () => {
     expect(input.startsWith('{"file_path":"/x"')).toBe(true)
   })
 
-  test('an image whose callum-flow-event refuses the write still gets the deny and the line', async ($, on) => {
+  test('an image whose fabriek-event refuses the write still gets the deny and the line', async ($, on) => {
     const w = askWorld(on, { eventExit: 2 })
     await $.agent.spawn(spawn(BUILD))
     expect((await check($, RM)).decision).toBe('deny')
     expect(w.events).toHaveLength(1)
     expect(companionLines(w).map(l => l.cause)).toEqual(['prompt-denied'])
+  })
+
+  test('an image with only the callum-flow-event name still gets the event, by the old name', async ($, on) => {
+    const w = askWorld(on, { oldImage: true })
+    await $.agent.spawn(spawn(BUILD))
+    expect((await check($, RM)).decision).toBe('deny')
+    expect((await check($, RM)).decision).toBe('deny')
+    expect(w.events.map(a => (a as string[])[0])).toEqual(['callum-flow-event', 'callum-flow-event'])
+    expect(dataOf(w.events[1] as string[])).toMatchObject({ agent_id: 'agent-1' })
   })
 
   test('a marker with a pr gives pr in the data, and one without gives null', async ($, on) => {
@@ -1049,7 +1062,7 @@ describe('permission prompts waiting', () => {
     await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
     await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
     expect(w.events).toHaveLength(1)
-    expect((w.events[0] as string[]).slice(0, 4)).toEqual(['callum-flow-event', '--type', 'prompt_waiting', '--data'])
+    expect((w.events[0] as string[]).slice(0, 4)).toEqual(['fabriek-event', '--type', 'prompt_waiting', '--data'])
     expect(dataOf(w.events[0] as string[])).toMatchObject({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', tool_input: note.message, transcript: AGENT_TRANSCRIPT, tool_name: null, seq: 7, branch: 'issue-571' })
     expect(dataOf(w.events[0] as string[])).not.toHaveProperty('ask_reason')
     await $.classic.Notification({ ...note, notification_type: 'worker_permission_prompt', agent_id: 'agent-1' } as never)

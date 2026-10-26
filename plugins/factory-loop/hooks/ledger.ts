@@ -333,7 +333,7 @@ export function exhausted(entry: LedgerEntry, config: Config): boolean {
 
 // --- the loop's own events (D-09, v2 SPEC 13.7.4) -------------------------------------------------
 
-// loopEvent: the native callum-flow-event argv for a `loop_entry` event about this entry, for agent
+// loopEvent: the native fabriek-event argv for a `loop_entry` event about this entry, for agent
 // and wake entries (owner notices and rate-cap notices are tells) at their start and end; null for
 // CLI kinds, which log their own events, and for a judge, which has no event type.
 export function loopEvent(entry: LedgerEntry, tokens?: TokenFields): string[] | null {

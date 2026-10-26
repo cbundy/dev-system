@@ -135,18 +135,19 @@ const ran = (r: RunResult): Partial<Command> => ({ exit: r.exitCode, bytes: byte
 
 // sourceOf: the State source an observe command reads (observe.ts), from its program.
 export function sourceOf(argv: readonly string[]): TraceSource | undefined {
-  const [cmd = '', ...args] = argv
+  const [first = '', ...args] = argv
+  const cmd = first.replace(/^callum-flow-/, 'fabriek-') // either name is the same command (#1359)
   const tool = cmd.slice(cmd.lastIndexOf('/') + 1)
-  if (cmd === 'callum-flow-factory-state') return 'factory'
+  if (cmd === 'fabriek-factory-state') return 'factory'
   if (cmd === 'dev-query') return 'facts'
   if (tool === 'pipeline-watch.sh') return 'runs'
-  if (tool === 'queue-watch.sh' || (cmd === 'callum-flow-issue-read' && args.includes('--list'))) return 'queue'
-  if (cmd === 'callum-flow-issue-read') return 'github'
+  if (tool === 'queue-watch.sh' || (cmd === 'fabriek-issue-read' && args.includes('--list'))) return 'queue'
+  if (cmd === 'fabriek-issue-read') return 'github'
   if (tool === 'usage-check.sh') return 'usage'
   // a pool slot's reflog or tree (git -C <slot>, #563) is the pool's
   if (cmd === 'treehouse' || (cmd === 'git' && args[0] === '-C')) return 'pool'
   if (cmd === 'git') return 'checkout'
-  if (cmd === 'callum-flow-milestone') return 'milestone'
+  if (cmd === 'fabriek-milestone') return 'milestone'
   return undefined
 }
 
@@ -170,7 +171,7 @@ export function tracedActIo(tr: Tracer, io: ActIo): ActIo {
     ...io,
     run: (argv, init) => {
       const call = () => timed(tr, argv.join(' '), () => io.run(argv, init), ran)
-      return argv[0] === 'callum-flow-event' ? spent(tr, 'eventsMs', call) : call()
+      return argv[0] === 'fabriek-event' || argv[0] === 'callum-flow-event' ? spent(tr, 'eventsMs', call) : call()
     },
     spawnAgent: input => timed(tr, `agent.spawn ${input.name ?? input.subagentType}`, () => io.spawnAgent(input), refused),
     stopAgent: agentId => timed(tr, `TaskStop ${agentId}`, () => io.stopAgent(agentId), refused),

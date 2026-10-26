@@ -89,7 +89,7 @@ export type ReusedEvent = {
 }
 
 // One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by
-// `callum-flow-event --type gate_run --data <json> --issue N`, so it has no note, no old-format
+// `fabriek-event --type gate_run --data <json> --issue N`, so it has no note, no old-format
 // line and no parser. rules-gates.ts builds it from the companion's gate lines.
 export type GateRunData = {
   life: string
@@ -114,7 +114,7 @@ export type GateRunData = {
 export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
 
 // One shadow compare (shadow_read.v1): written in the new format alone, for no issue, by
-// `callum-flow-event --type shadow_read --data <json>`; sources-records.ts builds the data.
+// `fabriek-event --type shadow_read --data <json>`; sources-records.ts builds the data.
 export type ShadowReadData = {
   reader: string
   tool: string
@@ -133,7 +133,7 @@ export type ShadowReadData = {
 export type ShadowReadEvent = { state: 'shadow_read'; data: ShadowReadData }
 
 // One change in the state of the default branch (main_state.v1): written in the new format alone, for
-// no issue, by `callum-flow-event --type main_state --data <json>`; rules-main.ts builds the data
+// no issue, by `fabriek-event --type main_state --data <json>`; rules-main.ts builds the data
 // from the main source's reading. The arrays line up index by index (workflows, then deployments).
 export type MainStateData = {
   observed_at: string
@@ -157,12 +157,12 @@ export type MainStateData = {
 export type MainStateEvent = { state: 'main_state'; data: MainStateData }
 
 // One park or wait comment's place (comment_posted.v1): written in the new format alone, by
-// `callum-flow-event --type comment_posted --data <json> --issue N`; rules-entry.ts builds it.
+// `fabriek-event --type comment_posted --data <json> --issue N`; rules-entry.ts builds it.
 export type CommentPostedData = { life: string; seq: number; to_state: 'parked' | 'waiting'; comment_url: string }
 export type CommentPostedEvent = { state: 'comment_posted'; issue: number; data: CommentPostedData }
 
 // One change in one setting the loop runs on (settings_changed.v1): written in the new format alone, for no
-// issue, by `callum-flow-event --type settings_changed --data <json>`; rules-settings.ts builds it.
+// issue, by `fabriek-event --type settings_changed --data <json>`; rules-settings.ts builds it.
 export type SettingsChangedData = {
   key: string
   old_value: unknown
@@ -174,7 +174,7 @@ export type SettingsChangedData = {
 export type SettingsChangedEvent = { state: 'settings_changed'; data: SettingsChangedData }
 
 // One change in the reading of the Next release milestone (milestone_state.v1): written in the new format
-// alone, for no issue, by `callum-flow-event --type milestone_state --data <json>`; rules-release-log.ts
+// alone, for no issue, by `fabriek-event --type milestone_state --data <json>`; rules-release-log.ts
 // (O5) builds it.
 export type MilestoneStateData = {
   milestone_closed: number

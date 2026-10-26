@@ -8,6 +8,7 @@
 //    is found again, or created with it. No label is added.
 // Executors decide nothing: plan did.
 import type { Executor } from '../exec'
+import { settingPair } from '../tool-name.mjs'
 import type { Action, ActionKind } from '../types'
 import { childTitle, clip, createdIssue, failed, foundChild, ok, refused } from './act-split'
 import * as ARGV from './argv'
@@ -29,7 +30,7 @@ const upstream: Executor = async (ctx, action) => {
   const target = action.target.toLowerCase()
   if (!UPSTREAM_REPOS.includes(target)) return refused(`${action.target} is not a repo an upstream request may go to`)
   if (action.issue === null) return refused('the upstream action names no issue')
-  const listed = await ok(ctx, ARGV.openIssuesArgv(), undefined, LIST_MS, { CALLUM_FLOW_REPO: target })
+  const listed = await ok(ctx, ARGV.openIssuesArgv(), undefined, LIST_MS, settingPair('REPO', target))
   if ('exec' in listed) return listed.exec
   const marker = action.marker.replace(/^<!-- factory-loop:/, '').replace(/ -->$/, '')
   const found = foundChild(listed.out, marker)

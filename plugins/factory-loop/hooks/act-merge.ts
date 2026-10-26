@@ -1,7 +1,7 @@
 // The rollout executor (v2 SPEC 13.6.1, D-29): the read of a hand-merged issue's rollout, which rule M7
 // asks for when the issue's PR was merged by hand. It decides nothing (plan did): it runs
-// callum-flow-rollout through ctx.cmd and reads the CLI's own line and exit code
-// (images/base/callum-flow-rollout). The argv and the reading of the output are pure functions
+// fabriek-rollout through ctx.cmd and reads the CLI's own line and exit code
+// (images/base/fabriek-rollout). The argv and the reading of the output are pure functions
 // below, so tests and the argv safety test use them without the engine.
 import { detailOf, rateLimited } from './exec'
 import type { Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
@@ -22,7 +22,7 @@ export const NO_EXIT = -1
 // --- argv (v2 SPEC 13.6.1) ---------------------------------------------------------------------------
 
 export function rolloutArgv(issue: number): string[] {
-  return ['callum-flow-rollout', String(issue)]
+  return ['fabriek-rollout', String(issue)]
 }
 
 // --- reading the CLI's output ----------------------------------------------------------------
@@ -31,7 +31,7 @@ export type RolloutRead =
   | { rollout: Rollout; source: string; line: string }
   | { rollout: null; problem: 'conflict' | 'invalid' | 'unreadable' | 'unknown'; line: string }
 
-// parseRollout: callum-flow-rollout's one line: `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`,
+// parseRollout: fabriek-rollout's one line: `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`,
 // or `ROLLOUT conflict|invalid|unreadable <reason>` (exit 1).
 export function parseRollout(text: string): RolloutRead {
   const line = lines(text).find(l => l.startsWith('ROLLOUT ')) ?? ''
@@ -83,7 +83,7 @@ export function failure(argv: readonly string[], r: RunResult, said?: string): E
     outcome: { kind: 'cli', exit: r.exitCode, detail: detailOf(r) },
     summary: clip(`${label(argv)}: exit ${r.exitCode}${line === '' ? '' : `: ${line}`}`),
   }
-  if (r.exitCode === 2 && (argv[0] ?? '').startsWith('callum-flow-')) exec.noRetry = true
+  if (r.exitCode === 2 && /^(fabriek|callum-flow)-/.test(argv[0] ?? '')) exec.noRetry = true
   if (rateLimited(r.stderr)) exec.rateLimited = true
   return exec
 }

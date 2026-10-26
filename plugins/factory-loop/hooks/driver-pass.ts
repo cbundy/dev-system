@@ -4,6 +4,7 @@ import type { EngineInterface } from 'claude-code'
 
 import { actPass, commandOf, logLoop, loggedOf, planPass, sendNotice, updateDone } from './act'
 import type { ActEnv, ActReport } from './act'
+import { takeNotices } from './tool-name.mjs'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import { GITHUB_BACKOFF_MS, observe } from './observe'
 import type { Runtime, Stored } from './observe'
@@ -233,7 +234,11 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
       rt,
       state.control,
       await agentModelsOf(path => text($, path), rt.pluginRoot),
-      { implementerOpusPct: await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT'), designSessionPct: await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT') },
+      {
+        // FABRIEK_<X> first, then the old CALLUM_FLOW_<X> (tool-name.mjs, #1359)
+        implementerOpusPct: (await $.env.get('FABRIEK_IMPLEMENTER_OPUS_PCT')) ?? (await $.env.get('CALLUM_FLOW_IMPLEMENTER_OPUS_PCT')),
+        designSessionPct: (await $.env.get('FABRIEK_DESIGN_SESSION_PCT')) ?? (await $.env.get('CALLUM_FLOW_DESIGN_SESSION_PCT')),
+      },
       state.now,
       effectiveCap(rt.config, rt.memoryBytes ?? null, state.v2?.interventions.gates),
     )
@@ -393,6 +398,7 @@ export async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNoti
     await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 
+  problems.push(...takeNotices()) // the fabriek commands an old image lacks, once per tool (tool-name.mjs)
   if (act && S.saveProblem !== null) problems.push(`ledger: not saved, so nothing starts until a save succeeds: ${S.saveProblem}`)
   // each skip keeps the time it was first seen while it lasts, for the trace's waits
   S.waits = waitSince(S.waits, result.skipped, state.now)

@@ -87,7 +87,7 @@ export function snapshotData(view: QueueView, takenAt: Ms, reason: 'changed' | '
   }
 }
 
-export const snapshotArgv = (data: SnapshotData): string[] => ['callum-flow-event', '--type', 'queue_snapshot', '--data', JSON.stringify(data)]
+export const snapshotArgv = (data: SnapshotData): string[] => ['fabriek-event', '--type', 'queue_snapshot', '--data', JSON.stringify(data)]
 
 // --- the module's book ----------------------------------------------------------------------------
 
