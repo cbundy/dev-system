@@ -5,9 +5,14 @@
   },
   "plugins": [
     {
-      "name": "callum-flow",
-      "source": "./plugins/callum-flow",
+      "name": "fabriek",
+      "source": "./plugins/fabriek",
       "description": "Skills (update-dev, onboard, evaluate-sessions, query-factory-data, factory-state, backlog-triage, dependency-chain) and hooks for working in a dev-system repo."
+    },
+    {
+      "name": "callum-flow",
+      "source": "./plugins/fabriek",
+      "description": "The old name of fabriek, the same plugin, kept as a second marketplace name for the 10-minor-release window so a workspace whose settings still enable callum-flow@callum keeps its guard hooks. Install only one of the two."
     },
     {
       "name": "factory-hud",

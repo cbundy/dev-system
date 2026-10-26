@@ -10,7 +10,7 @@ const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
 const REPO_ROOT = path.join(__dirname, "..");
-const HOOKS_DIR = path.join(REPO_ROOT, "plugins", "callum-flow", "hooks");
+const HOOKS_DIR = path.join(REPO_ROOT, "plugins", "fabriek", "hooks");
 const REAL_HOOK = path.join(HOOKS_DIR, "forbid-coder-self.sh");
 const HOOKS_JSON = path.join(HOOKS_DIR, "hooks.json");
 

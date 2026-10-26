@@ -29,7 +29,7 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
-SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks plugins/factory-loop/bin plugins/factory-loop-workspace/bin coder scripts"
+SHELL_DIRS="images/base features/src/callum-tools features/test plugins/fabriek/hooks plugins/factory-loop/bin plugins/factory-loop-workspace/bin coder scripts"
 JS_DIRS="images/base bin plugins scripts"
 
 failures=0

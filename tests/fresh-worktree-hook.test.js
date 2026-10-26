@@ -11,7 +11,7 @@ const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
 const HOOK = process.env.HOOK_SCRIPT ||
-  path.join(__dirname, "..", "plugins", "callum-flow", "hooks", "fresh-worktree.sh");
+  path.join(__dirname, "..", "plugins", "fabriek", "hooks", "fresh-worktree.sh");
 
 const GIT_ENV = {
   ...process.env,

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Data plumbing for the dependency-chain skill: it crawls an issue's dependency chain through
-// callum-flow-issue-read, classifies each issue, finds what holds the chain, and writes the doc's
+// fabriek-issue-read, classifies each issue, finds what holds the chain, and writes the doc's
 // parts (the diagram's widget code, the issue table, a Mermaid fallback), so the session never
 // hand-builds the graph or the drawing. Node built-ins only.
 //
 //   node chain.js crawl <seed>... [--max N]
-//       Prints the graph as JSON. Reads every issue and its timeline with `callum-flow-issue-read
+//       Prints the graph as JSON. Reads every issue and its timeline with `fabriek-issue-read
 //       --json` (the repo comes from CALLUM_FLOW_REPO, as for that tool). From the seeds it follows
 //       sub-issues down the whole tree, then blocked_by and blocking links up to two hops outside it.
 //   node chain.js list <graph.json>
@@ -47,13 +47,16 @@ const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 // ---- crawl ----------------------------------------------------------------------------------
 
 function issueRead(args) {
-  const bin = process.env.CALLUM_FLOW_ISSUE_READ || "callum-flow-issue-read";
-  return new Promise((resolve, reject) => {
-    execFile(bin, ["--json", ...args], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`${bin} --json ${args.join(" ")}: ${String(stderr || err.message).trim()}`));
-      else resolve(JSON.parse(stdout));
+  const run = (bin) =>
+    new Promise((resolve, reject) => {
+      execFile(bin, ["--json", ...args], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) reject(Object.assign(new Error(`${bin} --json ${args.join(" ")}: ${String(stderr || err.message).trim()}`), { code: err.code }));
+        else resolve(JSON.parse(stdout));
+      });
     });
-  });
+  if (process.env.CALLUM_FLOW_ISSUE_READ) return run(process.env.CALLUM_FLOW_ISSUE_READ);
+  // An image older than the rename has only the callum-flow-* name.
+  return run("fabriek-issue-read").catch((e) => (e.code === "ENOENT" ? run("callum-flow-issue-read") : Promise.reject(e)));
 }
 
 // links: the current sub-issues, parent, blocked_by and blocking of one issue, replayed from its

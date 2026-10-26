@@ -5,7 +5,7 @@ description: >-
   the report on a GitHub issue: throughput and lead time, first-pass gate rate,
   reviewer false positives and adjudicator agreement, token and model spend by
   role, wasted wakes, and a ranked list of gaps with evidence. Every number comes
-  from the read-only `callum-flow-evaluate` tool in the base image; this skill
+  from the read-only `fabriek-evaluate` tool in the base image; this skill
   adds GitHub context and the narrative. Use when asked to evaluate, audit or
   review the orchestrator and sub-agent sessions for a window, or to compare one
   window with a baseline. For what is happening right now, use factory-state.
@@ -23,7 +23,9 @@ Arguments you need (ask once if missing, otherwise do not ask):
 
 ## The number rule
 
-Every number in the report comes from `callum-flow-evaluate` output. Never count,
+An image older than the fabriek rename has only the `callum-flow-*` names of these commands: use those there.
+
+Every number in the report comes from `fabriek-evaluate` output. Never count,
 sum, average or estimate a number yourself, not even "about N". If a figure you
 want is not in the output, say it is not measured and, if it matters, list the gap
 as a finding ("the tool does not report X"). GitHub context (PR titles, issue
@@ -32,8 +34,8 @@ numbers, review text) is evidence for the narrative, not a source of metrics.
 ## 1. Run the tool
 
 ```
-callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format json     > /tmp/eval.json
-callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format markdown > /tmp/eval.md
+fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format json     > /tmp/eval.json
+fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] --format markdown > /tmp/eval.md
 ```
 
 Add `--regime <factory_loop_v2|testbed|manual|unknown>` to report one regime only (events of that
@@ -46,7 +48,7 @@ It reads transcripts and the local event log, makes no
 network calls, and needs no flags in a normal workspace. Exit 2 is a bad argument,
 exit 1 a source that exists but could not be read (report that and stop).
 
-If `callum-flow-evaluate` is not on PATH, the image predates it. It ships in the
+If `fabriek-evaluate` is not on PATH, the image predates it. It ships in the
 base image from version 2.10.0 (`images/base/VERSION`). Say which image version is
 needed and stop. Never fall back to counting by hand, with `jq`, `grep` or `gh`.
 
@@ -97,7 +99,7 @@ time from each merged issue's timeline. For every issue in `throughput.issues`
 labelings and pass the file:
 
 ```
-callum-flow-issue-read --json --timeline <N> \
+fabriek-issue-read --json --timeline <N> \
   | jq '[.events[] | select(.event == "labeled" and .label.name == "ready") | .created_at]'
 ```
 
@@ -114,8 +116,8 @@ For the same window, with `gh` (read-only):
 
 - PRs merged: `gh pr list --state merged --search "merged:>=<date>" --json number,mergedAt,headRefName`
   (metadata only, no title, body or comment text; take a title, when needed, from
-  `callum-flow-issue-read --pr <N>`)
-- issues closed: `callum-flow-issue-read --json --list --state closed`, then keep those closed
+  `fabriek-issue-read --pr <N>`)
+- issues closed: `fabriek-issue-read --json --list --state closed`, then keep those closed
   on or after `<date>`
 
 Use them to name what shipped and to connect an issue number in the tool's tables
@@ -170,7 +172,7 @@ what it does, with its number in parentheses.
    a one-line direction (not a design), and related issues.
 
 If a baseline issue was given, add a short comparison after the gaps: read its
-last report with `callum-flow-issue-read <baseline> --comments`, and compare only the
+last report with `fabriek-issue-read <baseline> --comments`, and compare only the
 numbers both reports contain, quoting both. Do not recompute the baseline's
 numbers; if its window needs re-running, run the tool for that window.
 

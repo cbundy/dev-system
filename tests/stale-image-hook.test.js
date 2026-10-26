@@ -10,7 +10,7 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
-const HOOKS_DIR = path.join(__dirname, "..", "plugins", "callum-flow", "hooks");
+const HOOKS_DIR = path.join(__dirname, "..", "plugins", "fabriek", "hooks");
 const HOOK = process.env.HOOK_SCRIPT || path.join(HOOKS_DIR, "stale-image.sh");
 
 function which(name) {

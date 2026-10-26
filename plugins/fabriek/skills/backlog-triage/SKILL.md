@@ -42,13 +42,15 @@ Then decide the lists:
 
 ### 2. Batch the open issues
 
+An image older than the fabriek rename has only the `callum-flow-*` names of these commands: use those there.
+
 ```sh
-callum-flow-issue-read --list --state open --json > <work>/list.json
+fabriek-issue-read --list --state open --json > <work>/list.json
 node <skill>/triage-prep.js prep <work>/list.json <work> --batch 30
 ```
 
 This writes `<work>/batches.json` (epic trees kept in one batch) and `<work>/issues.json`. Pick `--batch` so there
-are three to six batches. Read issue text only through `callum-flow-issue-read`, never raw `gh issue` or `gh api`.
+are three to six batches. Read issue text only through `fabriek-issue-read`, never raw `gh issue` or `gh api`.
 
 ### 3. Run the triage workflow
 

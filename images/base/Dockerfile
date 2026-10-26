@@ -287,9 +287,10 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   DEV_SECRETS_DIR=/run/secrets/dev-system
 
 # The Claude plugins every workspace gets (cbundy/dev-system#148): dev-init
-# installs each one on every start, with or without a repo, so the callum-flow
+# installs each one on every start, with or without a repo, so the fabriek
 # skills (onboard, update-dev and the rest) are in
-# every first Claude session. A whitespace-separated list of
+# every first Claude session. fabriek was named callum-flow: plugins.sh treats
+# callum-flow@callum as its twin and keeps exactly one of the two installed. A whitespace-separated list of
 # <plugin>@<marketplace>=<marketplace source> entries (see plugins.sh). A
 # per-repo image (ENV DEV_DEFAULT_PLUGINS=...) or the runtime's environment
 # can change it; empty installs none. The default is pinned to the plugin
@@ -300,7 +301,7 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
 # declares the marketplace with no ref takes this pin (#373).
 # The empty default is only for ad-hoc local builds; published images always set it.
 ARG DEV_PLUGIN_REF=
-ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system${DEV_PLUGIN_REF:+#$DEV_PLUGIN_REF}
+ENV DEV_DEFAULT_PLUGINS=fabriek@callum=cbundy/dev-system${DEV_PLUGIN_REF:+#$DEV_PLUGIN_REF}
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which

@@ -21,6 +21,19 @@ repo_owned_plugins() {
   jq -r '. as $settings | .enabledPlugins | if type == "object" then to_entries[] | select(.value == false or (.value == true and $settings.extraKnownMarketplaces[(.key | split("@") | last)] != null)) | .key else empty end' "$1" 2>/dev/null
 }
 
+# twin_plugin <id>: the other name of the same plugin, for the one plugin that
+# has two: fabriek@callum is callum-flow@callum under its old name (the
+# marketplace lists both, from one source, for the 10-minor-release window of
+# the rename). Fails for any other id. A workspace runs exactly one of the two:
+# both would run every guard hook twice, neither would have no guards.
+twin_plugin() {
+  case "$1" in
+    callum-flow@callum) echo "fabriek@callum" ;;
+    fabriek@callum) echo "callum-flow@callum" ;;
+    *) return 1 ;;
+  esac
+}
+
 # default_plugins: the image's default plugins, one "<plugin>@<marketplace>
 # <marketplace source>" line per valid entry of DEV_DEFAULT_PLUGINS (a
 # whitespace-separated list of <plugin>@<marketplace>=<source> entries, where
@@ -50,13 +63,27 @@ valid_default_plugin() {
 
 # wanted_default_plugins [settings file]: the default plugins (as
 # default_plugins prints them) the repo's settings file leaves to the image:
-# every one but those repo_owned_plugins names. A default the repo turns on
+# every one but those repo_owned_plugins names or whose twin it names. A default the repo turns on
 # without declaring its marketplace stays the image's, from the image's source.
 wanted_default_plugins() {
-  local named="" defaults marketplaces id src
-  [ -z "${1:-}" ] || named=$(repo_owned_plugins "$1")
+  local named="" enabled="" defaults marketplaces id src twin
+  if [ -n "${1:-}" ]; then
+    named=$(repo_owned_plugins "$1")
+    enabled=$(enabled_plugins "$1")
+  fi
+  # A default whose twin (twin_plugin) the repo names is the repo's too: it
+  # keeps the name its settings use. A twin the repo enables without declaring
+  # its marketplace takes the default's place, from the image's source.
   defaults=$(default_plugins | while read -r id src; do
-    grep -qxF -- "$id" <<<"$named" || printf '%s %s\n' "$id" "$src"
+    grep -qxF -- "$id" <<<"$named" && continue
+    if twin=$(twin_plugin "$id"); then
+      grep -qxF -- "$twin" <<<"$named" && continue
+      if grep -qxF -- "$twin" <<<"$enabled" && ! grep -qxF -- "$id" <<<"$enabled"; then
+        printf '%s %s\n' "$twin" "$src"
+        continue
+      fi
+    fi
+    printf '%s %s\n' "$id" "$src"
   done)
   marketplaces=$(wanted_marketplaces "${1:-}" "" "$defaults")
   while read -r id src; do
@@ -184,14 +211,17 @@ install_plugin() {
   claude_plugin install "$1"
 }
 
-# add_and_install <id> <source> <fix>: one missing plugin - adds its
+# add_and_install <id> <source> <fix> [<fallback id>]: one missing plugin - adds its
 # marketplace from <source> first when Claude does not know it ($known, the
 # marketplaces Claude knows, updated here), then installs it. <fix> is the
 # retry command a WARNING names. A plugin in $RESTORE_DISABLED (disabled before
 # a marketplace move) is disabled again once installed. A problem is logged and
-# still returns 0; it fails only when the step's deadline stopped it.
+# still returns 0; it fails only when the step's deadline stopped it. Each id
+# installed is added to $INSTALLED_NOW. When the install fails and <fallback
+# id> (the plugin's twin) is given, that is installed instead before anything
+# is warned about: the marketplace ref in use may predate the plugin's name.
 add_and_install() {
-  local id="$1" src="$2" fix="$3" mkt="${1##*@}" added=false
+  local id="$1" src="$2" fix="$3" fallback="${4:-}" mkt="${1##*@}" added=false reason ref="no ref"
   if ! grep -qxF -- "$mkt" <<<"$known"; then
     if ! claude_plugin marketplace add "$src"; then
       [ "$PLUGIN_EXPIRED" = false ] || return 1
@@ -204,10 +234,21 @@ add_and_install() {
   fi
   if ! install_plugin "$id" "$mkt" "$added"; then
     [ "$PLUGIN_EXPIRED" = false ] || return 1
-    log "WARNING: could not install Claude plugin $id: $PLUGIN_REASON"
+    reason="$PLUGIN_REASON"
+    [[ "$src" != *#* ]] || ref="${src#*#}"
+    if [ -n "$fallback" ]; then
+      if install_plugin "$fallback" "$mkt" "$added"; then
+        INSTALLED_NOW="${INSTALLED_NOW:+$INSTALLED_NOW$'\n'}$fallback"
+        log "installed Claude plugin $fallback ($id is not in marketplace $mkt at $ref)"
+        return 0
+      fi
+      [ "$PLUGIN_EXPIRED" = false ] || return 1
+    fi
+    log "WARNING: could not install Claude plugin $id: $reason"
     log "  Fix: check that marketplace $mkt has a plugin named ${id%@*}, then run: $fix$([[ "$fix" == *"claude plugin install $id"* ]] || echo " (or: claude plugin install $id)")"
     return 0
   fi
+  INSTALLED_NOW="${INSTALLED_NOW:+$INSTALLED_NOW$'\n'}$id"
   log "installed Claude plugin $id"
   if grep -qxF -- "$id" <<<"${RESTORE_DISABLED:-}" && ! claude_plugin disable "$id" --scope user; then
     log "WARNING: Claude plugin $id was disabled before its marketplace moved, but could not be disabled again, so it is now enabled: $PLUGIN_REASON"
@@ -216,7 +257,7 @@ add_and_install() {
 }
 
 install_wanted_plugin() {
-  local id="$1" src="$2" fix="$3" mkt="${1##*@}" kind
+  local id="$1" src="$2" fix="$3" fallback="${4:-}" mkt="${1##*@}" kind
   if [ -z "$src" ] && ! grep -qxF -- "$mkt" <<<"$known"; then
     kind=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.source? // empty' "$settings" 2>/dev/null)
     case "$kind" in
@@ -235,7 +276,7 @@ install_wanted_plugin() {
     esac
     return 0
   fi
-  add_and_install "$id" "$src" "$fix"
+  add_and_install "$id" "$src" "$fix" "$fallback"
 }
 
 # candidate_plugin_ref: the ref DEV_CANDIDATE_PLUGIN_REF asks for (a release
@@ -401,6 +442,52 @@ prune_orphan_installs() {
   return 0
 }
 
+# replaced_twins <wanted ids> <ids>: each of the ids that is not wanted while
+# its twin (twin_plugin) is, one per line.
+replaced_twins() {
+  local id twin
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    twin=$(twin_plugin "$id") || continue
+    grep -qxF -- "$id" <<<"$1" && continue
+    grep -qxF -- "$twin" <<<"$1" && printf '%s\n' "$id"
+  done <<<"$2"
+  return 0
+}
+
+# settle_twins <wanted ids> <installed ids> <replaced ids>: the last step of
+# the twin rule. Once a wanted plugin is installed (<installed ids>, before or
+# during this run), its unwanted twin goes: a user-scope install is uninstalled
+# and "replaced" is logged; so is a twin that was not reinstalled after a
+# marketplace move (<replaced ids>). Two wanted twins (a repo that enables both)
+# get one WARNING. Needs $INSTALLED_JSON.
+settle_twins() {
+  local id twin
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    twin=$(twin_plugin "$id") || continue
+    if grep -qxF -- "$twin" <<<"$1"; then
+      [[ "$id" < "$twin" ]] || continue
+      log "WARNING: both $id and $twin are wanted: they are one plugin under two names, so each of its guard hooks runs twice."
+      log "  Fix: keep only one of them (fabriek@callum) in enabledPlugins in the repo's .claude/settings.json, then run: dev-init --repo"
+      continue
+    fi
+    grep -qxF -- "$id" <<<"$2" || continue
+    if grep -qxF -- "$twin" <<<"$3"; then
+      log "replaced Claude plugin $twin with $id"
+    elif printf '%s\n' "$INSTALLED_JSON" | jq -e --arg t "$twin" 'any(.[]; .id == $t and (.scope // "user") == "user")' >/dev/null 2>&1; then
+      if claude_plugin uninstall "$twin" --scope user; then
+        log "replaced Claude plugin $twin with $id"
+      else
+        [ "$PLUGIN_EXPIRED" = false ] || return 1
+        log "WARNING: could not uninstall Claude plugin $twin, the old name of $id, so both are installed and each guard hook runs twice: $PLUGIN_REASON"
+        log "  Fix: run: claude plugin uninstall $twin --scope user"
+      fi
+    fi
+  done <<<"$1"
+  return 0
+}
+
 # install_plugins: installs each wanted plugin Claude has not installed -
 # first the ones the workspace repo's committed .claude/settings.json enables
 # (their marketplaces added from the sources it declares), then the image's
@@ -421,7 +508,7 @@ prune_orphan_installs() {
 # new ref, and a disabled one is disabled again; a WARNING for one of those
 # names the install by hand. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults wanted marketplaces installed MOVED RESTORE RESTORE_DISABLED INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local settings="" plugins="" defaults wanted marketplaces installed replaced fallback INSTALLED_NOW="" MOVED RESTORE RESTORE_DISABLED INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))
@@ -467,10 +554,13 @@ install_plugins() {
   # Unknown (the listing failed) means try them all: an install of a plugin
   # that is already there is a no-op.
   installed=$(install_ids "$INSTALLED_JSON") || installed=""
-  wanted=$(printf '%s\n%s\n' "$plugins" "$defaults" | cut -d' ' -f1)
+  wanted=$(printf '%s\n%s\n' "$plugins" "$defaults" | cut -d' ' -f1 | awk 'NF')
+  # A plugin that came back from a marketplace move is not installed again
+  # when its twin is wanted instead.
+  replaced=$(replaced_twins "$wanted" "$RESTORE")
   while IFS= read -r id; do
     missing+=("$id")
-  done < <(not_installed "$(printf '%s\n%s\n' "$wanted" "$RESTORE" | awk 'NF && !seen[$0]++')" "$installed")
+  done < <(not_installed "$(printf '%s\n%s\n' "$wanted" "$RESTORE" | awk 'NR == FNR { drop[$0] = 1; next } NF && !($0 in drop) && !seen[$0]++' <(printf '%s\n' "$replaced") -)" "$installed")
   known=""
   if [ "${#missing[@]}" -gt 0 ] && claude_plugin marketplace list --json; then
     known=$(printf '%s\n' "$PLUGIN_OUT" | jq -r '.[].name' 2>/dev/null)
@@ -483,7 +573,13 @@ install_plugins() {
       fix="dev-init --plugins"
       grep -qxF -- "$id" <<<"$plugins" && fix="dev-init --repo"
       grep -qxF -- "$id" <<<"$wanted" || fix="dev-init --plugins; claude plugin install $id"
-      install_wanted_plugin "$id" "$src" "$fix" && continue
+      # A default whose marketplace ref predates its name falls back to its twin.
+      fallback=""
+      if [ "$id" = fabriek@callum ] && grep -qxF -- "$id" <<<"$(printf '%s\n' "$defaults" | cut -d' ' -f1)"; then
+        fallback=$(twin_plugin "$id")
+        ! grep -qxF -- "$fallback" <<<"$wanted" || fallback=""
+      fi
+      install_wanted_plugin "$id" "$src" "$fix" "$fallback" && continue
     fi
     by_hand=""
     for id in "${missing[@]:i}"; do
@@ -493,6 +589,9 @@ install_plugins() {
     log "  Fix: check this container's network access to the plugin marketplaces, then run: dev-init --plugins$by_hand"
     break
   done
+  if [ "$PLUGIN_EXPIRED" = false ]; then
+    settle_twins "$wanted" "$(printf '%s\n%s\n' "$installed" "$INSTALLED_NOW")" "$replaced" || true
+  fi
   prune_orphan_installs "$INSTALLED_JSON"
   return 0
 }

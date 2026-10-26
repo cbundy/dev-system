@@ -1,5 +1,5 @@
 // Tests for the dependency-chain skill: the frontmatter, the crawl through a stubbed
-// callum-flow-issue-read (sub-issues, blocker links, removed links, the hop limit), the states and
+// fabriek-issue-read (sub-issues, blocker links, removed links, the hop limit), the states and
 // holds it finds, and the parts of the doc it writes: the diagram's widget code (every box a link
 // on top, literal text ids, nothing the docs validator refuses), the issue table and the Mermaid
 // fallback.
@@ -12,7 +12,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 
-const DIR = path.join(__dirname, "..", "plugins", "callum-flow", "skills", "dependency-chain");
+const DIR = path.join(__dirname, "..", "plugins", "fabriek", "skills", "dependency-chain");
 const CHAIN = path.join(DIR, "chain.js");
 const chain = require(CHAIN);
 const read = (f) => fs.readFileSync(path.join(DIR, f), "utf8");
@@ -64,7 +64,7 @@ const TIMELINES = {
   12: [{ event: "blocked_by_added", created_at: at(1), blocked_by: ref(11) }],
 };
 
-// A stand-in for callum-flow-issue-read that answers from the fixture and logs each call.
+// A stand-in for fabriek-issue-read that answers from the fixture and logs each call.
 function stub() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chain-"));
   const data = path.join(dir, "data.json");
@@ -104,9 +104,9 @@ test("no em dash in any skill file", () => {
   for (const f of fs.readdirSync(DIR)) assert.doesNotMatch(read(f), /—/, f);
 });
 
-test("the skill reads issues through callum-flow-issue-read and runs every chain.js command it ships", () => {
+test("the skill reads issues through fabriek-issue-read and runs every chain.js command it ships", () => {
   const skill = read("SKILL.md");
-  assert.match(skill, /callum-flow-issue-read --list --json/);
+  assert.match(skill, /fabriek-issue-read --list --json/);
   for (const cmd of ["crawl", "list", "holds", "table", "draw", "mermaid"]) assert.match(skill, new RegExp(`chain\\.js ${cmd}\\b`), cmd);
 });
 

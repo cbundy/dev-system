@@ -1,5 +1,5 @@
-// Tests for the callum-flow PreToolUse(Bash|WebFetch) hook that refuses reading GitHub
-// issue, PR and comment text any way except callum-flow-issue-read (dev-system#312).
+// Tests for the fabriek PreToolUse(Bash|WebFetch) hook that refuses reading GitHub
+// issue, PR and comment text any way except fabriek-issue-read (dev-system#312).
 // Feeds it the exact PreToolUse JSON shape Claude Code puts on stdin.
 "use strict";
 
@@ -11,7 +11,7 @@ const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
 const REPO_ROOT = path.join(__dirname, "..");
-const HOOKS_DIR = path.join(REPO_ROOT, "plugins", "callum-flow", "hooks");
+const HOOKS_DIR = path.join(REPO_ROOT, "plugins", "fabriek", "hooks");
 const REAL_HOOK = path.join(HOOKS_DIR, "forbid-raw-gh-read.sh");
 const HOOKS_JSON = path.join(HOOKS_DIR, "hooks.json");
 
@@ -40,7 +40,7 @@ function parseDeny(stdout, what) {
   assert.equal(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
   assert.equal(parsed.hookSpecificOutput.permissionDecision, "deny", `expected deny for: ${what}`);
   const reason = parsed.hookSpecificOutput.permissionDecisionReason;
-  assert.match(reason, /callum-flow-issue-read/, `reason should name the reader for: ${what}`);
+  assert.match(reason, /fabriek-issue-read/, `reason should name the reader for: ${what}`);
   assert.match(reason, /untrusted author/);
   assert.doesNotMatch(reason, /—/, "reason must not contain an em dash");
   return reason;
@@ -228,15 +228,37 @@ test("reason: names the reader forms; adds the stale-image line without the read
     assert.match(reason, /dev-restart-self/);
     assert.match(reason, /Rebuild Container/);
     assert.match(reason, /out of date/);
+    assert.match(reason, /fabriek-issue-read \(or callum-flow-issue-read[^)]*\) is not on PATH/);
   } finally {
     fs.rmSync(emptyBin, { recursive: true, force: true });
   }
 });
 
+// Either reader name on PATH means the image is not out of date: no PATH note, and the old name
+// is pointed out only when it is the one that exists.
+for (const [name, other] of [["fabriek-issue-read", "callum-flow-issue-read"], ["callum-flow-issue-read", "fabriek-issue-read"]]) {
+  test(`reason: no PATH note with only ${name} on PATH`, () => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "reader-"));
+    try {
+      for (const tool of ["sh", "awk", "cat", "dirname"]) {
+        const found = spawnSync("sh", ["-c", `command -v ${tool}`], { encoding: "utf-8" }).stdout.trim();
+        fs.symlinkSync(found, path.join(bin, tool));
+      }
+      fs.writeFileSync(path.join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const reason = assertDenied("gh issue view 5", { env: { PATH: bin, CALLUM_FLOW_TRUSTED_AUTHORS: "cbundy:1" } });
+      assert.doesNotMatch(reason, /is not on PATH|Rebuild Container/);
+      assert.equal(reason.includes(`still named ${other}`), false);
+      assert.equal(/still named callum-flow-issue-read/.test(reason), name === "callum-flow-issue-read");
+    } finally {
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+}
+
 test("reason: names the variable when the reader exists and it is unset", () => {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "reader-"));
   try {
-    const stub = path.join(bin, "callum-flow-issue-read");
+    const stub = path.join(bin, "fabriek-issue-read");
     fs.writeFileSync(stub, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const env = { PATH: `${bin}:${process.env.PATH}`, CALLUM_FLOW_TRUSTED_AUTHORS: "", DEV_GH_TOKEN_FILE: "" };
     const unset = assertDenied("gh issue view 5", { env });
@@ -255,7 +277,7 @@ test("reason: no fail-closed text when token mode has an identity entry; still t
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "reader-"));
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "ghcfg-"));
   try {
-    fs.writeFileSync(path.join(bin, "callum-flow-issue-read"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "fabriek-issue-read"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const base = { PATH: `${bin}:${process.env.PATH}`, CALLUM_FLOW_TRUSTED_AUTHORS: "", DEV_GH_TOKEN_FILE: "", GH_CONFIG_DIR: cfg };
     const idf = path.join(cfg, "dev-system-identity.json");
     fs.writeFileSync(idf, JSON.stringify({ login: "tokenbot", id: 777, name: "T", email: "e" }));
