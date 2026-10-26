@@ -5,7 +5,7 @@ description: >-
   health on a schedule, find problems in its outcomes, file bugs, and step in
   only when the loop cannot help itself. Use when the owner asks a session to
   supervise, babysit or be the foreman for a repo's factory loop.
-version: 0.99.1
+version: 0.100.0
 ---
 
 # Foreman
