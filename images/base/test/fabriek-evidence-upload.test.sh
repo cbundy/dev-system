@@ -1,12 +1,12 @@
 #!/bin/sh
 #
-# Plain-shell tests for images/base/callum-flow-evidence-upload (cbundy/dev-system#914) with a
+# Plain-shell tests for images/base/fabriek-evidence-upload (cbundy/dev-system#914) with a
 # stub curl on a hermetic PATH that records its argv and stdin config and answers with a status
 # the test sets.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-TOOL="$SCRIPT_DIR/../callum-flow-evidence-upload"
+TOOL="$SCRIPT_DIR/../fabriek-evidence-upload"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -81,7 +81,7 @@ no_calls() { [ ! -e "$fakebin/calls" ] || fail "$1: curl was called"; }
 reset
 run --help
 expect_rc 0 help
-expect_out "usage: callum-flow-evidence-upload" help
+expect_out "usage: fabriek-evidence-upload" help
 
 # blob path from --repo, with workspace sanitising
 reset
@@ -290,4 +290,4 @@ expect_rc 1 "second upload fails"
 expect_err "Clip.MP4" "names the failing file"
 [ ! -s "$tmpdir/out" ] || fail "partial failure printed urls"
 
-echo "callum-flow-evidence-upload tests passed"
+echo "fabriek-evidence-upload tests passed"

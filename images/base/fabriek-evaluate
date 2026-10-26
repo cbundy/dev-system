@@ -1,0 +1,1719 @@
+#!/usr/bin/env node
+'use strict';
+// fabriek-evaluate: the offline, read-only numbers behind the evaluate-sessions skill
+// (cbundy/dev-system#258). It reads local Claude Code transcripts, the factory event log and prints
+// one deterministic report of throughput, gate quality, token spend and wasted agent wakes. No network, no gh, no psql, no LLM: the same
+// inputs give byte-identical output. docs/metrics.md defines every number.
+//
+// Usage: fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
+//          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
+//          [--ready-times <file>]
+//          [--source old|new|shadow] [--new-events <file>] [--regime <value>]
+//
+// --regime (factory_loop_v2|testbed|manual|unknown) keeps only the events of that regime (a null
+// regime counts as unknown) and the turns attributed to it through their session; without it the
+// report carries throughput.by_regime and spend.by_regime. A regime is never guessed from a device
+// or workspace name.
+//
+// --source picks the event store (cbundy/dev-system#899; docs/factory-events/replay.md, "Source switch"),
+// else FABRIEK_EVALUATE_SOURCE, else new (the default; old is the way back). old reads the old log (--events, or the default
+// file); new reads the new events: the local log ${CALLUM_EVENTS_DIR}/factory/<owner>__<name>.jsonl,
+// or with --new-events a file of factory.event_log rows (docs/metrics.md has the export). shadow
+// prints the old report and records how the new one differed in factory/.shadow/evaluate.jsonl.
+// A metric that needs a v1-only event reads n/a under new, named in `sources`.
+//
+// Exit codes: 0 success, 2 bad arguments, 1 a source that exists but cannot be read.
+// A source that is missing is never an error: the affected metrics read "n/a" with the reason
+// listed under `sources`.
+//
+// --ready-times is a JSON object {"<issue>": "<ISO>" | ["<ISO>", ...]} of the times each issue
+// got its `ready` label (from the GitHub timeline). The tool picks the last one at or before the
+// issue's first `claimed`; without an entry it falls back to the first `ready` event.
+// The events file may be a `factory.events` export covering several devices; the per_device,
+// claims and waiting sections use each event's `device`.
+// --nm-state and --nm-export are retired: they are still accepted (their value is consumed) and
+// ignored, and `sources` carries one entry saying so. `window.scope` says which scope each source
+// covers.
+//
+// Environment: CLAUDE_CONFIG_DIR (default ~/.claude), CALLUM_EVENTS_DIR (default
+// /persist/events), FABRIEK_LEASE_MINUTES
+// (default 120, the claim lease the stuck-issue test uses).
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+// The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.js, beside this tool or in the share dir).
+const { applyFabriekEnv } = require([path.join(__dirname, 'fabriek-env.js'), path.join(process.env.DEV_SYSTEM_SHARE || '/usr/local/share/dev-system', 'fabriek-env.js')].find((p) => fs.existsSync(p)));
+applyFabriekEnv();
+
+// Tunable thresholds, named in docs/metrics.md. Tune after the first real report.
+const REPEAT_WINDOW_MS = 10 * 60 * 1000;
+const TOP_WAKES = 10;
+const ALIVE_MS = 30 * 60 * 1000; // a device is alive if it logged any event in the previous 30 minutes
+const STUCK_LEASES = 2; // stuck: no event for longer than this many leases
+const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound with another device idle, means "B"
+const RELEASE_STATES = ['merged', 'abandoned', 'closed', 'reclaimed', 'ready']; // end an in-flight claim
+// Not progress for the stuck test (metrics.md query 6): a lost race, a claim heartbeat, the
+// factory loop's bookkeeping (DECISIONS D-09), and the factory loop v2's review results and
+// interventions, and its prompt_denied and prompt_waiting (v2 SPEC 7.1, 10.10). Each still counts as the device being alive.
+const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop', 'reviewed', 'intervention', 'prompt_denied', 'prompt_waiting']);
+const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
+const ACTION_BASH_RE = new RegExp(
+  [
+    '\\bgh\\s+(issue|pr)\\s+(create|comment|edit|merge|close|ready)\\b',
+    '\\bgh\\s+workflow\\s+run\\b',
+    '\\bgit\\s+(commit|push|rebase)\\b',
+    '\\baxi\\s+(run|respond|abort)\\b',
+    '\\b(callum-flow|fabriek)-(claim|merge|event|fix-linkage)(?![\\w-])',
+  ].join('|'),
+);
+const REARM_ONLY_TOOLS = new Set(['Monitor', 'TaskStop', 'ToolSearch']);
+// run_started is not here: a run start is never read from an agent-logged event (cbundy/dev-system#343).
+const STAGE_STATES = ['ready', 'claimed', 'delegated', 'merge_ready', 'merged'];
+const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
+const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
+const REGIMES = ['factory_loop_v2', 'testbed', 'manual', 'unknown'];
+const TOP_KEYS = [
+  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
+  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'merges', 'prs', 'gaps', 'size', 'overlap', 'spend', 'waste',
+  'sources',
+];
+// A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
+const OVERRIDE_MS = 60 * 60 * 1000;
+// An intervention or judgement with no life (an op, a hand-recorded rescue, a control-file edit) is a
+// merged issue's when logged from its first claim to its closing transition (else its merge) plus
+// this: an op lands at once, and one the loop derives is logged within a few passes (v2 SPEC 7.2).
+const IV_GRACE_MS = 30 * 60 * 1000;
+// The triage choice each triage-answer row of the factory loop v2's table applies (v2 SPEC 4.3).
+const TRIAGE_ROWS = { X1: 'retry', X2: 'fix', X3: 'redesign', X4: 'park', X5: 'drop' };
+// The release states that end a claim's life without a merge, as claim completion names them.
+const CLAIM_ENDS = { merged: 'merged', closed: 'closed', reclaimed: 'released', ready: 'released' };
+
+class UsageError extends Error {}
+class InputError extends Error {}
+
+const na = (reason) => ({ 'n/a': reason });
+// merges, prs, gaps, size and overlap read the new events' pr, by, recovered, files, file_lines, additions
+// and deletions fields (docs/metrics.md, 9c).
+const MERGE_SECTIONS = ['merges', 'prs', 'gaps', 'size', 'overlap'];
+const MERGE_OLD_NA = "needs the new events' pr, by and recovered fields";
+
+// ---------------------------------------------------------------- arguments
+
+function parseArgs(argv) {
+  const o = { projectsDirs: [], format: 'json' };
+  const need = (i, name) => {
+    if (i + 1 >= argv.length) throw new UsageError(`${name} needs a value`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--repo') o.repo = need(i++, a);
+    else if (a === '--since') o.since = need(i++, a);
+    else if (a === '--until') o.until = need(i++, a);
+    else if (a === '--format') o.format = need(i++, a);
+    else if (a === '--projects-dir') o.projectsDirs.push(need(i++, a));
+    else if (a === '--events') o.events = need(i++, a);
+    else if (a === '--nm-state' || a === '--nm-export') { need(i++, a); o.retiredNm = true; } // retired: accepted, ignored
+    else if (a === '--ready-times') o.readyTimes = need(i++, a);
+    else if (a === '--new-events') o.newEvents = need(i++, a);
+    else if (a === '--regime') o.regime = need(i++, a);
+    else if (a === '-h' || a === '--help') o.help = true;
+    else throw new UsageError(`unknown option '${a}'`);
+  }
+  if (o.help) return o;
+  if (o.regime !== undefined && !REGIMES.includes(o.regime)) {
+    throw new UsageError(`--regime must be one of ${REGIMES.join(', ')}`);
+  }
+  if (!o.repo || !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new UsageError('--repo <owner/name> is required');
+  if (!o.since) throw new UsageError('--since <ISO> is required');
+  if (!['json', 'markdown'].includes(o.format)) throw new UsageError("--format must be json or markdown");
+  const since = Date.parse(o.since);
+  if (Number.isNaN(since)) throw new UsageError(`--since is not a date: ${o.since}`);
+  const until = o.until === undefined ? Date.now() : Date.parse(o.until);
+  if (Number.isNaN(until)) throw new UsageError(`--until is not a date: ${o.until}`);
+  if (until <= since) throw new UsageError('--until must be after --since');
+  o.win = { since, until };
+  return o;
+}
+
+const USAGE = 'usage: fabriek-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
+  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--ready-times <file>] ' +
+  '[--source old|new|shadow] [--new-events <file>] [--regime <value>]';
+
+// ---------------------------------------------------------------- helpers
+
+const inWin = (ts, win) => {
+  const t = typeof ts === 'number' ? ts : Date.parse(ts);
+  return t >= win.since && t < win.until;
+};
+const iso = (ms) => new Date(ms).toISOString();
+const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+const mungePath = (p) => p.replace(/[^A-Za-z0-9]/g, '-');
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+// nearest rank (docs/metrics.md): the smallest value with at least 90% of the values at or below it
+function p90(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.ceil(0.9 * s.length) - 1];
+}
+const pct = (num, den) => (den ? Math.round((1000 * num) / den) / 10 : null);
+
+// owner/name from an https or ssh GitHub URL, lower-cased.
+function repoOfUrl(url) {
+  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+// Parse JSONL leniently: a bad line is skipped, never fatal.
+function parseJsonl(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* skip */ }
+  }
+  return out;
+}
+
+function readText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new InputError(`cannot read ${file}: ${e.code || e.message}`);
+  }
+}
+
+// ---------------------------------------------------------------- transcripts
+
+function textOf(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
+  }
+  return '';
+}
+
+// A wake is a user line carrying a task notification or an owner prompt, or a scheduled
+// task fire. Returns null for anything else (including tool results).
+function classifyWake(line) {
+  if (!line || typeof line !== 'object') return null;
+  if (line.type === 'system' && line.subtype === 'scheduled_task_fire') {
+    return { kind: 'cron', taskId: null, status: null, text: String(line.prompt || line.content || '') };
+  }
+  if (line.type !== 'user') return null;
+  const content = line.message && line.message.content;
+  if (Array.isArray(content) && content.some((b) => b && b.type === 'tool_result')) return null;
+  const text = textOf(content);
+  const origin = line.origin && line.origin.kind;
+  if (origin === 'task-notification' || text.includes('<task-notification>')) {
+    const tag = (n) => {
+      const m = new RegExp(`<${n}>([\\s\\S]*?)</${n}>`).exec(text);
+      return m ? m[1].trim() : null;
+    };
+    const summary = tag('summary') || '';
+    const status = tag('status');
+    let kind;
+    if (/^Monitor event/.test(summary)) kind = 'monitor-event';
+    else if (/^Monitor|timed out|didn't finish/i.test(summary) || status === 'stopped') kind = 'monitor-timeout';
+    else if (/^Agent\b/.test(summary)) kind = 'agent-done';
+    else kind = 'bash-done';
+    return { kind, taskId: tag('task-id'), status, text };
+  }
+  if (line.isMeta) return null;
+  if (origin === undefined || origin === 'human') return { kind: 'owner', taskId: null, status: null, text };
+  return null;
+}
+
+// One pass over a session's lines inside the window: distinct-requestId turns (last usage
+// wins, never summed per line) and the wakes they belong to.
+function buildTurns(lines, win) {
+  const turns = [];
+  const wakes = [];
+  const byKey = new Map();
+  let cur = -1;
+  let anon = 0;
+  for (const l of lines) {
+    if (!l || !inWin(l.timestamp, win)) continue;
+    if (l.type === 'assistant') {
+      const msg = l.message || {};
+      const key = typeof l.requestId === 'string' ? l.requestId : `__anon${anon++}`;
+      let t = byKey.get(key);
+      if (!t) {
+        t = {
+          requestId: key, ts: l.timestamp, model: null, wake: cur, tools: [], toolIds: new Set(),
+          usage: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+        };
+        byKey.set(key, t);
+        turns.push(t);
+        if (cur >= 0) wakes[cur].turns.push(t);
+      }
+      if (msg.model) t.model = msg.model;
+      if (msg.usage) {
+        t.usage = {
+          input: msg.usage.input_tokens || 0,
+          output: msg.usage.output_tokens || 0,
+          cache_read: msg.usage.cache_read_input_tokens || 0,
+          cache_creation: msg.usage.cache_creation_input_tokens || 0,
+        };
+      }
+      for (const b of Array.isArray(msg.content) ? msg.content : []) {
+        if (b && b.type === 'tool_use' && !t.toolIds.has(b.id)) {
+          t.toolIds.add(b.id);
+          t.tools.push({ id: b.id, name: b.name, input: b.input || {} });
+        }
+      }
+    } else {
+      const w = classifyWake(l);
+      if (w) {
+        wakes.push({ ...w, ts: l.timestamp, turns: [] });
+        cur = wakes.length - 1;
+      }
+    }
+  }
+  return { turns, wakes };
+}
+
+const turnTokens = (t) => t.usage.input + t.usage.output + t.usage.cache_read + t.usage.cache_creation;
+
+const isActionCall = (tool) =>
+  ACTION_TOOLS.has(tool.name) || (tool.name === 'Bash' && ACTION_BASH_RE.test(String(tool.input.command || '')));
+
+// Discover transcript files. Returns { dirs, files }; a file is
+// { path, session, kind: 'main'|'sub', role, toolUseId }.
+function findTranscripts(projectsRoot, checkouts, explicitDirs) {
+  let dirs;
+  if (explicitDirs.length) {
+    dirs = explicitDirs.map((d) => path.resolve(d));
+  } else {
+    let names = [];
+    try { names = fs.readdirSync(projectsRoot); } catch { /* absent */ }
+    const munged = [...new Set(checkouts.map(mungePath))];
+    dirs = names
+      .filter((n) => munged.some((m) => n === m || n.startsWith(`${m}--`)))
+      .sort()
+      .map((n) => path.join(projectsRoot, n));
+  }
+  const files = [];
+  const foundDirs = [];
+  for (const dir of dirs) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    foundDirs.push(dir);
+    for (const e of entries.sort((a, b) => cmpStr(a.name, b.name))) {
+      if (e.isFile() && e.name.endsWith('.jsonl')) {
+        files.push({ path: path.join(dir, e.name), session: e.name.slice(0, -6), kind: 'main', role: 'orchestrator' });
+      } else if (e.isDirectory()) {
+        const sub = path.join(dir, e.name, 'subagents');
+        let subs = [];
+        try { subs = fs.readdirSync(sub).sort(); } catch { /* none */ }
+        for (const f of subs) {
+          if (!/^agent-.+\.jsonl$/.test(f)) continue;
+          let meta = {};
+          try { meta = JSON.parse(fs.readFileSync(path.join(sub, f.replace(/\.jsonl$/, '.meta.json')), 'utf8')); } catch { /* none */ }
+          files.push({
+            path: path.join(sub, f), session: e.name, kind: 'sub', toolUseId: meta.toolUseId || null,
+            role: meta.agentType || 'unknown',
+          });
+        }
+      }
+    }
+  }
+  return { dirs, foundDirs, files };
+}
+
+// ---------------------------------------------------------------- events
+
+function loadEvents(file) {
+  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}` };
+  return { events: parseJsonl(readText(file)).filter((e) => e && typeof e.state === 'string' && e.ts), reason: null };
+}
+
+function loadReadyTimes(file) {
+  // issue -> ascending list of ms. A missing file is "n/a"; a present but malformed one is an input error.
+  if (!fs.existsSync(file)) return { times: null, reason: `file not found: ${file}` };
+  let raw;
+  try { raw = JSON.parse(readText(file)); } catch (e) { throw new InputError(`--ready-times ${file} is not JSON: ${e.message}`); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new InputError(`--ready-times ${file} must be a JSON object of issue -> time(s)`);
+  const times = new Map();
+  for (const [k, v] of Object.entries(raw)) {
+    const ms = (Array.isArray(v) ? v : [v]).map((x) => Date.parse(x));
+    if (!/^\d+$/.test(k) || !ms.length || ms.some(Number.isNaN)) throw new InputError(`--ready-times ${file}: bad entry for '${k}'`);
+    times.set(Number(k), ms.sort((a, b) => a - b));
+  }
+  return { times, reason: null, rows: times.size };
+}
+
+function firstTs(events) {
+  // state -> earliest ms, over the given events.
+  const m = new Map();
+  for (const e of events) {
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) continue;
+    if (!m.has(e.state) || t < m.get(e.state)) m.set(e.state, t);
+  }
+  return m;
+}
+
+function groupByIssue(events) {
+  const g = new Map();
+  for (const e of events) {
+    if (e.issue === null || e.issue === undefined) continue;
+    if (!g.has(e.issue)) g.set(e.issue, []);
+    g.get(e.issue).push(e);
+  }
+  return g;
+}
+
+// ---- interval helpers (half-open [start, end) in ms)
+
+function mergeIv(iv) {
+  const sorted = iv.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const out = [];
+  for (const [a, b] of sorted) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+function subtractIv(A, B) {
+  const out = [];
+  for (let [a, b] of A) {
+    for (const [c, d] of B) {
+      if (d <= a || c >= b) continue;
+      if (c > a) out.push([a, c]);
+      a = Math.max(a, d);
+      if (a >= b) break;
+    }
+    if (a < b) out.push([a, b]);
+  }
+  return out;
+}
+const lenIv = (iv) => sum(iv.map(([a, b]) => b - a));
+const clipIv = (iv, lo, hi) => iv.map(([a, b]) => [Math.max(a, lo), Math.min(b, hi)]).filter(([a, b]) => b > a);
+const secs = (ms) => Math.round(ms / 1000);
+
+function timed(events) {
+  // events with a parsed `t` and a `dev`, in time order (ties keep file order)
+  return events
+    .map((e, i) => ({ e, i, t: Date.parse(e.ts) }))
+    .filter((x) => !Number.isNaN(x.t))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((x) => ({ ...x.e, t: x.t, dev: x.e.device || 'unknown' }));
+}
+
+// Claims: per issue, who holds a live `claimed`, until a release state (metrics.md query 6).
+function computeClaims(evs, win, leaseMinutes) {
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (e.issue === null || e.issue === undefined || e.t >= win.until) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  const double = [];
+  const stuck = [];
+  const staleMs = STUCK_LEASES * leaseMinutes * 60 * 1000;
+  for (const n of [...byIssue.keys()].sort((a, b) => a - b)) {
+    const live = new Map();
+    let flagged = false;
+    let last = null;
+    for (const e of byIssue.get(n)) {
+      if (NOT_PROGRESS.has(e.state)) continue;
+      last = e;
+      if (e.state === 'claimed') {
+        live.set(e.dev, e.t);
+        if (live.size >= 2 && !flagged) {
+          flagged = true;
+          if (e.t >= win.since) double.push({ issue: n, devices: [...live.keys()].sort(), at: iso(e.t) });
+        }
+      } else if (RELEASE_STATES.includes(e.state)) {
+        live.clear();
+        flagged = false;
+      }
+    }
+    if (live.size && last && win.until - last.t > staleMs) {
+      stuck.push({
+        issue: n, devices: [...live.keys()].sort(), last_event_at: iso(last.t), last_state: last.state,
+        silent_seconds: secs(win.until - last.t),
+      });
+    }
+  }
+  const inWinEv = (st) => evs.filter((e) => e.state === st && inWin(e.t, win));
+  return {
+    double_claims: { count: double.length, issues: double },
+    claim_lost: { count: inWinEv('claim_lost').length, issues: [...new Set(inWinEv('claim_lost').map((e) => e.issue))].sort((a, b) => a - b) },
+    reclaimed: inWinEv('reclaimed').length,
+    stuck: { count: stuck.length, lease_minutes: leaseMinutes, issues: stuck },
+  };
+}
+
+// Devices that are alive and hold nothing, as idle intervals per device (the waiting split's flag).
+function idleIntervals(evs, until) {
+  const devs = [...new Set(evs.map((e) => e.dev))].sort();
+  const idle = new Map();
+  for (const d of devs) {
+    const alive = mergeIv(evs.filter((e) => e.dev === d && e.t < until).map((e) => [e.t, Math.min(e.t + ALIVE_MS, until)]));
+    // in flight: from this device's `claimed` of an issue until that issue's next release state
+    const held = [];
+    const byIssue = new Map();
+    for (const e of evs) {
+      if (e.issue === null || e.issue === undefined) continue;
+      if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+      byIssue.get(e.issue).push(e);
+    }
+    for (const list of byIssue.values()) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].state !== 'claimed' || list[i].dev !== d) continue;
+        const end = list.slice(i + 1).find((x) => RELEASE_STATES.includes(x.state));
+        held.push([list[i].t, end ? end.t : until]);
+      }
+    }
+    idle.set(d, subtractIv(alive, mergeIv(held)));
+  }
+  return idle;
+}
+
+function readyFor(n, issueEvents, readyTimes) {
+  const claimed = issueEvents.find((e) => e.state === 'claimed');
+  const gh = readyTimes ? readyTimes.get(n) : undefined;
+  if (gh) {
+    const cand = gh.filter((t) => !claimed || t <= claimed.t);
+    if (cand.length) return { t: cand[cand.length - 1], source: 'github' };
+  }
+  const ev = issueEvents.find((e) => e.state === 'ready');
+  return ev ? { t: ev.t, source: 'event' } : null;
+}
+
+// The waiting split (metrics.md query 7): each merged issue's ready -> merged time cut into
+// pipeline-bound, dispatcher-bound and agent work, with the dispatcher-bound part flagged when
+// another device was idle.
+function computeWaiting(evs, mergedIssues, readyTimes, idle) {
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (e.issue === null || e.issue === undefined) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  const rows = [];
+  let without = 0;
+  for (const n of [...mergedIssues].sort((a, b) => a - b)) {
+    const list = byIssue.get(n).filter((e) => e.state !== 'run_started');
+    const mergedEv = list.find((e) => e.state === 'merged');
+    const rd = readyFor(n, list, readyTimes);
+    if (!rd || rd.t >= mergedEv.t) { without++; continue; }
+    const [R, M] = [rd.t, mergedEv.t];
+    const claimedEv = list.find((e) => e.state === 'claimed');
+    const owner = claimedEv ? claimedEv.dev : mergedEv.dev;
+    const after = (i, states) => list.slice(i + 1).find((x) => states.includes(x.state));
+    const disp = [];
+    const pipe = []; // no pipeline source: the pipeline-bound part is always empty
+    if (claimedEv) disp.push([R, claimedEv.t]);
+    list.forEach((e, i) => {
+      if (e.state === 'parked') {
+        const end = after(i, ['verdict', 'fix_requested', 'merge_ready', 'failed', 'merged']);
+        disp.push([e.t, end ? end.t : M]);
+      } else if (e.state === 'merge_ready') {
+        const end = after(i, ['merged', 'failed']);
+        disp.push([e.t, end ? end.t : M]);
+      }
+    });
+    const D = mergeIv(clipIv(disp, R, M));
+    const P = subtractIv(mergeIv(clipIv(pipe, R, M)), D);
+    const otherIdle = mergeIv([...idle.entries()].filter(([d]) => d !== owner).flatMap(([, iv]) => iv));
+    const dIdle = lenIv(D) - lenIv(subtractIv(D, otherIdle));
+    const total = M - R;
+    rows.push({
+      issue: n, device: owner, ready_source: rd.source,
+      pipeline_bound: secs(lenIv(P)), dispatcher_bound: secs(lenIv(D)), dispatcher_bound_other_idle: secs(dIdle),
+      agent_work: secs(total - lenIv(P) - lenIv(D)), total: secs(total),
+    });
+  }
+  const t = (k) => sum(rows.map((r) => r[k]));
+  const totals = {
+    pipeline_bound: t('pipeline_bound'), dispatcher_bound: t('dispatcher_bound'),
+    dispatcher_bound_other_idle: t('dispatcher_bound_other_idle'), agent_work: t('agent_work'), total: t('total'),
+  };
+  const wait = totals.pipeline_bound + totals.dispatcher_bound;
+  const ofWait = wait ? pct(totals.dispatcher_bound_other_idle, wait) : null;
+  let decision;
+  if (!rows.length) decision = 'n/a (no merged issue with a known ready time)';
+  else if (!wait) decision = 'n/a (no wait)';
+  else decision = ofWait > IDLE_SHARE_THRESHOLD ? 'B' : 'gate';
+  return {
+    issues_with_split: rows.length,
+    issues_without_ready: without,
+    totals,
+    wait_seconds: wait,
+    other_idle_pct_of_wait: ofWait === null ? 'n/a' : ofWait,
+    other_idle_pct_of_total: totals.total ? pct(totals.dispatcher_bound_other_idle, totals.total) : 'n/a',
+    threshold_pct: IDLE_SHARE_THRESHOLD,
+    decision,
+    issues: rows,
+  };
+}
+
+function computeEventMetrics(allEvents, win, ctx = {}) {
+  const byIssue = groupByIssue(allEvents);
+  const issues = [...byIssue.keys()].sort((a, b) => a - b);
+  const sec = (a, b) => (a !== undefined && b !== undefined ? Math.round((b - a) / 1000) : null);
+  const evs = timed(allEvents);
+  const evsByIssue = groupByIssue(evs);
+  const readyTimes = ctx.readyTimes || null;
+  const leaseMinutes = ctx.leaseMinutes || 120;
+
+  // throughput and lead time (metrics.md query 1)
+  const merged = [];
+  for (const n of issues) {
+    const f = firstTs(byIssue.get(n).filter((e) => STAGE_STATES.includes(e.state)));
+    if (!f.has('merged') || !inWin(f.get('merged'), win)) continue;
+    const rd = readyFor(n, evsByIssue.get(n) || [], readyTimes);
+    const ready = rd ? rd.t : f.get('ready');
+    // pipeline start: the issue's first transition to reviewing (v2 SPEC 7.3); none means null
+    // stages, never a guess
+    const toReview = (evsByIssue.get(n) || []).find((e) => e.state === 'transition' && noteTokens(e.note).to === 'reviewing');
+    const runAt = toReview ? toReview.t : undefined;
+    merged.push({
+      issue: n,
+      merged_at: iso(f.get('merged')),
+      ready_source: rd ? rd.source : null,
+      run_source: toReview ? 'transition' : 'none',
+      waiting_for_claim: sec(ready, f.get('claimed')),
+      design: sec(f.get('claimed'), f.get('delegated')),
+      implementation: sec(f.get('delegated'), runAt),
+      pipeline: sec(runAt, f.get('merge_ready')),
+      waiting_for_merge: sec(f.get('merge_ready'), f.get('merged')),
+      total: sec(ready, f.get('merged')),
+    });
+  }
+  merged.sort((a, b) => cmpStr(a.merged_at, b.merged_at) || a.issue - b.issue);
+  const totals = merged.map((m) => m.total).filter((x) => x !== null);
+  const throughput = {
+    merged_issues: merged.length,
+    lead_time_total_seconds: { median: median(totals), max: totals.length ? Math.max(...totals) : null, issues_with_total: totals.length },
+    issues_without_ready: merged.length - totals.length,
+    issues: merged,
+  };
+
+  // per device (metrics.md query 4), claims (query 6) and the waiting split (query 7)
+  const mergedIssues = merged.map((m) => m.issue);
+  const devRows = new Map();
+  const dev = (d) => {
+    if (!devRows.has(d)) devRows.set(d, { device: d, merges: 0, claims: 0, claim_lost: 0 });
+    return devRows.get(d);
+  };
+  for (const n of mergedIssues) dev(evsByIssue.get(n).find((e) => e.state === 'merged').dev).merges++;
+  for (const e of evs) {
+    if (!inWin(e.t, win)) continue;
+    if (e.state === 'claimed') dev(e.dev).claims++;
+    else if (e.state === 'claim_lost') dev(e.dev).claim_lost++;
+  }
+  const per_device = [...devRows.values()].sort((a, b) => cmpStr(a.device, b.device));
+  const claims = computeClaims(evs, win, leaseMinutes);
+  const waiting = computeWaiting(evs, mergedIssues, readyTimes, idleIntervals(evs, win.until));
+
+  // first pass (query 2), restricted to a first merge_ready inside the window
+  let green = 0;
+  let first = 0;
+  const setbacks = [];
+  for (const n of issues) {
+    const evs = byIssue.get(n);
+    const f = firstTs(evs.filter((e) => e.state === 'merge_ready'));
+    if (!f.has('merge_ready') || !inWin(f.get('merge_ready'), win)) continue;
+    const s = firstTs(evs.filter((e) => e.state === 'failed' || e.state === 'fix_requested'));
+    const setback = Math.min(...[...s.values(), Infinity]);
+    green++;
+    if (setback === Infinity || setback > f.get('merge_ready')) first++;
+    else setbacks.push(n);
+  }
+  const first_pass = {
+    reached_green: green,
+    first_pass: first,
+    first_pass_pct: green ? pct(first, green) : 'n/a (0 issues)',
+    setback_issues: setbacks,
+  };
+
+  // review (query 3) and adjudicator agreement
+  const verdicts = allEvents.filter((e) => e.state === 'verdict' && inWin(e.ts, win));
+  const prefixOf = (e) => {
+    const m = /^\s*([A-Z]+)\s*:/.exec(e.note || '');
+    return m && VERDICT_PREFIXES.includes(m[1]) ? m[1] : null;
+  };
+  const counts = {};
+  for (const e of verdicts) {
+    const p = prefixOf(e);
+    if (!p) continue;
+    const a = e.actor || 'unknown';
+    counts[a] = counts[a] || Object.fromEntries(VERDICT_PREFIXES.map((x) => [x, 0]));
+    counts[a][p]++;
+  }
+  const total = (p) => sum(Object.values(counts).map((c) => c[p]));
+  const correct = total('CORRECT');
+  const wrong = total('WRONG');
+  const review = {
+    verdicts: sum(VERDICT_PREFIXES.map(total)),
+    by_prefix: Object.fromEntries(VERDICT_PREFIXES.map((p) => [p, total(p)])),
+    by_actor: Object.fromEntries(Object.keys(counts).sort().map((a) => [a, counts[a]])),
+    false_positive_pct: correct + wrong ? pct(wrong, correct + wrong) : 'n/a (0 CORRECT/WRONG verdicts)',
+  };
+
+  const findingOf = (e) => {
+    const m = /^\s*[A-Z]+\s*:\s*(\S+)/.exec(e.note || '');
+    return m ? m[1] : null;
+  };
+  const keyed = new Map();
+  for (const e of verdicts) {
+    const p = prefixOf(e);
+    const id = findingOf(e);
+    if (!p || !id || !e.run_id) continue;
+    const k = `${e.run_id}\u0000${id}`;
+    if (!keyed.has(k)) keyed.set(k, []);
+    keyed.get(k).push({ actor: e.actor || 'unknown', prefix: p });
+  }
+  let pairs = 0;
+  let agree = 0;
+  let unpaired = 0;
+  for (const rows of keyed.values()) {
+    const adj = rows.filter((r) => r.actor === 'adjudicator');
+    const other = rows.filter((r) => r.actor !== 'adjudicator');
+    if (adj.length && other.length) {
+      // pair the first adjudicator verdict with the first verdict from another actor
+      pairs++;
+      if (adj[0].prefix === other[0].prefix) agree++;
+      unpaired += adj.length - 1;
+    } else unpaired += adj.length;
+  }
+  const adjudicator_agreement = {
+    pairs,
+    agreed: agree,
+    agreement_pct: pairs ? pct(agree, pairs) : 'n/a (0 pairs)',
+    unpaired_adjudicator_verdicts: unpaired,
+  };
+
+  // test_weakened (cbundy/dev-system#314): one event per commit that deleted or weakened a test
+  const twBy = new Map();
+  let twRestored = 0;
+  let twTotal = 0;
+  for (const e of allEvents) {
+    if (e.state !== 'test_weakened' || !inWin(e.ts, win)) continue;
+    const step = (/(?:^|\s)step=(\S+)/.exec(e.note || '') || [])[1] || 'none';
+    const restored = /(?:^|\s)restored=yes(?:\s|$)/.test(e.note || '');
+    if (!twBy.has(step)) twBy.set(step, { step, restored: 0, unrestored: 0 });
+    twBy.get(step)[restored ? 'restored' : 'unrestored']++;
+    twTotal++;
+    if (restored) twRestored++;
+  }
+  const test_weakened = {
+    total: twTotal,
+    restored: twRestored,
+    unrestored: twTotal - twRestored,
+    by_step: [...twBy.values()].sort((a, b) => cmpStr(a.step, b.step)),
+  };
+
+  // merged-at lookups for stale-wake detection
+  const mergedAt = { issue: new Map(), run: new Map() };
+  for (const e of allEvents) {
+    if (e.state !== 'merged') continue;
+    const t = Date.parse(e.ts);
+    if (e.issue !== null && e.issue !== undefined && !(mergedAt.issue.get(e.issue) <= t)) mergedAt.issue.set(e.issue, t);
+    if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
+  }
+  const v2 = computeV2Metrics(evs, win, merged.map((m) => ({ issue: m.issue, t: Date.parse(m.merged_at) })));
+  Object.assign(v2, computeMergeMetrics(evs, win));
+  return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, ...v2, mergedAt };
+}
+
+// ---------------------------------------------------------------- the factory loop v2's events
+
+// A note's `key=value` tokens (v2 SPEC 7.1): values are percent-encoded, and `none` is no value.
+function noteTokens(note) {
+  const out = {};
+  for (const word of String(note || '').split(' ')) {
+    const i = word.indexOf('=');
+    if (i <= 0 || Object.prototype.hasOwnProperty.call(out, word.slice(0, i))) continue;
+    const raw = word.slice(i + 1);
+    let v = raw;
+    try {
+      v = decodeURIComponent(raw);
+    } catch {
+      v = raw;
+    }
+    out[word.slice(0, i)] = raw === 'none' ? null : v;
+  }
+  return out;
+}
+
+// once: the events counted one per identity, the first kept: a retried event can be logged twice
+// (v2 SPEC 7.1), so a transition counts once per (issue, life, seq), an intervention once per
+// fact and cause, a review once per (issue, round, patch).
+function once(evs, idOf) {
+  const seen = new Set();
+  return evs.filter((e) => {
+    const id = idOf(e);
+    if (id === null) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+const statsOf = (xs) => ({ median: median(xs), max: xs.length ? Math.max(...xs) : null, total: sum(xs) });
+const day = (t) => iso(t).slice(0, 10);
+
+// The interventions, judgement calls, claim completion and rounds of #632 and v2 SPEC 7.3, from
+// the `intervention`, `reviewed`, `transition`, `verdict` and claim events. merged: the issues
+// merged in the window, each with its first `merged`.
+function computeV2Metrics(evs, win, merged) {
+  const t = (e) => noteTokens(e.note);
+  const transitions = once(evs.filter((e) => e.state === 'transition'), (e) => {
+    const f = t(e);
+    return f.life && f.seq !== undefined ? `${e.issue}|${f.life}|${f.seq}` : null;
+  }).map((e) => ({ ...e, f: t(e) }));
+  const interventions = once(evs.filter((e) => e.state === 'intervention'), (e) => {
+    const f = t(e);
+    return f.fact ? `${e.issue}|${f.who}|${f.cause}|${f.fact}` : e.event_id || null;
+  }).map((e) => ({ ...e, f: t(e) })).filter((e) => (e.f.who === 'person' || e.f.who === 'loop') && e.f.cause);
+  const reviews = once(evs.filter((e) => e.state === 'reviewed'), (e) => {
+    const f = t(e);
+    return `${e.issue}|${f.round}|${f.patch}`;
+  }).map((e) => ({ ...e, f: t(e) }));
+  const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
+  const firstClaim = new Map();
+  for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !firstClaim.has(e.issue)) firstClaim.set(e.issue, e.t);
+  // the span of a merged issue: from its first claimed (else its merge) to its merge; its lives, those
+  // begun by its merge (a transition of the life logged at or before it); and how long an event with
+  // no life may come after: to its closing transition (the first to closed since its last claim
+  // before the merge), else its merge, plus IV_GRACE_MS
+  const spans = merged.map((m) => {
+    const from = firstClaim.has(m.issue) ? Math.min(firstClaim.get(m.issue), m.t) : m.t;
+    const mine = transitions.filter((x) => x.issue === m.issue);
+    const claims = evs.filter((e) => e.state === 'claimed' && e.issue === m.issue && e.t <= m.t).map((e) => e.t);
+    const since = claims.length ? Math.max(...claims) : from;
+    const close = mine.filter((x) => x.f.to === 'closed' && x.t >= since).sort((a, b) => a.t - b.t)[0];
+    return {
+      issue: m.issue, from, to: m.t,
+      lives: new Set(mine.filter((x) => x.t <= m.t && x.f.life).map((x) => x.f.life)),
+      known: new Set(mine.filter((x) => x.f.life).map((x) => x.f.life)),
+      until: Math.max(m.t, close ? close.t : m.t) + IV_GRACE_MS,
+    };
+  });
+  const within = (e, s) => e.issue === s.issue && e.t >= s.from && e.t <= s.to;
+  // belongs: an intervention or judgement of the merged issue's work. One that names a known life
+  // is its own when that life began by the merge, whenever it was logged: a derived intervention is
+  // logged a pass or more after its fact, maybe after the merge. Any other counts from the first
+  // claim to the grace after the close.
+  const belongs = (e, s) => {
+    if (e.issue !== s.issue) return false;
+    const life = (e.f || t(e)).life;
+    if (life && s.known.has(life)) return s.lives.has(life);
+    return e.t >= s.from && e.t <= s.until;
+  };
+
+  // interventions (#632 metric 1): per merged issue and per day, by who and cause; fleet-level per day
+  const ivWin = interventions.filter((e) => inWin(e.t, win));
+  const byCause = new Map();
+  const days = new Map();
+  for (const e of ivWin) {
+    const k = `${e.f.who}\u0000${e.f.cause}`;
+    byCause.set(k, (byCause.get(k) || 0) + 1);
+    const d = days.get(day(e.t)) || { day: day(e.t), person: 0, loop: 0, fleet: 0 };
+    d[e.f.who]++;
+    if (issueOf(e) === null) d.fleet++;
+    days.set(d.day, d);
+  }
+  const ivIssues = spans.map((s) => {
+    const mine = interventions.filter((e) => belongs(e, s));
+    const n = (who) => mine.filter((e) => e.f.who === who).length;
+    return { issue: s.issue, person: n('person'), loop: n('loop'), untouched: mine.length === 0, causes: [...new Set(mine.map((e) => e.f.cause))].sort() };
+  }).sort((a, b) => a.issue - b.issue);
+  const untouched = ivIssues.filter((i) => i.untouched).length;
+  const perMerged = (k) => (merged.length ? Math.round((100 * sum(ivIssues.map((i) => i[k]))) / merged.length) / 100 : 'n/a (0 merged issues)');
+  const interventionsOut = {
+    total: ivWin.length,
+    person: ivWin.filter((e) => e.f.who === 'person').length,
+    loop: ivWin.filter((e) => e.f.who === 'loop').length,
+    fleet: ivWin.filter((e) => issueOf(e) === null).length,
+    by_cause: [...byCause.entries()].map(([k, count]) => ({ who: k.split('\u0000')[0], cause: k.split('\u0000')[1], count }))
+      .sort((a, b) => cmpStr(a.who, b.who) || cmpStr(a.cause, b.cause)),
+    per_day: [...days.values()].sort((a, b) => cmpStr(a.day, b.day)),
+    merged_issues: merged.length,
+    untouched,
+    untouched_pct: merged.length ? pct(untouched, merged.length) : 'n/a (0 merged issues)',
+    person_per_merged_issue: perMerged('person'),
+    loop_per_merged_issue: perMerged('loop'),
+    issues: ivIssues,
+  };
+
+  // judgement calls (#632 metric 2): reviews, triage calls (with the choice the next triage row
+  // applied), a designer's question or split, a fixer's dispositions; overridden when a person
+  // intervention names the issue within an hour after it
+  const calls = [];
+  for (const e of reviews) calls.push({ e, kind: 'review', outcome: e.f.verdict || 'unknown' });
+  for (const e of interventions.filter((x) => x.f.who === 'loop' && x.f.cause === 'triage')) {
+    const next = transitions.find((x) => x.issue === e.issue && x.t >= e.t && TRIAGE_ROWS[x.f.row]);
+    calls.push({ e, kind: 'triage', outcome: next ? TRIAGE_ROWS[next.f.row] : 'pending' });
+  }
+  for (const e of transitions.filter((x) => x.f.row === 'T3' || x.f.row === 'T4')) calls.push({ e, kind: 'design', outcome: e.f.row === 'T3' ? 'question' : 'split' });
+  for (const e of evs.filter((x) => x.state === 'verdict' && x.actor === 'fixer')) {
+    const p = (/^\s*([A-Z]+)\s*:/.exec(e.note || '') || [])[1];
+    if (p === 'CORRECT' || p === 'WRONG') calls.push({ e, kind: 'fix', outcome: p === 'CORRECT' ? 'fixed' : 'declined' });
+  }
+  // a judge task (a loop_entry of kind task): one call per key, timed by its first row, its outcome
+  // the wake and the status of the key's latest row (by time, then the device's sequence number)
+  const taskRows = new Map();
+  evs.forEach((e, i) => {
+    if (e.state !== 'loop') return;
+    const f = t(e);
+    if (f.kind !== 'task' || !f.key) return;
+    if (!taskRows.has(f.key)) taskRows.set(f.key, []);
+    taskRows.get(f.key).push({ e, f, i });
+  });
+  const bySeq = (a, b) => a.e.t - b.e.t || (a.e.device_seq ?? 0) - (b.e.device_seq ?? 0) || a.i - b.i;
+  for (const rows of taskRows.values()) {
+    rows.sort(bySeq);
+    const last = rows[rows.length - 1].f;
+    calls.push({ e: rows[0].e, kind: 'task', outcome: `${last.wake || 'none'}:${last.status || 'none'}` });
+  }
+  const persons = interventions.filter((x) => x.f.who === 'person');
+  const overridden = (c) => persons.some((x) => x.issue === c.e.issue && issueOf(x) !== null && x.t > c.e.t && x.t <= c.e.t + OVERRIDE_MS);
+  const callsWin = calls.filter((c) => inWin(c.e.t, win));
+  const byKind = new Map();
+  for (const c of callsWin) {
+    const k = `${c.kind}\u0000${c.outcome}`;
+    const row = byKind.get(k) || { kind: c.kind, outcome: c.outcome, count: 0, overridden: 0 };
+    row.count++;
+    if (overridden(c)) row.overridden++;
+    byKind.set(k, row);
+  }
+  const callIssues = spans.map((s) => {
+    const mine = calls.filter((c) => belongs(c.e, s));
+    return { issue: s.issue, calls: mine.length, overridden: mine.filter(overridden).length };
+  }).sort((a, b) => a.issue - b.issue);
+  const judgement_calls = {
+    total: callsWin.length,
+    overridden: callsWin.filter(overridden).length,
+    per_merged_issue: merged.length ? Math.round((100 * sum(callIssues.map((i) => i.calls))) / merged.length) / 100 : 'n/a (0 merged issues)',
+    by_kind: [...byKind.values()].sort((a, b) => cmpStr(a.kind, b.kind) || cmpStr(a.outcome, b.outcome)),
+    issues: callIssues,
+  };
+
+  // claim completion (#632 metric 3): per issue and life, its first claimed, then the first of a
+  // merge, an abandon (by its reason), a close, a release back to the queue or a park; still open
+  // at the window's end is censored, not a failure
+  const lives = [];
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (issueOf(e) === null || e.t >= win.until) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  for (const [n, list] of byIssue) {
+    let open = null;
+    for (const e of list) {
+      if (e.state === 'claimed' && !open) {
+        open = { issue: n, device: e.dev, claimed: e.t, outcome: 'open', ended: null };
+        lives.push(open);
+        continue;
+      }
+      if (!open) continue;
+      let end = CLAIM_ENDS[e.state] || null;
+      if (e.state === 'abandoned') end = `abandoned:${t(e).reason || 'unknown'}`;
+      if (e.state === 'transition' && t(e).to === 'parked') end = 'parked';
+      if (end) {
+        open.outcome = end;
+        open.ended = e.t;
+        open = null;
+      }
+    }
+  }
+  const claimed = lives.filter((l) => inWin(l.claimed, win)).sort((a, b) => a.claimed - b.claimed || a.issue - b.issue);
+  const outcomes = {};
+  for (const l of claimed) outcomes[l.outcome] = (outcomes[l.outcome] || 0) + 1;
+  const resolved = claimed.filter((l) => l.outcome !== 'open');
+  const devices = new Map();
+  for (const l of claimed) {
+    const d = devices.get(l.device) || { device: l.device, claims: 0, merged: 0, open: 0 };
+    d.claims++;
+    if (l.outcome === 'merged') d.merged++;
+    if (l.outcome === 'open') d.open++;
+    devices.set(l.device, d);
+  }
+  const claim_completion = {
+    claims: claimed.length,
+    merged: outcomes.merged || 0,
+    open: outcomes.open || 0,
+    merged_pct_of_resolved: resolved.length ? pct(outcomes.merged || 0, resolved.length) : 'n/a (0 resolved claims)',
+    outcomes: Object.fromEntries(Object.keys(outcomes).sort().map((k) => [k, outcomes[k]])),
+    by_device: [...devices.values()].sort((a, b) => cmpStr(a.device, b.device)),
+    issues: claimed.map((l) => ({ issue: l.issue, device: l.device, claimed_at: iso(l.claimed), outcome: l.outcome, ended_at: l.ended === null ? null : iso(l.ended) })),
+  };
+
+  // rounds and time in flight per merged issue: review rounds from `reviewed`, fix rounds from
+  // `fix_requested`, and the claim-to-merge time less the time parked (a transition to parked
+  // until the issue's next transition)
+  const roundRows = spans.map((s) => {
+    const parked = [];
+    const tr = transitions.filter((x) => x.issue === s.issue).sort((a, b) => a.t - b.t);
+    tr.forEach((x, i) => {
+      if (x.f.to !== 'parked') return;
+      const next = tr.slice(i + 1).find((y) => y.t > x.t);
+      parked.push([x.t, next ? next.t : s.to]);
+    });
+    const parkedMs = lenIv(mergeIv(clipIv(parked, s.from, s.to)));
+    return {
+      issue: s.issue,
+      review_rounds: new Set(reviews.filter((e) => within(e, s)).map((e) => e.f.round)).size,
+      fix_rounds: evs.filter((e) => e.state === 'fix_requested' && within(e, s)).length,
+      in_flight_seconds: secs(s.to - s.from - parkedMs),
+      parked_seconds: secs(parkedMs),
+    };
+  }).sort((a, b) => a.issue - b.issue);
+  const rounds = {
+    merged_issues: roundRows.length,
+    review_rounds: statsOf(roundRows.map((r) => r.review_rounds)),
+    fix_rounds: statsOf(roundRows.map((r) => r.fix_rounds)),
+    in_flight_seconds: statsOf(roundRows.map((r) => r.in_flight_seconds)),
+    issues: roundRows,
+  };
+  return { interventions: interventionsOut, judgement_calls, claim_completion, rounds };
+}
+
+// The merges, pull requests and merge gaps of docs/metrics.md 9c, from the new events' `pr`, `by` and
+// `recovered` fields: the same definitions as the saved queries there. A merge is one per (issue, pr)
+// across three signals: a `merged` event, a transition to closed `why=merged-by-hand` and a person
+// intervention `hand-merge`; a signal with no pr takes that of the issue's latest event naming one at
+// or before it.
+const PR_TYPES = new Set(['transition', 'reviewed', 'intervention', 'merged']);
+const HEAD_MOVE_CAUSES = new Set(['queue:patch', 'push']);
+const GAPS_SHOWN = 10;
+const HOTTEST_SHOWN = 10;
+// The one code-file rule of docs/metrics.md 9c: a path matching it is not a code file (a document, a
+// changelog or version file, a release note, a package manifest or lockfile). Only syntax that JS
+// RegExp and PostgreSQL `~` read alike; every 9c size query embeds this same literal.
+const NON_CODE_RE = /(\.md$|(^|\/)(CHANGELOG(\.[^/]*)?|VERSION)$|(^|\/)release-notes\/|(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|poetry\.lock|pyproject\.toml|requirements[^/]*\.txt|composer\.json|composer\.lock)$)/;
+const isCode = (p) => !NON_CODE_RE.test(p);
+
+function computeMergeMetrics(evs, win) {
+  const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
+  const key = (e, f) => {
+    if (e.state === 'transition') return f.life && f.seq !== undefined ? `t|${e.issue}|${f.life}|${f.seq}` : null;
+    if (e.state === 'reviewed') return `r|${e.issue}|${f.round}|${f.patch}`;
+    if (e.state === 'intervention') return f.fact ? `i|${e.issue}|${f.who}|${f.cause}|${f.fact}` : e.event_id || null;
+    return null;
+  };
+  const named = once(
+    evs.filter((e) => PR_TYPES.has(e.state) && issueOf(e) !== null).map((e) => ({ ...e, f: noteTokens(e.note), pr: e.pr === undefined ? null : e.pr })),
+    (e) => key(e, e.f),
+  );
+  const claimed = new Map();
+  for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !claimed.has(e.issue)) claimed.set(e.issue, e.t);
+  const prOf = (s) => {
+    if (s.pr !== null) return s.pr;
+    let best = null;
+    for (const e of named) {
+      if (e.issue !== s.issue || e.pr === null || e.t > s.t) continue;
+      if (best === null || e.t > best.t || (e.t === best.t && e.pr > best.pr)) best = e;
+    }
+    return best ? best.pr : null;
+  };
+  const signals = [];
+  for (const e of named) {
+    if (e.state === 'merged') signals.push({ ...e, hand: e.f.by === 'hand', merged: true });
+    else if (e.state === 'transition' && e.f.to === 'closed' && e.f.why === 'merged-by-hand') signals.push({ ...e, hand: true, merged: false });
+    else if (e.state === 'intervention' && e.f.who === 'person' && e.f.cause === 'hand-merge') signals.push({ ...e, hand: true, merged: false });
+  }
+  const groups = new Map();
+  for (const s of signals) {
+    const pr = prOf(s);
+    const k = `${s.issue}|${pr}`;
+    const g = groups.get(k) || { issue: s.issue, pr, t: s.t, hand: false, recovered: null, size: null };
+    g.t = Math.min(g.t, s.t);
+    // the merge's size: that of its earliest merged event with files (a tie by the files' text)
+    if (s.merged && Array.isArray(s.files)) {
+      const fk = JSON.stringify(s.files);
+      if (g.size === null || s.t < g.size.t || (s.t === g.size.t && fk < g.size.key)) {
+        g.size = { t: s.t, key: fk, files: s.files, file_lines: Array.isArray(s.file_lines) ? s.file_lines : null, additions: s.additions ?? null, deletions: s.deletions ?? null };
+      }
+    }
+    g.hand = g.hand || s.hand;
+    if (s.merged && s.f.recovered !== undefined && s.f.recovered !== null) g.recovered = g.recovered === true || s.f.recovered === 'true';
+    groups.set(k, g);
+  }
+  const prCmp = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
+  const mine = [...groups.values()].filter((g) => inWin(g.t, win)).sort((a, b) => a.t - b.t || a.issue - b.issue || prCmp(a.pr, b.pr));
+  const sizes = computeSizeOverlap([...groups.values()], mine, claimed);
+  if (!mine.length) return { merges: na('0 merges in the window'), prs: na('0 merges in the window'), gaps: na('fewer than 2 merges in the window'), ...sizes };
+  const byOf = (g) => (g.hand ? 'hand' : 'factory');
+  const triState = (v) => (v === null ? 2 : v ? 1 : 0);
+
+  const counts = new Map();
+  const days = new Map();
+  const bump = (m, k, row) => {
+    const r = m.get(k) || { ...row, merges: 0 };
+    r.merges++;
+    m.set(k, r);
+  };
+  for (const g of mine) {
+    bump(counts, `${byOf(g)}|${g.recovered}`, { by: byOf(g), recovered: g.recovered });
+    bump(days, `${day(g.t)}|${byOf(g)}|${g.recovered}`, { day: day(g.t), by: byOf(g), recovered: g.recovered });
+  }
+  const order = (a, b) => cmpStr(a.day || '', b.day || '') || cmpStr(a.by, b.by) || triState(a.recovered) - triState(b.recovered);
+  const merges = {
+    total: mine.length,
+    by: [...counts.values()].sort(order).map((r) => ({ by: r.by, recovered: r.recovered, count: r.merges })),
+    per_day: [...days.values()].sort(order).map((r) => ({ day: r.day, by: r.by, recovered: r.recovered, merges: r.merges })),
+    issues: mine.map((g) => ({ issue: g.issue, pr: g.pr, merged_at: iso(g.t), by: byOf(g), recovered: g.recovered })),
+    per_day_by_kind: perDayByKind(evs, mine, claimed, byOf, win),
+  };
+
+  const rows = mine.map((g) => {
+    const seen = named.filter((e) => e.issue === g.issue && e.t <= g.t && (e.state === 'transition' || e.state === 'reviewed') && g.pr !== null && e.pr === g.pr);
+    const from = Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+    const span = named.filter((e) => e.issue === g.issue && e.t >= from && e.t <= g.t);
+    const prs = new Set(span.filter((e) => e.pr !== null).map((e) => e.pr)).size;
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      pr_open_to_merge_seconds: seen.length ? secs(g.t - Math.min(...seen.map((e) => e.t))) : null,
+      prs,
+      supersedes: Math.max(prs - 1, 0),
+      head_moves: span.filter((e) => e.state === 'intervention' && HEAD_MOVE_CAUSES.has(e.f.cause)).length,
+    };
+  });
+  const prs = {
+    merges: rows.length,
+    pr_open_to_merge_seconds: statsOf(rows.map((r) => r.pr_open_to_merge_seconds).filter((x) => x !== null)),
+    prs: statsOf(rows.map((r) => r.prs)),
+    supersedes: statsOf(rows.map((r) => r.supersedes)),
+    head_moves: statsOf(rows.map((r) => r.head_moves)),
+    issues: rows,
+  };
+
+  if (mine.length < 2) return { merges, prs, gaps: na('fewer than 2 merges in the window'), ...sizes };
+  // state intervals of each issue from its transitions: [seq_at, the next one's); the last has no end
+  const states = new Map();
+  for (const e of named.filter((x) => x.state === 'transition').sort((a, b) => a.t - b.t || Number(a.f.seq) - Number(b.f.seq) || cmpStr(a.f.life || '', b.f.life || ''))) {
+    if (!states.has(e.issue)) states.set(e.issue, []);
+    states.get(e.issue).push({ from: e.t, to: Infinity, state: e.f.to, question: e.f.question === 'yes' });
+  }
+  for (const list of states.values()) list.forEach((s, i) => { if (i + 1 < list.length) s.to = list[i + 1].from; });
+  const pairs = mine.slice(1).map((next, i) => ({ before: mine[i], after: next }));
+  pairs.sort((a, b) => (b.after.t - b.before.t) - (a.after.t - a.before.t) || a.before.t - b.before.t);
+  const gaps = {
+    merges: mine.length,
+    gaps: pairs.slice(0, GAPS_SHOWN).map(({ before, after }) => {
+      const inFlight = [];
+      for (const [issue, list] of [...states].sort((a, b) => a[0] - b[0])) {
+        const held = new Map();
+        let asked = false;
+        for (const s of list) {
+          if (s.state === 'closed' || !(s.from < after.t && s.to > before.t)) continue;
+          held.set(s.state, (held.get(s.state) || 0) + Math.min(s.to, after.t) - Math.max(s.from, before.t));
+          if (s.state === 'parked' && s.question) asked = true;
+        }
+        if (!held.size) continue;
+        const [state] = [...held].sort((a, b) => b[1] - a[1] || cmpStr(a[0], b[0]))[0];
+        inFlight.push({ issue, state, parked_with_question: asked });
+      }
+      return {
+        from: iso(before.t), to: iso(after.t), gap_seconds: secs(after.t - before.t),
+        before: { issue: before.issue, pr: before.pr }, after: { issue: after.issue, pr: after.pr }, in_flight: inFlight,
+      };
+    }),
+  };
+  return { merges, prs, gaps, ...sizes };
+}
+
+// All merges to main per day and kind (docs/metrics.md 9c): `unlinked` is a merged event with no issue
+// (one per pr, a retried event counted once) or a merge whose issue has no claimed event at or before
+// it; `hand` any other hand merge; `factory` the rest. Summed over kind, the merges with an issue are
+// those of `per_day`.
+function perDayByKind(evs, mine, claimed, byOf, win) {
+  const rows = new Map();
+  const bump = (d, kind) => {
+    const k = `${d}|${kind}`;
+    const r = rows.get(k) || { day: d, kind, merges: 0 };
+    r.merges++;
+    rows.set(k, r);
+  };
+  for (const g of mine) bump(day(g.t), claimed.has(g.issue) && claimed.get(g.issue) <= g.t ? byOf(g) : 'unlinked');
+  const loose = new Map();
+  for (const e of evs) {
+    if (e.state !== 'merged' || (e.issue !== null && e.issue !== undefined)) continue;
+    const k = e.pr !== null && e.pr !== undefined ? `pr|${e.pr}` : `ev|${e.event_id || loose.size}`;
+    loose.set(k, Math.min(loose.has(k) ? loose.get(k) : Infinity, e.t));
+  }
+  for (const t of loose.values()) if (inWin(t, win)) bump(day(t), 'unlinked');
+  return [...rows.values()].sort((a, b) => cmpStr(a.day, b.day) || cmpStr(a.kind, b.kind));
+}
+
+// The size and overlap of the merges in the window (docs/metrics.md 9c): from each merge's earliest
+// merged event with files. all: every merge of the input (a window of another issue's merge may lie
+// outside the report's); mine: those in the window; claimed: the first claim of each issue.
+function computeSizeOverlap(all, mine, claimed) {
+  const noFiles = "no merge in the window has files (recorded from #752's release on)";
+  const codeOf = (g) => g.size.files.filter(isCode);
+  const rows = mine.map((g) => {
+    const z = g.size;
+    if (z === null) return { issue: g.issue, pr: g.pr, files: null, lines: null, code_files: null, code_lines: null };
+    const lines = z.file_lines === null ? null
+      : z.file_lines.filter((x) => x && isCode(x.path)).reduce((a, x) => a + x.additions + x.deletions, 0);
+    return {
+      issue: g.issue,
+      pr: g.pr,
+      files: z.files.length,
+      lines: z.additions !== null && z.deletions !== null ? z.additions + z.deletions : null,
+      code_files: codeOf(g).length,
+      code_lines: lines,
+    };
+  });
+  const known = rows.filter((r) => r.files !== null);
+  if (!known.length) {
+    return { size: na(mine.length ? noFiles : '0 merges in the window'), overlap: na(mine.length ? noFiles : '0 merges in the window') };
+  }
+  const stats = (k) => {
+    const xs = known.map((r) => r[k]).filter((x) => x !== null);
+    return { median: median(xs), p90: p90(xs) };
+  };
+  const withLines = known.filter((r) => r.code_lines !== null).length;
+  const size = {
+    merges: mine.length,
+    known: known.length,
+    code_lines_known: withLines,
+    files: stats('files'),
+    lines: stats('lines'),
+    code_files: stats('code_files'),
+    code_lines: withLines ? stats('code_lines') : na('no known merge has file_lines'),
+    issues: rows,
+  };
+
+  const from = (g) => Math.min(claimed.has(g.issue) ? claimed.get(g.issue) : g.t, g.t);
+  const meets = (a, b) => (from(a) < b.t && from(b) < a.t) || (from(a) === a.t && from(b) === b.t && a.t === b.t);
+  const others = all.filter((g) => g.size !== null);
+  const per = [];
+  const hot = new Map();
+  for (const g of mine.filter((m) => m.size !== null)) {
+    const mineCode = new Set(codeOf(g));
+    const hit = new Set();
+    for (const o of others) {
+      if (o.issue === g.issue || !meets(g, o)) continue;
+      const shared = codeOf(o).filter((f) => mineCode.has(f));
+      if (!shared.length) continue;
+      hit.add(o.issue);
+      for (const f of shared) {
+        if (!hot.has(f)) hot.set(f, new Set());
+        hot.get(f).add(g.issue);
+      }
+    }
+    per.push({ issue: g.issue, pr: g.pr, overlapping: hit.size > 0, overlaps: [...hit].sort((a, b) => a - b) });
+  }
+  const overlapping = per.filter((r) => r.overlapping).length;
+  const overlap = {
+    merges: per.length,
+    overlapping,
+    share: Math.round((1000 * overlapping) / per.length) / 1000,
+    issues: per,
+    hottest_files: [...hot].map(([path, set]) => ({ path, issues: set.size }))
+      .sort((a, b) => b.issues - a.issues || cmpStr(a.path, b.path)).slice(0, HOTTEST_SHOWN),
+  };
+  return { size, overlap };
+}
+
+// ---------------------------------------------------------------- waste
+
+function isStale(w, seenDone, mergedAt) {
+  const wt = Date.parse(w.ts);
+  if (w.taskId && seenDone.has(w.taskId)) return true;
+  if (!mergedAt) return false;
+  for (const m of w.text.matchAll(/#(\d+)\b/g)) {
+    const t = mergedAt.issue.get(Number(m[1]));
+    if (t !== undefined && t < wt) return true;
+  }
+  for (const m of w.text.matchAll(/\b[0-9A-Z]{26}\b/g)) {
+    const t = mergedAt.run.get(m[0]);
+    if (t !== undefined && t < wt) return true;
+  }
+  return false;
+}
+
+function computeWaste(sessions, mergedAt) {
+  const cat = () => ({ count: 0, tokens: 0 });
+  const out = {
+    wakes: Object.fromEntries(WAKE_KINDS.map((k) => [k, 0])),
+    wake_turns: 0,
+    wake_tokens: 0,
+    idle_wakes: cat(),
+    re_arms: cat(),
+    stale_wakes: cat(),
+    repeated_checks: cat(),
+    top_wakes: [],
+  };
+  const all = [];
+  for (const s of sessions) {
+    const seenDone = new Set();
+    s.wakes.forEach((w) => {
+      const tokens = sum(w.turns.map(turnTokens));
+      const calls = w.turns.flatMap((t) => t.tools);
+      const owner = w.kind === 'owner';
+      out.wakes[w.kind]++;
+      out.wake_turns += w.turns.length;
+      out.wake_tokens += tokens;
+      const idle = !owner && w.turns.length > 0 && !calls.some(isActionCall);
+      const rearm = idle && calls.length > 0 &&
+        calls.every((c) => REARM_ONLY_TOOLS.has(c.name) || (c.name === 'Bash' && c.input.run_in_background === true)) &&
+        calls.some((c) => c.name === 'Monitor' || c.name === 'Bash');
+      const stale = !owner && w.kind !== 'cron' && isStale(w, seenDone, mergedAt);
+      if (w.taskId && w.status === 'completed') seenDone.add(w.taskId);
+      for (const [flag, c] of [[idle, out.idle_wakes], [rearm, out.re_arms], [stale, out.stale_wakes]]) {
+        if (flag) { c.count++; c.tokens += tokens; }
+      }
+      all.push({ session: s.session, ts: w.ts, kind: w.kind, turns: w.turns.length, tokens, idle, re_arm: rearm, stale });
+    });
+
+    // repeated checks: identical Bash command within the window with no action call between
+    const last = new Map();
+    let actions = 0;
+    for (const t of s.turns) {
+      let hit = false;
+      for (const c of t.tools) {
+        if (isActionCall(c)) { actions++; continue; }
+        if (c.name !== 'Bash') continue;
+        const key = String(c.input.command || '').replace(/\s+/g, ' ').trim();
+        const prev = last.get(key);
+        if (prev && prev.actions === actions && Date.parse(t.ts) - prev.ts <= REPEAT_WINDOW_MS) {
+          out.repeated_checks.count++;
+          hit = true;
+        }
+        last.set(key, { ts: Date.parse(t.ts), actions });
+      }
+      if (hit) out.repeated_checks.tokens += turnTokens(t);
+    }
+  }
+  out.top_wakes = all
+    .sort((a, b) => b.tokens - a.tokens || cmpStr(a.ts, b.ts) || cmpStr(a.session, b.session))
+    .slice(0, TOP_WAKES);
+  return out;
+}
+
+// ---------------------------------------------------------------- spend
+
+const turnRegime = (t) => t.regime || 'unknown';
+
+// computeSpend(fileTurns, regime): with a regime, only the turns attributed to it count.
+function computeSpend(fileTurns, regime = null) {
+  const rows = new Map();
+  const add = (role, model, turns, u) => {
+    const k = `${role}\u0000${model}`;
+    const r = rows.get(k) || { role, model, turns: 0, input: 0, output: 0, cache_read: 0, cache_creation: 0 };
+    r.turns += turns;
+    r.input += u.input;
+    r.output += u.output;
+    r.cache_read += u.cache_read;
+    r.cache_creation += u.cache_creation;
+    rows.set(k, r);
+  };
+  for (const f of fileTurns) {
+    for (const t of f.turns) if (regime === null || turnRegime(t) === regime) add(f.role, t.model || 'unknown', 1, t.usage);
+  }
+  return [...rows.values()].sort((a, b) => cmpStr(a.role, b.role) || cmpStr(a.model, b.model));
+}
+
+// spend.by_regime: the spend rows of each regime, sorted by regime; for a role and model they add up to spend.rows.
+function computeSpendByRegime(fileTurns, regimes) {
+  return regimes.map((regime) => ({ regime, rows: computeSpend(fileTurns, regime) }));
+}
+
+// Sets `regime` on every turn: the regime of the latest regime-carrying event of the turn's session at or
+// before the turn (the first such event's regime for an earlier turn), else unknown. A sub-agent's transcript
+// carries its parent's session. Only the events' own regime is read, never a device or workspace name.
+function attributeTurns(parsed, repoEvents) {
+  const bySession = new Map();
+  repoEvents.forEach((e, i) => {
+    if (typeof e.session_id !== 'string' || !e.session_id || typeof e.regime !== 'string' || !e.regime) return;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) return;
+    if (!bySession.has(e.session_id)) bySession.set(e.session_id, []);
+    bySession.get(e.session_id).push({ t, i, regime: e.regime });
+  });
+  for (const list of bySession.values()) list.sort((a, b) => a.t - b.t || a.i - b.i);
+  for (const f of parsed) {
+    const list = bySession.get(f.session);
+    for (const turn of f.turns) {
+      if (!list) { turn.regime = 'unknown'; continue; }
+      const at = Date.parse(turn.ts);
+      let r = list[0].regime;
+      for (const x of list) { if (x.t <= at) r = x.regime; else break; }
+      turn.regime = r;
+    }
+  }
+}
+
+// throughput.by_regime: per regime the merged issues (the throughput derivation), the distinct issues closed
+// and the claims in the window, from that regime's events.
+// The regimes the spend breakdown lists: those of the window's events and turns.
+function spendRegimes(parsed, repoEvents, win) {
+  const set = new Set([
+    ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+    ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+  ]);
+  return [...set].sort(cmpStr);
+}
+
+function throughputByRegime(repoEvents, win, regimes, ctx) {
+  return regimes.map((regime) => {
+    const evs = repoEvents.filter((e) => (e.regime || 'unknown') === regime);
+    const inW = evs.filter((e) => inWin(Date.parse(e.ts), win));
+    return {
+      regime,
+      merged_issues: computeEventMetrics(evs, win, ctx).throughput.merged_issues,
+      closed_issues: new Set(inW.filter((e) => e.state === 'closed' && e.issue !== null && e.issue !== undefined).map((e) => e.issue)).size,
+      claims: inW.filter((e) => e.state === 'claimed').length,
+    };
+  });
+}
+
+// Sub-agents whose transcript model differs from the model the Agent call requested.
+function modelMismatches(fileTurns) {
+  const requested = new Map();
+  for (const f of fileTurns) {
+    for (const t of f.turns) {
+      for (const c of t.tools) if (c.name === 'Agent' && c.input.model) requested.set(c.id, String(c.input.model));
+    }
+  }
+  const out = [];
+  for (const f of fileTurns) {
+    if (f.kind !== 'sub' || !f.toolUseId || !requested.has(f.toolUseId)) continue;
+    const want = requested.get(f.toolUseId);
+    const models = [...new Set(f.turns.map((t) => t.model).filter(Boolean))].sort();
+    if (models.length && !models.every((m) => m.toLowerCase().includes(want.toLowerCase()))) {
+      out.push({ session: f.session, role: f.role, requested: want, actual: models });
+    }
+  }
+  return out.sort((a, b) => cmpStr(a.session + a.role, b.session + b.role));
+}
+
+// ---------------------------------------------------------------- assembly
+
+function gitToplevel() {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
+}
+
+// loadShared(name): a helper module of the image, from beside this tool, else from $DEV_SYSTEM_SHARE.
+function loadShared(name, env = process.env) {
+  const places = [path.join(__dirname, name), path.join(env.DEV_SYSTEM_SHARE || '/usr/local/share/dev-system', name)];
+  const found = places.find((p) => fs.existsSync(p));
+  if (!found) throw new InputError(`${name} not found beside the tool or in $DEV_SYSTEM_SHARE`);
+  return require(found);
+}
+
+function evaluate(opts, env = process.env) {
+  const win = opts.win;
+  const home = env.HOME || os.homedir();
+  const [owner, name] = opts.repo.split('/');
+  const useNew = opts.source === 'new';
+  const eventsFile = opts.events || path.join(env.CALLUM_EVENTS_DIR || '/persist/events', `${owner}__${name}.jsonl`);
+  const newMod = useNew ? loadShared('evaluate-new-events.js', env) : null;
+  const newFile = useNew ? opts.newEvents || newMod.localLog(env.CALLUM_EVENTS_DIR, opts.repo) : null;
+  const projectsRoot = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
+  const sources = [];
+
+  if (opts.retiredNm) {
+    sources.push({ kind: 'no-mistakes', path: 'retired', found: false, rows: null, note: '--nm-state and --nm-export are retired: no-mistakes is retired and its data is not read' });
+  }
+
+  let ev;
+  if (useNew) {
+    try { ev = newMod.loadNewEvents(newFile); } catch (e) { throw new InputError(`cannot read ${newFile}: ${e.code || e.message}`); }
+  } else ev = loadEvents(eventsFile);
+  sources.push({
+    kind: useNew ? 'events-new' : 'events', path: useNew ? newFile : eventsFile, found: ev.events !== null,
+    rows: ev.events ? ev.events.length : null, ...(ev.reason ? { 'n/a': ev.reason } : {}),
+  });
+  if (useNew) {
+    sources.push({ kind: 'source', path: 'new', found: true, rows: null, note: 'computed from the new events (docs/metrics.md, Reading the new events)' });
+    for (const sk of ev.skipped || []) sources.push({ kind: 'new-events-skipped', path: `${sk.type} v${sk.type_version}`, found: false, rows: sk.count });
+    for (const [k, why] of Object.entries(newMod.NA_METRICS)) sources.push({ kind: 'new-events-n/a', path: k, found: false, rows: null, 'n/a': why });
+    for (const [k, why] of Object.entries(newMod.NOTES)) sources.push({ kind: 'new-events-note', path: k, found: true, rows: null, note: why });
+  }
+
+  const checkouts = [];
+  const top = gitToplevel();
+  if (top) checkouts.push(top);
+  const tr = findTranscripts(projectsRoot, checkouts, opts.projectsDirs);
+  const parsed = tr.files.map((f) => {
+    const lines = parseJsonl(readText(f.path));
+    return { ...f, lines, ...buildTurns(lines, win), inWindow: lines.some((l) => l && inWin(l.timestamp, win)) };
+  });
+  if (tr.foundDirs.length) {
+    for (const d of tr.foundDirs) {
+      const mine = parsed.filter((f) => path.resolve(f.path).startsWith(`${d}${path.sep}`));
+      sources.push({ kind: 'transcripts', path: d, found: true, rows: sum(mine.map((f) => f.lines.length)), files: mine.length });
+    }
+  } else {
+    sources.push({
+      kind: 'transcripts', path: opts.projectsDirs.length ? opts.projectsDirs.join(',') : projectsRoot, found: false, rows: null,
+      'n/a': opts.projectsDirs.length ? 'no --projects-dir exists' : 'no project directory matches the checkout path(s)',
+    });
+  }
+  sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
+
+  const haveTr = tr.foundDirs.length > 0;
+  const allRepoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  attributeTurns(parsed, allRepoEvents); // from every event of the session, before the regime filter
+  const repoEvents = opts.regime === undefined ? allRepoEvents : allRepoEvents.filter((e) => (e.regime || 'unknown') === opts.regime);
+  let rt = { times: null };
+  if (opts.readyTimes) {
+    rt = loadReadyTimes(opts.readyTimes);
+    sources.push({
+      kind: 'ready-times', path: opts.readyTimes, found: rt.times !== null, rows: rt.times ? rt.rows : null,
+      ...(rt.reason ? { 'n/a': rt.reason } : {}),
+    });
+  }
+  sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
+  const evNa = ev.events === null ? na(ev.reason) : null;
+  const fenv = applyFabriekEnv({ ...env });
+  const leaseMinutes = Number(fenv.FABRIEK_LEASE_MINUTES) > 0 ? Number(fenv.FABRIEK_LEASE_MINUTES) : 120;
+  const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
+    { readyTimes: rt.times, leaseMinutes });
+  if (em && opts.regime === undefined) {
+    const regimes = [...new Set([
+      ...repoEvents.filter((e) => inWin(Date.parse(e.ts), win)).map((e) => e.regime || 'unknown'),
+      ...parsed.flatMap((f) => f.turns.map(turnRegime)),
+    ])].sort(cmpStr);
+    em.throughput.by_regime = throughputByRegime(repoEvents, win, regimes, { readyTimes: rt.times, leaseMinutes });
+  }
+  if (em && useNew) for (const [k, why] of Object.entries(newMod.NA_METRICS)) em[k] = na(why);
+  if (em && !useNew) for (const k of MERGE_SECTIONS) em[k] = na(MERGE_OLD_NA);
+
+  const mains = parsed.filter((f) => f.kind === 'main');
+  const subs = parsed.filter((f) => f.kind === 'sub');
+  const report = {
+    window: {
+      since: iso(win.since),
+      until: iso(win.until),
+      regime: opts.regime === undefined ? 'all' : opts.regime,
+      sessions: mains.filter((f) => f.inWindow).length,
+      sub_agents: subs.filter((f) => f.inWindow).length,
+      scope: {
+        events: (useNew ? opts.newEvents : opts.events) ? 'fleet' : 'workspace',
+        transcripts: 'workspace',
+      },
+    },
+    throughput: em ? em.throughput : evNa,
+    first_pass: em ? em.first_pass : evNa,
+    review: em ? em.review : evNa,
+    adjudicator_agreement: em ? em.adjudicator_agreement : evNa,
+    test_weakened: em ? em.test_weakened : evNa,
+    per_device: em ? em.per_device : evNa,
+    claims: em ? em.claims : evNa,
+    waiting: em ? em.waiting : evNa,
+    interventions: em ? em.interventions : evNa,
+    judgement_calls: em ? em.judgement_calls : evNa,
+    claim_completion: em ? em.claim_completion : evNa,
+    rounds: em ? em.rounds : evNa,
+    merges: em ? em.merges : evNa,
+    prs: em ? em.prs : evNa,
+    gaps: em ? em.gaps : evNa,
+    size: em ? em.size : evNa,
+    overlap: em ? em.overlap : evNa,
+    spend: !haveTr ? na('no transcripts') : {
+      rows: computeSpend(parsed, opts.regime === undefined ? null : opts.regime),
+      ...(opts.regime === undefined ? { by_regime: computeSpendByRegime(parsed, spendRegimes(parsed, repoEvents, win)) } : {}),
+      sub_agent_model_mismatches: modelMismatches(parsed),
+    },
+    waste: haveTr ? computeWaste(mains, em ? em.mergedAt : null) : na('no transcripts'),
+    sources,
+  };
+  return report;
+}
+
+// ---------------------------------------------------------------- markdown
+
+const cell = (v) => (v === null || v === undefined ? 'n/a' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+function table(headers, rows) {
+  if (!rows.length) return '(none)\n';
+  const line = (r) => `| ${r.map(cell).join(' | ')} |`;
+  return [line(headers), line(headers.map(() => '---')), ...rows.map(line)].join('\n') + '\n';
+}
+const kv = (obj) => table(['metric', 'value'], Object.entries(obj));
+const naLine = (s) => `n/a: ${s['n/a']}\n`;
+
+function toMarkdown(r) {
+  const out = ['# Session evaluation', ''];
+  const sec = (title, body) => out.push(`## ${title}`, '', body, '');
+  const guard = (s, f) => (s && s['n/a'] ? naLine(s) : f(s));
+  const { scope, ...win } = r.window;
+  sec('window', kv(win) + `\nScope: events=${scope.events} transcripts=${scope.transcripts}\n`);
+  sec('throughput', guard(r.throughput, (t) =>
+    kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
+    table(['issue', 'merged_at', 'ready_source', 'run_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
+      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total])) +
+    (t.by_regime ? '\nBy regime:\n\n' + table(['regime', 'merged_issues', 'closed_issues', 'claims'], t.by_regime.map((x) => [x.regime, x.merged_issues, x.closed_issues, x.claims])) : '')));
+  sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
+  sec('review', guard(r.review, (v) =>
+    kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
+    table(['actor', ...VERDICT_PREFIXES], [['(all)', ...VERDICT_PREFIXES.map((p) => v.by_prefix[p])],
+      ...Object.entries(v.by_actor).map(([a, c]) => [a, ...VERDICT_PREFIXES.map((p) => c[p])])])));
+  sec('adjudicator_agreement', guard(r.adjudicator_agreement, kv));
+  sec('test_weakened', guard(r.test_weakened, (t) =>
+    kv({ total: t.total, restored: t.restored, unrestored: t.unrestored }) + '\n' +
+    table(['step', 'restored', 'unrestored'], t.by_step.map((x) => [x.step, x.restored, x.unrestored]))));
+  sec('per_device', guard(r.per_device, (rows) =>
+    table(['device', 'merges', 'claims', 'claim_lost'], rows.map((d) => [d.device, d.merges, d.claims, d.claim_lost]))));
+  sec('claims', guard(r.claims, (c) =>
+    kv({
+      double_claims: c.double_claims.count, claim_lost: c.claim_lost.count, reclaimed: c.reclaimed,
+      stuck: c.stuck.count, lease_minutes: c.stuck.lease_minutes,
+    }) + '\n' +
+    table(['double-claimed issue', 'devices', 'at'], c.double_claims.issues.map((i) => [i.issue, i.devices.join(','), i.at])) + '\n' +
+    table(['stuck issue', 'devices', 'last_state', 'last_event_at', 'silent_seconds'],
+      c.stuck.issues.map((i) => [i.issue, i.devices.join(','), i.last_state, i.last_event_at, i.silent_seconds]))));
+  sec('waiting', guard(r.waiting, (w) =>
+    kv({
+      ...w.totals, wait_seconds: w.wait_seconds, other_idle_pct_of_wait: w.other_idle_pct_of_wait,
+      other_idle_pct_of_total: w.other_idle_pct_of_total, threshold_pct: w.threshold_pct,
+      issues_with_split: w.issues_with_split, issues_without_ready: w.issues_without_ready, decision: w.decision,
+    }) + '\n' +
+    table(['issue', 'device', 'ready_source', 'pipeline_bound', 'dispatcher_bound', 'dispatcher_bound_other_idle', 'agent_work', 'total'],
+      w.issues.map((i) => [i.issue, i.device, i.ready_source, i.pipeline_bound, i.dispatcher_bound, i.dispatcher_bound_other_idle, i.agent_work, i.total]))));
+  sec('interventions', guard(r.interventions, (v) =>
+    kv({
+      total: v.total, person: v.person, loop: v.loop, fleet: v.fleet, merged_issues: v.merged_issues, untouched: v.untouched,
+      untouched_pct: v.untouched_pct, person_per_merged_issue: v.person_per_merged_issue, loop_per_merged_issue: v.loop_per_merged_issue,
+    }) + '\n' +
+    table(['who', 'cause', 'count'], v.by_cause.map((c) => [c.who, c.cause, c.count])) + '\n' +
+    table(['day', 'person', 'loop', 'fleet'], v.per_day.map((d) => [d.day, d.person, d.loop, d.fleet])) + '\n' +
+    table(['merged issue', 'person', 'loop', 'untouched', 'causes'], v.issues.map((i) => [i.issue, i.person, i.loop, i.untouched, i.causes.join(',') || 'none']))));
+  sec('judgement_calls', guard(r.judgement_calls, (j) =>
+    kv({ total: j.total, overridden: j.overridden, per_merged_issue: j.per_merged_issue }) + '\n' +
+    table(['kind', 'outcome', 'count', 'overridden'], j.by_kind.map((k) => [k.kind, k.outcome, k.count, k.overridden])) + '\n' +
+    table(['merged issue', 'calls', 'overridden'], j.issues.map((i) => [i.issue, i.calls, i.overridden]))));
+  sec('claim_completion', guard(r.claim_completion, (c) =>
+    kv({ claims: c.claims, merged: c.merged, open: c.open, merged_pct_of_resolved: c.merged_pct_of_resolved }) + '\n' +
+    table(['outcome', 'claims'], Object.entries(c.outcomes)) + '\n' +
+    table(['device', 'claims', 'merged', 'open'], c.by_device.map((d) => [d.device, d.claims, d.merged, d.open])) + '\n' +
+    table(['issue', 'device', 'claimed_at', 'outcome', 'ended_at'], c.issues.map((i) => [i.issue, i.device, i.claimed_at, i.outcome, i.ended_at]))));
+  sec('rounds', guard(r.rounds, (x) =>
+    kv({
+      merged_issues: x.merged_issues, 'review_rounds.median': x.review_rounds.median, 'review_rounds.max': x.review_rounds.max,
+      'fix_rounds.median': x.fix_rounds.median, 'fix_rounds.max': x.fix_rounds.max,
+      'in_flight_seconds.median': x.in_flight_seconds.median, 'in_flight_seconds.max': x.in_flight_seconds.max,
+    }) + '\n' +
+    table(['merged issue', 'review_rounds', 'fix_rounds', 'in_flight_seconds', 'parked_seconds'],
+      x.issues.map((i) => [i.issue, i.review_rounds, i.fix_rounds, i.in_flight_seconds, i.parked_seconds]))));
+  sec('merges', guard(r.merges, (m) =>
+    kv({ merges: m.total }) + '\n' +
+    table(['by', 'recovered', 'merges'], m.by.map((x) => [x.by, x.recovered, x.count])) + '\n' +
+    table(['day', 'by', 'recovered', 'merges'], m.per_day.map((d) => [d.day, d.by, d.recovered, d.merges])) + '\n' +
+    table(['issue', 'pr', 'merged_at', 'by', 'recovered'], m.issues.map((i) => [i.issue, i.pr, i.merged_at, i.by, i.recovered])) + '\n' +
+    'By kind (unlinked: no issue, or no claim at or before the merge):\n\n' + table(['day', 'kind', 'merges'], m.per_day_by_kind.map((d) => [d.day, d.kind, d.merges]))));
+  sec('prs', guard(r.prs, (p) =>
+    kv({
+      merges: p.merges, 'pr_open_to_merge_seconds.median': p.pr_open_to_merge_seconds.median, 'pr_open_to_merge_seconds.max': p.pr_open_to_merge_seconds.max,
+      'prs.median': p.prs.median, 'prs.max': p.prs.max, 'supersedes.median': p.supersedes.median, 'supersedes.max': p.supersedes.max,
+      'head_moves.median': p.head_moves.median, 'head_moves.max': p.head_moves.max,
+    }) + '\n' +
+    table(['issue', 'pr', 'pr_open_to_merge_seconds', 'prs', 'supersedes', 'head_moves'],
+      p.issues.map((i) => [i.issue, i.pr, i.pr_open_to_merge_seconds, i.prs, i.supersedes, i.head_moves]))));
+  sec('gaps', guard(r.gaps, (g) =>
+    kv({ merges: g.merges, gaps_shown: g.gaps.length }) + '\n' +
+    table(['from', 'to', 'gap_seconds', 'after merge of', 'before merge of', 'in flight (issue:state, ? = parked with a question)'],
+      g.gaps.map((x) => [x.from, x.to, x.gap_seconds, `#${x.before.issue}`, `#${x.after.issue}`,
+        x.in_flight.map((i) => `#${i.issue}:${i.state}${i.parked_with_question ? '?' : ''}`).join(' ') || 'none']))));
+  sec('size', guard(r.size, (z) =>
+    kv({ merges: z.merges, known: z.known, code_lines_known: z.code_lines_known }) + '\n' +
+    table(['metric', 'median', 'p90'], ['files', 'lines', 'code_files', 'code_lines'].map((k) => (z[k]['n/a'] ? [k, 'n/a', z[k]['n/a']] : [k, z[k].median, z[k].p90]))) + '\n' +
+    table(['issue', 'pr', 'files', 'lines', 'code_files', 'code_lines'], z.issues.map((i) => [i.issue, i.pr, i.files, i.lines, i.code_files, i.code_lines]))));
+  sec('overlap', guard(r.overlap, (o) =>
+    kv({ merges: o.merges, overlapping: o.overlapping, share: o.share }) + '\n' +
+    table(['issue', 'pr', 'overlapping', 'overlaps'], o.issues.map((i) => [i.issue, i.pr, i.overlapping, i.overlaps.map((x) => `#${x}`).join(' ') || 'none'])) + '\n' +
+    'Hottest files:\n\n' + table(['path', 'issues'], o.hottest_files.map((f) => [f.path, f.issues]))));
+  sec('spend', guard(r.spend, (s) =>
+    table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
+      s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
+    (s.sub_agent_model_mismatches['n/a'] ? naLine(s.sub_agent_model_mismatches)
+      : 'Sub-agents on a model other than requested:\n\n' + table(['session', 'role', 'requested', 'actual'],
+        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')]))) +
+    (s.by_regime || []).map((g) => `\nSpend for regime ${g.regime}:\n\n` + table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
+      g.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation]))).join('')));
+  sec('waste', guard(r.waste, (w) =>
+    table(['wake kind', 'count'], WAKE_KINDS.map((k) => [k, w.wakes[k]])) + '\n' +
+    table(['category', 'count', 'tokens'], [
+      ['all wakes', sum(Object.values(w.wakes)), w.wake_tokens], ['idle wake', w.idle_wakes.count, w.idle_wakes.tokens],
+      ['re-arm', w.re_arms.count, w.re_arms.tokens], ['stale wake', w.stale_wakes.count, w.stale_wakes.tokens],
+      ['repeated check', w.repeated_checks.count, w.repeated_checks.tokens]]) + '\n' +
+    table(['session', 'ts', 'kind', 'turns', 'tokens', 'idle', 're_arm', 'stale'],
+      w.top_wakes.map((t) => [t.session, t.ts, t.kind, t.turns, t.tokens, t.idle, t.re_arm, t.stale]))));
+  const noted = r.sources.some((s) => s.note);
+  sec('sources', table(['kind', 'path', 'found', 'rows', 'n/a', ...(noted ? ['note'] : [])],
+    r.sources.map((s) => [s.kind, s.path, s.found, s.rows, s['n/a'] || '', ...(noted ? [s.note || ''] : [])])));
+  return out.join('\n');
+}
+
+// ---------------------------------------------------------------- main
+
+async function main(argv, env = process.env) {
+  let opts;
+  try {
+    const rs = loadShared('factory-source.js', env).resolveSource('evaluate', argv, env, 'new');
+    opts = parseArgs(rs.argv);
+    opts.source = rs.source;
+  } catch (e) {
+    if (e instanceof InputError) {
+      process.stderr.write(`fabriek-evaluate: ${e.message}\n`);
+      return 1;
+    }
+    if (!(e instanceof UsageError) && e.code !== 'USAGE') throw e;
+    process.stderr.write(`fabriek-evaluate: ${e.message}\n${USAGE}\n`);
+    return 2;
+  }
+  if (opts.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  let report;
+  try {
+    if (opts.source === 'shadow') {
+      const shadow = loadShared('factory-source.js', env);
+      const newMod = loadShared('evaluate-new-events.js', env);
+      report = await shadow.runShadow({
+        tool: 'evaluate',
+        old: () => evaluate({ ...opts, source: 'old' }, env),
+        new: () => {
+          if (opts.events && !opts.newEvents) throw new Error('skipped: no new input (--events given without --new-events)');
+          const nf = opts.newEvents || newMod.localLog(env.CALLUM_EVENTS_DIR, opts.repo);
+          if (!fs.existsSync(nf)) throw new Error(`skipped: no new log (${nf})`);
+          return evaluate({ ...opts, source: 'new' }, env);
+        },
+        normalize: newMod.normalize,
+        repo: opts.repo,
+        args: { since: opts.since, until: opts.until || null, format: opts.format, events: Boolean(opts.events), new_events: Boolean(opts.newEvents) },
+        eventsDir: env.CALLUM_EVENTS_DIR,
+      });
+    } else report = evaluate(opts, env);
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    process.stderr.write(`fabriek-evaluate: ${e.message}\n`);
+    return 1;
+  }
+  process.stdout.write(opts.format === 'markdown' ? toMarkdown(report) : `${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+
+module.exports = {
+  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend, computeSpendByRegime, attributeTurns,
+  modelMismatches, evaluate, toMarkdown, MERGE_SECTIONS, NON_CODE_RE, computeMergeMetrics, mungePath, repoOfUrl,
+};
+
+if (require.main === module) {
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`${e && e.stack || e}\n`); process.exitCode = 1; });
+}

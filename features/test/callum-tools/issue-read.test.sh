@@ -1,14 +1,14 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-issue-read and the trusted-author list
+# Plain-shell tests for fabriek-issue-read and the trusted-author list
 # (cbundy/dev-system#307). A stub gh serves fixture JSON files, so nothing here
 # touches the real API. Hermetic PATH, no network, no Docker.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
-READ="$ROOT/images/base/callum-flow-issue-read"
-EVENT="$ROOT/images/base/callum-flow-event"
+READ="$ROOT/images/base/fabriek-issue-read"
+EVENT="$ROOT/images/base/fabriek-event"
 SHARE="$ROOT/images/base"
 
 fail() {
@@ -63,9 +63,9 @@ chmod +x "$tmpdir/gh"
 
 TRUSTED='cbundy:13131067'
 run() {
-  PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
-    CALLUM_FLOW_EVENT_BIN="${EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" CALLUM_FLOW_SHARE_DIR="$SHARE" \
-    CALLUM_FLOW_TRUSTED_AUTHORS="$TRUSTED" "$SH" "$@"
+  PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r \
+    FABRIEK_EVENT_BIN="${EVENT_BIN:-$EVENT}" CALLUM_EVENTS_DIR="$tmpdir/events" FABRIEK_SHARE_DIR="$SHARE" \
+    FABRIEK_TRUSTED_AUTHORS="$TRUSTED" "$SH" "$@"
 }
 rc_of() { set +e; run "$@" >"$tmpdir/out" 2>"$tmpdir/err"; rc=$?; set -e; }
 expect_rc() { [ "$rc" = "$1" ] || fail "$2: exit $rc, wanted $1 (stderr: $(cat "$tmpdir/err"))"; }
@@ -73,7 +73,7 @@ no_out() { [ ! -s "$tmpdir/out" ] || fail "$1: stdout not empty: $(cat "$tmpdir/
 # $1 = secret text that must appear nowhere in stdout or stderr
 absent() { ! grep -qF -- "$1" "$tmpdir/out" "$tmpdir/err" || fail "$2: '$1' leaked"; }
 present() { grep -qF -- "$1" "$tmpdir/out" || fail "$2: '$1' missing from: $(cat "$tmpdir/out")"; }
-# events: the new store, the only log the reader writes (callum-flow-event --type untrusted_stripped --data);
+# events: the new store, the only log the reader writes (fabriek-event --type untrusted_stripped --data);
 # the old log must stay empty
 events() { cat "$tmpdir/events"/factory/* 2>/dev/null || true; }
 old_events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
@@ -108,7 +108,7 @@ for bad in '' 'cbundy' 'cbundy:0' 'cbundy:abc' 'a:1,' ' a:1' 'a:1 b:2' ':5'; do
   rc_of "$READ" 7
   expect_rc 1 "list '$bad' must fail closed"
   no_out "list '$bad'"
-  grep -q CALLUM_FLOW_TRUSTED_AUTHORS "$tmpdir/err" || fail "list '$bad': error does not name the variable: $(cat "$tmpdir/err")"
+  grep -q FABRIEK_TRUSTED_AUTHORS "$tmpdir/err" || fail "list '$bad': error does not name the variable: $(cat "$tmpdir/err")"
 done
 TRUSTED='cbundy:13131067'
 rc_of "$READ" 7
@@ -122,17 +122,17 @@ present "B7" "trusted issue"
 # unset entirely (not just empty)
 cat > "$tmpdir/unset-run" <<'WRAP'
 #!/bin/sh
-unset CALLUM_FLOW_TRUSTED_AUTHORS
+unset FABRIEK_TRUSTED_AUTHORS CALLUM_FLOW_TRUSTED_AUTHORS
 exec "$1" 7
 WRAP
 set +e
-PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_SHARE_DIR="$SHARE" \
+PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r FABRIEK_SHARE_DIR="$SHARE" \
   "$SH" "$tmpdir/unset-run" "$READ" >"$tmpdir/out" 2>"$tmpdir/err"
 rc=$?
 set -e
 expect_rc 1 "unset variable"
 no_out "unset variable"
-grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is not set' "$tmpdir/err" || fail "unset: unclear error: $(cat "$tmpdir/err")"
+grep -q 'FABRIEK_TRUSTED_AUTHORS is not set' "$tmpdir/err" || fail "unset: unclear error: $(cat "$tmpdir/err")"
 # several entries, case-insensitive login
 TRUSTED='Alice:5,CBundy:13131067'
 rc_of "$READ" 7
@@ -766,7 +766,7 @@ no_out "stale identity file, token mode off"
 TRUSTED=''
 token_run "" 7
 expect_rc 1 "stale identity file, token mode off, empty variable"
-grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is not set' "$tmpdir/err" || fail "stale identity: unclear error: $(cat "$tmpdir/err")"
+grep -q 'FABRIEK_TRUSTED_AUTHORS is not set' "$tmpdir/err" || fail "stale identity: unclear error: $(cat "$tmpdir/err")"
 
 # a malformed identity file fails closed, naming the file
 for bad in 'not json' '{"login":"x"}' '{"login":"x","id":"7"}' '{"login":"bad login","id":7}' '[]'; do
@@ -782,7 +782,7 @@ printf '%s\n' '{"login":"TokenBot","id":777}' > "$IDENTITY"
 TRUSTED='bad'
 token_run "$tmpdir/token" 8
 expect_rc 1 "malformed variable in token mode"
-grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is malformed' "$tmpdir/err" || fail "malformed variable: $(cat "$tmpdir/err")"
+grep -q 'FABRIEK_TRUSTED_AUTHORS is malformed' "$tmpdir/err" || fail "malformed variable: $(cat "$tmpdir/err")"
 unset GH_CONFIG_DIR
 
 echo "issue-read tests passed"

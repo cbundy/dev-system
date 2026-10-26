@@ -48,7 +48,7 @@ function run(extraEnv = {}, { args = [] } = {}) {
       DEV_MACHINE_NAME: DEV,
       DEV_CONTEXT_WINDOW_DIR: path.join(tmp, "windows"),
       HEARTBEAT_NOW_MS: String(NOW),
-      CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old",
+      FABRIEK_HEARTBEAT_STATE_SOURCE: "old",
       ...extraEnv,
     },
   });
@@ -328,7 +328,7 @@ for (const flat of [false, true]) {
   for (const [name, lines, want] of rules) {
     test(`new (${shape}): ${name}`, () => {
       writeNew(lines);
-      const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+      const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
       assert.deepEqual(issuesOf(out), want);
       assert.equal(out.state, want.length ? "busy" : "idle");
     });
@@ -343,7 +343,7 @@ for (const flat of [false, true]) {
   const tr = (from, to, m, branch = "issue-7") => n("transition", 7, { from_state: from, to_state: to, branch }, at(m));
   const branchOf = (lines) => {
     writeNew(lines);
-    const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+    const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
     return out.in_flight.length ? out.in_flight[0].branch : out.state;
   };
 
@@ -351,7 +351,7 @@ for (const flat of [false, true]) {
     const lines = [n("claimed", 7, {}, at(0)), tr("queued", "designing", 1), tr("designing", "building", 2)];
     assert.equal(branchOf(lines), "issue-7");
     writeEvents([ev("claimed", 7), ev("delegated", 7, { branch: "issue-7", ts: "2026-10-12T10:02:00Z" })]);
-    assert.equal(run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" }).out.in_flight[0].branch, "issue-7");
+    assert.equal(run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "old" }).out.in_flight[0].branch, "issue-7");
   });
   test(`new (${shape}): implementer_routed after the entry reads null, nothing is carried`, () => {
     assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("designing", "building", 2), n("implementer_routed", 7, {}, at(3))]), null);
@@ -378,7 +378,7 @@ for (const flat of [false, true]) {
 
 test("new: an in_flight entry has the new type as state, a null run_id and the payload branch", () => {
   writeNew([nev("claimed", 7, { branch: "issue-7" })]);
-  const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+  const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
   assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 7, run_id: null, branch: "issue-7", state: "claimed" }]);
 });
 
@@ -389,14 +389,14 @@ test("new: .shadow and .pushed files are not read", () => {
     fs.writeFileSync(path.join(tmp, "events", "factory", d, "x.jsonl"), JSON.stringify(nev("claimed", 2)) + "\n");
   }
   fs.writeFileSync(path.join(tmp, "events", "factory", ".shadow", "heartbeat-state.jsonl"), JSON.stringify(nev("claimed", 3)) + "\n");
-  const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+  const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
   assert.deepEqual(out.in_flight, []);
 });
 
 test("new: a line longer than a read chunk and a torn line are handled", () => {
   writeNew([nev("claimed", 1, { branch: "x".repeat(200000) })]);
   fs.appendFileSync(path.join(tmp, "events", "factory", "o__r.jsonl"), "{torn\n");
-  const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+  const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
   assert.deepEqual(issuesOf(out), [1]);
 });
 
@@ -412,23 +412,23 @@ test("an event of a version the shapes file does not list as current is skipped 
   const stamp = (e, v) => ({ ...e, type_version: v });
   writeNew([stamp(nev("claimed", 5, { branch: "issue-5" }, { flat: true }), 2), stamp(nev("claimed", 6, { branch: "issue-6" }, { flat: true }), 1), stamp(nev("mystery", 7, {}, { flat: true }), 1)]);
   for (const source of ["new", "shadow"]) {
-    const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: source });
+    const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: source });
     assert.deepEqual(issuesOf(out), source === "new" ? [6] : [], source);
     assert.deepEqual(out.skipped_events, [{ type: "claimed", type_version: 2, count: 1 }, { type: "mystery", type_version: 1, count: 1 }], source);
   }
-  const old = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
+  const old = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "old" });
   assert.deepEqual(old.out.skipped_events, []);
 });
 
 test("default is new: an empty variable shows new's answer and writes no shadow record; the old variable and --source old show old's", () => {
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("merged", 5)]);
-  const dflt = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" });
+  const dflt = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "" });
   assert.deepEqual(issuesOf(dflt.out), [], "new says 5 is merged");
   assert.deepEqual(shadowRecords(), []);
-  const viaVar = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
+  const viaVar = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "old" });
   assert.deepEqual(issuesOf(viaVar.out), [5], "old says 5 is in flight");
-  const viaFlag = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" }, { args: ["--source", "old"] });
+  const viaFlag = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "" }, { args: ["--source", "old"] });
   assert.deepEqual(issuesOf(viaFlag.out), [5]);
   assert.deepEqual(shadowRecords(), []);
 });
@@ -436,9 +436,9 @@ test("default is new: an empty variable shows new's answer and writes no shadow 
 test("shadow (opt-in): prints old's output and writes one clean record when the reads agree", () => {
   writeEvents([ev("claimed", 5, { branch: "issue-5" })]);
   writeNew([nev("claimed", 5, { branch: "issue-5" })]);
-  const env = { CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "shadow" };
+  const env = { FABRIEK_HEARTBEAT_STATE_SOURCE: "shadow" };
   const shadow = run(env);
-  const old = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" });
+  const old = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "old" });
   assert.deepEqual(shadow.out, old.out);
   assert.equal(shadow.out.in_flight[0].state, "claimed");
   const recs = shadowRecords();
@@ -452,7 +452,7 @@ test("shadow (opt-in): prints old's output and writes one clean record when the 
 test("shadow: a difference prints old's output and is recorded at an in_flight path", () => {
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("merged", 5)]);
-  const { out, stderr } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "shadow" });
+  const { out, stderr } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "shadow" });
   assert.deepEqual(issuesOf(out), [5]);
   const [rec] = shadowRecords();
   assert.ok(rec.differences > 0);
@@ -464,7 +464,7 @@ test("shadow: a difference prints old's output and is recorded at an in_flight p
 test("shadow: an agreeing run inside the quiet period writes no record, a differing run does", () => {
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("claimed", 5)]);
-  const env = { CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "shadow" };
+  const env = { FABRIEK_HEARTBEAT_STATE_SOURCE: "shadow" };
   run(env);
   run(env);
   assert.equal(shadowRecords().length, 1);
@@ -483,7 +483,7 @@ test("shadow: a slow new read times out, old's answer is printed and new_error n
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("claimed", 5)]);
   const t0 = Date.now();
-  const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "shadow", CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS: "50", HEARTBEAT_TEST_NEW_DELAY_MS: "100" });
+  const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "shadow", FABRIEK_HEARTBEAT_STATE_NEW_TIMEOUT_MS: "50", HEARTBEAT_TEST_NEW_DELAY_MS: "100" });
   assert.ok(Date.now() - t0 < 2000);
   assert.deepEqual(issuesOf(out), [5]);
   const [rec] = shadowRecords();
@@ -493,7 +493,7 @@ test("shadow: a slow new read times out, old's answer is printed and new_error n
 
 test("new: a slow read contributes nothing, with a warning, and the beat still answers", () => {
   writeNew([nev("claimed", 5)]);
-  const { out, stderr } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new", CALLUM_FLOW_HEARTBEAT_STATE_NEW_TIMEOUT_MS: "50", HEARTBEAT_TEST_NEW_DELAY_MS: "100" });
+  const { out, stderr } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new", FABRIEK_HEARTBEAT_STATE_NEW_TIMEOUT_MS: "50", HEARTBEAT_TEST_NEW_DELAY_MS: "100" });
   assert.deepEqual(out.in_flight, []);
   assert.match(stderr, /new read timed out/);
 });
@@ -501,7 +501,7 @@ test("new: a slow read contributes nothing, with a warning, and the beat still a
 test("new: an unreadable new log warns and the answer comes from chat only", () => {
   fs.writeFileSync(path.join(tmp, "events", "factory"), "a file, not a folder");
   writeChat([prompt(60)]);
-  const { out, stderr } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+  const { out, stderr } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "new" });
   assert.deepEqual(out.in_flight, []);
   assert.equal(out.state, "busy");
   assert.match(stderr, /heartbeat-state: events: /);
@@ -510,19 +510,19 @@ test("new: an unreadable new log warns and the answer comes from chat only", () 
 test("an invalid source warns once, reads old and writes no shadow record", () => {
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("merged", 5)]);
-  const { out, stderr } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "bogus" });
+  const { out, stderr } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "bogus" });
   assert.deepEqual(issuesOf(out), [5]);
   assert.equal(stderr.match(/invalid source/g).length, 1);
   assert.match(stderr, /: reading old\n$/);
   assert.deepEqual(shadowRecords(), []);
-  const flag = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "" }, { args: ["--source", "bogus"] });
+  const flag = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "" }, { args: ["--source", "bogus"] });
   assert.match(flag.stderr, /invalid source.*reading old/);
 });
 
 test("--source new overrides the environment", () => {
   writeEvents([ev("claimed", 5)]);
   writeNew([nev("merged", 5)]);
-  const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" }, { args: ["--source", "new"] });
+  const { out } = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "old" }, { args: ["--source", "new"] });
   assert.deepEqual(out.in_flight, []);
 });
 
@@ -584,7 +584,7 @@ test("--source and --repo are both parsed, in either order", () => {
   const a = run({}, { args: ["--source", "old", "--repo", "owner/name"] });
   assert.deepEqual(a.out.config, snap);
   assert.deepEqual(issuesOf(a.out), [5]);
-  const b = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "bogus" }, { args: ["--repo=owner/name", "--source=old"] });
+  const b = run({ FABRIEK_HEARTBEAT_STATE_SOURCE: "bogus" }, { args: ["--repo=owner/name", "--source=old"] });
   assert.deepEqual(b.out.config, snap);
 });
 

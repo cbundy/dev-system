@@ -1,6 +1,6 @@
 "use strict";
 
-// The native mode of callum-flow-event (`--type`, dev-system#792): the real script into a scratch
+// The native mode of fabriek-event (`--type`, dev-system#792): the real script into a scratch
 // events dir, the event it writes checked strictly against its schema and read back by the shared
 // reader (plugins/factory-loop/hooks/v2/event-reader.ts). Also the refusals, the unchecked writes of
 // an unknown type or version, and the degraded paths.
@@ -24,7 +24,7 @@ register(
 );
 
 const ROOT = path.join(__dirname, "..");
-const EVENT = path.join(ROOT, "images", "base", "callum-flow-event");
+const EVENT = path.join(ROOT, "images", "base", "fabriek-event");
 const SHAPES = path.join(ROOT, "images", "base", "factory-event-shapes.json");
 const SCHEMAS_DIR = path.join(ROOT, "docs", "factory-events", "schemas");
 const READER_REL = path.join("plugins", "factory-loop", "hooks", "v2", "event-reader.ts");
@@ -52,7 +52,7 @@ function native(args, { env = {}, shapes = SHAPES } = {}) {
   const r = spawnSync("/bin/sh", [EVENT, ...args], {
     encoding: "utf8",
     env: {
-      PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box",
+      PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, FABRIEK_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box",
       DEV_VERSIONS_FILE: versions, CALLUM_EVENT_SHAPES: shapes, ...env,
     },
   });
@@ -299,7 +299,7 @@ for (const [name, args, want] of REFUSED) {
     const { r, dir, lines, old } = native(args);
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, want);
-    assert.match(r.stderr, /^callum-flow-event:/);
+    assert.match(r.stderr, /^fabriek-event:/);
     assert.equal(r.stderr.trim().split("\n").length, 1, "one line");
     assert.deepEqual(lines, []);
     assert.deepEqual(old, []);
@@ -314,7 +314,7 @@ test("an unknown type, and an unknown version of a known type, are written with 
   ]) {
     const { r, lines } = native(args);
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stderr, `callum-flow-event: warning: unknown factory event: ${label} - written unchecked\n`);
+    assert.equal(r.stderr, `fabriek-event: warning: unknown factory event: ${label} - written unchecked\n`);
     assert.equal(lines.length, 1);
     assert.equal(JSON.parse(lines[0]).type_version, Number(label.split(" v")[1]));
   }
@@ -472,7 +472,7 @@ test("regime: a value the enum lacks is written as given with exactly one warnin
   const { r, lines } = native([...claimed, "--regime", "bogus"]);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr.trim().split("\n").length, 1, r.stderr);
-  assert.match(r.stderr, /callum-flow-event: warning: unknown regime 'bogus' - written as given/);
+  assert.match(r.stderr, /fabriek-event: warning: unknown regime 'bogus' - written as given/);
   const e = JSON.parse(lines[0]);
   assert.equal(e.regime, "bogus");
   assert.notDeepEqual(reader.validateStrict("envelope", 1, e), [], "strict validation still rejects it");
@@ -490,9 +490,9 @@ test("regime: the old-state mode passes FACTORY_REGIME to the translator, and wi
 // The hand-recorded rescue of docs/metrics.md (section 9), run through the writer as the document shows it.
 test("the documented rescue command writes a manual intervention, and reads null without --regime", () => {
   const md = fs.readFileSync(path.join(ROOT, "docs", "metrics.md"), "utf8");
-  const block = md.match(/```sh\n(callum-flow-event --type intervention[\s\S]*?)```/);
+  const block = md.match(/```sh\n((?:callum-flow|fabriek)-event --type intervention[\s\S]*?)```/);
   assert.ok(block, "docs/metrics.md shows the rescue command");
-  const cmd = block[1].replace(/\\\n\s*/g, "").trim().replace(/^callum-flow-event\s+/, "")
+  const cmd = block[1].replace(/\\\n\s*/g, "").trim().replace(/^(?:callum-flow|fabriek)-event\s+/, "")
     .replace("--issue N", "--issue 7").replace("<what was done>", "patched the trust file");
   const m = cmd.match(/^(.*?) --data '(.*)'$/);
   assert.ok(m, `the command has a --data argument: ${cmd}`);

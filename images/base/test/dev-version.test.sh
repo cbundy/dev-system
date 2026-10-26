@@ -106,7 +106,7 @@ run_cmd() {
   rc=0
   out=$(PATH="${EXTRA_PATH:+$EXTRA_PATH:}$bin:$PATH" DEV_VERSION_STAMP="${STAMP_FILE:-$tmp/stamp}" DEV_VERSION_STAMP_DIR="$tmp/layers" \
     DEV_SYSTEM_SHARE="$SCRIPT_DIR/.." DEV_VERSION_REGISTRY=https://reg.test DEV_VERSION_NPM=https://npm.test \
-    DEV_DEFAULT_PLUGINS='callum-flow@callum=cbundy/dev-system#v0.2.0' "$CMD" "$@" 2>&1) || rc=$?
+    DEV_DEFAULT_PLUGINS="${PINNED_PLUGINS:-callum-flow@callum=cbundy/dev-system#v0.2.0}" "$CMD" "$@" 2>&1) || rc=$?
 }
 
 expect() { # expect <description> <rc> <grep pattern...>
@@ -285,6 +285,17 @@ rm -f "$tmp/layers/dev" "$snap"
   [ "$rc" -eq 0 ] || fail "snapshot without env: exit $rc: $out")
 jq -e '.device == null and .dev_image == null and .template_version == null and .role == null and .ring == null
   and .runtime == null and .coder_workspace == null and .base_image == "2.13.0"' "$snap" > /dev/null || fail "snapshot nulls: $(cat "$snap")"
+
+# plugin_version comes from a fabriek@... (user) component when the plugin has that name, and still from
+# callum-flow@... (user) (the window of the plugin rename).
+reset; printf '[{"id":"fabriek@callum","version":"0.7.0","scope":"user"}]' > "$FIX/plugins.json"
+PINNED_PLUGINS='fabriek@callum=cbundy/dev-system#v0.7.0' DEV_VERSIONS_FILE=$snap EXTRA_PATH=$nonet run_cmd --snapshot
+[ "$rc" -eq 0 ] || fail "snapshot with a fabriek@ plugin: exit $rc: $out"
+jq -e '.plugin_version == "0.7.0" and ((.components[] | select(.name == "fabriek@callum(user)")) | .running == "0.7.0")' "$snap" > /dev/null \
+  || fail "snapshot plugin_version from fabriek@: $(cat "$snap")"
+reset; printf '[{"id":"callum-flow@callum","version":"0.2.0","scope":"user"}]' > "$FIX/plugins.json"
+DEV_VERSIONS_FILE=$snap EXTRA_PATH=$nonet run_cmd --snapshot
+jq -e '.plugin_version == "0.2.0"' "$snap" > /dev/null || fail "snapshot plugin_version from callum-flow@: $(cat "$snap")"
 
 reset; run_cmd --bogus
 expect "bad flag" 2 'usage: dev-version'

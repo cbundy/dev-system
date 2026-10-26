@@ -1,0 +1,286 @@
+#!/usr/bin/env node
+"use strict";
+// fabriek-capture: start a UI app, take desktop and narrow full-page screenshots (and an optional
+// video) with headless Chromium through Playwright, stop the app, and upload the captures through
+// fabriek-evidence-upload (cbundy/dev-system#1271). Repo-agnostic: the repo says how to start its app.
+//
+// Exit codes: 0 ok, 1 upload failed, 2 bad usage, 3 app did not start, 4 page error or bad status,
+// 69 browser missing, 78 no evidence storage.
+
+const { spawn, spawnSync, execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const http = require("node:http");
+const net = require("node:net");
+const os = require("node:os");
+const path = require("node:path");
+
+const USAGE = `usage: fabriek-capture --start "<cmd>" [--path /p] [--timeout S] [--video] [--out DIR] [--dest pr-<N>/<slug>] <scenario>
+
+Starts <cmd> with sh -c in its own process group on a free port (exported as PORT; {port} in <cmd> is
+replaced), waits for http://127.0.0.1:<port><path> to answer, takes <scenario>-desktop.png (1440x900) and
+<scenario>-narrow.png (390x844) full-page screenshots with headless Chromium, and with --video also
+<scenario>.webm. The app's whole process group and the browser are stopped on every exit path.
+
+  --start CMD     command that starts the app (required)
+  --path /p       page to capture (default /)
+  --timeout S     seconds to wait for the app to answer (default 60)
+  --video         also record <scenario>.webm
+  --out DIR       output folder (default \${TMPDIR:-/tmp}/fabriek-capture/<scenario>-<timestamp>)
+  --dest D        upload with fabriek-evidence-upload D and print one URL per file; without it the
+                  local file paths are printed and nothing is uploaded
+  --help          this text
+
+Playwright is resolved from the current directory's node_modules, then the global npm root. The base
+image ships no browser: see images/base/README.md, section fabriek-capture.
+
+exit: 0 ok, 1 upload failed, 2 bad usage, 3 app did not start, 4 page error or bad status,
+69 browser missing, 78 no evidence storage`;
+
+class Fail extends Error {
+  constructor(code, msg) {
+    super(msg);
+    this.code = code;
+  }
+}
+
+function parseArgs(argv) {
+  const o = { path: "/", timeout: 60, video: false, start: null, out: null, dest: null, scenario: null };
+  const need = (i, name) => {
+    if (i + 1 >= argv.length) throw new Fail(2, `${name} needs a value`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--help" || a === "-h") {
+      o.help = true;
+    } else if (a === "--video") o.video = true;
+    else if (a === "--start") o.start = need(i++, a);
+    else if (a === "--path") o.path = need(i++, a);
+    else if (a === "--timeout") o.timeout = Number(need(i++, a));
+    else if (a === "--out") o.out = need(i++, a);
+    else if (a === "--dest") o.dest = need(i++, a);
+    else if (a.startsWith("--")) throw new Fail(2, `unknown option ${a}`);
+    else if (o.scenario === null) o.scenario = a;
+    else throw new Fail(2, `unexpected argument ${a}`);
+  }
+  if (o.help) return o;
+  if (!o.start) throw new Fail(2, "--start is required");
+  if (o.scenario === null) throw new Fail(2, "a <scenario> name is required");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(o.scenario)) throw new Fail(2, "<scenario> must match [a-z0-9][a-z0-9-]*");
+  if (!o.path.startsWith("/")) throw new Fail(2, "--path must start with /");
+  if (!Number.isFinite(o.timeout) || o.timeout <= 0) throw new Fail(2, "--timeout must be a positive number of seconds");
+  return o;
+}
+
+function resolvePlaywright() {
+  const roots = [process.cwd()];
+  try {
+    const g = execFileSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 20000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (g) roots.push(g);
+  } catch {
+    /* no npm or no global root */
+  }
+  for (const root of roots) {
+    for (const name of ["playwright", "playwright-core"]) {
+      try {
+        return require(require.resolve(name, { paths: [root] }));
+      } catch {
+        /* try the next */
+      }
+    }
+  }
+  throw new Fail(69, "Playwright is not installed (checked this checkout and the global npm root); add it and its Chromium to the repo's per-repo dev image - see images/base/README.md, section fabriek-capture");
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const { port } = s.address();
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopGroup(pid) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + 3000;
+  while (groupAlive(pid) && Date.now() < deadline) await sleep(50);
+  if (groupAlive(pid)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* gone */
+    }
+    const d2 = Date.now() + 3000;
+    while (groupAlive(pid) && Date.now() < d2) await sleep(50);
+  }
+}
+
+function probe(port, p) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: "127.0.0.1", port, path: p, timeout: 2000 }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(false));
+  });
+}
+
+let child = null;
+let childExit = null;
+let browser = null;
+
+async function cleanup() {
+  if (browser) {
+    const b = browser;
+    browser = null;
+    try {
+      await Promise.race([b.close(), sleep(5000)]);
+    } catch {
+      /* closing */
+    }
+  }
+  if (child) {
+    const pid = child.pid;
+    child = null;
+    await stopGroup(pid);
+  }
+}
+
+async function run(o) {
+  const pw = resolvePlaywright();
+  const chromium = pw.chromium || (pw.default && pw.default.chromium);
+  if (!chromium) throw new Fail(69, "the Playwright found has no chromium; see images/base/README.md, section fabriek-capture");
+
+  const port = await freePort();
+  const cmd = o.start.split("{port}").join(String(port));
+  child = spawn("sh", ["-c", cmd], { detached: true, stdio: ["ignore", 2, 2], env: { ...process.env, PORT: String(port) } });
+  child.on("exit", (code, sig) => {
+    childExit = sig ? `signal ${sig}` : `code ${code}`;
+  });
+  child.on("error", (e) => {
+    childExit = `error ${e.message}`;
+  });
+
+  const deadline = Date.now() + o.timeout * 1000;
+  for (;;) {
+    if (childExit) throw new Fail(3, `the app exited (${childExit}) before it answered on port ${port}`);
+    if (await probe(port, o.path)) break;
+    if (Date.now() >= deadline) throw new Fail(3, `the app did not answer http://127.0.0.1:${port}${o.path} within ${o.timeout}s`);
+    await sleep(200);
+  }
+
+  const out = o.out || path.join(process.env.TMPDIR || "/tmp", "fabriek-capture", `${o.scenario}-${new Date().toISOString().replace(/[-:.]/g, "").replace("T", "-").slice(0, 15)}-${process.pid}`);
+  fs.mkdirSync(out, { recursive: true });
+  const url = `http://127.0.0.1:${port}${o.path}`;
+
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (e) {
+    throw new Fail(69, `Chromium could not start (${String(e.message).split("\n")[0]}); install it in the repo's per-repo dev image - see images/base/README.md, section fabriek-capture`);
+  }
+
+  const files = [];
+  const shots = [
+    { name: "desktop", viewport: { width: 1440, height: 900 }, video: o.video },
+    { name: "narrow", viewport: { width: 390, height: 844 }, video: false },
+  ];
+  for (const s of shots) {
+    const vdir = path.join(out, ".video");
+    const ctx = await browser.newContext({
+      viewport: s.viewport,
+      ...(s.video ? { recordVideo: { dir: vdir, size: s.viewport } } : {}),
+    });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String((e && e.message) || e)));
+    const res = await page.goto(url, { waitUntil: "load", timeout: 30000 });
+    const status = res && typeof res.status === "function" ? res.status() : 0;
+    if (status >= 400) throw new Fail(4, `${url} answered HTTP ${status} (${s.name})`);
+    const file = path.join(out, `${o.scenario}-${s.name}.png`);
+    await page.screenshot({ path: file, fullPage: true });
+    if (errors.length) throw new Fail(4, `page error (${s.name}): ${errors[0].split("\n")[0]}`);
+    files.push(file);
+    if (s.video) {
+      const video = page.video();
+      await ctx.close();
+      const webm = path.join(out, `${o.scenario}.webm`);
+      await video.saveAs(webm);
+      fs.rmSync(vdir, { recursive: true, force: true });
+      files.push(webm);
+    } else {
+      await ctx.close();
+    }
+  }
+  await cleanup();
+
+  if (!o.dest) {
+    for (const f of files) process.stdout.write(`${f}\n`);
+    return 0;
+  }
+  const up = spawnSync("fabriek-evidence-upload", [o.dest, ...files], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  if (up.error) throw new Fail(1, `could not run fabriek-evidence-upload: ${up.error.message}`);
+  if (up.status === 0) {
+    process.stdout.write(up.stdout);
+    return 0;
+  }
+  process.stderr.write(`fabriek-capture: captures kept in ${out}\n`);
+  if (up.status === 78) throw new Fail(78, "no evidence storage for this repo; commit a capture from the folder above and use a commit-pinned blob URL");
+  throw new Fail(1, `upload failed (fabriek-evidence-upload exit ${up.status})`);
+}
+
+async function main() {
+  let o;
+  try {
+    o = parseArgs(process.argv.slice(2));
+  } catch (e) {
+    process.stderr.write(`fabriek-capture: ${e.message}\n${USAGE}\n`);
+    return e.code || 2;
+  }
+  if (o.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  let signalled = 0;
+  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) {
+    process.on(sig, () => {
+      if (signalled) return;
+      signalled = code;
+      cleanup().finally(() => process.exit(code));
+    });
+  }
+  try {
+    return await run(o);
+  } catch (e) {
+    const code = e instanceof Fail ? e.code : 1;
+    const msg = e instanceof Fail ? e.message : `unexpected error: ${String((e && e.message) || e).split("\n")[0]}`;
+    process.stderr.write(`fabriek-capture: ${msg}\n`);
+    return code;
+  } finally {
+    await cleanup();
+  }
+}
+
+main().then((code) => {
+  if (!process.exitCode) process.exitCode = code;
+  process.exit(code);
+});

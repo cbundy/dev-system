@@ -3,7 +3,7 @@
 #
 # Plain-shell test for factory-db-migrate and its place in dev-init (cbundy/dev-system#888):
 # which secret it uses, that the bootstrap runs exactly once with the right arguments, the status
-# file for each outcome, the loop_entry record (written by the real callum-flow-event against the
+# file for each outcome, the loop_entry record (written by the real fabriek-event against the
 # generated shapes), the no-file and no-database cases, and dev-init's step order.
 # factory-db-bootstrap is a stub on PATH that records its argv. No database or network.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
@@ -31,7 +31,7 @@ mkdir "$bin" "$share" "$migrations"
 cp "$BASE/agentsview.sh" "$BASE/factory-db.sh" "$share/"
 for n in 0001_a 0002_b 0003_c; do : > "$migrations/$n.sql"; done
 cp "$BASE/factory-db-migrate" "$bin/"
-cp "$BASE/callum-flow-event" "$bin/"
+cp "$BASE/fabriek-event" "$bin/"
 cp "$BASE/factory-event-write.js" "$BASE/factory-event-shapes.json" "$share/"
 
 # The stub bootstrap: records its argv, then acts as STUB_MODE says.
@@ -157,7 +157,7 @@ echo x > "$FIX/mig/factory-db-migrator-url"
 STUB_MODE=error call
 [ "$(jq_status error | wc -c | tr -d ' ')" -eq 301 ] || fail "4c: error length: $(jq_status error | wc -c)"
 
-# 5. The record, written by the real callum-flow-event against the generated shapes.
+# 5. The record, written by the real fabriek-event against the generated shapes.
 run_case
 writer_url 'postgres://fdb_writer:pw@db:5432/fdb_main'
 echo x > "$FIX/mig/factory-db-migrator-url"
@@ -183,8 +183,8 @@ unset DEV_MACHINE_NAME
 run_case
 writer_url 'postgres://fdb_writer:pw@db:5432/fdb_main'
 echo x > "$FIX/mig/factory-db-migrator-url"
-printf '#!/bin/sh\nexit 1\n' > "$FIX/callum-flow-event"
-chmod +x "$FIX/callum-flow-event"
+printf '#!/bin/sh\nexit 1\n' > "$FIX/fabriek-event"
+chmod +x "$FIX/fabriek-event"
 EXTRA_PATH="$FIX" call
 [ "$rc" -eq 0 ] && [ "$(jq_status outcome)" = migrated ] || fail "5d: rc $rc: $out"
 case "$out" in *"could not write the loop_entry event"*) ;; *) fail "5d: no log line: $out" ;; esac

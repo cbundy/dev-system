@@ -2,7 +2,7 @@
 #
 # factory-event-push-loop: ships the new factory event log
 # (<events dir>/factory/*.jsonl, one envelope per line, written by
-# callum-flow-event's dual write) to factory.event_store as the writer role
+# fabriek-event's dual write) to factory.event_store as the writer role
 # (cbundy/dev-system#740, part of #649). The old event-push-loop and its
 # factory.events table are untouched.
 #
@@ -39,12 +39,12 @@
 # output is masked. Every psql run is bounded by timeout; a timeout counts as
 # unreachable, not as a refusal.
 #
-# callum-flow-event touches <events dir>/.wake after every append. Between
+# fabriek-event touches <events dir>/.wake after every append. Between
 # passes the loop polls that file about once a second.
 #
 # Release collector (cbundy/dev-system#1012): at the start of a pass, at most every
 # DEV_FACTORY_RELEASE_COLLECT_INTERVAL seconds (default 900; 0 turns it off; the stamp is the mtime of
-# <events dir>/factory/.released-collect), the loop runs `callum-flow-released --collect`, which writes
+# <events dir>/factory/.released-collect), the loop runs `fabriek-released --collect`, which writes
 # the `released` events a repo's CI attached to its GitHub Releases. It runs before the files are
 # walked, so what it writes is pushed in the same pass. Its stderr goes to this log, masked. A missing
 # tool, unauthenticated gh, a timeout (FACTORY_RELEASE_COLLECT_TIMEOUT, default 120) or a non-zero exit
@@ -58,7 +58,7 @@
 #   FACTORY_EVENT_PUSH_TIMEOUT seconds a psql run may take (default 60),
 #   DEV_FACTORY_RELEASE_COLLECT_INTERVAL seconds between release collections (default 900; 0 = off),
 #   FACTORY_RELEASE_COLLECT_TIMEOUT seconds the collector may take (default 120),
-#   FACTORY_RELEASE_COLLECT_BIN the collector (default callum-flow-released on PATH),
+#   FACTORY_RELEASE_COLLECT_BIN the collector (default fabriek-released on PATH),
 #   FACTORY_RELEASE_REPOS repos to collect besides those the device's logs name (owner/name list).
 set -u
 
@@ -77,7 +77,7 @@ COLLECT_INTERVAL="${DEV_FACTORY_RELEASE_COLLECT_INTERVAL:-900}"
 case "$COLLECT_INTERVAL" in '' | *[!0-9]*) COLLECT_INTERVAL=900 ;; esac
 COLLECT_TIMEOUT="${FACTORY_RELEASE_COLLECT_TIMEOUT:-120}"
 case "$COLLECT_TIMEOUT" in '' | *[!0-9]* | 0) COLLECT_TIMEOUT=120 ;; esac
-COLLECT_BIN="${FACTORY_RELEASE_COLLECT_BIN:-callum-flow-released}"
+COLLECT_BIN="${FACTORY_RELEASE_COLLECT_BIN:-fabriek-released}"
 
 # The statement for each line of the input, numbered from $off + 1. The raw line
 # is the only literal; jq doubles its single quotes.

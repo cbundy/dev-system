@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+#
+# fabriek-evidence-upload: upload evidence files (screenshots, videos, reports) to the repo's
+# own private Azure blob container and print one read-signed URL per file (cbundy/dev-system#914).
+# One container and one SAS pair per repo; the workspace name is part of the blob path. The setup
+# is in docs/evidence-storage.md.
+#
+# Exit codes: 0 ok, 1 refused credentials or failed upload, 2 bad usage or input,
+# 78 no credentials for the repo.
+set -u
+
+usage() {
+  cat <<'USAGE'
+usage: fabriek-evidence-upload [--repo owner/name] [--check | --dry-run] <dest> <file>...
+
+Uploads each file to <owner>/<repo>/<workspace>/<dest>/<basename> in the repo's container and
+prints one read-signed URL per file on stdout, in input order. Everything else goes to stderr.
+
+  --repo owner/name  the repo (default: GITHUB_REPOSITORY, then the origin remote)
+  --check            validate the credentials for the repo, upload nothing (no <dest> or files)
+  --dry-run          print the blob path and read URL per file, upload nothing
+  --help             this text
+
+Credentials, first match wins: ARTIFACT_CONTAINER_URL + ARTIFACT_SAS + ARTIFACT_READ_SAS in the
+environment; else the folder evidence/<owner>/<repo>/ (container-url, write-sas, read-sas) in
+DEV_WORKSPACE_SECRETS_DIR (/run/secrets/dev-system-workspace), else in DEV_SECRETS_DIR
+(/run/secrets/dev-system).
+
+exit: 0 ok, 1 refused credentials or failed upload, 2 bad usage or input, 78 not configured
+USAGE
+}
+
+die() { # die RC MESSAGE
+  local rc=$1
+  shift
+  printf 'fabriek-evidence-upload: %s\n' "$*" >&2
+  exit "$rc"
+}
+
+repo="" mode=upload
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    --repo)
+      [ $# -ge 2 ] || die 2 "--repo needs owner/name"
+      repo=$2
+      shift 2
+      ;;
+    --repo=*)
+      repo=${1#--repo=}
+      shift
+      ;;
+    --check)
+      mode=check
+      shift
+      ;;
+    --dry-run)
+      mode=dry-run
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*) die 2 "unknown option $1 (see --help)" ;;
+    *) break ;;
+  esac
+done
+
+dest="" files=()
+if [ "$mode" = check ]; then
+  [ $# -eq 0 ] || die 2 "--check takes no destination or files"
+else
+  [ $# -ge 2 ] || die 2 "usage: fabriek-evidence-upload [--repo owner/name] [--check|--dry-run] <dest> <file>..."
+  dest=$1
+  shift
+  files=("$@")
+fi
+
+# --- repo -----------------------------------------------------------------------------------
+if [ -z "$repo" ]; then
+  repo=${GITHUB_REPOSITORY:-}
+fi
+if [ -z "$repo" ]; then
+  url=$(git remote get-url origin 2>/dev/null) || url=""
+  if [ -n "$url" ]; then
+    url=${url%/}
+    url=${url%.git}
+    name=${url##*[/:]}
+    rest=${url%"$name"}
+    rest=${rest%[/:]}
+    owner=${rest##*[/:]}
+    [ -n "$owner" ] && [ -n "$name" ] && repo="$owner/$name"
+  fi
+fi
+[ -n "$repo" ] || die 2 "cannot tell the repo: pass --repo owner/name, set GITHUB_REPOSITORY, or run in a checkout with an origin remote"
+repo=${repo,,}
+case "$repo" in
+  */*/* | /* | */ | .*/* | */.*) die 2 "bad repo '$repo' (want owner/name)" ;;
+esac
+[[ "$repo" =~ ^[a-z0-9._-]+/[a-z0-9._-]+$ ]] || die 2 "bad repo '$repo' (want owner/name)"
+if [ "${repo%%/*}" = .. ] || [ "${repo##*/}" = .. ]; then die 2 "bad repo '$repo' (want owner/name)"; fi
+
+# --- workspace ------------------------------------------------------------------------------
+if [ -n "${DEV_CODER_WORKSPACE:-}" ]; then
+  ws=$DEV_CODER_WORKSPACE
+elif [ -n "${CODER_WORKSPACE_NAME:-}" ]; then
+  ws=$CODER_WORKSPACE_NAME
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  ws="ci-${GITHUB_RUN_ID:-}"
+else
+  ws=${HOSTNAME:-}
+  [ -n "$ws" ] || ws=$(hostname 2>/dev/null) || ws=""
+  [ -n "$ws" ] || ws=$(cat /etc/hostname 2>/dev/null) || ws=""
+fi
+ws=${ws,,}
+ws=${ws//[^a-z0-9-]/-}
+[ -n "$ws" ] || ws=workspace
+
+# --- credentials ----------------------------------------------------------------------------
+trim() { # trim VALUE: strip surrounding whitespace and a leading ?
+  local v=$1
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "${v#\?}"
+}
+
+ws_dir="${DEV_WORKSPACE_SECRETS_DIR:-/run/secrets/dev-system-workspace}/evidence/$repo"
+sh_dir="${DEV_SECRETS_DIR:-/run/secrets/dev-system}/evidence/$repo"
+fix_hint="see docs/evidence-storage.md"
+
+container="" wsas="" rsas="" src_container="" src_wsas="" src_rsas="" source=""
+if [ -n "${ARTIFACT_SAS:-}" ]; then
+  source="environment (ARTIFACT_*)"
+  src_container=ARTIFACT_CONTAINER_URL src_wsas=ARTIFACT_SAS src_rsas=ARTIFACT_READ_SAS
+  container=$(trim "${ARTIFACT_CONTAINER_URL:-}")
+  wsas=$(trim "$ARTIFACT_SAS")
+  rsas=$(trim "${ARTIFACT_READ_SAS:-}")
+  [ -n "$container" ] || die 1 "ARTIFACT_SAS is set but ARTIFACT_CONTAINER_URL is empty: set it to the container URL ($fix_hint)"
+  [ -n "$rsas" ] || die 1 "ARTIFACT_SAS is set but ARTIFACT_READ_SAS is empty: set it to the read-only SAS ($fix_hint)"
+else
+  dir=""
+  if [ -e "$ws_dir" ]; then
+    dir=$ws_dir
+  elif [ -e "$sh_dir" ]; then
+    dir=$sh_dir
+  fi
+  [ -n "$dir" ] || die 78 "evidence storage is not configured for $repo: looked for ARTIFACT_SAS in the environment, $ws_dir and $sh_dir; fall back to a committed capture ($fix_hint)"
+  source="folder $dir"
+  src_container="$dir/container-url" src_wsas="$dir/write-sas" src_rsas="$dir/read-sas"
+  read_secret() { # read_secret FILE VARNAME
+    local v
+    [ -r "$1" ] || die 1 "$1 is missing or unreadable: create it ($fix_hint)"
+    v=$(cat -- "$1" 2>/dev/null) || die 1 "$1 is unreadable: fix its owner and mode ($fix_hint)"
+    v=$(trim "$v")
+    [ -n "$v" ] || die 1 "$1 is empty: fill it ($fix_hint)"
+    printf -v "$2" '%s' "$v"
+  }
+  read_secret "$src_container" container
+  read_secret "$src_wsas" wsas
+  read_secret "$src_rsas" rsas
+fi
+
+container=${container%/}
+if ! [[ "$container" =~ ^https://[^/?#[:space:]]+/[^/?#[:space:]]+$ ]]; then
+  die 1 "$src_container is not https://<host>/<container> with one container segment and no query string: use the container URL only ($fix_hint)"
+fi
+
+sas_param() { # sas_param SAS KEY: the value of KEY, empty when absent
+  local p
+  local IFS='&'
+  for p in $1; do
+    [ "${p%%=*}" = "$2" ] && {
+      printf '%s' "${p#*=}"
+      return 0
+    }
+  done
+  return 1
+}
+
+check_sas() { # check_sas SAS SOURCE KIND(read|write)
+  local sas=$1 src=$2 kind=$3 sr sp
+  if sas_param "$sas" srt >/dev/null || sas_param "$sas" ss >/dev/null; then
+    die 1 "$src is an account SAS: issue a container-scoped service SAS instead ($fix_hint)"
+  fi
+  sr=$(sas_param "$sas" sr) || sr=""
+  [ "$sr" = c ] || die 1 "$src is not container-scoped (sr must be c): issue a SAS for the repo's container ($fix_hint)"
+  sp=$(sas_param "$sas" sp) || sp=""
+  if [ "$kind" = read ]; then
+    [ "$sp" = r ] || die 1 "$src has permissions '$sp', want exactly r: issue a read-only SAS ($fix_hint)"
+  else
+    case "$sp" in
+      *c*w* | *w*c*) ;;
+      *) die 1 "$src has permissions '$sp', want c and w: issue a create and write SAS ($fix_hint)" ;;
+    esac
+  fi
+}
+check_sas "$wsas" "$src_wsas" write
+check_sas "$rsas" "$src_rsas" read
+
+if [ "$mode" = check ]; then
+  printf 'fabriek-evidence-upload: OK evidence storage for %s from %s, container %s\n' "$repo" "$source" "$container" >&2
+  exit 0
+fi
+
+# --- input ----------------------------------------------------------------------------------
+dest=${dest%/}
+bad_dest() { die 2 "bad destination '$1': use a relative path of plain segments, e.g. pr-12/screens"; }
+[ -n "$dest" ] || bad_dest "$dest"
+case "$dest" in
+  /* | *[[:space:]]* | *//*) bad_dest "$dest" ;;
+esac
+case "/$dest/" in
+  */../* | */./*) bad_dest "$dest" ;;
+esac
+for f in "${files[@]}"; do
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then die 2 "$f is not a readable file; nothing was uploaded"; fi
+done
+
+urlencode() { # urlencode STRING: percent-encode everything but unreserved characters and /
+  local s=$1 out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case "$c" in
+      [A-Za-z0-9._~/-]) out+=$c ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+ctype() { # ctype FILE
+  local ext=${1##*.}
+  ext=${ext,,}
+  case "$ext" in
+    png) echo image/png ;;
+    jpg | jpeg) echo image/jpeg ;;
+    gif) echo image/gif ;;
+    webp) echo image/webp ;;
+    mp4) echo video/mp4 ;;
+    webm) echo video/webm ;;
+    zip) echo application/zip ;;
+    html) echo text/html ;;
+    *) echo application/octet-stream ;;
+  esac
+}
+
+cfg_escape() { # cfg_escape VALUE: escape for a double-quoted curl config value
+  local v=$1
+  v=${v//\\/\\\\}
+  v=${v//\"/\\\"}
+  printf '%s' "$v"
+}
+
+urls=()
+for f in "${files[@]}"; do
+  base=${f##*/}
+  blob="$repo/$ws/$dest/$base"
+  enc=$(urlencode "$blob")
+  read_url="$container/$enc?$rsas"
+  if [ "$mode" = dry-run ]; then
+    printf 'fabriek-evidence-upload: %s\n' "$blob" >&2
+    urls+=("$read_url")
+    continue
+  fi
+  config=$(printf 'url = "%s"\nrequest = "PUT"\nheader = "x-ms-blob-type: BlockBlob"\nheader = "Content-Type: %s"\nupload-file = "%s"\noutput = "/dev/null"\nwrite-out = "%%{http_code}"\nsilent\nshow-error\n' \
+    "$(cfg_escape "$container/$enc?$wsas")" "$(ctype "$f")" "$(cfg_escape "$f")")
+  errfile=$(mktemp) || die 1 "cannot create a temporary file"
+  status=$(curl -K - <<<"$config" 2>"$errfile") && crc=0 || crc=$?
+  err=$(cat "$errfile")
+  rm -f "$errfile"
+  err=${err//"$wsas"/***}
+  if [ "$crc" != 0 ] || [ "$status" != 201 ]; then
+    [ -z "$err" ] || printf '%s\n' "$err" >&2
+    die 1 "upload of $f failed: HTTP status ${status:-none} (curl exit $crc), expected 201; nothing was reported as uploaded"
+  fi
+  printf 'fabriek-evidence-upload: uploaded %s\n' "$f" >&2
+  urls+=("$read_url")
+done
+
+printf '%s\n' "${urls[@]}"

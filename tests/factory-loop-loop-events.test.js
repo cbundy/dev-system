@@ -4,7 +4,7 @@
 // DECISIONS D-09) must be one callum-flow-event takes: a loop_entry for an entry of every logged kind
 // (ledger.ts loopEvent, derive.ts loopEntryArgv) and a loop_passes for the minute's pass summary
 // (passes.ts passesEventArgv). One refused is a usage error the loop only notes. This runs the real
-// images/base/callum-flow-event into a scratch CALLUM_EVENTS_DIR, and holds each line's data to what
+// images/base/fabriek-event into a scratch CALLUM_EVENTS_DIR, and holds each line's data to what
 // the translator makes of the old `loop` line (the note from derive.ts loopNote, passes.ts
 // passesNote). Plugin tests cannot run a command or load the image's translator, so this lives here.
 const { test, before, after } = require("node:test");

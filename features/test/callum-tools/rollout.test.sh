@@ -2,15 +2,15 @@
 #
 # shellcheck disable=SC2016
 # (backticks in test data are literal)
-# Plain-shell tests for callum-flow-rollout (cbundy/dev-system#239, #310). A stub gh
-# serves canned REST issue and comment JSON to the real callum-flow-issue-read, so
+# Plain-shell tests for fabriek-rollout (cbundy/dev-system#239, #310). A stub gh
+# serves canned REST issue and comment JSON to the real fabriek-issue-read, so
 # the trusted-author filter is exercised end to end; hermetic PATH, no network.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-ROLLOUT="$SCRIPT_DIR/../../../images/base/callum-flow-rollout"
+ROLLOUT="$SCRIPT_DIR/../../../images/base/fabriek-rollout"
 SHARE="$SCRIPT_DIR/../../../images/base"
-READER="$SHARE/callum-flow-issue-read"
+READER="$SHARE/fabriek-issue-read"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -67,9 +67,9 @@ brief() { printf '## Design brief\n\n## Sequencing\nnone\n\n## Rollout\n%s\n\n##
 # r <args>: run the script; sets out, rc
 r() {
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
-    CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" \
-    CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
+  out=$(PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_REPO=o/r \
+    FABRIEK_ISSUE_READ_BIN="${READ_BIN:-$READER}" FABRIEK_SHARE_DIR="$SHARE" \
+    FABRIEK_EVENT_BIN="$tmpdir/noevent" FABRIEK_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$ROLLOUT" "$@" 2> "$tmpdir/err") || rc=$?
 }
 # want <name> <exit> <line>

@@ -1,15 +1,15 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-designer-route (cbundy/dev-system#1040). A
+# Plain-shell tests for fabriek-designer-route (cbundy/dev-system#1040). A
 # stub gh serves a label list and a recording stub stands in for the event
 # script. Hermetic PATH, no network, no Docker.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
-ROUTE="$ROOT/images/base/callum-flow-designer-route"
+ROUTE="$ROOT/images/base/fabriek-designer-route"
 SHARE="$ROOT/images/base"
-READER="$SHARE/callum-flow-issue-read"
+READER="$SHARE/fabriek-issue-read"
 SCHEMA="$ROOT/docs/factory-events/schemas/designer_routed.v1.json"
 AGENT="$ROOT/plugins/factory-loop/agents/designer-v2.md"
 
@@ -33,7 +33,7 @@ cat > "$tmpdir/gh" <<'STUB'
 # labels live in $STUB_DIR/labels (one per line); $STUB_DIR/gh-fails makes the
 # issue read fail and $STUB_DIR/no-repo the repo lookup; $STUB_DIR/author holds
 # the issue author's user JSON (default the owner). The issue comes back as REST
-# returns it, for callum-flow-issue-read.
+# returns it, for fabriek-issue-read.
 d=${STUB_DIR:?}
 case "$1 $2" in
   'api repos/cbundy/dev-system/issues/'*)
@@ -64,16 +64,16 @@ reset() {
 # bucket <issue> [repo]: the expected designer bucket
 bucket() { printf 'designer:%s#%s' "${2:-cbundy/dev-system}" "$1" | cksum | { read -r c _; echo $((c % 100)); }; }
 # route <issue> [PCT]; sets out, rc; PCT "unset" leaves the variable unset; REPO
-# "none" leaves CALLUM_FLOW_REPO unset so the script asks gh
+# "none" leaves FABRIEK_REPO unset so the script asks gh
 route() {
   set +e
   (
-    unset CALLUM_FLOW_DESIGNER_SONNET_PCT CALLUM_FLOW_REPO
-    [ "${2-unset}" = unset ] || export CALLUM_FLOW_DESIGNER_SONNET_PCT="$2"
-    [ "${REPO:-}" = none ] || export CALLUM_FLOW_REPO="${REPO:-cbundy/dev-system}"
-    PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" \
-      CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" \
-      CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" "$SH" "$ROUTE" "$1"
+    unset FABRIEK_DESIGNER_SONNET_PCT FABRIEK_REPO CALLUM_FLOW_DESIGNER_SONNET_PCT CALLUM_FLOW_REPO
+    [ "${2-unset}" = unset ] || export FABRIEK_DESIGNER_SONNET_PCT="$2"
+    [ "${REPO:-}" = none ] || export FABRIEK_REPO="${REPO:-cbundy/dev-system}"
+    PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_EVENT_BIN="$tmpdir/event" \
+      FABRIEK_ISSUE_READ_BIN="${READ_BIN:-$READER}" FABRIEK_SHARE_DIR="$SHARE" \
+      FABRIEK_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" "$SH" "$ROUTE" "$1"
   ) >"$tmpdir/out" 2>"$tmpdir/err"
   rc=$?
   set -e
@@ -159,13 +159,13 @@ fi
 # stable and case-insensitive on the repo
 reset; route 14 74; first=$out; : > "$d/events"; route 14 74; [ "$out" = "$first" ] || fail "same issue routed differently"
 reset; REPO=CBundy/Dev-System route 14 74; expect sonnet hash 73 74 "upper-case repo"; REPO=''
-reset; REPO=none route 14 74; expect sonnet hash 73 74 "repo from gh when CALLUM_FLOW_REPO is unset"; REPO=''
+reset; REPO=none route 14 74; expect sonnet hash 73 74 "repo from gh when FABRIEK_REPO is unset"; REPO=''
 
 # -h and --help print the usage line on stdout and exit 0, log nothing, and win
-# over an invalid CALLUM_FLOW_DESIGNER_SONNET_PCT
+# over an invalid FABRIEK_DESIGNER_SONNET_PCT
 help_ok() {
   [ "$rc" = 0 ] || fail "$1: exit $rc, wanted 0"
-  [ "$out" = "usage: callum-flow-designer-route <issue>" ] || fail "$1: printed '$out'"
+  [ "$out" = "usage: fabriek-designer-route <issue>" ] || fail "$1: printed '$out'"
   [ ! -s "$tmpdir/err" ] || fail "$1: wrote to stderr: $(cat "$tmpdir/err")"
   [ ! -s "$d/events" ] || fail "$1: logged on help"
 }
@@ -174,25 +174,25 @@ reset; route -h 50; help_ok "-h"
 reset; route --help abc; help_ok "--help with invalid pct"
 reset; route -h; help_ok "-h with pct unset"
 reset
-set +e; PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_FLOW_REPO=o/r "$SH" "$ROUTE" --help 14 >"$tmpdir/out" 2>/dev/null; rc=$?; set -e
+set +e; PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_EVENT_BIN="$tmpdir/event" FABRIEK_REPO=o/r "$SH" "$ROUTE" --help 14 >"$tmpdir/out" 2>/dev/null; rc=$?; set -e
 out=$(cat "$tmpdir/out"); usage_err "--help with a second argument"
 
 # usage errors log nothing
 reset; route 14 abc; usage_err "pct abc"
-grep -q CALLUM_FLOW_DESIGNER_SONNET_PCT "$tmpdir/err" || fail "usage message must name the variable"
+grep -q FABRIEK_DESIGNER_SONNET_PCT "$tmpdir/err" || fail "usage message must name the variable"
 reset; route 14 101; usage_err "pct 101"
 reset; route 14 -5; usage_err "pct -5"
 reset; route abc 50; usage_err "issue abc"
 reset; route "" 50; usage_err "empty issue"
 reset
-set +e; PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_FLOW_REPO=o/r "$SH" "$ROUTE" >"$tmpdir/out" 2>/dev/null; rc=$?; set -e
+set +e; PATH="$toolbin" STUB_DIR="$d" FABRIEK_GH_BIN="$tmpdir/gh" FABRIEK_EVENT_BIN="$tmpdir/event" FABRIEK_REPO=o/r "$SH" "$ROUTE" >"$tmpdir/out" 2>/dev/null; rc=$?; set -e
 out=$(cat "$tmpdir/out"); usage_err "no argument"
 
 # fallbacks route to the control and warn
 reset; touch "$d/gh-fails"; route 14 100; expect opus fallback - 100 "gh failure"
 grep -q warning "$tmpdir/err" || fail "fallback must warn on stderr"
 reset; touch "$d/no-repo"; REPO=none route 14 100; expect opus fallback - 100 "unknown repo"; REPO=''
-grep -q CALLUM_FLOW_REPO "$tmpdir/err" || fail "unknown repo must say how to set it"
+grep -q FABRIEK_REPO "$tmpdir/err" || fail "unknown repo must say how to set it"
 
 # the reader logs untrusted_stripped to the same event stub; only the route events matter
 only_route_events() { grep '^--type designer_routed' "$d/events" > "$d/e2" || true; mv "$d/e2" "$d/events"; }

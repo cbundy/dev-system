@@ -100,7 +100,7 @@ check "dev-init creates the missing contract dirs as 1000:1000 0700 on a volume 
   for d in events dev-restart-self; do
     [ "$(stat -c %u:%g:%a /persist/$d)" = 1000:1000:700 ] || { echo "/persist/$d: $(stat -c %u:%g:%a /persist/$d)"; exit 1; }
   done
-  callum-flow-event ready --issue 1 --repo a/b 2>&1 | tee /tmp/ev.out
+  fabriek-event ready --issue 1 --repo a/b 2>&1 | tee /tmp/ev.out
   ! grep -q "event not recorded" /tmp/ev.out && [ "$(cat /persist/events/factory/*.jsonl | wc -l)" = 1 ] || exit 1
   out2=$( { dev-init; echo "rc=$?"; } 2>&1 ); echo "$out2"
   echo "$out2" | grep -qx "rc=0" && ! echo "$out2" | grep -q "dev-init: WARNING: /persist"' \
@@ -171,7 +171,7 @@ check "dev-init starts the heartbeat loop when a URL is configured: its lock is 
 check "dev-init starts no heartbeat loop without a URL" in_image '
   dev-init >/dev/null 2>&1; flock -n /tmp/dev-heartbeat.lock true && [ ! -e /tmp/dev-heartbeat.pid ]' --entrypoint ""
 
-# The old event-push-loop is gone from dev-init (#1143): callum-flow-event writes no old log lines.
+# The old event-push-loop is gone from dev-init (#1143): fabriek-event writes no old log lines.
 check "dev-init starts no event-push-loop even with a database URL configured" in_image '
   out=$(dev-init 2>&1); echo "$out"
   ! echo "$out" | grep -qF "started factory event push (log:" && flock -n /tmp/dev-event-push.lock true &&

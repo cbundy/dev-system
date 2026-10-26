@@ -33,7 +33,7 @@ test("section 6b: counts, sums, failed reads and the newest difference detail pe
       VALUES (1, '${crypto.randomUUID()}', '${ts}', '${type}', 1, '${repo}', '${device}', 'agent', NULL, ${seq}, $j$${JSON.stringify(data)}$j$::jsonb)`, "writer");
   };
   const read = (repo, ts, over = {}, device = "dev") => put(repo, "shadow_read", ts, {
-    reader: "claim-events", tool: "callum-flow-sweep", compared: 10, differences: 0, live_differences: 0,
+    reader: "claim-events", tool: "fabriek-sweep", compared: 10, differences: 0, live_differences: 0,
     diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 120, detail: null, ...over,
   }, device);
 

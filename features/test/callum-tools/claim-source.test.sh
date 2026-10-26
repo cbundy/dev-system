@@ -4,13 +4,13 @@
 # the old store (factory.events), the new one (factory.event_log) or both (shadow, opt-in, which
 # decides on old and records a shadow_read event). The default is new. A stub dev-query stands in for both
 # databases and honours the window the rule asks for; the events are written by the real
-# callum-flow-event, so the local logs are the real old and new ones.
+# fabriek-event, so the local logs are the real old and new ones.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
 SHARE="$ROOT/images/base"
-REAL_EVENT="$SHARE/callum-flow-event"
+REAL_EVENT="$SHARE/fabriek-event"
 SCHEMA="$ROOT/docs/factory-events/schemas/shadow_read.v1.json"
 
 fail() {
@@ -85,7 +85,7 @@ cat > "$tmpdir/drv.sh" <<'DRV'
 . "$SHARE/claim-events.sh"
 DEVQ=${DEVQ_BIN:-$TMP/dev-query}
 EVENT=${EVENT_BIN:-$REAL_EVENT}
-CE_TOOL=${DRV_TOOL:-callum-flow-sweep}
+CE_TOOL=${DRV_TOOL:-fabriek-sweep}
 repo=o/r
 mkdir -p "$OUT"
 rc=0
@@ -132,11 +132,11 @@ old_line() {
       base_image: null, dev_image: null, template_version: null, plugin_version: null}' >> "$EV/o__r.jsonl"
 }
 # local_event STATE --issue N [--note TEXT]: the event on this device in both local stores. The new
-# store gets it from the real writer; the old log (which callum-flow-event no longer writes,
+# store gets it from the real writer; the old log (which fabriek-event no longer writes,
 # cbundy/dev-system#1143) gets a literal old-format line the test writes itself.
 local_event() {
   old_line "$@"
-  env -i PATH="$toolbin" HOME="$tmpdir" CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA "$SH" "$REAL_EVENT" "$@" --repo o/r > /dev/null 2> "$tmpdir/lerr" || fail "callum-flow-event $*: $(cat "$tmpdir/lerr")"
+  env -i PATH="$toolbin" HOME="$tmpdir" CALLUM_EVENTS_DIR="$EV" DEV_MACHINE_NAME=devA "$SH" "$REAL_EVENT" "$@" --repo o/r > /dev/null 2> "$tmpdir/lerr" || fail "fabriek-event $*: $(cat "$tmpdir/lerr")"
 }
 shadow_events() { cat "$EV"/factory/*.jsonl 2>/dev/null | jq -c 'select(.type == "shadow_read")' || true; }
 latest() { cat "$tmpdir/out/latest"; }
@@ -166,7 +166,7 @@ build_lifecycle() {
 }
 
 build_lifecycle
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old
+drive FABRIEK_CLAIM_EVENTS_SOURCE=old
 rc_is 0 "old"
 expect_stderr_empty "old"
 latest > "$tmpdir/latest-old"
@@ -181,7 +181,7 @@ grep -q '^9 claimed claimed devB$' "$tmpdir/latest-old" || fail "old: latest for
 grep -q 'FROM factory.events WHERE repo = :.repo. AND issue IS NOT NULL$' "$S/calls-old" || fail "old: query is unbounded: $(cat "$S/calls-old")"
 [ -z "$(shadow_events)" ] || fail "old writes no shadow_read event"
 
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new
+drive FABRIEK_CLAIM_EVENTS_SOURCE=new
 rc_is 0 "new"
 expect_stderr_empty "new"
 tuples > "$tmpdir/tuples-new"
@@ -212,7 +212,7 @@ released "$tmpdir/out/latest" 11 || fail "#11 is released (requeued)"
 # the default is new: unset and empty decide like the `new` run, read factory.event_log and not
 # the old store, and write no shadow_read event
 for setting in unset empty; do
-  if [ "$setting" = unset ]; then drive; else drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=; fi
+  if [ "$setting" = unset ]; then drive; else drive FABRIEK_CLAIM_EVENTS_SOURCE=; fi
   rc_is 0 "default ($setting)"
   expect_stderr_empty "default ($setting)"
   tuples > "$tmpdir/tuples-default"
@@ -226,44 +226,44 @@ for setting in unset empty; do
 done
 
 # shadow, when asked for: the decision is old's, on the same history, and a shadow_read is written
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "shadow"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow decides on old: $(diff "$tmpdir/latest-old" "$tmpdir/out/latest")"
 [ "$(held)" = "$(cat "$tmpdir/held-old")" ] || fail "shadow: held"
 [ -n "$(shadow_events)" ] || fail "shadow: no shadow_read event"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 [ "$(shadow_events | wc -l)" = 2 ] || fail "shadow writes one event per run"
 
 # an invalid value warns once, names the variable and the value, and reads old
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=bogus
+drive FABRIEK_CLAIM_EVENTS_SOURCE=bogus
 rc_is 0 "invalid"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "invalid: one warning: $(cat "$tmpdir/stderr")"
-grep -q "CALLUM_FLOW_CLAIM_EVENTS_SOURCE='bogus'" "$tmpdir/stderr" || fail "invalid: names the variable and value: $(cat "$tmpdir/stderr")"
+grep -q "FABRIEK_CLAIM_EVENTS_SOURCE='bogus'" "$tmpdir/stderr" || fail "invalid: names the variable and value: $(cat "$tmpdir/stderr")"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "invalid value: old's decision"
 [ "$(shadow_events | wc -l)" = 2 ] || fail "invalid value writes no shadow_read event"
 
 # --- failures on the new side ----------------------------------------------------------
 build_lifecycle
 echo 78 > "$S/new-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new
+drive FABRIEK_CLAIM_EVENTS_SOURCE=new
 rc_is 0 "new, exit 78"
 expect_stderr_empty "new, exit 78"
 grep -q '^7 merged merged devA$' "$tmpdir/out/latest" || fail "new, exit 78: the local log still decides"
 ! grep -q '^9 ' "$tmpdir/out/latest" || fail "new, exit 78: no central rows"
 echo 1 > "$S/new-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new
+drive FABRIEK_CLAIM_EVENTS_SOURCE=new
 rc_is 0 "new, exit 1"
 grep -q "warning: cannot read the central event log (new source, dev-query --factory exit 1), using this device's log only" "$tmpdir/stderr" || fail "new, exit 1: $(cat "$tmpdir/stderr")"
 ! grep -q '^9 ' "$tmpdir/out/latest" || fail "new, exit 1: local log only"
 # shadow: the decision stays old's; exit 78 records nothing, exit 1 records new_ok=false
 echo 78 > "$S/new-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "shadow, new exit 78"
 expect_stderr_empty "shadow, new exit 78"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow, new exit 78: decision"
 [ -z "$(shadow_events)" ] || fail "shadow, new exit 78 writes no event: $(shadow_events)"
 echo 1 > "$S/new-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "shadow, new exit 1"
 cmp -s "$tmpdir/latest-old" "$tmpdir/out/latest" || fail "shadow, new exit 1: decision"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "shadow, new exit 1: one warning: $(cat "$tmpdir/stderr")"
@@ -271,7 +271,7 @@ shadow_events | jq -e '.data.new_ok == false and .data.old_ok == true and .data.
 rm "$S/new-rc"
 # the old store failing is the old behaviour: its warning, the local log
 echo 3 > "$S/old-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old
+drive FABRIEK_CLAIM_EVENTS_SOURCE=old
 grep -q "warning: cannot read the central event log (dev-query exit 3), using this device's log only" "$tmpdir/stderr" || fail "old, exit 3: $(cat "$tmpdir/stderr")"
 rm "$S/old-rc"
 
@@ -305,13 +305,13 @@ reset
 for n in 20 21 22; do both -4000 "$n" claimed claimed devB; done
 both -3000 21 reclaimed requeued devB
 local_event claimed --issue 23
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow DRV_TOOL=callum-flow-claim
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow DRV_TOOL=fabriek-claim
 rc_is 0 "equal"
 expect_stderr_empty "equal"
 ev=$(shadow_events)
 [ "$(printf '%s\n' "$ev" | wc -l)" = 1 ] || fail "one shadow_read per compare: $ev"
 printf '%s\n' "$ev" | validate || fail "equal: the event breaks shadow_read.v1: $ev"
-printf '%s\n' "$ev" | jq -e '.data == {reader: "claim-events", tool: "callum-flow-claim", compared: 4, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null}' > /dev/null || fail "equal: $ev"
+printf '%s\n' "$ev" | jq -e '.data == {reader: "claim-events", tool: "fabriek-claim", compared: 4, differences: 0, live_differences: 0, diff_keys: [], old_ok: true, new_ok: true, settle_seconds: 600, detail: null, scope_floor: null}' > /dev/null || fail "equal: $ev"
 # the same events in both stores and the local logs, not just central ones: nothing differs
 printf '%s\n' "$ev" | jq -e '.repo == "o/r"' > /dev/null || fail "equal: repo"
 
@@ -321,7 +321,7 @@ both -4000 30 claimed claimed devB
 row old -3000 31 claimed devB
 row old -5 32 claimed devB
 row old -700000 33 claimed devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "differences"
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "differences: the event breaks shadow_read.v1: $ev"
@@ -333,10 +333,10 @@ grep -q '^33 claimed claimed devB$' "$tmpdir/out/latest" || fail "differences: t
 reset
 both -4000 30 claimed claimed devB
 row old -3000 31 claimed devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow CALLUM_FLOW_SHADOW_WINDOW_SECONDS=2000
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow FABRIEK_SHADOW_WINDOW_SECONDS=2000
 shadow_events | jq -e '.data | .compared == 0 and .differences == 0' > /dev/null || fail "window: $(shadow_events)"
 # a longer settle time moves the older difference into live only
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow CALLUM_FLOW_SHADOW_SETTLE_SECONDS=4000
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow FABRIEK_SHADOW_SETTLE_SECONDS=4000
 shadow_events | tail -1 | jq -e '.data | .differences == 0 and .live_differences == 1 and .settle_seconds == 4000 and .diff_keys == ["o/r#31"]' > /dev/null || fail "settle: $(shadow_events | tail -1)"
 # a difference on a deciding value only: the claim device, the lifecycle class
 reset
@@ -346,14 +346,14 @@ both -3900 42 claimed claimed devB
 row old -3000 40 claimed devC
 row new -3000 41 claimed devB
 row new -3000 42 transition devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 3 and .differences == 2 and .diff_keys == ["o/r#40", "o/r#41"]' > /dev/null || fail "deciding values: $(shadow_events)"
 # a non-deciding lifecycle type on one side only is no difference
 reset
 both -4000 43 claimed claimed devB
 row new -3000 43 transition devB
 row new -2900 43 finding_handled devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 1 and .differences == 0' > /dev/null || fail "non-deciding types: $(shadow_events)"
 
 # --- the scope floor: history from before a device's first new-store row ------------------
@@ -369,7 +369,7 @@ row old -5000 83 claimed devC
 row old -3500 84 claimed devB
 row old -5000 85 claimed ''
 both -3500 86 claimed claimed devA
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "floor"
 expect_stderr_empty "floor"
 ev=$(shadow_events)
@@ -385,34 +385,34 @@ for side in old new; do
   grep -q ":'floors'::jsonb ->> device" "$S/calls-$side" || fail "floor: the $side read cuts on the floors"
 done
 # old and new make no floor read
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=old
+drive FABRIEK_CLAIM_EVENTS_SOURCE=old
 [ ! -e "$S/calls-floors" ] || fail "old reads no floors"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=new
+drive FABRIEK_CLAIM_EVENTS_SOURCE=new
 [ ! -e "$S/calls-floors" ] || fail "new reads no floors"
 # devB with no new row: its old rows show as differences (the floor is per device)
 grep -v '|devB$' "$S/new" > "$S/new.nob" || :
 mv "$S/new.nob" "$S/new"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | tail -1 | jq -e '.data.diff_keys | index("o/r#80") != null and index("o/r#81") != null' > /dev/null || fail "no floor for devB: $(shadow_events | tail -1)"
 # a row in the floor's own second is kept on both sides (old whole second, new .250)
 reset
 row new -3000 90 claimed devB
 row old -3000 90 claimed devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 1 and .differences == 0 and .live_differences == 0' > /dev/null || fail "floor second: $(shadow_events)"
 # this device's local logs are cut at its floor: a floor in the future leaves the local event out
 reset
 local_event claimed --issue 91
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | jq -e '.data | .compared == 1 and .scope_floor == null' > /dev/null || fail "local, no floor: $(shadow_events)"
 row new 3600 92 claimed devA
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 shadow_events | tail -1 | jq -e '.data | .compared == 0 and .differences == 0 and .scope_floor != null' > /dev/null || fail "local floor: $(shadow_events | tail -1)"
 # a failing floor read: new_ok false, one warning, the decision still old's; exit 78 records nothing
 reset
 both -4000 93 claimed claimed devB
 echo 1 > "$S/floors-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 rc_is 0 "floor read fails"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "floor read fails: one warning: $(cat "$tmpdir/stderr")"
 grep -q '^93 claimed claimed devB$' "$tmpdir/out/latest" || fail "floor read fails: the decision"
@@ -420,7 +420,7 @@ ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "floor read fails: the event breaks shadow_read.v1: $ev"
 printf '%s\n' "$ev" | jq -e '.data | .new_ok == false and .old_ok == true and .compared == 0 and .differences == 0 and .scope_floor == null' > /dev/null || fail "floor read fails: $ev"
 echo 78 > "$S/floors-rc"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 expect_stderr_empty "floor read exit 78"
 [ "$(shadow_events | wc -l)" = 1 ] || fail "floor read exit 78 records nothing"
 rm "$S/floors-rc"
@@ -429,7 +429,7 @@ rm "$S/floors-rc"
 reset
 i=100
 while [ "$i" -lt 160 ]; do row old -3000 "$i" claimed devB; i=$((i + 1)); done
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "clip: the event breaks shadow_read.v1"
 printf '%s\n' "$ev" | jq -e '.data | .differences == 60 and .live_differences == 60 and (.diff_keys | length) == 50 and .diff_keys[0] == "o/r#100" and .diff_keys[49] == "o/r#149"' > /dev/null || fail "clip: $ev"
@@ -438,7 +438,7 @@ printf '%s\n' "$ev" | jq -e '.data | .differences == 60 and .live_differences ==
 reset
 long=$(awk 'BEGIN { for (i = 0; i < 700; i++) printf "x" }')
 row old -3000 50 claimed "$long"
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow
 ev=$(shadow_events)
 printf '%s\n' "$ev" | validate || fail "detail: the event breaks shadow_read.v1"
 printf '%s\n' "$ev" | jq -e '.data.detail | length == 500 and startswith("o/r#50 old: other claimed xxx")' > /dev/null || fail "detail clip: $ev"
@@ -446,7 +446,7 @@ printf '%s\n' "$ev" | jq -e '.data.detail | length == 500 and startswith("o/r#50
 # a failing write warns once, leaves the status and the decision alone
 reset
 row old -3000 60 claimed devB
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow EVENT_BIN="$tmpdir/event-nowrite"
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow EVENT_BIN="$tmpdir/event-nowrite"
 rc_is 0 "write fails"
 [ "$(wc -l < "$tmpdir/stderr")" = 1 ] || fail "write fails: one warning: $(cat "$tmpdir/stderr")"
 grep -q 'warning: cannot record the shadow_read event' "$tmpdir/stderr" || fail "write fails: $(cat "$tmpdir/stderr")"
@@ -456,7 +456,7 @@ grep -q '^60 claimed claimed devB$' "$tmpdir/out/latest" || fail "write fails: t
 # without dev-query nothing is compared and nothing is recorded
 reset
 local_event claimed --issue 70
-drive CALLUM_FLOW_CLAIM_EVENTS_SOURCE=shadow DEVQ_BIN="$tmpdir/no-such-dev-query"
+drive FABRIEK_CLAIM_EVENTS_SOURCE=shadow DEVQ_BIN="$tmpdir/no-such-dev-query"
 rc_is 0 "no dev-query"
 expect_stderr_empty "no dev-query"
 grep -q '^70 claimed claimed devA$' "$tmpdir/out/latest" || fail "no dev-query: the local log decides: $(latest)"

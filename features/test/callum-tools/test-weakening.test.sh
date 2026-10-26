@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-test-weakening (cbundy/dev-system#314).
+# Plain-shell tests for fabriek-test-weakening (cbundy/dev-system#314).
 # Real commits in a temp git repo, no stubs. The three flagged commits are
 # rebuilt from `git show 8bc09bf`, `cb78337` and `7152dff` with their subjects and
 # changed lines verbatim; the rest are the cases that must stay unflagged.
@@ -8,7 +8,7 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-DET="$SCRIPT_DIR/../../../images/base/callum-flow-test-weakening"
+DET="$SCRIPT_DIR/../../../images/base/fabriek-test-weakening"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -18,7 +18,7 @@ fail() {
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset CALLUM_FLOW_TEST_PATHS
+unset CALLUM_FLOW_TEST_PATHS FABRIEK_TEST_PATHS
 
 new_repo() {
   r="$tmpdir/$1"

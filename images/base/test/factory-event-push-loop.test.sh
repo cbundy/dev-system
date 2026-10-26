@@ -2,7 +2,7 @@
 #
 # Tests for images/base/factory-event-push-loop (cbundy/dev-system#740): the new factory event log
 # shipped to factory.event_store as the writer role, against a real PostgreSQL (scripts/test-pg.sh).
-# Lines are written by the real callum-flow-event. Skips cleanly with no server.
+# Lines are written by the real fabriek-event. Skips cleanly with no server.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -eu
 
@@ -10,7 +10,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../../.." && pwd)
 BOOTSTRAP="$ROOT/images/base/factory-db-bootstrap"
 LOOP="$ROOT/images/base/factory-event-push-loop"
-EVENT="$ROOT/images/base/callum-flow-event"
+EVENT="$ROOT/images/base/fabriek-event"
 TEST_REPO_ROOT=$ROOT
 export TEST_REPO_ROOT
 
@@ -78,7 +78,7 @@ rows() { q "$db" "SELECT count(*) FROM factory.event_store"; }
 
 # ev ARGS...: the real writer, into $EVDIR
 ev() {
-  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=acme/widgets DEV_MACHINE_NAME=dev-box CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
+  CALLUM_EVENTS_DIR=$EVDIR FABRIEK_REPO=acme/widgets DEV_MACHINE_NAME=dev-box CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" bash "$EVENT" "$@" 2> /dev/null
 }
 # loop ARGS...: the loop as the writer; stdout+stderr in $tmpdir/loop.out, status in $rc
@@ -128,7 +128,7 @@ echo "ok: second run is a no-op"
 EVDIR=$tmpdir/ev3
 mkdir -p "$EVDIR/.pushed"
 ev claimed --issue 9 --branch issue-9
-# callum-flow-event writes no old line any more (#1143): the old file is a literal old-format line
+# fabriek-event writes no old line any more (#1143): the old file is a literal old-format line
 printf '%s\n' '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"acme/widgets","device":"dev-box","state":"claimed","issue":9}' > "$EVDIR/acme__widgets.jsonl"
 echo 1 > "$EVDIR/.pushed/acme__widgets.jsonl"
 old_sum=$(cat "$EVDIR/acme__widgets.jsonl" "$EVDIR/.pushed/acme__widgets.jsonl" | sha256sum)
@@ -301,11 +301,11 @@ stub=$tmpdir/collector
 cat > "$stub" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$STUB_CALLS"
-echo "callum-flow-released: collect o/r v1.0.0: collect (stub) postgres://u:hunter2secret@h/db" >&2
+echo "fabriek-released: collect o/r v1.0.0: collect (stub) postgres://u:hunter2secret@h/db" >&2
 case "${STUB_MODE:-ok}" in
   fail) exit 1 ;;
   sleep) sleep 30 ;;
-  write) CLAUDE_CONFIG_DIR=/nonexistent CALLUM_FLOW_REPO=acme/widgets DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="$NOVERS" bash "$EVENT_BIN" --type claimed --data '{"lease_minutes":5}' --issue 121 2> /dev/null ;;
+  write) CLAUDE_CONFIG_DIR=/nonexistent FABRIEK_REPO=acme/widgets DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="$NOVERS" bash "$EVENT_BIN" --type claimed --data '{"lease_minutes":5}' --issue 121 2> /dev/null ;;
 esac
 STUB
 chmod +x "$stub"

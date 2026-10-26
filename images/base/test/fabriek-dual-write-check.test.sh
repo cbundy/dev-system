@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# Tests for images/base/callum-flow-dual-write-check (cbundy/dev-system#743): the read-only check
+# Tests for images/base/fabriek-dual-write-check (cbundy/dev-system#743): the read-only check
 # that the old event table and the new event store agree, against a real PostgreSQL
-# (scripts/test-pg.sh). The new events are written by the real callum-flow-event; the old lines are
-# literal old-format lines the test writes itself (callum-flow-event no longer writes them,
+# (scripts/test-pg.sh). The new events are written by the real fabriek-event; the old lines are
+# literal old-format lines the test writes itself (fabriek-event no longer writes them,
 # cbundy/dev-system#1143). Both are shipped by the real event-push-loop (old table) and
 # factory-event-push-loop (new store). Skips cleanly with no server.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
@@ -12,8 +12,8 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../../.." && pwd)
 BOOTSTRAP="$ROOT/images/base/factory-db-bootstrap"
-CHECK="$ROOT/images/base/callum-flow-dual-write-check"
-EVENT="$ROOT/images/base/callum-flow-event"
+CHECK="$ROOT/images/base/fabriek-dual-write-check"
+EVENT="$ROOT/images/base/fabriek-event"
 OLDLOOP="$ROOT/images/base/event-push-loop"
 NEWLOOP="$ROOT/images/base/factory-event-push-loop"
 TEST_REPO_ROOT=$ROOT
@@ -44,7 +44,7 @@ if [ -z "${FACTORY_TEST_PG_ADMIN_URL:-}" ]; then
   own_cluster=1
 fi
 if [ -z "${FACTORY_TEST_PG_ADMIN_URL:-}" ]; then
-  echo "callum-flow-dual-write-check tests skipped: no PostgreSQL server"
+  echo "fabriek-dual-write-check tests skipped: no PostgreSQL server"
   exit 0
 fi
 ADMIN=$FACTORY_TEST_PG_ADMIN_URL
@@ -87,7 +87,7 @@ oldrows() { q "$olddb" "SELECT count(*) FROM factory.events"; }
 
 EVDIR=$tmpdir/ev
 mkdir -p "$EVDIR"
-# ev ARGS...: the real writer, repo acme/widgets unless CALLUM_FLOW_REPO is set, device dev-box.
+# ev ARGS...: the real writer, repo acme/widgets unless FABRIEK_REPO is set, device dev-box.
 # An old-state call (not --type, not --new-only) also gets the literal old line the pre-cutover
 # writer appended, sharing the new event's id and second (a skipped state gets its own id).
 ev() {
@@ -96,7 +96,7 @@ ev() {
   _new=$EVDIR/factory/$_file
   _n=0
   [ ! -f "$_new" ] || _n=$(wc -l < "$_new")
-  CALLUM_EVENTS_DIR=$EVDIR CALLUM_FLOW_REPO=$_repo DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
+  CALLUM_EVENTS_DIR=$EVDIR FABRIEK_REPO=$_repo DEV_MACHINE_NAME=${EVDEV:-dev-box} CLAUDE_CONFIG_DIR="$tmpdir/no-claude" \
     DEV_VERSIONS_FILE="$tmpdir/no-versions.json" bash "$EVENT" "$@" 2> /dev/null
   [ "$1" != --type ] || return 0
   case " $* " in *" --new-only "*) return 0 ;; esac
@@ -219,7 +219,7 @@ grep -q '^  extra ready 11111111-1111-4111-8111-111111111111$' "$tmpdir/chk.out"
 [ "$(newrows)" = $((shipped + 2)) ] || fail "check changed the store"
 echo "ok: an extra new row"
 
-# -- 8b. an event written natively (callum-flow-event --type) has no old row, so it is an extra under
+# -- 8b. an event written natively (fabriek-event --type) has no old row, so it is an extra under
 # its type and the check exits 1. This pins the current behavior (cbundy/dev-system#743): the check
 # proves dual write only where no producer writes natively.
 ev --type claim_renewed --issue 7 --data '{"lease_minutes":30}'
@@ -283,4 +283,4 @@ rc=0
 timeout 60 bash "$CHECK" --bogus > "$tmpdir/chk.out" 2>&1 || rc=$?
 [ "$rc" = 2 ] || fail "usage error should exit 2"
 echo "ok: errors exit 2"
-echo "callum-flow-dual-write-check tests passed"
+echo "fabriek-dual-write-check tests passed"

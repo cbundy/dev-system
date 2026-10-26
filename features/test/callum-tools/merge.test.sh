@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-merge (cbundy/dev-system#219, #403). The shared stubs
+# Plain-shell tests for fabriek-merge (cbundy/dev-system#219, #403). The shared stubs
 # and real local origin live in merge-guard-lib.sh; the guard cases are in
 # merge-guard.test.sh (split out by cbundy/dev-system#480 to keep each file under 30s).
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
@@ -9,7 +9,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/merge-guard-lib.sh"
 
-# the new store's log of the test repo (callum-flow-merge writes there only: --type ... --data)
+# the new store's log of the test repo (fabriek-merge writes there only: --type ... --data)
 nlog="$events/factory/o__r.jsonl"
 
 # merge refuses when the PR head is not the approved patch, and merges nothing (moved here from merge-guard.test.sh)
@@ -54,7 +54,7 @@ passed=$((passed + 1))
 reset; echo 'MATCH #7 expect=closing via=api actual=[12]' > "$st/linkage"; m 7
 [ "$rc" = 0 ] || fail "merge, no issue: exit $rc out=$out err=$(cat "$tmpdir/err")"
 [ -f "$st/gh-calls" ] || fail "merge, no issue: not merged"
-grep -q '^callum-flow-merge: warning: no issue known, merged event not recorded$' "$tmpdir/err" || fail "merge, no issue: no warning: $(cat "$tmpdir/err")"
+grep -q '^fabriek-merge: warning: no issue known, merged event not recorded$' "$tmpdir/err" || fail "merge, no issue: no warning: $(cat "$tmpdir/err")"
 [ ! -e "$nlog" ] && [ ! -e "$events/o__r.jsonl" ] || fail "merge, no issue: an event was written: $(cat "$nlog" 2> /dev/null)"
 passed=$((passed + 1))
 
@@ -76,7 +76,7 @@ passed=$((passed + 1))
 passed=$((passed + 1))
 reset; echo 1 > "$st/milestone-rc"; m 7
 [ "$rc" = 0 ] || fail "a failing tag must not fail the merge: $rc $out"
-grep -q '^callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
+grep -q '^fabriek-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
 [ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
 passed=$((passed + 1))
 reset; MILESTONE_BIN="$tmpdir/does-not-exist" m 7
@@ -106,7 +106,7 @@ for bad in fails junk partial nosize; do
   esac
   m 7
   [ "$rc" = 0 ] || fail "size read $bad: exit $rc out=$out"
-  grep -qx 'callum-flow-merge: warning: could not read the size of PR #7 - merged event written without it' "$tmpdir/err" || fail "size read $bad: no warning: $(cat "$tmpdir/err")"
+  grep -qx 'fabriek-merge: warning: could not read the size of PR #7 - merged event written without it' "$tmpdir/err" || fail "size read $bad: no warning: $(cat "$tmpdir/err")"
   [ "$(wc -l < "$nlog" | tr -d ' ')" = 1 ] || fail "size read $bad: the event must still be written"
   # a bad size still gives merged_at when the read has one; a failed read or a missing mergedAt gives null
   case "$bad" in nosize) want_at='"2026-10-02T09:00:00Z"' ;; *) want_at=null ;; esac
@@ -138,7 +138,7 @@ passed=$((passed + 1))
 # merge: method override, flag and env
 reset; m 7 --base main --expect closing; expect_pass "explicit default base does not request closure"
 reset; m 7 --method rebase; grep -q -- '--rebase' "$st/gh-calls" || fail "--method rebase"
-reset; CALLUM_FLOW_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
+reset; FABRIEK_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
 reset; m 7 --method bogus; [ "$rc" = 2 ] || fail "bad method exits 2"
 passed=$((passed + 1))
 

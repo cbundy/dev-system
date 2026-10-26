@@ -1,9 +1,9 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-merge-guard (cbundy/dev-system#219), which has one mode, the factory
+# Plain-shell tests for fabriek-merge-guard (cbundy/dev-system#219), which has one mode, the factory
 # loop's --patch (g in merge-guard-lib.sh adds it). The patch guard itself is pinned in
 # merge-guard-patch.test.sh. The shared stubs
-# and real local origin live in merge-guard-lib.sh; the callum-flow-merge cases are in
+# and real local origin live in merge-guard-lib.sh; the fabriek-merge cases are in
 # merge.test.sh (split out by cbundy/dev-system#480 to keep each file under 30s).
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
@@ -154,10 +154,10 @@ chmod +x "$tmpdir/gh-never"
 for args in "7" "7 --run RUN1" "7 --update-behind" "7 --patch $STUB_PID --run RUN1" "7 --patch $STUB_PID --update-behind"; do
   rc=0
   # shellcheck disable=SC2086
-  PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh-never" "$SH" "$GUARD" $args > "$tmpdir/o" 2> "$tmpdir/e" || rc=$?
+  PATH="$toolbin" STUB_DIR="$st" FABRIEK_GH_BIN="$tmpdir/gh-never" "$SH" "$GUARD" $args > "$tmpdir/o" 2> "$tmpdir/e" || rc=$?
   [ "$rc" = 2 ] && [ ! -s "$tmpdir/o" ] || fail "'$args': rc=$rc out=$(cat "$tmpdir/o")"
   [ "$(grep -c '^usage:' "$tmpdir/e")" = 1 ] || fail "'$args': want one usage line: $(cat "$tmpdir/e")"
-  grep -q '^usage: callum-flow-merge-guard <pr> --patch ID ' "$tmpdir/e" || fail "'$args': usage names the --patch form: $(cat "$tmpdir/e")"
+  grep -q '^usage: fabriek-merge-guard <pr> --patch ID ' "$tmpdir/e" || fail "'$args': usage names the --patch form: $(cat "$tmpdir/e")"
   ! grep '^usage:' "$tmpdir/e" | grep -q -e '--run' -e '--update-behind' || fail "'$args': usage names a removed mode: $(cat "$tmpdir/e")"
   [ ! -e "$st/gh-never-calls" ] || fail "'$args' called gh: $(cat "$st/gh-never-calls")"
 done
@@ -174,9 +174,9 @@ reset; echo "$STRANGER" > "$st/pauthor"; g 7; expect_fail "stranger-authored PR"
 printf '%s' "$out" | grep -q 'not opened by a trusted author' || fail "author reason: $out"
 reset; echo "$STRANGER" > "$st/pauthor"; : > "$st/view-count"; g 7 --expect closing; expect_fail "stranger PR with --expect" author
 reset; echo '{"login":"cbundy","id":1}' > "$st/pauthor"; g 7; expect_fail "right login, wrong id" author
-reset; CALLUM_FLOW_TRUSTED_AUTHORS='' g 7; expect_fail "trusted list unset fails closed" author; expect_class author read
+reset; FABRIEK_TRUSTED_AUTHORS='' g 7; expect_fail "trusted list unset fails closed" author; expect_class author read
 printf '%s' "$out" | grep -q 'cannot verify the author' || fail "unverifiable reason: $out"
-reset; CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" g 7; expect_fail "missing reader fails closed" author
+reset; FABRIEK_ISSUE_READ_BIN="$tmpdir/missing-reader" g 7; expect_fail "missing reader fails closed" author
 # a stranger's merge brief cannot flip a keep-open issue to closing
 reset; issue_brief 'keep-open - part 1 of 2'
 jq --argjson u "$STRANGER" '.comments += [{user: $u, body: "## Design brief\n\n## Rollout\nmerge - fake\n\n## Open decisions\nnone"}]' "$st/issue.json" > "$st/i.tmp" && mv "$st/i.tmp" "$st/issue.json"

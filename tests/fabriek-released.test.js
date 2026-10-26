@@ -1,5 +1,5 @@
-// Tests for images/base/callum-flow-released (dev-system#1010): the real script with a `gh` stub on
-// PATH, writing through the real callum-flow-event into a scratch events dir. The written event is
+// Tests for images/base/fabriek-released (dev-system#1010): the real script with a `gh` stub on
+// PATH, writing through the real fabriek-event into a scratch events dir. The written event is
 // checked strictly against released.v1 by the shared reader (the producer fixture).
 "use strict";
 
@@ -23,7 +23,7 @@ register(
 );
 
 const ROOT = path.join(__dirname, "..");
-const TOOL = path.join(ROOT, "images", "base", "callum-flow-released");
+const TOOL = path.join(ROOT, "images", "base", "fabriek-released");
 const READER = path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "event-reader.ts");
 
 let reader;
@@ -32,7 +32,7 @@ let n = 0;
 
 before(async () => {
   reader = await import(READER);
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "callum-flow-released-"));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fabriek-released-"));
   // The gh stub: GH_FIXTURE is a JSON file mapping an endpoint (or "graphql#<pr>") to the JSON gh
   // would print (already --slurp shaped), or to {"fail": "<stderr>"}. It records every call.
   fs.mkdirSync(path.join(tmp, "bin"));
@@ -131,12 +131,12 @@ test("a write appends one released event that validates strictly; a second run s
 
   r = t.go();
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, new RegExp(`callum-flow-released: v0.2.0 already written as ${e.event_id}, skipped`));
+  assert.match(r.stderr, new RegExp(`fabriek-released: v0.2.0 already written as ${e.event_id}, skipped`));
   assert.equal(t.lines().length, 1);
 });
 
-test("the repo falls back to CALLUM_FLOW_REPO", () => {
-  const t = run(["v0.2.0", "--dry-run"], { env: { CALLUM_FLOW_REPO: REPO } });
+test("the repo falls back to FABRIEK_REPO", () => {
+  const t = run(["v0.2.0", "--dry-run"], { env: { FABRIEK_REPO: REPO } });
   const r = t.go();
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), EXPECTED);
@@ -155,7 +155,7 @@ test("usage errors exit 2: no tag, a bad source, a bad repo, an unknown flag", (
     const t = run(args);
     const r = t.go();
     assert.equal(r.status, 2, args.join(" "));
-    assert.match(r.stderr, /usage: callum-flow-released/);
+    assert.match(r.stderr, /usage: fabriek-released/);
     assert.equal(fs.existsSync(path.join(t.dir, "factory")), false);
   }
 });
@@ -163,7 +163,7 @@ test("usage errors exit 2: no tag, a bad source, a bad repo, an unknown flag", (
 test("--help prints usage and exits 0", () => {
   const r = run(["--help"]).go();
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^usage: callum-flow-released /);
+  assert.match(r.stdout, /^usage: fabriek-released /);
 });
 
 test("a missing GitHub Release gives empty headlines and one note, not a failure", () => {
@@ -200,7 +200,7 @@ test("--attach uploads the dry-run payload wrapped as a released event, with --c
   const t = run(["v0.2.0", "--repo", REPO, "--source", "workflow", "--attach"]);
   const r = t.go();
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, `callum-flow-released: attached factory-released.json to ${REPO} v0.2.0 (2 PRs)\n`);
+  assert.equal(r.stdout, `fabriek-released: attached factory-released.json to ${REPO} v0.2.0 (2 PRs)\n`);
   assert.equal(t.uploaded(), `${JSON.stringify({ type: "released", type_version: 1, data: JSON.parse(dry.stdout) })}\n`);
   assert.match(t.calls(), /^release upload v0\.2\.0 \S+factory-released\.json --clobber --repo o\/r$/m);
   assert.equal(fs.existsSync(path.join(t.dir, "factory")), false);
@@ -241,7 +241,7 @@ test("the composite action runs the attach mode with the repo, tag and source in
   assert.match(y, /^\s+source:\s*\n(\s+.*\n)*?\s+default: workflow/m);
   assert.match(y, /TAG: \$\{\{ inputs\.tag \}\}/);
   assert.match(y, /SOURCE: \$\{\{ inputs\.source \}\}/);
-  assert.match(y, /callum-flow-released" "\$TAG" --repo "\$GITHUB_REPOSITORY" --source "\$SOURCE" --attach/);
+  assert.match(y, /fabriek-released" "\$TAG" --repo "\$GITHUB_REPOSITORY" --source "\$SOURCE" --attach/);
   const wf = fs.readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
   const steps = wf.split(/^ {6}- /m);
   assert.match(steps[steps.length - 1], /uses: \.\/\.github\/actions\/released-event/);
@@ -264,7 +264,7 @@ test("--collect writes one valid released event per release, once, and says so",
   const t = run(["--collect", "--repo", REPO], { fx });
   let r = t.go();
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, /callum-flow-released: collect o\/r v0\.2\.0: collect \(source workflow\)/);
+  assert.match(r.stderr, /fabriek-released: collect o\/r v0\.2\.0: collect \(source workflow\)/);
   const evs = t.lines().map((l) => JSON.parse(l));
   assert.equal(evs.length, 1);
   assert.equal(evs[0].type, "released");
@@ -278,7 +278,7 @@ test("--collect writes one valid released event per release, once, and says so",
 
 test("--collect skips a tag the log already holds (written by the loop)", () => {
   const t = run(["--collect", "--repo", REPO], { fx: { [releasesKey(REPO)]: [rel("v0.2.0", 1)], [assetKey(REPO, 1)]: asset("v0.2.0") } });
-  const w = spawnSync(path.join(ROOT, "images", "base", "callum-flow-event"), ["--type", "released", "--data", JSON.stringify(EXPECTED), "--repo", REPO], { encoding: "utf8", env: { ...process.env, CALLUM_EVENTS_DIR: t.dir, DEV_VERSIONS_FILE: path.join(t.dir, "versions.json"), DEV_MACHINE_NAME: "box" } });
+  const w = spawnSync(path.join(ROOT, "images", "base", "fabriek-event"), ["--type", "released", "--data", JSON.stringify(EXPECTED), "--repo", REPO], { encoding: "utf8", env: { ...process.env, CALLUM_EVENTS_DIR: t.dir, DEV_VERSIONS_FILE: path.join(t.dir, "versions.json"), DEV_MACHINE_NAME: "box" } });
   assert.equal(w.status, 0, w.stderr);
   const r = t.go();
   assert.equal(r.status, 0, r.stderr);

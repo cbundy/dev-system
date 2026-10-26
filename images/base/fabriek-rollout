@@ -1,0 +1,118 @@
+#!/bin/sh
+#
+# fabriek-rollout: print how an issue is "done", without changing anything
+# (cbundy/dev-system#239). The designer records it as the `## Rollout` field of
+# the issue's design brief; fabriek-merge-guard derives the PR's linkage
+# expectation from it, so a PR that must stay open can never close its issue.
+#
+# Usage: fabriek-rollout <issue>
+#
+# Output: exactly one line
+#   ROLLOUT <merge|run-it|keep-open> source=<brief|body>
+# The value is the first word of the `## Rollout` section of the latest
+# `## Design brief` comment. With no brief, or an empty Rollout, it falls back
+# to the issue body: a `## Run it` heading gives run-it, anything else merge.
+# Headings inside fenced code blocks and prose that merely mentions "Run it"
+# do not count.
+#
+# A brief that says merge while the body has a `## Run it` heading, or a brief
+# whose Rollout is not one of the three values, prints
+#   ROLLOUT conflict <reason>
+#   ROLLOUT invalid <reason>
+# and exits 1, as does a failure to read the issue (reason on stderr).
+#
+# Exit codes: 0 resolved, 1 conflict, invalid or unreadable, 2 usage error.
+#
+# Trust (cbundy/dev-system#310): the issue and its comments are read only through
+# fabriek-issue-read, which keeps just the trusted authors' text. An untrusted
+# issue, a failed read or an untrusted trusted-author list prints
+#   ROLLOUT unreadable <reason>
+# and exits 1. A `## Design brief` comment by anyone else is never seen, so it
+# cannot set the Rollout.
+#
+# Environment (for tests): FABRIEK_ISSUE_READ_BIN (fabriek-issue-read).
+# The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.sh; a lone copy of this script without it still runs, on the FABRIEK_ names only).
+case $0 in */*) _fe=${0%/*}/fabriek-env.sh ;; *) _fe=./fabriek-env.sh ;; esac
+[ -r "$_fe" ] || _fe=${FABRIEK_SHARE_DIR:-${CALLUM_FLOW_SHARE_DIR:-${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}}}/fabriek-env.sh
+# shellcheck source=fabriek-env.sh
+[ ! -r "$_fe" ] || . "$_fe"
+unset _fe
+
+set -u
+
+READ=${FABRIEK_ISSUE_READ_BIN:-fabriek-issue-read}
+
+usage() {
+  [ -z "${1-}" ] || echo "fabriek-rollout: $1" >&2
+  echo "usage: fabriek-rollout <issue>" >&2
+  exit 2
+}
+
+issue=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage ;;
+    -*) usage "unknown option '$1'" ;;
+    *) [ -z "$issue" ] || usage "unexpected argument '$1'"; issue=$1 ;;
+  esac
+  shift
+done
+[ -n "$issue" ] || usage "missing <issue>"
+case "$issue" in *[!0-9]*) usage "<issue> must be a number" ;; esac
+command -v jq > /dev/null 2>&1 || usage "jq not found"
+
+# The reader's stderr (its reason, never stripped content) passes through.
+if ! rj=$("$READ" --json "$issue" --comments) ||
+  ! ij=$(printf '%s' "$rj" | jq -ce 'if (.issue | type) == "object" and (.comments | type) == "array" then {body: (.issue.body // ""), comments: .comments} else error("shape") end' 2> /dev/null); then
+  echo "fabriek-rollout: cannot read issue #$issue" >&2
+  echo "ROLLOUT unreadable cannot read issue #$issue"
+  exit 1
+fi
+
+# section <heading-regex>: stdin -> the lines under the first matching heading
+# (outside fenced code), up to the next heading of any level
+section() {
+  awk -v re="$1" '
+    /^[ \t]*(```|~~~)/ { fence = !fence; if (on) print; next }
+    fence { if (on) print; next }
+    /^#{1,6}[ \t]/ {
+      if (on) exit
+      if (tolower($0) ~ re) on = 1
+      next
+    }
+    on { print }
+  '
+}
+
+body=$(printf '%s' "$ij" | jq -r '.body // ""')
+brief=$(printf '%s' "$ij" | jq -r '[.comments[]? | select((.body // "") | test("^\\s*##\\s+Design brief"))] | last | .body // ""')
+
+body_runit=0
+# the heading itself counts, even with an empty section
+if printf '%s\n' "$body" | awk '/^[ \t]*(```|~~~)/ {f = !f; next} !f && tolower($0) ~ /^#{1,6}[ \t]+run it[ \t]*$/ {found = 1} END {exit !found}'; then
+  body_runit=1
+fi
+
+val=''
+if [ -n "$brief" ]; then
+  raw=$(printf '%s\n' "$brief" | section '^#{1,6}[ \t]+rollout[ \t]*$' | grep -v '^[[:space:]]*$' | sed -n 1p)
+  val=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed 's/^[^a-z]*//; s/[^a-z-].*$//')
+fi
+
+case "$val" in
+  merge)
+    if [ "$body_runit" = 1 ]; then
+      echo "ROLLOUT conflict brief says merge but issue #$issue has a '## Run it' heading"
+      exit 1
+    fi
+    echo "ROLLOUT merge source=brief"
+    ;;
+  run-it | keep-open) echo "ROLLOUT $val source=brief" ;;
+  '')
+    if [ "$body_runit" = 1 ]; then echo "ROLLOUT run-it source=body"; else echo "ROLLOUT merge source=body"; fi
+    ;;
+  *)
+    echo "ROLLOUT invalid brief Rollout '$val' is not merge, run-it or keep-open"
+    exit 1
+    ;;
+esac

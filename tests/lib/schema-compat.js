@@ -4,7 +4,7 @@
 // A differential. For a tag, the tag's own code writes the same events and heartbeat into two
 // databases: A, built by the tag's own factory-db-bootstrap and migrations, and B, built by head's.
 // Then each of the tag's reads (the sql blocks of its docs/metrics.md, the SQL the loop exports, its
-// callum-flow-factory-state) runs on A and on B as the reader role, and B must answer as A does.
+// factory-state tool) runs on A and on B as the reader role, and B must answer as A does.
 // Everything here returns problems as strings instead of asserting, so a test can inspect them.
 "use strict";
 
@@ -17,12 +17,18 @@ const path = require("node:path");
 const ROOT = path.join(__dirname, "..", "..");
 const EXPORTS_SCRIPT = path.join(__dirname, "schema-compat-exports.mjs");
 
+// A tag from before the fabriek rename has the callum-flow-* commands; a later one has fabriek-* and the
+// callum-flow-* aliases that only run them. The window's older tags still run, so a tool is looked up by the
+// new name and falls back to the old one; both names are in KEY_PATHS.
+const toolPath = (base, name) => (fs.existsSync(path.join(base, `fabriek-${name}`)) ? path.join(base, `fabriek-${name}`) : path.join(base, `callum-flow-${name}`));
+
 // What a tag is extracted from, and what the writers and readers use (the dedupe key).
 const ARCHIVE_PATHS = ["images/base", "plugins/factory-loop", "docs/metrics.md", "docs/factory-events"];
 const KEY_PATHS = [
-  "images/base/callum-flow-event", "images/base/factory-event-write.js", "images/base/factory-event-shapes.json",
+  "images/base/fabriek-event", "images/base/callum-flow-event", "images/base/fabriek-env.sh", "images/base/fabriek-env.js",
+  "images/base/factory-event-write.js", "images/base/factory-event-shapes.json",
   "images/base/factory-event-push-loop", "images/base/heartbeat-loop", "images/base/factory-db.sh",
-  "images/base/callum-flow-factory-state", "images/base/dev-query", "images/base/factory-db",
+  "images/base/fabriek-factory-state", "images/base/callum-flow-factory-state", "images/base/dev-query", "images/base/factory-db",
   "images/base/factory-db-bootstrap", "images/base/factory-source.js", "images/base/agentsview.sh",
   "images/base/workspace.sh", "docs/metrics.md", "docs/factory-events/schemas", "plugins/factory-loop/hooks",
 ];
@@ -186,13 +192,13 @@ async function writeEvents(tagDir, scratch, label) {
   const problems = [];
   for (const type of Object.keys(current)) {
     const schema = JSON.parse(fs.readFileSync(path.join(schemas, `${type}.v${current[type]}.json`), "utf8"));
-    const args = [path.join(base, "callum-flow-event"), "--type", type];
+    const args = [toolPath(base, "event"), "--type", type];
     if (schema["x-issue"] !== "none") args.push("--issue", "3");
     args.push("--data", JSON.stringify(schema.examples[0]));
     const r = await run("/bin/sh", args, {
-      env: cleanEnv({ CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: REPO, DEV_MACHINE_NAME: DEVICE, DEV_VERSIONS_FILE: versions, CALLUM_EVENT_SHAPES: shapes }),
+      env: cleanEnv({ CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: REPO, FABRIEK_REPO: REPO, DEV_MACHINE_NAME: DEVICE, DEV_VERSIONS_FILE: versions, CALLUM_EVENT_SHAPES: shapes }),
     });
-    if (r.status !== 0) problems.push(`${label} callum-flow-event --type ${type}: exit ${r.status}: ${r.stderr.trim()}`);
+    if (r.status !== 0) problems.push(`${label} ${path.basename(toolPath(base, "event"))} --type ${type}: exit ${r.status}: ${r.stderr.trim()}`);
   }
   const fdir = path.join(dir, "factory");
   const lines = fs.existsSync(fdir)
@@ -293,8 +299,8 @@ async function listReaders(tagDir, label) {
       for (const file of files) for (const [name, sql] of Object.entries(found[file] ?? {})) readers.push({ id: `${file} ${name}`, kind: "sql", sql });
     }
   }
-  const state = path.join(tagDir, "images", "base", "callum-flow-factory-state");
-  if (fs.existsSync(state) && /factory\.(event_log|issue_state_at)/.test(fs.readFileSync(state, "utf8"))) readers.push({ id: "callum-flow-factory-state", kind: "state" });
+  const state = toolPath(path.join(tagDir, "images", "base"), "factory-state");
+  if (fs.existsSync(state) && /factory\.(event_log|issue_state_at)/.test(fs.readFileSync(state, "utf8"))) readers.push({ id: "factory-state", kind: "state" });
   return readers;
 }
 
@@ -363,8 +369,8 @@ const pinNow = (sql, at) => sql.replace(/\bnow\(\)/gi, `'${at}'::timestamptz`);
 async function readOne(reader, db, { at, tagDir, share }) {
   if (reader.kind === "state") {
     const base = path.join(tagDir, "images", "base");
-    const r = await run(process.execPath, [path.join(base, "callum-flow-factory-state"), "--source", "new", "--github", "off", "--at", at, "--format", "json"], {
-      env: cleanEnv({ DEV_SYSTEM_SHARE: share, CALLUM_FLOW_DEV_QUERY_BIN: path.join(base, "dev-query"), FACTORY_DB_READER_URL: db.readerUrl, AGENTSVIEW_PG_URL: db.readerUrl }),
+    const r = await run(process.execPath, [toolPath(base, "factory-state"), "--source", "new", "--github", "off", "--at", at, "--format", "json"], {
+      env: cleanEnv({ DEV_SYSTEM_SHARE: share, CALLUM_FLOW_DEV_QUERY_BIN: path.join(base, "dev-query"), FABRIEK_DEV_QUERY_BIN: path.join(base, "dev-query"), FACTORY_DB_READER_URL: db.readerUrl, AGENTSVIEW_PG_URL: db.readerUrl }),
     });
     if (r.status !== 0) return { id: reader.id, ok: false, error: `exit ${r.status}: ${(r.stderr || r.stdout).trim().slice(0, 600)}`, outside: false };
     return { id: reader.id, ok: true, state: true, raw: r.stdout };

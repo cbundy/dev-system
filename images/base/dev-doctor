@@ -354,15 +354,15 @@ done
 unset fdb_role fdb_rc fdb_out fdb_msg fdb_fix
 
 # Evidence storage (cbundy/dev-system#914): the workspace repo's container and SAS pair, checked
-# by callum-flow-evidence-upload --check in the checkout. Not configured is a WARN; a setup that
+# by fabriek-evidence-upload --check in the checkout. Not configured is a WARN; a setup that
 # is wrong (an account SAS, a wrong scope, a missing file) is a FAIL with the tool's message.
 if [ -f "$workspace/.callum-dev/evidence-off" ]; then
   info "evidence collection is off for this repo (.callum-dev/evidence-off)"
-elif command -v callum-flow-evidence-upload >/dev/null 2>&1 \
+elif command -v fabriek-evidence-upload >/dev/null 2>&1 \
   && git -C "$workspace" remote get-url origin >/dev/null 2>&1; then
   evs_rc=0
-  evs_out=$(cd "$workspace" && callum-flow-evidence-upload --check 2>&1) || evs_rc=$?
-  evs_msg=$(printf '%s\n' "$evs_out" | sed -n '1s/^callum-flow-evidence-upload: //p')
+  evs_out=$(cd "$workspace" && fabriek-evidence-upload --check 2>&1) || evs_rc=$?
+  evs_msg=$(printf '%s\n' "$evs_out" | sed -n -e '1s/^fabriek-evidence-upload: //p' -e '1s/^callum-flow-evidence-upload: //p')
   case "$evs_rc" in
     0) ok "evidence storage: ${evs_msg#OK }" ;;
     78) warn "evidence storage is not configured for this repo" \
@@ -409,7 +409,7 @@ else
 fi
 
 # The old factory event log (cbundy/dev-system#218): when it was last written and last
-# pushed, and how many lines still wait. Information only, and history: callum-flow-event
+# pushed, and how many lines still wait. Information only, and history: fabriek-event
 # writes no new lines to it (cbundy/dev-system#1143) and dev-init no longer starts its push
 # loop, so a count that waits does not mean anything is wrong. The one failure here is a
 # configured database with no psql to push the new log with.
@@ -497,11 +497,13 @@ fi
 
 unset ev_dir ev_lines ev_pushed ev_last_written ev_last_pushed ev_f ev_m
 
-# The trusted GitHub authors (cbundy/dev-system#307): callum-flow-issue-read fails
+# The trusted GitHub authors (cbundy/dev-system#307): fabriek-issue-read fails
 # closed without them, and once the factory reads through it, so does every agent.
 # The image bakes no list - the Coder template and the desktop devcontainer
-# templates provision CALLUM_FLOW_TRUSTED_AUTHORS - so a missing or malformed value
+# templates provision FABRIEK_TRUSTED_AUTHORS (or the older CALLUM_FLOW_TRUSTED_AUTHORS) - so a missing or malformed value
 # is a FAIL here, before anything enforces it.
+# shellcheck source=fabriek-env.sh
+. /usr/local/share/dev-system/fabriek-env.sh
 # shellcheck source=trusted-authors.sh
 . /usr/local/share/dev-system/trusted-authors.sh
 if ta_msg=$(trusted_authors_check); then
@@ -511,7 +513,7 @@ if ta_msg=$(trusted_authors_check); then
     ok "trusted authors (token mode): $ta_list ($(printf '%s\n' "$ta_list" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
     unset ta_list
   else
-    ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '%s\n' "$CALLUM_FLOW_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
+    ok "FABRIEK_TRUSTED_AUTHORS is set ($(printf '%s\n' "$FABRIEK_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
   fi
 else
   fail "$ta_msg" \

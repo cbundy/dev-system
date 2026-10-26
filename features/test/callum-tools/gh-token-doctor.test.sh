@@ -11,7 +11,7 @@ set -eu
 for name in $(env | sed -n 's/^\(DEV_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(GIT_\(AUTHOR\|COMMITTER\)_[A-Z]*\)=.*/\1/p'); do
   unset "$name"
 done
-unset CALLUM_FLOW_TRUSTED_AUTHORS GH_TOKEN GITHUB_TOKEN
+unset FABRIEK_TRUSTED_AUTHORS CALLUM_FLOW_TRUSTED_AUTHORS GH_TOKEN GITHUB_TOKEN
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 BASE="$SCRIPT_DIR/../../../images/base"
@@ -69,7 +69,7 @@ expect() { printf '%s\n' "$out" | grep -qF -- "$1" || fail "$2: '$1' missing fro
 refuse() { ! printf '%s\n' "$out" | grep -qF -- "$1" || fail "$2: '$1' present in: $out"; }
 
 export DEV_GH_TOKEN_FILE="$tmp/token"
-export CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067
+export FABRIEK_TRUSTED_AUTHORS=cbundy:13131067
 
 echo "healthy token mode"
 good_identity
@@ -79,10 +79,10 @@ expect "gh's active github.com login is the token's account" healthy
 
 echo "effective list: merged, deduplicated by id and login case"
 [ "$(trusted_authors_effective)" = "cbundy:13131067,TokenBot:777" ] || fail "effective: $(trusted_authors_effective)"
-[ "$(CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067,tokenbot:777 trusted_authors_effective)" = "cbundy:13131067,tokenbot:777" ] || fail "dedupe"
-[ "$(CALLUM_FLOW_TRUSTED_AUTHORS='' trusted_authors_effective)" = "TokenBot:777" ] || fail "identity alone"
+[ "$(FABRIEK_TRUSTED_AUTHORS=cbundy:13131067,tokenbot:777 trusted_authors_effective)" = "cbundy:13131067,tokenbot:777" ] || fail "dedupe"
+[ "$(FABRIEK_TRUSTED_AUTHORS='' trusted_authors_effective)" = "TokenBot:777" ] || fail "identity alone"
 [ "$(DEV_GH_TOKEN_FILE='' trusted_authors_effective)" = "cbundy:13131067" ] || fail "token mode off ignores the file"
-CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 trusted_authors_check >/dev/null || fail "check passes"
+FABRIEK_TRUSTED_AUTHORS=cbundy:13131067 trusted_authors_check >/dev/null || fail "check passes"
 [ "$(trusted_authors_json)" = '[{"login":"cbundy","id":13131067},{"login":"tokenbot","id":777}]' ] || fail "json: $(trusted_authors_json)"
 
 echo "an untrusted token account is a FAIL"
@@ -121,7 +121,7 @@ out=$(ACTIVE=tokenbot GIT_AUTHOR_EMAIL=777+TokenBot@users.noreply.github.com GIT
 refuse FAIL "matching overrides"
 
 echo "outside token mode the doctor line keeps its wording"
-grep -qF 'ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf' "$BASE/dev-doctor" || fail "dev-doctor wording changed"
+grep -qF 'ok "FABRIEK_TRUSTED_AUTHORS is set ($(printf' "$BASE/dev-doctor" || fail "dev-doctor wording changed"
 grep -qF 'trusted author(s))"' "$BASE/dev-doctor" || fail "dev-doctor wording changed"
 grep -qF 'if gh_token_mode; then' "$BASE/dev-doctor" || fail "dev-doctor does not branch on token mode"
 

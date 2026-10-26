@@ -1,0 +1,209 @@
+#!/bin/sh
+#
+# fabriek-merge: run fabriek-merge-guard and, only if every guard
+# passes, squash-merge the PR and log the `merged` event (cbundy/dev-system#219), written with
+# `fabriek-event --type merged --data`. The event needs an issue here: when the guard knows none, the
+# merge still succeeds, a warning says so and no `merged` event is written (fabriek-sweep's
+# "unrecorded merges to main" rule records such a merge later, with a null issue).
+# After a successful merge the PR's size is read once, `gh pr view <pr> --json files,additions,deletions`,
+# and `mergedAt`, and the event carries `files` (the paths), `file_lines`, `additions` and `deletions`, and
+# `merged_at` (GitHub's mergedAt as given), plus `title: null` (the loop's ready/claimed events carry the title).
+# A failed size read warns and writes the size fields as null, a missing mergedAt writes merged_at null: the
+# merge already happened, so the event is still written.
+# The merge train (docs/factory-loop/v2/SPEC.md 9.4) uses two more options. --tested-tree SHA goes to the
+# guard, which then also checks that merging onto the base gives that tree; --train-dropped REASON (head-moved,
+# outside-merge, conflict, train-red, left-queue, tree-mismatch or refused) says why a built train was given up
+# and is not passed to the guard. They are exclusive. The merged event carries `train` (rode, dropped or null),
+# `train_reason`, `tested_tree` and `tree_matched`: with --tested-tree, whether the merge commit's tree
+# (`gh pr view --json mergeCommit`, then git) equals the tested tree; null when that does not read (a warning only).
+# This is the one command that can merge, so it is allowed only in the main
+# checkout's gitignored .claude/settings.local.json, never in the synced
+# allow list.
+#
+# Usage: fabriek-merge <pr> --patch ID [--method squash|merge|rebase] [guard options]
+#   Guard options (--expect, --patch, --tested-tree, --base, --issue) go straight to the
+#   guard; without --expect the guard derives the linkage from the issue's Rollout.
+#   The factory loop merges with --patch <id> (docs/factory-loop/v2/SPEC.md 9.3):
+#   the guard checks the approved patch instead of a pipeline run, and prints each
+#   FAIL line with its class for the loop to act on.
+#   The merge method is squash unless --method or FABRIEK_MERGE_METHOD
+#   (a per-repo override) says otherwise.
+#
+# The merge is `gh pr merge <pr> --<method> --match-head-commit <sha>` with the
+# sha the guard verified, so a push after the check makes GitHub refuse it.
+# GitHub also refuses for a branch rule (for example a PR that fell behind its
+# base); on a refusal the PR is re-read to say which of the two it was.
+# The guard's advisory `GUARD test-weakening WARN` lines are relayed to stderr
+# (they never block); after a successful merge one `test_weakened` event is
+# logged per WEAKENED line the guard reported, restored ones included
+# (cbundy/dev-system#314).
+# After the merge and the `merged` event, `fabriek-milestone tag <pr>` puts
+# the PR and the issues it closes into the Next release milestone
+# (cbundy/dev-system#403). A failure there only warns - the merge already
+# happened, and the release workflow's reconcile step catches anything missed.
+# After success, a non-empty guard close_issue field prints a manual closure
+# instruction; this script does not close the issue itself.
+#
+# Exit codes: 0 merged, 1 a guard failed (its GUARD lines are printed) or the
+# merge was refused, 2 usage error.
+#
+# Environment (for tests): FABRIEK_GH_BIN, FABRIEK_GUARD_BIN (the
+# guard, default: beside this script), FABRIEK_EVENT_BIN
+# (fabriek-event), FABRIEK_MILESTONE_BIN (fabriek-milestone, default:
+# beside this script).
+# The FABRIEK_<X> settings, falling back to the old CALLUM_FLOW_<X> names (fabriek-env.sh; a lone copy of this script without it still runs, on the FABRIEK_ names only).
+case $0 in */*) _fe=${0%/*}/fabriek-env.sh ;; *) _fe=./fabriek-env.sh ;; esac
+[ -r "$_fe" ] || _fe=${FABRIEK_SHARE_DIR:-${CALLUM_FLOW_SHARE_DIR:-${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}}}/fabriek-env.sh
+# shellcheck source=fabriek-env.sh
+[ ! -r "$_fe" ] || . "$_fe"
+unset _fe
+
+set -u
+
+GH=${FABRIEK_GH_BIN:-gh}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+GUARD=${FABRIEK_GUARD_BIN:-$here/fabriek-merge-guard}
+EVENT=${FABRIEK_EVENT_BIN:-fabriek-event}
+MILESTONE=${FABRIEK_MILESTONE_BIN:-$here/fabriek-milestone}
+method=${FABRIEK_MERGE_METHOD:-squash}
+
+usage() {
+  [ -z "${1-}" ] || echo "fabriek-merge: $1" >&2
+  echo "usage: fabriek-merge <pr> --patch ID [--method squash|merge|rebase] [--expect closing|refs] [--base BRANCH] [--issue N] [--tested-tree SHA | --train-dropped REASON]" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+pr=$1
+shift
+case "$pr" in '' | -* | *[!0-9]*) usage "<pr> must be a number" ;; esac
+
+# Rebuild the guard arguments without --method and --train-dropped.
+tested_tree='' dropped=''
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  n=$((n - 1))
+  if [ "$a" = --method ]; then
+    [ "$n" -gt 0 ] || usage "--method needs a value"
+    method=$1
+    shift
+    n=$((n - 1))
+  elif [ "$a" = --train-dropped ]; then
+    [ "$n" -gt 0 ] || usage "--train-dropped needs a value"
+    dropped=$1
+    shift
+    n=$((n - 1))
+  elif [ "$a" = --tested-tree ]; then
+    [ "$n" -gt 0 ] || usage "--tested-tree needs a value"
+    tested_tree=$1
+    shift
+    n=$((n - 1))
+    set -- "$@" "$a" "$tested_tree"
+  else
+    set -- "$@" "$a"
+  fi
+done
+[ -z "$tested_tree" ] || [ -z "$dropped" ] || usage "--tested-tree and --train-dropped are exclusive"
+case "$dropped" in
+  '' | head-moved | outside-merge | conflict | train-red | left-queue | tree-mismatch | refused) ;;
+  *) usage "--train-dropped must be head-moved, outside-merge, conflict, train-red, left-queue, tree-mismatch or refused" ;;
+esac
+case "$method" in squash | merge | rebase) ;; *) usage "method must be squash, merge or rebase" ;; esac
+
+out=$("$GUARD" "$pr" "$@" --emit-verified)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  [ -z "$out" ] || printf '%s\n' "$out"
+  exit "$rc"
+fi
+printf '%s\n' "$out" | grep '^GUARD ' >&2
+v=$(printf '%s\n' "$out" | sed -n 's/^VERIFIED //p' | sed -n 1p)
+get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+branch=$(get branch) sha=$(get head) issue=$(get issue) close_issue=$(get close_issue)
+[ -n "$sha" ] || { echo "fabriek-merge: the guard verified no head sha - not merging" >&2; exit 1; }
+
+merge_rc=0
+merge_err=$($GH pr merge "$pr" "--$method" --match-head-commit "$sha" 2>&1) || merge_rc=$?
+[ -z "$merge_err" ] || printf '%s\n' "$merge_err" >&2
+if [ "$merge_rc" -ne 0 ]; then
+  now=$($GH pr view "$pr" --json headRefOid,mergeStateStatus 2> /dev/null) || now=''
+  now_sha=$(printf '%s' "$now" | jq -r '.headRefOid // empty' 2> /dev/null)
+  now_state=$(printf '%s' "$now" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
+  if [ -n "$now_sha" ] && [ "$now_sha" != "$sha" ]; then
+    echo "fabriek-merge: head moved since the check (verified $(printf %.7s "$sha"), now $(printf %.7s "$now_sha")) - re-gate" >&2
+  else
+    case "$now_state" in
+      BEHIND | DIRTY | BLOCKED | DRAFT) echo "fabriek-merge: GitHub refused: merge state $now_state (branch rule) - see the guard's mergeable action" >&2 ;;
+      *) echo "fabriek-merge: GitHub refused the merge (merge state ${now_state:-unknown}), head unchanged - see the error above, retry or check the PR" >&2 ;;
+    esac
+  fi
+  exit 1
+fi
+
+# The merged event needs an issue in this script: with none known, warn and write none.
+if [ -z "$issue" ]; then
+  echo "fabriek-merge: warning: no issue known, merged event not recorded" >&2
+else
+  # The size of the merged PR and the time GitHub merged it, read once after the merge:
+  # {files, file_lines, additions, deletions} (all null when the size does not read) and merged_at (null when absent).
+  size='{"files":null,"file_lines":null,"additions":null,"deletions":null}'
+  merged_at=
+  if sv=$($GH pr view "$pr" --json files,additions,deletions,mergedAt 2> /dev/null); then
+    merged_at=$(printf '%s' "$sv" | jq -r '.mergedAt | strings' 2> /dev/null) || merged_at=
+  fi
+  if [ -n "$sv" ] &&
+    sz=$(printf '%s' "$sv" | jq -ce '{files: ([.files[]?.path | select(type == "string" and . != "")]), file_lines: [.files[]? | objects | select((.path | type) == "string" and .path != "" and (.additions | type) == "number" and (.deletions | type) == "number" and .additions >= 0 and .deletions >= 0 and .additions == (.additions | floor) and .deletions == (.deletions | floor)) | {path, additions, deletions}], additions: (.additions | numbers), deletions: (.deletions | numbers)}' 2> /dev/null); then
+    size=$sz
+  else
+    echo "fabriek-merge: warning: could not read the size of PR #$pr - merged event written without it" >&2
+  fi
+  # The merge train (--tested-tree / --train-dropped): train, train_reason, tested_tree and tree_matched.
+  # tree_matched is whether the merge commit's tree is the tested one, null when it does not read.
+  tree_matched=null
+  if [ -n "$tested_tree" ]; then
+    mc=$($GH pr view "$pr" --json mergeCommit 2> /dev/null | jq -r '.mergeCommit.oid | strings' 2> /dev/null) || mc=
+    mt=
+    if [ -n "$mc" ] && git fetch --quiet origin "$mc" 2> /dev/null; then
+      mt=$(git rev-parse "$mc^{tree}" 2> /dev/null) || mt=
+    fi
+    if [ -z "$mt" ]; then
+      echo "fabriek-merge: warning: could not read the tree of PR #$pr's merge commit - tree_matched written as null" >&2
+    elif [ "$mt" = "$tested_tree" ]; then
+      tree_matched=true
+    else
+      tree_matched=false
+    fi
+  fi
+  $EVENT --type merged --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" --arg at "$merged_at" --argjson s "$size" \
+    --arg tt "$tested_tree" --arg td "$dropped" --argjson tm "$tree_matched" \
+    '{pr: $pr, branch: (if $b == "" then null else $b end), head: $h, by: "factory", recovered: false,
+      merged_at: (if $at == "" then null else $at end), title: null,
+      train: (if $tt != "" then "rode" elif $td != "" then "dropped" else null end),
+      train_reason: (if $td == "" then null else $td end),
+      tested_tree: (if $tt == "" then null else $tt end), tree_matched: $tm} + $s')" ||
+    echo "fabriek-merge: warning: merged event not recorded" >&2
+fi
+# milestone tagging never fails a merge that already succeeded
+"$MILESTONE" tag "$pr" ||
+  echo "fabriek-merge: warning: milestone tagging failed - the release reconcile step will catch it" >&2
+# one test_weakened event per flagged commit (the guard's WEAKENED lines)
+printf '%s\n' "$out" | grep '^WEAKENED ' | while IFS= read -r w_line; do
+  w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')
+  w_restored=$(printf '%s' "$w_line" | sed 's/.* restored=\([^ ]*\) .*/\1/')
+  w_files=$(printf '%s' "$w_line" | sed 's/.* files=\(.*\) kinds=.*/\1/')
+  w_kinds=$(printf '%s' "$w_line" | sed 's/.* kinds=//')
+  if [ -z "$issue" ]; then
+    echo "fabriek-merge: warning: no issue known, test_weakened event for $(printf %.7s "$w_commit") not recorded" >&2
+    continue
+  fi
+  $EVENT --type test_weakened --issue "$issue" --data "$(jq -nc --argjson pr "$pr" --arg b "$branch" --arg h "$sha" \
+    --arg c "$(printf %.7s "$w_commit")" --arg r "$w_restored" --arg k "$w_kinds" --arg f "$w_files" \
+    '{branch: $b, pr: $pr, head: $h, commit: $c, restored: ($r == "yes"), kinds: ($k | split(",")), files: ($f | split(","))}')" ||
+    echo "fabriek-merge: warning: test_weakened event not recorded" >&2
+done
+if [ -n "$close_issue" ]; then
+  printf 'Close issue #%s by hand with a comment naming merged PR #%s; GitHub registers no closing references on a non-default base.\n' "$close_issue" "$pr"
+fi
+exit 0

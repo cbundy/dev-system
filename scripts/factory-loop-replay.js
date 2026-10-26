@@ -44,7 +44,7 @@ register(
 
 const ROOT = path.join(__dirname, "..");
 const HOOKS = path.join(ROOT, "plugins", "factory-loop", "hooks");
-const FACTORY_STATE = path.join(ROOT, "images", "base", "callum-flow-factory-state");
+const FACTORY_STATE = path.join(ROOT, "images", "base", "fabriek-factory-state");
 const MIN = 60_000;
 const LOOKBACK = 60 * MIN;
 // A heartbeat is periodic, so it matches only when the loop planned one within BEAT_BEFORE of the
