@@ -8,7 +8,7 @@ description: >-
   fix to the shared dev flow. Clarifies intent with the user BEFORE creating
   anything, captures the motivating context from the current session, then
   raises a PR on cbundy/dev-system. Never merges.
-version: 0.100.0
+version: 0.101.0
 ---
 
 # update-dev: propose a change to the shared dev system
