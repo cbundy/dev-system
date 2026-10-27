@@ -169,7 +169,10 @@ async function baseline(cmd: Cmd, holder: SessionTokenHolder, src: SessionSource
     if (first === null) first = t.at
     if (t.at >= cutoff) counted.push(t)
   }
-  reset(start + byteLength(r.stdout.slice(0, nl + 1)), recent.slice(-RECENT_MAX))
+  // a window start inside a multi-byte character decodes each leading stray byte as one U+FFFD (3 bytes re-encoded): count them as the 1 byte they were
+  let stray = 0
+  while (stray < head && r.stdout[stray] === '\uFFFD') stray++
+  reset(start + byteLength(r.stdout.slice(0, nl + 1)) - 2 * stray, recent.slice(-RECENT_MAX))
   if (start > 0 && first !== null && first >= cutoff) return none(`no baseline: over ${CHUNK_BYTES / 1024 / 1024} MiB since ${new Date(cutoff).toISOString()}`)
   return reading(price(counted))
 }

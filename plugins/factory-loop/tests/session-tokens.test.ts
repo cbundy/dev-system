@@ -103,6 +103,24 @@ describe('readSessionTokens', () => {
     expect((await readSessionTokens(f.cmd, h, SRC)).tokens?.input).toBe(5)
   })
 
+  test('a baseline window starting inside a multi-byte character still lands the offset on the last newline', async () => {
+    const mk = (i: number) => JSON.stringify({ type: 'user', message: { content: 'é'.repeat(20) + i } }) + '\n'
+    const n = Math.ceil((CHUNK_BYTES + 100) / bytes(mk(0))) + 1
+    let body = Array.from({ length: n }, (_, i) => mk(i)).join('')
+    // grow an ASCII last line until the window start lands on a continuation byte
+    const core = body
+    let enc = new TextEncoder().encode(body)
+    for (let k = 1; ((enc[enc.length - CHUNK_BYTES] as number) & 0xc0) !== 0x80 && k < 50; k++) {
+      body = core + 'x'.repeat(k) + '\n'
+      enc = new TextEncoder().encode(body)
+    }
+    expect((enc[enc.length - CHUNK_BYTES] as number) & 0xc0).toBe(0x80)
+    const f = fake({ [PATH]: body })
+    const h = newSessionTokenState(1000)
+    await readSessionTokens(f.cmd, h, SRC, 6000)
+    expect(h.state?.offset).toBe(enc.length)
+  })
+
   test('a request whose lines straddle two reads counts once', async () => {
     const f = fake({ [PATH]: '\n' })
     const h = newSessionTokenState()
