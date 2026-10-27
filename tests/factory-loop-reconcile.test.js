@@ -303,7 +303,11 @@ test("an image with only the callum-flow command names still reads: each fabriek
     fs.writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${path.join(w.dir, "fake.js")}" fabriek-${tool} "$@"\n`);
     fs.chmodSync(bin, 0o755);
   }
-  const noBins = { FABRIEK_FACTORY_STATE_BIN: "", CALLUM_FLOW_FACTORY_STATE_BIN: "", FABRIEK_ISSUE_READ_BIN: "", CALLUM_FLOW_ISSUE_READ_BIN: "", FABRIEK_EVENT_BIN: "", CALLUM_FLOW_EVENT_BIN: "", PATH: `${old}:${path.dirname(process.execPath)}:${process.env.PATH}` };
+  // only node itself, linked alone: an image that also installs the fabriek-* names beside node must not shadow the old names
+  const nodeDir = path.join(w.dir, "node-only");
+  fs.mkdirSync(nodeDir);
+  fs.symlinkSync(process.execPath, path.join(nodeDir, "node"));
+  const noBins = { FABRIEK_FACTORY_STATE_BIN: "", CALLUM_FLOW_FACTORY_STATE_BIN: "", FABRIEK_ISSUE_READ_BIN: "", CALLUM_FLOW_ISSUE_READ_BIN: "", FABRIEK_EVENT_BIN: "", CALLUM_FLOW_EVENT_BIN: "", PATH: `${old}:${nodeDir}:/usr/bin:/bin` };
   const out = w.run([], noBins);
   assert.equal(out.status, 0, out.stderr);
   assert.ok(w.calls().some((c) => c.name === "fabriek-factory-state"), "the report was read through the old name");
