@@ -9,10 +9,11 @@ const SRC = { configDir: '/cfg', sessionCwd: '/work/space', session: 'sess-1' }
 const PATH = '/cfg/projects/-work-space/sess-1.jsonl'
 
 const bytes = (s: string) => new TextEncoder().encode(s).length
-const line = (requestId: string | null, u: { in?: number; out?: number; read?: number; create?: number }) =>
+const line = (requestId: string | null, u: { in?: number; out?: number; read?: number; create?: number }, ts?: number) =>
   JSON.stringify({
     type: 'assistant',
     ...(requestId === null ? {} : { requestId }),
+    ...(ts === undefined ? {} : { timestamp: new Date(ts).toISOString() }),
     message: { model: 'm', usage: { input_tokens: u.in ?? 0, output_tokens: u.out ?? 0, cache_read_input_tokens: u.read ?? 0, cache_creation_input_tokens: u.create ?? 0 } },
   })
 
@@ -44,14 +45,48 @@ function fake(files: Record<string, string>, opts: { ddFails?: boolean } = {}) {
 }
 
 describe('readSessionTokens', () => {
-  test('the first read is a null baseline at the file size; later reads count the added requests once', async () => {
-    const f = fake({ [PATH]: line('r0', { in: 99 }) + '\n' })
-    const h = newSessionTokenState()
-    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: null, cost: null, problem: 'no baseline' })
+  test('a new session counts all its requests on the first read; later reads count only the added ones', async () => {
+    const f = fake({ [PATH]: line('r0', { in: 99 }, 2000) + '\n' + line('r0b', { in: 1 }, 3000) + '\n' })
+    const h = newSessionTokenState(1000)
+    expect(await readSessionTokens(f.cmd, h, SRC, 5000)).toEqual({ tokens: { input: 100, output: 0, cacheRead: 0, cacheCreation: 0 }, cost: null, problem: null, unpriced: ['m'] })
     expect(h.state?.offset).toBe(bytes(f.files[PATH] as string))
     f.files[PATH] += [line('r1', { in: 1, out: 2, read: 3, create: 4 }), line('r1', { in: 1, out: 2, read: 3, create: 4 }), line(null, { out: 10 })].join('\n') + '\n'
-    expect(await readSessionTokens(f.cmd, h, SRC)).toEqual({ tokens: { input: 1, output: 12, cacheRead: 3, cacheCreation: 4 }, cost: null, problem: null, unpriced: ['m'] })
-    expect((await readSessionTokens(f.cmd, h, SRC)).tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
+    expect(await readSessionTokens(f.cmd, h, SRC, 6000)).toEqual({ tokens: { input: 1, output: 12, cacheRead: 3, cacheCreation: 4 }, cost: null, problem: null, unpriced: ['m'] })
+    expect((await readSessionTokens(f.cmd, h, SRC, 7000)).tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 })
+  })
+
+  test('a resumed session counts only requests since the cutoff, a request id repeated in the next chunk counts once, and one without a timestamp is skipped', async () => {
+    const f = fake({ [PATH]: line('old', { in: 50 }, 500) + '\n' + line('new', { in: 7 }, 1500) + '\n' + line('nots', { in: 1000 }) + '\n' })
+    const h = newSessionTokenState(1000)
+    expect((await readSessionTokens(f.cmd, h, SRC, 2000)).tokens?.input).toBe(7)
+    f.files[PATH] += line('new', { in: 7 }, 1500) + '\n' + line('next', { in: 3 }, 2500) + '\n'
+    expect((await readSessionTokens(f.cmd, h, SRC, 3000)).tokens?.input).toBe(3)
+  })
+
+  test('after a missing transcript the next baseline counts only requests after the failed read', async () => {
+    const f = fake({ [PATH]: line('a', { in: 1 }, 1500) + '\n' })
+    const h = newSessionTokenState(1000)
+    expect((await readSessionTokens(f.cmd, h, SRC, 2000)).tokens?.input).toBe(1)
+    const saved = f.files[PATH] as string
+    delete f.files[PATH]
+    expect((await readSessionTokens(f.cmd, h, SRC, 3000)).tokens).toBeNull()
+    f.files[PATH] = saved + line('b', { in: 4 }, 3500) + '\n'
+    expect((await readSessionTokens(f.cmd, h, SRC, 4000)).tokens?.input).toBe(4)
+  })
+
+  test('a window starting mid-file whose first request is after the cutoff is a named null', async () => {
+    const l = line('q', { in: 1 }, 5000) + '\n'
+    const n = Math.ceil((CHUNK_BYTES + 10) / bytes(l))
+    let body = ''
+    for (let i = 0; i < n; i++) body += line(`q${i}`, { in: 1 }, 5000) + '\n'
+    const f = fake({ [PATH]: body })
+    const h = newSessionTokenState(1000)
+    const r = await readSessionTokens(f.cmd, h, SRC, 6000)
+    expect(r.tokens).toBeNull()
+    expect(r.problem).toContain('no baseline: over 4 MiB since')
+    expect(h.state?.offset).toBe(bytes(body))
+    const old = fake({ [PATH]: body.replaceAll('1970-01-01T00:00:05.000Z', '1970-01-01T00:00:00.500Z') })
+    expect((await readSessionTokens(old.cmd, newSessionTokenState(1000), SRC, 6000)).tokens?.input).toBe(0)
   })
 
   test('a half-written last line waits, and the offset lands after the last newline with multi-byte text before it', async () => {
@@ -78,12 +113,13 @@ describe('readSessionTokens', () => {
     expect((await readSessionTokens(f.cmd, h, SRC)).tokens?.input).toBe(7)
   })
 
-  test('a new session id resets to a null baseline', async () => {
-    const f = fake({ [PATH]: '\n', '/cfg/projects/-work-space/sess-2.jsonl': 'x\n' })
-    const h = newSessionTokenState()
-    await readSessionTokens(f.cmd, h, SRC)
-    const r = await readSessionTokens(f.cmd, h, { ...SRC, session: 'sess-2' })
-    expect(r).toEqual({ tokens: null, cost: null, problem: 'no baseline' })
+  test('a new session id in the process counts only its requests after the previous read', async () => {
+    const S2 = '/cfg/projects/-work-space/sess-2.jsonl'
+    const f = fake({ [PATH]: '\n', [S2]: line('a', { in: 1 }, 1500) + '\n' + line('b', { in: 2 }, 2500) + '\n' })
+    const h = newSessionTokenState(1000)
+    await readSessionTokens(f.cmd, h, SRC, 2000)
+    const r = await readSessionTokens(f.cmd, h, { ...SRC, session: 'sess-2' }, 3000)
+    expect(r.tokens?.input).toBe(2)
     expect(h.state?.session).toBe('sess-2')
   })
 

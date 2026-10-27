@@ -148,7 +148,7 @@ export function ensure($: EngineInterface) {
     // the first pass after a load: a session start or a reload
     $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))
     rearm($, DEFAULT_CONFIG.passEveryMs)
-    armSummary($, { rt: () => S.lastRt, killed: () => killed($), send: (rt, argv) => commandOf(actIo($), acting(rt), [])(argv, { timeoutMs: 60_000 }), run: (rt, argv, init) => commandOf(actIo($), acting(rt), [])(argv, init) })
+    armSummary($, { rt: () => S.lastRt, killed: () => killed($), loadedAt: () => S.loadedAt, send: (rt, argv) => commandOf(actIo($), acting(rt), [])(argv, { timeoutMs: 60_000 }), run: (rt, argv, init) => commandOf(actIo($), acting(rt), [])(argv, init) })
   })().catch(() => {
     S.started = undefined
   })

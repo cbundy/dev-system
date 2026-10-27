@@ -3398,8 +3398,9 @@ and `loop_passes`, as `fabriek-event --type <type> --data <json> [--issue N]`:
   cost of the same requests, each at its own model's price, null when the tokens are null or a model is unpriced, read by
   `hooks/session-tokens.ts` from the main session's transcript (only the bytes added since the
   previous minute's read, once per `requestId`; step agents are on `loop_entry`). They are read
-  every minute, sent or not, and are null for the first read of a session in the process, when the
-  transcript cannot be found or read, and when the runtime knows no config dir. It also carries
+  every minute, sent or not, and the first read of a session in the process counts the requests since the loop loaded (a
+  new session: all of them; read from the transcript's last 4 MiB by timestamp). They are null when the
+  transcript cannot be found or read, when that window cannot reach back to the load, and when the runtime knows no config dir. It also carries
   `usage_tier` (`normal`, `slow`, `stop-new` or `stop-all`) and `usage_tier_overridden` (whether an owner
   override held the tier at normal): `tierOf` (13.5.2) of the last pass that ended in the minute with a
   plan, so the state in force at the minute's end; both are null when no pass in the minute reached a

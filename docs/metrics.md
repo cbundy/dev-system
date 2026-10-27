@@ -3741,8 +3741,9 @@ ORDER BY 1, repo, device;
 The `loop_passes` event also carries the tokens the loop's own main session (the orchestrator) spent in the minute:
 `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_creation_tokens`. The loop reads them from its own
 transcript, only the bytes added since the previous minute, once per request; step agents are not in them (they are on
-`loop_entry`, see "Tokens per merged issue"). They are null when the minute had no baseline (the first read in a process
-or of a new session), when the transcript could not be read, and in events of older loops. It also carries `cost_usd`, the
+`loop_entry`, see "Tokens per merged issue"). The first read after a loop starts counts the requests made since the loop started (a new session: all
+of its requests), so a restart leaves no empty minute. They are null only when the transcript could not be read (or its last
+4 MiB hold only requests since the start), and in events of older loops. It also carries `cost_usd`, the
 what-if cost of those same requests (see [What-if cost of the loop's own work](#what-if-cost-of-the-loops-own-work)).
 
 Per hour, repo and device, the four sums, and `minutes_without_tokens`, the minutes sent with null tokens, so a gap shows
