@@ -651,6 +651,13 @@ jq -c 'select(.cap != null) | {at, cap}' /persist/claude/factory-loop/<owner>__<
 jq -c 'select(.cap.ceiling != null and .cap.ceiling < .cap.configured) | {at, cap}' /persist/claude/factory-loop/<owner>__<name>/decisions-*.jsonl
 ```
 
+Untracked files a prepare or free left out and removed unsaved (over 50 MB, or core dumps), and slots that stayed leased because their free used up its attempts:
+
+```sh
+jq -c '. as $d | .outcomes[]? | select((.summary // "") | test("left out")) | {at: $d.at, key, summary}' /persist/claude/factory-loop/*/decisions-*.jsonl
+jq -c '. as $d | .skipped[]? | select(.rule == "W2" and (.why | startswith("W2: stalled"))) | {at: $d.at, issue, why}' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ### Heartbeat twins of the loop's own workspace
 
 The heartbeat guard leaves out a recent beat from the loop's own Coder workspace under another

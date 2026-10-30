@@ -10,7 +10,10 @@
 //   retry after a lost answer takes no second slot.
 // - prepare: the step marker gets the loop dir and the scratch folder's path (plan leaves both empty,
 //   rules-agent.ts markerOf; the tool makes the folder);
-//   `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when the slot held uncommitted work.
+//   `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when the slot held uncommitted work. Untracked
+//   files it left out and removed (over the size cap, or core dumps) come as one
+//   `SKIPPED size=<bytes> why=<large|core-dump> path=<p>` line each (prepare and free); the outcome's
+//   `skipped` lists them and the summary names them.
 // - Every op that ends the slot's processes (prepare, the old step's processes, free) prints
 //   `KILLED <n>`; the outcome keeps n, and the summary names it when any were ended.
 // - the old step's processes (entry action, 4.5): `KILLED <n>`; with no slot known there is nothing
@@ -80,6 +83,28 @@ const field = (text: string, word: string, name: string): string | null => {
   return null
 }
 
+// skippedOf: the SKIPPED lines of the tool's output (path last, escaped as JSON does without quotes).
+function skippedOf(stdout: string): { path: string; size: number; why: string }[] {
+  const out: { path: string; size: number; why: string }[] = []
+  for (const line of stdout.split('\n')) {
+    const m = /^SKIPPED size=(\d+) why=(large|core-dump) path=(.*)$/.exec(line.trimEnd())
+    if (m?.[3] === undefined) continue
+    let path = m[3]
+    try {
+      path = JSON.parse(`"${m[3]}"`) as string
+    } catch {
+      // keep it as printed
+    }
+    out.push({ path, size: Number(m[1]), why: m[2] ?? 'large' })
+  }
+  return out
+}
+
+const withSkipped = (o: SlotOutcome, stdout: string): SlotOutcome => {
+  const skipped = skippedOf(stdout)
+  return skipped.length === 0 ? o : { ...o, skipped }
+}
+
 // readSlot: the op's outcome from the tool's output; null when its result line is missing.
 export function readSlot(op: SlotOp, stdout: string, a: Pick<SlotAction, 'path' | 'lease'>): SlotOutcome | null {
   const k = /^KILLED (\d+)\s*$/m.exec(stdout)?.[1]
@@ -91,13 +116,19 @@ export function readSlot(op: SlotOp, stdout: string, a: Pick<SlotAction, 'path' 
   }
   if (op === 'prepare') {
     const head = field(stdout, 'PREPARED', 'head')
-    return head === null || !/^[0-9a-f]{7,64}$/.test(head) ? null : { ...base, head, leftovers: field(stdout, 'LEFTOVERS', 'file') }
+    return head === null || !/^[0-9a-f]{7,64}$/.test(head) ? null : withSkipped({ ...base, head, leftovers: field(stdout, 'LEFTOVERS', 'file') }, stdout)
   }
   if (op === 'free') {
-    if (field(stdout, 'FREED', 'path') !== null) return { ...base, leftovers: field(stdout, 'LEFTOVERS', 'file') }
+    if (field(stdout, 'FREED', 'path') !== null) return withSkipped({ ...base, leftovers: field(stdout, 'LEFTOVERS', 'file') }, stdout)
     return field(stdout, 'GONE', 'path') === null ? null : { ...base, lease: null }
   }
   return base.killed === null ? null : base
+}
+
+function skippedSummary(o: SlotOutcome): string {
+  const s = o.skipped ?? []
+  if (s.length === 0) return ''
+  return `; left out ${s.length} untracked file(s): ${s.map((x) => `${x.path} (${Math.round(x.size / 1048576)} MB, ${x.why})`).join(', ')}`
 }
 
 function summaryOf(o: SlotOutcome): string {
@@ -106,9 +137,9 @@ function summaryOf(o: SlotOutcome): string {
     case 'lease':
       return clip(`leased ${o.path ?? '?'} (${o.lease ?? '?'})`)
     case 'prepare':
-      return clip(`prepared at ${(o.head ?? '').slice(0, 7)}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
+      return clip(`prepared at ${(o.head ?? '').slice(0, 7)}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}${skippedSummary(o)}`)
     case 'free':
-      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
+      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}${skippedSummary(o)}`)
     default:
       return clip(`${o.killed ?? 0} process(es) ended in ${o.path ?? 'the slot'}`)
   }

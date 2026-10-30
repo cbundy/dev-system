@@ -31,7 +31,7 @@
 // - W2 is planned before W1, so for one issue the old life's slot goes back first (totality/T-19).
 //
 // Pure: the time is state.now.
-import { ALLOWED, gate, skip, want } from '../foundation'
+import { ALLOWED, gate, skip, wake, want } from '../foundation'
 import type { ActionClass, LedgerEntry, Ms } from '../types'
 import { capOf, capText } from './capacity'
 import { freeKey, keyParts, leaseKey, lifeAt, lifeKey } from './keys'
@@ -133,7 +133,7 @@ function frees(ctx: V2Ctx): void {
       skip(ctx, 'W2', l.issue, `W2: slot ${l.path} of life ${l.life} waits: ${busy.key} still runs in it`)
       continue
     }
-    want(ctx, {
+    const g = want(ctx, {
       kind: 'slot',
       op: 'free',
       key: freeKey(l.lease),
@@ -149,6 +149,13 @@ function frees(ctx: V2Ctx): void {
       keepScratch: parked(ctx, l),
       maxAttempts: FREE_ATTEMPTS,
     })
+    // a free that used up its attempts leaves the slot leased: the owner hears once (as R1's stalled does);
+    // `/factory retry N` clears it
+    if (g === 'exhausted') {
+      const key = freeKey(l.lease)
+      skip(ctx, 'W2', l.issue, `W2: stalled: ${key}: ${ctx.byKey.get(key)?.summary ?? 'used up its attempts'}`)
+      want(ctx, wake('tell', 'stalled', `tell:stalled:${key}`, 'W2', l.issue, { issue: l.issue, key, kind: 'slot' }))
+    }
   }
 }
 
