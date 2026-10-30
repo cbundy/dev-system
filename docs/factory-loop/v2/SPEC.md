@@ -748,7 +748,8 @@ S3 plans these for the record's current seq until each is done. Keys are
 - **An effect that uses up its attempts holds its record.** The record's skip line reads
   `stalled: <key>: <error>`, the owner hears once (`tell(stalled)`, an owner item), and
   `/factory retry N` clears it (D-38). A retry of the step could not fix a failing effect, so the
-  record is not sent down the unknown path.
+  record is not sent down the unknown path. W2's free is the same: a free that used up its attempts
+  leaves the slot leased, its skip line reads `W2: stalled: <key>: <error>`, and the owner hears once.
 - The slot is freed by W2, not by an entry action, so it is freed however the record parked or
   closed (10.1).
 
@@ -1006,7 +1007,8 @@ has to read facts of the earlier loop.
   changing nothing unless `events.ts` writes and reads back the release's and the intervention's
   note fields and the `fabriek-event` in use logs an `intervention`.
 - **Nothing is lost.** A slot is returned only once its leftovers are saved or its tree is clean;
-  else its issue fails and the slot is left for the owner. Each event is looked for in the log
+  else its issue fails and the slot is left for the owner. The exception: untracked files over 50 MB
+  and core dumps are left out of the leftovers, named in a `SKIPPED` line, and removed (10.2). Each event is looked for in the log
   after it is written, since `fabriek-event` exits 0 when a write fails. One that is not there
   fails its issue (exit 1), and its argv is kept in `<loop dir>/unlogged-events.jsonl` to log
   again.
@@ -1984,7 +1986,7 @@ agents from its timer (the spike notes, above).
 - **W2, free.** A slot with a `factory-loop:<N>:<life>` holder is freed when no record of that
   issue and life is in a slot state and no step entry of it runs. Action `slot` op `free`:
   `factory-slot free <path> <lease> <loop dir> [--keep-scratch]` kills the slot's processes (10.8),
-  saves leftovers (10.2) and prints their file, removes the life's scratch folders (10.2) unless
+  saves leftovers (10.2) and prints their file (and a `SKIPPED` line for each file it left out), removes the life's scratch folders (10.2) unless
   W2 passes `--keep-scratch`, runs `git reset --hard` and `git clean -fd`, then `treehouse return
   <path> --if-lease-id <lease>`, which also ends lingering processes. It is done when the slot
   shows available. From the free's start the lease counts as gone, so a record resumed meanwhile
@@ -2011,7 +2013,10 @@ Before every agent step (each attempt and each triage included), action `slot` o
    commits that origin has under no ref, as one binary patch against the merge base of HEAD and the
    step's start (`origin/<branch>`, else `origin/<default>`), so it applies onto the start:
    `<loop dir>/leftovers/<N>-<life>-s<seq>-<ts>.patch`, pruned with the loop's other files after
-   7 days (D-46);
+   7 days (D-46). The diff streams into the patch file, never through a memory buffer. An
+   untracked file over 50 MB, or a core dump (named `core` or `core.<digits>`, ELF type ET_CORE),
+   is left out: never hashed, not counted as lost work, named on the patch's second line and in a
+   `SKIPPED size=<bytes> why=<large|core-dump> path=<path>` line, and removed by the clean (step 4);
 4. `git reset --hard`, `git clean -fd`, then `git switch
    --ignore-other-worktrees -C <branch> origin/<branch>` (or `origin/<default>` when origin has no
    such branch). A stale slot or a person's worktree that still has the branch checked out no
@@ -2027,7 +2032,7 @@ Before every agent step (each attempt and each triage included), action `slot` o
    not exactly that path. It is the step's `$TMPDIR` (10.5): the loop's prompts name it, and
    `free` removes it (10.1). Folders older than 7 days are pruned at every prepare and free (D-46);
 7. print `PREPARED head=<sha>`, `KILLED <n>` (step 1's count), and `LEFTOVERS file=<f>` when it
-   saved any.
+   saved any, and the `SKIPPED` lines.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
 retry. Uncommitted work of a failed attempt, and work it committed but never pushed, survives in

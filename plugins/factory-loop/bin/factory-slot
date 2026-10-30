@@ -43,6 +43,12 @@
 // patch is taken against the merge base of HEAD and that start, in a scratch index, so the slot's own
 // is not touched; its first line names the base and the HEAD it was taken from.
 //
+// Left out: an untracked file over 50 MB (UNTRACKED_MAX_BYTES), or a core dump (named `core` or
+// `core.<digits>`, ELF type ET_CORE, any size), is neither hashed nor saved, and the clean removes it. It
+// is not lost work. prepare and free print one `SKIPPED size=<bytes> why=<large|core-dump> path=<path>`
+// line for each (path last, escaped as JSON does without the quotes); the patch's second line names them.
+// The diff streams into the patch file, never through a memory buffer.
+//
 // Every op refuses (exit 3) a path that is not a slot of the pool and a lease whose holder is not
 // `factory-loop:`-prefixed; prepare also refuses a lease that is not the one named, or whose holder
 // is not the marker's issue and life. Leftovers older than 7 days are pruned whenever one is saved
@@ -54,7 +60,8 @@
 // still fetches is killed, never orphaned to finish a second lease later).
 //
 // Exit codes: 0 done, 1 failed (worth a retry), 2 usage, 3 refused. Environment for tests:
-// FABRIEK_TREEHOUSE_BIN, FABRIEK_GIT_BIN (or the old CALLUM_FLOW_ names), FACTORY_SLOT_KILL_GRACE_MS.
+// FABRIEK_TREEHOUSE_BIN, FABRIEK_GIT_BIN (or the old CALLUM_FLOW_ names), FACTORY_SLOT_KILL_GRACE_MS,
+// FACTORY_SLOT_MAX_BUFFER (bytes a command's buffered output may take) and FACTORY_SLOT_UNTRACKED_MAX_BYTES.
 'use strict'
 
 const { spawnSync } = require('node:child_process')
@@ -76,6 +83,8 @@ const LEFTOVERS_KEEP_MS = 7 * DAY
 const SCRATCH_KEEP_MS = 7 * DAY
 const KILL_GRACE_MS = 5_000
 const CMD_TIMEOUT_MS = 240_000
+// untracked files over this many bytes are left out of the leftovers patch and removed
+const UNTRACKED_MAX_BYTES = 50 * 1024 * 1024
 const HOOKS_OFF = ['-c', 'core.hooksPath=/dev/null']
 
 class Failed extends Error {
@@ -100,7 +109,11 @@ function runner(env, deadline) {
   return (name, args, opts = {}) => {
     const left = deadline === null ? CMD_TIMEOUT_MS : Math.min(CMD_TIMEOUT_MS, deadline - Date.now())
     if (left <= 0) throw new Failed(`out of time: the op's budget ran out before ${name} ${args.filter((a) => !a.startsWith('-')).slice(0, 2).join(' ')}`)
-    const r = spawnSync(b[name], args, { encoding: 'utf8', cwd: opts.cwd, env: { ...env, ...(opts.env || {}) }, input: '', timeout: left, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024 })
+    // stdoutFd: the command's stdout goes straight to that file descriptor, never into memory
+    const max = Number(env.FACTORY_SLOT_MAX_BUFFER)
+    const maxBuffer = Number.isInteger(max) && max > 0 ? max : 256 * 1024 * 1024
+    const stdio = opts.stdoutFd === undefined ? undefined : ['pipe', opts.stdoutFd, 'pipe']
+    const r = spawnSync(b[name], args, { encoding: 'utf8', cwd: opts.cwd, env: { ...env, ...(opts.env || {}) }, input: '', timeout: left, killSignal: 'SIGKILL', maxBuffer, ...(stdio ? { stdio } : {}) })
     return { code: r.error ? -1 : r.status === null ? -1 : r.status, stdout: r.stdout || '', stderr: r.error ? String(r.error.message) : r.stderr || '' }
   }
 }
@@ -244,36 +257,106 @@ function baseOf(io, dir, head, branch, start) {
 // built in a scratch index so the slot's own is not touched; no file when nothing would be lost.
 // branch: the step's branch; start: the commit the next step starts from. lost: whether anything
 // would be lost (a dirty tree, or unpushed commits). problem: why it could not all be saved.
-function saveLeftovers(io, dir, loopDir, name, branch, start) {
+function saveLeftovers(io, dir, loopDir, name, branch, start, env = {}) {
   const h = git(io, dir, ['rev-parse', '--verify', '-q', 'HEAD'])
-  if (h.code !== 0) return { file: null, lost: !cleanTree(io, dir), problem: 'no HEAD' }
+  if (h.code !== 0) return { file: null, lost: !cleanTree(io, dir), problem: 'no HEAD', skipped: [] }
   const head = h.stdout.trim()
   const b = baseOf(io, dir, head, branch, start)
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-`))
   const opts = { env: { GIT_INDEX_FILE: path.join(scratch, 'index') } }
-  const lost = () => b.unpushed > 0 || !cleanTree(io, dir)
+  let skipped = []
+  const lost = () => b.unpushed > 0 || !cleanTree(io, dir, new Set(skipped.map((x) => x.path)))
+  const fail = (problem) => ({ file: null, lost: lost(), problem, skipped })
   try {
-    for (const args of [['read-tree', 'HEAD'], ['add', '-A']]) {
-      const r = git(io, dir, args, opts)
-      if (r.code !== 0) return { file: null, lost: lost(), problem: why(r) }
+    const rt = git(io, dir, ['read-tree', 'HEAD'], opts)
+    if (rt.code !== 0) return fail(why(rt))
+    const ls = git(io, dir, ['ls-files', '-o', '--exclude-standard', '-z'], opts)
+    if (ls.code !== 0) return fail(why(ls))
+    skipped = leftOut(dir, ls.stdout.split('\0').filter((x) => x !== ''), untrackedMax(env))
+    let addArgs = ['add', '-A']
+    if (skipped.length > 0) {
+      // left-out files are never hashed: they are excluded from the add by pathspec
+      const list = path.join(scratch, 'pathspecs')
+      fs.writeFileSync(list, ['.', ...skipped.map((x) => `:(exclude,literal)${x.path}`)].map((x) => `${x}\0`).join(''))
+      addArgs = ['add', '-A', `--pathspec-from-file=${list}`, '--pathspec-file-nul']
     }
-    const d = git(io, dir, ['diff', '--cached', '--binary', b.base], opts)
-    if (d.code !== 0) return { file: null, lost: lost(), problem: why(d) }
-    if (d.stdout === '') return { file: null, lost: lost(), problem: b.problem }
+    const ad = git(io, dir, addArgs, opts)
+    if (ad.code !== 0) return fail(why(ad))
     const out = path.join(loopDir, 'leftovers')
     fs.mkdirSync(out, { recursive: true })
     pruneLeftovers(out)
     const file = path.join(out, `${name}-${Date.now()}.patch`)
     // git apply skips the text before the first diff header
     const commits = b.unpushed > 0 && b.problem === null ? `, with its ${b.unpushed} commit(s) not on origin` : ''
-    fs.writeFileSync(file, `${ME} leftovers: against ${b.base}${b.base === head ? ' (HEAD)' : ''}, from HEAD ${head}${commits}. Apply with: git apply --3way <this file>\n\n${d.stdout}`)
-    return { file, lost: lost(), problem: b.problem }
+    const left = skipped.length > 0 ? `Left out, not saved and removed: ${skipped.map((x) => `${escapePath(x.path)} (${x.size} bytes, ${x.why})`).join(', ')}\n` : ''
+    const header = `${ME} leftovers: against ${b.base}${b.base === head ? ' (HEAD)' : ''}, from HEAD ${head}${commits}. Apply with: git apply --3way <this file>\n${left}\n`
+    // the diff streams into the patch file, never through a memory buffer
+    const fd = fs.openSync(file, 'wx')
+    let d
+    try {
+      fs.writeSync(fd, header)
+      d = git(io, dir, ['diff', '--cached', '--binary', b.base], { ...opts, stdoutFd: fd })
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (d.code !== 0 || fs.statSync(file).size <= Buffer.byteLength(header)) {
+      fs.rmSync(file, { force: true })
+      return d.code !== 0 ? fail(why(d)) : { file: null, lost: lost(), problem: b.problem, skipped }
+    }
+    return { file, lost: lost(), problem: b.problem, skipped }
   } catch (err) {
-    return { file: null, lost: lost(), problem: String(err && err.message ? err.message : err) }
+    return fail(String(err && err.message ? err.message : err))
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
 }
+
+// untrackedMax: the size over which an untracked file is left out (a test may lower it).
+function untrackedMax(env) {
+  const n = Number(env.FACTORY_SLOT_UNTRACKED_MAX_BYTES)
+  return Number.isInteger(n) && n >= 0 && env.FACTORY_SLOT_UNTRACKED_MAX_BYTES !== undefined && env.FACTORY_SLOT_UNTRACKED_MAX_BYTES !== '' ? n : UNTRACKED_MAX_BYTES
+}
+
+// escapePath: a path as JSON writes a string, without the quotes, so control characters stay off the line.
+const escapePath = (p) => JSON.stringify(p).slice(1, -1)
+
+// isCoreDump: an ELF file of type ET_CORE (byte order from EI_DATA), named core or core.<digits>.
+function isCoreDump(file) {
+  if (!/^core(\.\d+)?$/.test(path.basename(file))) return false
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(18)
+    if (fs.readSync(fd, buf, 0, 18, 0) < 18) return false
+    if (buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) return false
+    if (buf[5] !== 1 && buf[5] !== 2) return false
+    return (buf[5] === 1 ? buf.readUInt16LE(16) : buf.readUInt16BE(16)) === 4
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
+
+// leftOut: the untracked files (paths relative to dir) that are not saved: over `max` bytes, or core dumps.
+function leftOut(dir, paths, max) {
+  const out = []
+  for (const rel of paths) {
+    const file = path.join(dir, rel)
+    let st
+    try {
+      st = fs.lstatSync(file)
+    } catch {
+      continue
+    }
+    if (!st.isFile()) continue
+    if (isCoreDump(file)) out.push({ path: rel, size: st.size, why: 'core-dump' })
+    else if (st.size > max) out.push({ path: rel, size: st.size, why: 'large' })
+  }
+  return out
+}
+
+const skippedLines = (skipped) => skipped.map((x) => `SKIPPED size=${x.size} why=${x.why} path=${escapePath(x.path)}`)
 
 // pruneLeftovers: patch files older than 7 days go, as the loop's other files do (D-46).
 function pruneLeftovers(dir) {
@@ -329,22 +412,31 @@ function removeScratch(loopDir, issue, life) {
   }
 }
 
-function cleanTree(io, dir) {
-  const r = git(io, dir, ['--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'])
-  return r.code === 0 && r.stdout.trim() === ''
+// cleanTree: nothing to lose in the tree; the untracked files named in `ignore` (left out) do not count.
+function cleanTree(io, dir, ignore = new Set()) {
+  const r = git(io, dir, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  if (r.code !== 0) return false
+  const parts = r.stdout.split('\0')
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i]
+    if (e === '') continue
+    if (e.startsWith('?? ') && ignore.has(e.slice(3))) continue
+    return false
+  }
+  return true
 }
 
 // clear: with the slot's processes ended, its leftovers saved (against the start of the next step
 // on `branch`), then its tree reset and cleaned. Work that could not be saved is left alone: it
-// fails. The file, or null.
-function clear(io, dir, loopDir, name, branch, start) {
-  const saved = saveLeftovers(io, dir, loopDir, name, branch, start)
+// fails. The patch file (or null) and the untracked files left out (they are removed by the clean).
+function clear(io, dir, loopDir, name, branch, start, env) {
+  const saved = saveLeftovers(io, dir, loopDir, name, branch, start, env)
   if (saved.problem !== null && saved.lost) throw new Failed(`its work could not be saved (${saved.problem}); the slot was left as it is`)
   // a rebase, am or cherry-pick an agent left half done would hold the switch; its work is saved
   for (const cmd of ['rebase', 'am', 'cherry-pick']) git(io, dir, [cmd, '--quit'])
   must(git(io, dir, ['reset', '-q', '--hard']), 'git reset --hard')
   must(git(io, dir, ['clean', '-q', '-fd']), 'git clean -fd')
-  return saved.file
+  return { file: saved.file, skipped: saved.skipped }
 }
 
 // --- ops ------------------------------------------------------------------------------------------------
@@ -398,7 +490,7 @@ function markerOf(text, branch) {
   return m
 }
 
-async function prepare(io, args, cwd, graceMs) {
+async function prepare(io, args, cwd, graceMs, env) {
   const [p, id, branch, json] = args
   if (args.length !== 4 || !p || !id || !branch) throw usage('prepare takes a slot, its lease, the branch and the marker')
   if (io.run('git', ['check-ref-format', '--branch', branch]).code !== 0) throw usage(`${branch} is not a branch name`)
@@ -412,7 +504,7 @@ async function prepare(io, args, cwd, graceMs) {
   must(git(io, dir, ['fetch', '-q', '--prune', 'origin']), 'git fetch origin')
   const start = startOf(io, dir, branch)
   if (start === null) throw new Failed('origin has no default branch the slot can start from')
-  const file = clear(io, dir, marker.loopDir, `${marker.issue}-${marker.life}-s${marker.seq}`, branch, start)
+  const { file, skipped } = clear(io, dir, marker.loopDir, `${marker.issue}-${marker.life}-s${marker.seq}`, branch, start, env)
   if (start === `origin/${branch}`) {
     must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '-C', branch, start]), `git switch to ${start}`)
   } else {
@@ -426,7 +518,7 @@ async function prepare(io, args, cwd, graceMs) {
   const tmp = path.join(gitDir, `${MARKER}.${process.pid}.tmp`)
   fs.writeFileSync(tmp, `${JSON.stringify(marker, null, 2)}\n`)
   fs.renameSync(tmp, path.join(gitDir, MARKER))
-  return [`PREPARED head=${head}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
+  return [`PREPARED head=${head}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`]), ...skippedLines(skipped)]
 }
 
 async function end(io, args, graceMs) {
@@ -435,7 +527,7 @@ async function end(io, args, graceMs) {
   return [await endIn(w.path, graceMs)]
 }
 
-async function free(io, args, cwd, graceMs) {
+async function free(io, args, cwd, graceMs, env) {
   const keep = args[3] === '--keep-scratch'
   const [p, id, loopDir] = args
   if (args.length !== (keep ? 4 : 3) || !p || !id || !loopDir || !path.isAbsolute(loopDir)) throw usage('free takes a slot, its lease, the absolute loop dir and optionally --keep-scratch')
@@ -449,7 +541,7 @@ async function free(io, args, cwd, graceMs) {
   const on = git(io, w.path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
   const branch = on.code === 0 ? on.stdout.trim() : null
   const start = startOf(io, w.path, branch)
-  const file = clear(io, w.path, loopDir, `${m[1]}-${m[2]}-free`, branch, start)
+  const { file, skipped } = clear(io, w.path, loopDir, `${m[1]}-${m[2]}-free`, branch, start, env)
   // the slot goes back detached at the start, so its next holder does not inherit the branch and its
   // unpushed commits (they are saved, and the branch keeps them); best effort, the tree is clean
   if (start !== null) git(io, w.path, ['switch', '-q', '--detach', start])
@@ -457,7 +549,7 @@ async function free(io, args, cwd, graceMs) {
   pruneScratch(loopDir)
   const r = io.run('treehouse', ['return', w.path, '--if-lease-id', id, '--force'], { cwd })
   const after = slotAt(poolOf(io), w.path)
-  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
+  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`]), ...skippedLines(skipped)]
   throw new Failed(r.code !== 0 ? `treehouse return: ${why(r)}` : `treehouse return left it ${after.status || 'held'}`)
 }
 
@@ -480,11 +572,11 @@ async function cli(argv, env, cwd = process.cwd()) {
     case 'lease':
       return lease(io, args, cwd)
     case 'prepare':
-      return prepare(io, args, cwd, graceMs)
+      return prepare(io, args, cwd, graceMs, env)
     case 'kill':
       return end(io, args, graceMs)
     case 'free':
-      return free(io, args, cwd, graceMs)
+      return free(io, args, cwd, graceMs, env)
     default:
       throw usage(op === undefined ? 'no op' : `unknown op ${op}`)
   }

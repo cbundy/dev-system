@@ -263,8 +263,9 @@ export type V2Outcome =
   // leftovers: the patch file a prepare or a free saved the slot's leftovers to (10.2): its uncommitted
   // work and its commits not on origin, against the commit the next step starts from; a retry's
   // prompt names it (5.1), and a resumed life finds a free's through rules-agent.ts leftoversOf; null
-  // when nothing would have been lost
-  | { kind: 'slot'; op: SlotOp; path: string | null; lease: string | null; head: string | null; killed: number | null; leftovers?: string | null }
+  // when nothing would have been lost. skipped: the untracked files it left out and removed unsaved
+  // (over the size cap, or core dumps), which are not lost work
+  | { kind: 'slot'; op: SlotOp; path: string | null; lease: string | null; head: string | null; killed: number | null; leftovers?: string | null; skipped?: { path: string; size: number; why: string }[] }
   // drop: a train merge that fell back to the queue's own path, with why (9.8); the try is not counted toward the unknown
   | { kind: 'queue'; op: 'update' | 'merge'; merged: boolean; head: string | null; failClass: GuardClass | null; lines: string[]; drop?: TrainDrop }
   | TrainOutcome

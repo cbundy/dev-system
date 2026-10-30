@@ -199,6 +199,18 @@ describe('W2: free', () => {
     expect(freed(plan(world([parked], { leases: [leaseFor(parked)], ledger: [done] })))).toEqual([])
   })
 
+  test('a free that used up its attempts is not planned again, and the owner hears once', () => {
+    const parked = rec(90, { state: 'parked', step: null })
+    const key = freeKey(leaseFor(parked).lease)
+    const failed = entry(key, 'slot', { issue: 90, status: 'failed', attempts: 2, endedAt: NOW - HOUR, summary: 'factory-slot free: its work could not be saved', maxAttempts: 2 })
+    const used = plan(world([parked], { leases: [leaseFor(parked)], ledger: [failed] }))
+    expect(freed(used)).toEqual([])
+    expect(said(used, 90)).toContain(`W2: stalled: ${key}: factory-slot free: its work could not be saved`)
+    expect(used.actions.filter(a => a.kind === 'tell' && a.issue === 90)).toEqual([expect.objectContaining({ wake: 'stalled', key: `tell:stalled:${key}` })])
+    const told = entry(`tell:stalled:${key}`, 'tell', { issue: 90 })
+    expect(plan(world([parked], { leases: [leaseFor(parked)], ledger: [failed, told] })).actions.filter(a => a.kind === 'tell')).toEqual([])
+  })
+
   test('a waiting record\'s slot is freed, keeping the life\'s scratch folders as a parked one\'s: the wait ends in a resume of the same life', () => {
     const waiting = rec(89, { state: 'waiting', step: null, wait: [{ kind: 'pr-merged', pr: 812 }], resumeTo: 'designing' })
     const p = plan(world([waiting], { leases: [leaseFor(waiting)] }))
@@ -563,6 +575,10 @@ describe('the slot executor (act-slots.ts)', () => {
     const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 0\n` }))
     expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, killed: 0, leftovers: null }, summary: 'prepared at 9e01b77' })
     // the action must name its slot, lease, branch and marker: a loop bug, never retried
+    const left = await actWorld(() => ({ stdout: 'FREED path=/s\nKILLED 0\nSKIPPED size=209715200 why=large path=a b.bin\nSKIPPED size=64 why=core-dump path=core\n' })).run(act('free', { lease: 'L5' }))
+    expect(left).toMatchObject({ status: 'done', outcome: { skipped: [{ path: 'a b.bin' }, { path: 'core' }] } })
+    expect(left.summary).toContain('left out 2 untracked file(s): a b.bin (200 MB, large), core (0 MB, core-dump)')
+    expect(left.summary.length).toBeLessThanOrEqual(200)
     expect(await actWorld().run({ ...a, marker: null })).toMatchObject({ status: 'failed', noRetry: true, summary: expect.stringContaining('refused') })
   })
 
@@ -615,5 +631,9 @@ describe('the slot executor (act-slots.ts)', () => {
     expect(readSlot('lease', 'LEASED path=/a\n', at)).toBeNull()
     expect(readSlot('kill', 'KILLED x\n', at)).toBeNull()
     expect(readSlot('free', '', at)).toBeNull()
+    // left-out files: read whole, path last
+    const skip = readSlot('free', 'FREED path=/s\nKILLED 0\nSKIPPED size=209715200 why=large path=my big file.bin\nSKIPPED size=64 why=core-dump path=sub/core.1\n', at)
+    expect(skip).toMatchObject({ skipped: [{ path: 'my big file.bin', size: 209715200, why: 'large' }, { path: 'sub/core.1', size: 64, why: 'core-dump' }] })
+    expect(readSlot('free', 'FREED path=/s\nKILLED 0\n', at)).not.toHaveProperty('skipped')
   })
 })

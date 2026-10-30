@@ -13,6 +13,7 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -402,6 +403,91 @@ test("free: a commit on the slot's branch that was never pushed is saved against
   // a clean slot with nothing unpushed frees with no file
   const t = leased(w, 6);
   assert.equal(w.run("free", t.path, t.lease, w.loopDir).stdout.trim(), `FREED path=${t.path}\nKILLED 0`);
+});
+
+// elf: a 64-byte ELF64 header of the given e_type, in the given byte order (a core dump is type 4)
+function elf(type, big = false) {
+  const b = Buffer.alloc(64);
+  Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, big ? 2 : 1, 1]).copy(b);
+  if (big) b.writeUInt16BE(type, 16);
+  else b.writeUInt16LE(type, 16);
+  return b;
+}
+const skippedLines = (out) => out.split("\n").filter((l) => l.startsWith("SKIPPED "));
+
+test("free: a diff far larger than the runner's buffer is streamed into the patch, which applies back byte for byte", () => {
+  const w = world();
+  const s = leased(w);
+  const big = crypto.randomBytes(1024 * 1024);
+  fs.writeFileSync(path.join(s.path, "big.bin"), big);
+  fs.writeFileSync(path.join(s.path, "a.txt"), "changed\n");
+  const r = w.runWith({ FACTORY_SLOT_MAX_BUFFER: "65536" }, "free", s.path, s.lease, w.loopDir);
+  assert.equal(r.status, 0, r.stderr);
+  const file = field(r.stdout, "LEFTOVERS", "file");
+  assert.ok(file, "the leftovers are saved");
+  assert.deepEqual(skippedLines(r.stdout), []);
+  const scratch = path.join(w.dir, "apply");
+  git(w.checkout, "worktree", "add", "-q", "--detach", scratch, "origin/main");
+  git(scratch, "apply", file);
+  assert.ok(fs.readFileSync(path.join(scratch, "big.bin")).equals(big));
+  assert.equal(fs.readFileSync(path.join(scratch, "a.txt"), "utf8"), "changed\n");
+});
+
+test("prepare: an untracked file over the cap is left out, named, never hashed and removed; the small one is saved", () => {
+  const w = world();
+  const s = leased(w);
+  const big = crypto.randomBytes(200 * 1024);
+  fs.writeFileSync(path.join(s.path, "huge.bin"), big);
+  fs.writeFileSync(path.join(s.path, "small.txt"), "small\n");
+  const r = w.runWith({ FACTORY_SLOT_UNTRACKED_MAX_BYTES: "100000" }, "prepare", s.path, s.lease, "issue-5", marker(w));
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(skippedLines(r.stdout), ["SKIPPED size=204800 why=large path=huge.bin"]);
+  const file = field(r.stdout, "LEFTOVERS", "file");
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  assert.match(lines[0], /^factory-slot leftovers: against [0-9a-f]{40} \(HEAD\), from HEAD [0-9a-f]{40}\. Apply with: git apply --3way/);
+  assert.equal(lines[1], "Left out, not saved and removed: huge.bin (204800 bytes, large)");
+  const text = fs.readFileSync(file, "utf8");
+  assert.ok(text.includes("small.txt"));
+  assert.ok(!text.includes("diff --git a/huge.bin"));
+  assert.ok(!fs.existsSync(path.join(s.path, "huge.bin")), "the clean removed it");
+  const tmpFile = path.join(w.dir, "copy.bin");
+  fs.writeFileSync(tmpFile, big);
+  const oid = git(w.checkout, "hash-object", tmpFile);
+  assert.notEqual(spawnSync("git", ["-C", w.checkout, "cat-file", "-e", oid]).status, 0, "no blob of it was written");
+  assert.notEqual(spawnSync("git", ["-C", s.path, "cat-file", "-e", oid]).status, 0);
+});
+
+test("free: a slot whose only dirt is a file over the cap frees cleanly, with one SKIPPED line and no LEFTOVERS", () => {
+  const w = world();
+  const s = leased(w);
+  fs.writeFileSync(path.join(s.path, "my file.bin"), crypto.randomBytes(200 * 1024));
+  const r = w.runWith({ FACTORY_SLOT_UNTRACKED_MAX_BYTES: "100000" }, "free", s.path, s.lease, w.loopDir);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(field(r.stdout, "LEFTOVERS", "file"), undefined);
+  assert.deepEqual(skippedLines(r.stdout), ["SKIPPED size=204800 why=large path=my file.bin"]);
+  assert.equal(git(s.path, "status", "--porcelain"), "");
+  assert.equal(w.pool()[0].status, "available");
+});
+
+test("free: core dumps are left out whatever their size; a text file or a non-core ELF named core is saved", () => {
+  const w = world();
+  const s = leased(w);
+  fs.mkdirSync(path.join(s.path, "sub"));
+  fs.writeFileSync(path.join(s.path, "core"), elf(4));
+  fs.writeFileSync(path.join(s.path, "sub", "core.1234"), elf(4, true));
+  fs.mkdirSync(path.join(s.path, "other"));
+  fs.writeFileSync(path.join(s.path, "other", "core"), "just text\n");
+  fs.mkdirSync(path.join(s.path, "exe"));
+  fs.writeFileSync(path.join(s.path, "exe", "core"), elf(2));
+  const r = w.run("free", s.path, s.lease, w.loopDir);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(skippedLines(r.stdout).sort(), ["SKIPPED size=64 why=core-dump path=core", "SKIPPED size=64 why=core-dump path=sub/core.1234"]);
+  const text = fs.readFileSync(field(r.stdout, "LEFTOVERS", "file"), "utf8");
+  assert.ok(text.includes("diff --git a/other/core b/other/core"));
+  assert.ok(text.includes("diff --git a/exe/core b/exe/core"));
+  assert.ok(!text.includes("diff --git a/core b/core"));
+  assert.ok(!fs.existsSync(path.join(s.path, "core")));
+  assert.ok(!fs.existsSync(path.join(s.path, "sub", "core.1234")));
 });
 
 test("--budget-ms bounds the whole op: a treehouse get that hangs is ended inside it, and the op fails, worth a retry", () => {
